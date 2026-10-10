@@ -1,11 +1,26 @@
-from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
-from typing import Final
+from collections.abc import Iterable
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
+from typing import Final, TypeVar
 
 import litellm
 from litellm._logging import print_verbose
 from litellm.utils import get_optional_params
 
 from ..llms.vllm.completion import handler as vllm_handler
+
+_ResponseT = TypeVar("_ResponseT")
+
+
+def _first_successful_response(futures: Iterable[Future[_ResponseT]]) -> _ResponseT | None:
+    for future in as_completed(futures):
+        try:
+            result: Final = future.result()
+        except Exception as exc:
+            print_verbose(f"batch_completion_models: model request failed: {exc}")
+            continue
+        if result is not None:
+            return result
+    return None
 
 
 def batch_completion(
@@ -127,7 +142,7 @@ def batch_completion(
 def batch_completion_models(*args, **kwargs):
     """
     Send a request to multiple language models concurrently and return the response
-    as soon as one of the models responds.
+    as soon as one of the models succeeds.
 
     Args:
         *args: Variable-length positional arguments passed to the completion function.
@@ -136,11 +151,17 @@ def batch_completion_models(*args, **kwargs):
             - Other keyword arguments to be passed to the completion function.
 
     Returns:
-        str or None: The response from one of the language models, or None if no response is received.
+        ModelResponse, CustomStreamWrapper or None: The first response, or None if no response is received.
+
+    Raises:
+        Exception: With models, if no request succeeds, the first failed request's exception in input order.
+            With deployments, failures are ignored and None is returned if no request succeeds.
 
     Note:
         This function utilizes a ThreadPoolExecutor to parallelize requests to multiple models.
-        It sends requests concurrently and returns the response from the first model that responds.
+        Requests already running continue after the first successful response is returned.
+        Streaming returns the first available stream without consuming tokens. Errors raised while
+        consuming that stream are passed to the caller; they do not select another model.
     """
 
     if "model" in kwargs:
@@ -148,54 +169,32 @@ def batch_completion_models(*args, **kwargs):
     if "models" in kwargs:
         models: Final = kwargs["models"]
         kwargs.pop("models")
-        futures = {}
-        with ThreadPoolExecutor(max_workers=len(models)) as executor:
-            for model in models:
-                futures[model] = executor.submit(litellm.completion, *args, model=model, **kwargs)
-
-            for model, future in sorted(futures.items(), key=lambda x: models.index(x[0])):
-                if future.result() is not None:
-                    return future.result()
+        executor: Final = ThreadPoolExecutor(max_workers=len(models))
+        try:
+            futures: Final = tuple(
+                executor.submit(litellm.completion, *args, model=model, **kwargs) for model in models
+            )
+            response: Final = _first_successful_response(futures)
+            if response is None:
+                for future in futures:
+                    future.result()
+            return response
+        finally:
+            executor.shutdown(wait=False, cancel_futures=True)
     elif "deployments" in kwargs:
         deployments: Final = kwargs["deployments"]
         kwargs.pop("deployments")
         kwargs.pop("model_list")
         nested_kwargs: Final = kwargs.pop("kwargs", {})
-        futures = {}
-        with ThreadPoolExecutor(max_workers=len(deployments)) as executor:
-            for deployment in deployments:
-                for key in kwargs:
-                    if key not in deployment:  # don't override deployment values e.g. model name, api base, etc.
-                        deployment[key] = kwargs[key]
-                kwargs = {**deployment, **nested_kwargs}
-                futures[deployment["model"]] = executor.submit(litellm.completion, **kwargs)
-
-            while futures:
-                # wait for the first returned future
-                print_verbose("\n\n waiting for next result\n\n")
-                done, _ = wait(futures.values(), return_when=FIRST_COMPLETED)
-                print_verbose(f"done list\n{done}")
-                for future in done:
-                    try:
-                        result = future.result()
-                        return result
-                    except Exception:
-                        # if model 1 fails, continue with response from model 2, model3
-                        print_verbose("\n\ngot an exception, ignoring, removing from futures")
-                        print_verbose(futures)
-                        new_futures = {}
-                        for key, value in futures.items():
-                            if future == value:
-                                print_verbose(f"removing key{key}")
-                                continue
-                            else:
-                                new_futures[key] = value
-                        futures = new_futures
-                        print_verbose(f"new futures{futures}")
-                        continue
-
-                print_verbose("\n\ndone looping through futures\n\n")
-                print_verbose(futures)
+        deployment_executor: Final = ThreadPoolExecutor(max_workers=len(deployments))
+        try:
+            deployment_futures: Final = tuple(
+                deployment_executor.submit(litellm.completion, **{**kwargs, **deployment, **nested_kwargs})
+                for deployment in deployments
+            )
+            return _first_successful_response(deployment_futures)
+        finally:
+            deployment_executor.shutdown(wait=False, cancel_futures=True)
 
     return None  # If no response is received from any model
 
