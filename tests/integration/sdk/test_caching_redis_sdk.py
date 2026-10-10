@@ -27,6 +27,15 @@ async def _drain_cache_writes() -> None:
     await asyncio.gather(*_PENDING_CACHE_WRITES)
 
 
+async def _wait_for_stream_cache_entry(cache: Cache, model: str, messages: list[dict[str, str]]) -> None:
+    key: Final = cache.get_cache_key(model=model, messages=messages, stream=True)
+    for _ in range(200):
+        if await cache.cache.async_get_cache(key) is not None:
+            return
+        await asyncio.sleep(0.025)
+    pytest.fail(f"no cache entry was written for {model} within 5s")
+
+
 @pytest.fixture
 def redis_response_cache(monkeypatch: pytest.MonkeyPatch) -> Cache:
     cache: Final = Cache(
@@ -193,7 +202,7 @@ async def test_redis_cache_acompletion_stream(redis_response_cache: Cache) -> No
         mock_response="streamed cache response",
     )
     first_chunks: Final = tuple([chunk async for chunk in first_stream])
-    await _drain_cache_writes()
+    await _wait_for_stream_cache_entry(redis_response_cache, "gpt-4o-mini", messages)
     second_stream: Final = await acompletion(
         model="gpt-4o-mini",
         messages=messages,
