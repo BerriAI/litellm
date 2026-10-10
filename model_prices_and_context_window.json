@@ -44219,39 +44219,26 @@
         "supports_reasoning": true,
         "supports_tool_choice": true
     },
-    "sambanova/DeepSeek-R1": {
-        "input_cost_per_token": 5e-06,
+    "sambanova/MiniMax-M3": {
+        "input_cost_per_token": 6e-07,
         "litellm_provider": "sambanova",
-        "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
-        "max_tokens": 32768,
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
         "mode": "chat",
-        "output_cost_per_token": 7e-06,
-        "source": "https://cloud.sambanova.ai/plans/pricing"
-    },
-    "sambanova/Llama-4-Maverick-17B-128E-Instruct": {
-        "input_cost_per_token": 6.3e-07,
-        "litellm_provider": "sambanova",
-        "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
-        "max_tokens": 131072,
-        "metadata": {
-            "notes": "For vision models, images are converted to 6432 input tokens and are billed at that amount"
-        },
-        "mode": "chat",
-        "output_cost_per_token": 1.8e-06,
+        "output_cost_per_token": 2.4e-06,
         "source": "https://cloud.sambanova.ai/plans/pricing",
         "supports_function_calling": true,
+        "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_tool_choice": true
     },
     "sambanova/Meta-Llama-3.3-70B-Instruct": {
         "input_cost_per_token": 6e-07,
         "litellm_provider": "sambanova",
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
-        "max_tokens": 131072,
+        "max_output_tokens": 3072,
+        "max_tokens": 3072,
         "mode": "chat",
         "output_cost_per_token": 1.2e-06,
         "source": "https://cloud.sambanova.ai/plans/pricing",
@@ -44260,9 +44247,9 @@
         "supports_tool_choice": true
     },
     "sambanova/DeepSeek-V3.1": {
-        "max_tokens": 131072,
+        "max_tokens": 7168,
         "max_input_tokens": 131072,
-        "max_output_tokens": 131072,
+        "max_output_tokens": 7168,
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 4.5e-06,
         "litellm_provider": "sambanova",
@@ -44286,9 +44273,9 @@
         "source": "https://cloud.sambanova.ai/plans/pricing"
     },
     "sambanova/DeepSeek-V3.2": {
-        "max_tokens": 32768,
+        "max_tokens": 7168,
         "max_input_tokens": 32768,
-        "max_output_tokens": 32768,
+        "max_output_tokens": 7168,
         "input_cost_per_token": 3e-06,
         "output_cost_per_token": 4.5e-06,
         "litellm_provider": "sambanova",
