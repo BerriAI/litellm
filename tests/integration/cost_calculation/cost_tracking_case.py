@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from pathlib import Path
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
+from integration.cost_calculation.cost_map import COST_MAP_ENTRIES
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, field_validator, model_validator
 
-CASES_PATH: Final = Path(__file__).resolve().parent / "cost_tracking_cases.json"
 PRIOR_RESPONSE_ID_MARKER: Final = "$PRIOR_RESPONSE_ID"
 
 
@@ -487,15 +486,6 @@ class RealtimeCostCase(BaseModel):
     expected: ExactExpected
 
 
-class _CasesFile(BaseModel):
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    cost_map: dict[str, CostMapEntry]
-    cases: tuple[CostTrackingTestCase, ...]
-    batch_cases: tuple[BatchCostCase, ...] = ()
-    realtime_cases: tuple[RealtimeCostCase, ...] = ()
-
-
 _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
     {
         "anthropic": "anthropic",
@@ -568,8 +558,6 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
     }
 )
 
-_LOADED: Final = _CasesFile.model_validate_json(CASES_PATH.read_bytes())
-COST_MAP: Final[Mapping[str, CostMapEntry]] = MappingProxyType(dict(_LOADED.cost_map))
-JSON_CASES: Final[tuple[CostTrackingTestCase, ...]] = _LOADED.cases
-BATCH_CASES: Final[tuple[BatchCostCase, ...]] = _LOADED.batch_cases
-REALTIME_CASES: Final[tuple[RealtimeCostCase, ...]] = _LOADED.realtime_cases
+COST_MAP: Final[Mapping[str, CostMapEntry]] = MappingProxyType(
+    {model: CostMapEntry.model_validate(entry) for model, entry in COST_MAP_ENTRIES.items()}
+)
