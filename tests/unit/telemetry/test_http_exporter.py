@@ -19,16 +19,24 @@ _RECORD: Final = RequestRecord(
     provider_status=StatusClass.SUCCESS,
     latency_to_first_byte_ms=120.0,
 )
+
+
+def _metrics_of(record: RequestRecord) -> RequestMetrics:
+    metrics: Final = RequestMetrics.empty()
+    metrics.add(record)
+    return metrics
+
+
 _REPORT: Final = Report(
     instance=InstanceInfo(instance_id="i", litellm_version="1.2.3", groups=frozenset(TelemetryGroup)),
     window_start=10.0,
     window_end=70.0,
-    requests=((RequestKey.of(_RECORD), RequestMetrics.of(_RECORD)),),
+    requests=((RequestKey.of(_RECORD), _metrics_of(_RECORD)),),
 )
 
 
-def _histogram_json(bounds: tuple[float, ...], hit_index: int | None) -> Sequence[int]:
-    return [int(index == hit_index) for index in range(len(bounds) + 1)]
+def _histogram_json(bounds: tuple[float, ...], hit_index: int | None) -> Mapping[str, Sequence[int] | int]:
+    return {"counts": [int(index == hit_index) for index in range(len(bounds) + 1)], "invalid": 0}
 
 
 @pytest.mark.asyncio
@@ -108,3 +116,10 @@ async def test_a_transport_error_is_retryable_instead_of_raising() -> None:
 
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         assert await HttpExporter(client, "https://telemetry.example").export(_REPORT) is ExportOutcome.RETRY
+
+
+@pytest.mark.parametrize("endpoint", ["https://[::1/v1/reports", "telemetry.example/v1/reports"])
+@pytest.mark.asyncio
+async def test_an_invalid_endpoint_url_is_rejected_instead_of_retried_forever(endpoint: str) -> None:
+    async with httpx.AsyncClient() as client:
+        assert await HttpExporter(client, endpoint).export(_REPORT) is ExportOutcome.REJECTED

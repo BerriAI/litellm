@@ -30,6 +30,8 @@ class HttpExporter:
             response: Final = await self._client.post(
                 self._endpoint, content=body, headers={"content-type": "application/json"}
             )
+        except (httpx.InvalidURL, httpx.UnsupportedProtocol):
+            return ExportOutcome.REJECTED
         except httpx.HTTPError:
             return ExportOutcome.RETRY
         return _outcome_for(response.status_code)

@@ -1,9 +1,8 @@
 """The wire shape of one telemetry report: what an exporter sends or stores for one window"""
 
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from itertools import chain
-from typing import Final, TypeAlias, TypeVar
+from typing import Final, TypeAlias
 
 from litellm.telemetry.histogram import ATTEMPT_BOUNDS, BLOCK_COUNT_BOUNDS, LATENCY_BOUNDS_MS, Histogram
 from litellm.telemetry.records import (
@@ -13,7 +12,6 @@ from litellm.telemetry.records import (
     RequestRecord,
     StatusClass,
     TelemetryGroup,
-    TokenCounts,
     UIAction,
     UIEvent,
 )
@@ -21,14 +19,6 @@ from litellm.telemetry.records import (
 REPORT_SCHEMA_VERSION: Final = 1
 
 JsonValue: TypeAlias = "str | int | float | bool | None | Sequence[JsonValue] | Mapping[str, JsonValue]"
-
-_K: Final = TypeVar("_K", bound=str)
-
-
-def add_counts(counts: tuple[tuple[_K, int], ...], increments: Iterable[tuple[_K, int]]) -> tuple[tuple[_K, int], ...]:
-    pairs: Final = tuple(chain(counts, increments))
-    keys: Final = sorted({key for key, _ in pairs})
-    return tuple((key, sum(n for k, n in pairs if k == key)) for key in keys)
 
 
 @dataclass(frozen=True, slots=True)
@@ -58,45 +48,65 @@ class RequestKey:
         )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class RequestMetrics:
+    """One request row's running totals, added to in place so each record costs no allocation"""
+
     request_count: int
-    tokens: TokenCounts
+    input_tokens: int
+    output_tokens: int
+    cache_read_tokens: int
     block_count: Histogram
-    block_types: tuple[tuple[BlockType, int], ...]
-    header_keys: tuple[tuple[str, int], ...]
+    block_types: dict[BlockType, int]  # mutable-ok: incremented in place once per record on the request path
+    header_keys: dict[str, int]  # mutable-ok: incremented in place once per record on the request path
     provider_attempts: Histogram
     latency_to_headers: Histogram
     latency_to_first_byte: Histogram
 
     @classmethod
-    def of(cls, record: RequestRecord) -> "RequestMetrics":
+    def empty(cls) -> "RequestMetrics":
         return cls(
-            request_count=1,
-            tokens=record.tokens,
-            block_count=Histogram.of(BLOCK_COUNT_BOUNDS, None if record.blocks is None else record.blocks.total),
-            block_types=add_counts((), () if record.blocks is None else record.blocks.by_type),
-            header_keys=add_counts((), ((key, 1) for key in record.header_keys)),
-            provider_attempts=Histogram.of(ATTEMPT_BOUNDS, record.provider_attempts),
-            latency_to_headers=Histogram.of(LATENCY_BOUNDS_MS, record.latency_to_headers_ms),
-            latency_to_first_byte=Histogram.of(LATENCY_BOUNDS_MS, record.latency_to_first_byte_ms),
+            request_count=0,
+            input_tokens=0,
+            output_tokens=0,
+            cache_read_tokens=0,
+            block_count=Histogram.empty(BLOCK_COUNT_BOUNDS),
+            block_types={},
+            header_keys={},
+            provider_attempts=Histogram.empty(ATTEMPT_BOUNDS),
+            latency_to_headers=Histogram.empty(LATENCY_BOUNDS_MS),
+            latency_to_first_byte=Histogram.empty(LATENCY_BOUNDS_MS),
         )
 
-    def merge(self, other: "RequestMetrics") -> "RequestMetrics":
-        return RequestMetrics(
-            request_count=self.request_count + other.request_count,
-            tokens=TokenCounts(
-                input=self.tokens.input + other.tokens.input,
-                output=self.tokens.output + other.tokens.output,
-                cache_read=self.tokens.cache_read + other.tokens.cache_read,
-            ),
-            block_count=self.block_count.merge(other.block_count),
-            block_types=add_counts(self.block_types, other.block_types),
-            header_keys=add_counts(self.header_keys, other.header_keys),
-            provider_attempts=self.provider_attempts.merge(other.provider_attempts),
-            latency_to_headers=self.latency_to_headers.merge(other.latency_to_headers),
-            latency_to_first_byte=self.latency_to_first_byte.merge(other.latency_to_first_byte),
-        )
+    def add(self, record: RequestRecord) -> None:
+        self.request_count += 1
+        self.input_tokens += record.tokens.input
+        self.output_tokens += record.tokens.output
+        self.cache_read_tokens += record.tokens.cache_read
+        self.provider_attempts.add(record.provider_attempts)
+        self.latency_to_headers.add(record.latency_to_headers_ms)
+        self.latency_to_first_byte.add(record.latency_to_first_byte_ms)
+        for key in record.header_keys:
+            self.header_keys[key] = self.header_keys.get(key, 0) + 1
+        if record.blocks is None:
+            return
+        self.block_count.add(record.blocks.total)
+        for block_type, count in record.blocks.by_type:
+            self.block_types[block_type] = self.block_types.get(block_type, 0) + count
+
+    def add_metrics(self, other: "RequestMetrics") -> None:
+        self.request_count += other.request_count
+        self.input_tokens += other.input_tokens
+        self.output_tokens += other.output_tokens
+        self.cache_read_tokens += other.cache_read_tokens
+        self.block_count.add_histogram(other.block_count)
+        self.provider_attempts.add_histogram(other.provider_attempts)
+        self.latency_to_headers.add_histogram(other.latency_to_headers)
+        self.latency_to_first_byte.add_histogram(other.latency_to_first_byte)
+        for block_type, count in other.block_types.items():
+            self.block_types[block_type] = self.block_types.get(block_type, 0) + count
+        for key, count in other.header_keys.items():
+            self.header_keys[key] = self.header_keys.get(key, 0) + count
 
 
 @dataclass(frozen=True, slots=True)
@@ -116,23 +126,22 @@ class AttemptKey:
         )
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(slots=True)
 class AttemptMetrics:
     attempt_count: int
     latency_to_first_token: Histogram
 
     @classmethod
-    def of(cls, record: AttemptRecord) -> "AttemptMetrics":
-        return cls(
-            attempt_count=1,
-            latency_to_first_token=Histogram.of(LATENCY_BOUNDS_MS, record.latency_to_first_token_ms),
-        )
+    def empty(cls) -> "AttemptMetrics":
+        return cls(attempt_count=0, latency_to_first_token=Histogram.empty(LATENCY_BOUNDS_MS))
 
-    def merge(self, other: "AttemptMetrics") -> "AttemptMetrics":
-        return AttemptMetrics(
-            attempt_count=self.attempt_count + other.attempt_count,
-            latency_to_first_token=self.latency_to_first_token.merge(other.latency_to_first_token),
-        )
+    def add(self, record: AttemptRecord) -> None:
+        self.attempt_count += 1
+        self.latency_to_first_token.add(record.latency_to_first_token_ms)
+
+    def add_metrics(self, other: "AttemptMetrics") -> None:
+        self.attempt_count += other.attempt_count
+        self.latency_to_first_token.add_histogram(other.latency_to_first_token)
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,7 +161,7 @@ def _enum_value(value: StatusClass | BlockType | UIAction | TelemetryGroup) -> s
 
 
 def _histogram_json(histogram: Histogram) -> JsonValue:
-    return list(histogram.counts)
+    return {"counts": list(histogram.counts), "invalid": histogram.invalid}
 
 
 def _request_json(key: RequestKey, metrics: RequestMetrics, groups: frozenset[TelemetryGroup]) -> JsonValue:
@@ -170,15 +179,15 @@ def _request_json(key: RequestKey, metrics: RequestMetrics, groups: frozenset[Te
     }
     tokens: Final[Mapping[str, JsonValue]] = {
         "provider_cache_hit": key.provider_cache_hit,
-        "input_tokens": metrics.tokens.input,
-        "output_tokens": metrics.tokens.output,
-        "cache_read_tokens": metrics.tokens.cache_read,
+        "input_tokens": metrics.input_tokens,
+        "output_tokens": metrics.output_tokens,
+        "cache_read_tokens": metrics.cache_read_tokens,
     }
     taxonomy: Final[Mapping[str, JsonValue]] = {"provider": key.provider, "deployment_hash": key.deployment_hash}
     details: Final[Mapping[str, JsonValue]] = {
         "block_count": _histogram_json(metrics.block_count),
-        "block_types": {_enum_value(block_type): n for block_type, n in metrics.block_types},
-        "header_keys": dict(metrics.header_keys),
+        "block_types": {_enum_value(block_type): n for block_type, n in sorted(metrics.block_types.items())},
+        "header_keys": dict(sorted(metrics.header_keys.items())),
     }
     return {
         **success,
