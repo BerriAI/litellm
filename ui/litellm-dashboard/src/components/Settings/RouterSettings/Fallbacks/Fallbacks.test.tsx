@@ -77,6 +77,19 @@ vi.mock("./AddFallbacks", () => ({
 }));
 
 describe("Fallbacks", () => {
+  it("shows provider logos for saved custom aliases absent from the cost map", async () => {
+    vi.mocked(fetchModelsModule.fetchAvailableModels).mockResolvedValue([
+      { model_group: "custom-primary", providers: ["openai"] },
+      { model_group: "custom-backup", providers: ["anthropic"] },
+    ]);
+    vi.mocked(networkingModule.getCallbacksCall).mockResolvedValue({
+      router_settings: { fallbacks: [{ "custom-primary": ["custom-backup"] }] },
+    });
+    renderWithQueryClient(<Fallbacks {...defaultProps} />);
+    expect(await screen.findByRole("img", { name: "openai logo" })).toBeInTheDocument();
+    expect(await screen.findByRole("img", { name: "anthropic logo" })).toBeInTheDocument();
+  });
+
   const mockAccessToken = "test-token";
   const mockUserRole = "Admin";
   const mockUserID = "user-123";

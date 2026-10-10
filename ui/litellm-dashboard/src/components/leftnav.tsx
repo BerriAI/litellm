@@ -225,6 +225,13 @@ const menuGroups: MenuGroup[] = [
         roles: rolesAllowedToViewWriteScopedPages,
       },
       {
+        key: "fallbacks",
+        page: "fallbacks",
+        label: "Fallbacks",
+        icon: <Route {...ICON} />,
+        roles: all_admin_roles,
+      },
+      {
         key: "agentic",
         page: "agentic",
         label: "Agentic",
