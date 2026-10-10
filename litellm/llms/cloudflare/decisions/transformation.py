@@ -15,6 +15,8 @@ _RESPONSE_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapte
 class CloudflareDecisionsConfig(BaseDecisionsConfig):
     api_key_env = ("CLOUDFLARE_API_KEY",)
     api_base_env = ("CLOUDFLARE_API_BASE",)
+    supports_images = True
+    inlines_remote_images = True
 
     def get_default_api_base(self) -> str | None:
         account_id: Final = normalize_nonempty_secret_str(get_secret_str("CLOUDFLARE_ACCOUNT_ID"))

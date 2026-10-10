@@ -470,15 +470,8 @@ def test_decisions_return_guardrail_information_when_requested(
                 }
             ],
         },
-        {
-            "model": "decider",
-            "input": [
-                {"role": "user", "content": [{"type": "input_image", "image_url": "data:image/png;base64,AA=="}]}
-            ],
-            "questions": [{"type": "predicate", "instructions": "Is this a defect?"}],
-        },
     ),
-    ids=("systemone_body", "colliding_choice_values", "image_input"),
+    ids=("systemone_body", "colliding_choice_values"),
 )
 def test_openai_format_decisions_rejects_bodies_it_cannot_translate(
     client: TestClient,
@@ -634,6 +627,120 @@ def test_a_non_string_safety_identifier_is_refused_unless_the_deployment_drops_p
         "model": "gpt-6-luna",
         "input": "The package arrived with a broken screen.",
         "questions": _OPENAI_FORMAT_REQUEST["questions"][:1],
+    }
+
+
+_IMAGE_TEXT: Final = "Is the screen cracked?"
+_PNG_DATA_URL: Final = "data:image/png;base64,AA=="
+_IMAGE_ENDPOINTS: Final = ("/v1/decisions", "/v1/systemone")
+_IMAGE_REQUEST_BODIES: Final[tuple[Mapping[str, object], ...]] = (
+    {
+        "model": "decider",
+        "input": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": _IMAGE_TEXT},
+                    {"type": "input_image", "image_url": _PNG_DATA_URL},
+                ],
+            }
+        ],
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    },
+    {
+        "model": "decider",
+        "state": _IMAGE_TEXT,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        "images": [_PNG_DATA_URL],
+    },
+)
+_IMAGE_REQUESTS: Final = tuple(zip(_IMAGE_ENDPOINTS, _IMAGE_REQUEST_BODIES, strict=True))
+_IMAGE_REQUEST_IDS: Final = ("openai_format", "systemone_format")
+
+
+def _route_decider_to(monkeypatch: pytest.MonkeyPatch, litellm_params: Mapping[str, object]) -> None:
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        litellm.Router(model_list=[{"model_name": "decider", "litellm_params": dict(litellm_params)}]),
+    )
+
+
+@pytest.mark.parametrize(("endpoint", "request_body"), _IMAGE_REQUESTS, ids=_IMAGE_REQUEST_IDS)
+def test_images_reach_a_cloudflare_clef_deployment_as_its_images_field(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    request_body: Mapping[str, object],
+) -> None:
+    _route_decider_to(
+        monkeypatch,
+        {
+            "model": "cloudflare/clef",
+            "api_key": "cloudflare-key",
+            "api_base": "https://api.cloudflare.com/client/v4/accounts/acct/ai/run",
+        },
+    )
+    upstream: Final = respx_mock.post(
+        "https://api.cloudflare.com/client/v4/accounts/acct/ai/run/@cf/cloudflare/clef"
+    ).respond(json=_RESPONSE)
+
+    response: Final = client.post(endpoint, json=request_body)
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "clef",
+        "state": _IMAGE_TEXT,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        "images": [_PNG_DATA_URL],
+    }
+
+
+@pytest.mark.parametrize(
+    ("endpoint", "request_body", "param"),
+    tuple(zip(_IMAGE_ENDPOINTS, _IMAGE_REQUEST_BODIES, ("input_image", "images"), strict=True)),
+    ids=_IMAGE_REQUEST_IDS,
+)
+def test_images_to_a_text_only_deployment_are_refused_without_drop_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    request_body: Mapping[str, object],
+    param: str,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(endpoint, json=request_body)
+
+    assert response.status_code == 400, response.text
+    assert f"['{param}']" in response.json()["error"]["message"]
+    assert not upstream.called
+
+
+@pytest.mark.parametrize(("endpoint", "request_body"), _IMAGE_REQUESTS, ids=_IMAGE_REQUEST_IDS)
+def test_images_to_a_text_only_deployment_are_dropped_when_it_drops_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    request_body: Mapping[str, object],
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    _route_decider_to(
+        monkeypatch, {"model": "perplexity/pplx-decider-v1-27b", "api_key": "test-key", "drop_params": True}
+    )
+    upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = client.post(endpoint, json=request_body)
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": _IMAGE_TEXT,
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
 
 

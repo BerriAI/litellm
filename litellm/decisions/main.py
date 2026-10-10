@@ -1,5 +1,6 @@
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from types import MappingProxyType
 from typing import Final, TypeAlias
 
 import httpx
@@ -9,16 +10,25 @@ from typing_extensions import assert_never
 import litellm
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.prompt_templates.image_handling import (
+    async_convert_urls_to_base64,
+    convert_url_to_base64,
+)
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
     BaseDecisionsConfig,
+    image_param,
     ir_to_systemone_response,
+    remote_image_urls,
     systemone_request_to_ir,
+    with_inlined_images,
+    without_images,
 )
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
 from litellm.types.decisions import (
     DecisionQuestion,
+    DecisionsBase64Image,
     DecisionsIRRequest,
     DecisionsIRResponse,
     DecisionsJSON,
@@ -36,6 +46,7 @@ from litellm.utils import ProviderConfigManager, client
 DecisionsQuestions: TypeAlias = (
     Mapping[str, DecisionQuestion | Mapping[str, object]] | Sequence[OpenAIDecisionQuestion | Mapping[str, object]]
 )
+DecisionsImages: TypeAlias = Sequence[str | DecisionsBase64Image | Mapping[str, object]]
 DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequestBody
 
 _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
@@ -54,7 +65,6 @@ class _DecisionsCall:
     provider_config: BaseDecisionsConfig
     request: DecisionsRequestFormat
     ir_request: DecisionsIRRequest
-    body: Mapping[str, object] = field(repr=False)
     api_base: str
     api_key: str | None = field(repr=False)
     logging_obj: LiteLLMLoggingObj | None
@@ -89,11 +99,12 @@ def _validate_request(
     *,
     state: DecisionsJSON | None,
     questions: DecisionsQuestions | None,
+    images: DecisionsImages | None,
     decision_input: OpenAIDecisionInput | None,
     safety_identifier: str | None,
 ) -> DecisionsRequestFormat:
     if decision_input is None:
-        return _SYSTEMONE_REQUEST_ADAPTER.validate_python({"state": state, "questions": questions})
+        return _SYSTEMONE_REQUEST_ADAPTER.validate_python({"state": state, "questions": questions, "images": images})
     return _OPENAI_REQUEST_ADAPTER.validate_python(
         {"input": decision_input, "questions": questions, "safety_identifier": safety_identifier}
     )
@@ -120,8 +131,29 @@ def _request_safety_identifier(safety_identifier: object, kwargs: Mapping[str, o
 
 
 @dataclass(frozen=True, slots=True)
-class _UnsupportedSafetyIdentifier:
-    pass
+class _UnsupportedParams:
+    names: tuple[str, ...]
+
+
+def _unsupported_params(ir_request: DecisionsIRRequest, provider_config: BaseDecisionsConfig) -> tuple[str, ...]:
+    refuses_safety_identifier: Final = (
+        ir_request.safety_identifier is not None and not provider_config.supports_safety_identifier
+    )
+    refused_image_param: Final = None if provider_config.supports_images else image_param(ir_request.input)
+    return (
+        *(("safety_identifier",) if refuses_safety_identifier else ()),
+        *(() if refused_image_param is None else (refused_image_param,)),
+    )
+
+
+def _without_unsupported_params(
+    ir_request: DecisionsIRRequest, provider_config: BaseDecisionsConfig
+) -> DecisionsIRRequest:
+    return replace(
+        ir_request,
+        input=ir_request.input if provider_config.supports_images else without_images(ir_request.input),
+        safety_identifier=ir_request.safety_identifier if provider_config.supports_safety_identifier else None,
+    )
 
 
 def _provider_ir_request(
@@ -130,13 +162,14 @@ def _provider_ir_request(
     safety_identifier: str | None,
     provider_config: BaseDecisionsConfig,
     kwargs: Mapping[str, object],
-) -> DecisionsIRRequest | _UnsupportedSafetyIdentifier:
+) -> DecisionsIRRequest | _UnsupportedParams:
     ir_request: Final = _ir_request(request, safety_identifier)
-    if ir_request.safety_identifier is None or provider_config.supports_safety_identifier:
+    unsupported: Final = _unsupported_params(ir_request, provider_config)
+    if not unsupported:
         return ir_request
     if _drops_params(kwargs):
-        return replace(ir_request, safety_identifier=None)
-    return _UnsupportedSafetyIdentifier()
+        return _without_unsupported_params(ir_request, provider_config)
+    return _UnsupportedParams(names=unsupported)
 
 
 def _prepare_call(
@@ -144,6 +177,7 @@ def _prepare_call(
     model: str,
     state: DecisionsJSON | None,
     questions: DecisionsQuestions | None,
+    images: DecisionsImages | None,
     decision_input: OpenAIDecisionInput | None,
     safety_identifier: str | None,
     api_key: str | None,
@@ -172,6 +206,15 @@ def _prepare_call(
             model=model,
             llm_provider=provider,
         )
+    if images is not None and decision_input is not None:
+        raise litellm.BadRequestError(
+            message=(
+                "images belongs to the System One format; with input (OpenAI format), "
+                "send images as input_image content parts"
+            ),
+            model=model,
+            llm_provider=provider,
+        )
     try:
         canonical_model: Final = provider_config.canonical_model(upstream_model)
     except ValueError as error:
@@ -181,6 +224,7 @@ def _prepare_call(
         request: Final = _validate_request(
             state=state,
             questions=questions,
+            images=images,
             decision_input=decision_input,
             safety_identifier=request_safety_identifier,
         )
@@ -212,22 +256,13 @@ def _prepare_call(
         provider_config=provider_config,
         kwargs=kwargs,
     )
-    if isinstance(ir_request, _UnsupportedSafetyIdentifier):
+    if isinstance(ir_request, _UnsupportedParams):
         raise litellm.UnsupportedParamsError(
             message=(
-                f"{provider} does not support parameters: ['safety_identifier'], for model={model}. "
+                f"{provider} does not support parameters: {list(ir_request.names)}, for model={model}. "
                 "To drop these, set `litellm.drop_params=True` or for proxy:\n\n"
                 "`litellm_settings:\n drop_params: true`\n"
             ),
-            model=model,
-            llm_provider=provider,
-        )
-    body: Final = provider_config.transform_decisions_request(
-        model=canonical_model, request=ir_request, custom_llm_provider=provider
-    )
-    if isinstance(body, UnsupportedDecisionsRequest):
-        raise litellm.BadRequestError(
-            message=f"Decisions provider '{provider}' cannot serve this request: {body.reason}",
             model=model,
             llm_provider=provider,
         )
@@ -250,13 +285,52 @@ def _prepare_call(
         provider_config=provider_config,
         request=request,
         ir_request=ir_request,
-        body=body,
         api_base=resolved_api_base,
         api_key=resolved_api_key,
         logging_obj=logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None,
         headers=extra_headers or {},
         timeout=timeout,
     )
+
+
+def _remote_image_urls(call: _DecisionsCall) -> tuple[str, ...]:
+    if not call.provider_config.inlines_remote_images:
+        return ()
+    return remote_image_urls(call.ir_request.input)
+
+
+def _with_data_urls(call: _DecisionsCall, data_urls: Mapping[str, str]) -> _DecisionsCall:
+    return replace(
+        call, ir_request=replace(call.ir_request, input=with_inlined_images(call.ir_request.input, data_urls))
+    )
+
+
+def _with_remote_images_inlined(call: _DecisionsCall) -> _DecisionsCall:
+    remote_urls: Final = _remote_image_urls(call)
+    if not remote_urls:
+        return call
+    return _with_data_urls(call, MappingProxyType({url: convert_url_to_base64(url) for url in remote_urls}))
+
+
+async def _async_with_remote_images_inlined(call: _DecisionsCall) -> _DecisionsCall:
+    remote_urls: Final = _remote_image_urls(call)
+    if not remote_urls:
+        return call
+    data_urls: Final = await async_convert_urls_to_base64(remote_urls)
+    return _with_data_urls(call, MappingProxyType(dict(zip(remote_urls, data_urls, strict=True))))
+
+
+def _request_body(call: _DecisionsCall) -> Mapping[str, object]:
+    body: Final = call.provider_config.transform_decisions_request(
+        model=call.model, request=call.ir_request, custom_llm_provider=call.custom_llm_provider
+    )
+    if isinstance(body, UnsupportedDecisionsRequest):
+        raise litellm.BadRequestError(
+            message=f"Decisions provider '{call.custom_llm_provider}' cannot serve this request: {body.reason}",
+            model=call.requested_model,
+            llm_provider=call.custom_llm_provider,
+        )
+    return body
 
 
 def _format_response(response: DecisionsIRResponse, call: _DecisionsCall) -> DecisionsResponse | OpenAIDecisionResponse:
@@ -312,21 +386,26 @@ async def adecisions(
     extra_headers: Mapping[str, str] | None = None,
     input: OpenAIDecisionInput | None = None,
     safety_identifier: str | None = None,
+    images: DecisionsImages | None = None,
     **kwargs: object,
 ) -> DecisionsResponse | OpenAIDecisionResponse:
-    call: Final = _prepare_call(
-        model=model,
-        state=state,
-        questions=questions,
-        decision_input=input,
-        safety_identifier=safety_identifier,
-        api_key=api_key,
-        api_base=api_base,
-        timeout=timeout,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        kwargs=kwargs,
+    call: Final = await _async_with_remote_images_inlined(
+        _prepare_call(
+            model=model,
+            state=state,
+            questions=questions,
+            images=images,
+            decision_input=input,
+            safety_identifier=safety_identifier,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            kwargs=kwargs,
+        )
     )
+    body: Final = _request_body(call)
     try:
         response: Final = await _HANDLER.adecisions(
             model=call.model,
@@ -334,7 +413,7 @@ async def adecisions(
             logging_obj=call.logging_obj,
             provider_config=call.provider_config,
             request=call.ir_request,
-            body=call.body,
+            body=body,
             api_base=call.api_base,
             api_key=call.api_key,
             headers=call.headers,
@@ -357,21 +436,26 @@ def decisions(
     extra_headers: Mapping[str, str] | None = None,
     input: OpenAIDecisionInput | None = None,
     safety_identifier: str | None = None,
+    images: DecisionsImages | None = None,
     **kwargs: object,
 ) -> DecisionsResponse | OpenAIDecisionResponse:
-    call: Final = _prepare_call(
-        model=model,
-        state=state,
-        questions=questions,
-        decision_input=input,
-        safety_identifier=safety_identifier,
-        api_key=api_key,
-        api_base=api_base,
-        timeout=timeout,
-        custom_llm_provider=custom_llm_provider,
-        extra_headers=extra_headers,
-        kwargs=kwargs,
+    call: Final = _with_remote_images_inlined(
+        _prepare_call(
+            model=model,
+            state=state,
+            questions=questions,
+            images=images,
+            decision_input=input,
+            safety_identifier=safety_identifier,
+            api_key=api_key,
+            api_base=api_base,
+            timeout=timeout,
+            custom_llm_provider=custom_llm_provider,
+            extra_headers=extra_headers,
+            kwargs=kwargs,
+        )
     )
+    body: Final = _request_body(call)
     try:
         response: Final = _HANDLER.decisions(
             model=call.model,
@@ -379,7 +463,7 @@ def decisions(
             logging_obj=call.logging_obj,
             provider_config=call.provider_config,
             request=call.ir_request,
-            body=call.body,
+            body=body,
             api_base=call.api_base,
             api_key=call.api_key,
             headers=call.headers,

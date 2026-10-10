@@ -105,6 +105,7 @@ class _Provider:
     wraps_result: bool
     cost_map_key: str | None
     speaks_openai: bool = False
+    takes_images: bool = False
 
     def upstream_body(self) -> dict[str, JsonValue]:
         if self.speaks_openai:
@@ -156,6 +157,7 @@ _PROVIDERS: Final = (
         _API_KEY,
         True,
         "cloudflare/@cf/cloudflare/clef",
+        takes_images=True,
     ),
     _Provider("hosted_vllm", "hosted_vllm/Qwen/Qwen3-0.6B", "/v1/systemone", "Qwen/Qwen3-0.6B", None, False, None),
     _Provider(
@@ -173,9 +175,11 @@ _PROVIDERS: Final = (
     _Provider("openai", "openai/gpt-6-luna", "/v1/decisions", "gpt-6-luna", _API_KEY, False, "gpt-6-luna", True),
 )
 _SYSTEM_ONE_PROVIDERS: Final = tuple(provider for provider in _PROVIDERS if not provider.speaks_openai)
+_TEXT_ONLY_PROVIDERS: Final = tuple(provider for provider in _SYSTEM_ONE_PROVIDERS if not provider.takes_images)
 _PERPLEXITY: Final = _PROVIDERS[0]
 _TYPESAFE: Final = _PROVIDERS[1]
 _OPENAI: Final = next(provider for provider in _PROVIDERS if provider.speaks_openai)
+_CLOUDFLARE: Final = next(provider for provider in _SYSTEM_ONE_PROVIDERS if provider.takes_images)
 _PREDICATE: Final[dict[str, JsonValue]] = {"type": "predicate", "name": "q", "instructions": "Is it?"}
 _INVALID_BODIES: Final[tuple[tuple[str, dict[str, JsonValue]], ...]] = (
     ("missing questions", {"input": _INPUT}),
@@ -197,12 +201,13 @@ _INVALID_BODIES: Final[tuple[tuple[str, dict[str, JsonValue]], ...]] = (
     ("numeric safety_identifier", {"input": _INPUT, "questions": _QUESTIONS, "safety_identifier": 7}),
     ("list safety_identifier", {"input": _INPUT, "questions": _QUESTIONS, "safety_identifier": [_SAFETY_IDENTIFIER]}),
 )
+_PNG_DATA_URL: Final = "data:image/png;base64,iVBORw0KGgo="
 _IMAGE_INPUT: Final[list[JsonValue]] = [
     {
         "role": "user",
         "content": [
             {"type": "input_text", "text": _INPUT},
-            {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=", "detail": "auto"},
+            {"type": "input_image", "image_url": _PNG_DATA_URL, "detail": "auto"},
         ],
     }
 ]
@@ -212,7 +217,7 @@ _OPENAI_IMAGE_MESSAGES: Final[list[JsonValue]] = [
         "type": "message",
         "content": [
             {"type": "input_text", "text": _INPUT},
-            {"type": "input_image", "image_url": "data:image/png;base64,iVBORw0KGgo=", "detail": "auto"},
+            {"type": "input_image", "image_url": _PNG_DATA_URL, "detail": "auto"},
         ],
     }
 ]
@@ -295,6 +300,13 @@ def _assert_refused_as_invalid(gateway: Gateway, model: str, label: str, body: d
     response: Final = gateway.request("POST", "/v1/decisions", {"model": model, **body})
     assert response.status_code == 400, (label, response.text)
     assert "Invalid Decisions request" in response.text, (label, response.text)
+
+
+def _decide_with_images_in_both_formats(gateway: Gateway, model: str) -> tuple[httpx.Response, httpx.Response]:
+    return (
+        _decide(gateway, model, input=_IMAGE_INPUT),
+        _decide_in_system_one_format(gateway, model, images=[_PNG_DATA_URL]),
+    )
 
 
 def _assert_refused_for_safety_identifier(response: httpx.Response) -> None:
@@ -425,17 +437,36 @@ def test_invalid_bodies_are_refused_at_the_gateway_without_an_upstream_call(gate
         assert _upstream_calls(gateway, handle) == []
 
 
-@pytest.mark.parametrize("provider", _SYSTEM_ONE_PROVIDERS, ids=_provider_id)
-def test_system_one_providers_refuse_images_at_the_gateway_without_an_upstream_call(
+@pytest.mark.parametrize("provider", _TEXT_ONLY_PROVIDERS, ids=_provider_id)
+def test_text_only_providers_refuse_images_unless_the_deployment_drops_params(
     gateway: Gateway, provider: _Provider
 ) -> None:
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, provider.upstream_reply())
-        model: Final = _deployment(scenario, handle, provider)
-        response: Final = _decide(gateway, model, input=_IMAGE_INPUT)
-        assert response.status_code == 400, response.text
-        assert "input_image" in response.text
+        strict: Final = _deployment(scenario, handle, provider)
+        openai_format, system_one_format = _decide_with_images_in_both_formats(gateway, strict)
+        assert (openai_format.status_code, system_one_format.status_code) == (400, 400), openai_format.text
+        assert "['input_image']" in openai_format.text and "drop_params" in openai_format.text, openai_format.text
+        assert "['images']" in system_one_format.text, system_one_format.text
         assert _upstream_calls(gateway, handle) == []
+
+        dropping: Final = _deployment(scenario, handle, provider, drop_params=True)
+        accepted: Final = _decide_with_images_in_both_formats(gateway, dropping)
+        assert [response.status_code for response in accepted] == [200, 200], [response.text for response in accepted]
+        assert [call["body"] for call in _upstream_calls(gateway, handle)] == [provider.upstream_body()] * 2
+
+
+def test_cloudflare_receives_images_from_either_format_in_its_images_field(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        handle: Final = _register(scenario, _CLOUDFLARE.upstream_reply())
+        model: Final = _deployment(scenario, handle, _CLOUDFLARE)
+        openai_format, system_one_format = _decide_with_images_in_both_formats(gateway, model)
+        assert openai_format.status_code == 200, openai_format.text
+        assert openai_format.json() == _CLOUDFLARE.litellm_response()
+        assert system_one_format.status_code == 200, system_one_format.text
+        assert system_one_format.json()["answers"] == _SYSTEM_ONE_ANSWERS
+        expected_body: Final = {**_CLOUDFLARE.upstream_body(), "images": [_PNG_DATA_URL]}
+        assert [call["body"] for call in _upstream_calls(gateway, handle)] == [expected_body] * 2
 
 
 def test_openai_forwards_image_input_in_its_own_message_shape(gateway: Gateway) -> None:
