@@ -6016,7 +6016,7 @@ def completion(
             ## COMPLETION CALL - RAGFlow uses HTTP handler to support custom URL paths
             response = _complete_ragflow(_dispatch_ctx)
         elif custom_llm_provider == "scaledown":
-            return _complete_scaledown(_dispatch_ctx)
+            response = _complete_scaledown(_dispatch_ctx)  # rebind-ok: shared provider return
         elif custom_llm_provider == "xai":
             ## COMPLETION CALL
             response = _complete_xai(_dispatch_ctx)
