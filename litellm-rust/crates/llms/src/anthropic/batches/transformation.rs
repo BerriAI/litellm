@@ -1,13 +1,12 @@
 use litellm_llms_types::formats::batches::{BatchRequestCounts, BatchResponse, BatchStatus};
 use litellm_llms_types::formats::messages::MessagesResponse;
+use litellm_llms_types::providers::anthropic::{BATCHES_PATH, MESSAGES_PATH};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use time::OffsetDateTime;
 use url::Url;
 
 use crate::{Error, anthropic::common_utils::resolve_anthropic_api_base};
-
-const BATCHES_PATH_SUFFIX: &str = "/v1/messages/batches";
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnthropicBatchRequestCounts {
@@ -106,12 +105,12 @@ fn batches_base_url(
 ) -> Result<Url, Error> {
     let api_base = resolve_anthropic_api_base(api_base, env_lookup);
     let api_base = api_base.trim_end_matches('/');
-    let complete_url = if api_base.ends_with(BATCHES_PATH_SUFFIX) {
+    let complete_url = if api_base.ends_with(BATCHES_PATH) {
         api_base.to_string()
-    } else if let Some(base) = api_base.strip_suffix("/v1/messages") {
-        format!("{base}{BATCHES_PATH_SUFFIX}")
+    } else if let Some(base) = api_base.strip_suffix(MESSAGES_PATH) {
+        format!("{base}{BATCHES_PATH}")
     } else {
-        format!("{api_base}{BATCHES_PATH_SUFFIX}")
+        format!("{api_base}{BATCHES_PATH}")
     };
     Url::parse(&complete_url).map_err(|error| {
         Error::InvalidRequest(crate::ErrorDetail::invalid("Anthropic API base", error))
@@ -187,7 +186,7 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
         BatchResponse {
             id: response.id.clone(),
             object: "batch".into(),
-            endpoint: "/v1/messages".into(),
+            endpoint: MESSAGES_PATH.into(),
             input_file_id: "None".into(),
             completion_window: "24h".into(),
             status,

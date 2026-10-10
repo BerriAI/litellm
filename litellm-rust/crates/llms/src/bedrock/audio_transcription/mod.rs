@@ -5,7 +5,10 @@ use litellm_auth_aws::{
     resolve_bedrock_region,
 };
 use litellm_core_utils::core_helpers::json_type_name;
-use litellm_llms_types::formats::audio_transcription::AudioTranscriptionResponseData;
+use litellm_llms_types::{
+    formats::audio_transcription::AudioTranscriptionResponseData,
+    providers::bedrock::ConverseResponse,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use strum::IntoStaticStr;
@@ -19,7 +22,6 @@ use crate::{
         },
         auth::AuthScheme,
     },
-    bedrock::chat::converse_transformation::ConverseResponse,
 };
 
 const SUPPORTED_PARAMS: &[&str] = &["language", "prompt", "temperature", "response_format"];
