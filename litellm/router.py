@@ -966,6 +966,7 @@ class Router:
         router_general_settings: RouterGeneralSettings | None = RouterGeneralSettings(),
         deployment_affinity_ttl_seconds: int = 3600,
         model_group_affinity_config: dict[str, list[str]] | None = None,
+        session_affinity_yield_on_saturated_deployment: bool = False,
         ignore_invalid_deployments: bool = False,
         enable_health_check_routing: bool = False,
         health_check_staleness_threshold: int | None = None,
@@ -1011,6 +1012,7 @@ class Router:
             alerting_config (AlertingConfig): Slack alerting configuration. Defaults to None.
             provider_budget_config (ProviderBudgetConfig): Provider budget configuration. Use this to set llm_provider budget limits. example $100/day to OpenAI, $100/day to Azure, etc. Defaults to None.
             deployment_affinity_ttl_seconds (int): TTL for user-key -> deployment affinity mapping. Defaults to 3600.
+            session_affinity_yield_on_saturated_deployment (bool): When True, a session pin yields to another deployment in the model group that still has max_parallel_requests capacity once the pinned deployment is saturated. Defaults to False.
             ignore_invalid_deployments (bool): Ignores invalid deployments, and continues with other deployments. Default is to raise an error.
             enable_weighted_failover (bool): When True and the routing strategy is "simple-shuffle", a retryable failure on one deployment causes the request to re-pick (weighted) across the other deployments in the same model group before any cross-group fallback runs. Bounded by `max_fallbacks`. Async-only: currently honored by `router.acompletion()` and other async entrypoints. The sync `router.completion()` path falls back to the regular fallback flow. Defaults to False.
             fallback_access_check (Optional[FallbackAccessCheck]): Awaited before each cross-model-group fallback attempt on the async path; a fallback target it rejects is skipped. Defaults to None (every configured fallback is attempted).
@@ -1177,6 +1179,7 @@ class Router:
 
         self.deployment_affinity_ttl_seconds = deployment_affinity_ttl_seconds
         self.model_group_affinity_config = model_group_affinity_config
+        self.session_affinity_yield_on_saturated_deployment = session_affinity_yield_on_saturated_deployment
         warn_on_unknown_model_group_affinity_flags(model_group_affinity_config)
 
         if model_list is not None:
@@ -2458,6 +2461,7 @@ class Router:
             enable_session_id_affinity=False,
             model_group_affinity_config=self.model_group_affinity_config,
             is_priority_group=self._is_priority_routing_group,
+            enable_session_affinity_yield_on_saturated_deployment=self.session_affinity_yield_on_saturated_deployment,
         )
         self.optional_callbacks.append(affinity_callback)
         litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
@@ -2492,6 +2496,10 @@ class Router:
                 existing_affinity_callback.enable_session_id_affinity = (
                     existing_affinity_callback.enable_session_id_affinity or enable_session_id_affinity
                 )
+                existing_affinity_callback.enable_session_affinity_yield_on_saturated_deployment = (
+                    existing_affinity_callback.enable_session_affinity_yield_on_saturated_deployment
+                    or self.session_affinity_yield_on_saturated_deployment
+                )
                 existing_affinity_callback.ttl_seconds = self.deployment_affinity_ttl_seconds
                 if self.model_group_affinity_config:
                     existing_affinity_callback.model_group_affinity_config = self.model_group_affinity_config
@@ -2504,6 +2512,7 @@ class Router:
                     enable_session_id_affinity=enable_session_id_affinity,
                     model_group_affinity_config=self.model_group_affinity_config,
                     is_priority_group=self._is_priority_routing_group,
+                    enable_session_affinity_yield_on_saturated_deployment=self.session_affinity_yield_on_saturated_deployment,
                 )
                 self.optional_callbacks.append(affinity_callback)
                 litellm.logging_callback_manager.add_litellm_callback(affinity_callback)
