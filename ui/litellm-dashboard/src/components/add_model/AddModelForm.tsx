@@ -38,7 +38,7 @@ import ConnectionErrorDisplay from "./model_connection_test";
 import ProviderSpecificFields from "./provider_specific_fields";
 import { TEST_MODES } from "./add_model_modes";
 import DecisionModelNote from "./DecisionModelNote";
-import { decisionModelsSublabel, type DecisionCatalog } from "@/lib/decisionModels";
+import { type DecisionCatalog } from "@/lib/decisionModels";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { credentialsKeys } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { extractProxyErrorMessage } from "@/lib/http/client";
@@ -153,10 +153,9 @@ const AddModelForm: React.FC<AddModelFormProps> = ({
       sortedProviderMetadata.map((providerInfo) => ({
         label: providerInfo.provider_display_name,
         value: providerInfo.provider,
-        sublabel: decisionModelsSublabel(decisionCatalog, providerInfo.litellm_provider),
         icon: <ProviderLogo provider={providerInfo.provider} className="w-5 h-5" />,
       })),
-    [sortedProviderMetadata, decisionCatalog],
+    [sortedProviderMetadata],
   );
 
   const pickedLitellmProvider = sortedProviderMetadata.find(
