@@ -3,6 +3,8 @@ Tests for AI Usage Chat module.
 """
 
 import json
+from collections.abc import AsyncIterator
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -330,15 +332,15 @@ class TestStreamUsageAiChat:
         "tool_name", ["get_usage_data", "get_team_usage_data", "get_tag_usage_data"]
     )
     async def test_invalid_tool_dates_are_reported_to_the_model(
-        self, tool_name, start_date, end_date, reason
-    ):
-        arguments = json.dumps({"start_date": start_date, "end_date": end_date})
-        mock_tool_call = MagicMock()
+        self, tool_name: str, start_date: str, end_date: str, reason: str
+    ) -> None:
+        arguments: Final = json.dumps({"start_date": start_date, "end_date": end_date})
+        mock_tool_call: Final = MagicMock()
         mock_tool_call.id = "call_dates"
         mock_tool_call.function.name = tool_name
         mock_tool_call.function.arguments = arguments
 
-        mock_first_response = MagicMock()
+        mock_first_response: Final = MagicMock()
         mock_first_response.choices = [MagicMock()]
         mock_first_response.choices[0].message.tool_calls = [mock_tool_call]
         mock_first_response.choices[0].message.model_dump.return_value = {
@@ -353,13 +355,13 @@ class TestStreamUsageAiChat:
             ],
         }
 
-        async def mock_stream():
-            chunk = MagicMock()
+        async def mock_stream() -> AsyncIterator[MagicMock]:
+            chunk: Final = MagicMock()
             chunk.choices = [MagicMock()]
             chunk.choices[0].delta.content = "Those dates are reversed."
             yield chunk
 
-        fetch = AsyncMock()
+        fetch: Final = AsyncMock()
         with (
             patch(
                 "litellm.proxy.management_endpoints.usage_endpoints.ai_usage_chat.litellm"
@@ -370,30 +372,35 @@ class TestStreamUsageAiChat:
                 side_effect=[mock_first_response, mock_stream()]
             )
 
-            events = [
-                json.loads(event.replace("data: ", "").strip())
-                async for event in stream_usage_ai_chat(
-                    messages=[{"role": "user", "content": "How much did we spend?"}],
-                    model="gpt-4o-mini",
-                    is_admin=True,
-                )
-            ]
+            events: Final[tuple[dict[str, object], ...]] = tuple(
+                [
+                    json.loads(event.replace("data: ", "").strip())
+                    async for event in stream_usage_ai_chat(
+                        messages=[
+                            {"role": "user", "content": "How much did we spend?"}
+                        ],
+                        model="gpt-4o-mini",
+                        is_admin=True,
+                    )
+                ]
+            )
 
-            final_messages = mock_litellm.acompletion.call_args_list[1].kwargs[
+            final_messages: Final = mock_litellm.acompletion.call_args_list[1].kwargs[
                 "messages"
             ]
 
         fetch.assert_not_called()
-        tool_messages = [m for m in final_messages if m["role"] == "tool"]
-        assert tool_messages == [
+        assert [m for m in final_messages if m["role"] == "tool"] == [
             {
                 "role": "tool",
                 "tool_call_id": "call_dates",
                 "content": f"Invalid date range: {reason}",
             }
         ]
-        statuses = [e["status"] for e in events if e["type"] == "tool_call"]
-        assert statuses == ["running", "complete"]
+        assert [e["status"] for e in events if e["type"] == "tool_call"] == [
+            "running",
+            "complete",
+        ]
 
     @pytest.mark.asyncio
     async def test_stream_handles_error(self):
