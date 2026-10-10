@@ -8991,6 +8991,8 @@ class ProviderConfigManager:
             return litellm.StrandsDeciderDecisionsConfig()
         if provider == LlmProviders.OPENAI:
             return litellm.OpenAIDecisionsConfig()
+        if provider == LlmProviders.AZURE_AI:
+            return litellm.AzureAIDecisionsConfig()
         return None
 
     @staticmethod
