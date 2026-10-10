@@ -1,15 +1,21 @@
 import asyncio
+import importlib
 import io
 import json
+import sys
 import wave
 from datetime import datetime
 from pathlib import Path
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
 import litellm
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers import (
+    transcribe_passthrough_logging_handler as transcribe_handler,
+)
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.transcribe_passthrough_logging_handler import (
     TRANSCRIBE_MAX_MEDIA_DURATION_SECONDS,
@@ -940,3 +946,48 @@ class TestIsTranscribeRoute:
         )
 
         assert normalized["kwargs"].get("model") != "transcribe/GetTranscriptionJob"
+
+
+def test_soundfile_only_required_when_measuring_media(tmp_path: Path) -> None:
+    """
+    The streaming path imports this handler through success_handler, so the handler
+    must import without soundfile, which is only loaded when media is measured (#45379).
+    """
+    media: Final = tmp_path / "a.wav"
+    with wave.open(str(media), "wb") as out:
+        out.setnchannels(1)
+        out.setsampwidth(2)
+        out.setframerate(8000)
+        out.writeframes(bytes(2 * 12_000))
+
+    blocked: Final = "soundfile"
+    saved: Final = sys.modules.get(blocked)
+    sys.modules[blocked] = None
+    try:
+        with pytest.raises(ImportError):
+            media_file_seconds(media)
+    finally:
+        if saved is None:
+            _ = sys.modules.pop(blocked, None)
+        else:
+            sys.modules[blocked] = saved
+
+
+def test_handler_module_imports_without_soundfile() -> None:
+    alt: Final = f"{transcribe_handler.__name__}.no_soundfile_import_probe"
+    source: Final = str(transcribe_handler.__file__)
+    blocked: Final = "soundfile"
+    saved: Final = sys.modules.get(blocked)
+    sys.modules[blocked] = None
+    try:
+        spec: Final = importlib.util.spec_from_file_location(alt, source)
+        assert spec is not None and spec.loader is not None
+        module: Final = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert hasattr(module, "media_file_seconds")
+    finally:
+        sys.modules.pop(alt, None)
+        if saved is None:
+            _ = sys.modules.pop(blocked, None)
+        else:
+            sys.modules[blocked] = saved
