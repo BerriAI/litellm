@@ -38,11 +38,9 @@ export const SYSTEM_ONE_EXAMPLE = {
   },
 } satisfies SystemOneRequest;
 
-export const PLACEHOLDER_DECISION_MODEL = "your-decision-model";
+export const decisionsExample = (model?: string): DecisionRequest => ({ ...SYSTEM_ONE_EXAMPLE, model });
 
-export const decisionsExample = (model: string): DecisionRequest => ({ ...SYSTEM_ONE_EXAMPLE, model });
-
-export const openAIDecisionsExample = (model: string): OpenAIDecisionsRequest => ({
+export const openAIDecisionsExample = (model?: string): OpenAIDecisionsRequest => ({
   model,
   input: SYSTEM_ONE_EXAMPLE.state,
   questions: [

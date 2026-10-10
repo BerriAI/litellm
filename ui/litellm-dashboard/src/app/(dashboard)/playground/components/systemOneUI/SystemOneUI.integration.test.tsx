@@ -355,6 +355,34 @@ describe("SystemOneUI integration", () => {
     expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("");
   });
 
+  it.each(["/v1/decisions", "/v1/systemone"] as const)(
+    "omits model while discovery is pending on %s",
+    async (endpoint) => {
+      const models = Promise.withResolvers<Response>();
+      mockModelLookup.mockReturnValue(models.promise);
+      mockFetch.mockResolvedValueOnce(
+        createResponse({
+          model: "jev-latest",
+          answers: endpoint === "/v1/decisions" ? [] : {},
+          usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
+        }),
+      );
+      render(<SystemOneUI accessToken="session-key" />);
+      if (endpoint === "/v1/decisions") {
+        await selectEndpoint(endpoint);
+      }
+      await userEvent.click(screen.getByRole("button", { name: "Send" }));
+      expect(await screen.findByText("jev-latest")).toBeInTheDocument();
+      expect(mockFetch.mock.calls[0]?.[0]).toMatch(new RegExp(`${endpoint}$`));
+      expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string)).not.toHaveProperty("model");
+      await act(async () => {
+        models.resolve(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+        await models.promise;
+      });
+      expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("");
+    },
+  );
+
   it("shows invalid JSON and disables Send", async () => {
     render(<SystemOneUI accessToken="session-key" />);
 
@@ -382,13 +410,14 @@ describe("SystemOneUI integration", () => {
     expect(options?.headers).toMatchObject({ "Content-Type": "application/json" });
     expect(Object.values(options?.headers as Record<string, string>)).toContain("Bearer session-key");
     expect(JSON.parse(options?.body as string)).toMatchObject({
-      model: "your-decision-model",
       questions: { has_repro_steps: { type: "noul" } },
     });
+    expect(JSON.parse(options?.body as string)).not.toHaveProperty("model");
   });
 
   it("uses the requested model when the response omits it", async () => {
     const user = userEvent.setup();
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
     mockFetch.mockResolvedValueOnce(
       createResponse({
         answers: responseBody.answers,
@@ -396,9 +425,11 @@ describe("SystemOneUI integration", () => {
     );
     render(<SystemOneUI accessToken="session-key" />);
 
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest"));
+
     await user.click(screen.getByRole("button", { name: "Send" }));
 
-    expect(await screen.findByText("your-decision-model")).toBeInTheDocument();
+    expect(await screen.findByText("jev-latest")).toBeInTheDocument();
     expect(screen.getByText("Selected choice")).toBeInTheDocument();
   });
 
@@ -660,7 +691,6 @@ describe("SystemOneUI integration", () => {
       expect(screen.queryByRole("textbox", { name: "System One JSON payload" })).not.toBeInTheDocument();
       expect(mockFetch.mock.calls[0]?.[0]).toMatch(/\/v1\/systemone$/);
       expect(sentBody()).toEqual({
-        model: "your-decision-model",
         state: "The login page is blank after the upgrade",
         questions: {
           team: {

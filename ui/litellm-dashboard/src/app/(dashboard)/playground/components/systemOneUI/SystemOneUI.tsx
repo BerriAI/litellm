@@ -12,7 +12,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Code, Info, LoaderCircle, RotateCcw, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { makePlaygroundDecisionRequest, type PlaygroundDecisionRequest } from "../../llm_calls/system_one";
-import { PLACEHOLDER_DECISION_MODEL, decisionsExample, openAIDecisionsExample } from "./lib/example";
+import { decisionsExample, openAIDecisionsExample } from "./lib/example";
 import { payloadModel, withPayloadModel } from "./lib/payloadModel";
 import JsonEditor from "./JsonEditor";
 import QuestionBreakdown from "./QuestionBreakdown";
@@ -53,7 +53,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   const [drafts, setDrafts] = useState<Partial<Record<PlaygroundDecisionRequest["endpoint"], string>>>({});
   const [view, setView] = useState<EditorView>("form");
   const example = endpoint === "/v1/decisions" ? openAIDecisionsExample : decisionsExample;
-  const examplePayload = JSON.stringify(example(decisionModels[0] ?? PLACEHOLDER_DECISION_MODEL), null, 2);
+  const examplePayload = JSON.stringify(example(decisionModels[0]), null, 2);
   const rawPayload = drafts[endpoint] ?? examplePayload;
   const activeController = useRef<AbortController | null>(null);
   const validated = useMemo(
