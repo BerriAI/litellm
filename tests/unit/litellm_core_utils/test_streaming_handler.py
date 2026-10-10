@@ -3682,6 +3682,215 @@ def test_record_partial_usage_for_failure_keeps_cache_values_recovered_from_chun
     assert stashed.prompt_tokens_details.cached_tokens == 7
 
 
+def test_sync_stream_failure_records_partial_usage_before_failure_handler():
+    """Sync __next__ must stash partial usage before failure_handler, matching
+    the async path. Otherwise failure_handler zeros response_cost (#14457).
+    """
+    messages = [{"role": "user", "content": "Hi"}]
+    logging_obj = Logging(
+        model="gpt-4o-mini",
+        messages=messages,
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="partial-usage-sync-1",
+        function_id="1245",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+
+    def _broken_stream():
+        yield ModelResponseStream(
+            id="chatcmpl-sync-fail-1",
+            created=1742056047,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="Hello from the stream", role="assistant"),
+                )
+            ],
+        )
+        raise RuntimeError("simulated mid-stream provider failure")
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=_broken_stream(),
+        model="gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    # The content chunk is logged on the shared success executor before the
+    # generator raises. Leave that path off so this test only covers the
+    # failure-handler ordering and does not block on callback threads.
+    previous_disable_streaming_logging = litellm.disable_streaming_logging
+    litellm.disable_streaming_logging = True
+    stashed_when_handler_started: list = []
+
+    class _ImmediateThread:
+        def __init__(self, target=None, args=(), kwargs=None, **_kwargs):
+            self._target = target
+            self._args = args
+
+        def start(self):
+            stashed_when_handler_started.append(
+                logging_obj.model_call_details.get("combined_usage_object")
+            )
+            if self._target is not None:
+                self._target(*self._args)
+
+    try:
+        with patch(
+            "litellm.litellm_core_utils.streaming_handler.threading.Thread",
+            _ImmediateThread,
+        ):
+            with patch.object(logging_obj, "failure_handler", MagicMock()) as failure_handler:
+                with pytest.raises(
+                    litellm.exceptions.MidStreamFallbackError,
+                    match="simulated mid-stream provider failure",
+                ):
+                    for _ in wrapper:
+                        pass
+
+        failure_handler.assert_called_once()
+        assert stashed_when_handler_started
+        assert stashed_when_handler_started[0] is not None
+        assert stashed_when_handler_started[0].completion_tokens > 0
+        assert logging_obj.model_call_details.get("response_cost") is not None
+    finally:
+        litellm.disable_streaming_logging = previous_disable_streaming_logging
+
+
+def test_failure_handler_preserves_stashed_partial_cost_no_double_zero():
+    """Once partial usage is stashed, failure_handler must not overwrite response_cost with 0."""
+    logging_obj = Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="partial-usage-preserve-1",
+        function_id="1245",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+    logging_obj.model_call_details["combined_usage_object"] = Usage(
+        prompt_tokens=10, completion_tokens=5, total_tokens=15
+    )
+    logging_obj.model_call_details["response_cost"] = 0.0015
+
+    logging_obj._failure_handler_helper_fn(
+        exception=RuntimeError("boom"),
+        traceback_exception="traceback",
+    )
+
+    assert logging_obj.model_call_details["response_cost"] == 0.0015
+    assert logging_obj.model_call_details["combined_usage_object"].total_tokens == 15
+
+
+def test_record_partial_usage_falls_back_when_stream_chunk_builder_raises():
+    """If stream_chunk_builder raises mid-recovery, fall back to chunk usage."""
+    logging_obj = Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="partial-usage-fallback-1",
+        function_id="1245",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-fallback-1",
+            created=1742056047,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="partial", role="assistant"),
+                )
+            ],
+            usage=Usage(prompt_tokens=40, completion_tokens=3, total_tokens=43),
+        )
+    ]
+
+    with patch(
+        "litellm.stream_chunk_builder",
+        side_effect=litellm.APIError(
+            status_code=500,
+            message="stream_chunk_builder failed",
+            llm_provider="openai",
+            model="gpt-4o-mini",
+        ),
+    ):
+        wrapper._record_partial_usage_for_failure()
+
+    stashed = logging_obj.model_call_details["combined_usage_object"]
+    assert stashed.prompt_tokens == 40
+    assert stashed.completion_tokens == 3
+    assert stashed.total_tokens == 43
+    assert "response_cost" in logging_obj.model_call_details
+
+
+def test_record_partial_usage_is_idempotent_no_double_count():
+    """Re-running recovery on the same chunks must overwrite, not accumulate tokens."""
+    logging_obj = Logging(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "Hey"}],
+        stream=True,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="partial-usage-idempotent-1",
+        function_id="1245",
+    )
+    logging_obj.model_call_details["custom_llm_provider"] = "openai"
+
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4o-mini",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.chunks = [
+        ModelResponseStream(
+            id="chatcmpl-idempotent-1",
+            created=1742056047,
+            model="gpt-4o-mini",
+            object="chat.completion.chunk",
+            choices=[
+                StreamingChoices(
+                    finish_reason=None,
+                    index=0,
+                    delta=Delta(content="Hello world", role="assistant"),
+                )
+            ],
+            usage=Usage(prompt_tokens=4, completion_tokens=2, total_tokens=6),
+        )
+    ]
+
+    wrapper._record_partial_usage_for_failure()
+    first_usage = logging_obj.model_call_details["combined_usage_object"]
+    first_cost = logging_obj.model_call_details["response_cost"]
+
+    wrapper._record_partial_usage_for_failure()
+    second_usage = logging_obj.model_call_details["combined_usage_object"]
+    second_cost = logging_obj.model_call_details["response_cost"]
+
+    assert second_usage.prompt_tokens == first_usage.prompt_tokens == 4
+    assert second_usage.completion_tokens == first_usage.completion_tokens == 2
+    assert second_usage.total_tokens == first_usage.total_tokens == 6
+    assert second_cost == first_cost
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_stream_chunk_builder_raise_at_end_of_stream_still_recovers_usage(
