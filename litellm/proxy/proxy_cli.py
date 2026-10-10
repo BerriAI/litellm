@@ -781,7 +781,7 @@ class ProxyInitializationHelpers:
     is_flag=True,
     type=bool,
     help="To debug the input",
-    envvar="DEBUG",
+    envvar="LITELLM_DEBUG",
 )
 @click.option(
     "--detailed_debug",
