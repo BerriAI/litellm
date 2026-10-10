@@ -216,6 +216,7 @@ _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
         "invalid_request_error": 400,
         "context_length_exceeded": 400,
         "content_policy_violation": 400,
+        "cyber_policy": 400,
         "model_not_found": 400,
     }
 )

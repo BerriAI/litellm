@@ -1,5 +1,6 @@
 import re
 import secrets
+import signal
 import textwrap
 import uuid
 from collections.abc import Iterator
@@ -10,6 +11,7 @@ from typing import Final
 import httpx
 import pytest
 import yaml
+from pydantic import TypeAdapter
 from integration._support.client import Gateway, Scenario, gateway_from_environment, object_value
 from integration._support.mcp import (
     INITIALIZE,
@@ -24,7 +26,7 @@ from integration._support.mcp import (
     tool_calls,
 )
 from integration._support.mcp_grants import create_toolset
-from integration._support.process import owned_proxy
+from integration._support.process import owned_proxy, owned_proxy_process
 
 from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
@@ -443,9 +445,11 @@ def test_require_key_mcp_access_defined_stops_key_inheritance_but_not_the_dashbo
         assert _listed_toolset_ids(strict, inheriting) == ()
         assert _route_tools(strict, inheriting, granted_name).status == 403
         assert _listed_toolset_ids(strict, own) == (granted_id,)
-        assert _route_tools(strict, own, granted_name).tools == (f"{alias}-add",)
+        own_tools: Final = _route_tools(strict, own, granted_name)
+        assert own_tools.tools == (f"{alias}-add",), (own_tools.status, own_tools.raw)
         assert _listed_toolset_ids(strict, member) == (granted_id,)
-        assert _route_tools(strict, member, granted_name).tools == (f"{alias}-add",)
+        member_tools: Final = _route_tools(strict, member, granted_name)
+        assert member_tools.tools == (f"{alias}-add",), (member_tools.status, member_tools.raw)
         peer.drain()
         called: Final = _route_call(strict, member, granted_name, f"{alias}-add")
         assert called.ok and called.text == "9", called.raw
@@ -513,6 +517,24 @@ def test_a_member_of_two_teams_sees_the_union_and_each_route_stays_narrowed_to_i
         crossed: Final = _route_call(gateway, headers, first_name, f"{alias}-multiply")
         assert not crossed.ok, crossed.raw
         assert tool_calls(peer.drain()) == ()
+
+
+def test_owned_proxy_loss_retains_exit_status_and_first_http_failure(gateway: Gateway, tmp_path: Path) -> None:
+    with pytest.raises(httpx.TransportError) as failure:  # noqa: PT012  # HTTP failure must propagate through proxy cleanup
+        with owned_proxy_process(gateway, tmp_path, {}) as owned:
+            response: Final = owned.gateway.client.get("/health/readiness")
+            assert response.status_code == 200, response.text
+            owned.process.kill()
+            owned.process.wait(timeout=3)
+            owned.gateway.client.get("/health/readiness")
+    record: Final = TypeAdapter(dict[str, int | float | str | None]).validate_json(
+        owned.log.with_suffix(".exit.json").read_text()
+    )
+    assert record["root_pid"] == owned.process.pid
+    assert record["exit_before_stop"] == -signal.SIGKILL
+    assert record["exit_after_stop"] == -signal.SIGKILL
+    assert record["exception_before_stop"] == failure.type.__name__
+    assert record["exception_at_record"] == failure.type.__name__
 
 
 _PROBE: Final = "catalog-probe"
