@@ -1,0 +1,29 @@
+contents:
+  repositories:
+    - https://packages.wolfi.dev/os
+  keyring:
+    - https://packages.wolfi.dev/os/wolfi-signing.rsa.pub
+  packages:
+    - wolfi-base
+    - bash
+    - build-base
+    - coreutils
+    - curl
+    - libevent-dev
+    - libsndfile
+    - libssl3
+    - nodejs-26
+    - npm-12
+    - openssl-4.0
+    - openssl-4.0-dev
+    - pkgconf
+    - python-3.13
+    - python-3.13-dev
+    - rust
+
+archs:
+  - x86_64
+  - aarch64
+
+environment:
+  PATH: /usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin

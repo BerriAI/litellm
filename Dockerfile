@@ -18,7 +18,6 @@ FROM $LITELLM_BUILD_IMAGE AS pgbouncer-builder
 ARG PGBOUNCER_VERSION
 ARG PGBOUNCER_SHA256
 USER root
-RUN apk add --no-cache build-base pkgconf libevent-dev openssl-dev curl
 WORKDIR /build
 RUN curl -fsSL -o pgbouncer.tar.gz "https://www.pgbouncer.org/downloads/files/${PGBOUNCER_VERSION}/pgbouncer-${PGBOUNCER_VERSION}.tar.gz" && \
     echo "${PGBOUNCER_SHA256}  pgbouncer.tar.gz" | sha256sum -c - && \
@@ -53,18 +52,6 @@ USER root
 
 COPY --from=uvbin /uv /usr/local/bin/uv
 COPY --from=uvbin /uvx /usr/local/bin/uvx
-
-RUN apk add --no-cache \
-    bash \
-    gcc \
-    python-3.13 \
-    python-3.13-dev \
-    rust \
-    openssl \
-    openssl-dev \
-    nodejs \
-    npm \
-    libsndfile
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
@@ -119,7 +106,6 @@ RUN sed -i 's/\r$//' docker/entrypoint.sh && chmod +x docker/entrypoint.sh && \
 
 FROM $LITELLM_BUILD_IMAGE AS liteadmin-builder
 COPY --from=uvbin /uv /usr/local/bin/uv
-RUN apk add --no-cache python-3.13
 ADD --checksum=sha256:2f7ae5cdd9d91731c0990e74a58239dc3e3fd2bf28dab23b55eafcdc47aaf87e \
     https://github.com/BerriAI/litellm-admin-agent/archive/ef501e94bc9fbacb9233b922abf71427f030408c.tar.gz /tmp/liteadmin.tar.gz
 RUN mkdir /tmp/liteadmin && tar xzf /tmp/liteadmin.tar.gz --strip-components=1 -C /tmp/liteadmin && \
@@ -134,14 +120,6 @@ ENV LITELLM_RELEASE_TAG=${LITELLM_RELEASE_TAG}
 
 USER root
 
-# The base image only configures Chainguard's authenticated apk repo, which
-# requires an enterprise subscription. Add the public Wolfi repo so `apk add`
-# also works for anyone installing extra packages into a running container.
-# https://github.com/BerriAI/litellm/issues/33518
-RUN echo "https://packages.wolfi.dev/os" >> /etc/apk/repositories
-
-# node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl tzdata nodejs python-3.13 libsndfile libevent
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
 WORKDIR /app
