@@ -4279,3 +4279,52 @@ class TestMalformedInjectionPointsAreIgnored:
         kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
         _stamp_injection_points_with_dialect(kwargs, "gpt-5.6", "openai")
         assert kwargs == {"cache_control_injection_points": value}
+
+
+class TestEmptyAssistantStringKeepsItsShape:
+    """An assistant turn replayed as the empty string stays that string and carries no breakpoint.
+
+    Anthropic accepts ``{"role": "assistant", "content": ""}`` but answers 400 to an empty text block,
+    to cache_control on one, and to a message-level cache_control (api.anthropic.com, 2026-10-08).
+    """
+
+    HISTORY = [
+        {"role": "user", "content": "Say hi."},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "Now say bye."},
+    ]
+    EMPTY_TURN = {"role": "assistant", "content": ""}
+
+    def test_default_breakpoints_leave_the_empty_turn_as_the_string_it_arrived_as(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        messages, system = AnthropicCacheControlHook.maybe_inject_cache_control(
+            copy.deepcopy(self.HISTORY), "sys", {}, model="claude-opus-5-5", custom_llm_provider="anthropic"
+        )
+        assert messages[1] == self.EMPTY_TURN
+        assert messages[2]["content"] == [
+            {"type": "text", "text": "Now say bye.", "cache_control": {"type": "ephemeral"}}
+        ]
+        assert system == [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]
+
+    def test_role_targeted_point_skips_the_empty_turn_on_the_messages_route(self):
+        history = self.HISTORY + [{"role": "assistant", "content": "Bye."}, {"role": "user", "content": "Again."}]
+        messages, _, _ = AnthropicCacheControlHook.apply_to_anthropic_messages_request(
+            copy.deepcopy(history), None, [{"location": "message", "role": "assistant"}]
+        )
+        assert messages[1] == self.EMPTY_TURN
+        assert messages[3]["content"] == [{"type": "text", "text": "Bye.", "cache_control": {"type": "ephemeral"}}]
+        assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 1
+
+    def test_role_targeted_point_skips_the_empty_turn_on_the_chat_route(self):
+        history = self.HISTORY + [{"role": "assistant", "content": "Bye."}, {"role": "user", "content": "Again."}]
+        _, messages, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model="anthropic/claude-opus-5-5",
+            messages=copy.deepcopy(history),
+            non_default_params={"cache_control_injection_points": [{"location": "message", "role": "assistant"}]},
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert messages[1] == self.EMPTY_TURN
+        assert messages[3] == {"role": "assistant", "content": "Bye.", "cache_control": {"type": "ephemeral"}}
+        assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 1

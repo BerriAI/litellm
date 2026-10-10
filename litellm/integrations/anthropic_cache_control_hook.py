@@ -613,7 +613,8 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         # 1. if string, insert cache control in the message
         if isinstance(message_content, str):
-            message["cache_control"] = control
+            if message_content:
+                message["cache_control"] = control
         # 2. list of objects - only apply to last item per Anthropic spec
         elif isinstance(message_content, list):
             if len(message_content) > 0 and isinstance(message_content[-1], dict):
@@ -719,7 +720,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         for i, msg in enumerate(processed_messages):
             content = msg.get("content")
-            if isinstance(content, str):
+            if isinstance(content, str) and content:
                 processed_messages[i] = {**msg, "content": [{"type": "text", "text": content}]}
 
         processed_messages = AnthropicCacheControlHook._apply_message_injections(
