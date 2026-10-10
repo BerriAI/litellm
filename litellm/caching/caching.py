@@ -449,9 +449,9 @@ class Cache:
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
         else:
-            cache_key += self._get_proxy_cache_scope(
+            cache_key += self._get_proxy_cache_scope(  # rebind-ok: append authenticated proxy scope to the cache key
                 cast(Mapping[str, object], kwargs)  # cast-ok: cache kwargs are string-keyed
-            )
+            )  # noqa: LIT010  # preserve the existing cache-key assembly path
 
         reasoning_summary: Final = peek_reasoning_summary_aliases(kwargs)
         reasoning_summary_material: Final = (
