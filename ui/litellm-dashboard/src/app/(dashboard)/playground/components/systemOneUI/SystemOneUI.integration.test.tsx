@@ -517,38 +517,38 @@ describe("SystemOneUI integration", () => {
       await user.click(await screen.findByRole("option", { name: type }));
     }
 
-    async function rename(user: ReturnType<typeof userEvent.setup>, field: HTMLElement, name: string) {
-      await user.clear(field);
-      await user.type(field, name);
-      await user.tab();
+    const fill = (field: HTMLElement, value: string) => fireEvent.change(field, { target: { value } });
+
+    function rename(field: HTMLElement, name: string) {
+      fill(field, name);
+      fireEvent.blur(field);
     }
 
     it("sends a choice and a yes/no question built in the form without opening JSON", async () => {
       const user = userEvent.setup();
       render(<SystemOneUI accessToken="session-key" />);
       const input = screen.getByRole("textbox", { name: "Input" });
-      await user.clear(input);
-      await user.type(input, "The login page is blank after the upgrade");
+      fill(input, "The login page is blank after the upgrade");
       for (const name of ["area", "has_repro_steps", "severity"]) {
         await user.click(screen.getByRole("button", { name: `Remove question ${name}` }));
       }
 
       await user.click(screen.getByRole("button", { name: "Add question" }));
-      await rename(user, question("question_1").getByRole("textbox", { name: "Question name" }), "team");
-      await user.type(question("team").getByRole("textbox", { name: "Instructions" }), "Which team owns this?");
+      rename(question("question_1").getByRole("textbox", { name: "Question name" }), "team");
+      fill(question("team").getByRole("textbox", { name: "Instructions" }), "Which team owns this?");
       const [first, second] = question("team").getAllByRole("textbox", { name: "Option label" });
-      await rename(user, first, "frontend");
-      await rename(user, second, "backend");
-      await user.type(question("team").getByRole("textbox", { name: "Description of frontend" }), "Dashboard and UI");
+      rename(first, "frontend");
+      rename(second, "backend");
+      fill(question("team").getByRole("textbox", { name: "Description of frontend" }), "Dashboard and UI");
       await user.click(question("team").getByRole("button", { name: "Add option" }));
-      await rename(user, question("team").getAllByRole("textbox", { name: "Option label" })[2], "infra");
-      await user.type(question("team").getByRole("textbox", { name: "Description of infra" }), "Deploys");
+      rename(question("team").getAllByRole("textbox", { name: "Option label" })[2], "infra");
+      fill(question("team").getByRole("textbox", { name: "Description of infra" }), "Deploys");
 
       await user.click(screen.getByRole("button", { name: "Add question" }));
       await pickAnswerType(user, "question_1", "Yes / no");
-      await rename(user, question("question_1").getByRole("textbox", { name: "Question name" }), "urgent");
-      await user.type(question("urgent").getByRole("textbox", { name: "Instructions" }), "Is this blocking users?");
-      await user.type(question("urgent").getByRole("textbox", { name: "Yes means" }), "Nobody can log in");
+      rename(question("question_1").getByRole("textbox", { name: "Question name" }), "urgent");
+      fill(question("urgent").getByRole("textbox", { name: "Instructions" }), "Is this blocking users?");
+      fill(question("urgent").getByRole("textbox", { name: "Yes means" }), "Nobody can log in");
 
       await user.click(screen.getByRole("button", { name: "Send" }));
 
@@ -578,11 +578,10 @@ describe("SystemOneUI integration", () => {
       expect(await screen.findByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest");
 
       const level = question("severity").getByRole("textbox", { name: "Level 0" });
-      await user.clear(level);
-      await user.type(level, "Typo");
+      fill(level, "Typo");
       await user.click(question("severity").getByRole("button", { name: "Remove level 4" }));
       await user.click(question("severity").getByRole("button", { name: "Add level" }));
-      await user.type(question("severity").getByRole("textbox", { name: "Level 4" }), "Data loss");
+      fill(question("severity").getByRole("textbox", { name: "Level 4" }), "Data loss");
       await pickAnswerType(user, "has_repro_steps", "Choice");
       await user.click(question("has_repro_steps").getByRole("button", { name: "Add option" }));
       await user.click(question("area").getByRole("button", { name: "Remove option docs" }));
@@ -613,19 +612,18 @@ describe("SystemOneUI integration", () => {
       const name = question("severity").getByRole("textbox", { name: "Question name" });
       expect(name).toHaveAttribute("aria-invalid", "false");
 
-      await user.clear(name);
-      await user.type(name, "area");
+      fill(name, "area");
       expect(name).toHaveAttribute("aria-invalid", "true");
       expect(question("severity").getByText('"area" is already used')).toBeInTheDocument();
-      await user.tab();
+      fireEvent.blur(name);
       expect(name).toHaveValue("severity");
 
-      await user.clear(name);
+      fill(name, "");
       expect(question("severity").getByText("Enter a name")).toBeInTheDocument();
-      await user.tab();
+      fireEvent.blur(name);
       expect(name).toHaveValue("severity");
 
-      await rename(user, name, "  impact  ");
+      rename(name, "  impact  ");
       expect(question("impact").getByRole("textbox", { name: "Question name" })).toHaveValue("impact");
       await user.click(screen.getByRole("button", { name: "Add question" }));
       await user.click(screen.getByRole("button", { name: "Add question" }));
@@ -657,7 +655,7 @@ describe("SystemOneUI integration", () => {
       });
       await user.click(screen.getByRole("tab", { name: "Form" }));
       expect(screen.getByRole("textbox", { name: "Input" })).toHaveValue("s");
-      await user.type(question("q").getByRole("textbox", { name: "Yes means" }), "y");
+      fill(question("q").getByRole("textbox", { name: "Yes means" }), "y");
 
       const json = JSON.parse(((await openJsonEditor()) as HTMLTextAreaElement).value);
       expect(json).toEqual({ ...payload, questions: { q: { ...payload.questions.q, criteria: { true: "y" } } } });
