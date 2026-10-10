@@ -564,6 +564,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         if anthropic_messages_optional_request_params.get("safeguards") is not None:
             beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
 
+        if is_mid_conversation_output_config_used:
+            beta_set.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
+
         self._filter_context_management_for_bedrock_invoke(
             anthropic_messages_request=anthropic_messages_request,
             beta_set=beta_set,
