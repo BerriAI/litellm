@@ -194,6 +194,9 @@ def _is_transient_file_retrieve_error(error: Exception) -> bool:
     return isinstance(error, (httpx.TransportError, APIConnectionError, asyncio.TimeoutError))
 
 
+_MEASURED_SIZE_SAVE_ATTEMPTS: Final = 3
+
+
 def _stored_json_text(raw_file_object: object) -> str:
     """JSON text of a stored file object exactly as read, for a write that must not race a newer one."""
     if isinstance(raw_file_object, BaseModel):
@@ -871,6 +874,29 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
         return sized_file_object
 
+    async def _save_batch_output_file_object(
+        self,
+        stored: LiteLLM_ManagedFileTable,
+        file_object: OpenAIFileObject,
+        size_bytes: int | None,
+    ) -> None:
+        """Save a batch output's details; a measured size is retried over a concurrent refresh so it is never lost."""
+        current_row: LiteLLM_ManagedFileTable | None = stored  # rebind-ok: the row as last read
+        for _ in range(_MEASURED_SIZE_SAVE_ATTEMPTS):
+            if current_row is None:
+                return
+            saved = await self._save_refreshed_file_object(  # rebind-ok: per attempt
+                current_row, _with_measured_size(file_object, size_bytes)
+            )
+            if saved is not None or not size_bytes:
+                return
+            latest_row = await ManagedFileRepository(  # rebind-ok: per attempt
+                self.prisma_client, use_writer=True
+            ).table.find_first(where={"unified_file_id": stored.unified_file_id})
+            current_row = (
+                None if latest_row is None else LiteLLM_ManagedFileTable.model_validate(latest_row.model_dump())
+            )
+
     async def store_batch_output_file(
         self,
         *,
@@ -912,7 +938,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return
         if stored_object is not None and not stored_object.litellm_details_fallback:
             if stored_file is not None and size_bytes and not stored_object.bytes:
-                await self._save_refreshed_file_object(stored_file, _with_measured_size(stored_object, size_bytes))
+                await self._save_batch_output_file_object(stored_file, stored_object, size_bytes)
             return
 
         fallback_written_recently: Final = (
@@ -953,7 +979,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         )
 
         if stored_file is not None:
-            await self._save_refreshed_file_object(stored_file, _with_measured_size(file_object, size_bytes))
+            await self._save_batch_output_file_object(stored_file, file_object, size_bytes)
             return
 
         await self.store_unified_file_id(
