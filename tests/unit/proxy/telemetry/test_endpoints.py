@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections.abc import Mapping
 from typing import Final
 
@@ -14,12 +14,17 @@ from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.telemetry.endpoints import (
     TelemetrySettingsResponse,
     router,
+    telemetry_consent,
     telemetry_runtime_dependency,
+    telemetry_sink,
     telemetry_store,
 )
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
 from litellm.proxy.telemetry.settings import TelemetrySettings
 from litellm.proxy.telemetry.store import TelemetryStore
+from litellm.telemetry.consent import TelemetryConsent
+from litellm.telemetry.records import AttemptRecord, InstanceInfo, RequestRecord, TelemetryGroup, UIAction, UIEvent
+from litellm.telemetry.sink import TelemetrySink
 from tests.unit.proxy.telemetry.fake_database import SettingsDatabase
 
 
@@ -85,6 +90,74 @@ def test_exporting_without_a_local_store_is_an_error() -> None:
     assert response.status_code == 500, response.text
 
 
+@dataclass
+class _UIEventSink:
+    events: list[UIEvent] = field(default_factory=list)  # mutable-ok: records what the route forwarded
+
+    def set_instance(self, info: InstanceInfo) -> None:
+        pass
+
+    def record_request(self, record: RequestRecord) -> None:
+        pass
+
+    def record_attempt(self, record: AttemptRecord) -> None:
+        pass
+
+    def record_ui_event(self, event: UIEvent) -> None:
+        self.events.append(event)
+
+    async def flush(self) -> None:
+        pass
+
+
+def _ui_client(role: LitellmUserRoles, sink: TelemetrySink | None) -> TestClient:
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=role)
+    app.dependency_overrides[telemetry_sink] = lambda: sink
+    return TestClient(app)
+
+
+@pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.INTERNAL_USER])
+def test_any_signed_in_ui_user_records_ui_events_into_the_sink(role: LitellmUserRoles) -> None:
+    sink: Final = _UIEventSink()
+    response: Final = _ui_client(role, sink).post(
+        "/telemetry/ui_events", json={"page": "models-and-endpoints", "action": "click", "target": "tab=health"}
+    )
+    assert response.status_code == 204, response.text
+    assert sink.events == [UIEvent(page="models-and-endpoints", action=UIAction.CLICK, target="tab=health")]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"page": "teams/abc-123", "action": "view"},
+        {"page": "Teams", "action": "view"},
+        {"page": "", "action": "view"},
+        {"page": "teams", "action": "hover"},
+        {"page": "teams", "action": "click", "target": "user@example.com"},
+        {"page": "teams", "action": "click", "target": "tab=sk-abc123"},
+        {"page": "teams", "action": "click", "target": "key=team-abc"},
+        {"page": "teams", "action": "click", "target": f"tab={'a' * 45}"},
+        {"page": "team-1234", "action": "view"},
+        {"page": "a" * 49, "action": "view"},
+        {"page": "teams", "action": "view", "team_id": "abc"},
+    ],
+)
+def test_ui_events_outside_the_allowlisted_shape_are_rejected(body: Mapping[str, object]) -> None:
+    sink: Final = _UIEventSink()
+    response: Final = _ui_client(LitellmUserRoles.PROXY_ADMIN, sink).post("/telemetry/ui_events", json=body)
+    assert response.status_code == 422, response.text
+    assert sink.events == []
+
+
+def test_ui_events_are_accepted_and_dropped_while_telemetry_is_off() -> None:
+    response: Final = _ui_client(LitellmUserRoles.PROXY_ADMIN, None).post(
+        "/telemetry/ui_events", json={"page": "teams", "action": "view"}
+    )
+    assert response.status_code == 204, response.text
+
+
 def test_the_proxy_app_serves_the_export_route_from_its_own_telemetry_runtime() -> None:
     from litellm.proxy.proxy_server import app, telemetry_runtime
 
@@ -96,6 +169,18 @@ def test_the_proxy_app_serves_the_export_route_from_its_own_telemetry_runtime() 
         _ = app.dependency_overrides.pop(user_api_key_auth)
     assert response.status_code == 500, response.text
     assert response.json() == {"detail": CommonProxyErrors.db_not_connected_error.value}
+
+
+def test_the_proxy_app_accepts_ui_events_while_its_telemetry_runtime_is_off() -> None:
+    from litellm.proxy.proxy_server import app, telemetry_runtime
+
+    assert telemetry_runtime.sink is None
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+    try:
+        response: Final = TestClient(app).post("/telemetry/ui_events", json={"page": "teams", "action": "view"})
+    finally:
+        _ = app.dependency_overrides.pop(user_api_key_auth)
+    assert response.status_code == 204, response.text
 
 
 async def _settings_client(
@@ -197,6 +282,26 @@ async def test_env_vars_lock_the_settings_and_are_listed_without_their_values(
     assert (body.vetoed, body.editable, _enabled(read)) == (True, False, ())
     assert body.environment_variables == ("LITELLM_TELEMETRY_DISABLED", "LITELLM_TELEMETRY_ENDPOINT")
     assert "secret" not in read.text
+
+
+@pytest.mark.parametrize(
+    ("groups", "enabled"),
+    [
+        (frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.PAGE_NAVIGATION}), True),
+        (frozenset({TelemetryGroup.HEARTBEAT, TelemetryGroup.REQUEST_SUCCESS}), False),
+        (frozenset[TelemetryGroup](), False),
+    ],
+)
+def test_any_ui_user_can_ask_whether_page_navigation_events_are_wanted(
+    groups: frozenset[TelemetryGroup], enabled: bool
+) -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER)
+    app.dependency_overrides[telemetry_consent] = lambda: TelemetryConsent(groups)
+    response: Final = TestClient(app).get("/telemetry/ui_events/enabled")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"enabled": enabled}
 
 
 @pytest.mark.asyncio

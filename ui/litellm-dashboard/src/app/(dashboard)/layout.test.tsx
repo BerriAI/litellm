@@ -2,11 +2,18 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { usePathname } from "next/navigation";
 import { AuthProvider } from "@/contexts/AuthContext";
+import { recordUiEvent } from "@/lib/telemetry/uiEvents";
 import Layout from "./layout";
 
 const { replaceMock } = vi.hoisted(() => ({ replaceMock: vi.fn() }));
 
 let searchParamsValue = new URLSearchParams();
+
+vi.mock("@/lib/telemetry/uiEvents", () => ({
+  recordUiEvent: vi.fn(() => Promise.resolve()),
+}));
+
+vi.mock("@/app/(dashboard)/telemetry/_components/TelemetryEnvBanner", () => ({ default: () => null }));
 
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({ push: vi.fn(), replace: replaceMock })),
@@ -112,6 +119,32 @@ describe("(dashboard) Layout", () => {
     expect(within(navigation).getByRole("button", { name: "Close navigation" })).toBeInTheDocument();
     fireEvent.click(within(navigation).getByRole("link", { name: "Settings" }));
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Navigation" })).not.toBeInTheDocument());
+  });
+
+  it("records one page view per route segment, not per query change", async () => {
+    const dashboard = () => (
+      <AuthProvider>
+        <Layout>
+          <p>Gateway content</p>
+        </Layout>
+      </AuthProvider>
+    );
+    const { rerender } = render(dashboard());
+    pendingUiConfig.resolve();
+    await screen.findByRole("button", { name: "Open navigation" });
+    searchParamsValue = new URLSearchParams("tab=members");
+    rerender(dashboard());
+    vi.mocked(usePathname).mockReturnValue("/ui/teams/abc-123");
+    rerender(dashboard());
+    vi.mocked(usePathname).mockReturnValue("/ui/teams/def-456");
+    rerender(dashboard());
+
+    await vi.waitFor(() =>
+      expect(vi.mocked(recordUiEvent).mock.calls).toEqual([
+        [{ page: "guardrails", action: "view" }],
+        [{ page: "teams", action: "view" }],
+      ]),
+    );
   });
 
   it("closes the mobile drawer when navigation changes outside the drawer", async () => {

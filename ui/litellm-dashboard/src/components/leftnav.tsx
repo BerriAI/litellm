@@ -76,6 +76,7 @@ import {
   isUserTeamAdminForAnyTeam,
   rolesAllowedToViewWriteScopedPages,
   rolesWithWriteAccess,
+  proxyAdminTierRoles,
 } from "../utils/roles";
 import BetaBadge from "./BetaBadge";
 import SidebarAccountMenu from "./SidebarAccountMenu/SidebarAccountMenu";
@@ -462,6 +463,13 @@ const menuGroups: MenuGroup[] = [
             roles: all_admin_roles,
           },
           { key: "ui-theme", page: "ui-theme", label: "UI Theme", icon: <Palette {...ICON} />, roles: all_admin_roles },
+          {
+            key: "telemetry",
+            page: "telemetry",
+            label: "Telemetry",
+            icon: <Activity {...ICON} />,
+            roles: proxyAdminTierRoles,
+          },
         ],
       },
     ],
