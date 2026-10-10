@@ -45190,6 +45190,21 @@ export interface components {
             team_id: string;
         };
         /**
+         * TeamListCallerMembership
+         * @description The calling user's own spend and effective member budget in a team.
+         */
+        TeamListCallerMembership: {
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+        };
+        /**
          * TeamListItem
          * @description A team item in the paginated list response, enriched with computed fields.
          */
@@ -45223,6 +45238,7 @@ export interface components {
             budget_limits?: components["schemas"]["BudgetLimitEntry"][] | null;
             /** Budget Reset At */
             budget_reset_at?: string | null;
+            caller_membership?: components["schemas"]["TeamListCallerMembership"] | null;
             /** Created At */
             created_at?: string | null;
             /** Default Team Member Models */

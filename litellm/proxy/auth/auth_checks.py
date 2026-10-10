@@ -15,6 +15,7 @@ import re
 import time
 from collections.abc import Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from functools import partial
 from itertools import chain
 from types import MappingProxyType
@@ -1655,6 +1656,20 @@ async def get_team_member_default_budget(
     )
 
     return budget
+
+
+def resolve_effective_team_member_budget(
+    member_budget: LiteLLM_BudgetTable | None,
+    team_default_budget: LiteLLM_BudgetTable | None,
+    now: datetime,
+) -> float | None:
+    if member_budget is not None and member_budget.max_budget is not None:
+        return member_budget.effective_max_budget(now)
+    if team_default_budget is None or team_default_budget.max_budget is None or team_default_budget.max_budget <= 0:
+        return None
+    return team_default_budget.max_budget + (
+        member_budget.active_temp_budget_increase(now) if member_budget is not None else 0.0
+    )
 
 
 async def resolve_default_end_user_budget(
@@ -6205,29 +6220,24 @@ async def _check_team_member_budget(
 
         # Per-member override wins; otherwise fall back to the team-level
         # default configured via team.metadata["team_member_budget_id"].
-        team_member_budget: float | None = None
         member_budget_row: Final = loaded_membership.litellm_budget_table if loaded_membership is not None else None
         now: Final = get_utc_datetime()
-        if member_budget_row is not None and member_budget_row.max_budget is not None:
-            team_member_budget = member_budget_row.effective_max_budget(now=now)
-        else:
-            default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
-            if isinstance(default_budget_id, str):
-                default_budget: Final = await get_team_member_default_budget(
-                    budget_id=default_budget_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                )
-                # Treat 0 on the team default as "no cap".
-                # Per-member rows still respect 0 as an explicit admin disable.
-                if (
-                    default_budget is not None
-                    and default_budget.max_budget is not None
-                    and default_budget.max_budget > 0
-                ):
-                    team_member_budget = default_budget.max_budget + (
-                        member_budget_row.active_temp_budget_increase(now=now) if member_budget_row is not None else 0.0
-                    )
+        default_budget_id: Final = (team_object.metadata or {}).get("team_member_budget_id")
+        team_default_budget: Final = (
+            await get_team_member_default_budget(
+                budget_id=default_budget_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+            )
+            if (member_budget_row is None or member_budget_row.max_budget is None)
+            and isinstance(default_budget_id, str)
+            else None
+        )
+        team_member_budget: Final = resolve_effective_team_member_budget(
+            member_budget=member_budget_row,
+            team_default_budget=team_default_budget,
+            now=now,
+        )
 
         if team_member_budget is not None:
             team_member_spend = (loaded_membership.spend if loaded_membership is not None else 0.0) or 0.0

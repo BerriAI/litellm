@@ -21,6 +21,11 @@ export interface Team {
   keys_count?: number;
   members_count?: number;
   members_with_roles: Member[];
+  caller_membership?: {
+    spend: number;
+    max_budget: number | null;
+    budget_reset_at: string | null;
+  } | null;
   team_member_permissions?: string[] | null;
   spend: number;
   access_group_ids?: string[];
