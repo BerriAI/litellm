@@ -1,4 +1,5 @@
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
+import { useQuery } from "@tanstack/react-query";
 import { ArrowRight, Pencil, Play, Trash2 } from "lucide-react";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -9,6 +10,8 @@ import { ProviderLogo } from "../../../molecules/models/ProviderLogo";
 import { toast } from "@/lib/toast";
 import { getCallbacksCall, setCallbacksCall } from "../../../networking";
 import { isProxyAdminRole } from "@/utils/roles";
+import { fetchAvailableModels } from "@/components/llm_calls/fetch_models";
+import { fallbackPrimaryLabel, resolveFallbackProvider } from "./fallbackOptions";
 import AddFallbacks from "./AddFallbacks";
 import EditFallbacks from "./EditFallbacks";
 
@@ -20,12 +23,14 @@ const modelCardClass =
 
 const iconWrapperClass = "inline-flex shrink-0 items-center justify-center px-1.5 py-1.5";
 
-function renderModelNameCell(modelName: string, getProviderFromModel?: (modelName: string) => string): React.ReactNode {
-  const provider = getProviderFromModel?.(modelName) ?? modelName;
+export type ModelDisplayResolver = (modelName: string) => { provider: string; label: string; title?: string };
+
+function renderModelNameCell(modelName: string, resolveModel?: ModelDisplayResolver): React.ReactNode {
+  const resolved = resolveModel?.(modelName) ?? { provider: modelName, label: modelName };
   return (
-    <span className={modelCardClass}>
-      <ProviderLogo provider={provider} className="w-4 h-4 shrink-0" />
-      <span className="break-words">{modelName}</span>
+    <span className={modelCardClass} title={resolved.title}>
+      <ProviderLogo provider={resolved.provider} className="w-4 h-4 shrink-0" />
+      <span className="break-words">{resolved.label}</span>
     </span>
   );
 }
@@ -33,17 +38,17 @@ function renderModelNameCell(modelName: string, getProviderFromModel?: (modelNam
 function renderFallbacksChain(
   _primaryModel: string,
   fallbackModels: string[],
-  getProviderFromModel?: (modelName: string) => string,
+  resolveModel?: ModelDisplayResolver,
 ): React.ReactNode {
   const list = Array.isArray(fallbackModels) ? fallbackModels : [];
   if (list.length === 0) return null;
 
   const ChainCard = ({ modelName }: { modelName: string }) => {
-    const provider = getProviderFromModel?.(modelName) ?? modelName;
+    const resolved = resolveModel?.(modelName) ?? { provider: modelName, label: modelName };
     return (
-      <span className={modelCardClass}>
-        <ProviderLogo provider={provider} className="w-4 h-4 shrink-0" />
-        <span className="break-words">{modelName}</span>
+      <span className={modelCardClass} title={resolved.title}>
+        <ProviderLogo provider={resolved.provider} className="w-4 h-4 shrink-0" />
+        <span className="break-words">{resolved.label}</span>
       </span>
     );
   };
@@ -127,11 +132,18 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
   const [fallbackToEdit, setFallbackToEdit] = useState<FallbackEntry | null>(null);
 
   const { data: modelCostMapData } = useModelCostMap();
-  const getProviderFromModel = (model: string): string => {
-    if (modelCostMapData != null && typeof modelCostMapData === "object" && model in modelCostMapData) {
-      return modelCostMapData[model]["litellm_provider"] ?? "";
-    }
-    return "";
+  const { data: modelGroups = [] } = useQuery({
+    queryKey: ["availableModels", "fallbacks"],
+    queryFn: () => fetchAvailableModels(accessToken ?? ""),
+    enabled: Boolean(accessToken),
+  });
+  const resolveModelDisplay = (model: string): { provider: string; label: string; title?: string } => {
+    const label = fallbackPrimaryLabel(model);
+    return {
+      provider: resolveFallbackProvider(model, modelCostMapData, modelGroups),
+      label,
+      ...(label !== model && { title: model }),
+    };
   };
 
   useEffect(() => {
@@ -281,10 +293,10 @@ const Fallbacks: React.FC<FallbacksProps> = ({ accessToken, userRole, userID }) 
               Object.entries(item).map(([key, value]) => (
                 <TableRow key={index.toString() + key}>
                   <TableCell className="align-top whitespace-normal">
-                    {renderModelNameCell(key, getProviderFromModel)}
+                    {renderModelNameCell(key, resolveModelDisplay)}
                   </TableCell>
                   <TableCell className="align-top whitespace-normal">
-                    {renderFallbacksChain(key, Array.isArray(value) ? value : [], getProviderFromModel)}
+                    {renderFallbacksChain(key, Array.isArray(value) ? value : [], resolveModelDisplay)}
                   </TableCell>
                   <TableCell className="align-top">
                     {canModify && (

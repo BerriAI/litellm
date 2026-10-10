@@ -115,6 +115,27 @@ describe("Fallbacks", () => {
     ]);
   });
 
+  it("should resolve a provider logo for wildcard and prefixed primary keys", async () => {
+    vi.mocked(networkingModule.getCallbacksCall).mockResolvedValueOnce({
+      router_settings: {
+        fallbacks: [
+          { "anthropic/*": ["gpt-4"] },
+          { "openai/gpt-6-astra": ["gpt-4"] },
+          { "bedrock/us.anthropic.claude-opus-4-8": ["gpt-4"] },
+        ],
+      },
+    });
+
+    const { container } = renderWithQueryClient(<Fallbacks {...defaultProps} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("All Anthropic Models")).toBeInTheDocument();
+    });
+    expect(screen.getByText("All Anthropic Models").parentElement).toHaveAttribute("title", "anthropic/*");
+    const logos = container.querySelectorAll("img");
+    expect(logos.length).toBeGreaterThanOrEqual(3);
+  });
+
   it("should render the component", async () => {
     renderWithQueryClient(<Fallbacks {...defaultProps} />);
 

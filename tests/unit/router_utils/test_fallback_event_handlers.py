@@ -805,6 +805,40 @@ def test_get_fallback_model_group_does_not_mutate_fallbacks():
     assert fallbacks == [{"gpt-3.5-turbo": ["claude-3-haiku"]}, "gpt-4o-mini"]
 
 
+class TestGetFallbackModelGroupPatternKeys:
+    def test_provider_wildcard_key_matches_model_group(self):
+        fallbacks = [{"openai/*": ["claude-3-haiku"]}]
+
+        assert get_fallback_model_group(fallbacks=fallbacks, model_group="openai/gpt-6-astra")[0] == [
+            "claude-3-haiku"
+        ]
+
+    def test_provider_wildcard_key_does_not_match_other_providers(self):
+        fallbacks = [{"openai/*": ["claude-3-haiku"]}]
+
+        assert get_fallback_model_group(fallbacks=fallbacks, model_group="anthropic/claude-x")[0] is None
+
+    def test_exact_key_beats_pattern_key(self):
+        fallbacks = [{"openai/*": ["generic-backup"]}, {"openai/gpt-4": ["specific-backup"]}]
+
+        assert get_fallback_model_group(fallbacks=fallbacks, model_group="openai/gpt-4")[0] == ["specific-backup"]
+
+    def test_pattern_key_beats_generic_star(self):
+        fallbacks = [{"*": ["star-backup"]}, {"openai/*": ["openai-backup"]}]
+
+        assert get_fallback_model_group(fallbacks=fallbacks, model_group="openai/gpt-4")[0] == ["openai-backup"]
+
+    def test_first_matching_pattern_key_in_list_order_wins(self):
+        fallbacks = [{"openai/*": ["first-backup"]}, {"*gpt*": ["second-backup"]}]
+
+        assert get_fallback_model_group(fallbacks=fallbacks, model_group="openai/gpt-4")[0] == ["first-backup"]
+
+    def test_generic_star_still_applies_when_no_pattern_matches(self):
+        fallbacks = [{"anthropic/*": ["anthropic-backup"]}, {"*": ["star-backup"]}]
+
+        assert get_fallback_model_group(fallbacks=fallbacks, model_group="openai/gpt-4") == (["star-backup"], 1)
+
+
 class TestTriggerCooldownForFailedDeployment:
     def test_calls_set_cooldown_deployments_with_stamped_deployment_id(self):
         mock_router = MagicMock()

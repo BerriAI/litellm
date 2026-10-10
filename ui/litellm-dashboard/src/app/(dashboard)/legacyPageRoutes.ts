@@ -39,6 +39,7 @@ const LEGACY_PAGE_ROUTES: ReadonlyMap<string, string> = new Map(
     "model-insights": "model-insights",
     agents: "agents",
     "router-settings": "router-settings",
+    fallbacks: "fallbacks",
     users: "users",
     teams: "teams",
     organizations: "organizations",

@@ -666,3 +666,92 @@ describe("preferred LiteAdmin model", () => {
     ).toBeNull();
   });
 });
+
+describe("router fallback operations", () => {
+  const routerSettings = () => ({
+    routing_strategy: "least-busy",
+    fallbacks: [{ "gpt-4": ["claude-3-haiku"] }, { "openai/*": ["claude-3-haiku", "gpt-4"] }],
+    model_group_retry_policy: { "gpt-4": { AuthenticationErrorRetries: 0 } },
+  });
+
+  beforeEach(() => {
+    managementFetch.mockImplementation(async (input) => {
+      const path = new URL(String(input)).pathname;
+      if (path.endsWith("/get/config/callbacks")) return json({ router_settings: routerSettings() });
+      if (path.endsWith("/config/update")) return json({ status: "success" });
+      throw new Error(`Unexpected request: ${path}`);
+    });
+  });
+
+  const configUpdateBody = () => {
+    const call = managementFetch.mock.calls.find(([url]) => String(url).includes("/config/update"));
+    expect(call).toBeDefined();
+    return JSON.parse(String(call?.[1]?.body));
+  };
+
+  it("fallbacks_list reads router_settings.fallbacks without confirmation", async () => {
+    const input = options();
+    const model = transport([completion([call("fallbacks_list", {})]), completion()]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(managementFetch).toHaveBeenCalledTimes(1);
+    expect(new URL(String(managementFetch.mock.calls[0][0])).pathname).toBe("/root/get/config/callbacks");
+    expect(input.confirm).not.toHaveBeenCalled();
+  });
+
+  it("fallback_set appends a new entry and saves full router_settings minus the retry policy", async () => {
+    const input = options();
+    const model = transport([
+      completion([call("fallback_set", { model: "anthropic/*", fallbacks: ["gpt-4"] })]),
+      completion(),
+    ]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(configUpdateBody()).toEqual({
+      router_settings: {
+        routing_strategy: "least-busy",
+        fallbacks: [
+          { "gpt-4": ["claude-3-haiku"] },
+          { "openai/*": ["claude-3-haiku", "gpt-4"] },
+          { "anthropic/*": ["gpt-4"] },
+        ],
+      },
+    });
+    expect(input.confirm).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: "fallback_set", destructive: false }),
+    );
+  });
+
+  it("fallback_set replaces the entry for an existing model in place", async () => {
+    const model = transport([
+      completion([call("fallback_set", { model: "gpt-4", fallbacks: ["gpt-4o-mini"] })]),
+      completion(),
+    ]);
+
+    await runLiteAdmin(options(), model.client);
+
+    expect(configUpdateBody().router_settings.fallbacks).toEqual([
+      { "gpt-4": ["gpt-4o-mini"] },
+      { "openai/*": ["claude-3-haiku", "gpt-4"] },
+    ]);
+  });
+
+  it("fallback_delete removes only that entry and keeps the rest of router_settings", async () => {
+    const input = options();
+    const model = transport([completion([call("fallback_delete", { model: "openai/*" })]), completion()]);
+
+    await runLiteAdmin(input, model.client);
+
+    expect(configUpdateBody()).toEqual({
+      router_settings: {
+        routing_strategy: "least-busy",
+        fallbacks: [{ "gpt-4": ["claude-3-haiku"] }],
+      },
+    });
+    expect(input.confirm).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ name: "fallback_delete", destructive: true }),
+    );
+  });
+});
