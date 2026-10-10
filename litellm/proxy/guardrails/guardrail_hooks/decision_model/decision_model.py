@@ -61,16 +61,18 @@ def _tool_call_texts(inputs: GenericGuardrailAPIInputs) -> tuple[str, ...]:
     A tool call with missing or blank arguments yields nothing to screen."""
     texts: Final[list[str]] = []  # mutable-ok: builder accumulator returned as a tuple
     for tool_call in inputs.get("tool_calls") or []:
-        function: Final[object] = (
-            tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
-        )
-        arguments: Final[object] = (
-            function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
-        )
+        name: str | None
+        arguments: str | None
+        if isinstance(tool_call, dict):
+            function = tool_call.get("function")
+            arguments = function.get("arguments") if function else None
+            name = function.get("name") if function else None
+        else:
+            arguments = tool_call.function.arguments
+            name = tool_call.function.name
         if not isinstance(arguments, str) or not arguments.strip():
             continue
-        name: Final[object] = function.get("name") if isinstance(function, dict) else getattr(function, "name", None)
-        texts.append(f"{name if isinstance(name, str) else ''}({arguments})")
+        texts.append(f"{name or ''}({arguments})")
     return tuple(texts)
 
 
