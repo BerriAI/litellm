@@ -6,6 +6,7 @@ xAI batches carry request counters, not a status, and no output file: results ar
 """
 
 import json
+import time
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
@@ -24,7 +25,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.xai.common_utils import XAIModelInfo
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.llms.openai import CreateBatchRequest
+from litellm.types.llms.openai import CreateBatchRequest, OpenAIFileObject
 from litellm.types.utils import LiteLLMBatch
 
 OpenAIBatchStatus: TypeAlias = Literal[
@@ -83,6 +84,23 @@ def xai_batches_url(api_base: str | None, batch_id: str | None = None, suffix: s
 
 def is_xai_batch_results_id(file_id: str) -> bool:
     return file_id.startswith(XAI_BATCH_ID_PREFIX)
+
+
+def xai_batch_results_file_object(batch: LiteLLMBatch) -> OpenAIFileObject:
+    """Describe a completed batch's results as a file without downloading them, so the size is a 0 placeholder."""
+    if batch.output_file_id is None:
+        raise xai_batches_error(
+            f"xAI batch {batch.id} has no results file until it completes (status={batch.status})", 404, _EMPTY_HEADERS
+        )
+    return OpenAIFileObject(
+        id=batch.output_file_id,
+        object="file",
+        purpose="batch_output",
+        filename=f"{batch.output_file_id}_results.jsonl",
+        bytes=0,
+        created_at=int(time.time()),
+        status="processed",
+    )
 
 
 class XAICreateBatchRequest(TypedDict):

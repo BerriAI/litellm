@@ -1,4 +1,5 @@
 import json
+import time
 from typing import Final
 
 import httpx
@@ -276,6 +277,51 @@ async def test_file_content_of_a_batch_id_walks_every_results_page(sync_mode: bo
         },
         {"id": "batch_req_r2", "custom_id": "r2", "response": None, "error": {"code": "3", "message": "boom"}},
     ]
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@respx.mock
+async def test_file_retrieve_of_a_batch_id_describes_its_results_from_one_batch_read(sync_mode: bool) -> None:
+    batch_id: Final = f"batch_retrieve_{sync_mode}"
+    batch: Final = respx.get(f"{API_BASE}/v1/batches/{batch_id}").respond(200, json={**_XAI_BATCH, "batch_id": batch_id})
+    results: Final = respx.get(f"{API_BASE}/v1/batches/{batch_id}/results").respond(
+        200, json={"results": [], "pagination_token": None}
+    )
+    files_lookup: Final = respx.get(f"{API_BASE}/v1/files/{batch_id}").respond(404, json={"code": "not-found"})
+
+    kwargs: Final = {"file_id": batch_id, "custom_llm_provider": "xai", "api_key": KEY, "api_base": API_BASE}
+    before: Final = int(time.time())
+    file_object: Final = litellm.file_retrieve(**kwargs) if sync_mode else await litellm.afile_retrieve(**kwargs)
+    after: Final = int(time.time())
+
+    assert (batch.call_count, results.call_count, files_lookup.call_count) == (1, 0, 0)
+    assert (file_object.id, file_object.purpose, file_object.filename, file_object.bytes, file_object.status) == (
+        batch_id,
+        "batch_output",
+        f"{batch_id}_results.jsonl",
+        0,
+        "processed",
+    )
+    assert before <= file_object.created_at <= after
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@respx.mock
+async def test_file_retrieve_of_an_unfinished_batch_is_a_404_without_reading_results(sync_mode: bool) -> None:
+    batch_id: Final = f"batch_unfinished_{sync_mode}"
+    respx.get(f"{API_BASE}/v1/batches/{batch_id}").respond(
+        200,
+        json={**_XAI_BATCH, "batch_id": batch_id, "state": {**_XAI_BATCH["state"], "num_pending": 1}},
+    )
+    results: Final = respx.get(f"{API_BASE}/v1/batches/{batch_id}/results").respond(
+        200, json={"results": [], "pagination_token": None}
+    )
+
+    kwargs: Final = {"file_id": batch_id, "custom_llm_provider": "xai", "api_key": KEY, "api_base": API_BASE}
+    with pytest.raises(XAIBatchesError, match="has no results file until it completes") as raised:
+        litellm.file_retrieve(**kwargs) if sync_mode else await litellm.afile_retrieve(**kwargs)
+
+    assert (raised.value.status_code, results.call_count) == (404, 0)
 
 
 @respx.mock
