@@ -79,7 +79,7 @@ from litellm.constants import (
 )
 from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
-from litellm.proxy._experimental.mcp_server.legacy_callbacks import record_upstream_tool_authorization
+from litellm.proxy._experimental.mcp_server.mcp_context import get_active_mcp_request_ctx
 from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
 from litellm.proxy._experimental.mcp_server.result_conversion import (
     age_freshness,
@@ -104,6 +104,14 @@ from litellm.types.mcp import (
 if TYPE_CHECKING:
     from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult
     from litellm.proxy._experimental.mcp_server.legacy_callbacks import ElicitationCallback
+
+
+def _mcp_response_hooks() -> tuple[Callable[[httpx2.Response], Awaitable[None]], ...]:
+    if get_active_mcp_request_ctx() is None:
+        return (capture_upstream_error_response,)
+    from litellm.proxy._experimental.mcp_server.legacy_callbacks import record_upstream_tool_authorization
+
+    return (record_upstream_tool_authorization, capture_upstream_error_response)
 
 
 def to_basic_auth(auth_value: str) -> str:
@@ -834,7 +842,7 @@ class MCPClient:
                 follow_redirects=True,
                 event_hooks=MappingProxyType(
                     {
-                        "response": [record_upstream_tool_authorization, capture_upstream_error_response],
+                        "response": list(_mcp_response_hooks()),
                         "request": [guard] if guard else [],
                     }
                 ),
