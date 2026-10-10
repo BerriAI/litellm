@@ -22,15 +22,7 @@ vi.mock("./detailNavigation", () => ({
 }));
 
 vi.mock("@/components/molecules/DecisionModelsBanner", () => ({
-  default: ({ onAddModel }: { onAddModel?: () => void }) => (
-    <section aria-label="Decision models">
-      {onAddModel && (
-        <button type="button" onClick={onAddModel}>
-          Add a decision model
-        </button>
-      )}
-    </section>
-  ),
+  default: () => <section aria-label="Decision models" />,
 }));
 vi.mock("@/components/model_info_view", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="model-info">model:{modelId}</div>,
@@ -105,21 +97,6 @@ describe("ModelsAndEndpointsPage", () => {
     await user.click(screen.getByRole("tab", { name: "Health Status" }));
     expect(screen.getByTestId("panel-health")).toBeInTheDocument();
     expect(screen.queryByTestId("panel-all-models")).not.toBeInTheDocument();
-  });
-
-  it("opens the Add Model tab from the decision models banner", async () => {
-    const user = userEvent.setup();
-    renderPage();
-    await user.click(screen.getByRole("button", { name: "Add a decision model" }));
-    expect(screen.getByTestId("panel-add")).toBeInTheDocument();
-    expect(screen.queryByTestId("panel-all-models")).not.toBeInTheDocument();
-  });
-
-  it("does not offer the banner's Add a decision model to a session that cannot add models", () => {
-    mockUseAuthorized.mockReturnValue(NON_ADMIN);
-    renderPage();
-    expect(screen.getByRole("region", { name: "Decision models" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Add a decision model" })).not.toBeInTheDocument();
   });
 
   it("does not show a view-only session the decision models banner, whose Playground it cannot open", () => {

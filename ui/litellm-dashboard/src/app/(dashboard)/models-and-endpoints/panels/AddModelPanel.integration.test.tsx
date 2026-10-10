@@ -582,7 +582,7 @@ describe("AddModelPanel decision models", () => {
       "href",
       "https://docs.litellm.ai/docs/decisions",
     );
-    expect(within(note).getByRole("link", { name: "test it in the System One playground" })).toHaveAttribute(
+    expect(within(note).getByRole("link", { name: "test it in the Decisions playground" })).toHaveAttribute(
       "href",
       "/ui/playground?tab=system-one",
     );
