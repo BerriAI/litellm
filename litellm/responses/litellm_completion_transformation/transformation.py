@@ -25,8 +25,9 @@ from openai.types.chat.chat_completion_named_tool_choice_param import (
 from openai.types.chat.chat_completion_named_tool_choice_param import (
     Function as NamedToolChoiceFunction,
 )
-from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch
+from openai.types.responses import ResponseFunctionToolCall, ResponseFunctionWebSearch, ResponseReasoningItem
 from openai.types.responses.response_create_params import ResponseInputParam
+from openai.types.responses.response_reasoning_item import Content as ReasoningTextContent
 from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomParam
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
@@ -77,7 +78,6 @@ from litellm.types.llms.openai import (
     ResponseAPIUsage,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
-    ResponsesAPIStatus,
     ToolChoice,
     ValidChatCompletionMessageContentTypes,
     ValidChatCompletionMessageContentTypesLiteral,
@@ -442,6 +442,13 @@ class LiteLLMCompletionResponsesConfig:
             api_base=api_base,
         )
         return ResponsesReasoningChatForm(effort=effort, summary=summary if bridges_back else None)
+
+    @staticmethod
+    def transform_reasoning_for_responses_api_response(
+        responses_api_request: Mapping[str, object],
+    ) -> dict[str, object]:  # mutable-ok: ResponsesAPIResponse.reasoning is typed as dict
+        reasoning_param: Final = _echoable_request_params(responses_api_request).get("reasoning") or {}
+        return {"effort": reasoning_param.get("effort"), "summary": reasoning_param.get("summary")}
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -2298,7 +2305,7 @@ class LiteLLMCompletionResponsesConfig:
     @staticmethod
     def _map_chat_completion_finish_reason_to_responses_status(
         finish_reason: str | None,
-    ) -> ResponsesAPIStatus:
+    ) -> Literal["completed", "incomplete"]:
         """
         Map chat completion finish_reason to responses API status.
 
@@ -2309,7 +2316,7 @@ class LiteLLMCompletionResponsesConfig:
             finish_reason: The finish_reason from a chat completion response
 
         Returns:
-            The corresponding responses API status value (one of ResponsesAPIStatus)
+            "completed" or "incomplete"
         """
         if finish_reason is None:
             return "incomplete"
@@ -2492,7 +2499,9 @@ class LiteLLMCompletionResponsesConfig:
             top_p=echoed.get("top_p"),
             max_output_tokens=echoed.get("max_output_tokens"),
             previous_response_id=echoed.get("previous_response_id"),
-            reasoning=echoed.get("reasoning"),
+            reasoning=LiteLLMCompletionResponsesConfig.transform_reasoning_for_responses_api_response(
+                responses_api_request
+            ),
             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                 finish_reason
             ),
@@ -2533,6 +2542,7 @@ class LiteLLMCompletionResponsesConfig:
         | ResponseFunctionToolCall
         | ResponseFunctionWebSearch
         | CustomToolCallOutputItem
+        | ResponseReasoningItem
     ]:
         responses_output: list[
             GenericResponseOutputItem
@@ -2542,6 +2552,7 @@ class LiteLLMCompletionResponsesConfig:
             | ResponseFunctionToolCall
             | ResponseFunctionWebSearch
             | CustomToolCallOutputItem
+            | ResponseReasoningItem
         ] = []
 
         responses_output.extend(
@@ -2618,7 +2629,7 @@ class LiteLLMCompletionResponsesConfig:
     def _extract_reasoning_output_items(
         chat_completion_response: ModelResponse,
         choices: list[Choices],
-    ) -> list[GenericResponseOutputItem]:
+    ) -> list[ResponseReasoningItem]:
         for choice in choices:
             if hasattr(choice, "message") and choice.message:
                 message = choice.message
@@ -2627,22 +2638,18 @@ class LiteLLMCompletionResponsesConfig:
                 if reasoning_content or encrypted_content:
                     # Only check the first choice for reasoning content
                     return [
-                        GenericResponseOutputItem(
+                        ResponseReasoningItem(
                             type="reasoning",
                             id=mint_reasoning_item_id(),
                             status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
                                 choice.finish_reason
                             ),
-                            role="assistant",
-                            content=[
-                                OutputText(
-                                    type="output_text",
-                                    text=text,
-                                    annotations=[],
-                                )
-                                for text in (reasoning_content,)
-                                if text
-                            ],
+                            summary=[],
+                            content=(
+                                [ReasoningTextContent(type="reasoning_text", text=reasoning_content)]
+                                if reasoning_content
+                                else None
+                            ),
                             encrypted_content=encrypted_content,
                         )
                     ]

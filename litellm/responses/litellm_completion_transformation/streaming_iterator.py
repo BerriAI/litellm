@@ -555,7 +555,9 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             "output": [],
             "parallel_tool_calls": True,
             "previous_response_id": None,
-            "reasoning": {"effort": None, "summary": None},
+            "reasoning": LiteLLMCompletionResponsesConfig.transform_reasoning_for_responses_api_response(
+                self.responses_api_request
+            ),
             "store": True,
         }
         if "temperature" in self.responses_api_request:
@@ -998,7 +1000,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         "id": self._cached_reasoning_item_id,
                         "type": "reasoning",
                         "status": "in_progress",
-                        "summary": None,
+                        "summary": [],
                     }
                 ),
             )

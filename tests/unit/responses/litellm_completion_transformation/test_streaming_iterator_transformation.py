@@ -15,6 +15,7 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from openai.types.responses import ResponseReasoningItem
 
 from litellm.responses.litellm_completion_transformation.streaming_iterator import (
     LiteLLMCompletionStreamingIterator,
@@ -976,6 +977,38 @@ def _reasoning_chunk(reasoning: str, finish_reason: str | None = None) -> ModelR
             )
         ],
     )
+
+
+def test_streamed_reasoning_echo_and_item_match_the_responses_spec() -> None:
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-haiku-4-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper(
+            [_reasoning_chunk("Euler's polynomial fails at n=40."), _chunk("40", finish_reason="stop")]
+        ),
+        request_input="Find n.",
+        responses_api_request={"reasoning": {"effort": "high"}},
+        custom_llm_provider="anthropic",
+        litellm_metadata={},
+    )
+
+    events: Final = [event.model_dump(mode="json") for event in iterator]
+
+    response_reasoning: Final = [
+        event["response"]["reasoning"] for event in events if event["type"] in RESPONSE_ID_EVENT_TYPES
+    ]
+    assert response_reasoning == [{"effort": "high", "summary": None}] * 3
+    added_reasoning: Final = [
+        event["item"]
+        for event in events
+        if event["type"] == "response.output_item.added" and event["item"]["type"] == "reasoning"
+    ]
+    assert [item["summary"] for item in added_reasoning] == [[]]
+    completed: Final = next(event for event in events if event["type"] == "response.completed")
+    reasoning_item: Final = ResponseReasoningItem.model_validate(completed["response"]["output"][0])
+    assert reasoning_item.summary == []
+    assert [(part.type, part.text) for part in reasoning_item.content or ()] == [
+        ("reasoning_text", "Euler's polynomial fails at n=40.")
+    ]
 
 
 def _annotation_only_chunk() -> ModelResponseStream:

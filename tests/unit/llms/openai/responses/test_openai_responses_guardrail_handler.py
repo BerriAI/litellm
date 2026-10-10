@@ -39,7 +39,7 @@ from litellm.responses.litellm_completion_transformation.transformation import (
 )
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.responses.main import CustomToolCallOutputItem, GenericResponseOutputItem, OutputText
-from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
+from litellm.types.utils import CallTypes, Choices, GenericGuardrailAPIInputs, Message, ModelResponse
 
 
 class MockGuardrail(CustomGuardrail):
@@ -3737,3 +3737,43 @@ class TestOpenAIResponsesHandlerStreamingScanKey:
         assert [inputs.get("texts") for inputs in guardrail.seen_inputs] == [["hi"]], guardrail.seen_inputs
         tool_calls = guardrail.seen_inputs[0].get("tool_calls") or []
         assert [call["function"]["arguments"] for call in tool_calls] == ['{"city": "Paris"}'], tool_calls
+
+
+class PersimmonTextMaskingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "texts": [text.replace("persimmon", "[MASKED]") for text in inputs.get("texts", [])]}
+
+
+@pytest.mark.asyncio
+async def test_output_guardrail_rewrites_bridged_reasoning_text() -> None:
+    chat_response: Final = ModelResponse(
+        id="chatcmpl-1",
+        created=1,
+        model="claude-haiku-4-5",
+        object="chat.completion",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(role="assistant", content=None, reasoning_content="thinking about persimmon"),
+            )
+        ],
+    )
+    response: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="hi",
+        responses_api_request={},
+        chat_completion_response=chat_response,
+    )
+
+    result: Final = await OpenAIResponsesHandler().process_output_response(
+        response, PersimmonTextMaskingGuardrail(guardrail_name="mask")
+    )
+
+    assert [item.type for item in result.output] == ["reasoning"]
+    assert [part.text for part in result.output[0].content] == ["thinking about [MASKED]"]
