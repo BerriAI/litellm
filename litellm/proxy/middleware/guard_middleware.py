@@ -148,7 +148,7 @@ class GuardMiddleware:
                 "Guard is DISABLED until then.",
                 exc,
             )
-            return False
+        return not self._guard_failed
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not guard_enabled():
