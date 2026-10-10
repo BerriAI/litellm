@@ -1,6 +1,9 @@
 import logging
+from typing import Final
 
+import httpx
 import pytest
+from openai import Timeout as SDKTimeout
 from pydantic import ValidationError
 
 from litellm.types.router import (
@@ -19,9 +22,18 @@ from litellm.types.utils import (
     CustomPricingLiteLLMParams,
     MirroredPricingParams,
     anthropic_wif_litellm_params,
+    github_copilot_oauth_litellm_params,
+    oauth_token_exchange_litellm_params,
     openai_wif_litellm_params,
     server_owned_wif_litellm_params,
 )
+
+
+def test_sdk_timeout_is_normalized_for_provider_clients() -> None:
+    timeout: Final = SDKTimeout(connect=2.0, read=None, write=5.0, pool=7.0)
+    params: Final = GenericLiteLLMParams(timeout=timeout)
+    assert isinstance(params.timeout, httpx.Timeout)
+    assert params.timeout.as_dict() == timeout.as_dict()
 
 
 def test_model_info_declares_mirrored_pricing_fields():
@@ -241,9 +253,7 @@ def test_model_info_rejects_offset_aware_access_window_times():
     with pytest.raises(ValidationError):
         ModelInfo(
             id="x",
-            access_windows=[
-                {"start": "22:00+05:00", "end": "06:00", "timezone": "UTC", "team_ids": ["t"]}
-            ],
+            access_windows=[{"start": "22:00+05:00", "end": "06:00", "timezone": "UTC", "team_ids": ["t"]}],
         )
 
 
@@ -325,13 +335,30 @@ def test_openai_wif_fields_round_trip_through_model_dump():
         assert dumped[field] == value, field
 
 
-def test_server_owned_registry_is_anthropic_plus_openai():
-    assert server_owned_wif_litellm_params == anthropic_wif_litellm_params + openai_wif_litellm_params
+def test_server_owned_registry_includes_anthropic_openai_and_oauth_token_exchange():
+    assert oauth_token_exchange_litellm_params == (
+        "token_exchange_audience",
+        "token_exchange_endpoint",
+        "token_exchange_profile",
+        "token_exchange_scope",
+    )
+    assert github_copilot_oauth_litellm_params == ("github_copilot_auth_type",)
+    assert server_owned_wif_litellm_params == (
+        anthropic_wif_litellm_params
+        + openai_wif_litellm_params
+        + oauth_token_exchange_litellm_params
+        + github_copilot_oauth_litellm_params
+    )
     assert set(openai_wif_litellm_params) == {
         "openai_identity_provider_id",
         "openai_service_account_id",
         "openai_identity_token_file",
     }
+
+
+def test_credential_litellm_params_declares_each_oauth_token_exchange_field():
+    for field in oauth_token_exchange_litellm_params:
+        assert field in CredentialLiteLLMParams.model_fields, field
 
 
 def test_server_owned_wif_fields_present_reports_openai_fields():

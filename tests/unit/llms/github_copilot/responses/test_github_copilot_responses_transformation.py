@@ -9,7 +9,7 @@ Source: litellm/llms/github_copilot/responses/transformation.py
 
 from unittest.mock import patch, MagicMock
 
-
+import httpx
 import pytest
 import litellm
 from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map
@@ -753,3 +753,82 @@ class TestGithubCopilotReasoningStreamItemIdNormalization:
             },
         )
         assert event.item_id == "stable_rs_id"
+
+
+def test_validate_environment_uses_per_user_session_and_skips_authenticator():
+    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+
+    config = GithubCopilotResponsesAPIConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.side_effect = AssertionError("shared authenticator must not run")
+
+    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
+    headers = config.validate_environment(
+        headers={},
+        model="github_copilot/gpt-5.4",
+        litellm_params={"github_copilot_user_session": session},
+    )
+    assert headers["Authorization"] == "Bearer user-copilot-token"
+    config.authenticator.get_api_key.assert_not_called()
+
+
+def test_per_user_session_token_wins_over_caller_authorization():
+    """extra_headers["Authorization"] (any casing) must never displace the per-user
+    session token on the outgoing request."""
+    from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+
+    config = GithubCopilotResponsesAPIConfig()
+    config.authenticator = MagicMock()
+    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
+    headers = config.validate_environment(
+        headers={"Authorization": "Bearer caller-token", "authorization": "Bearer caller-token-lower"},
+        model="github_copilot/gpt-5.1",
+        litellm_params={"github_copilot_user_session": session},
+    )
+    assert headers["Authorization"] == "Bearer user-copilot-token"
+    assert "authorization" not in headers
+
+
+def test_shared_mode_keeps_caller_authorization():
+    """Pin: without a session, caller extra_headers still override the shared token."""
+    config = GithubCopilotResponsesAPIConfig()
+    config.authenticator = MagicMock()
+    config.authenticator.get_api_key.return_value = "shared-api-key"
+    headers = config.validate_environment(
+        headers={"Authorization": "Bearer caller-token"},
+        model="github_copilot/gpt-5.1",
+        litellm_params={},
+    )
+    assert headers["Authorization"] == "Bearer caller-token"
+
+
+def test_transform_response_carries_upstream_usage():
+    config = GithubCopilotResponsesAPIConfig()
+    raw = httpx.Response(
+        200,
+        json={
+            "id": "resp_1",
+            "object": "response",
+            "created_at": 1,
+            "status": "completed",
+            "model": "github_copilot/gpt-5.4",
+            "output": [
+                {
+                    "type": "message",
+                    "id": "m1",
+                    "role": "assistant",
+                    "status": "completed",
+                    "content": [{"type": "output_text", "text": "hi", "annotations": []}],
+                }
+            ],
+            "usage": {"input_tokens": 9, "output_tokens": 4, "total_tokens": 13},
+        },
+    )
+    result = config.transform_response_api_response(
+        model="github_copilot/gpt-5.4",
+        raw_response=raw,
+        logging_obj=MagicMock(),
+    )
+    assert result.usage is not None
+    assert result.usage.input_tokens == 9
+    assert result.usage.output_tokens == 4

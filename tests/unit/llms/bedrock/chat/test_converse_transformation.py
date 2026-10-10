@@ -17,7 +17,8 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
-from litellm.types.llms.bedrock import ConverseTokenUsageBlock
+from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock
+from litellm.types.llms.openai import AllMessageValues
 
 
 def test_transform_usage():
@@ -6556,6 +6557,81 @@ def test_bedrock_tool_message_image_url_png_still_becomes_image():
     assert "document" not in block
     assert block["image"]["format"] == "png"
     assert block["image"]["source"]["bytes"] == png_b64
+
+
+def _png_tool_messages(text: str | None = None) -> list[AllMessageValues]:
+    from litellm.types.llms.openai import (
+        ChatCompletionImageObject,
+        ChatCompletionImageUrlObject,
+        ChatCompletionTextObject,
+        ChatCompletionToolMessage,
+        ChatCompletionUserMessage,
+    )
+
+    png_b64: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABXvMqOgAAAABJRU5ErkJggg=="
+    image: Final = ChatCompletionImageObject(
+        type="image_url",
+        image_url=ChatCompletionImageUrlObject(url=f"data:image/png;base64,{png_b64}"),
+    )
+    parts: Final = (
+        (ChatCompletionTextObject(type="text", text=text), image) if text is not None else (image,)
+    )
+    user: Final = ChatCompletionUserMessage(role="user", content="Describe the attached image.")
+    tool: Final = ChatCompletionToolMessage(role="tool", tool_call_id="tooluse_png_gpt", content=list(parts))
+    return [user, tool]
+
+
+def _gpt_tool_turn(text: str | None) -> list[ContentBlock]:
+    from litellm.types.llms.openai import ChatCompletionToolParam, ChatCompletionToolParamFunctionChunk
+
+    fetch_tool: Final = ChatCompletionToolParam(
+        type="function",
+        function=ChatCompletionToolParamFunctionChunk(
+            name="fetch_image",
+            description="Returns an image",
+            parameters={"type": "object", "properties": {}},
+        ),
+    )
+    body: Final = AmazonConverseConfig()._transform_request(
+        model="bedrock/global.openai.gpt-6.1-sol",
+        messages=_png_tool_messages(text),
+        optional_params={"tools": [fetch_tool]},
+        litellm_params={},
+        headers={},
+    )
+    messages: Final = body["messages"]
+    assert isinstance(messages, list)
+    last: Final = messages[-1]
+    assert isinstance(last, dict)
+    content: Final = last["content"]
+    assert isinstance(content, list)
+    return [ContentBlock(**block) for block in content if isinstance(block, dict)]
+
+
+def test_openai_gpt_tool_result_image_sits_beside_the_tool_result():
+    """gpt-6.1-sol rejects an image nested in toolResult.content. The image has to be a sibling block."""
+    turn: Final = _gpt_tool_turn("tool image")
+    tool_index: Final = next(i for i, block in enumerate(turn) if "toolResult" in block)
+    tool_result: Final = turn[tool_index]["toolResult"]
+    assert isinstance(tool_result, dict)
+    assert tool_result["toolUseId"] == "tooluse_png_gpt"
+    assert tool_result["content"] == [{"text": "tool image"}]
+    image: Final = turn[tool_index + 1]["image"]
+    assert isinstance(image, dict)
+    assert image["format"] == "png"
+
+
+def test_openai_gpt_image_only_tool_result_keeps_a_text_block():
+    from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_PLACEHOLDER
+
+    turn: Final = _gpt_tool_turn(None)
+    tool_index: Final = next(i for i, block in enumerate(turn) if "toolResult" in block)
+    tool_result: Final = turn[tool_index]["toolResult"]
+    assert isinstance(tool_result, dict)
+    assert tool_result["content"] == [{"text": TOOL_RESULT_IMAGE_PLACEHOLDER}]
+    image: Final = turn[tool_index + 1]["image"]
+    assert isinstance(image, dict)
+    assert image["format"] == "png"
 
 
 def test_transform_response_does_not_leak_body_on_parse_failure():

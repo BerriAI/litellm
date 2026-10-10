@@ -15,7 +15,13 @@ from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.secret_managers.main import get_secret_str, normalize_nonempty_secret_str
 from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
 
-from .common_utils import BaseOpenAILLM, OpenAIError, is_openai_backed_api_base
+from .common_utils import (
+    BaseOpenAILLM,
+    OpenAIAsyncHTTPClient,
+    OpenAIError,
+    OpenAIHTTPClient,
+    is_openai_backed_api_base,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -174,13 +180,16 @@ def build_openai_client(
     )
     retries: Final = _max_retries_or_sdk_default(max_retries)
     if workload_identity_config is None:
+        static_key_http_client: Final = (
+            None if static_key_http_client_factory is None else static_key_http_client_factory()
+        )
         return OpenAI(
             api_key=api_key,
             base_url=api_base,
             timeout=timeout,
             max_retries=retries,
             organization=organization,
-            http_client=None if static_key_http_client_factory is None else static_key_http_client_factory(),
+            http_client=static_key_http_client or OpenAIHTTPClient(),
         )
     cache_params: Final = _client_cache_params(
         is_async=False,
@@ -227,13 +236,16 @@ def build_async_openai_client(
     )
     retries: Final = _max_retries_or_sdk_default(max_retries)
     if workload_identity_config is None:
+        static_key_http_client: Final = (
+            None if static_key_http_client_factory is None else static_key_http_client_factory()
+        )
         return AsyncOpenAI(
             api_key=api_key,
             base_url=api_base,
             timeout=timeout,
             max_retries=retries,
             organization=organization,
-            http_client=None if static_key_http_client_factory is None else static_key_http_client_factory(),
+            http_client=static_key_http_client or OpenAIAsyncHTTPClient(),
         )
     cache_params: Final = _client_cache_params(
         is_async=True,

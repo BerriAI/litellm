@@ -2,6 +2,7 @@ import asyncio
 import json
 import sys
 from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 from typing import Final
 
@@ -48,6 +49,24 @@ CHAT_COMPLETION_BODY: Final = {
     "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
 }
+
+
+@pytest.fixture(autouse=True)
+def mock_sdk_token_exchange_transport(monkeypatch: pytest.MonkeyPatch) -> None:
+    native_client_factory: Final = getattr(sys.modules.get("openai.auth._workload"), "DefaultHttpx2Client", None)
+    if native_client_factory is not None:
+        import httpx2
+
+        def handle_exchange(request: httpx2.Request) -> httpx2.Response:
+            response: Final = respx.mock.handler(
+                httpx.Request(request.method, str(request.url), headers=dict(request.headers), content=request.content)
+            )
+            return httpx2.Response(response.status_code, headers=dict(response.headers), content=response.content)
+
+        monkeypatch.setattr(
+            "openai.auth._workload.DefaultHttpx2Client",
+            partial(native_client_factory, transport=httpx2.MockTransport(handle_exchange), trust_env=False),
+        )
 
 
 @pytest.fixture
@@ -428,20 +447,20 @@ class TestResolveConfigFromDeployment:
     def test_partial_litellm_params_without_env_raise_naming_the_missing_field(
         self, deployment_wif: dict[str, str], missing_key: str
     ) -> None:
-        partial: Final = {key: value for key, value in deployment_wif.items() if key != missing_key}
+        subset: Final = {key: value for key, value in deployment_wif.items() if key != missing_key}
         with pytest.raises(OpenAIError) as error:
-            resolve_openai_workload_identity_config(api_key=None, api_base=None, litellm_params=partial)
+            resolve_openai_workload_identity_config(api_key=None, api_base=None, litellm_params=subset)
         assert error.value.status_code == 500
         assert f"missing {missing_key}." in error.value.message
-        assert all(key not in error.value.message.split(".")[0] for key in partial)
+        assert all(key not in error.value.message.split(".")[0] for key in subset)
 
     def test_partial_litellm_params_fall_back_to_the_process_key(
         self, deployment_wif: dict[str, str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-from-env")
-        partial: Final = {key: value for key, value in deployment_wif.items() if key != "openai_identity_token_file"}
+        subset: Final = {key: value for key, value in deployment_wif.items() if key != "openai_identity_token_file"}
         assert (
-            resolve_openai_workload_identity_config(api_key="sk-from-env", api_base=None, litellm_params=partial)
+            resolve_openai_workload_identity_config(api_key="sk-from-env", api_base=None, litellm_params=subset)
             is None
         )
 
@@ -457,9 +476,9 @@ class TestResolveConfigFromDeployment:
         )
 
     def test_partial_litellm_params_yield_to_the_deployments_own_key(self, deployment_wif: dict[str, str]) -> None:
-        partial: Final = {key: value for key, value in deployment_wif.items() if key != "openai_identity_token_file"}
+        subset: Final = {key: value for key, value in deployment_wif.items() if key != "openai_identity_token_file"}
         assert (
-            resolve_openai_workload_identity_config(api_key="sk-static", api_base=None, litellm_params=partial) is None
+            resolve_openai_workload_identity_config(api_key="sk-static", api_base=None, litellm_params=subset) is None
         )
 
     def test_static_api_key_beats_litellm_params(self, deployment_wif: dict[str, str]) -> None:
@@ -885,9 +904,9 @@ class TestHttpHandlersHonorDeploymentIdentity:
     def test_partial_deployment_identity_fails_loudly(
         self, deployment_wif: dict[str, str], surface: str, headers_from: HeadersFromParams
     ) -> None:
-        partial: Final = {key: value for key, value in deployment_wif.items() if key != "openai_service_account_id"}
+        subset: Final = {key: value for key, value in deployment_wif.items() if key != "openai_service_account_id"}
         with pytest.raises(OpenAIError, match="missing openai_service_account_id"):
-            headers_from(GenericLiteLLMParams(**partial))
+            headers_from(GenericLiteLLMParams(**subset))
 
 
 class TestDiscoverModels:

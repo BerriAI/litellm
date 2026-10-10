@@ -38,6 +38,7 @@ from litellm.secret_managers.main import get_secret, get_secret_str
 from litellm.types.llms.bedrock import AWS_AUTH_PARAM_KEYS, AwsAuthParams
 
 if TYPE_CHECKING:
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
     from litellm.types.llms.openai import AllMessageValues
 
 
@@ -895,11 +896,11 @@ def bedrock_runtime_chat_completions_is_default(model: str) -> bool:
 def bedrock_rejects_stop_sequences(model: str) -> bool:
     """Whether AWS refuses stop sequences for this model on every Bedrock route.
 
-    Grok answers ``stopSequences`` on Converse and ``stop`` on native Chat Completions alike with
-    ``This model doesn't support the stopSequences field`` (Grok 4.6 and 4.7 checked live on 2026-10-09),
-    so litellm drops ``stop`` for it instead of forwarding it to a 400.
+    Grok and GPT 5.6 and newer answer ``stopSequences`` on Converse and ``stop`` on native Chat Completions
+    alike with ``This model doesn't support the stopSequences field`` (Grok 4.6 and 4.7, GPT 5.6 and GPT 6.1
+    checked live on 2026-10-09), so litellm drops ``stop`` for them instead of forwarding it to a 400.
     """
-    return _XAI_GROK_MODEL_RE.search(model) is not None
+    return _bedrock_runtime_chat_completions_default_family(model)
 
 
 def bedrock_runtime_chat_completions_serves_tools_with_reasoning(model: str) -> bool:
@@ -920,6 +921,19 @@ def bedrock_runtime_chat_completions_enforces_response_format(model: str) -> boo
     Converse, which emulates the schema through a forced ``json_tool_call`` tool, serves those requests.
     """
     return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions_response_format")
+
+
+def bedrock_converse_supports_tool_result_images(model: str) -> bool:
+    """Whether Converse accepts an image nested in ``toolResult.content``.
+
+    Missing means yes, which is what Claude accepts. A price-map row sets
+    ``supports_bedrock_converse_tool_result_images`` to false when Bedrock
+    rejects that image and it has to sit beside the tool result instead.
+    """
+    entries: Final = tuple(entry for entry in _bedrock_price_map_entries(model) if entry is not None)
+    if not entries:
+        return True
+    return all(entry.get("supports_bedrock_converse_tool_result_images") is not False for entry in entries)
 
 
 def bedrock_model_is_openai_gpt(model: str) -> bool:
@@ -1363,6 +1377,10 @@ class BedrockModelInfo(BaseLLMModelInfo):
     global_config = AmazonBedrockGlobalConfig()
     all_global_regions = global_config.get_all_regions()
 
+    def __init__(self, client: HTTPHandler | None = None) -> None:
+        super().__init__()
+        self._client: Final = client
+
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:
         """
@@ -1390,7 +1408,15 @@ class BedrockModelInfo(BaseLLMModelInfo):
         return headers
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
-        return []
+        return self.discover_models({"api_key": api_key})
+
+    def discover_models(
+        self, litellm_params: Mapping[str, object] | None = None
+    ) -> list[str]:  # mutable-ok: matches get_models' list[str] contract shared by every provider override
+        from litellm.llms.bedrock.model_listing import BedrockModelLister
+
+        client: Final = self._client if self._client is not None else litellm.module_level_client
+        return sorted(BedrockModelLister(deployment=litellm_params or {}, client=client).invocable_model_ids())
 
     # def get_provider_info(self, model: str) -> Optional[ProviderSpecificModelInfo]:
     #     """

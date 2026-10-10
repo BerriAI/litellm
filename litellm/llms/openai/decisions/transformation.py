@@ -293,6 +293,7 @@ def ir_to_openai_response(
 
 class OpenAIDecisionsConfig(BaseDecisionsConfig):
     path = "/v1/decisions"
+    supports_safety_identifier = True
 
     def get_default_api_base(self) -> str | None:
         return "https://api.openai.com"
