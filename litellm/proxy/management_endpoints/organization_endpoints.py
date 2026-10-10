@@ -121,6 +121,8 @@ class _ObjectPermissionRow(Protocol):
 class _UserTableClient(Protocol):
     async def find_unique(self, where: Mapping[str, object]) -> "PrismaUserTable | None": ...
 
+    async def find_many(self, where: Mapping[str, object], take: int | None = None) -> "Sequence[PrismaUserTable]": ...
+
 
 class _BudgetTableClient(Protocol):
     async def create(self, data: Mapping[str, object]) -> "PrismaBudgetTable": ...
@@ -1419,16 +1421,12 @@ async def find_member_if_email(user_email: str, prisma_client: PrismaClient) -> 
             "error": f"Unique user not found for user_email={user_email}. Potential duplicate OR non-existent user_email in LiteLLM_UserTable. Use 'user_id' instead."
         },
     )
-    try:
-        existing_user_email_row: Final = await UserRepository(prisma_client).table.find_unique(
-            where={"user_email": user_email}
-        )
-    except Exception:
+    existing_user_email_rows: Final = await _table(UserRepository(prisma_client)).find_many(
+        where={"user_email": user_email}, take=2
+    )
+    if len(existing_user_email_rows) != 1:
         raise not_unique_user_email_error
-    if existing_user_email_row is None:
-        raise not_unique_user_email_error
-    existing_user_email_row_pydantic: Final = LiteLLM_UserTable.model_validate(existing_user_email_row.model_dump())
-    return existing_user_email_row_pydantic
+    return LiteLLM_UserTable.model_validate(existing_user_email_rows[0].model_dump())
 
 
 @router.patch(
@@ -1648,25 +1646,20 @@ async def add_member_to_organization(
     try:
         user_object: LiteLLM_UserTable | None = None
         existing_user_id_row = None
-        existing_user_email_row = None
         ## Check if user exists in LiteLLM_UserTable - user exists - either the user_id or user_email is in LiteLLM_UserTable
         if member.user_id is not None:
             existing_user_id_row = await _table(UserRepository(prisma_client)).find_unique(
                 where={"user_id": member.user_id}
             )
 
-        if existing_user_id_row is None and member.user_email is not None:
-            try:
-                existing_user_email_row = await UserRepository(prisma_client).table.find_unique(
-                    where={"user_email": member.user_email}
-                )
-            except Exception as e:
-                raise ValueError(
-                    f"Potential NON-Existent or Duplicate user email in DB: Error finding a unique instance of user_email={member.user_email} in LiteLLM_UserTable.: {e}"
-                )
+        existing_user_email_rows: Final = (
+            await _table(UserRepository(prisma_client)).find_many(where={"user_email": member.user_email}, take=2)
+            if existing_user_id_row is None and member.user_email is not None
+            else ()
+        )
 
         ## If user does not exist, create a new user
-        if existing_user_id_row is None and existing_user_email_row is None:
+        if existing_user_id_row is None and not existing_user_email_rows:
             # Create a new user - since user does not exist
             user_id: Final[str] = member.user_id or str(uuid.uuid4())
             new_user_defaults: Final = get_new_internal_user_defaults(
@@ -1677,16 +1670,20 @@ async def add_member_to_organization(
             _returned_user = await prisma_client.insert_data(data=new_user_defaults, table_name="user")
             if _returned_user is not None:
                 user_object = LiteLLM_UserTable.model_validate(_returned_user.model_dump())
-        elif existing_user_email_row is not None and (
-            len(existing_user_email_row)  # pyright: ignore[reportArgumentType]  # find_unique yields a row, not a list
-            > 1
-        ):
+        elif len(existing_user_email_rows) > 1:
             raise HTTPException(
                 status_code=400,
                 detail={"error": "Multiple users with this email found in db. Please use 'user_id' instead."},
             )
-        elif existing_user_email_row is not None:
-            user_object = LiteLLM_UserTable.model_validate(existing_user_email_row.model_dump())
+        elif existing_user_email_rows and member.user_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": f"user_email '{member.user_email}' and user_id '{member.user_id}' do not belong to the same user."
+                },
+            )
+        elif existing_user_email_rows:
+            user_object = LiteLLM_UserTable.model_validate(existing_user_email_rows[0].model_dump())
         elif existing_user_id_row is not None:
             user_object = LiteLLM_UserTable.model_validate(existing_user_id_row.model_dump())
         else:
@@ -1713,5 +1710,7 @@ async def add_member_to_organization(
         )
         return user_object, organization_membership
 
+    except HTTPException:
+        raise
     except Exception as e:
         raise ValueError(f"Error adding member={member} to organization={organization_id}: {e}")
