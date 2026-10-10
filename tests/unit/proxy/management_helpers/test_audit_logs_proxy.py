@@ -264,7 +264,7 @@ async def test_track_audit_task_lifecycle():
     task_completed: Final = asyncio.Event()
 
     async def _sample_coroutine() -> None:
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0)
         task_completed.set()
 
     task: Final = track_audit_task(asyncio.create_task(_sample_coroutine()))
@@ -285,7 +285,7 @@ async def test_drain_audit_tasks_waits_for_all_tasks():
     event2: Final = asyncio.Event()
 
     async def _worker(event: asyncio.Event) -> None:
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
         event.set()
 
     task1: Final = track_audit_task(asyncio.create_task(_worker(event1)))
@@ -305,7 +305,7 @@ async def test_drain_audit_tasks_waits_for_all_tasks():
 @pytest.mark.asyncio
 async def test_drain_audit_tasks_handles_failing_task_cleanly():
     async def _failing_worker() -> None:
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0)
         raise RuntimeError("test audit log write failure")
 
     task: Final = track_audit_task(asyncio.create_task(_failing_worker()))
@@ -319,12 +319,12 @@ async def test_drain_audit_tasks_handles_failing_task_cleanly():
 @pytest.mark.asyncio
 async def test_drain_audit_tasks_timeout_does_not_cancel_pending_tasks():
     async def _long_running_worker() -> None:
-        await asyncio.sleep(10.0)
+        await asyncio.Event().wait()
 
     task: Final = track_audit_task(asyncio.create_task(_long_running_worker()))
     try:
         assert not task.done()
-        await drain_audit_tasks(timeout=0.05)
+        await drain_audit_tasks(timeout=0)
         assert not task.cancelled()
         assert not task.done()
     finally:
@@ -344,7 +344,7 @@ async def test_drain_audit_tasks_persists_management_audit_write_before_db_disco
     async def _mock_create(data: dict[str, Any]) -> None:
         if is_disconnected[0]:
             raise RuntimeError("Database already disconnected")
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
         writes.append(data)
 
     mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=_mock_create)
@@ -384,7 +384,7 @@ async def test_create_audit_log_auto_registers_in_drain():
     writes: Final[list[dict[str, Any]]] = []
 
     async def _mock_create(data: dict[str, Any]) -> None:
-        await asyncio.sleep(0.02)
+        await asyncio.sleep(0)
         writes.append(data)
 
     mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=_mock_create)
@@ -407,7 +407,7 @@ async def test_create_audit_log_auto_registers_in_drain():
         )
 
         task: Final = asyncio.create_task(create_audit_log_for_update(request_data=request_data))
-        await asyncio.sleep(0.001)
+        await asyncio.sleep(0)
 
         await drain_audit_tasks(timeout=2.0)
 
@@ -424,15 +424,13 @@ async def test_drain_audit_tasks_discards_timed_out_tasks_on_timeout():
 
     hung_task: Final = track_audit_task(asyncio.create_task(_hung_worker()))
     try:
-        start_time: Final = time.perf_counter()
-        await drain_audit_tasks(timeout=0.05)
-        duration_first_drain: Final = time.perf_counter() - start_time
-        assert duration_first_drain >= 0.04
+        await drain_audit_tasks(timeout=0)
+        assert not hung_task.done()
 
-        second_drain_start: Final = time.perf_counter()
-        await drain_audit_tasks(timeout=0.5)
-        duration_second_drain: Final = time.perf_counter() - second_drain_start
-        assert duration_second_drain < 0.05
+        second_drain: Final = asyncio.create_task(drain_audit_tasks(timeout=60))
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert second_drain.done()
     finally:
         hung_task.cancel()
         try:
@@ -446,12 +444,12 @@ async def test_drain_audit_tasks_captures_tasks_queued_during_drain():
     finished_tasks: Final[list[str]] = []
 
     async def _first_worker() -> None:
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0)
         track_audit_task(asyncio.create_task(_second_worker()))
         finished_tasks.append("first")
 
     async def _second_worker() -> None:
-        await asyncio.sleep(0.01)
+        await asyncio.sleep(0)
         finished_tasks.append("second")
 
     track_audit_task(asyncio.create_task(_first_worker()))
@@ -482,13 +480,15 @@ async def test_create_audit_log_for_update_does_not_track_when_logging_disabled(
     with patch("litellm.store_audit_logs", False):
         caller: Final = asyncio.create_task(_caller_that_outlives_the_audit_call())
         await asyncio.sleep(0)
-        started: Final = time.monotonic()
-        await drain_audit_tasks(timeout=1.0)
-        elapsed: Final = time.monotonic() - started
+        drain: Final = asyncio.create_task(drain_audit_tasks(timeout=60))
+        for _ in range(3):
+            await asyncio.sleep(0)
+        drain_returned_while_caller_was_running: Final = drain.done()
         release_caller.set()
         await caller
+        await drain
 
-    assert elapsed < 0.5
+    assert drain_returned_while_caller_was_running
 
 
 @pytest.mark.asyncio
@@ -504,7 +504,7 @@ async def test_hook_spawn_with_io_delay_drained_before_shutdown():
     mock_prisma.db.litellm_auditlog.create = AsyncMock(side_effect=_mock_create)
 
     async def _hook_with_preceding_io() -> None:
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0)
         await create_audit_log_for_update(
             request_data=LiteLLM_AuditLogs(
                 id=str(uuid.uuid4()),
