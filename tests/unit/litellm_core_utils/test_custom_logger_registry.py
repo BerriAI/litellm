@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import os
+import sys
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Final, Literal
@@ -406,3 +407,59 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
+
+@pytest.mark.parametrize(
+    ("callback_name", "module_path", "class_name"),
+    (
+        ("dynamic_rate_limiter", "litellm.proxy.hooks.dynamic_rate_limiter", "PROXY_DynamicRateLimitHandler"),
+        ("dynamic_rate_limiter_v3", "litellm.proxy.hooks.dynamic_rate_limiter_v3", "PROXY_DynamicRateLimitHandlerV3"),
+    ),
+)
+def test_lazy_proxy_callback_classes_resolve_in_registry_lookups(
+    callback_name: str, module_path: str, class_name: str
+) -> None:
+    proxy_class: Final = getattr(importlib.import_module(module_path), class_name)
+
+    assert CustomLoggerRegistry.get_class_type_for_custom_logger_name(callback_name) is proxy_class
+    assert CustomLoggerRegistry.get_callback_str_from_class_type(proxy_class) == callback_name
+    assert CustomLoggerRegistry.get_all_callback_strs_from_class_type(proxy_class) == [callback_name]
+
+
+def test_registry_import_leaves_proxy_rate_limiter_modules_unloaded(monkeypatch: pytest.MonkeyPatch) -> None:
+    registry_module_name: Final = "litellm.litellm_core_utils.custom_logger_registry"
+    limiter_module_names: Final = (
+        "litellm.proxy.hooks.dynamic_rate_limiter",
+        "litellm.proxy.hooks.dynamic_rate_limiter_v3",
+    )
+    for module_name in (registry_module_name, *limiter_module_names):
+        parent_name, _, attribute_name = module_name.rpartition(".")
+        monkeypatch.setattr(importlib.import_module(parent_name), attribute_name, importlib.import_module(module_name))
+        monkeypatch.delitem(sys.modules, module_name)
+
+    fresh_registry_module: Final = importlib.import_module(registry_module_name)
+
+    assert fresh_registry_module.CustomLoggerRegistry is not CustomLoggerRegistry
+    assert [name for name in limiter_module_names if name in sys.modules] == []
+
+
+@pytest.mark.parametrize(
+    ("legacy_name", "module_path"),
+    (
+        ("PROXY_DynamicRateLimitHandler", "litellm.proxy.hooks.dynamic_rate_limiter"),
+        ("_PROXY_DynamicRateLimitHandler", "litellm.proxy.hooks.dynamic_rate_limiter"),
+        ("PROXY_DynamicRateLimitHandlerV3", "litellm.proxy.hooks.dynamic_rate_limiter_v3"),
+        ("_PROXY_DynamicRateLimitHandlerV3", "litellm.proxy.hooks.dynamic_rate_limiter_v3"),
+    ),
+)
+def test_legacy_rate_limiter_exports_resolve_to_proxy_objects(legacy_name: str, module_path: str) -> None:
+    registry_module: Final = importlib.import_module("litellm.litellm_core_utils.custom_logger_registry")
+
+    assert getattr(registry_module, legacy_name) is getattr(importlib.import_module(module_path), legacy_name)
+
+
+def test_registry_module_still_raises_for_unknown_attributes() -> None:
+    registry_module: Final = importlib.import_module("litellm.litellm_core_utils.custom_logger_registry")
+
+    with pytest.raises(AttributeError):
+        getattr(registry_module, "PROXY_NotARealHandler")

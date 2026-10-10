@@ -19331,7 +19331,7 @@ def _hidden_runtime_callback_names(configured_callback_names: frozenset[str]) ->
     from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry
 
     configured_classes: Final = tuple(
-        CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE[name]
+        CustomLoggerRegistry.get_class_type_for_custom_logger_name(name)
         for name in configured_callback_names
         if name in CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE
     )
