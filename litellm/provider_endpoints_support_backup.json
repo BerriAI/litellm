@@ -2100,6 +2100,24 @@
         "interactions": true
       }
     },
+    "powertokens": {
+      "display_name": "PowerTokens (`powertokens`)",
+      "url": "https://docs.litellm.ai/docs/providers/powertokens",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "reka": {
       "display_name": "Reka (`reka`)",
       "url": "https://docs.litellm.ai/docs/providers/reka",
