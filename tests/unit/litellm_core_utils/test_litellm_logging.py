@@ -422,6 +422,37 @@ def test_post_call_serializes_dict_with_datetime(logging_obj):
     assert "2026-05-11" in serialized
 
 
+class _StringifyCounter:
+    """A raw provider response that counts how often it is turned into text."""
+
+    def __init__(self) -> None:
+        self.stringified = 0
+
+    def __str__(self) -> str:
+        self.stringified += 1
+        return "raw-provider-body"
+
+
+def test_post_call_does_not_format_the_raw_response_when_debug_logging_is_off(logging_obj, caplog):
+    """Formatting the RAW RESPONSE debug line copied the whole provider body (e.g. a base64 image or a
+    3072-dim embedding batch) on every call, even with debug logging off."""
+    caplog.set_level(logging.INFO, logger="LiteLLM")
+    response: Final = _StringifyCounter()
+
+    logging_obj.post_call(original_response=response)
+
+    assert response.stringified == 0
+    assert "RAW RESPONSE" not in caplog.text
+
+
+def test_post_call_still_logs_the_raw_response_when_debug_logging_is_on(logging_obj, caplog):
+    caplog.set_level(logging.DEBUG, logger="LiteLLM")
+
+    logging_obj.post_call(original_response=_StringifyCounter())
+
+    assert "RAW RESPONSE:\nraw-provider-body" in caplog.text
+
+
 def test_sentry_environment(monkeypatch):
     import sentry_sdk
 
