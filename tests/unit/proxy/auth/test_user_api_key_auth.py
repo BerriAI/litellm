@@ -12,6 +12,7 @@ import pytest
 from starlette.datastructures import URL
 from starlette.types import Message
 from litellm._logging import verbose_proxy_logger
+import json
 import logging
 import litellm
 from litellm.proxy.auth.user_api_key_auth import (
@@ -910,6 +911,36 @@ async def test_user_api_key_auth_websocket_carries_asgi_path():
         request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
         assert request_arg.scope.get("path") == "/v1/realtime"
         assert request_arg.scope.get("root_path") == ""
+
+
+@pytest.mark.asyncio
+async def test_accepted_websocket_reauthorizes_the_frame_model_without_closing():
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth_accepted_websocket_for_model
+
+    mock_websocket = MagicMock(spec=WebSocket)
+    mock_websocket.query_params = {}
+    mock_websocket.headers = {"authorization": "Bearer some_api_key"}
+    mock_websocket.scope = {
+        "type": "websocket",
+        "path": "/v1/live/sessions",
+        "headers": [(b"authorization", b"Bearer some_api_key")],
+    }
+    mock_websocket.url = URL(url="/v1/live/sessions")
+    denial = ProxyException("denied", "user_model_access_denied", "model", 403)
+
+    with patch(
+        "litellm.proxy.auth.user_api_key_auth.user_api_key_auth", autospec=True, side_effect=denial
+    ) as mock_user_api_key_auth:
+        with pytest.raises(ProxyException) as raised:
+            await user_api_key_auth_accepted_websocket_for_model(mock_websocket, "gpt-live-1")
+
+    assert raised.value is denial
+    request_arg = mock_user_api_key_auth.call_args.kwargs["request"]
+    assert json.loads(await request_arg.body()) == {"model": "gpt-live-1"}
+    assert request_arg.scope.get("path") == "/v1/live/sessions"
+    assert mock_user_api_key_auth.call_args.kwargs["api_key"] == "Bearer some_api_key"
+    mock_websocket.close.assert_not_called()
 
 
 @pytest.mark.parametrize("enforce_rbac", [True, False])

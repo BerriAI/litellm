@@ -390,6 +390,11 @@ MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY: Final = "litellm.model_group_alias_resolve
 MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
 MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS: Final = 5.0
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
+OPENAI_LIVE_SESSION_START_TIMEOUT_SECONDS: Final = 30
+OPENAI_LIVE_SESSION_CLOSE_TIMEOUT_SECONDS: Final = 5
+OPENAI_LIVE_TERMINAL_RESPONSE_EVENT_TYPES: Final = frozenset(
+    {"response.completed", "response.incomplete", "response.failed"}
+)
 REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
 
 # SSL/TLS cipher configuration for faster handshakes

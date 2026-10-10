@@ -1255,24 +1255,7 @@ async def common_checks(
             code=status.HTTP_400_BAD_REQUEST,
         )
 
-    managed_policy: Final = managed_agent_policy(valid_token)
-    if _model and valid_token is not None and managed_policy is not None:
-        managed_models: Final = (managed_policy.object_permission or MappingProxyType({})).get("models", ())
-        if not isinstance(managed_models, (list, tuple)) or not managed_models:
-            raise HTTPException(403, "This agent has no model grants")
-        can_object_call_model(
-            model=_resolve_team_alias(
-                _model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router
-            ),
-            llm_router=llm_router,
-            models=list(managed_models),
-            team_id=valid_token.team_id,
-            object_type="agent",
-            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
-        )
-
-    await _check_agent_access_group_model_access(model=_model, valid_token=valid_token, llm_router=llm_router)
-    await _check_agent_caller_model_access(
+    await can_agent_call_model(
         model=_model,
         valid_token=valid_token,
         llm_router=llm_router,
@@ -4763,7 +4746,7 @@ def _can_object_call_model(
         raise Exception(f"Unable to parse model, max fallback depth exceeded - received model: {model}")
     if isinstance(model, list):
         for m in model:
-            _can_object_call_model(
+            can_object_call_model(
                 model=m,
                 llm_router=llm_router,
                 models=models,
@@ -4861,6 +4844,40 @@ def _live_team_alias_target(
         and target not in llm_router.model_name_to_deployment_indices
     )
     return model if deleted_team_deployment else target
+
+
+async def can_agent_call_model(
+    model: str | list[str] | None,  # mutable-ok: the model checks it delegates to take list[str]
+    valid_token: UserAPIKeyAuth | None,
+    llm_router: Router | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    managed_policy: Final = managed_agent_policy(valid_token)
+    if model and valid_token is not None and managed_policy is not None:
+        managed_models: Final = (managed_policy.object_permission or {}).get("models", ())
+        if not isinstance(managed_models, (list, tuple)) or not managed_models:
+            raise HTTPException(403, "This agent has no model grants")
+        can_object_call_model(
+            model=_resolve_team_alias(
+                model, team_model_aliases_for_auth_check(valid_token), valid_token.team_id, llm_router
+            ),
+            llm_router=llm_router,
+            models=list(managed_models),
+            team_id=valid_token.team_id,
+            object_type="agent",
+            key_model_aliases=key_model_aliases_for_auth_check(valid_token),
+        )
+    await _check_agent_access_group_model_access(model=model, valid_token=valid_token, llm_router=llm_router)
+    await _check_agent_caller_model_access(
+        model=model,
+        valid_token=valid_token,
+        llm_router=llm_router,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+    )
 
 
 async def _check_agent_access_group_model_access(
