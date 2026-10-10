@@ -13,6 +13,7 @@ from typing import Any, Final, TypedDict
 from urllib.parse import quote
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, Required
 
 from litellm.llms.custom_httpx.http_handler import MaskedHTTPStatusError
@@ -30,6 +31,8 @@ _OPENAPI_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 OPENAPI_TOOL_NAME_MAX_LEN: Final = 128
 
 _OPENAPI_TOOL_NAME_MAX_LEN: Final = OPENAPI_TOOL_NAME_MAX_LEN
+_MAX_YAML_INT_LENGTH: Final = 1024
+_OPENAPI_MAPPING_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 
 
 def sanitize_openapi_tool_name(raw_name: str) -> str:
@@ -157,7 +160,7 @@ def _sanitize_path_parameter_value(param_value: object, param_name: str) -> str:
     return quote(value_str, safe="")
 
 
-def load_openapi_spec(filepath: str) -> dict[str, Any]:
+def load_openapi_spec(filepath: str) -> Mapping[str, Any]:
     """
     Sync wrapper. For URL specs, use the shared/custom MCP httpx client.
     """
@@ -175,7 +178,51 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
     return asyncio.run(load_openapi_spec_async(filepath))
 
 
-async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> dict[str, Any]:
+def _parse_openapi_spec(text: str) -> Mapping[str, Any]:
+    """Parse JSON or YAML OpenAPI documents into a mapping."""
+    try:
+        parsed_json: Final[Any] = json.loads(text)
+    except json.JSONDecodeError:
+        import yaml
+        from yaml.nodes import MappingNode, Node, ScalarNode
+
+        class _NoMergeSafeLoader(yaml.SafeLoader):
+            def compose_node(self, parent: Node | None, index: int) -> Node | None:
+                if self.check_event(  # pyright: ignore[reportUnknownMemberType]  # PyYAML lacks typed loader stubs
+                    yaml.events.AliasEvent
+                ):
+                    raise yaml.YAMLError("YAML aliases are not supported")
+                return super().compose_node(parent, index)
+
+            def flatten_mapping(self, node: MappingNode) -> None:
+                if any(key_node.tag == "tag:yaml.org,2002:merge" for key_node, _ in node.value):
+                    raise yaml.YAMLError("YAML merge keys are not supported")
+                super().flatten_mapping(node)
+
+            def construct_yaml_int(self, node: ScalarNode) -> int:
+                node_value: Final = str(node.value)
+                if len(node_value) > _MAX_YAML_INT_LENGTH:
+                    raise yaml.YAMLError("YAML integer is too long")
+                return super().construct_yaml_int(node)
+
+        _NoMergeSafeLoader.add_constructor(
+            "tag:yaml.org,2002:int",
+            _NoMergeSafeLoader.construct_yaml_int,
+        )
+
+        return _validate_openapi_mapping(yaml.load(text, Loader=_NoMergeSafeLoader))
+
+    return _validate_openapi_mapping(parsed_json)
+
+
+def _validate_openapi_mapping(value: object) -> Mapping[str, Any]:
+    try:
+        return _OPENAPI_MAPPING_ADAPTER.validate_python(value)
+    except ValueError as exc:
+        raise TypeError("OpenAPI spec must be a JSON or YAML object") from exc
+
+
+async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None) -> Mapping[str, Any]:
     if filepath.startswith("http://") or filepath.startswith("https://"):
         client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.MCP)
         r: Final[httpx.Response] = (
@@ -184,14 +231,14 @@ async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None
             else await async_safe_get(client, filepath, max_response_bytes=max_bytes)
         )
         r.raise_for_status()
-        return r.json()
+        return _parse_openapi_spec(r.text)
 
     # fallback: local file
     # Local filesystem path
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
     with open(filepath, "r", encoding="utf-8") as f:
-        return json.load(f)
+        return _parse_openapi_spec(f.read())
 
 
 def get_base_url(spec: Mapping[str, Any], spec_path: str | None = None) -> str:
