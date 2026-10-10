@@ -454,19 +454,17 @@ mod tests {
 
     struct TestAddressResolver {
         blocked_hosts: HashSet<&'static str>,
+        blocked_ip: IpAddr,
     }
 
     impl AddressResolver for TestAddressResolver {
         fn resolve<'a>(&'a self, host: &'a str, port: u16) -> AddressResolution<'a> {
-            let blocked = self.blocked_hosts.contains(host);
-            Box::pin(async move {
-                let ip = if blocked {
-                    IpAddr::from([127, 0, 0, 1])
-                } else {
-                    IpAddr::from([8, 8, 8, 8])
-                };
-                Ok(vec![SocketAddr::new(ip, port)])
-            })
+            let ip = if self.blocked_hosts.contains(host) {
+                self.blocked_ip
+            } else {
+                IpAddr::from([8, 8, 8, 8])
+            };
+            Box::pin(async move { Ok(vec![SocketAddr::new(ip, port)]) })
         }
     }
 
@@ -483,12 +481,31 @@ mod tests {
         url_policy: UrlPolicy,
         uses_proxy: bool,
     ) -> MediaFetcher {
+        fetcher_resolving_blocked_hosts_to(
+            pinned_address,
+            blocked_hosts,
+            IpAddr::from([127, 0, 0, 1]),
+            url_policy,
+            uses_proxy,
+        )
+    }
+
+    fn fetcher_resolving_blocked_hosts_to(
+        pinned_address: SocketAddr,
+        blocked_hosts: HashSet<&'static str>,
+        blocked_ip: IpAddr,
+        url_policy: UrlPolicy,
+        uses_proxy: bool,
+    ) -> MediaFetcher {
         let direct = Resolution::from(&HttpSettings::default()).config;
         MediaFetcher::with_resolution(
             &HttpClientPool::new(Arc::new(LoopbackDnsResolver(pinned_address))),
             &direct,
             url_policy,
-            Arc::new(TestAddressResolver { blocked_hosts }),
+            Arc::new(TestAddressResolver {
+                blocked_hosts,
+                blocked_ip,
+            }),
             Arc::new(move |_| uses_proxy),
         )
         .expect("test fetcher builds")
@@ -745,6 +762,30 @@ mod tests {
         assert_eq!(requests.len(), 2);
         assert!(requests[1].starts_with("GET /final "));
         assert_eq!(media.bytes, b"ok");
+    }
+
+    #[rstest::rstest]
+    #[case::six_to_four("2002:c000:204::1")]
+    #[case::ietf_protocol_assignments_v4("192.0.0.9")]
+    #[case::mapped_azure_wire_server("::ffff:168.63.129.16")]
+    #[tokio::test]
+    async fn host_resolving_to_a_newly_blocked_address_receives_no_request(
+        #[case] resolved: IpAddr,
+    ) {
+        let (url, server, address) = serve_named("blocked.test", vec![OK_RESPONSE]).await;
+        let error = fetcher_resolving_blocked_hosts_to(
+            address,
+            HashSet::from(["blocked.test"]),
+            resolved,
+            UrlPolicy::default(),
+            false,
+        )
+        .fetch(url, policy(10, 0))
+        .await
+        .expect_err("blocked destination is rejected");
+        assert!(matches!(error, Error::BlockedUrl));
+        assert!(!server.is_finished(), "server must not have seen a request");
+        server.abort();
     }
 
     #[tokio::test]
