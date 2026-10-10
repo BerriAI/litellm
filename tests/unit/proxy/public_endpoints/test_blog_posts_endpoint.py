@@ -45,8 +45,8 @@ def test_get_blog_posts_returns_response_shape(client):
     assert post["url"] == "https://www.litellm.ai/blog/test"
 
 
-def test_get_blog_posts_limits_to_five(client):
-    """Endpoint returns at most 5 posts."""
+def test_get_blog_posts_returns_every_fetched_post(client):
+    """The parser owns the cap (BLOG_POSTS_MAX), so the endpoint passes every fetched post through."""
     many_posts = [
         {
             "title": f"Post {i}",
@@ -64,7 +64,7 @@ def test_get_blog_posts_limits_to_five(client):
         response = client.get("/public/litellm_blog_posts")
 
     assert response.status_code == 200
-    assert len(response.json()["posts"]) == 5
+    assert [p["title"] for p in response.json()["posts"]] == [f"Post {i}" for i in range(10)]
 
 
 def test_get_blog_posts_returns_local_backup_on_failure(client):

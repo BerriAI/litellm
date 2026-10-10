@@ -13,11 +13,11 @@ import time
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from importlib.resources import files
-from typing import Final, NotRequired, TypedDict
+from typing import Final, TypedDict
 
 import httpx
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly
+from typing_extensions import NotRequired, ReadOnly
 
 from litellm import verbose_logger
 from litellm.types.llms.base import LiteLLMBaseModel
