@@ -6,11 +6,11 @@ per-integration checks here.
 """
 
 import math
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
-from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR
+from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR
 
 _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
@@ -38,9 +38,29 @@ def callback_config_error(
     )
     if langfuse_error is not None:
         return langfuse_error
-    capture_error: Final = _capture_message_content_error(callback_name, callback_vars, callback_type)
-    if capture_error is not None:
-        return capture_error
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        validate_capture_message_content_value,
+        validate_excluded_services_value,
+    )
+
+    destination_setting_error: Final = next(
+        (
+            error
+            for variable_name, validator in (
+                (CAPTURE_MESSAGE_CONTENT_VAR, validate_capture_message_content_value),
+                (EXCLUDED_SERVICES_VAR, validate_excluded_services_value),
+            )
+            if (
+                error := _destination_setting_error(
+                    variable_name, callback_name, callback_vars, callback_type, validator
+                )
+            )
+            is not None
+        ),
+        None,
+    )
+    if destination_setting_error is not None:
+        return destination_setting_error
     if callback_name != _NEWRELIC_CALLBACK:
         return None
     return _newrelic_config_error(callback_vars)
@@ -85,29 +105,30 @@ def _langfuse_span_scope_error(callback_name: str | None, callback_vars: Mapping
     return None
 
 
-def _capture_message_content_error(
-    callback_name: str | None, callback_vars: Mapping[str, str], callback_type: str | None
+def _destination_setting_error(
+    variable_name: str,
+    callback_name: str | None,
+    callback_vars: Mapping[str, str],
+    callback_type: str | None,
+    validator: Callable[[str], None],
 ) -> str | None:
-    value: Final = callback_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)
+    value: Final = callback_vars.get(variable_name)
     if value is None:
         return None
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.integrations.otel.presets.destinations import destination_capable_backends
-    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
-        validate_capture_message_content_value,
-    )
 
     supported: Final = sorted(destination_capable_backends())
     if callback_name not in supported:
-        return f"{CAPTURE_MESSAGE_CONTENT_VAR} applies to the OTel v2 callbacks {supported} only, not {callback_name!r}"
+        return f"{variable_name} applies to the OTel v2 callbacks {supported} only, not {callback_name!r}"
     if not is_otel_v2_enabled():
-        return f"Per-destination {CAPTURE_MESSAGE_CONTENT_VAR} requires the proxy to run with LITELLM_OTEL_V2=true."
+        return f"Per-destination {variable_name} requires the proxy to run with LITELLM_OTEL_V2=true."
     try:
-        validate_capture_message_content_value(value)
+        validator(value)
     except ValueError as e:
         return str(e)
     if callback_type == "failure":
-        return f"{CAPTURE_MESSAGE_CONTENT_VAR} needs callback_type 'success' or 'success_and_failure'"
+        return f"{variable_name} needs callback_type 'success' or 'success_and_failure'"
     return None
 
 
@@ -221,20 +242,21 @@ def conflicting_span_scope_error(
     )
 
 
-def conflicting_capture_error(
+def conflicting_callback_var_error(
     callback_name: str,
+    variable_name: str,
     callback_vars: Mapping[str, str] | None,
     stored_entries: Sequence[tuple[str | None, Mapping[str, str]]],
 ) -> str | None:
-    incoming: Final = None if callback_vars is None else callback_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)
+    incoming: Final = None if callback_vars is None else callback_vars.get(variable_name)
     if incoming is None:
         return None
     return next(
         (
-            f"{CAPTURE_MESSAGE_CONTENT_VAR} is already set to {stored!r} by another {callback_name} entry. "
+            f"{variable_name} is already set to {stored!r} by another {callback_name} entry. "
             f"Every {callback_name} entry shares one value: remove that entry or send the same value."
             for name, entry_vars in stored_entries
-            if name == callback_name and (stored := entry_vars.get(CAPTURE_MESSAGE_CONTENT_VAR)) not in (None, incoming)
+            if name == callback_name and (stored := entry_vars.get(variable_name)) not in (None, incoming)
         ),
         None,
     )
@@ -255,7 +277,7 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
             for error in (
                 *(_logging_entry_error(entry) for entry in entries),
                 *(conflicting_span_scope_error(entry_vars[i], entry_vars[:i]) for i in range(len(entry_vars))),
-                *(_conflicting_entry_capture_error(named_vars[i], named_vars[:i]) for i in range(len(named_vars))),
+                *(_conflicting_entry_setting_error(named_vars[i], named_vars[:i]) for i in range(len(named_vars))),
             )
             if error is not None
         ),
@@ -263,8 +285,8 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
     )
 
 
-def stored_capture_entries(logging_entries: object) -> tuple[tuple[str | None, Mapping[str, str]], ...]:
-    """The callback name and vars of every stored ``logging`` entry, for ``conflicting_capture_error``."""
+def stored_callback_entries(logging_entries: object) -> tuple[tuple[str | None, Mapping[str, str]], ...]:
+    """The callback name and vars of every stored ``logging`` entry."""
     entries: Final = _object_sequence(logging_entries) or ()
     return tuple((_entry_callback_name(entry), _entry_callback_vars(entry)) for entry in entries)
 
@@ -281,11 +303,21 @@ def _entry_callback_name(entry: object) -> str | None:
             return None
 
 
-def _conflicting_entry_capture_error(
+def _conflicting_entry_setting_error(
     entry: tuple[str | None, Mapping[str, str]], earlier: Sequence[tuple[str | None, Mapping[str, str]]]
 ) -> str | None:
     callback_name, callback_vars = entry
-    return None if callback_name is None else conflicting_capture_error(callback_name, callback_vars, earlier)
+    if callback_name is None:
+        return None
+    return next(
+        (
+            error
+            for variable_name in (CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR)
+            if (error := conflicting_callback_var_error(callback_name, variable_name, callback_vars, earlier))
+            is not None
+        ),
+        None,
+    )
 
 
 def _entry_callback_vars(entry: object) -> Mapping[str, str]:

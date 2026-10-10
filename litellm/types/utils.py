@@ -3727,6 +3727,7 @@ ARIZE_OTLP_PROTOCOLS: Final[frozenset[str]] = frozenset(get_args(ArizeOtlpProtoc
 
 
 CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
+EXCLUDED_SERVICES_VAR: Final = "excluded_services"
 
 
 class CaptureMessageContent(str):

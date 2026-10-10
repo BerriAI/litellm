@@ -314,7 +314,11 @@ nothing here imports outside it:
   `db.system.name` spellings `redis` / `postgresql`). Unknown names are logged
   as an error and ignored. A span is withheld when its `db.system.name` /
   `db.system` attribute is in the set, so request root, auth, guardrail and
-  model spans can never be excluded.
+  model spans can never be excluded. Team and key destinations can replace the
+  global set with `excluded_services` in their own `callback_vars`; `"none"`
+  means no datastore spans are excluded, while an omitted value follows the
+  global set. These destination overrides require OTel v2 and are accepted only
+  on `langfuse_otel`, `arize`, `weave_otel` and `newrelic` callbacks.
 - [`baggage.py`](./model/baggage.py) — the single definition of which request-identity
   values are promoted into Baggage (so child spans inherit them) and under which
   attribute keys.

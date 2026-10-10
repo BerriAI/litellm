@@ -21,6 +21,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_config_validation import cross_entry_family_error
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
@@ -28,6 +29,7 @@ from litellm.proxy.management_endpoints.team_callback_endpoints import (
     delete_team_callback,
     disable_team_logging,
     get_team_callbacks,
+    router,
 )
 
 
@@ -1434,7 +1436,7 @@ async def test_delete_team_callback_route_accepts_team_ids_containing_slashes():
     }
     mock_prisma = _patch_prisma(_team_row(team_id=team_id, metadata=metadata))
 
-    app = FastAPI()
+    app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[user_api_key_auth] = _admin_auth
 
@@ -1772,3 +1774,50 @@ async def test_add_team_callbacks_stores_capture_message_content_in_the_existing
     patched_prisma.db.litellm_teamtable.update.assert_awaited_once()
     stored: Final = json.loads(patched_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
     assert [entry["callback_vars"].get("capture_message_content") for entry in stored["logging"]] == [capture]
+
+
+@pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.asyncio
+async def test_add_team_callbacks_stores_excluded_services_in_the_existing_callback_metadata(patched_prisma) -> None:
+    data: Final = AddTeamCallback(
+        callback_name="langfuse_otel",
+        callback_type="success",
+        callback_vars={
+            "langfuse_public_key": "pk",
+            "langfuse_secret_key": "sk",
+            "excluded_services": "redis,postgres",
+        },
+    )
+    await add_team_callbacks(
+        data=data,
+        http_request=Mock(spec=Request),
+        team_id="team-victim",
+        user_api_key_dict=_admin_auth(),
+    )
+    stored: Final = json.loads(patched_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
+    assert [entry["callback_vars"].get("excluded_services") for entry in stored["logging"]] == ["redis,postgres"]
+
+
+def test_add_team_callback_returns_http_422_for_unknown_excluded_services() -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+
+    response: Final = TestClient(app).post(
+        "/team/team-victim/callback",
+        json={
+            "callback_name": "langfuse_otel",
+            "callback_type": "success",
+            "callback_vars": {
+                "langfuse_public_key": "pk",
+                "langfuse_secret_key": "sk",
+                "excluded_services": "auth",
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "excluded_services" in response.text
