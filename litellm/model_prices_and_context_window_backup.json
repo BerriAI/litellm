@@ -70698,6 +70698,303 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
+    "alibaba_token_plan/auto": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "chat",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses"
+        ],
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "supports_function_calling": true
+    },
+    "alibaba_token_plan/qwen3.8-max": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "chat",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses"
+        ],
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "alibaba_token_plan/qwen3.8-flash": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "chat",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses"
+        ],
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "alibaba_token_plan/qwen3.7-plus": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "chat",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses"
+        ],
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "alibaba_token_plan/qwen3.7-max": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "chat",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses"
+        ],
+        "supports_reasoning": true,
+        "supports_vision": false,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "alibaba_token_plan/qwen3.6-flash": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "chat",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses"
+        ],
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "alibaba_token_plan/deepseek-v4.1-flash": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "chat",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses"
+        ],
+        "supports_reasoning": true,
+        "supports_vision": true,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "alibaba_token_plan/deepseek-v4-pro-0813": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "chat",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses"
+        ],
+        "supports_reasoning": true,
+        "supports_vision": false,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "alibaba_token_plan/deepseek-v4-pro": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "chat",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses"
+        ],
+        "supports_reasoning": true,
+        "supports_vision": false,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "alibaba_token_plan/deepseek-v4-flash-0731": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "chat",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses"
+        ],
+        "supports_reasoning": true,
+        "supports_vision": false,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "alibaba_token_plan/glm-5.3": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "chat",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses"
+        ],
+        "supports_reasoning": true,
+        "supports_vision": false,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "alibaba_token_plan/glm-5.2": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "chat",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/messages",
+            "/v1/responses"
+        ],
+        "supports_reasoning": true,
+        "supports_vision": false,
+        "supports_function_calling": true,
+        "supports_tool_choice": true
+    },
+    "alibaba_token_plan/qwen-image-3.0-pro": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "image_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "alibaba_token_plan/wan2.7-image": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "image_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "alibaba_token_plan/wan2.7-image-pro": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "image_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/images/generations",
+            "/v1/images/edits"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "image"
+        ]
+    },
+    "alibaba_token_plan/qwen-audio-3.0-tts-plus": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "audio_speech",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/audio/speech"
+        ]
+    },
+    "alibaba_token_plan/qwen-audio-3.0-asr-flash": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "audio_transcription",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/audio/transcriptions"
+        ]
+    },
+    "alibaba_token_plan/qwen-audio-3.0-realtime-plus": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "realtime",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/realtime"
+        ],
+        "supported_modalities": [
+            "text",
+            "audio"
+        ],
+        "supported_output_modalities": [
+            "text",
+            "audio"
+        ],
+        "supports_audio_input": true,
+        "supports_audio_output": true,
+        "supports_function_calling": true
+    },
+    "alibaba_token_plan/happyhorse-1.1-t2v": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text"
+        ],
+        "supported_output_modalities": [
+            "video",
+            "audio"
+        ]
+    },
+    "alibaba_token_plan/happyhorse-1.1-i2v": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video",
+            "audio"
+        ]
+    },
+    "alibaba_token_plan/happyhorse-1.1-r2v": {
+        "litellm_provider": "alibaba_token_plan",
+        "mode": "video_generation",
+        "source": "https://www.alibabacloud.com/help/en/model-studio/token-plan-personal-overview",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
+        "supported_modalities": [
+            "text",
+            "image"
+        ],
+        "supported_output_modalities": [
+            "video",
+            "audio"
+        ]
+    },
     "azure_ai/kimi-k2-thinking": {
         "deprecation_date": "2026-03-29",
         "input_cost_per_token": 6e-07,

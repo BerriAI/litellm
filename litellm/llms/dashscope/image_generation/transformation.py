@@ -55,7 +55,7 @@ DEFAULT_API_BASE: Final = "https://dashscope-intl.aliyuncs.com/api/v1/services/a
 CHAT_COMPATIBLE_MODE_PATH: Final = "/compatible-mode/v1"
 
 # Maps OpenAI size strings (WxH) to DashScope size strings (W*H)
-OPENAI_TO_DASHSCOPE_SIZE: Final[dict] = {
+OPENAI_TO_DASHSCOPE_SIZE: Final[Mapping[str, str]] = {
     "256x256": "256*256",
     "512x512": "512*512",
     "1024x1024": "1024*1024",
@@ -76,13 +76,13 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
 
     def map_openai_params(
         self,
-        non_default_params: dict,
-        optional_params: dict,
+        non_default_params: Mapping[str, object],
+        optional_params: Mapping[str, object],
         model: str,
         drop_params: bool,
-    ) -> dict:
+    ) -> dict[str, object]:
         supported_params: Final = self.get_supported_openai_params(model)
-        mapped: Final[dict] = {}
+        mapped: Final[dict[str, object]] = {}
         for k, v in non_default_params.items():
             if k in optional_params:
                 continue
@@ -90,7 +90,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
                 continue
             if k == "size":
                 # Convert "WxH" → "W*H"
-                mapped["size"] = OPENAI_TO_DASHSCOPE_SIZE.get(v, v.replace("x", "*"))
+                mapped["size"] = OPENAI_TO_DASHSCOPE_SIZE.get(v, v.replace("x", "*")) if isinstance(v, str) else v
             else:
                 mapped[k] = v
         return mapped
@@ -136,17 +136,13 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         self,
         model: str,
         prompt: str,
-        optional_params: dict,
-        litellm_params: dict,
-        headers: dict,
-    ) -> dict:
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
+        headers: Mapping[str, str],
+    ) -> dict[str, object]:  # mutable-ok: provider interface requires a mutable return value
         """
         Transform OpenAI-style image generation request to DashScope multimodal-generation format.
         """
-        parameters: Final[dict] = {}
-        for k, v in optional_params.items():
-            parameters[k] = v
-
         return {
             "model": model,
             "input": {
@@ -157,7 +153,7 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
                     }
                 ]
             },
-            "parameters": parameters,
+            "parameters": dict(optional_params),
         }
 
     def transform_image_generation_response(
@@ -166,9 +162,9 @@ class DashScopeImageGenerationConfig(BaseImageGenerationConfig):
         raw_response: httpx.Response,
         model_response: ImageResponse,
         logging_obj: LiteLLMLoggingObj,
-        request_data: dict,
-        optional_params: dict,
-        litellm_params: dict,
+        request_data: Mapping[str, object],
+        optional_params: Mapping[str, object],
+        litellm_params: Mapping[str, object],
         encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,

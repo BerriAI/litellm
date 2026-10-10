@@ -410,6 +410,19 @@ describe("provider_info_helpers", () => {
   });
 
   describe("getProviderModels", () => {
+    it("lists Token Plan models when selected from the Add Model provider dropdown", () => {
+      const modelMap = {
+        "alibaba_token_plan/qwen3.8-max": { litellm_provider: "alibaba_token_plan" },
+        "dashscope/qwen3.8-max": { litellm_provider: "dashscope" },
+      };
+      expect(getProviderModels("ALIBABA_TOKEN_PLAN", modelMap)).toEqual(["alibaba_token_plan/qwen3.8-max"]);
+      expect(getProviderLogoAndName("alibaba_token_plan")).toEqual({
+        displayName: "Alibaba Cloud Token Plan",
+        logo: providerLogoMap[Providers.Dashscope],
+      });
+      expect(getPlaceholder("ALIBABA_TOKEN_PLAN")).toBe("alibaba_token_plan/qwen3.8-max");
+    });
+
     it("should return empty array when provider is not provided", () => {
       const modelMap = {};
       const result = getProviderModels(undefined as any, modelMap);

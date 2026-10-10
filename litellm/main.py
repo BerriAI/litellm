@@ -8436,7 +8436,25 @@ def speech(
         custom_llm_provider=custom_llm_provider,
     )
     response: HttpxBinaryResponseContent | Coroutine[object, object, HttpxBinaryResponseContent] | None = None
-    if custom_llm_provider == "edenai":
+    if custom_llm_provider == "alibaba_token_plan":
+        return base_llm_http_handler.text_to_speech_handler(
+            model=model,
+            input=input,
+            voice=voice if isinstance(voice, str) else None,
+            text_to_speech_provider_config=text_to_speech_provider_config
+            or litellm.AlibabaTokenPlanTextToSpeechConfig(),
+            text_to_speech_optional_params=optional_params,
+            custom_llm_provider=custom_llm_provider,
+            litellm_params={**litellm_params_dict, "api_base": api_base},
+            logging_obj=logging_obj,
+            timeout=http_timeout,
+            extra_headers=TypeAdapter(dict[str, object]).validate_python(extra_headers)
+            if extra_headers is not None
+            else None,
+            client=client if isinstance(client, (HTTPHandler, AsyncHTTPHandler)) else None,
+            _is_async=aspeech or False,
+        )
+    elif custom_llm_provider == "edenai":
         litellm_params_dict["api_base"] = api_base
         response = base_llm_http_handler.text_to_speech_handler(
             model=model,

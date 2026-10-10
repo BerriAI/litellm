@@ -76,6 +76,20 @@ def test_get_provider_create_fields():
     ), "Expected at least one provider to have detailed credential fields"
 
 
+def test_token_plan_provider_fields_require_key_and_allow_endpoint_override() -> None:
+    app: Final = FastAPI()
+    app.include_router(router)
+    client: Final = TestClient(app)
+    response: Final = client.get("/public/providers/fields")
+    assert response.status_code == 200
+    provider: Final = next(p for p in response.json() if p["litellm_provider"] == "alibaba_token_plan")
+    assert provider["provider"] == "ALIBABA_TOKEN_PLAN"
+    assert [(field["key"], field["required"], field["field_type"]) for field in provider["credential_fields"]] == [
+        ("api_key", True, "password"),
+        ("api_base", False, "text"),
+    ]
+
+
 def test_get_litellm_model_cost_map_catalog_only_excludes_runtime_registered_entries(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -600,7 +600,7 @@ def _get_openai_compatible_provider_info(
     from litellm.llms.openai_like.dynamic_config import create_config_class
     from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
-    if JSONProviderRegistry.exists(custom_llm_provider):
+    if custom_llm_provider != "alibaba_token_plan" and JSONProviderRegistry.exists(custom_llm_provider):
         provider_config: Final = JSONProviderRegistry.get(custom_llm_provider)
         if provider_config is None:
             raise ValueError(f"Provider {custom_llm_provider} not found")
@@ -859,6 +859,10 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.HerokuChatConfig().get_openai_compatible_provider_info(api_base, api_key)
+    elif custom_llm_provider == "alibaba_token_plan":
+        from litellm.llms.alibaba_token_plan.common_utils import get_api_base, get_api_key
+
+        return model, custom_llm_provider, get_api_key(api_key), get_api_base(api_base)
     elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
         (
             api_base,

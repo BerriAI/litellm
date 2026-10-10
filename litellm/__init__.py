@@ -687,6 +687,7 @@ aiml_models: Set = set()
 deepgram_models: Set = set()
 elevenlabs_models: Set = set()
 dashscope_models: Set = set()
+alibaba_token_plan_models: set[str] = set()
 qwencloud_models: Set = set()
 qwen_ai_platform_models: Set = set()
 moonshot_models: Set = set()
@@ -946,6 +947,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             heroku_models.add(key)
         elif value.get("litellm_provider") == "dashscope":
             dashscope_models.add(key)
+        elif value.get("litellm_provider") == "alibaba_token_plan":
+            alibaba_token_plan_models.add(key)
         elif value.get("litellm_provider") == "qwencloud":
             qwencloud_models.add(key)
         elif value.get("litellm_provider") == "qwen_ai_platform":
@@ -1118,6 +1121,7 @@ model_list = list(
     | deepgram_models
     | elevenlabs_models
     | dashscope_models
+    | alibaba_token_plan_models
     | qwencloud_models
     | qwen_ai_platform_models
     | moonshot_models
@@ -1229,6 +1233,7 @@ def _build_models_by_provider() -> dict:
         "elevenlabs": elevenlabs_models,
         "heroku": heroku_models,
         "dashscope": dashscope_models,
+        "alibaba_token_plan": alibaba_token_plan_models,
         "qwencloud": qwencloud_models,
         "qwen_ai_platform": qwen_ai_platform_models,
         "modelscope": modelscope_models,
@@ -2145,6 +2150,30 @@ if TYPE_CHECKING:
     )
     from .llms.dashscope.rerank.transformation import (
         DashScopeRerankConfig as DashScopeRerankConfig,
+    )
+    from .llms.alibaba_token_plan.chat.transformation import (
+        AlibabaTokenPlanChatConfig as AlibabaTokenPlanChatConfig,
+    )
+    from .llms.alibaba_token_plan.messages.transformation import (
+        AlibabaTokenPlanAnthropicMessagesConfig as AlibabaTokenPlanAnthropicMessagesConfig,
+    )
+    from .llms.alibaba_token_plan.audio_transcription.transformation import (
+        AlibabaTokenPlanAudioTranscriptionConfig as AlibabaTokenPlanAudioTranscriptionConfig,
+    )
+    from .llms.alibaba_token_plan.text_to_speech.transformation import (
+        AlibabaTokenPlanTextToSpeechConfig as AlibabaTokenPlanTextToSpeechConfig,
+    )
+    from .llms.alibaba_token_plan.image_generation.transformation import (
+        AlibabaTokenPlanImageGenerationConfig as AlibabaTokenPlanImageGenerationConfig,
+    )
+    from .llms.alibaba_token_plan.image_edit.transformation import (
+        AlibabaTokenPlanImageEditConfig as AlibabaTokenPlanImageEditConfig,
+    )
+    from .llms.alibaba_token_plan.realtime.transformation import (
+        AlibabaTokenPlanRealtimeConfig as AlibabaTokenPlanRealtimeConfig,
+    )
+    from .llms.alibaba_token_plan.videos.transformation import (
+        AlibabaTokenPlanVideoConfig as AlibabaTokenPlanVideoConfig,
     )
     from .llms.dashscope.qwencloud import (
         QwenCloudChatConfig as QwenCloudChatConfig,

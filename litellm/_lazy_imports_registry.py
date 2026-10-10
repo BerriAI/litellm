@@ -330,6 +330,14 @@ LLM_CONFIG_NAMES: Final = (
     "GigaChatConfig",
     "GigaChatEmbeddingConfig",
     "DashScopeChatConfig",
+    "AlibabaTokenPlanChatConfig",
+    "AlibabaTokenPlanAnthropicMessagesConfig",
+    "AlibabaTokenPlanAudioTranscriptionConfig",
+    "AlibabaTokenPlanTextToSpeechConfig",
+    "AlibabaTokenPlanImageGenerationConfig",
+    "AlibabaTokenPlanImageEditConfig",
+    "AlibabaTokenPlanRealtimeConfig",
+    "AlibabaTokenPlanVideoConfig",
     "QwenCloudChatConfig",
     "QwenAIPlatformChatConfig",
     "ModelScopeChatConfig",
@@ -1250,6 +1258,38 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "DashScopeChatConfig": (
         ".llms.dashscope.chat.transformation",
         "DashScopeChatConfig",
+    ),
+    "AlibabaTokenPlanChatConfig": (
+        ".llms.alibaba_token_plan.chat.transformation",
+        "AlibabaTokenPlanChatConfig",
+    ),
+    "AlibabaTokenPlanAnthropicMessagesConfig": (
+        ".llms.alibaba_token_plan.messages.transformation",
+        "AlibabaTokenPlanAnthropicMessagesConfig",
+    ),
+    "AlibabaTokenPlanAudioTranscriptionConfig": (
+        ".llms.alibaba_token_plan.audio_transcription.transformation",
+        "AlibabaTokenPlanAudioTranscriptionConfig",
+    ),
+    "AlibabaTokenPlanTextToSpeechConfig": (
+        ".llms.alibaba_token_plan.text_to_speech.transformation",
+        "AlibabaTokenPlanTextToSpeechConfig",
+    ),
+    "AlibabaTokenPlanImageGenerationConfig": (
+        ".llms.alibaba_token_plan.image_generation.transformation",
+        "AlibabaTokenPlanImageGenerationConfig",
+    ),
+    "AlibabaTokenPlanImageEditConfig": (
+        ".llms.alibaba_token_plan.image_edit.transformation",
+        "AlibabaTokenPlanImageEditConfig",
+    ),
+    "AlibabaTokenPlanRealtimeConfig": (
+        ".llms.alibaba_token_plan.realtime.transformation",
+        "AlibabaTokenPlanRealtimeConfig",
+    ),
+    "AlibabaTokenPlanVideoConfig": (
+        ".llms.alibaba_token_plan.videos.transformation",
+        "AlibabaTokenPlanVideoConfig",
     ),
     "QwenCloudChatConfig": (
         ".llms.dashscope.qwencloud",

@@ -12302,7 +12302,7 @@ class BaseLLMHTTPHandler:
                 provider_config=text_to_speech_provider_config,
             )
 
-        speech_response: Final = text_to_speech_provider_config.transform_text_to_speech_response(
+        speech_response: Final = await text_to_speech_provider_config.async_transform_text_to_speech_response(
             model=model,
             raw_response=response,
             logging_obj=logging_obj,

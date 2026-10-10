@@ -18,6 +18,8 @@ from litellm.litellm_core_utils.realtime_streaming import (
     client_sent_openai_beta_realtime_header,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.alibaba_token_plan.realtime.transformation import AlibabaTokenPlanRealtimeConfig
+from litellm.llms.base_llm.realtime.transcription_protocol import RealtimeTranscriptionProtocolError
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.xai.realtime.transformation import XAIRealtimeNormalizer
 from litellm.types.guardrails import GuardrailEventHooks
@@ -2354,6 +2356,116 @@ async def test_subsequent_session_update_cannot_reenable_vad_when_guardrails_act
     )
     assert isinstance(forwarded_turn_detection, dict)
     assert forwarded_turn_detection["create_response"] is False
+
+
+@pytest.mark.asyncio
+async def test_alibaba_mixed_beta_session_cannot_overwrite_transcription_guardrail(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="audio-guardrail",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    client_ws: Final = MagicMock()
+    client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")]}
+    client_ws.receive_text = AsyncMock(
+        side_effect=(
+            json.dumps(
+                {
+                    "type": "session.update",
+                    "session": {
+                        "input_audio_format": "pcm",
+                        "audio": {"input": {"turn_detection": {"type": "server_vad"}}},
+                    },
+                }
+            ),
+            ConnectionClosed(None, None),
+        )
+    )
+    backend_ws: Final = MagicMock(send=AsyncMock())
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        MagicMock(),
+        provider_config=AlibabaTokenPlanRealtimeConfig(),
+        model="qwen-audio-3.0-realtime-plus",
+    )
+
+    await streaming.client_ack_messages()
+
+    backend_ws.send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("beta", (False, True))
+@pytest.mark.parametrize("audio_event", ("append", "item"))
+async def test_alibaba_rejected_guardrail_disable_blocks_later_audio(
+    beta: bool, audio_event: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="audio-guardrail",
+        event_hook=GuardrailEventHooks.realtime_input_transcription,
+        default_on=True,
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    audio: Final = (
+        {"type": "input_audio_buffer.append", "audio": "AAAAAA=="}
+        if audio_event == "append"
+        else {
+            "type": "conversation.item.create",
+            "item": {"type": "message", "role": "user", "content": [{"type": "input_audio", "audio": "AAAAAA=="}]},
+        }
+    )
+    client_ws: Final = MagicMock()
+    client_ws.scope = {"headers": [(b"openai-beta", b"realtime=v1")] if beta else []}
+    session_update: Final = json.dumps(
+        {
+            "type": "session.update",
+            "session": {
+                "input_audio_format": "pcm",
+                "turn_detection": {"type": "server_vad"},
+                "audio": {
+                    "input": {
+                        "format": {"type": "audio/pcm", "rate": 16000},
+                        "turn_detection": {"type": "server_vad"},
+                    }
+                },
+            },
+        }
+    )
+    client_ws.receive_text = AsyncMock(side_effect=(session_update, json.dumps(audio), ConnectionClosed(None, None)))
+    client_ws.send_text = AsyncMock()
+    backend_ws: Final = MagicMock(send=AsyncMock())
+    backend_ws.recv = AsyncMock(
+        side_effect=(
+            json.dumps({"type": "session.created", "session": {"id": "guarded-session"}}),
+            json.dumps({"type": "session.updated", "session": {"id": "guarded-session"}}),
+            ConnectionClosed(None, None),
+        )
+    )
+    streaming: Final = RealTimeStreaming(
+        client_ws,
+        backend_ws,
+        MagicMock(),
+        provider_config=AlibabaTokenPlanRealtimeConfig(),
+        model="qwen-audio-3.0-realtime-plus",
+    )
+    with pytest.raises(ConnectionClosed):
+        await streaming._relay_backend_messages()
+    assert tuple(json.loads(call.args[0])["type"] for call in client_ws.send_text.await_args_list) == (
+        "session.created",
+        "session.updated",
+    )
+    await streaming._send_to_backend(session_update)
+    backend_ws.send.reset_mock()
+
+    await streaming.client_ack_messages()
+    with pytest.raises(RealtimeTranscriptionProtocolError):
+        await streaming._send_to_backend(json.dumps(audio))
+
+    backend_ws.send.assert_not_awaited()
 
 
 @pytest.mark.asyncio
