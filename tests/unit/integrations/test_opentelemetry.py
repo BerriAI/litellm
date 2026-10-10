@@ -7328,3 +7328,55 @@ class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
 
         # Assert: error.message should be set from error_str using ErrorAttributes constant
         mock_span.set_attribute.assert_called_with(ErrorAttributes.ERROR_MESSAGE, "Fallback error message")
+
+class TestOpenTelemetryRawSpanRespectsRedaction(unittest.TestCase):
+    """#44504: per-request message redaction must also skip the raw payload span.
+
+    ``set_raw_request_attributes`` dumps ``llm.<provider>.messages`` / ``choices``
+    verbatim from the un-redacted ``complete_input_dict`` and ``original_response``,
+    so without this guard a request that asked for redaction (the
+    ``x-litellm-enable-message-redaction`` header, a dynamic param, or the global
+    ``turn_off_message_logging`` switch) still leaks its content through the
+    ``raw_gen_ai_request`` span.
+    """
+
+    @patch.dict(os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""})
+    def test_skips_raw_span_when_redaction_header_set(self):  # test-quality-ok: negative-path test; the observable behavior is precisely that no raw span is created, which is only assertable on the tracer mock
+        """Redaction requested via the per-request header -> raw span is not created."""
+        from litellm.integrations.opentelemetry import OpenTelemetry
+
+        otel = OpenTelemetry()
+        otel.message_logging = True
+
+        mock_tracer = MagicMock()
+        mock_span = MagicMock()
+        mock_tracer.start_span.return_value = mock_span
+        otel.get_tracer_to_use_for_request = MagicMock(return_value=mock_tracer)
+        otel.set_raw_request_attributes = MagicMock()
+        otel._to_ns = MagicMock(return_value=1234567890)
+
+        kwargs = {"litellm_params": {"metadata": {"headers": {"x-litellm-enable-message-redaction": "true"}}}}
+        otel._maybe_log_raw_request(kwargs, {}, datetime.now(), datetime.now(), MagicMock())
+        mock_tracer.start_span.assert_not_called()
+        otel.set_raw_request_attributes.assert_not_called()
+
+    @patch.dict(os.environ, {"OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT": ""})
+    def test_creates_raw_span_when_no_redaction_requested(self):  # test-quality-ok: positive-path twin of the test above; asserts the span name and raw-attribute hook via the tracer mock, matching the existing file style
+        """No redaction requested (empty headers dict) -> raw span is still created."""
+        from litellm.integrations.opentelemetry import RAW_REQUEST_SPAN_NAME, OpenTelemetry
+
+        otel = OpenTelemetry()
+        otel.message_logging = True
+
+        mock_tracer = MagicMock()
+        mock_span = MagicMock()
+        mock_tracer.start_span.return_value = mock_span
+        otel.get_tracer_to_use_for_request = MagicMock(return_value=mock_tracer)
+        otel.set_raw_request_attributes = MagicMock()
+        otel._to_ns = MagicMock(return_value=1234567890)
+
+        kwargs = {"litellm_params": {"metadata": {"headers": {}}}}
+        otel._maybe_log_raw_request(kwargs, {}, datetime.now(), datetime.now(), MagicMock())
+        mock_tracer.start_span.assert_called_once()
+        self.assertEqual(mock_tracer.start_span.call_args[1]["name"], RAW_REQUEST_SPAN_NAME)
+        otel.set_raw_request_attributes.assert_called_once()

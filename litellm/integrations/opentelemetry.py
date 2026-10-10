@@ -1485,6 +1485,18 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         if not self._capture_in_span():
             return
 
+        # Per-request message redaction must apply to the raw payload span too:
+        # set_raw_request_attributes dumps llm.<provider>.messages / choices
+        # verbatim, so without this guard the very content redaction is meant
+        # to keep out of traces still leaks through the raw span. This uses the
+        # same precedence as the main span (dynamic param > redaction headers >
+        # global turn_off_message_logging).
+        from litellm.litellm_core_utils.redact_messages import (
+            should_redact_message_logging,  # pyright: ignore[reportUnknownVariableType]  # callee is untyped upstream
+        )
+
+        if should_redact_message_logging(kwargs):  # pyright: ignore[reportUnknownArgumentType]  # untyped by design
+            return
         litellm_params: Final = kwargs.get("litellm_params", {})
         metadata: Final = litellm_params.get("metadata") or {}
         generation_name: Final = metadata.get("generation_name")
