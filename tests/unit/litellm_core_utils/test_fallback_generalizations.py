@@ -625,8 +625,8 @@ def test_shipped_version_boundaries(shipped_cost_map, model, provider, adaptive,
     assert info.get("supports_mid_conversation_system") is mid_conversation, model
 
 
-def test_shipped_claude_version_regex_excludes_undelimited_41(shipped_cost_map):
-    unmatched = match_capability_generalizations("github_copilot/claude-opus-41")
+def test_shipped_claude_version_regex_excludes_two_digit_major(shipped_cost_map):
+    unmatched = match_capability_generalizations("github_copilot/claude-opus-42")
     assert unmatched is None or "supports_adaptive_thinking" not in unmatched
     assert unmatched is None or "supports_mid_conversation_system" not in unmatched
 

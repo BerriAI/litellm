@@ -10,7 +10,7 @@ TRANSPORT_HEADERS: Final = frozenset({"host", "accept", "accept-encoding", "conn
 
 
 def assert_translation(case: TranslationTestCase, gateway: Gateway, provider: SharedProvider) -> None:
-    provider.expect(Reply(body=json.dumps(case.mock_provider_response).encode()))
+    provider.expect(Reply(status=case.mock_provider_status_code, body=json.dumps(case.mock_provider_response).encode()))
     response: Final = gateway.request("POST", case.litellm_endpoint, case.litellm_request)
     received: Final = provider.received()
     assert [(request.method, request.target) for request in received] == [("POST", case.expected_provider_endpoint)]

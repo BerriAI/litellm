@@ -19,7 +19,7 @@ pytestmark: Final = pytest.mark.timeout(300)
 Provider: TypeAlias = Literal["chatgpt", "copilot"]
 
 _MODELS: Final[Mapping[Provider, str]] = MappingProxyType(
-    {"chatgpt": "chatgpt/gpt-5.6-terra", "copilot": "github_copilot/gpt-5.2"}
+    {"chatgpt": "chatgpt/gpt-5.6-terra", "copilot": "github_copilot/gpt-5.4"}
 )
 _REFUSALS: Final[Mapping[Provider, str]] = MappingProxyType(
     {"chatgpt": dl.CHATGPT_REFUSAL, "copilot": dl.COPILOT_REFUSAL}

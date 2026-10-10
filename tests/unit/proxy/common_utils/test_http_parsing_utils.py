@@ -1352,49 +1352,6 @@ async def test_only_trace_ingest_skips_json_body(method: str, path: str, skip_pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "content_type, encoding",
-    [
-        ("application/json", ""),
-        ("application/x-protobuf", ""),
-        ("application/json", "gzip"),
-    ],
-)
-async def test_otlp_auth_does_not_consume_chunked_bodies_before_the_receiver_limit(content_type, encoding):
-    from litellm.constants import OTLP_MAX_BODY_BYTES
-    from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
-
-    received = []
-    chunk = b"x" * (OTLP_MAX_BODY_BYTES // 2 + 1)
-
-    async def receive():
-        received.append(1)
-        assert len(received) <= 2, "receiver must reject without consuming subsequent chunks"
-        return {"type": "http.request", "body": chunk, "more_body": True}
-
-    request = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/v1/traces",
-            "headers": [
-                (b"content-type", content_type.encode()),
-                (b"content-encoding", encoding.encode()),
-            ],
-        },
-        receive,
-    )
-    assert await read_request_body(request) == {}
-    assert received == []
-    storage = MagicMock()
-    storage.ingest = AsyncMock()
-    with pytest.raises(TracingPayloadTooLargeError):
-        await TraceReceiver(storage).ingest(request.stream(), content_type, encoding, Tenant("team", "key"))
-    assert len(received) == 2
-    storage.ingest.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_auth_and_retired_trace_handler_never_consume_upload_body() -> None:
     from litellm.constants import OTLP_MAX_BODY_BYTES
     from litellm.proxy import tracing_endpoints

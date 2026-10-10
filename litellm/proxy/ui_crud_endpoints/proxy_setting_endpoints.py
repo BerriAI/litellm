@@ -37,6 +37,7 @@ from litellm.proxy.config_resolvers.sso import (
 from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     SUPPORTED_TEAM_ADMIN_PERMISSIONS,
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
+    TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
@@ -358,6 +359,10 @@ class UISettings(LiteLLMBaseModel):
         default=(),
         description=(
             "Team settings fields a team admin may change on the teams they administer. "
+            "With 'max_budget' alone a team admin may keep or lower the team budget; add 'raise_max_budget' to also "
+            "let them raise it. A raise is capped by the organization's max_budget when the team belongs to one, "
+            "has no ceiling for teams outside an organization or in an organization without a budget, and never "
+            "removes the cap. "
             "Include 'projects' to let team admins create and update projects for those teams. "
             "Include 'member_key_budgets' to let team admins update budget fields on keys owned by other members of those teams. "
             "Empty means team admins cannot edit team settings or manage projects at all. "
@@ -1923,9 +1928,8 @@ async def update_ui_settings(
     except ValidationError as e:
         raise HTTPException(status_code=422, detail=public_validation_errors(e.errors()))
 
-    unsupported_team_fields: Final = sorted(
-        frozenset(settings.team_admin_editable_team_fields) - SUPPORTED_TEAM_ADMIN_PERMISSIONS
-    )
+    submitted_team_fields: Final = frozenset(settings.team_admin_editable_team_fields)
+    unsupported_team_fields: Final = sorted(submitted_team_fields - SUPPORTED_TEAM_ADMIN_PERMISSIONS)
     if unsupported_team_fields:
         raise HTTPException(
             status_code=400,
@@ -1933,6 +1937,16 @@ async def update_ui_settings(
                 "error": (
                     f"{TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING} does not support {unsupported_team_fields}. "
                     f"Supported fields: {sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS)}."
+                )
+            },
+        )
+    if TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION in submitted_team_fields and "max_budget" not in submitted_team_fields:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"{TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING}: '{TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION}' "
+                    "requires 'max_budget' to be enabled as well."
                 )
             },
         )

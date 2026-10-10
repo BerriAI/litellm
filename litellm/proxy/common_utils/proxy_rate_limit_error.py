@@ -40,8 +40,36 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 from fastapi import HTTPException
+from pydantic import TypeAdapter, ValidationError
 
+from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import RateLimitError, RateLimitErrorCategory, RateLimitType
+
+PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS: Final = frozenset(
+    {
+        "model_per_key",
+        "model_per_team",
+        "model_per_organization",
+        "model_per_project",
+        "model_per_project_itpm",
+        "model_per_project_otpm",
+    }
+)
+DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_SETTING: Final = "disable_fallbacks_on_per_model_rate_limits"
+_DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_FLAG: Final[TypeAdapter[bool | None]] = TypeAdapter(bool | None)
+
+
+def per_model_rate_limits_disable_fallbacks(general_settings: Mapping[str, object]) -> bool:
+    raw_value: Final = general_settings.get(DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_SETTING)
+    try:
+        return _DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_FLAG.validate_python(raw_value) is True
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "general_settings.%s=%r is not a boolean, treating it as disabled",
+            DISABLE_FALLBACKS_ON_PER_MODEL_RATE_LIMITS_SETTING,
+            raw_value,
+        )
+        return False
 
 
 def map_v3_rate_limit_type(
@@ -149,6 +177,8 @@ class ProxyRateLimitError(HTTPException, RateLimitError):
         rate_limit_type: str | RateLimitType | None = None,
         model: str | None = None,
         llm_provider: str | None = "litellm_proxy",
+        *,
+        descriptor_key: str | None = None,
     ):
         # Normalize None → safe defaults so callers (and the resolver helper
         # in `rate_limiter_utils`) can pass `None` without producing an
@@ -191,3 +221,4 @@ class ProxyRateLimitError(HTTPException, RateLimitError):
         self.headers = stringified_headers
         self.detail = detail
         self.status_code = 429
+        self.descriptor_key = descriptor_key

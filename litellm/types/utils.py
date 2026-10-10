@@ -3726,6 +3726,28 @@ ArizeOtlpProtocol = Literal["grpc", "http/protobuf"]
 ARIZE_OTLP_PROTOCOLS: Final[frozenset[str]] = frozenset(get_args(ArizeOtlpProtocol))
 
 
+CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
+
+
+class CaptureMessageContent(str):
+    NO_CONTENT = "no_content"
+    SPAN_ONLY = "span_only"
+    EVENT_ONLY = "event_only"
+    SPAN_AND_EVENT = "span_and_event"
+
+
+# The values a team or key destination may set. OTel v2 writes content only to span attributes,
+# so the event modes stay global-only settings
+CAPTURE_MESSAGE_CONTENT_VALUES: Final[frozenset[str]] = frozenset(
+    {CaptureMessageContent.NO_CONTENT, CaptureMessageContent.SPAN_ONLY}
+)
+
+
+def captures_span_content(mode: str | None) -> bool:
+    """Whether a capture mode puts prompt and response content on spans"""
+    return mode in (CaptureMessageContent.SPAN_ONLY, CaptureMessageContent.SPAN_AND_EVENT)
+
+
 class StandardCallbackDynamicParams(TypedDict, total=False):
     # Langfuse dynamic params
     langfuse_public_key: str | None
@@ -4054,7 +4076,19 @@ ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
 
 anthropic_wif_litellm_params: Final = tuple(sorted(ANTHROPIC_WIF_KWARGS_KEYS))
 openai_wif_litellm_params: Final = tuple(sorted(OPENAI_WIF_KWARGS_KEYS))
-server_owned_wif_litellm_params: Final = anthropic_wif_litellm_params + openai_wif_litellm_params
+oauth_token_exchange_litellm_params: Final = (
+    "token_exchange_audience",
+    "token_exchange_endpoint",
+    "token_exchange_profile",
+    "token_exchange_scope",
+)
+github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type",)
+server_owned_wif_litellm_params: Final = (
+    anthropic_wif_litellm_params
+    + openai_wif_litellm_params
+    + oauth_token_exchange_litellm_params
+    + github_copilot_oauth_litellm_params
+)
 secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
 
 all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
@@ -4190,6 +4224,7 @@ class LlmProviders(str, Enum):
     FRIENDLIAI = "friendliai"
     FEATHERLESS_AI = "featherless_ai"
     WATSONX = "watsonx"
+    SCALEDOWN = "scaledown"
     WATSONX_TEXT = "watsonx_text"
     TRITON = "triton"
     PREDIBASE = "predibase"
@@ -4250,6 +4285,7 @@ class LlmProviders(str, Enum):
     A2A_AGENT = "a2a_agent"
     LANGGRAPH = "langgraph"
     LANGFLOW = "langflow"
+    MICROSOFT_365_COPILOT = "microsoft_365_copilot"
     MINIMAX = "minimax"
     SYNTHETIC = "synthetic"
     APERTIS = "apertis"

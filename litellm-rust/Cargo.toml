@@ -11,10 +11,9 @@ repository = "https://github.com/BerriAI/litellm"
 [workspace.dependencies]
 litellm-config = { path = "crates/config" }
 litellm-router = { path = "crates/router" }
+litellm-router-types = { path = "crates/router-types" }
 litellm-tracing = { path = "crates/tracing" }
-litellm-traces = { path = "crates/traces" }
-litellm-traces-cache = { path = "crates/traces-cache" }
-litellm-traces-clickhouse = { path = "crates/traces-clickhouse" }
+litellm-spend-clickhouse = { path = "crates/spend-clickhouse" }
 litellm-storage-clickhouse = { path = "crates/storage-clickhouse" }
 litellm-inference = { path = "crates/inference" }
 litellm-inference-transcription = { path = "crates/inference-transcription" }
@@ -100,7 +99,7 @@ vaultrs = { version = "=0.8.0", default-features = false, features = ["rustls"] 
 rustls-native-certs = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
-serde_with = { version = "=3.16.1", default-features = false, features = ["std", "macros"] }
+serde_with = { version = "=3.21.0", default-features = false, features = ["std", "macros"] }
 sha2 = "0.10"
 syn = { version = "2", default-features = false }
 sqlx = { version = "0.9.0", default-features = false, features = ["json", "macros", "postgres", "runtime-tokio", "chrono", "tls-rustls-ring-native-roots"] }

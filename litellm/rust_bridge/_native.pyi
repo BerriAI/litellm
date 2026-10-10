@@ -7,7 +7,6 @@ from pydantic import JsonValue
 
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge.public_call import NativeCall
-from litellm.rust_bridge.trace.generated.types import QueryScope, ReadQueryName, TraceScope
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import EmbeddingResponse, ModelResponse
@@ -18,43 +17,15 @@ class ForkedAfterNativeRuntimeStarted(RuntimeError): ...
 class ProcessReservedForForking(RuntimeError): ...
 
 def trace_encode_error(message: str) -> bytes: ...
-def trace_span_rows(
-    body: bytes, content_type: str | None, tenant: Mapping[str, str], max_attribute_value_bytes: int
-) -> list[dict[str, JsonValue]]: ...
+@final
+class NativeClickHouseSpendConfig:
+    def __new__(cls, database: str, url: str, retention_days: int) -> NativeClickHouseSpendConfig: ...
 
 @final
-class NativeTraceConfig:
-    def __new__(
-        cls,
-        database: str,
-        url: str,
-        retention_days: int,
-        max_attribute_value_bytes: int,
-    ) -> NativeTraceConfig: ...
-
-@final
-class NativeTraceStorage:
-    def __new__(cls, config: NativeTraceConfig) -> NativeTraceStorage: ...
+class NativeClickHouseSpendStorage:
+    def __new__(cls, config: NativeClickHouseSpendConfig) -> NativeClickHouseSpendStorage: ...
     def ensure_schema(self) -> Future[None]: ...
-    def insert_rows(self, table: str, rows: Sequence[Mapping[str, object]]) -> Future[None]: ...
-    def ingest(
-        self, payload: bytes, content_type: str | None, tenant: Mapping[str, str], logs: bool = False
-    ) -> Future[int]: ...
-    def list_traces(
-        self, scope: TraceScope, start_ms: int, end_ms: int, cursor: str | None, limit: int
-    ) -> Future[JsonValue]: ...
-    def get_trace(
-        self, trace_id: str, scope: TraceScope, trace_ref: str, cursor: str | None = None, page_size: int | None = None
-    ) -> Future[JsonValue]: ...
-    def get_span(self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str) -> Future[JsonValue]: ...
-    def get_span_error(
-        self, trace_id: str, span_id: str, scope: TraceScope, trace_ref: str, cursor: str | None
-    ) -> Future[JsonValue]: ...
-    def query_sql(self, sql: str, scope: QueryScope, secret: str) -> Future[str]: ...
-    def query_help(self, scope: QueryScope, secret: str) -> Future[JsonValue]: ...
-    def query(
-        self, query: ReadQueryName, parameters: Mapping[str, str | int | float | Sequence[str]]
-    ) -> Future[str]: ...
+    def insert_rows(self, rows: Sequence[Mapping[str, object]]) -> Future[None]: ...
 
 @final
 class NativeDiagnosticProcessor:
@@ -236,9 +207,9 @@ def reserve_process_for_forking() -> None: ...
 __all__ = [
     "ForkedAfterNativeRuntimeStarted",
     "HuggingFaceEncoding",
+    "NativeClickHouseSpendConfig",
+    "NativeClickHouseSpendStorage",
     "NativeDiagnosticProcessor",
-    "NativeTraceConfig",
-    "NativeTraceStorage",
     "ProcessReservedForForking",
     "ResponsesWebSocketConnection",
     "RustBridgeDeclined",
@@ -262,7 +233,6 @@ __all__ = [
     "reserve_process_for_forking",
     "responses",
     "trace_encode_error",
-    "trace_span_rows",
     "transcription",
 ]
 

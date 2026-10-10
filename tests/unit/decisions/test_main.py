@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+from concurrent.futures import wait
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -9,10 +11,16 @@ from typing import Final
 import httpx
 import pytest
 import respx
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+from botocore.credentials import Credentials
 
 import litellm
+from litellm.cost_calculator import get_response_cost_from_hidden_params
+from litellm.constants import AWS_SIGNING_MAX_THREADS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.bedrock.base_aws_llm import AWS_SIGNING_EXECUTOR
 from litellm.types.decisions import (
     ChoiceAnswer,
     DecisionsResponse,
@@ -21,6 +29,8 @@ from litellm.types.decisions import (
     OpenAIDecisionResponse,
     ScoreAnswer,
 )
+from litellm.types.utils import LlmProviders
+from litellm.utils import ProviderConfigManager
 
 _QUESTIONS: Final[Mapping[str, object]] = MappingProxyType(
     {
@@ -66,6 +76,20 @@ _STRANDS_RESPONSE: Final[Mapping[str, object]] = {
     },
     "usage": {"input_tokens": 216, "output_tokens": 3},
     "latency_ms": 3722.17,
+}
+_DATABRICKS_ENDPOINT: Final = "databricks-openjev-qwen35-4b"
+_DATABRICKS_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "/mosaicml/local_model",
+    "answers": {
+        "is_defect": {"type": "noul", "noul": 0.9},
+        "sentiment": {
+            "type": "choice",
+            "choice": "positive",
+            "confidence": 0.8,
+            "probabilities": {"positive": 0.8, "negative": 0.2},
+        },
+    },
+    "usage": {"input_tokens": 214, "output_tokens": 0},
 }
 _PROVIDERS: Final[tuple[tuple[str, str, str, str], ...]] = (
     (
@@ -682,6 +706,33 @@ async def test_strands_decider_without_key_preserves_response_extras(
 
 
 @pytest.mark.asyncio
+async def test_strands_decider_plain_api_base_answers_while_every_aws_signing_thread_is_busy(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    respx_mock.post("https://strands.example/v1/systemone").respond(json=_STRANDS_RESPONSE)
+    release: Final = threading.Event()
+    busy: Final = tuple(AWS_SIGNING_EXECUTOR.submit(release.wait) for _ in range(AWS_SIGNING_MAX_THREADS))
+
+    try:
+        response: Final = await asyncio.wait_for(
+            litellm.adecisions(
+                model="strands_decider/strands-decider-2B-hobson-v19",
+                state="review",
+                questions={"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+                api_base="https://strands.example",
+            ),
+            timeout=5,
+        )
+    finally:
+        release.set()
+        wait(busy)
+
+    assert isinstance(response.answers["severity"], ScoreAnswer)
+
+
+@pytest.mark.asyncio
 async def test_strands_decider_uses_key_from_matching_environment_base(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
@@ -731,6 +782,172 @@ async def test_strands_decider_provider_resolution_and_router_dispatch(
     assert provider_resolution[:2] == ("strands-decider-2B-hobson-v19", "strands_decider")
     assert route.called
     assert response.model == _STRANDS_RESPONSE["model"]
+
+
+_RUNTIME_ARN: Final = "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/qa_decider-AbC123xyz0"
+_RUNTIME_URL: Final = (
+    "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/"
+    "arn%3Aaws%3Abedrock-agentcore%3Aus-east-1%3A123456789012%3Aruntime%2Fqa_decider-AbC123xyz0/invocations"
+)
+_RUNTIME_CREDENTIALS: Final = Credentials(access_key="AKIDEXAMPLE", secret_key="example-secret")
+_SESSION_HEADER: Final = "x-amzn-bedrock-agentcore-runtime-session-id"
+
+
+def _sigv4_verifies(request: httpx.Request) -> bool:
+    authorization: Final = request.headers["authorization"]
+    signed_names: Final = authorization.split("SignedHeaders=")[1].split(",")[0].split(";")
+    replayed: Final = AWSRequest(
+        method=request.method,
+        url=str(request.url),
+        data=request.content,
+        headers={name: request.headers[name] for name in signed_names},
+    )
+    replayed.context["timestamp"] = request.headers["x-amz-date"]
+    auth: Final = SigV4Auth(_RUNTIME_CREDENTIALS, "bedrock-agentcore", "us-east-1")
+    string_to_sign: Final = auth.string_to_sign(replayed, auth.canonical_request(replayed))
+    return authorization.endswith(f"Signature={auth.signature(string_to_sign, replayed)}")
+
+
+@pytest.mark.parametrize("use_async", [True, False])
+@pytest.mark.asyncio
+async def test_strands_decider_runtime_arn_sends_a_sigv4_signed_invoke_agent_runtime_call(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    use_async: bool,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    route: Final = respx_mock.post(_RUNTIME_URL).respond(json=_STRANDS_RESPONSE)
+    call_args: Final[Mapping[str, object]] = {
+        "model": "strands_decider/strands-decider-2B-hobson-v19",
+        "state": "review",
+        "questions": {"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+        "api_base": _RUNTIME_ARN,
+        "aws_access_key_id": _RUNTIME_CREDENTIALS.access_key,
+        "aws_secret_access_key": _RUNTIME_CREDENTIALS.secret_key,
+    }
+
+    response: Final = await litellm.adecisions(**call_args) if use_async else litellm.decisions(**call_args)
+
+    assert route.call_count == 1
+    sent: Final = route.calls[0].request
+    assert _sigv4_verifies(sent)
+    assert json.loads(sent.content)["model"] == "strands-decider-2B-hobson-v19"
+    assert sent.headers[_SESSION_HEADER].startswith("litellm-decider-")
+    assert response.model == _STRANDS_RESPONSE["model"]
+
+
+@pytest.mark.asyncio
+async def test_strands_decider_runtime_arn_router_deployment_answers_openai_format_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "strands",
+                "litellm_params": {
+                    "model": "strands_decider/strands-decider-2B-hobson-v19",
+                    "api_base": _RUNTIME_ARN,
+                    "aws_access_key_id": _RUNTIME_CREDENTIALS.access_key,
+                    "aws_secret_access_key": _RUNTIME_CREDENTIALS.secret_key,
+                    "aws_region_name": "eu-west-1",
+                    "agentcore_runtime_session_id": "pooled-session-0123456789abcdef0123456",
+                },
+            }
+        ]
+    )
+    route: Final = respx_mock.post(_RUNTIME_URL).respond(json=_STRANDS_RESPONSE)
+
+    response: Final = await router.adecisions(
+        model="strands",
+        input="review",
+        extra_headers={_SESSION_HEADER: "caller-session-0123456789abcdef01234567"},
+        questions=[
+            {
+                "type": "score",
+                "name": "severity",
+                "instructions": "How bad?",
+                "levels": [{"label": "none"}, {"label": "low"}, {"label": "high"}],
+            }
+        ],
+    )
+
+    sent: Final = route.calls[0].request
+    assert _sigv4_verifies(sent)
+    assert sent.headers[_SESSION_HEADER] == "pooled-session-0123456789abcdef0123456"
+    assert isinstance(response, OpenAIDecisionResponse)
+
+
+@pytest.mark.asyncio
+async def test_strands_decider_runtime_arn_with_api_key_sends_the_bearer_token_unsigned(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    route: Final = respx_mock.post(_RUNTIME_URL).respond(json=_STRANDS_RESPONSE)
+
+    await litellm.adecisions(
+        model="strands_decider/strands-decider-2B-hobson-v19",
+        state="review",
+        questions={"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+        api_base=_RUNTIME_ARN,
+        api_key="runtime-jwt",
+    )
+
+    sent: Final = route.calls[0].request
+    assert sent.headers["authorization"] == "Bearer runtime-jwt"
+    assert "x-amz-date" not in sent.headers
+    assert _SESSION_HEADER in sent.headers
+
+
+@pytest.mark.parametrize(
+    ("code", "error_class"),
+    [
+        ("bad_request", litellm.BadRequestError),
+        ("loading", litellm.ServiceUnavailableError),
+        ("inference_error", litellm.InternalServerError),
+    ],
+)
+@pytest.mark.asyncio
+async def test_strands_decider_runtime_error_envelope_raises_instead_of_answering(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    code: str,
+    error_class: type[Exception],
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    respx_mock.post(_RUNTIME_URL).respond(json={"error": {"code": code, "message": "at most 16 questions"}})
+
+    with pytest.raises(error_class, match="at most 16 questions"):
+        await litellm.adecisions(
+            model="strands_decider/strands-decider-2B-hobson-v19",
+            state="review",
+            questions={"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+            api_base=_RUNTIME_ARN,
+            aws_access_key_id=_RUNTIME_CREDENTIALS.access_key,
+            aws_secret_access_key=_RUNTIME_CREDENTIALS.secret_key,
+        )
+
+
+@pytest.mark.asyncio
+async def test_strands_decider_plain_api_base_error_envelope_stays_an_unexpected_response(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    respx_mock.post("https://strands.example/v1/systemone").respond(
+        json={"error": {"code": "bad_request", "message": "at most 16 questions"}}
+    )
+
+    with pytest.raises(litellm.InternalServerError, match="returned an unexpected response"):
+        await litellm.adecisions(
+            model="strands_decider/strands-decider-2B-hobson-v19",
+            state="review",
+            questions={"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+            api_base="https://strands.example",
+        )
 
 
 _VLLM_RESPONSE: Final[Mapping[str, object]] = {
@@ -864,6 +1081,164 @@ async def test_hosted_vllm_choice_question_goes_out_as_a_jev_choice_with_the_ser
             }
         },
     }
+
+
+@pytest.mark.asyncio
+async def test_databricks_requires_api_base_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("DATABRICKS_API_BASE", raising=False)
+    monkeypatch.setenv("DATABRICKS_API_KEY", "dapi-key")
+
+    with pytest.raises(litellm.BadRequestError, match="DATABRICKS_API_BASE"):
+        await litellm.adecisions(
+            model=f"databricks/{_DATABRICKS_ENDPOINT}",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "endpoint_name", ["serving-endpoints/openjev", "openjev?x=1", "openjev#frag", "..", "open jev"]
+)
+async def test_databricks_rejects_a_serving_endpoint_name_that_would_rewrite_the_url(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint_name: str,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", "https://workspace.example/serving-endpoints")
+    monkeypatch.setenv("DATABRICKS_API_KEY", "dapi-key")
+
+    with pytest.raises(litellm.BadRequestError, match="bare endpoint name"):
+        await litellm.adecisions(
+            model=f"databricks/{endpoint_name}",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_databricks_requires_a_key_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", "https://workspace.example/serving-endpoints")
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+
+    with pytest.raises(litellm.AuthenticationError, match="Missing API key for Decisions provider 'databricks'"):
+        await litellm.adecisions(
+            model=f"databricks/{_DATABRICKS_ENDPOINT}",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        )
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "api_base", ["https://workspace.example/serving-endpoints", "https://workspace.example/serving-endpoints/"]
+)
+async def test_databricks_posts_the_jev_body_to_the_serving_endpoint_invocations_route(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    api_base: str,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", api_base)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.setenv("DATABRICKS_TOKEN", "dapi-token")
+    route: Final = respx_mock.post(
+        f"https://workspace.example/serving-endpoints/{_DATABRICKS_ENDPOINT}/invocations"
+    ).respond(json=_DATABRICKS_RESPONSE)
+    questions: Final = {
+        "is_defect": {"type": "noul", "instructions": "Is this a defect?"},
+        "sentiment": {"type": "choice", "criteria": {"positive": None, "negative": "unhappy"}},
+    }
+
+    response: Final = await litellm.adecisions(
+        model=f"databricks/{_DATABRICKS_ENDPOINT}",
+        state={"ticket": "export hangs"},
+        questions=questions,
+    )
+
+    assert route.called
+    sent: Final = respx_mock.calls[0].request
+    assert sent.headers["authorization"] == "Bearer dapi-token"
+    assert json.loads(sent.content) == {
+        "model": _DATABRICKS_ENDPOINT,
+        "state": {"ticket": "export hangs"},
+        "questions": questions,
+    }
+    assert response.model == "/mosaicml/local_model"
+    assert isinstance(response.answers["is_defect"], NoulAnswer)
+    assert isinstance(response.answers["sentiment"], ChoiceAnswer)
+    assert response.hidden_params["custom_llm_provider"] == "databricks"
+    assert response.hidden_params["model"] == f"databricks/{_DATABRICKS_ENDPOINT}"
+
+
+@pytest.mark.asyncio
+async def test_databricks_router_deployment_sends_its_own_key_to_its_own_base(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("DATABRICKS_API_BASE", "https://other-workspace.example/serving-endpoints")
+    monkeypatch.setenv("DATABRICKS_API_KEY", "env-key-stays-home")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "decider",
+                "litellm_params": {
+                    "model": f"databricks/{_DATABRICKS_ENDPOINT}",
+                    "api_base": "https://workspace.example/serving-endpoints",
+                    "api_key": "deployment-key",
+                },
+            }
+        ]
+    )
+    route: Final = respx_mock.post(
+        f"https://workspace.example/serving-endpoints/{_DATABRICKS_ENDPOINT}/invocations"
+    ).respond(json=_DATABRICKS_RESPONSE)
+
+    response: Final = await router.adecisions(
+        model="decider",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    )
+
+    assert route.called
+    assert respx_mock.calls[0].request.headers["authorization"] == "Bearer deployment-key"
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
+
+
+_PROVIDERS_WHOSE_CHAT_MODELS_ALSO_DECIDE: Final = frozenset(
+    {LlmProviders.OPENAI.value, LlmProviders.OPENROUTER.value, LlmProviders.HOSTED_VLLM.value}
+)
+_DEDICATED_DECIDER_PROVIDERS: Final[tuple[str, ...]] = tuple(
+    sorted(
+        provider.value
+        for provider in LlmProviders
+        if provider.value not in _PROVIDERS_WHOSE_CHAT_MODELS_ALSO_DECIDE
+        and ProviderConfigManager.get_provider_decisions_config(model="", provider=provider) is not None
+    )
+)
+
+
+@pytest.mark.parametrize("provider", _DEDICATED_DECIDER_PROVIDERS)
+def test_every_dedicated_decider_provider_ships_an_evaluation_mode_cost_map_entry(provider: str) -> None:
+    evaluation_entries: Final = tuple(
+        name
+        for name, info in litellm.model_cost.items()
+        if isinstance(info, Mapping) and info.get("litellm_provider") == provider and info.get("mode") == "evaluation"
+    )
+
+    assert evaluation_entries, f"a {provider} decider would be health-checked as chat without a mode: evaluation entry"
 
 
 @pytest.mark.asyncio
@@ -1053,5 +1428,255 @@ async def test_requests_a_provider_cannot_serve_are_rejected_before_http(
 ) -> None:
     with pytest.raises(litellm.BadRequestError, match=message):
         await litellm.adecisions(model=model, api_key="caller-key", **request_kwargs)
+
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_openrouter_decisions_uses_provider_reported_cost_without_cost_map(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delitem(litellm.model_cost, "openrouter/typesafe/jev-1.13", raising=False)
+    cost: Final = 1.1802e-5
+    route: Final = respx_mock.post("https://openrouter.ai/api/alpha/decisions").respond(
+        json={
+            "model": "typesafe/jev-1.13",
+            "answers": _RESPONSE["answers"],
+            "usage": {
+                "input_tokens": _INPUT_TOKENS,
+                "output_tokens": _OUTPUT_TOKENS,
+                "cost": cost,
+            },
+        }
+    )
+
+    response: Final = await litellm.adecisions(
+        model="openrouter/typesafe/jev-1.13",
+        state={"source": "unit-test"},
+        questions=_QUESTIONS,
+        api_key="caller-key",
+    )
+
+    assert route.called
+    assert get_response_cost_from_hidden_params(response.hidden_params) == cost
+
+
+_SAFETY_IDENTIFIER: Final = "end-user-7"
+_PREDICATE_QUESTIONS: Final[tuple[Mapping[str, object], ...]] = (
+    {"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"},
+)
+_PREDICATE_REQUESTS: Final[tuple[Mapping[str, object], ...]] = (
+    MappingProxyType({"input": "review", "questions": _PREDICATE_QUESTIONS}),
+    MappingProxyType(
+        {"state": "review", "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}}
+    ),
+)
+_PREDICATE_REQUEST_IDS: Final = ("input_format", "state_format")
+
+
+@pytest.mark.parametrize("request_kwargs", _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+def test_safety_identifier_is_refused_before_http_when_the_provider_cannot_take_it(
+    request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"safety_identifier.*drop_params") as caught:
+        litellm.decisions(
+            model="perplexity/pplx-decider-v1-27b",
+            safety_identifier=_SAFETY_IDENTIFIER,
+            api_key="caller-key",
+            **request_kwargs,
+        )
+
+    assert caught.value.status_code == 400
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ("call", "global"))
+async def test_safety_identifier_is_dropped_from_the_wire_under_drop_params(
+    scope: str, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", scope == "global")
+    route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+
+    response: Final = await litellm.adecisions(
+        model="perplexity/pplx-decider-v1-27b",
+        input="review",
+        questions=_PREDICATE_QUESTIONS,
+        safety_identifier=_SAFETY_IDENTIFIER,
+        api_key="caller-key",
+        **({"drop_params": True} if scope == "call" else {}),
+    )
+
+    assert route.called
+    assert json.loads(respx_mock.calls[0].request.content) == {
+        "model": "pplx-decider-v1-27b",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert isinstance(response, OpenAIDecisionResponse)
+    assert [answer.model_dump(mode="json") for answer in response.answers] == [
+        {"type": "predicate", "name": "is_defect", "probability": 0.9}
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_kwargs", _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+@pytest.mark.parametrize("drop_params", (False, True), ids=("strict", "drop_params"))
+async def test_safety_identifier_reaches_openai_whether_or_not_params_are_dropped(
+    drop_params: bool,
+    request_kwargs: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", drop_params)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+
+    await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        safety_identifier=_SAFETY_IDENTIFIER,
+        api_key="caller-key",
+        **request_kwargs,
+    )
+
+    assert route.called
+    assert json.loads(respx_mock.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": "review",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        "safety_identifier": _SAFETY_IDENTIFIER,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_kwargs", _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+async def test_non_string_safety_identifier_is_rejected_before_http(
+    request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    invalid_safety_identifier: Final[Mapping[str, object]] = MappingProxyType({"safety_identifier": 7})
+
+    with pytest.raises(litellm.BadRequestError, match=r"(?s)Invalid Decisions request.*safety_identifier"):
+        await litellm.adecisions(
+            model="openai/gpt-6-luna", api_key="caller-key", **request_kwargs, **invalid_safety_identifier
+        )
+
+    assert not route.called
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_kwargs", _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+async def test_non_string_safety_identifier_is_dropped_from_the_wire_under_drop_params(
+    request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    dropped_safety_identifier: Final[Mapping[str, object]] = MappingProxyType(
+        {"safety_identifier": 7, "drop_params": True}
+    )
+
+    await litellm.adecisions(
+        model="openai/gpt-6-luna", api_key="caller-key", **request_kwargs, **dropped_safety_identifier
+    )
+
+    assert route.called
+    assert json.loads(respx_mock.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": "review",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "api_base",
+    (
+        "https://res.services.ai.azure.com",
+        "https://res.services.ai.azure.com/",
+        "https://res.services.ai.azure.com/models",
+        "https://res.services.ai.azure.com/openai/v1",
+        "https://res.services.ai.azure.com/api/projects/proj",
+        "https://res.services.ai.azure.com/api/projects/proj/openai/v1",
+        "https://res.services.ai.azure.com/api/projects/proj/models",
+        "https://res.services.ai.azure.com/models?api-version=2024-05-01-preview",
+    ),
+)
+async def test_azure_ai_decision_posts_deployment_to_foundry_systemone_route(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    api_base: str,
+) -> None:
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+
+    response: Final = await litellm.adecisions(
+        model="azure_ai/decision-1",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_base=api_base,
+        api_key="foundry-key",
+    )
+
+    assert route.called
+    request: Final = respx_mock.calls[0].request
+    assert request.headers["authorization"] == "Bearer foundry-key"
+    assert "api-key" not in request.headers
+    assert json.loads(request.content) == {
+        "model": "decision-1",
+        "state": "review",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.answers == {"is_defect": NoulAnswer(type="noul", noul=0.9)}
+    assert response._hidden_params["model"] == "azure_ai/decision-1"
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_decision_reads_foundry_env_and_keeps_gateway_path_prefix(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setenv("AZURE_AI_API_BASE", "https://gateway.example.com/foundry/models")
+    monkeypatch.setenv("AZURE_AI_API_KEY", "env-foundry-key")
+    route: Final = respx_mock.post("https://gateway.example.com/foundry/providers/microsoft/v1/systemone").respond(
+        json=_RESPONSE
+    )
+
+    await litellm.adecisions(
+        model="azure_ai/decision-1",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    )
+
+    assert route.called
+    assert respx_mock.calls[0].request.headers["authorization"] == "Bearer env-foundry-key"
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_decision_requires_api_base_before_http(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("AZURE_AI_API_BASE", raising=False)
+    monkeypatch.setenv("AZURE_AI_API_KEY", "foundry-key")
+
+    with pytest.raises(litellm.BadRequestError, match="Missing AZURE_AI_API_BASE"):
+        await litellm.adecisions(
+            model="azure_ai/decision-1",
+            state="review",
+            questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        )
 
     assert len(respx_mock.calls) == 0

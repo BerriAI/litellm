@@ -25,7 +25,6 @@ from unittest.mock import Mock, patch
 
 import pytest
 
-
 import litellm
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -163,6 +162,7 @@ def test_maybe_raise_for_response_failed_event_wraps_content_policy_violation():
     "error_type,error_code,expected_exception",
     [
         ("invalid_request_error", "content_policy_violation", litellm.ContentPolicyViolationError),
+        ("invalid_request_error", "cyber_policy", litellm.ContentPolicyViolationError),
         ("tokens", "rate_limit_exceeded", litellm.RateLimitError),
         ("invalid_request_error", "insufficient_quota", litellm.RateLimitError),
         ("server_error", "internal_error", litellm.InternalServerError),
@@ -354,20 +354,22 @@ def test_response_failed_numeric_code_maps_to_its_http_status(code: int | str):
     assert isinstance(exc_info.value.original_exception, litellm.RateLimitError)
 
 
-def test_response_failed_unknown_code_keeps_upstream_code_and_message_on_mapped_exception():
+@pytest.mark.parametrize("code", ["cyber_policy", "unrecognized_failure"])
+def test_response_failed_keeps_upstream_code_and_uses_content_policy_fallback_for_cyber_policy(code: str):
     iterator = _make_iterator()
     upstream_message = "This content was flagged for possible cybersecurity risk."
     mock_response_obj = Mock()
-    mock_response_obj.error = {"code": "cyber_policy", "message": upstream_message}
+    mock_response_obj.error = {"code": code, "message": upstream_message}
     chunk = Mock()
     chunk.type = "response.failed"
     chunk.response = mock_response_obj
     with pytest.raises(MidStreamFallbackError) as exc_info:
         iterator._maybe_raise_for_error_event(chunk)
     mapped = exc_info.value.original_exception
-    assert isinstance(mapped, litellm.InternalServerError)
-    assert mapped.code == "cyber_policy"
-    assert mapped.body == {"message": upstream_message, "type": None, "code": "cyber_policy"}
+    expected = litellm.ContentPolicyViolationError if code == "cyber_policy" else litellm.InternalServerError
+    assert isinstance(mapped, expected)
+    assert mapped.code == code
+    assert mapped.body == {"message": upstream_message, "type": None, "code": code}
 
 
 def test_maybe_raise_for_error_event_null_error_obj():
