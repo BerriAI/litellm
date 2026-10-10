@@ -2833,6 +2833,22 @@ export interface Member {
   temp_budget_expiry?: string | null;
 }
 
+const nonEmptyString = (value: unknown): string | undefined =>
+  typeof value === "string" && value.trim() !== "" ? value : undefined;
+
+const objectField = (value: unknown, key: string): unknown =>
+  value !== null && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)[key]
+    : undefined;
+
+const teamMemberAddErrorMessage = (body: unknown): string =>
+  nonEmptyString(objectField(objectField(body, "error"), "message")) ??
+  nonEmptyString(objectField(body, "error")) ??
+  nonEmptyString(objectField(body, "message")) ??
+  nonEmptyString(objectField(body, "detail")) ??
+  nonEmptyString(objectField(objectField(body, "detail"), "error")) ??
+  "Failed to add team member";
+
 export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/team/member_add` : `/team/member_add`;
@@ -2860,8 +2876,7 @@ export const teamMemberAddCall = async (accessToken: string, teamId: string, for
         console.warn("Failed to parse error body as JSON:", errorText);
       }
 
-      const rawMessage = parsedError?.detail?.error || "Failed to add team member";
-      const err = new Error(rawMessage);
+      const err = new Error(teamMemberAddErrorMessage(parsedError));
       (err as any).raw = parsedError;
       throw err;
     }

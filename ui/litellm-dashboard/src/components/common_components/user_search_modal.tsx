@@ -18,11 +18,20 @@ interface User {
   role?: string;
 }
 
+type SearchField = "user_email" | "user_id";
+
 interface UserOption {
   label: string;
   value: string;
-  user: User | null;
+  users: User[];
 }
+
+const groupUsersByField = (users: User[], fieldName: SearchField): UserOption[] =>
+  [...new Set(users.map((user) => `${user[fieldName]}`))].map((value) => ({
+    label: value,
+    value,
+    users: users.filter((user) => `${user[fieldName]}` === value),
+  }));
 
 interface Role {
   label: string;
@@ -70,11 +79,15 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   const selectedUserEmail = form.watch("user_email");
   const [userOptions, setUserOptions] = useState<UserOption[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
-  const [selectedField, setSelectedField] = useState<"user_email" | "user_id">("user_email");
+  const [selectedField, setSelectedField] = useState<SearchField>("user_email");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [usersSharingEmail, setUsersSharingEmail] = useState<User[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const latestSearchRef = useRef(0);
+  const needsUserIdPick = usersSharingEmail.length > 0 && !selectedUserId;
+  const hasPickedUser = Boolean(selectedUserId || selectedUserEmail) && !needsUserIdPick;
 
-  const fetchUsers = async (searchText: string, fieldName: "user_email" | "user_id"): Promise<void> => {
+  const fetchUsers = async (searchText: string, fieldName: SearchField): Promise<void> => {
     const searchId = latestSearchRef.current + 1;
     latestSearchRef.current = searchId;
     const isLatestSearch = (): boolean => searchId === latestSearchRef.current;
@@ -99,12 +112,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
       if (!isLatestSearch()) return;
 
       const data: User[] = response;
-      const options: UserOption[] = data.map((user) => ({
-        label: fieldName === "user_email" ? `${user.user_email}` : `${user.user_id}`,
-        value: fieldName === "user_email" ? user.user_email : user.user_id,
-        user,
-      }));
-      setUserOptions(options);
+      setUserOptions(groupUsersByField(data, fieldName));
     } catch (error) {
       console.error("Error fetching users:", error);
     } finally {
@@ -112,15 +120,23 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     }
   };
 
-  const handleSearch = (value: string, fieldName: "user_email" | "user_id"): void => {
+  const handleSearch = (value: string, fieldName: SearchField): void => {
     setSelectedField(fieldName);
+    setSearchQuery(value);
     void fetchUsers(value, fieldName);
   };
 
-  const handleSelect = (option: UserOption | null): void => {
-    if (option?.user == null) return;
-    form.setValue("user_email", option.user.user_email);
-    form.setValue("user_id", option.user.user_id);
+  const handleSelect = (option: UserOption | null, fieldName: SearchField): void => {
+    const [firstUser, ...otherUsers] = option?.users ?? [];
+    if (firstUser === undefined) return;
+    const isAmbiguous = otherUsers.length > 0;
+    form.setValue("user_email", firstUser.user_email);
+    form.setValue("user_id", isAmbiguous ? null : firstUser.user_id);
+    if (fieldName === "user_email") {
+      setUsersSharingEmail(isAmbiguous ? option?.users ?? [] : []);
+      return;
+    }
+    setUsersSharingEmail((users) => (users.some((user) => user.user_id === firstUser.user_id) ? users : []));
   };
 
   const handleSubmit = async (values: FormValues): Promise<void> => {
@@ -135,6 +151,8 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   const handleClose = (): void => {
     form.reset(emptyValues);
     setUserOptions([]);
+    setSearchQuery("");
+    setUsersSharingEmail([]);
     onCancel();
   };
 
@@ -143,7 +161,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
   };
 
   const renderUserSearch = (
-    fieldName: "user_email" | "user_id",
+    fieldName: SearchField,
     placeholder: string,
     controlProps: {
       id: string;
@@ -152,15 +170,17 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
     },
     testId?: string,
   ) => {
-    const items = selectedField === fieldName ? userOptions : [];
+    const sharedEmailOptions = fieldName === "user_id" ? groupUsersByField(usersSharingEmail, "user_id") : [];
+    const items = selectedField === fieldName && searchQuery !== "" ? userOptions : sharedEmailOptions;
     const handleValueChange = (value: string | null) => {
       if (value === null) {
         form.setValue("user_email", null);
         form.setValue("user_id", null);
+        setUsersSharingEmail([]);
         return;
       }
       controlProps.onChange(value);
-      handleSelect(items.find((option) => option.value === value) ?? null);
+      handleSelect(items.find((option) => option.value === value) ?? null, fieldName);
     };
     return (
       <div data-testid={testId} onKeyDown={swallowEnter}>
@@ -205,7 +225,12 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
 
               <div className="text-center">OR</div>
 
-              <FormField control={form.control} name="user_id" label="User ID">
+              <FormField
+                control={form.control}
+                name="user_id"
+                label="User ID"
+                description={needsUserIdPick ? "Multiple users share this email. Pick the user ID to add." : undefined}
+              >
                 {({ id, value, onChange }) => renderUserSearch("user_id", "Search by user ID", { id, value, onChange })}
               </FormField>
 
@@ -238,7 +263,7 @@ const UserSearchModal: React.FC<UserSearchModalProps> = ({
             </FieldGroup>
 
             <div className="mt-4 text-right">
-              <Button type="submit" disabled={isSubmitting || (!selectedUserId && !selectedUserEmail)}>
+              <Button type="submit" disabled={isSubmitting || !hasPickedUser}>
                 {isSubmitting ? <UiLoadingSpinner className="size-4" /> : <UserPlus />}
                 {isSubmitting ? "Adding..." : "Add Member"}
               </Button>

@@ -118,6 +118,50 @@ describe("loginCall - storeLoginToken integration", () => {
   });
 });
 
+describe("teamMemberAddCall error message", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const rejectWith = (body: string) => {
+    vi.spyOn(global, "fetch").mockResolvedValue(new Response(body, { status: 400 }));
+  };
+
+  const member: Networking.Member = { user_id: "dup-user-1", role: "user" };
+  const addMember = () => Networking.teamMemberAddCall("token", "team-1", member);
+
+  it.each([
+    ["the proxy error envelope", { error: { message: "dup-user-1 is already a member of this team." } }],
+    ["an HTTPException detail", { detail: { error: "dup-user-1 is already a member of this team." } }],
+    ["a plain message field", { message: "dup-user-1 is already a member of this team." }],
+    ["a plain error string", { error: "dup-user-1 is already a member of this team." }],
+    ["a plain detail string", { detail: "dup-user-1 is already a member of this team." }],
+    [
+      "a lower-priority field when a higher one is not a string",
+      { error: { message: 5 }, detail: { error: "dup-user-1 is already a member of this team." } },
+    ],
+  ])("surfaces the backend message from %s", async (_shape, body) => {
+    rejectWith(JSON.stringify(body));
+
+    await expect(addMember()).rejects.toHaveProperty("message", "dup-user-1 is already a member of this team.");
+  });
+
+  it.each([
+    ["is not JSON", "<html>bad gateway</html>"],
+    ["is JSON null", "null"],
+    ["is an empty object", "{}"],
+    ["is an object without a known message field", JSON.stringify({ status: 502 })],
+    ["is an array", JSON.stringify(["unknown"])],
+    ["has a non-string message", JSON.stringify({ message: { reason: "unknown" } })],
+    ["has an empty error message", JSON.stringify({ error: { message: "" } })],
+    ["has a whitespace-only message", JSON.stringify({ message: "   " })],
+  ])("falls back to a generic message when the body %s", async (_case, body) => {
+    rejectWith(body);
+
+    await expect(addMember()).rejects.toHaveProperty("message", "Failed to add team member");
+  });
+});
+
 describe("modelInfoCall", () => {
   let currentFetch: typeof global.fetch;
 

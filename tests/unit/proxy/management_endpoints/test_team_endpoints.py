@@ -1174,8 +1174,68 @@ def test_team_member_add_duplication_check_raises_proxy_exception():
     assert exc_info.value.type == ProxyErrorTypes.team_member_already_in_team
     assert exc_info.value.param == "member"
     assert exc_info.value.code == "400"
-    assert "existing-user-id" in str(exc_info.value.message)
-    assert "already in team" in str(exc_info.value.message)
+    assert exc_info.value.message == "existing-user-id is already a member of this team."
+
+
+def _team_with_roster(*members: Member) -> LiteLLM_TeamTable:
+    return LiteLLM_TeamTable(team_id="test-team-123", members_with_roles=list(members))
+
+
+_DUP_USER_1: Final = Member(user_id="dup-user-1", user_email="shared@example.com", role="user")
+_DUP_USER_2: Final = Member(user_id="dup-user-2", user_email="shared@example.com", role="user")
+
+
+@pytest.mark.parametrize(
+    ("roster", "member", "expected_message"),
+    [
+        ((_DUP_USER_1,), _DUP_USER_1, "dup-user-1 is already a member of this team."),
+        ((_DUP_USER_1,), Member(user_id="dup-user-1", role="user"), "dup-user-1 is already a member of this team."),
+        (
+            (_DUP_USER_1,),
+            Member(user_email="shared@example.com", role="user"),
+            "A member of this team already uses shared@example.com.",
+        ),
+        ((_DUP_USER_1,), _DUP_USER_2, "A member of this team already uses shared@example.com."),
+        ((_DUP_USER_1, _DUP_USER_2), _DUP_USER_2, "dup-user-2 is already a member of this team."),
+        ((_DUP_USER_2, _DUP_USER_1), _DUP_USER_2, "dup-user-2 is already a member of this team."),
+        (
+            (Member(user_email="invited@example.com", role="user"),),
+            Member(user_email="invited@example.com", role="user"),
+            "A member of this team already uses invited@example.com.",
+        ),
+    ],
+    ids=[
+        "id_and_email",
+        "id_only",
+        "email_only",
+        "other_user_same_email",
+        "same_id_after_shared_email_member",
+        "same_id_before_shared_email_member",
+        "email_only_roster_entry",
+    ],
+)
+def test_team_member_add_duplication_check_names_only_the_requested_member(
+    roster: tuple[Member, ...], member: Member, expected_message: str
+):
+    data: Final = TeamMemberAddRequest(team_id="test-team-123", member=member)
+
+    with pytest.raises(ProxyException) as exc_info:
+        team_member_add_duplication_check(data=data, existing_team_row=_team_with_roster(*roster))
+
+    assert exc_info.value.type == ProxyErrorTypes.team_member_already_in_team
+    assert exc_info.value.message == expected_message
+
+
+def test_team_member_add_duplication_check_bulk_message_omits_roster():
+    data: Final = TeamMemberAddRequest(
+        team_id="test-team-123",
+        member=[Member(user_id="dup-user-1", role="user"), Member(user_email="shared@example.com", role="user")],
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        team_member_add_duplication_check(data=data, existing_team_row=_team_with_roster(_DUP_USER_1))
+
+    assert exc_info.value.message == "All requested users are already members of this team."
 
 
 def test_team_member_add_duplication_check_allows_new_member():
@@ -10633,42 +10693,93 @@ async def test_get_team_daily_activity_team_admin_sees_all_spend(mock_db_client)
                 pytest.fail("API keys should not be fetched for team admin users")
 
 
+def _first_email_owner(rows: tuple[MagicMock, ...], where: dict[str, object]) -> MagicMock | None:
+    criterion: Final = where["user_email"]
+    if isinstance(criterion, dict):
+        return next((row for row in rows if (row.user_email or "").lower() == criterion["equals"].lower()), None)
+    return next((row for row in rows if row.user_email == criterion), None)
+
+
+def _prisma_with_users(*users: tuple[str, str | None], team: LiteLLM_TeamTable | None = None) -> MagicMock:
+    rows: Final = tuple(MagicMock(user_id=user_id, user_email=user_email) for user_id, user_email in users)
+    return MagicMock(
+        **{
+            "db.litellm_usertable.find_unique": AsyncMock(
+                side_effect=lambda where: next((row for row in rows if row.user_id == where["user_id"]), None)
+            ),
+            "db.litellm_usertable.find_first": AsyncMock(side_effect=lambda where: _first_email_owner(rows, where)),
+            "db.litellm_usertable.find_many": AsyncMock(
+                side_effect=lambda where: [row for row in rows if row.user_id in where["user_id"]["in"]]
+            ),
+            "get_data": AsyncMock(
+                side_effect=lambda key_val, table_name, query_type: [
+                    row for row in rows if row.user_email == key_val["user_email"]
+                ]
+            ),
+            "writer_db.litellm_teamtable.find_unique": AsyncMock(return_value=team),
+        }
+    )
+
+
+_USER_DIRECTORY: Final = (
+    ("dup-user-1", "shared@example.com"),
+    ("dup-user-2", "shared@example.com"),
+    ("solo-user", "solo@example.com"),
+    ("no-email-user", None),
+)
+
+
 @pytest.mark.asyncio
-async def test_validate_and_populate_member_user_info_both_provided_match():
-    """
-    Test _validate_and_populate_member_user_info when both user_email and user_id
-    are provided and they match the same user in the database.
-    """
-    # Create member with both user_email and user_id
-    member = Member(user_email="test@example.com", user_id="user-123", role="user")
+@pytest.mark.parametrize(
+    ("user_id", "user_email"),
+    [
+        ("dup-user-2", "shared@example.com"),
+        ("solo-user", "solo@example.com"),
+        ("brand-new-user", "unused@example.com"),
+        ("no-email-user", "first-email@example.com"),
+    ],
+    ids=["one_of_shared_email_owners", "single_owner", "new_user_with_unused_email", "existing_user_without_email"],
+)
+async def test_validate_and_populate_member_user_info_accepts_owner_of_the_email(user_id: str, user_email: str):
+    member: Final = Member(user_id=user_id, user_email=user_email, role="user")
 
-    # Mock prisma client
-    mock_prisma_client = MagicMock()
-
-    # Mock user object that matches both email and user_id
-    mock_user = MagicMock()
-    mock_user.user_id = "user-123"
-    mock_user.user_email = "test@example.com"
-
-    # Mock get_data to return single user matching email
-    mock_prisma_client.get_data = AsyncMock(return_value=[mock_user])
-
-    # Call the function
-    result = await _validate_and_populate_member_user_info(
-        member=member,
-        prisma_client=mock_prisma_client,
+    result: Final = await _validate_and_populate_member_user_info(
+        member=member, prisma_client=_prisma_with_users(*_USER_DIRECTORY)
     )
 
-    # Verify result matches input (both already provided and match)
-    assert result.user_email == "test@example.com"
-    assert result.user_id == "user-123"
+    assert (result.user_id, result.user_email) == (user_id, user_email)
 
-    # Verify get_data was called with correct parameters
-    mock_prisma_client.get_data.assert_called_once_with(
-        key_val={"user_email": "test@example.com"},
-        table_name="user",
-        query_type="find_all",
-    )
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("user_id", "user_email"),
+    [
+        ("brand-new-user", "shared@example.com"),
+        ("solo-user", "shared@example.com"),
+        ("dup-user-1", "unused@example.com"),
+        ("brand-new-user", "solo@example.com"),
+        ("no-email-user", "solo@example.com"),
+    ],
+    ids=[
+        "new_user_id_with_shared_email",
+        "existing_user_id_with_shared_email",
+        "existing_user_id_with_unused_email",
+        "new_user_id_with_taken_email",
+        "existing_user_without_email_with_taken_email",
+    ],
+)
+async def test_validate_and_populate_member_user_info_rejects_non_owner_of_the_email(
+    user_id: str, user_email: str
+):
+    member: Final = Member(user_id=user_id, user_email=user_email, role="user")
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _validate_and_populate_member_user_info(member=member, prisma_client=_prisma_with_users(*_USER_DIRECTORY))
+
+    assert exc_info.value.status_code == 400
+    assert exc_info.value.detail == {
+        "error": f"user_email '{user_email}' and user_id '{user_id}' do not belong to the same user."
+    }
 
 
 @pytest.mark.asyncio
@@ -13806,6 +13917,201 @@ async def test_team_member_add_evicts_the_cached_team_roster(monkeypatch):
 
     assert cache.get_cache(key=f"team_id:{team_id}") is None
     assert cache.get_cache(key="team_alias:roster-evict") is None
+
+
+@pytest.mark.asyncio
+async def test_team_member_add_rejects_non_admin_before_revealing_existing_members(monkeypatch):
+    from litellm.proxy._types import TeamMemberAddRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    team_row = LiteLLM_TeamTable(
+        team_id="team-private",
+        members_with_roles=[Member(user_id="dup-user-1", user_email="shared@example.com", role="user")],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", AsyncMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id")
+
+    with (
+        patch(
+            "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
+            new_callable=AsyncMock,
+            return_value=team_row,
+        ),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await team_member_add(
+            data=TeamMemberAddRequest(
+                team_id="team-private", member=Member(user_email="shared@example.com", role="user")
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="outsider"),
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "dup-user-1" not in str(exc_info.value.detail)
+
+
+_WRITE_METHODS: Final = frozenset({"create", "create_many", "upsert", "update", "update_many", "delete", "tx"})
+_MEMBER_ADD_USERS: Final = (
+    ("dup-user-1", "shared@example.com"),
+    ("dup-user-2", "shared@example.com"),
+    ("dup-user-3", "shared@example.com"),
+    ("solo-user", "solo@example.com"),
+)
+
+
+def _write_calls(prisma: MagicMock) -> tuple[str, ...]:
+    return tuple(name for name, _, _ in prisma.mock_calls if name.rsplit(".", 1)[-1] in _WRITE_METHODS)
+
+
+def _rejection(error: Exception) -> tuple[str, int | str, str]:
+    if isinstance(error, ProxyException):
+        assert (error.type, error.param) == (ProxyErrorTypes.team_member_already_in_team, "member"), error
+        return ("already_in_team", error.code, error.message)
+    assert isinstance(error, HTTPException), error
+    return ("http", error.status_code, error.detail["error"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("roster", "member", "expected"),
+    [
+        (
+            (_DUP_USER_1,),
+            Member(user_id="dup-user-2", role="user"),
+            ("already_in_team", "400", "A member of this team already uses shared@example.com."),
+        ),
+        (
+            (_DUP_USER_1, _DUP_USER_2),
+            _DUP_USER_2,
+            ("already_in_team", "400", "dup-user-2 is already a member of this team."),
+        ),
+        (
+            (),
+            Member(user_email="shared@example.com", role="user"),
+            ("http", 400, "Multiple users found with email 'shared@example.com'. Please use 'user_id' instead."),
+        ),
+        (
+            (),
+            Member(user_id="solo-user", user_email="shared@example.com", role="user"),
+            ("http", 400, "user_email 'shared@example.com' and user_id 'solo-user' do not belong to the same user."),
+        ),
+        ((), [], ("http", 400, "At least one member is required.")),
+        (
+            (),
+            [_DUP_USER_2, Member(user_id="dup-user-3", user_email="shared@example.com", role="user")],
+            ("http", 400, "Several requested users share the email shared@example.com. Add only one of them."),
+        ),
+        (
+            (),
+            [Member(user_id="dup-user-2", role="user"), Member(user_id="dup-user-3", role="user")],
+            ("http", 400, "Several requested users share the email shared@example.com. Add only one of them."),
+        ),
+        (
+            (),
+            [Member(user_id="solo-user", role="user"), Member(user_id="solo-user", role="admin")],
+            ("http", 400, "solo-user appears more than once in this request."),
+        ),
+        (
+            (),
+            [
+                Member(user_id="solo-user", user_email="solo@example.com", role="user"),
+                Member(user_email="solo@example.com", role="user"),
+            ],
+            ("http", 400, "solo-user appears more than once in this request."),
+        ),
+        (
+            (Member(user_id="solo-user", user_email="solo@example.com", role="user"),),
+            [Member(user_id="solo-user", role="user"), Member(user_email="solo@example.com", role="user")],
+            ("http", 400, "solo-user appears more than once in this request."),
+        ),
+        (
+            (Member(user_id="solo-user", role="user"),),
+            [Member(user_email="solo@example.com", role="user")],
+            ("already_in_team", "400", "All requested users are already members of this team."),
+        ),
+    ],
+    ids=[
+        "row11_user_id_whose_email_a_member_uses",
+        "row8_same_user_already_in_team_after_shared_email_member",
+        "row4_email_with_several_owners",
+        "row6_user_id_that_does_not_own_the_email",
+        "row15_empty_list",
+        "row18_two_users_sharing_an_email",
+        "row18_two_user_ids_that_resolve_to_one_email",
+        "row19_same_user_id_twice",
+        "row19_same_user_by_id_and_email_then_email",
+        "row19_member_already_in_team_by_id_and_by_email",
+        "row16_all_members_already_in_team_after_resolution",
+    ],
+)
+async def test_team_member_add_rejects_without_writing(
+    monkeypatch,
+    roster: tuple[Member, ...],
+    member: Member | list[Member],
+    expected: tuple[str, int | str, str],
+):
+    from litellm.proxy._types import TeamMemberAddRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    team_id: Final = f"team-{uuid.uuid4().hex}"
+    prisma: Final = _prisma_with_users(
+        *_MEMBER_ADD_USERS, team=LiteLLM_TeamTable(team_id=team_id, members_with_roles=list(roster))
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id")
+
+    with pytest.raises((HTTPException, ProxyException)) as exc_info:
+        await team_member_add(
+            data=TeamMemberAddRequest(team_id=team_id, member=member),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin-1"),
+        )
+
+    assert _rejection(exc_info.value) == expected
+    assert _write_calls(prisma) == ()
+
+
+@pytest.mark.asyncio
+async def test_team_member_add_self_join_cannot_claim_another_users_email(monkeypatch):
+    from litellm.proxy._types import TeamMemberAddRequest
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.team_endpoints import team_member_add
+
+    team_id: Final = f"team-{uuid.uuid4().hex}"
+    prisma: Final = _prisma_with_users(
+        ("no-email-user", None),
+        ("victim-user", "victim@example.com"),
+        team=LiteLLM_TeamTable(team_id=team_id, members_with_roles=[]),
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    monkeypatch.setattr("litellm.proxy.proxy_server.litellm_proxy_admin_name", "default_user_id")
+    monkeypatch.setattr("litellm.default_internal_user_params", {"available_teams": [team_id]})
+
+    with pytest.raises((HTTPException, ProxyException)) as exc_info:
+        await team_member_add(
+            data=TeamMemberAddRequest(
+                team_id=team_id,
+                member=Member(user_id="no-email-user", user_email="victim@example.com", role="user"),
+            ),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="no-email-user"),
+        )
+
+    assert _rejection(exc_info.value) == (
+        "http",
+        400,
+        "user_email 'victim@example.com' and user_id 'no-email-user' do not belong to the same user.",
+    )
+    assert _write_calls(prisma) == ()
 
 
 class _RecordingAuditLogger(CustomLogger):
