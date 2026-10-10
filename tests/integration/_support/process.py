@@ -365,7 +365,7 @@ def owned_gateway_image(
         ) as client:
             yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), launch.process, launch.log)
     finally:
-        _stop(launch.process)
+        _stop_launch(launch)
 
 
 def _is_ready(client: httpx.Client) -> bool:
@@ -412,7 +412,7 @@ def refused_boot_log(
         assert launch.process.returncode != 0, f"Proxy exited 0 instead of refusing to boot:\n{launch.log.read_text()}"
         return launch.log.read_text()
     finally:
-        _stop(launch.process)
+        _stop_launch(launch)
 
 
 _UPSTREAM_READY_SECONDS: Final = 60

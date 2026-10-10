@@ -17,12 +17,14 @@ from pathlib import Path
 from queue import SimpleQueue
 from threading import Event
 from types import FrameType
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import psutil
 import psycopg
 import pytest
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from tests.integration._support import process as process_support
 from tests.integration._support.async_server import LoopbackServer
@@ -36,6 +38,13 @@ from tests.integration._support.database_relay import (
     held_statement_relay,
 )
 from tests.integration._support.runtime import configure_executor
+
+
+class ExitRecord(TypedDict):
+    root_pid: ReadOnly[int]
+    exit_after_stop: ReadOnly[int | None]
+    exception_at_record: ReadOnly[str | None]
+
 
 Relay = DatabaseRelay | DroppedConnectionRelay | HeldStatementRelay
 RelayFactory = Callable[[str, bytes], AbstractContextManager[tuple[Relay, str]]]
@@ -342,3 +351,29 @@ def test_partitioned_collection_reuses_unparametrized_fixtures_and_executes_ever
         f"shared {index}" for index in range(4)
     ]
     assert sorted(event for event in observed if event.startswith("plain ")) == [f"plain {index}" for index in range(8)]
+
+
+@pytest.mark.parametrize("entrypoint", ("gateway", "refused"))
+def test_owned_entrypoints_record_exit_and_reap_the_process_group(
+    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entrypoint: Literal["gateway", "refused"]
+) -> None:
+    monkeypatch.setenv("INTEGRATION_RESULTS_DIR", str(tmp_path))
+    config: Final = tmp_path / "config.yaml"
+    if entrypoint == "refused":
+        config.write_text("model_list: [\n")
+        refused: Final = process_support.refused_boot_log(gateway, tmp_path, {}, config=config)
+        assert refused
+    else:
+        config.write_text(
+            "model_list: []\ngeneral_settings:\n  master_key: os.environ/LITELLM_MASTER_KEY\n"
+            "  database_url: os.environ/DATABASE_URL\n"
+        )
+        with process_support.owned_gateway_image(gateway, tmp_path, {}, config=config, workers=1) as owned:
+            response: Final = owned.gateway.request("GET", "/health/readiness")
+            assert response.status_code == 200, response.text
+    records: Final = tuple(tmp_path.glob("*.exit.json"))
+    assert len(records) == 1
+    record: Final = TypeAdapter(ExitRecord).validate_json(records[0].read_text())
+    assert record["exit_after_stop"] is not None
+    assert record["exception_at_record"] is None
+    assert not process_support.group_members(record["root_pid"])
