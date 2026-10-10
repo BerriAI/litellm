@@ -1186,9 +1186,19 @@ def test_custom_redis_cache_with_key(monkeypatch: pytest.MonkeyPatch) -> None:
     }
 
     first: Final = completion(**request, mock_response="stored")
-    second: Final = completion(**request, mock_response="not stored")
+    second: Final = completion(
+        **{**request, "messages": [{"role": "user", "content": "different prompt, same key"}]},
+        mock_response="not stored",
+    )
+    uncached: Final = completion(
+        **{**request, "cache_key": f"other-{uuid.uuid4().hex}"},
+        mock_response="fresh",
+    )
 
-    assert first.id == second.id
+    assert second.id == first.id
+    assert second.choices[0].message.content == "stored"
+    assert uncached.id != first.id
+    assert uncached.choices[0].message.content == "fresh"
 
 
 @pytest.mark.asyncio

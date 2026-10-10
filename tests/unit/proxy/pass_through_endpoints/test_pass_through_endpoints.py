@@ -3008,6 +3008,31 @@ async def test_config_pass_through_without_configured_headers_preserves_no_autho
 
 
 @pytest.mark.asyncio
+async def test_config_pass_through_forwards_configured_authorization_header(tmp_path, monkeypatch):
+    proxy = await _boot_db_backed_proxy(
+        tmp_path,
+        monkeypatch,
+        config_pass_through_endpoints=[
+            {
+                "path": "/configured-headers",
+                "target": "http://upstream.test/api",
+                "headers": {"Authorization": "Bearer configured-token"},
+                "auth": False,
+            }
+        ],
+        db_pass_through_endpoints=[],
+    )
+    await _run_db_sync_cycle(proxy)
+
+    response, upstream_requests = await _send_through_proxy("/configured-headers", {})
+
+    assert response.status_code == 200
+    assert len(upstream_requests) == 1
+    assert str(upstream_requests[0].url) == "http://upstream.test/api"
+    assert upstream_requests[0].headers["authorization"] == "Bearer configured-token"
+
+
+@pytest.mark.asyncio
 async def test_langfuse_pass_through_headers_resolve_environment_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "public-key")
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "secret-key")

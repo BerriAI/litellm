@@ -608,9 +608,15 @@ async def test_acompletion_caching_with_ttl_on_router(redis_response_cache: Cach
     messages: Final = [{"role": "user", "content": f"router ttl {uuid.uuid4().hex}"}]
 
     first: Final = await router.acompletion(model="ttl-model", messages=messages, ttl=0)
+    await _drain_cache_writes()
     second: Final = await router.acompletion(model="ttl-model", messages=messages, ttl=0)
+    await _drain_cache_writes()
+    stored: Final = await router.acompletion(model="ttl-model", messages=messages, ttl=60)
+    await _drain_cache_writes()
+    replayed: Final = await router.acompletion(model="ttl-model", messages=messages, ttl=60)
 
     assert second.id != first.id
+    assert replayed.id == stored.id
 
 
 @pytest.mark.asyncio
