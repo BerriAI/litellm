@@ -408,7 +408,9 @@ class Cache:
         )
         return "".join(f"{field}: {value}" for field, value in scope_values if value is not None)
 
-    def get_cache_key(self, **kwargs: object) -> str | None:  # kwargs-ok: dynamic request parameters are part of the cache key
+    def get_cache_key(
+        self, **kwargs: object
+    ) -> str | None:  # kwargs-ok: dynamic request parameters are part of the cache key
         """
         Get the cache key for the given arguments.
 
