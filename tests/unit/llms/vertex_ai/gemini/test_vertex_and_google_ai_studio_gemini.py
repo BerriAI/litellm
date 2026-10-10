@@ -2,7 +2,7 @@ import asyncio, importlib, os, uuid
 import json
 import re
 from copy import deepcopy
-from typing import Final, List, cast, get_args
+from typing import Final, List, Literal, cast, get_args
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -2510,7 +2510,7 @@ def test_gemini_3_reasoning_effort_maps_to_thinking_level(model: str):
             "thinkingLevel": effort,
             "includeThoughts": True,
         }
-        assert mapped["temperature"] == 1.0
+        assert "temperature" not in mapped
         assert "thinkingBudget" not in mapped["thinkingConfig"]
 
 
@@ -2945,28 +2945,58 @@ def test_reasoning_effort_dict_format_gemini_3():
     assert "thinkingConfig" not in result
 
 
-def test_temperature_default_for_gemini_3():
-    """Test that temperature defaults to 1.0 for Gemini 3+ models when not specified"""
+@pytest.mark.parametrize("model", ["gemini-3-pro-preview", "gemini-flash-latest"])
+@pytest.mark.parametrize("config_cls", ["vertex", "studio"])
+def test_gemini_3_omits_temperature_when_not_specified(model: str, config_cls: Literal["vertex", "studio"]) -> None:
+    """Gemini 3+ requests must not gain a temperature the caller did not send"""
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
     )
 
-    v = VertexGeminiConfig()
-    model = "gemini-3-pro-preview"
-    optional_params = {}
-
-    # No temperature specified
-    non_default_params = {}
-    result = v.map_openai_params(
-        non_default_params=non_default_params,
-        optional_params=optional_params,
+    cfg: Final = VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
+    result: Final = cfg.map_openai_params(
+        non_default_params={},
+        optional_params={},
         model=model,
         drop_params=False,
     )
 
-    # Should default to 1.0
-    assert "temperature" in result
-    assert result["temperature"] == 1.0
+    assert "temperature" not in result
+
+
+@pytest.mark.parametrize("config_cls", ["vertex", "studio"])
+def test_gemini_3_explicit_temperature_is_still_forwarded(config_cls: Literal["vertex", "studio"]) -> None:
+    """An explicitly supplied temperature is still forwarded"""
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
+        VertexGeminiConfig,
+    )
+
+    cfg: Final = VertexGeminiConfig() if config_cls == "vertex" else GoogleAIStudioGeminiConfig()
+    result: Final = cfg.map_openai_params(
+        non_default_params={"temperature": 0.4},
+        optional_params={},
+        model="gemini-3-pro-preview",
+        drop_params=False,
+    )
+
+    assert result["temperature"] == 0.4
+
+
+@pytest.mark.parametrize("custom_llm_provider", ["gemini", "vertex_ai"])
+def test_get_optional_params_gemini_3_has_no_default_temperature(
+    custom_llm_provider: Literal["gemini", "vertex_ai"],
+) -> None:
+    """Neither the gemini nor the vertex_ai route injects a temperature"""
+    from litellm.utils import get_optional_params
+
+    optional_params: Final = get_optional_params(
+        model="gemini-3-pro-preview",
+        custom_llm_provider=custom_llm_provider,
+        reasoning_effort="medium",
+    )
+
+    assert "temperature" not in optional_params
+    assert optional_params["thinkingConfig"]["thinkingLevel"] == "medium"
 
 
 def test_media_resolution_from_detail_parameter():
@@ -3216,8 +3246,7 @@ def test_gemini_3_image_models_no_thinking_config():
 
     # Should NOT have thinkingConfig automatically added
     assert "thinkingConfig" not in result
-    # But should still get temperature=1.0 for Gemini 3
-    assert result["temperature"] == 1.0
+    assert "temperature" not in result
 
 
 def test_gemini_3_text_models_get_thinking_config():
@@ -3245,7 +3274,7 @@ def test_gemini_3_text_models_get_thinking_config():
 
     # Should NOT have thinkingConfig automatically added when user provides no reasoning_effort
     assert "thinkingConfig" not in result
-    assert result["temperature"] == 1.0
+    assert "temperature" not in result
 
 
 def test_gemini_image_models_excluded_from_thinking():
