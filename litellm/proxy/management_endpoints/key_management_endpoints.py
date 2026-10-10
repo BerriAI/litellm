@@ -1140,6 +1140,8 @@ _BUDGET_NUMERIC_KEYS = frozenset(
 def _enforce_upperbound_key_params(
     data: GenerateKeyRequest | UpdateKeyRequest,
     fill_defaults: bool = True,
+    *,
+    user_api_key_dict: UserAPIKeyAuth,
 ) -> None:
     """
     Enforce upperbound limits on key parameters.
@@ -1163,14 +1165,19 @@ def _enforce_upperbound_key_params(
     if litellm.upperbound_key_generate_params is None:
         return
 
+    exempt: Final = (
+        litellm.upperbound_key_generate_params_exempt_proxy_admins is True
+        and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+    )
+
     for elem in data:
         key, value = elem
         upperbound_value = getattr(litellm.upperbound_key_generate_params, key, None)
         if upperbound_value is not None:
             if value is None:
-                if fill_defaults:
+                if fill_defaults and not (exempt and key in data.model_fields_set):
                     setattr(data, key, upperbound_value)
-            else:
+            elif not exempt:
                 if key in [
                     "max_budget",
                     "max_parallel_requests",
@@ -1291,7 +1298,7 @@ async def _common_key_generation_helper(
                 setattr(data, key, litellm.default_key_generate_params.get(key, {}))
 
     # check if user set upperbound key/generate params on config.yaml
-    _enforce_upperbound_key_params(data, fill_defaults=True)
+    _enforce_upperbound_key_params(data, user_api_key_dict=user_api_key_dict, fill_defaults=True)
 
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
     # cannot grant a key a higher budget than their own authority.
@@ -2816,7 +2823,7 @@ async def _process_single_key_update(
             raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=message)
 
     # Enforce upperbound key params on update (don't fill defaults)
-    _enforce_upperbound_key_params(update_key_request, fill_defaults=False)
+    _enforce_upperbound_key_params(update_key_request, user_api_key_dict=user_api_key_dict, fill_defaults=False)
 
     # Get team object and check team limits if team_id is provided
     team_obj: LiteLLM_TeamTableCachedObj | None = None
@@ -3526,7 +3533,7 @@ async def update_key_fn(
         await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=data)
 
         # Enforce upperbound key params on update (don't fill defaults)
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, user_api_key_dict=user_api_key_dict, fill_defaults=False)
         non_default_values: Final = await prepare_key_update_data(
             data=data, existing_key_row=existing_key_row, prisma_client=prisma_client, llm_router=llm_router
         )
@@ -5663,7 +5670,7 @@ async def _execute_virtual_key_regeneration(
         if update_request is not None:
             await _enforce_custom_key_update_policy(hook=_custom_key_update_hook(proxy_server), data=update_request)
         # Enforce upperbound key params on regenerate (don't fill defaults)
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, user_api_key_dict=user_api_key_dict, fill_defaults=False)
         non_default_values = await prepare_key_update_data(
             data=data, existing_key_row=key_in_db, prisma_client=prisma_client, llm_router=llm_router
         )

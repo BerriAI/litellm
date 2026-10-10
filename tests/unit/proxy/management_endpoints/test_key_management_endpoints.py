@@ -12606,7 +12606,7 @@ def test_enforce_upperbound_rejects_over_limit_on_generate(monkeypatch):
     )
     data = GenerateKeyRequest(tpm_limit=5000)
     with pytest.raises(HTTPException) as exc_info:
-        _enforce_upperbound_key_params(data, fill_defaults=True)
+        _enforce_upperbound_key_params(data, user_api_key_dict=UserAPIKeyAuth(), fill_defaults=True)
     assert exc_info.value.status_code == 400
     assert "tpm_limit" in str(exc_info.value.detail)
 
@@ -12626,7 +12626,7 @@ def test_enforce_upperbound_fills_defaults_on_generate(monkeypatch):
                 ),
     )
     data = GenerateKeyRequest()  # tpm_limit=None, rpm_limit=None
-    _enforce_upperbound_key_params(data, fill_defaults=True)
+    _enforce_upperbound_key_params(data, user_api_key_dict=UserAPIKeyAuth(), fill_defaults=True)
     assert data.tpm_limit == 1000
     assert data.rpm_limit == 100
 
@@ -12646,7 +12646,7 @@ def test_enforce_upperbound_skips_none_on_update(monkeypatch):
                 ),
     )
     data = UpdateKeyRequest(key="sk-test")  # tpm_limit=None, rpm_limit=None
-    _enforce_upperbound_key_params(data, fill_defaults=False)
+    _enforce_upperbound_key_params(data, user_api_key_dict=UserAPIKeyAuth(), fill_defaults=False)
     assert data.tpm_limit is None  # should NOT be filled
     assert data.rpm_limit is None  # should NOT be filled
 
@@ -12667,7 +12667,7 @@ def test_enforce_upperbound_rejects_over_limit_on_update(monkeypatch):
     )
     data = UpdateKeyRequest(key="sk-test", tpm_limit=5000)
     with pytest.raises(HTTPException) as exc_info:
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, user_api_key_dict=UserAPIKeyAuth(), fill_defaults=False)
     assert exc_info.value.status_code == 400
     assert "tpm_limit" in str(exc_info.value.detail)
 
@@ -12689,7 +12689,7 @@ def test_enforce_upperbound_allows_within_limit_on_update(monkeypatch):
     data = UpdateKeyRequest(
         key="sk-test", tpm_limit=500, rpm_limit=50, max_budget=5.0
     )
-    _enforce_upperbound_key_params(data, fill_defaults=False)
+    _enforce_upperbound_key_params(data, user_api_key_dict=UserAPIKeyAuth(), fill_defaults=False)
     # Should not raise
     assert data.tpm_limit == 500
     assert data.rpm_limit == 50
@@ -12712,7 +12712,7 @@ def test_enforce_upperbound_duration_over_limit(monkeypatch):
     )
     data = UpdateKeyRequest(key="sk-test", duration="30d")
     with pytest.raises(HTTPException) as exc_info:
-        _enforce_upperbound_key_params(data, fill_defaults=False)
+        _enforce_upperbound_key_params(data, user_api_key_dict=UserAPIKeyAuth(), fill_defaults=False)
     assert exc_info.value.status_code == 400
     assert "duration" in str(exc_info.value.detail)
 
@@ -12723,7 +12723,7 @@ def test_enforce_upperbound_no_config_is_noop(monkeypatch):
 
     monkeypatch.setattr(litellm, "upperbound_key_generate_params", None)
     data = UpdateKeyRequest(key="sk-test", tpm_limit=999999)
-    _enforce_upperbound_key_params(data, fill_defaults=False)
+    _enforce_upperbound_key_params(data, user_api_key_dict=UserAPIKeyAuth(), fill_defaults=False)
     # Should not raise — no enforcement configured
     assert data.tpm_limit == 999999
 
@@ -19323,11 +19323,13 @@ def _wire_key_generation_prisma(monkeypatch):
     return mock_prisma_client.insert_data
 
 
-async def _generate_key_and_get_persisted_row(data: GenerateKeyRequest, mock_insert_data):
+async def _generate_key_and_get_persisted_row(
+    data: GenerateKeyRequest, mock_insert_data: AsyncMock, role: LitellmUserRoles = LitellmUserRoles.PROXY_ADMIN
+):
     await _common_key_generation_helper(
         data=data,
         user_api_key_dict=UserAPIKeyAuth(
-            user_role=LitellmUserRoles.PROXY_ADMIN,
+            user_role=role,
             api_key="sk-9876",
             user_id="1234",
         ),
@@ -21248,3 +21250,261 @@ async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
         "guardrail": "bedrock",
         "aws_secret_access_key": "aws-secret",
     }
+
+
+def _configure_exempt_proxy_admins(monkeypatch: pytest.MonkeyPatch, flag: object) -> None:
+    from litellm.types.proxy.management_endpoints.ui_sso import (
+        LiteLLM_UpperboundKeyGenerateParams,
+    )
+
+    monkeypatch.setattr(litellm, "default_key_generate_params", None)
+    monkeypatch.setattr(
+        litellm,
+        "upperbound_key_generate_params",
+        LiteLLM_UpperboundKeyGenerateParams(tpm_limit=1000, duration="7d"),
+    )
+    monkeypatch.setattr(litellm, "upperbound_key_generate_params_exempt_proxy_admins", flag)
+
+
+@pytest.mark.asyncio
+async def test_key_generate_exempt_flag_still_bounds_internal_user(monkeypatch: pytest.MonkeyPatch):
+    _configure_exempt_proxy_admins(monkeypatch, True)
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _generate_key_and_get_persisted_row(
+            GenerateKeyRequest(tpm_limit=5000), mock_insert_data, role=LitellmUserRoles.INTERNAL_USER
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "tpm_limit" in str(exc_info.value.detail)
+    mock_insert_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_key_generate_exempt_flag_lets_proxy_admin_exceed_bound(monkeypatch: pytest.MonkeyPatch):
+    _configure_exempt_proxy_admins(monkeypatch, True)
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(tpm_limit=5000, duration="365d"), mock_insert_data
+    )
+
+    assert key_row["tpm_limit"] == 5000
+    assert key_row["expires"] is not None
+
+
+@pytest.mark.asyncio
+async def test_key_generate_exempt_flag_proxy_admin_omitted_duration_gets_default_expiry(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _configure_exempt_proxy_admins(monkeypatch, True)
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(GenerateKeyRequest(), mock_insert_data)
+
+    assert key_row["expires"] is not None
+    assert key_row["tpm_limit"] == 1000
+
+
+@pytest.mark.asyncio
+async def test_key_generate_exempt_flag_proxy_admin_explicit_null_duration_never_expires(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    _configure_exempt_proxy_admins(monkeypatch, True)
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    key_row: Final = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(duration=None, tpm_limit=None), mock_insert_data
+    )
+
+    assert key_row["expires"] is None
+    assert key_row["tpm_limit"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("flag", ["true", "false", 1, None])
+async def test_key_generate_non_boolean_exempt_flag_exempts_nobody(monkeypatch: pytest.MonkeyPatch, flag: object):
+    _configure_exempt_proxy_admins(monkeypatch, flag)
+    mock_insert_data: Final = _wire_key_generation_prisma(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _generate_key_and_get_persisted_row(GenerateKeyRequest(tpm_limit=5000), mock_insert_data)
+    assert exc_info.value.status_code == 400
+
+    key_row: Final = await _generate_key_and_get_persisted_row(
+        GenerateKeyRequest(duration=None, tpm_limit=None), mock_insert_data
+    )
+    assert key_row["tpm_limit"] == 1000
+    assert key_row["expires"] is not None
+
+
+@pytest.mark.asyncio
+async def test_update_key_exempt_flag_still_bounds_internal_user(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    _configure_exempt_proxy_admins(monkeypatch, True)
+    hashed_token: Final = "hashed-token-exempt-test"
+    key_in_db: Final = LiteLLM_VerificationToken(
+        token=hashed_token, user_id="internal-user", created_by="internal-user"
+    )
+    mock_prisma_client: Final = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_in_db)
+    mock_prisma_client.update_data = AsyncMock()
+    _setup_update_key_mocks(monkeypatch, mock_prisma_client)
+
+    with pytest.raises(ProxyException) as exc_info:
+        await update_key_fn(
+            request=MagicMock(),
+            data=UpdateKeyRequest(key=hashed_token, tpm_limit=5000),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user", user_id="internal-user"
+            ),
+            litellm_changed_by=None,
+        )
+
+    assert str(exc_info.value.code) == "400"
+    assert "tpm_limit" in str(exc_info.value.message)
+    mock_prisma_client.update_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_update_key_exempt_flag_lets_proxy_admin_exceed_bound(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.management_endpoints.key_management_endpoints import update_key_fn
+
+    _configure_exempt_proxy_admins(monkeypatch, True)
+    hashed_token: Final = "hashed-token-exempt-test"
+    key_in_db: Final = LiteLLM_VerificationToken(token=hashed_token, user_id="test-user")
+    mock_prisma_client: Final = AsyncMock()
+    mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=key_in_db)
+    mock_prisma_client.update_data = AsyncMock(return_value={"data": {"tpm_limit": 5000}})
+    _setup_update_key_mocks(monkeypatch, mock_prisma_client)
+
+    await update_key_fn(
+        request=MagicMock(),
+        data=UpdateKeyRequest(key=hashed_token, tpm_limit=5000, duration="365d"),
+        user_api_key_dict=UserAPIKeyAuth(
+            user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-user"
+        ),
+        litellm_changed_by=None,
+    )
+
+    sent: Final = mock_prisma_client.update_data.call_args.kwargs["data"]
+    assert sent["tpm_limit"] == 5000
+    assert sent["expires"] is not None
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_exempt_flag_still_bounds_internal_user(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    _configure_exempt_proxy_admins(monkeypatch, True)
+    mock_prisma_client: Final = _make_regenerate_mock_prisma()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _execute_virtual_key_regeneration(
+            prisma_client=mock_prisma_client,
+            key_in_db=_make_regenerate_existing_key(),
+            hashed_api_key="abc123",
+            key="abc123",
+            data=RegenerateKeyRequest(duration="30d"),
+            user_api_key_dict=UserAPIKeyAuth(
+                user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user", user_id="user-1"
+            ),
+            litellm_changed_by=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "duration" in str(exc_info.value.detail)
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_exempt_flag_lets_proxy_admin_exceed_bound(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _execute_virtual_key_regeneration,
+    )
+
+    _configure_exempt_proxy_admins(monkeypatch, True)
+    mock_prisma_client: Final = _make_regenerate_mock_prisma()
+
+    await _execute_virtual_key_regeneration(
+        prisma_client=mock_prisma_client,
+        key_in_db=_make_regenerate_existing_key(),
+        hashed_api_key="abc123",
+        key="abc123",
+        data=RegenerateKeyRequest(duration="30d"),
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="admin-1"),
+        litellm_changed_by=None,
+        user_api_key_cache=MagicMock(),
+        proxy_logging_obj=MagicMock(),
+    )
+
+    assert mock_prisma_client.db.litellm_verificationtoken.update.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_key_exempt_flag_still_bounds_internal_user(monkeypatch: pytest.MonkeyPatch):
+    _configure_exempt_proxy_admins(monkeypatch, True)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _process_single_key_update(
+            update_key_request=UpdateKeyRequest(key="tok", tpm_limit=5000),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-user", user_id="u"),
+            litellm_changed_by=None,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            llm_router=None,
+            existing_key_row=LiteLLM_VerificationToken(token="tok", user_id="u", team_id="team-1"),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "tpm_limit" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_bulk_update_key_exempt_flag_lets_proxy_admin_past_bound(monkeypatch: pytest.MonkeyPatch):
+    _configure_exempt_proxy_admins(monkeypatch, True)
+    received: list[CustomKeyPolicyRequest] = []
+
+    async def stop_after_recording(policy_request: CustomKeyPolicyRequest) -> dict[str, object]:
+        received.append(policy_request)
+        return {"decision": False, "message": "stopped before the write"}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _process_single_key_update(
+            update_key_request=UpdateKeyRequest(key="tok", tpm_limit=5000, duration="365d"),
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin", user_id="a"),
+            litellm_changed_by=None,
+            prisma_client=None,
+            user_api_key_cache=MagicMock(),
+            proxy_logging_obj=MagicMock(),
+            llm_router=None,
+            existing_key_row=LiteLLM_VerificationToken(token="tok", user_id="u", team_id="team-1"),
+            user_custom_key_policy=stop_after_recording,
+        )
+
+    assert exc_info.value.status_code == 403
+    assert [policy_request.effective_key.tpm_limit for policy_request in received] == [5000]
+    _assert_expires_in(received[0].effective_key, "365d")
+
+
+def test_enforce_upperbound_exempt_flag_still_rejects_nan_for_proxy_admin(monkeypatch: pytest.MonkeyPatch):
+    _configure_exempt_proxy_admins(monkeypatch, True)
+
+    with pytest.raises(HTTPException) as exc_info:
+        _enforce_upperbound_key_params(
+            UpdateKeyRequest(key="k", max_budget=float("nan")),
+            fill_defaults=False,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-admin"),
+        )
+
+    assert exc_info.value.status_code == 400
+    assert "max_budget must be a finite number" in str(exc_info.value.detail)
