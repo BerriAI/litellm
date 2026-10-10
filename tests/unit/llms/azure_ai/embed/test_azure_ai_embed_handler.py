@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 import respx
@@ -88,6 +90,7 @@ def test_azure_ai_cohere_image_embedding_calls_image_route():
         api_key="fake-key",
     )
 
-    assert route.called
-    assert response.data is not None
+    assert json.loads(route.calls.last.request.read()) == {"input": [{"image": "data:image/png;base64,aGVsbG8="}]}
+    assert set(dict(response).keys()) == {"object", "data", "model", "usage"}
     assert response.data[0]["embedding"] == [0.1, 0.2]
+    assert (response.usage.prompt_tokens, response.usage.total_tokens) == (2, 2)

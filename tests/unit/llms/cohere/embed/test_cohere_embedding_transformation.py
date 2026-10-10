@@ -2,6 +2,7 @@ from datetime import datetime, timezone
 from typing import Final
 
 import httpx
+import pytest
 import respx
 
 import litellm
@@ -115,7 +116,6 @@ def test_cohere_embedding_usage_includes_text_and_image_token_details():
     )
 
     assert usage.prompt_tokens == 7
-    assert usage.prompt_tokens_details is not None
     assert (usage.prompt_tokens_details.text_tokens, usage.prompt_tokens_details.image_tokens) == (5, 2)
 
 
@@ -130,20 +130,25 @@ def test_cohere_embedding_error_class_preserves_status_and_message():
     assert "invalid embedding request" in str(error)
 
 
-@respx.mock
-def test_embedding_with_extra_headers_are_sent_to_cohere():
-    route: Final = respx.post("https://api.cohere.ai/v2/embed").mock(
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_embedding_with_extra_headers_are_sent_to_cohere(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, sync_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.cohere.ai/v2/embed").mock(
         return_value=httpx.Response(
             200,
             json={"embeddings": {"float": [[0.1, 0.2]]}, "meta": {"billed_units": {"input_tokens": 1}}},
         )
     )
+    request: Final = {
+        "model": "cohere/embed-english-v3.0",
+        "input": ["hello"],
+        "api_key": "test-key",
+        "extra_headers": {"x-request-id": "test-request"},
+    }
 
-    litellm.embedding(
-        model="cohere/embed-english-v3.0",
-        input=["hello"],
-        api_key="test-key",
-        extra_headers={"x-request-id": "test-request"},
-    )
+    response: Final = litellm.embedding(**request) if sync_mode else await litellm.aembedding(**request)
 
     assert route.calls.last.request.headers["x-request-id"] == "test-request"
+    assert response.data[0]["embedding"] == [0.1, 0.2]

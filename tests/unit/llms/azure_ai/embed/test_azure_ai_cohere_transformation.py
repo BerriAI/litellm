@@ -18,7 +18,7 @@ def test_azure_ai_cohere_request_splits_images_from_text_and_keeps_order():
     assert image_request == {
         "input": [{"image": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAAB"}]
     }
-    assert text_request["input"] == ["describe this image"]
+    assert text_request == {"input": ["describe this image"], "model": "Cohere-embed-v3-multilingual"}
     assert image_indexes == [1]
 
 

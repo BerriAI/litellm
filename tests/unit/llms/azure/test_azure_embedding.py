@@ -118,13 +118,19 @@ def test_azure_embedding_forwards_optional_args_in_the_request_body():
         input=["hello"],
         api_base="https://azure-optional-args.openai.azure.com",
         api_version="2023-05-15",
-        api_key="test-key",
         azure_ad_token="test-token",
+        encoding_format="float",
     )
 
-    request_body = json.loads(route.calls.last.request.read())
+    request = route.calls.last.request
+    assert json.loads(request.read()) == {
+        "model": "text-embedding-ada-002",
+        "input": ["hello"],
+        "encoding_format": "float",
+        "azure_ad_token": "test-token",
+    }
+    assert request.headers["authorization"] == "Bearer test-token"
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
-    assert request_body["azure_ad_token"] == "test-token"
 
 
 @pytest.mark.asyncio
@@ -155,7 +161,7 @@ async def test_aembedding_azure_returns_an_azure_embedding_response(
     )
 
     assert response._hidden_params["custom_llm_provider"] == "azure"
-    assert isinstance(response.usage, litellm.Usage)
+    assert (response.usage.prompt_tokens, response.usage.total_tokens) == (2, 2)
     assert response.data[0]["embedding"] == [0.4, 0.5, 0.6]
     assert len(route.calls) == 1
 

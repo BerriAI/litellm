@@ -1170,14 +1170,11 @@ def test_converse_streaming_tool_call_arguments_are_valid_json(
             ),
             (
                 "contentBlockDelta",
-                {
-                    "contentBlockIndex": 0,
-                    "delta": {
-                        "toolUse": {
-                            "input": '{"location":"Boston","unit":"fahrenheit"}',
-                        }
-                    },
-                },
+                {"contentBlockIndex": 0, "delta": {"toolUse": {"input": '{"location":"Bos'}}},
+            ),
+            (
+                "contentBlockDelta",
+                {"contentBlockIndex": 0, "delta": {"toolUse": {"input": 'ton","unit":"fahrenheit"}'}}},
             ),
             ("contentBlockStop", {"contentBlockIndex": 0}),
             ("messageStop", {"stopReason": "tool_use"}),
@@ -1221,7 +1218,6 @@ def test_converse_streaming_tool_call_arguments_are_valid_json(
     )
     chunks: Final = tuple(stream)
     assembled: Final = litellm.stream_chunk_builder(chunks=list(chunks), messages=messages)
-    assert assembled is not None
     assert assembled.choices[0].message.tool_calls[0].function.name == "get_current_weather"
     assert json.loads(assembled.choices[0].message.tool_calls[0].function.arguments) == {
         "location": "Boston",
