@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-http.workspace = true
 futures-util.workspace = true
 litellm-cache.workspace = true
 qdrant-client = { workspace = true, features = ["serde"] }
@@ -17,6 +18,7 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
 futures-executor = "0.3"
 litellm-cache-testing.workspace = true
 rstest.workspace = true

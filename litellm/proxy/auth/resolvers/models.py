@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from enum import Enum
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import ConfigDict, Field
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.auth_method import AuthMethod
 from litellm.proxy.auth.network import NetworkContext
 from litellm.proxy.auth.roles import Role, TeamRole
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class PrincipalType(str, Enum):
@@ -15,7 +16,7 @@ class PrincipalType(str, Enum):
     SERVICE_ACCOUNT = "service_account"
 
 
-class UserIdentity(BaseModel):
+class UserIdentity(LiteLLMBaseModel):
     id: str
     external_id: str | None = None
     user_name: str | None = None
@@ -23,32 +24,32 @@ class UserIdentity(BaseModel):
     display_name: str | None = None
 
 
-class OrganizationIdentity(BaseModel):
+class OrganizationIdentity(LiteLLMBaseModel):
     id: str
     name: str | None = None
 
 
-class TeamIdentity(BaseModel):
+class TeamIdentity(LiteLLMBaseModel):
     id: str
     name: str | None = None
     role: TeamRole = TeamRole.MEMBER
 
 
-class ProjectIdentity(BaseModel):
+class ProjectIdentity(LiteLLMBaseModel):
     id: str
     name: str | None = None
 
 
-class EndUserIdentity(BaseModel):
+class EndUserIdentity(LiteLLMBaseModel):
     id: str
 
 
-class CredentialRef(BaseModel):
+class CredentialRef(LiteLLMBaseModel):
     key_id: str | None = None
     token_id: str | None = None
 
 
-class Principal(BaseModel):
+class Principal(LiteLLMBaseModel):
     """Normalized caller identity, resolved once per request at the auth seam.
 
     Frozen and constructed fresh per request, never cached or shared. The identity

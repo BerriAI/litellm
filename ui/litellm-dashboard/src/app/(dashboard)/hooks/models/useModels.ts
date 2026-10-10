@@ -1,4 +1,5 @@
 import { useQuery, useInfiniteQuery, useQueryClient, UseQueryResult } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { createQueryKeys } from "../common/queryKeysFactory";
 import { modelInfoCall, modelHubCall, modelAvailableCall } from "@/components/networking";
 import useAuthorized from "../useAuthorized";
@@ -29,6 +30,7 @@ const allProxyModelsKeys = createQueryKeys("allProxyModels");
 const selectedTeamModelsKeys = createQueryKeys("selectedTeamModels");
 const infiniteModelKeys = createQueryKeys("infiniteModels");
 const userModelsKeys = createQueryKeys("userModels");
+const modelAccessGroupNameKeys = createQueryKeys("modelAccessGroupNames");
 
 export const useModelsInfo = (
   page: number = 1,
@@ -99,6 +101,7 @@ export interface AutoRouterDeployment extends AutoRouterCandidateDeployment {
   litellm_params?: {
     model?: string | null;
     base_model?: string | null;
+    custom_llm_provider?: string | null;
     complexity_router_config?: unknown;
     complexity_router_default_model?: string | null;
     auto_router_config?: unknown;
@@ -262,6 +265,31 @@ export const useUserModels = (): UseQueryResult<string[]> => {
     },
     enabled: Boolean(accessToken && userId && userRole),
   });
+};
+
+export const useModelAccessGroupNames = (): ReadonlySet<string> | undefined => {
+  const { accessToken, userId, userRole } = useAuthorized();
+  const { data, isError } = useQuery<string[]>({
+    queryKey: modelAccessGroupNameKeys.list({}),
+    queryFn: async () => {
+      const response: AllProxyModelsResponse = await modelAvailableCall(
+        accessToken!,
+        userId!,
+        userRole!,
+        false,
+        null,
+        true,
+        true,
+      );
+      return response.data.map((model) => model.id);
+    },
+    enabled: Boolean(accessToken && userId && userRole),
+  });
+  return useMemo(() => {
+    if (data !== undefined) return new Set(data);
+    if (isError) return new Set<string>();
+    return undefined;
+  }, [data, isError]);
 };
 
 export const useSelectedTeamModels = (teamID: string | null) => {

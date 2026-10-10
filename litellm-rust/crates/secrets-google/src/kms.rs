@@ -36,12 +36,10 @@ impl GoogleKms {
 }
 
 pub fn validate_environment(environment: &dyn Lookup) -> Result<(), Error> {
-    for key in [GOOGLE_APPLICATION_CREDENTIALS, GOOGLE_KMS_RESOURCE_NAME] {
-        if environment.get(key).is_none() {
-            return Err(Error::MissingEnvironment(key));
-        }
-    }
-    Ok(())
+    environment
+        .get(GOOGLE_KMS_RESOURCE_NAME)
+        .map(|_| ())
+        .ok_or(Error::MissingEnvironment(GOOGLE_KMS_RESOURCE_NAME))
 }
 
 pub async fn load_google_kms(
@@ -52,13 +50,16 @@ pub async fn load_google_kms(
         return Ok(None);
     }
     validate_environment(environment.as_ref())?;
-    let credentials = environment
-        .get(GOOGLE_APPLICATION_CREDENTIALS)
-        .ok_or(Error::MissingEnvironment(GOOGLE_APPLICATION_CREDENTIALS))?;
     let resource_name = environment
         .get(GOOGLE_KMS_RESOURCE_NAME)
         .ok_or(Error::MissingEnvironment(GOOGLE_KMS_RESOURCE_NAME))?;
-    let credentials = auth::credentials(None, Some(SecretValue::new(credentials)), environment);
+    let credentials = auth::credentials(
+        None,
+        environment
+            .get(GOOGLE_APPLICATION_CREDENTIALS)
+            .map(SecretValue::new),
+        environment,
+    );
     let client = KeyManagementService::builder()
         .with_credentials(credentials)
         .build()

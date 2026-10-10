@@ -5,6 +5,8 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
+from litellm.litellm_core_utils.request_timeout_resolver import get_configured_request_timeout
+
 DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS: Final = 600.0
 
 _SECONDS: Final = TypeAdapter(float)
@@ -48,8 +50,8 @@ def resolve_llm_passthrough_timeout(
     Anthropic /v1/messages).
 
     Non-streaming precedence: kwargs timeout/request_timeout -> litellm_params
-    timeout/request_timeout -> router_timeout -> general_settings.pass_through_request_timeout
-    -> 600s default.
+    timeout/request_timeout -> router_timeout -> litellm.request_timeout (litellm_settings.request_timeout,
+    when explicitly set) -> general_settings.pass_through_request_timeout -> 600s default.
 
     Streaming (``kwargs["stream"]`` truthy) resolves ``stream_timeout`` at every level before
     any generic timeout, matching ``Router._get_stream_timeout`` on the completion route:
@@ -73,6 +75,7 @@ def resolve_llm_passthrough_timeout(
         deployment.get("timeout"),
         deployment.get("request_timeout"),
         router_timeout,
+        get_configured_request_timeout(),
     )
     winner: Final = next((val for val in candidates if val is not None), None)
     return resolve_pass_through_request_timeout() if winner is None else _SECONDS.validate_python(winner)

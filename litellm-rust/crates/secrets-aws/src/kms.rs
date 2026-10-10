@@ -1,4 +1,3 @@
-use litellm_auth_aws::constants::AWS_REGION_NAME;
 use std::sync::Arc;
 
 use aws_sdk_kms::{
@@ -37,10 +36,7 @@ impl AwsKms {
 }
 
 pub fn validate_environment(environment: &dyn Lookup) -> Result<(), Error> {
-    environment
-        .get(AWS_REGION_NAME)
-        .map(|_| ())
-        .ok_or(Error::MissingRegion)
+    auth::region(&KeyManagementSettings::default(), environment).map(|_| ())
 }
 
 pub fn load_aws_kms(
@@ -50,9 +46,6 @@ pub fn load_aws_kms(
 ) -> Result<Option<AwsKms>, Error> {
     if use_aws_kms != Some(true) {
         return Ok(None);
-    }
-    if settings.aws_region_name.is_none() {
-        validate_environment(environment.as_ref())?;
     }
     let config = aws_sdk_kms::Config::builder()
         .behavior_version(BehaviorVersion::latest())

@@ -29,7 +29,7 @@ def _build_search_optional_params(
     search_domain_filter: list[str] | None = None,
     max_tokens_per_page: int | None = None,
     country: str | None = None,
-) -> dict[str, Any]:
+) -> dict[str, object]:
     """
     Helper function to build optional_params dict from Perplexity Search API parameters.
 
@@ -42,7 +42,7 @@ def _build_search_optional_params(
     Returns:
         Dict with non-None optional parameters
     """
-    optional_params: Final[dict[str, Any]] = {}
+    optional_params: Final[dict[str, object]] = {}
 
     if max_results is not None:
         optional_params["max_results"] = max_results

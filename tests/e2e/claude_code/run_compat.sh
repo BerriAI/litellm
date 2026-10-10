@@ -13,7 +13,7 @@
 #
 # Required env (proxy connection), same names as the rest of tests/e2e:
 #   LITELLM_PROXY_URL        e.g. http://localhost:4000
-#   LITELLM_MASTER_KEY       e.g. sk-1234
+#   LITELLM_MASTER_KEY       e.g. sk-<your-master-key>
 #
 # Optional env (rate limits, all default to 5 req/s; 0 disables a column):
 #   LITELLM_COMPAT_RATE_ANTHROPIC

@@ -194,6 +194,8 @@ class ResponsesToCompletionBridgeHandler:
         # would raise a duplicate-keyword TypeError.
         request_data["custom_llm_provider"] = custom_llm_provider
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
+        if kwargs.get("cache") is not None:
+            request_data["cache"] = kwargs["cache"]
         result: Final = responses(
             **request_data,
         )
@@ -289,6 +291,8 @@ class ResponsesToCompletionBridgeHandler:
         # would raise a duplicate-keyword TypeError.
         request_data["custom_llm_provider"] = custom_llm_provider
         request_data["model"] = _restore_routing_prefix(model, custom_llm_provider)
+        if kwargs.get("cache") is not None:
+            request_data["cache"] = kwargs["cache"]
         result: Final = await aresponses(
             **request_data,
             aresponses=True,

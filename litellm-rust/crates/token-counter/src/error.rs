@@ -9,7 +9,7 @@ pub enum Error {
     #[error("failed to load tokenizer: {0}")]
     Load(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("failed to load tokenizer: tiktoken rank file: {0}")]
-    Ranks(String),
+    Ranks(#[source] Box<dyn std::error::Error + Send + Sync>),
     #[error("failed to load tokenizer: Unicode character classes are unavailable")]
     UnicodeClasses,
     #[error("unsupported by the rust token counter: request body could not be parsed: {0}")]

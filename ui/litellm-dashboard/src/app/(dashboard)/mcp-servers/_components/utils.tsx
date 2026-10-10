@@ -1,4 +1,37 @@
-import { MCPEnvVar, MCPEnvVarScope } from "@/components/mcp_tools/types";
+import { MCPEnvVar, MCPEnvVarScope, type MCPServer } from "@/components/mcp_tools/types";
+
+export const getMCPNetworkAccess = (
+  server: Pick<MCPServer, "available_on_public_internet" | "mcp_info">,
+): {
+  readonly label: "All Networks" | "Internal Only" | "Unknown";
+  readonly dotClassName: string;
+  readonly description: string;
+} => {
+  const explicitlyPublished = server.mcp_info?.is_public_explicit;
+  if (server.available_on_public_internet === true || explicitlyPublished === true) {
+    return {
+      label: "All Networks",
+      dotClassName: "bg-success",
+      description:
+        server.available_on_public_internet === true
+          ? "Allows requests from public and internal IPs. Authentication and access permissions still apply"
+          : "Allows requests from public and internal IPs because this server is published in MCP Hub. Authentication and access permissions still apply",
+    };
+  }
+  if (server.available_on_public_internet === false && explicitlyPublished === false) {
+    return {
+      label: "Internal Only",
+      dotClassName: "bg-warning",
+      description:
+        "Allows requests only from internal/private IP ranges. Authentication and access permissions still apply",
+    };
+  }
+  return {
+    label: "Unknown",
+    dotClassName: "bg-border",
+    description: "The proxy did not report enough network and publication settings to determine allowed client IPs",
+  };
+};
 
 export const extractMCPToken = (url: string): { token: string | null; baseUrl: string } => {
   try {

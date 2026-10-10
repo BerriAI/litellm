@@ -93,6 +93,11 @@ func resourceLiteLLMModel() *schema.Resource {
 				Type:     schema.TypeString,
 				Optional: true,
 			},
+			"display_name": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Human-readable name returned as display_name by /v1/models, shown in client model pickers instead of model_name",
+			},
 			"mode": {
 				Type:     schema.TypeString,
 				Optional: true,

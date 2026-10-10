@@ -3,8 +3,7 @@ import pytest
 from fastapi.testclient import TestClient
 from litellm.proxy.proxy_server import app, ProxyLogging, hash_token
 from litellm.caching import DualCache
-
-MASTER_KEY = "sk-1234"
+from tests._master_key import MASTER_KEY
 
 
 @pytest.fixture(autouse=True)

@@ -157,6 +157,19 @@ describe("AllModelsTable", () => {
     expect(screen.getByText("Manual")).toBeInTheDocument();
   });
 
+  it("renders the credential's display name when one is set and keeps the name as the tooltip", () => {
+    render(
+      <AllModelsTable
+        {...baseProps}
+        credentialLabels={new Map([["openai-prod", "Prod OpenAI"]])}
+        data={[makeModel({ litellm_params: { model: "openai/gpt-4", litellm_credential_name: "openai-prod" } })]}
+      />,
+    );
+    expect(screen.getByText("Prod OpenAI")).toBeInTheDocument();
+    expect(screen.queryByText("openai-prod")).not.toBeInTheDocument();
+    expect(screen.getByTitle("openai-prod")).toBeInTheDocument();
+  });
+
   it("shows 'Defined in config' for a config model and the creator for a DB model", () => {
     const { rerender } = render(<AllModelsTable {...baseProps} />);
     expect(screen.getByText("alice")).toBeInTheDocument();
@@ -174,6 +187,8 @@ describe("AllModelsTable", () => {
     const { rerender } = render(<AllModelsTable {...baseProps} />);
     expect(screen.getByText("$30")).toBeInTheDocument();
     expect(screen.getByText("$60")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: /\$30/ })).toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: /costs/i })).toHaveClass("text-right");
 
     rerender(<AllModelsTable {...baseProps} data={[makeModel({ input_cost: null, output_cost: null })]} />);
     expect(screen.queryByText(/^\$/)).not.toBeInTheDocument();

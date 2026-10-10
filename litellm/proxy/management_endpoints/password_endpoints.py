@@ -14,6 +14,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import (
     UI_TEAM_ID,
     ChangePasswordRequest,
@@ -24,7 +25,11 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.login_utils import PASSWORD_SESSION_METADATA
-from litellm.proxy.auth.password_policy import validate_password_not_breached, validate_password_policy
+from litellm.proxy.auth.password_policy import (
+    get_hibp_client,
+    validate_password_not_breached,
+    validate_password_policy,
+)
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.session_endpoints import revoke_ui_session_keys
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
@@ -71,6 +76,7 @@ def _user_table(
 async def change_password(
     data: ChangePasswordRequest,
     user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    hibp_client: Annotated[AsyncHTTPHandler, Depends(get_hibp_client)],
 ) -> ChangePasswordResponse:
     """
     Change the calling user's own password.
@@ -133,7 +139,7 @@ async def change_password(
         )
 
     validate_password_policy(data.new_password, general_settings)
-    await validate_password_not_breached(data.new_password, general_settings)
+    await validate_password_not_breached(data.new_password, general_settings, hibp_client)
 
     password_update: Final[prisma_types.LiteLLM_UserTableUpdateInput] = {
         "password": hash_password(data.new_password),

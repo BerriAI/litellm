@@ -77,6 +77,12 @@ class BedrockRerankConfig:
             sources=_sources,
         )
 
+    def transform_request(
+        self,
+        request_data: RerankRequest,
+    ) -> BedrockRerankRequest:
+        return self._transform_request(request_data)
+
     def _transform_response(self, response: dict) -> RerankResponse:
         """
         Transform the response from Bedrock into the RerankResponse format.
@@ -108,3 +114,9 @@ class BedrockRerankConfig:
             results=_results,
             meta=rerank_meta,
         )  # Return response
+
+    def transform_response(
+        self,
+        response: dict[str, object],  # mutable-ok: mirrors override contract
+    ) -> RerankResponse:
+        return self._transform_response(response)

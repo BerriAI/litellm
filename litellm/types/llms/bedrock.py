@@ -1,10 +1,13 @@
 import json
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from typing import TYPE_CHECKING, Any, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict, override
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .openai import ChatCompletionToolCallChunk
 
@@ -558,7 +561,6 @@ class AmazonTitanMultimodalEmbeddingResponse(TypedDict):
     message: str  # Specifies any errors that occur during generation.
 
 
-# TwelveLabs Marengo Embed types
 TWELVELABS_EMBEDDING_INPUT_TYPES = Literal["text", "image", "video", "audio"]
 TWELVELABS_EMBEDDING_OPTIONS = Literal["visual-text", "visual-image", "audio"]
 
@@ -1008,13 +1010,21 @@ else:
     AWSPreparedRequest = Any
 
 
+@dataclass(frozen=True)
+class BearerPreparedRequest:
+    method: str
+    url: str
+    headers: Mapping[str, str]
+    body: bytes
+
+
 class BedrockPreparedRequest(TypedDict):
     """
     Internal/Helper class for preparing the request for bedrock image generation
     """
 
     endpoint_url: str
-    prepped: AWSPreparedRequest
+    prepped: AWSPreparedRequest | BearerPreparedRequest
     body: bytes
     data: dict
 
@@ -1115,7 +1125,7 @@ class AwsSessionTag(TypedDict):
     Value: str  # writable-ok: boto3's STS stubs type assume_role Tags as writable TagTypeDef, which rejects ReadOnly
 
 
-class AwsAuthParams(BaseModel):
+class AwsAuthParams(LiteLLMBaseModel):
     """Every credential-shaped aws_* param BaseAWSLLM.get_credentials accepts; region is resolved separately."""
 
     model_config = ConfigDict(frozen=True, extra="ignore")

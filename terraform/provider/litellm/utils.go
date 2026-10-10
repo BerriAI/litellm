@@ -55,6 +55,13 @@ func handleAPIResponse(resp *http.Response, reqBody interface{}, client *Client)
 			resp.Status, client.redactSensitiveData(string(bodyBytes)), client.redactSensitiveData(string(reqBodyBytes)))
 	}
 
+	var envelope struct {
+		Data []json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(bodyBytes, &envelope); err == nil && len(envelope.Data) > 0 {
+		bodyBytes = envelope.Data[0]
+	}
+
 	var modelResp ModelResponse
 	if err := json.Unmarshal(bodyBytes, &modelResp); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %v", err)

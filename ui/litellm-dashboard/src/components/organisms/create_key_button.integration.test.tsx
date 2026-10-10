@@ -567,6 +567,21 @@ describe("CreateKey", () => {
       expect((await createdPayload()).disable_global_guardrails).toBe(true);
     });
 
+    it("hides the disable_global_guardrails switch from a non-admin", async () => {
+      state.authorized = { ...state.authorized, userRole: "Internal User" };
+      await openModal();
+      await openSection(/Optional Settings/i);
+
+      expect(screen.queryByRole("switch", { name: /Disable Global Guardrails/i })).not.toBeInTheDocument();
+    });
+
+    it("shows the disable_global_guardrails switch to a proxy admin", async () => {
+      await openModal();
+      await openSection(/Optional Settings/i);
+
+      expect(await screen.findByRole("switch", { name: /Disable Global Guardrails/i })).toBeInTheDocument();
+    });
+
     it("folds a metadata JSON string back through JSON.stringify", async () => {
       await openModal();
       await nameTheKey();

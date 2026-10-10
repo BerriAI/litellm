@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Final
 
 import httpx
 
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import (
@@ -30,6 +31,7 @@ from litellm.proxy._experimental.mcp_server.oauth_utils import (
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_cache_codec import OAuthTokenCacheCodec
+from litellm.proxy._experimental.mcp_server.utils import MCP_OAUTH_TOKENS_TARGET
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -203,7 +205,7 @@ class MCPOAuth2TokenCache(InMemoryCache):
 mcp_oauth2_token_cache: Final = MCPOAuth2TokenCache()
 
 
-def _compute_per_user_token_ttl(server: "MCPServer", expires_in: int | None) -> int:
+def compute_per_user_token_ttl(server: "MCPServer", expires_in: int | None) -> int:
     """Compute Redis TTL for a per-user token.
 
     Uses server.token_storage_ttl_seconds when configured, capped at the token's
@@ -219,6 +221,9 @@ def _compute_per_user_token_ttl(server: "MCPServer", expires_in: int | None) -> 
     if lifetime_bound is not None:
         return max(lifetime_bound, 1)
     return MCP_PER_USER_TOKEN_DEFAULT_TTL
+
+
+_compute_per_user_token_ttl: Final = compute_per_user_token_ttl
 
 
 class MCPPerUserTokenCache:
@@ -245,6 +250,7 @@ class MCPPerUserTokenCache:
         token: Final = await self.get_token(user_id, server_id)
         return token.access_token if token is not None else None
 
+    @with_service_target(MCP_OAUTH_TOKENS_TARGET)
     async def get_token(self, user_id: str, server_id: str) -> OAuthToken | None:
         try:
             from litellm.proxy.proxy_server import user_api_key_cache  # noqa: PLC0415
@@ -263,6 +269,7 @@ class MCPPerUserTokenCache:
             )
             return None
 
+    @with_service_target(MCP_OAUTH_TOKENS_TARGET)
     async def set(
         self,
         user_id: str,

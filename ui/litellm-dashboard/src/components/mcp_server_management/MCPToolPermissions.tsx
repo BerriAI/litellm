@@ -8,13 +8,14 @@ import { useMCPAccessGroups } from "../../app/(dashboard)/hooks/mcpServers/useMC
 import { useMCPToolsets } from "../../app/(dashboard)/hooks/mcpServers/useMCPToolsets";
 import McpCrudPermissionPanel from "../mcp_tools/McpCrudPermissionPanel";
 import { classifyToolOp } from "../../utils/mcpToolCrudClassification";
-import { NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
+import { MCP_ALL_TOOLS_WILDCARD, NO_MCP_SERVERS_SENTINEL } from "../mcp_tools/constants";
 import {
   EffectiveMcpServer,
   McpGrantSource,
   applyToolPermissionWrite,
   emptyMcpAccessGroups,
   mcpAllowedToolsFor,
+  mcpGrantsAllTools,
   resolveEffectiveMcpServers,
 } from "./effectiveMcpServers";
 
@@ -150,7 +151,12 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   // Every write goes through here so an edit is authoritative for the SERVER, not for one of the
   // equivalent keys that may name it.
   const writeAllowedTools = (entry: EffectiveMcpServer, allowed: string[]) => {
-    onChange(applyToolPermissionWrite({ toolPermissions, entry, allowed }));
+    const names = (serverTools[entry.server.server_id] ?? []).map((t) => t.name);
+    const next =
+      entry.source.kind !== "toolset" && names.length > 0 && names.every((n) => allowed.includes(n))
+        ? [MCP_ALL_TOOLS_WILDCARD]
+        : allowed;
+    onChange(applyToolPermissionWrite({ toolPermissions, entry, allowed: next }));
   };
 
   const handleSelectAll = (entry: EffectiveMcpServer) => {
@@ -222,7 +228,8 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
         const serverId = server.server_id;
         const serverName = server.server_name || server.alias || serverId;
         const tools = serverTools[serverId] || [];
-        const selectedTools = entry.allowedTools ?? tools.map((t) => t.name);
+        const grantsAll = mcpGrantsAllTools(entry.keyedTools);
+        const selectedTools = grantsAll ? tools.map((t) => t.name) : entry.allowedTools ?? tools.map((t) => t.name);
         const isLoading = loadingTools[serverId];
         const error = toolErrors[serverId];
         const viewMode = viewModes[serverId] ?? "crud";
@@ -247,6 +254,11 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
                   )}
                 </div>
                 {server.description && <p className="text-sm text-muted-foreground">{server.description}</p>}
+                {grantsAll && (
+                  <p className="text-sm text-muted-foreground mt-1">
+                    All tools allowed, including tools added to this server later
+                  </p>
+                )}
                 {entry.ambiguousKeys.length > 0 && (
                   <p className="text-sm text-amber-700 mt-1">
                     {`Also granted by ${entry.ambiguousKeys.map((key) => `"${key}"`).join(", ")}, which names another server too. Those tools stay allowed here until the servers no longer share that name`}

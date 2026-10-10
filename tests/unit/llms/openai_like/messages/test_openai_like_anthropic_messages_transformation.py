@@ -396,7 +396,7 @@ def test_request_defaults_missing_cache_control_type_and_drops_non_dict(config):
 def test_native_anthropic_config_keeps_cache_control_ttl():
     """Anthropic itself accepts ttl, so the normalization must stay scoped to
     the OpenAI-like passthrough and never reach the native Anthropic path."""
-    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+    from litellm.llms.anthropic.pass_through.messages.transformation import (
         AnthropicMessagesConfig,
     )
 

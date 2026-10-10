@@ -175,7 +175,7 @@ async def acreate(
         else:
             response = init_response
 
-        maybe_schedule_background_interaction_cost_polling(
+        await maybe_schedule_background_interaction_cost_polling(
             response=response,
             create_kwargs=kwargs,
             custom_llm_provider=custom_llm_provider,
@@ -464,7 +464,7 @@ async def adelete(
     extra_headers: dict[str, Any] | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
-    **kwargs,
+    **kwargs: object,
 ) -> DeleteInteractionResult:
     """Async: Delete an interaction by its ID."""
     local_vars: Final = locals()
@@ -472,7 +472,7 @@ async def adelete(
         loop: Final = asyncio.get_event_loop()
         kwargs["adelete_interaction"] = True
 
-        await maybe_settle_background_interaction_before_delete(interaction_id=interaction_id)
+        await maybe_settle_background_interaction_before_delete(interaction_id=interaction_id, delete_kwargs=kwargs)
 
         func: Final = partial(
             delete,

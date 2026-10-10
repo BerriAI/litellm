@@ -8,7 +8,6 @@
 #
 # Protected branches (always allowed):
 #   - main
-#   - litellm_internal_staging
 #   - dependabot/*
 #   - gh-readonly-queue/*
 #
@@ -22,7 +21,7 @@ ZERO_OID_SHA256="000000000000000000000000000000000000000000000000000000000000000
 ALLOWED_TYPES="feature|bugfix|hotfix|release|chore"
 BRANCH_PATTERN="^(${ALLOWED_TYPES})/.+"
 
-PROTECTED_NAMES="main litellm_internal_staging"
+PROTECTED_NAMES="main"
 PROTECTED_PREFIXES="dependabot/ gh-readonly-queue/"
 
 is_protected() {
@@ -78,8 +77,7 @@ if [ -n "$invalid" ]; then
     chore/bump-deps
     hotfix/auth-bypass
 
-  Protected (always allowed): main, litellm_internal_staging,
-  dependabot/*, gh-readonly-queue/*.
+  Protected (always allowed): main, dependabot/*, gh-readonly-queue/*.
 
 See https://conventional-branch.github.io/
 

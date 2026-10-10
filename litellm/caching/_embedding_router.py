@@ -12,7 +12,7 @@ This module is dependency-injected: callers pass the proxy ``llm_router`` and
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
@@ -39,10 +39,10 @@ def resolve_embedding_router(
 
 
 def build_router_embedding_metadata(
-    request_metadata: dict[str, Any] | None,
-) -> dict[str, Any]:
+    request_metadata: Mapping[str, object] | None,
+) -> Mapping[str, object]:
     """Forward the caller's full metadata, flagged as a semantic-cache embedding."""
-    metadata: Final[dict[str, Any]] = dict(request_metadata or {})
+    metadata: Final = dict(request_metadata or {})
     metadata["semantic-cache-embedding"] = True
     return metadata
 

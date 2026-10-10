@@ -1,18 +1,30 @@
-use std::{future::Future, pin::Pin};
+use std::{future::Future, pin::Pin, sync::Arc};
 
 use litellm_core_utils::settings::Lookup;
+use litellm_host_python::{PythonContext, attach_blocking};
 use litellm_secrets::{
     Error, ExternalSecretManager, KeyManagementSettings, KeyManagementSystem, Secret, SecretValue,
 };
-use pyo3::{prelude::*, types::PyDict};
+use pyo3::{
+    exceptions::PyException,
+    prelude::*,
+    types::{PyDict, PyString},
+};
 
-use super::error::external_error;
+use super::error::{external_error, read_error};
 
 const HANDLER_MODULE: &str = "litellm.secret_managers.secret_manager_handler";
+const ENVIRONMENT_FALLBACK_LOG: &str =
+    "Defaulting to os.environ value for key=%s. An exception occurred - %s.\n\n%s";
 
 /// A secret manager whose reads execute in Python: a custom manager, a legacy compatible
 /// client, or a manually assigned SDK client.
 pub(crate) struct PythonSecretManager {
+    client: Arc<PythonClient>,
+    context: PythonContext,
+}
+
+struct PythonClient {
     client: Py<PyAny>,
     system: Option<KeyManagementSystem>,
     settings: Option<Py<PyAny>>,
@@ -23,33 +35,22 @@ impl PythonSecretManager {
         client: Py<PyAny>,
         system: Option<KeyManagementSystem>,
         settings: Option<Py<PyAny>>,
+        context: PythonContext,
     ) -> Self {
         Self {
-            client,
-            system,
-            settings,
+            client: Arc::new(PythonClient {
+                client,
+                system,
+                settings,
+            }),
+            context,
         }
     }
+}
 
+impl PythonClient {
     fn read(&self, py: Python<'_>, name: &str) -> PyResult<Option<String>> {
         let client = self.client.bind(py);
-        if self.system == Some(KeyManagementSystem::Custom)
-            || (self.system.is_none() && client.hasattr("sync_read_secret")?)
-        {
-            let kwargs = PyDict::new(py);
-            kwargs.set_item("secret_name", name)?;
-            if self.system == Some(KeyManagementSystem::Custom) {
-                let optional_params = self
-                    .settings
-                    .as_ref()
-                    .map(|settings| settings.bind(py).call_method0("model_dump"))
-                    .transpose()?;
-                kwargs.set_item("optional_params", optional_params)?;
-            }
-            return client
-                .call_method("sync_read_secret", (), Some(&kwargs))?
-                .extract();
-        }
         let kwargs = PyDict::new(py);
         kwargs.set_item("client", client)?;
         kwargs.set_item("key_manager", self.system.map_or("local", python_name))?;
@@ -58,31 +59,26 @@ impl PythonSecretManager {
             Some(settings) => kwargs.set_item("key_management_settings", settings.bind(py))?,
             None => kwargs.set_item("key_management_settings", py.None())?,
         }
-        py.import(HANDLER_MODULE)?
+        let result = py
+            .import(HANDLER_MODULE)?
             .getattr("get_secret_from_manager")?
-            .call((), Some(&kwargs))?
-            .extract()
+            .call((), Some(&kwargs))?;
+        if result.is_instance_of::<PyString>() {
+            result.extract().map(Some)
+        } else {
+            Ok(None)
+        }
     }
 }
 
 /// The `KeyManagementSystem` value as Python spells it.
 fn python_name(system: KeyManagementSystem) -> &'static str {
-    match system {
-        KeyManagementSystem::GoogleKms => "google_kms",
-        KeyManagementSystem::AzureKeyVault => "azure_key_vault",
-        KeyManagementSystem::AwsSecretManager => "aws_secret_manager",
-        KeyManagementSystem::GoogleSecretManager => "google_secret_manager",
-        KeyManagementSystem::HashicorpVault => "hashicorp_vault",
-        KeyManagementSystem::Cyberark => "cyberark",
-        KeyManagementSystem::Local => "local",
-        KeyManagementSystem::AwsKms => "aws_kms",
-        KeyManagementSystem::Custom => "custom",
-    }
+    system.into()
 }
 
 impl ExternalSecretManager for PythonSecretManager {
     fn system(&self) -> KeyManagementSystem {
-        self.system.unwrap_or(KeyManagementSystem::Custom)
+        self.client.system.unwrap_or(KeyManagementSystem::Custom)
     }
 
     fn read_secret<'a>(
@@ -91,19 +87,48 @@ impl ExternalSecretManager for PythonSecretManager {
         _settings: &'a KeyManagementSettings,
         _environment: &'a (dyn Lookup + Send + Sync),
     ) -> Pin<Box<dyn Future<Output = Result<Option<Secret>, Error>> + Send + 'a>> {
+        let client = Arc::clone(&self.client);
+        let context = self.context.clone();
+        let name = name.to_owned();
         Box::pin(async move {
-            Python::attach(|py| {
-                self.read(py, name)
-                    .map(|value| value.map(SecretValue::new).map(Secret::String))
-                    .map_err(|error| external_error(py, error))
+            match attach_blocking(context, move |py| match client.read(py, &name) {
+                Ok(value) => Ok(value.map(SecretValue::new).map(Secret::String)),
+                // `get_secret` answers a failed manager read from the process environment, but
+                // only for `Exception`: cancellation and other `BaseException`s propagate.
+                Err(error) if error.is_instance_of::<PyException>(py) => {
+                    log_environment_fallback(py, &name, &error)
+                        .map_err(|error| external_error(py, error))?;
+                    Err(read_error(py, error))
+                }
+                Err(error) => Err(external_error(py, error)),
             })
+            .await
+            {
+                Ok(result) => result,
+                Err(error) => Python::attach(|py| Err(external_error(py, error))),
+            }
         })
     }
 }
 
+fn log_environment_fallback(py: Python<'_>, name: &str, error: &PyErr) -> PyResult<()> {
+    let traceback = py
+        .import("traceback")?
+        .call_method1("format_exception", (error.value(py),))?;
+    let traceback = "".into_pyobject(py)?.call_method1("join", (traceback,))?;
+    py.import("litellm._logging")?
+        .getattr("verbose_logger")?
+        .call_method1(
+            "error",
+            (ENVIRONMENT_FALLBACK_LOG, name, error.value(py), traceback),
+        )?;
+    Ok(())
+}
+
 #[cfg(test)]
+#[allow(clippy::await_holding_lock)]
 mod tests {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex, MutexGuard};
 
     use litellm_secrets::{
         FailurePolicy, KeyManagementSettings, KeyManagementSystem, OidcResolver, SecretManager,
@@ -112,19 +137,27 @@ mod tests {
     use pyo3::{prelude::*, types::PyDict};
     use rstest::rstest;
 
+    use litellm_host_python::PythonContext;
+
     use super::{HANDLER_MODULE, PythonSecretManager, python_name};
     use crate::secrets::python_error;
 
-    #[rstest]
-    #[case::value_error("ValueError", None)]
-    #[case::value_error_with_fallback("ValueError", Some("environment-key"))]
-    #[case::cancelled("asyncio.CancelledError", None)]
-    #[case::cancelled_with_fallback("asyncio.CancelledError", Some("environment-key"))]
-    #[tokio::test]
-    async fn callback_failures_preserve_python_exceptions_even_with_environment_fallback(
-        #[case] failure_type: &str,
-        #[case] fallback: Option<&'static str>,
-    ) {
+    /// `sys.modules` is interpreter-global, so tests that install or rely on the handler module
+    /// cannot overlap with any other test on this list.
+    static HANDLER_LOCK: Mutex<()> = Mutex::new(());
+
+    fn handler_guard() -> MutexGuard<'static, ()> {
+        HANDLER_LOCK.lock().expect("handler lock poisoned")
+    }
+
+    /// A resolver over a Python manager whose reads raise `failure_type`, with the chained
+    /// exceptions Python attaches, and `fallback` as the process environment. The returned guard
+    /// keeps other module-mutating tests out for the lifetime of the returned resolver.
+    fn failing_resolver(
+        failure_type: &str,
+        fallback: Option<&'static str>,
+    ) -> (SecretResolver, Py<PyDict>, MutexGuard<'static, ()>) {
+        let handler = handler_guard();
         Python::initialize();
         let (reader, locals) = Python::attach(|py| {
             let locals = PyDict::new(py);
@@ -141,6 +174,13 @@ class Manager:
     def sync_read_secret(self, secret_name):
         raise failure
 manager = Manager()
+import sys, types
+for name in ('litellm', 'litellm.secret_managers'):
+    sys.modules.setdefault(name, types.ModuleType(name))
+handler = sys.modules.setdefault('litellm.secret_managers.secret_manager_handler', types.ModuleType('litellm.secret_managers.secret_manager_handler'))
+def get_secret_from_manager(**kwargs):
+    return kwargs['client'].sync_read_secret(kwargs['secret_name'])
+handler.get_secret_from_manager = get_secret_from_manager
 ",
                 Some(&locals),
                 Some(&locals),
@@ -150,18 +190,32 @@ manager = Manager()
                 locals.get_item("manager").unwrap().unwrap().unbind(),
                 None,
                 None,
+                PythonContext::capture(py).unwrap(),
             );
             (reader, locals.unbind())
         });
-        let resolver = SecretResolver::new(
+        let resolver = SecretResolver::new_python_compatible(
             Arc::new(SecretManagerState::new(
                 SecretManager::External(Arc::new(reader)),
                 KeyManagementSettings::default(),
             )),
             Arc::new(move |_: &str| fallback.map(str::to_owned)),
-            OidcResolver::default(),
+            OidcResolver::new(litellm_http::Client::plain_for_test()),
         )
         .with_failure_policy(FailurePolicy::EnvironmentFallback);
+        (resolver, locals, handler)
+    }
+
+    #[rstest]
+    #[case::cancelled("asyncio.CancelledError", None)]
+    #[case::cancelled_with_fallback("asyncio.CancelledError", Some("environment-key"))]
+    #[case::keyboard_interrupt("KeyboardInterrupt", Some("environment-key"))]
+    #[tokio::test]
+    async fn base_exceptions_propagate_unchanged_even_with_environment_fallback(
+        #[case] failure_type: &str,
+        #[case] fallback: Option<&'static str>,
+    ) {
+        let (resolver, locals, _handler) = failing_resolver(failure_type, fallback);
         let error = resolver.get_secret("API_KEY", None).await.unwrap_err();
         Python::attach(|py| {
             let original = python_error(py, &error).unwrap();
@@ -184,24 +238,97 @@ manager = Manager()
         });
     }
 
+    /// Installs a persistent `litellm._logging` stub whose `verbose_logger.error` records its
+    /// arguments, and returns those recorded for `name`.
+    fn logged_errors<'py>(py: Python<'py>, name: &str) -> Vec<Bound<'py, PyAny>> {
+        py.run(
+            c"
+import sys, types
+class Logger:
+    calls = []
+    def error(self, *args):
+        self.calls.append(args)
+logging = types.ModuleType('litellm._logging')
+logging.verbose_logger = Logger()
+sys.modules.setdefault('litellm', types.ModuleType('litellm'))
+sys.modules.setdefault('litellm._logging', logging)
+",
+            None,
+            None,
+        )
+        .unwrap();
+        py.import("litellm._logging")
+            .unwrap()
+            .getattr("verbose_logger")
+            .unwrap()
+            .getattr("calls")
+            .unwrap()
+            .try_iter()
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|call| call.get_item(1).unwrap().extract::<String>().unwrap() == name)
+            .collect()
+    }
+
+    #[rstest]
+    #[case::value_error("ValueError", None, "FALLBACK_VALUE_ERROR")]
+    #[case::value_error_with_fallback(
+        "ValueError",
+        Some("environment-key"),
+        "FALLBACK_VALUE_ERROR_WITH_ENVIRONMENT"
+    )]
+    #[case::runtime_error_with_fallback(
+        "RuntimeError",
+        Some("environment-key"),
+        "FALLBACK_RUNTIME_ERROR_WITH_ENVIRONMENT"
+    )]
+    #[tokio::test]
+    async fn exceptions_are_logged_and_answered_from_the_environment(
+        #[case] failure_type: &str,
+        #[case] fallback: Option<&'static str>,
+        #[case] name: &str,
+    ) {
+        let (resolver, _locals, _handler) = failing_resolver(failure_type, fallback);
+        Python::attach(|py| assert!(logged_errors(py, name).is_empty()));
+        let secret = resolver.get_secret(name, None).await.unwrap();
+        assert_eq!(
+            secret.map(|secret| match secret {
+                litellm_secrets::Secret::String(value) => value.expose().to_owned(),
+                other => panic!("unexpected secret {other:?}"),
+            }),
+            fallback.map(str::to_owned)
+        );
+        Python::attach(|py| {
+            let calls = logged_errors(py, name);
+            assert_eq!(calls.len(), 1);
+            assert!(
+                calls[0]
+                    .get_item(3)
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap()
+                    .contains("sync_read_secret")
+            );
+        });
+    }
+
     /// Installs a fake `get_secret_from_manager` that records its kwargs, runs `body`, and
-    /// removes the fake modules again.
+    /// removes the fake handler again; parent package stubs persist for concurrent tests.
+    /// Callers hold `handler_guard` before attaching so the GIL is never held while waiting on it.
     fn with_fake_handler<'py>(py: Python<'py>, body: impl FnOnce(&Bound<'py, PyDict>)) {
         let locals = PyDict::new(py);
         py.run(
             c"
 import sys, types
+previous_handler = sys.modules.get('litellm.secret_managers.secret_manager_handler')
 calls = []
 def get_secret_from_manager(**kwargs):
     calls.append(kwargs)
     return 'handled-' + kwargs['secret_name']
 handler = types.ModuleType('litellm.secret_managers.secret_manager_handler')
 handler.get_secret_from_manager = get_secret_from_manager
-installed = {}
 for name in ('litellm', 'litellm.secret_managers'):
-    if name not in sys.modules:
-        sys.modules[name] = types.ModuleType(name)
-        installed[name] = True
+    sys.modules.setdefault(name, types.ModuleType(name))
 sys.modules['litellm.secret_managers.secret_manager_handler'] = handler
 ",
             Some(&locals),
@@ -211,14 +338,43 @@ sys.modules['litellm.secret_managers.secret_manager_handler'] = handler
         body(&locals);
         py.run(
             c"
-sys.modules.pop('litellm.secret_managers.secret_manager_handler', None)
-for name in installed:
-    sys.modules.pop(name, None)
+if previous_handler is None:
+    sys.modules.pop('litellm.secret_managers.secret_manager_handler', None)
+else:
+    sys.modules['litellm.secret_managers.secret_manager_handler'] = previous_handler
 ",
             Some(&locals),
             Some(&locals),
         )
         .unwrap();
+    }
+
+    #[rstest]
+    #[case("None")]
+    #[case("True")]
+    #[case("123")]
+    #[case("{'key': 'value'}")]
+    fn nonstring_results_are_absent_without_a_read_failure(#[case] expression: &str) {
+        let _handler = handler_guard();
+        Python::initialize();
+        Python::attach(|py| {
+            with_fake_handler(py, |locals| {
+                locals.set_item("expression", expression).unwrap();
+                py.run(
+                    c"handler.get_secret_from_manager = lambda **kwargs: eval(expression)",
+                    Some(locals),
+                    Some(locals),
+                )
+                .unwrap();
+                let reader = PythonSecretManager::new(
+                    py.None(),
+                    None,
+                    None,
+                    PythonContext::capture(py).unwrap(),
+                );
+                assert_eq!(reader.client.read(py, "KEY").unwrap(), None);
+            });
+        });
     }
 
     #[rstest]
@@ -238,74 +394,9 @@ for name in installed:
         );
     }
 
-    #[rstest]
-    #[case::legacy(None, false)]
-    #[case::custom(Some(KeyManagementSystem::Custom), true)]
-    fn direct_readers_receive_compatible_kwargs(
-        #[case] system: Option<KeyManagementSystem>,
-        #[case] expects_optional_params: bool,
-    ) {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                c"
-class Settings:
-    def model_dump(self):
-        return {'scope': 'custom'}
-class Manager:
-    def __init__(self):
-        self.names = []
-        self.optional_params = []
-    def sync_read_secret(self, secret_name, optional_params=None, timeout=None):
-        self.names.append(secret_name)
-        self.optional_params.append(optional_params)
-        return 'direct-' + secret_name
-manager = Manager()
-settings = Settings()
-",
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-            let manager = locals.get_item("manager").unwrap().unwrap();
-            let settings = expects_optional_params
-                .then(|| locals.get_item("settings").unwrap().unwrap().unbind());
-            let reader = PythonSecretManager::new(manager.clone().unbind(), system, settings);
-            assert_eq!(
-                reader.read(py, "API_KEY").unwrap().as_deref(),
-                Some("direct-API_KEY")
-            );
-            assert_eq!(
-                manager
-                    .getattr("names")
-                    .unwrap()
-                    .extract::<Vec<String>>()
-                    .unwrap(),
-                ["API_KEY"]
-            );
-            let optional_params = manager
-                .getattr("optional_params")
-                .unwrap()
-                .get_item(0)
-                .unwrap();
-            if expects_optional_params {
-                assert_eq!(
-                    optional_params
-                        .get_item("scope")
-                        .unwrap()
-                        .extract::<String>()
-                        .unwrap(),
-                    "custom"
-                );
-            } else {
-                assert!(optional_params.is_none());
-            }
-        });
-    }
-
     #[test]
     fn configured_systems_dispatch_through_the_python_handler_with_the_original_settings() {
+        let _handler = handler_guard();
         Python::initialize();
         Python::attach(|py| {
             with_fake_handler(py, |locals| {
@@ -315,9 +406,10 @@ settings = Settings()
                     client.clone().unbind(),
                     Some(KeyManagementSystem::AzureKeyVault),
                     Some(settings.clone().unbind()),
+                    PythonContext::capture(py).unwrap(),
                 );
                 assert_eq!(
-                    reader.read(py, "API_KEY").unwrap().as_deref(),
+                    reader.client.read(py, "API_KEY").unwrap().as_deref(),
                     Some("handled-API_KEY")
                 );
                 assert!(py.import(HANDLER_MODULE).is_ok());
@@ -345,6 +437,65 @@ settings = Settings()
                         .extract::<String>()
                         .unwrap(),
                     "API_KEY"
+                );
+            });
+        });
+    }
+
+    #[rstest]
+    #[case::manually_assigned(None, "local")]
+    #[case::custom(Some(KeyManagementSystem::Custom), "custom")]
+    fn direct_readers_dispatch_through_the_python_handler_like_get_secret(
+        #[case] system: Option<KeyManagementSystem>,
+        #[case] key_manager: &str,
+    ) {
+        let _handler = handler_guard();
+        Python::initialize();
+        Python::attach(|py| {
+            with_fake_handler(py, |locals| {
+                py.run(
+                    c"
+class Manager:
+    def __init__(self):
+        self.names = []
+    def sync_read_secret(self, secret_name, optional_params=None, timeout=None):
+        self.names.append(secret_name)
+        return 'direct-' + secret_name
+manager = Manager()
+",
+                    Some(locals),
+                    Some(locals),
+                )
+                .unwrap();
+                let manager = locals.get_item("manager").unwrap().unwrap();
+                let reader = PythonSecretManager::new(
+                    manager.clone().unbind(),
+                    system,
+                    None,
+                    PythonContext::capture(py).unwrap(),
+                );
+                assert_eq!(
+                    reader.client.read(py, "API_KEY").unwrap().as_deref(),
+                    Some("handled-API_KEY")
+                );
+                assert_eq!(
+                    manager
+                        .getattr("names")
+                        .unwrap()
+                        .extract::<Vec<String>>()
+                        .unwrap(),
+                    Vec::<String>::new()
+                );
+                let calls = locals.get_item("calls").unwrap().unwrap();
+                let call = calls.get_item(0).unwrap().cast_into::<PyDict>().unwrap();
+                assert!(call.get_item("client").unwrap().unwrap().is(&manager));
+                assert_eq!(
+                    call.get_item("key_manager")
+                        .unwrap()
+                        .unwrap()
+                        .extract::<String>()
+                        .unwrap(),
+                    key_manager
                 );
             });
         });

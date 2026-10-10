@@ -10,8 +10,8 @@ from urllib.parse import quote
 from litellm._logging import print_verbose, verbose_logger
 from litellm.integrations.gcs_bucket.gcs_bucket_base import GCSBucketBase
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
 
@@ -31,7 +31,7 @@ class GCSCache(BaseCache):
         self.key_prefix = gcs_path.rstrip("/") + "/" if gcs_path else ""
         # create httpx clients
         self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
-        self.sync_client = _get_httpx_client()
+        self.sync_client = get_httpx_client()
 
     def _construct_headers(self) -> dict:
         base: Final = GCSBucketBase(bucket_name=self.bucket_name)

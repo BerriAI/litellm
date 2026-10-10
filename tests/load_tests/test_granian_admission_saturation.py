@@ -10,6 +10,8 @@ from typing import Final
 import httpx
 import pytest
 
+from tests._master_key import MASTER_KEY
+
 pytestmark = pytest.mark.skipif(
     os.environ.get("LITELLM_RUN_SATURATION_BENCHMARK") != "1",
     reason="set LITELLM_RUN_SATURATION_BENCHMARK=1 to run the saturation benchmark",
@@ -32,6 +34,7 @@ async def test_granian_admission_control_saturation(tmp_path: Path) -> None:
     proxy_port: Final = _free_port()
     fake_script: Final = Path(__file__).parents[1] / "_fake_openai_endpoint_server.py"
     config_path: Final = tmp_path / "saturation_config.yaml"
+    proxy_env: Final = {**os.environ, "LITELLM_MASTER_KEY": MASTER_KEY}
     config_path.write_text(
         f"""model_list:
   - model_name: slow-endpoint
@@ -39,7 +42,7 @@ async def test_granian_admission_control_saturation(tmp_path: Path) -> None:
       model: openai/slow-endpoint
       api_base: http://127.0.0.1:{fake_port}/v1
 general_settings:
-  master_key: sk-saturation
+  master_key: os.environ/LITELLM_MASTER_KEY
   max_in_flight_requests_per_worker: 8
   max_queued_requests_per_worker: 8
   admission_queue_timeout_seconds: 0.5
@@ -64,6 +67,7 @@ general_settings:
                 "--port",
                 str(proxy_port),
             ],
+            env=proxy_env,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
@@ -99,7 +103,7 @@ general_settings:
                     start: Final = time.perf_counter()
                     response = await client.post(
                         "/chat/completions",
-                        headers={"Authorization": "Bearer sk-saturation"},
+                        headers={"Authorization": f"Bearer {MASTER_KEY}"},
                         json={
                             "model": "slow-endpoint",
                             "messages": [{"role": "user", "content": "hello"}],
