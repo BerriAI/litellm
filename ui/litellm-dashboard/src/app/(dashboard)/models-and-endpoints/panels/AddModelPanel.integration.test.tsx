@@ -1,4 +1,5 @@
-import { renderWithProviders, screen, waitFor } from "../../../../../tests/test-utils";
+import { useSyncExternalStore } from "react";
+import { act, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AddModelPanel from "./AddModelPanel";
@@ -22,7 +23,11 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/usePtuCostAttributionEnabled", () =>
   usePtuCostAttributionEnabled: () => mockPtuEnabled(),
 }));
 
-vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({ useModelCostMap: () => ({ data: {} }) }));
+const mockUseModelCostMap = vi.fn();
+
+vi.mock("@/app/(dashboard)/hooks/models/useModelCostMap", () => ({
+  useModelCostMap: (...args: unknown[]) => mockUseModelCostMap(...args),
+}));
 
 vi.mock("@/app/(dashboard)/hooks/credentials/useCredentials", () => ({
   useCredentials: () => ({ data: { credentials: [] } }),
@@ -60,6 +65,20 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
           { key: "api_base", label: "API Base", field_type: "text", required: false },
         ],
       },
+      {
+        provider: "Anthropic",
+        provider_display_name: "Anthropic",
+        litellm_provider: "anthropic",
+        default_model_placeholder: "claude-3-opus",
+        credential_fields: [{ key: "api_key", label: "API Key", field_type: "password", required: false }],
+      },
+      {
+        provider: "TypeSafe",
+        provider_display_name: "TypeSafe",
+        litellm_provider: "typesafe",
+        default_model_placeholder: "jev-latest",
+        credential_fields: [{ key: "api_key", label: "API Key", field_type: "password", required: false }],
+      },
     ],
     isLoading: false,
     error: null,
@@ -69,6 +88,26 @@ vi.mock("@/app/(dashboard)/hooks/providers/useProviderFields", () => ({
 vi.mock("@/components/vector_store_management/VectorStoreSelector", () => ({
   default: () => <div data-testid="vector-store-selector" />,
 }));
+
+type Catalog = Record<string, { litellm_provider: string }>;
+
+const createCatalogFeed = () => {
+  let current: Catalog | undefined;
+  const listeners = new Set<() => void>();
+  const subscribe = (listener: () => void) => {
+    listeners.add(listener);
+    return () => {
+      listeners.delete(listener);
+    };
+  };
+  return {
+    useData: () => ({ data: useSyncExternalStore(subscribe, () => current) }),
+    publish: (next: Catalog) => {
+      current = next;
+      listeners.forEach((listener) => listener());
+    },
+  };
+};
 
 const lastCreatedModel = () => modelCreateCall.mock.calls.at(-1)?.[1];
 
@@ -138,8 +177,91 @@ const setup = async () => {
 describe("AddModelPanel submit payload contract", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseModelCostMap.mockReturnValue({ data: {} });
     mockPtuEnabled.mockReturnValue(false);
     mockAuthorized.mockReturnValue(PROXY_ADMIN);
+  });
+
+  it("lists catalog models in the model picker, not entries registered at runtime for deployments", async () => {
+    mockUseModelCostMap.mockImplementation((_enabled: boolean, catalogOnly: boolean) => ({
+      data: catalogOnly
+        ? { "gpt-4o-2024-08-06": { litellm_provider: "openai" } }
+        : {
+            "gpt-4o-2024-08-06": { litellm_provider: "openai" },
+            "openai-gpt-4o-deployment-id": { litellm_provider: "openai" },
+          },
+    }));
+    const { user } = await setup();
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByText("OpenAI"));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+
+    expect(await screen.findByText("gpt-4o-2024-08-06")).toBeInTheDocument();
+    expect(screen.queryByText("openai-gpt-4o-deployment-id")).not.toBeInTheDocument();
+  });
+
+  it("offers the catalog models once the catalog arrives after the provider was picked", async () => {
+    const catalog = createCatalogFeed();
+    mockUseModelCostMap.mockImplementation(() => catalog.useData());
+    const { user } = await setup();
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByText("OpenAI"));
+    expect(await screen.findByPlaceholderText("gpt-3.5-turbo")).toBeInTheDocument();
+
+    act(() => catalog.publish({ "gpt-4o-2024-08-06": { litellm_provider: "openai" } }));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+
+    expect(await screen.findByText("gpt-4o-2024-08-06")).toBeInTheDocument();
+  });
+
+  it("keeps a model name typed before the catalog arrives instead of swapping the field under the user", async () => {
+    const catalog = createCatalogFeed();
+    mockUseModelCostMap.mockImplementation(() => catalog.useData());
+    const { user } = await setup();
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByText("OpenAI"));
+    await user.type(await screen.findByPlaceholderText("gpt-3.5-turbo"), "my-fine-tune");
+
+    act(() => catalog.publish({ "gpt-4o-2024-08-06": { litellm_provider: "openai" } }));
+
+    await waitFor(() => expect(screen.getByPlaceholderText("gpt-3.5-turbo")).toHaveValue("my-fine-tune"));
+    expect(screen.queryByPlaceholderText("Select models")).not.toBeInTheDocument();
+  });
+
+  it("offers the catalog models when a name typed before the catalog arrived was cleared again", async () => {
+    const catalog = createCatalogFeed();
+    mockUseModelCostMap.mockImplementation(() => catalog.useData());
+    const { user } = await setup();
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByText("OpenAI"));
+    const typed = await screen.findByPlaceholderText("gpt-3.5-turbo");
+    await user.type(typed, "my-fine-tune");
+    await user.clear(typed);
+
+    act(() => catalog.publish({ "gpt-4o-2024-08-06": { litellm_provider: "openai" } }));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+
+    expect(await screen.findByText("gpt-4o-2024-08-06")).toBeInTheDocument();
+  });
+
+  it("swaps the offered models when the provider changes while the catalog stays the same", async () => {
+    const catalog = createCatalogFeed();
+    catalog.publish({
+      "gpt-4o-2024-08-06": { litellm_provider: "openai" },
+      "claude-sonnet-4-5": { litellm_provider: "anthropic" },
+    });
+    mockUseModelCostMap.mockImplementation(() => catalog.useData());
+    const { user } = await setup();
+    const provider = screen.getByRole("combobox", { name: /provider/i });
+    await user.click(provider);
+    await user.click(await screen.findByText("OpenAI"));
+    await user.clear(provider);
+    await user.type(provider, "Anthropic");
+    await user.click(await screen.findByText("Anthropic"));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+
+    expect(await screen.findByText("claude-sonnet-4-5")).toBeInTheDocument();
+    expect(screen.queryByText("gpt-4o-2024-08-06")).not.toBeInTheDocument();
   });
 
   it("sends only the always-mounted fields while Advanced Settings stays closed", async () => {
@@ -295,6 +417,7 @@ describe("AddModelPanel submit payload contract", () => {
 describe("AddModelPanel empty-string skip", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseModelCostMap.mockReturnValue({ data: {} });
     mockPtuEnabled.mockReturnValue(false);
     mockAuthorized.mockReturnValue(PROXY_ADMIN);
   });
@@ -376,6 +499,7 @@ describe("AddModelPanel validation gates", () => {
 describe("AddModelPanel behaviours the removed Advanced Settings form instance never drove", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseModelCostMap.mockReturnValue({ data: {} });
     mockPtuEnabled.mockReturnValue(false);
     mockAuthorized.mockReturnValue(PROXY_ADMIN);
   });
@@ -419,5 +543,63 @@ describe("AddModelPanel behaviours the removed Advanced Settings form instance n
       },
       model_info: { ...baseModelInfo },
     });
+  });
+});
+
+describe("AddModelPanel decision models", () => {
+  const DECISION_COST_MAP = {
+    "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+    "gpt-4o-2024-08-06": { litellm_provider: "openai", mode: "chat" },
+    "gpt-6-luna": { litellm_provider: "openai", mode: "chat", supported_endpoints: ["/v1/decisions"] },
+    "claude-sonnet-4-5": { litellm_provider: "anthropic", mode: "chat" },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseModelCostMap.mockReturnValue({ data: DECISION_COST_MAP });
+    mockPtuEnabled.mockReturnValue(false);
+    mockAuthorized.mockReturnValue(PROXY_ADMIN);
+  });
+
+  const decisionNotice = () => screen.queryByRole("note", { name: "Decision model notice" });
+
+  it("finds a provider by the name of one of its decision models", async () => {
+    const { user } = await setup();
+    await user.type(screen.getByRole("combobox", { name: /provider/i }), "jev");
+
+    expect(await screen.findByRole("option", { name: /TypeSafe/ })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: /Anthropic/ })).not.toBeInTheDocument();
+  });
+
+  it("points a decision-only provider at the decision routes, the docs, and the playground", async () => {
+    const { user } = await setup();
+    await user.type(screen.getByRole("combobox", { name: /provider/i }), "TypeSafe");
+    await user.click(await screen.findByRole("option", { name: /TypeSafe/ }));
+
+    const note = await screen.findByRole("note", { name: "Decision model notice" });
+    expect(note).toHaveTextContent("/v1/decisions");
+    expect(within(note).getByRole("link", { name: "How to call decision models" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/decisions",
+    );
+    expect(within(note).getByRole("link", { name: "test it in the Decisions playground" })).toHaveAttribute(
+      "href",
+      "/ui/playground?tab=system-one",
+    );
+  });
+
+  it("shows the notice on a chat provider only once one of its decision models is picked", async () => {
+    const { user } = await setup();
+    await user.click(screen.getByRole("combobox", { name: /provider/i }));
+    await user.click(await screen.findByRole("option", { name: /OpenAI/ }));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+    await user.click(await screen.findByText("gpt-4o-2024-08-06"));
+    expect(decisionNotice()).not.toBeInTheDocument();
+
+    await user.click(await screen.findByText("gpt-6-luna"));
+
+    const note = await screen.findByRole("note", { name: "Decision model notice" });
+    expect(note).toHaveTextContent("/v1/decisions");
+    expect(note).not.toHaveTextContent("/chat/completions");
   });
 });

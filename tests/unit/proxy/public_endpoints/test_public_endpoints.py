@@ -9,6 +9,7 @@ import pytest
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.public_endpoints import router
@@ -16,6 +17,7 @@ from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_pres
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
+from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreateInfo
 from litellm.types.utils import LlmProviders
 
 
@@ -86,6 +88,32 @@ def test_token_plan_provider_fields_require_key_and_allow_endpoint_override() ->
         ("api_key", True, "password"),
         ("api_base", False, "text"),
     ]
+
+
+def test_get_litellm_model_cost_map_catalog_only_excludes_runtime_registered_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    monkeypatch.setattr(litellm, "model_cost", dict(litellm.model_cost))
+    runtime_key: Final = "lit-9263-deployment-alias"
+    litellm.register_model({runtime_key: {"litellm_provider": "openai", "mode": "chat"}}, persist_across_reloads=False)
+    app: Final = FastAPI()
+    app.include_router(router)
+    client: Final = TestClient(app)
+
+    live_response: Final = client.get("/public/litellm_model_cost_map")
+    catalog_response: Final = client.get("/public/litellm_model_cost_map", params={"catalog_only": "true"})
+
+    assert live_response.status_code == 200
+    assert live_response.json()[runtime_key]["litellm_provider"] == "openai"
+    assert catalog_response.status_code == 200
+    catalog_payload: Final = catalog_response.json()
+    assert runtime_key not in catalog_payload
+    assert catalog_payload == json.loads(
+        json.dumps({key: dict(entry) for key, entry in GetModelCostMap.loaded_model_cost_map().items()})
+    )
 
 
 def test_get_litellm_model_cost_map_returns_cost_map():
@@ -416,6 +444,53 @@ def test_tencent_provider_fields():
     assert fields_by_key["api_base"]["required"] is False
 
 
+def _decisions_provider_entry(provider: str) -> ProviderCreateInfo:
+    app_instance: Final = FastAPI()
+    app_instance.include_router(router)
+    test_client: Final = TestClient(app_instance)
+
+    response: Final = test_client.get("/public/providers/fields")
+    assert response.status_code == 200
+    providers: Final = TypeAdapter(list[ProviderCreateInfo]).validate_python(response.json())
+    entry: Final = next((p for p in providers if p.provider == provider), None)
+    assert entry is not None, f"{provider} provider entry not found"
+    return entry
+
+
+def test_typesafe_provider_fields():
+    typesafe: Final = _decisions_provider_entry("TypeSafe")
+
+    assert typesafe.provider_display_name == "TypeSafe"
+    assert typesafe.litellm_provider == LlmProviders.TYPESAFE.value
+    assert typesafe.default_model_placeholder is not None
+    assert typesafe.default_model_placeholder.startswith("typesafe/")
+
+    fields_by_key: Final = {f.key: f for f in typesafe.credential_fields}
+
+    assert fields_by_key["api_key"].required is True
+    assert fields_by_key["api_key"].field_type == "password"
+
+    assert fields_by_key["api_base"].required is False
+    assert fields_by_key["api_base"].field_type == "text"
+
+
+def test_strands_decider_provider_fields():
+    strands: Final = _decisions_provider_entry("StrandsDecider")
+
+    assert strands.provider_display_name == "Strands Decider"
+    assert strands.litellm_provider == LlmProviders.STRANDS_DECIDER.value
+    assert strands.default_model_placeholder is not None
+    assert strands.default_model_placeholder.startswith("strands_decider/")
+
+    fields_by_key: Final = {f.key: f for f in strands.credential_fields}
+
+    assert fields_by_key["api_base"].required is True
+    assert fields_by_key["api_base"].field_type == "text"
+
+    assert fields_by_key["api_key"].required is False
+    assert fields_by_key["api_key"].field_type == "password"
+
+
 ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
     {
         "a2a",
@@ -450,12 +525,10 @@ ADD_MODEL_UNLISTED_PROVIDERS: Final = frozenset(
         "sagemaker_nova",
         "scaleway",
         "stability",
-        "strands_decider",
         "synthetic",
         "tensormesh",
         "text-completion-inception",
         "transcribe",
-        "typesafe",
         "valkey",
         "xiaomi_mimo",
         "zai",
@@ -513,7 +586,7 @@ def test_google_ai_studio_provider_fields_expose_api_base():
     assert api_base_field["field_type"] == "text"
     # default_value MUST be null (not the canonical URL): saving it as the
     # default would persist v1beta into every credential record and bypass
-    # `_get_gemini_url`'s automatic v1alpha routing for Gemini 3+ models. The
+    # `get_gemini_url`'s automatic v1alpha routing for Gemini 3+ models. The
     # placeholder shows the canonical URL so users still get the visual hint.
     # (See greptileai threads on PR #30419.)
     assert api_base_field["default_value"] is None
@@ -562,11 +635,11 @@ def test_public_model_hub_with_healthy_model():
 
     with (
         patch("litellm.public_model_groups", ["gpt-3.5-turbo"]),
-        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch(
-            "litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict"
+            "litellm.proxy.health_endpoints._health_endpoints.convert_health_check_to_dict"
         ) as mock_convert,
     ):
 
@@ -620,11 +693,11 @@ def test_public_model_hub_with_unhealthy_model():
 
     with (
         patch("litellm.public_model_groups", ["gpt-4"]),
-        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch(
-            "litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict"
+            "litellm.proxy.health_endpoints._health_endpoints.convert_health_check_to_dict"
         ) as mock_convert,
     ):
 
@@ -669,7 +742,7 @@ def test_public_model_hub_without_health_check():
 
     with (
         patch("litellm.public_model_groups", ["claude-3"]),
-        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
     ):
@@ -751,11 +824,11 @@ def test_public_model_hub_mixed_health_statuses():
 
     with (
         patch("litellm.public_model_groups", ["gpt-3.5-turbo", "gpt-4", "claude-3"]),
-        patch("litellm.proxy.proxy_server._get_model_group_info") as mock_get_info,
+        patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
         patch(
-            "litellm.proxy.health_endpoints._health_endpoints._convert_health_check_to_dict"
+            "litellm.proxy.health_endpoints._health_endpoints.convert_health_check_to_dict"
         ) as mock_convert,
     ):
 

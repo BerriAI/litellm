@@ -216,21 +216,19 @@ describe("SpendByProvider", () => {
     expect(screen.queryByText("unknown")).not.toBeInTheDocument();
   });
 
-  it("renders one cyan donut sector per visible provider with the $ total as center label", () => {
-    const { container } = render(
-      <SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />,
-    );
+  it("renders one share segment per visible provider, largest first, in the stacked usage palette with the $ total", () => {
+    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={mockProviderSpend} />);
 
-    const sectors = container.querySelectorAll(".recharts-pie-sector path");
-    expect(sectors).toHaveLength(2);
-    const fills = new Set(Array.from(sectors).map((sector) => sector.getAttribute("fill")));
-    expect(fills).toEqual(new Set(["var(--color-cyan-500, #06b6d4)"]));
-
-    const centerLabels = Array.from(container.querySelectorAll("text.fill-foreground")).map((text) => text.textContent);
-    expect(centerLabels).toContain("$351.25");
+    const segments = screen.getAllByTestId("provider-share-segment");
+    expect(segments).toHaveLength(2);
+    // anthropic ($200.75) outranks openai ($150.50), so it takes the first palette color.
+    expect(segments.map((segment) => segment.getAttribute("title"))).toEqual(["anthropic · 57.2%", "openai · 42.8%"]);
+    expect(segments[0]).toHaveStyle({ backgroundColor: "rgb(236, 72, 153)" });
+    expect(segments[1]).toHaveStyle({ backgroundColor: "rgb(168, 85, 247)" });
+    expect(screen.getByTestId("provider-spend-total")).toHaveTextContent("$351.25");
   });
 
-  it("adds the unknown provider slice and updates the center total when Show Unknown is on", () => {
+  it("adds the unknown provider segment and updates the total when Show Unknown is on", () => {
     const providerSpendWithUnknown = [
       {
         provider: "openai",
@@ -249,17 +247,15 @@ describe("SpendByProvider", () => {
         tokens: 1000,
       },
     ];
-    const { container } = render(
-      <SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithUnknown} />,
-    );
+    render(<SpendByProvider loading={false} isDateChanging={false} providerSpend={providerSpendWithUnknown} />);
 
-    expect(container.querySelectorAll(".recharts-pie-sector path")).toHaveLength(1);
-    expect(container.querySelector("text.fill-foreground")?.textContent).toBe("$150.50");
+    expect(screen.getAllByTestId("provider-share-segment")).toHaveLength(1);
+    expect(screen.getByTestId("provider-spend-total")).toHaveTextContent("$150.50");
 
     fireEvent.click(screen.getAllByRole("switch")[1]);
 
-    expect(container.querySelectorAll(".recharts-pie-sector path")).toHaveLength(2);
-    expect(container.querySelector("text.fill-foreground")?.textContent).toBe("$200.50");
+    expect(screen.getAllByTestId("provider-share-segment")).toHaveLength(2);
+    expect(screen.getByTestId("provider-spend-total")).toHaveTextContent("$200.50");
   });
 
   it("should include all providers with spend greater than zero by default", () => {

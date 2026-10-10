@@ -283,7 +283,7 @@ async def _a2a_sse_event_source(
     so the caller can relay them instead of breaking the stream.
     """
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-    from litellm.types.agents import _normalize_a2a_jsonrpc_response
+    from litellm.types.agents import normalize_a2a_jsonrpc_response
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
     headers: Final = {
@@ -305,7 +305,7 @@ async def _a2a_sse_event_source(
             try:
                 parsed: Final = json.loads(error_body)
                 if isinstance(parsed, dict) and "error" in parsed:
-                    error_event = _normalize_a2a_jsonrpc_response(parsed, request_id=request_id)
+                    error_event = normalize_a2a_jsonrpc_response(parsed, request_id=request_id)
             except Exception:
                 error_event = None
             yield error_event or {
@@ -674,7 +674,7 @@ async def invoke_agent_a2a(
     )
 
     body: dict[str, Any] = {}
-    request_data: dict[str, Any] = body
+    request_data: dict[str, object] = body
     try:
         body = await request.json()
         request_data = body
@@ -867,7 +867,7 @@ async def invoke_agent_a2a(
             )
             # Defer spend-log until after post_call_success_hook so guardrail
             # results written by the unified_guardrail hook are captured.
-            logging_obj._defer_async_logging = True
+            logging_obj.defer_async_logging = True
             response = await asend_message(
                 model=f"a2a_agent/{agent_name}",
                 request=a2a_request,
@@ -887,12 +887,12 @@ async def invoke_agent_a2a(
                     response=response,
                 )
             finally:
-                _enqueue_fn: Final = getattr(logging_obj, "_enqueue_deferred_logging", None)
+                _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
                 if _enqueue_fn is not None:
-                    logging_obj._enqueue_deferred_logging = None
+                    logging_obj.enqueue_deferred_logging = None
                     _enqueue_fn()
 
-            response_dict: Final[dict[str, Any]] = (
+            response_dict: Final[dict[str, object]] = (
                 response.model_dump(mode="json", exclude_none=True)
                 if hasattr(response, "model_dump")
                 else response

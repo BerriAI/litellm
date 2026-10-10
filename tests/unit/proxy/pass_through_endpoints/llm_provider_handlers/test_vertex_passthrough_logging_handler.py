@@ -1,4 +1,6 @@
+import json
 from datetime import datetime
+from typing import Final
 
 import httpx
 import pytest
@@ -93,3 +95,35 @@ def test_interactions_usage_object_is_read_into_prompt_and_completion_tokens():
     assert response.usage.completion_tokens == 29
     assert response.usage.completion_tokens_details.text_tokens == 9
     assert result["kwargs"]["custom_llm_provider"] == "vertex_ai"
+
+
+def test_build_complete_streaming_response_assembles_stream_generate_content_sse_chunks():
+    logging_obj: Final = Logging(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="pass_through_endpoint",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="call-1",
+        function_id="fn-1",
+    )
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={}, model="gemini-2.5-flash")
+    first_chunk: Final = {"candidates": [{"content": {"parts": [{"text": "Hello"}], "role": "model"}, "index": 0}]}
+    last_chunk: Final = {
+        "candidates": [
+            {"content": {"parts": [{"text": " there!"}], "role": "model"}, "finishReason": "STOP", "index": 0}
+        ],
+        "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 8, "totalTokenCount": 18},
+    }
+
+    response: Final = VertexPassthroughLoggingHandler._build_complete_streaming_response(
+        all_chunks=[f"data: {json.dumps(first_chunk)}", f"data: {json.dumps(last_chunk)}"],
+        litellm_logging_obj=logging_obj,
+        model="gemini-2.5-flash",
+        url_route="/v1/projects/p/locations/us-central1/publishers/google/models/gemini-2.5-flash:streamGenerateContent",
+    )
+
+    assert isinstance(response, ModelResponse)
+    assert response.choices[0].message.content == "Hello there!"
+    assert response.choices[0].finish_reason == "stop"
+    assert (response.usage.prompt_tokens, response.usage.completion_tokens, response.usage.total_tokens) == (10, 8, 18)

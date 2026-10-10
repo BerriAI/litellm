@@ -52,8 +52,8 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, run_aws_signing
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.types.integrations.s3_v2 import S3PartitionGranularity, s3BatchLoggingElement
@@ -875,7 +875,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             prepared: Final = self._prepare_put(batch_logging_element)
 
-            httpx_client: Final = _get_httpx_client(
+            httpx_client: Final = get_httpx_client(
                 params=({"ssl_verify": self.s3_verify} if self.s3_verify is not None else None)
             )
 

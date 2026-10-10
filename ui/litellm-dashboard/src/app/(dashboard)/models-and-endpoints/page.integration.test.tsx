@@ -16,7 +16,7 @@ vi.mock("./panels/ModelRetrySettingsPanel", () => ({ default: () => <div data-te
 vi.mock("./panels/ModelGroupAliasPanel", () => ({ default: () => <div data-testid="panel-alias" /> }));
 vi.mock("./panels/PriceDataPanel", () => ({ default: () => <div data-testid="panel-price" /> }));
 vi.mock("./panels/AccessGroupBudgetsPanel", () => ({ default: () => <div data-testid="panel-budgets" /> }));
-vi.mock("@/components/molecules/cost_optimization_feedback_banner", () => ({ default: () => null }));
+vi.mock("@/components/molecules/DecisionModelsBanner", () => ({ default: () => null }));
 vi.mock("@/components/model_info_view", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="model-info">model:{modelId}</div>,
 }));
@@ -84,6 +84,7 @@ vi.mock("@/app/(dashboard)/hooks/uiSettings/useUISettings", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/models/useModels", () => ({
   useAllProxyModels: vi.fn(() => ({ data: { data: [] }, isLoading: false })),
+  useModelAccessGroupNames: vi.fn(() => new Set<string>()),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({

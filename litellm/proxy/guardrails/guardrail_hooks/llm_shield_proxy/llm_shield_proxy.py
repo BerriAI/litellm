@@ -2,7 +2,7 @@ import copy
 import functools
 import os
 import uuid
-from collections.abc import AsyncGenerator, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Any,  # noqa: TID251  # **kwargs forwards verbatim to CustomGuardrail.__init__
@@ -10,9 +10,11 @@ from typing import (
     Final,
     Literal,
     Optional,
+    Protocol,
 )
 
 import httpx
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import GuardrailRaisedException
@@ -79,6 +81,25 @@ _DEPLOYMENT_RESTORE_KEY: Final = "llm_shield_restore_at_deployment"
 _VAULT_PREFIX: Final = f"litellm-{uuid.uuid4().hex}"
 
 _DEFAULT_TIMEOUT_SECONDS: Final = 10.0
+
+_SHIELD_BODY: Final = TypeAdapter(dict[str, object])
+
+
+def _string_tool_arguments(calls: Sequence[object]) -> Iterator[tuple[object, str]]:
+    for call in calls:
+        function = read_field(call, "function")
+        arguments = read_field(function, "arguments") if function is not None else None
+        if isinstance(arguments, str) and arguments:
+            yield function, arguments
+
+
+class _ContentDelta(Protocol):
+    content: object
+
+
+class _FinishingDelta(Protocol):
+    content: object
+    tool_calls: object
 
 
 class LLMShieldProxyGuardrail(CustomGuardrail):
@@ -207,7 +228,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
                 timeout=_DEFAULT_TIMEOUT_SECONDS,
             )
             response.raise_for_status()
-            return response.json()
+            return _SHIELD_BODY.validate_python(response.json(), strict=True)
         except httpx.HTTPStatusError as exc:
             verbose_proxy_logger.exception("LLM Shield Proxy returned %s for %s", exc.response.status_code, path)
             raise GuardrailRaisedException(
@@ -321,8 +342,8 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         self,
         data: MutableRequest,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
-    ) -> Any:
+        response: object,
+    ) -> object:
         """Restores the original values in a copy of a non-streaming response.
 
         The copy is what keeps plaintext out of the response cache. LiteLLM caches the
@@ -337,8 +358,9 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             return response
         response = detached(response)  # rebind-ok: everything below restores the copy.
 
-        if self._is_anthropic_message_response(response):
-            return await self._restore_anthropic_response(response, data)
+        anthropic_body: Final = as_object(response)
+        if anthropic_body is not None and self._is_anthropic_message_response(anthropic_body):
+            return await self._restore_anthropic_response(anthropic_body, data)
 
         response_slots: Final = self._responses_api_slots(response)
         if response_slots:
@@ -430,7 +452,9 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             collect_response_item(item, slots)
         return tuple(slots)
 
-    async def _restore_responses_api_response(self, response: Any, slots: Sequence[Slot], data: MutableRequest) -> Any:
+    async def _restore_responses_api_response(
+        self, response: object, slots: Sequence[Slot], data: MutableRequest
+    ) -> object:
         """Puts the original values back into a Responses API reply."""
         await rehydrate_slots(slots, functools.partial(self._rehydrate, session_id=self._session_id(data)))
         return response
@@ -438,7 +462,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
     async def async_post_call_streaming_iterator_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
-        response: Any,
+        response: AsyncIterable[object],
         request_data: MutableRequest,
     ) -> AsyncGenerator[Any, None]:
         """Restores original values incrementally, without buffering the stream.
@@ -535,7 +559,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
     async def _restore_content_window(
         self,
-        delta: Any,
+        delta: _ContentDelta,
         key: CarryKey,
         carries: CarryWindows,
         session_id: str,
@@ -559,7 +583,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
     async def _restore_tool_call_window(
         self,
-        tool_call: Any,
+        tool_call: object,
         choice_index: int,
         carries: CarryWindows,
         session_id: str,
@@ -587,7 +611,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
 
     async def _flush_finished_choice(
         self,
-        delta: Any,
+        delta: _FinishingDelta,
         choice_index: int,
         carries: CarryWindows,
         session_id: str,
@@ -620,8 +644,8 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             delta.tool_calls = [*existing, *continuations]
 
     async def _flush_trailing(
-        self, last_chunk: Any, carries: CarryWindows, session_id: str
-    ) -> AsyncGenerator[Any, None]:
+        self, last_chunk: object, carries: CarryWindows, session_id: str
+    ) -> AsyncGenerator[object, None]:
         """Empties every window still holding text, one chunk per window.
 
         This is the net for a stream that ended with no finish_reason at all; a stream
@@ -718,27 +742,18 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             return inputs
 
         restored_calls: Final[list[object]] = [copy.deepcopy(call) for call in tool_calls]  # mutable-ok: a new list.
-        spans: Final[list[str]] = list(text_list)  # mutable-ok: ordered batch, frozen before the call.
-        writers: Final[list[Callable[[str], None]]] = []  # mutable-ok: one per span appended below.
-        for call in restored_calls:
-            function = read_field(call, "function")
-            arguments = read_field(function, "arguments") if function is not None else None
-            if isinstance(arguments, str) and arguments:
-                spans.append(arguments)
-                writers.append(functools.partial(write_field, function, "arguments"))
-
+        argument_fields: Final = tuple(_string_tool_arguments(restored_calls))
+        spans: Final = (*text_list, *(arguments for _, arguments in argument_fields))
         replaced: Final = (
-            await self._redact(tuple(spans), self._mint_session_id(request_data))
+            await self._redact(spans, self._mint_session_id(request_data))
             if input_type == "request"
-            else await self._rehydrate(tuple(spans), self._session_id(request_data))
+            else await self._rehydrate(spans, self._session_id(request_data))
         )
-        restored_values: Final[list[str]] = list(replaced)  # mutable-ok: sliced into the texts list.
-
-        for write, replacement in zip(writers, restored_values[len(text_list) :]):
-            write(replacement)
+        for (function, _), replacement in zip(argument_fields, replaced[len(text_list) :]):
+            write_field(function, "arguments", replacement)
         merged: Final[JsonBody] = {**inputs}
         if text_list:
-            merged["texts"] = restored_values[: len(text_list)]
+            merged["texts"] = list(replaced[: len(text_list)])
         if restored_calls:
             merged["tool_calls"] = restored_calls
         return merged

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Final, cast
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from litellm._logging import verbose_logger
 from litellm.llms.custom_httpx.http_handler import (
@@ -19,13 +19,14 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.llms.gemini.common_utils import GeminiModelInfo
 from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm import Router
     from litellm.types.rag import RAGIngestOptions
 
 
-class _WhiteSpaceConfig(BaseModel):
+class _WhiteSpaceConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True, hide_input_in_errors=True)
 
     max_tokens_per_chunk: object = 800

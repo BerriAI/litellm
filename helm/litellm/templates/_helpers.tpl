@@ -472,21 +472,7 @@ collector containers through an emptyDir. Empty when the sidecar is off
 or gateway.collector.address is a tcp://127.0.0.1:<port> address.
 */}}
 {{- define "litellm.lensWorker.image" -}}
-{{- if .Values.lensWorker.image.digest -}}
-{{- if not (regexMatch "^sha256:[0-9a-f]{64}$" .Values.lensWorker.image.digest) -}}
-{{- fail "lensWorker.image.digest must be sha256 followed by 64 lowercase hex characters" -}}
-{{- end -}}
-{{- printf "%s@%s" .Values.lensWorker.image.repository .Values.lensWorker.image.digest -}}
-{{- else -}}
-{{- $backendTag := .Values.backend.image.tag | default .Chart.AppVersion -}}
-{{- $releaseTag := ternary (printf "v%s" $backendTag) $backendTag (regexMatch "^[0-9]" $backendTag) -}}
-{{- $tag := .Values.lensWorker.image.tag | default $releaseTag -}}
-{{- $repository := .Values.lensWorker.image.repository -}}
-{{- if and (hasPrefix "sha-" $tag) (eq $repository "ghcr.io/berriai/litellm-lens-worker") -}}
-{{- $repository = "ghcr.io/berriai/litellm-lens-worker-dev" -}}
-{{- end -}}
-{{- printf "%s:%s" $repository $tag -}}
-{{- end -}}
+{{- include "lens.image" (dict "Values" .Values.lensWorker "Chart" .Subcharts.lens.Chart) -}}
 {{- end -}}
 
 {{- define "litellm.gateway.collectorSocketDir" -}}
@@ -513,4 +499,96 @@ shutdown drain window.
 - name: LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS
   value: {{ .drainTimeoutSeconds | quote }}
 {{- end }}
+{{- end -}}
+
+{{- define "litellm.lensConnectionEnv" -}}
+{{- $mode := include "litellm.lens.mode" . -}}
+{{- if ne $mode "disabled" }}
+{{- if and (eq $mode "external") (not .Values.lensWorker.serviceTokenSecret.name) -}}
+{{- fail "lensWorker.serviceTokenSecret.name is required for external Lens" -}}
+{{- end }}
+{{- if and (eq $mode "external") (not .Values.lensWorker.gateway.secretName) -}}
+{{- fail "lensWorker.gateway.secretName is required for external Lens" -}}
+{{- end -}}
+- name: LITELLM_LENS_URL
+  value: {{ if eq $mode "external" }}{{ required "lensWorker.externalUrl is required for external Lens" .Values.lensWorker.externalUrl | quote }}{{ else }}{{ printf "http://%s-lens-worker:%v" (include "litellm.fullname" .) .Values.lensWorker.service.port | quote }}{{ end }}
+- name: LITELLM_LENS_PUBLIC_URL
+  value: {{ include "litellm.lensWorker.publicUrl" . | quote }}
+- name: LENS_GATEWAY_SECRET
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "litellm.lensWorker.gatewaySecretName" . | quote }}
+      key: {{ .Values.lensWorker.gateway.secretKey | quote }}
+- name: LITELLM_LENS_SERVICE_TOKEN
+  valueFrom:
+    secretKeyRef:
+      name: {{ include "litellm.lensWorker.serviceTokenSecretName" . | quote }}
+      key: {{ .Values.lensWorker.serviceTokenSecret.key | quote }}
+{{- end }}
+{{- end -}}
+
+{{- define "litellm.lensWorker.labels" -}}
+{{- $labels := include "litellm.commonLabels" . | fromYaml -}}
+{{- $_ := set $labels "app.kubernetes.io/name" (printf "%s-lens-worker" (include "litellm.name" . | trunc 51 | trimSuffix "-")) -}}
+{{- toYaml $labels -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.serviceTokenSecretName" -}}
+{{- .Values.lensWorker.serviceTokenSecret.name | default (printf "%s-lens-service" (include "litellm.fullname" .)) -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.gatewaySecretName" -}}
+{{- .Values.lensWorker.gateway.secretName | default (printf "%s-lens-gateway" (include "litellm.fullname" . | trunc 50 | trimSuffix "-")) -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.bundledClickhouse" -}}
+{{- if and (eq (include "litellm.lens.mode" .) "bundled") .Values.lensWorker.clickhouse.enabled (not .Values.lensWorker.clickhouseSecret.name) -}}true{{- end -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.publicUrl" -}}
+{{- if .Values.lensWorker.publicUrl -}}
+{{- .Values.lensWorker.publicUrl -}}
+{{- else if eq (include "litellm.lens.mode" .) "external" -}}
+{{- fail "lensWorker.publicUrl is required for external Lens" -}}
+{{- else if .Values.lensWorker.ingress.enabled -}}
+{{- $tls := or (not (empty .Values.lensWorker.ingress.tls)) (hasKey .Values.lensWorker.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
+{{- printf "%s://%s" (ternary "https" "http" $tls) (required "lensWorker.ingress.host is required" .Values.lensWorker.ingress.host) -}}
+{{- else if and .Values.ingress.enabled .Values.ingress.host -}}
+{{- $tls := or (not (empty .Values.ingress.tls)) (hasKey .Values.ingress.annotations "alb.ingress.kubernetes.io/certificate-arn") -}}
+{{- printf "%s://%s/lens-ingest" (ternary "https" "http" $tls) .Values.ingress.host -}}
+{{- else -}}
+{{- fail "lensWorker.publicUrl is required when there is no single ingress hostname" -}}
+{{- end -}}
+{{- end -}}
+
+{{- define "litellm.lensWorker.clickhouseName" -}}
+{{- printf "%s-lens-clickhouse" (include "litellm.fullname" . | trunc 47 | trimSuffix "-") -}}
+{{- end -}}
+
+{{- define "litellm.lens.mode" -}}
+{{- $mode := .Values.lensWorker.mode | default (ternary "bundled" "disabled" .Values.lensWorker.enabled) -}}
+{{- if not (has $mode (list "bundled" "external" "disabled")) -}}
+{{- fail "lensWorker.mode must be bundled, external or disabled" -}}
+{{- end -}}
+{{- $mode -}}
+{{- end -}}
+
+{{- define "litellm.lens.render" -}}
+{{- $root := .root -}}
+{{- $values := mergeOverwrite (deepCopy $root.Subcharts.lens.Values) (deepCopy $root.Values.lensWorker) -}}
+{{- $_ := set $values "fullnameOverride" (printf "%s-lens-worker" (include "litellm.fullname" $root)) -}}
+{{- $_ := set $values "component" "lens-worker" -}}
+{{- $_ := set $values "nameOverride" (printf "%s-lens-worker" (include "litellm.name" $root | trunc 51 | trimSuffix "-")) -}}
+{{- $_ := set $values "imagePullSecrets" $root.Values.imagePullSecrets -}}
+{{- $_ := set $values.gateway "enabled" true -}}
+{{- $_ := set $values.gateway "generatedName" (include "litellm.lensWorker.gatewaySecretName" $root) -}}
+{{- $_ := set $values.clickhouse "nameOverride" (include "litellm.lensWorker.clickhouseName" $root) -}}
+{{- $_ := set $values.serviceTokenSecret "generatedName" (include "litellm.lensWorker.serviceTokenSecretName" $root) -}}
+{{- $_ := set $values "publicUrl" ($root.Values.lensWorker.standaloneUrl | default $root.Subcharts.lens.Values.publicUrl) -}}
+{{- if and (eq .resource "deployment") (or $root.Values.lensWorker.publicUrl $root.Values.lensWorker.ingress.enabled $root.Values.ingress.enabled) -}}
+{{- $ingestion := include "litellm.lensWorker.publicUrl" $root -}}
+{{- $_ := set $values "ingestionUrl" $ingestion -}}
+{{- $_ := set $values "publicUrl" ($root.Values.lensWorker.standaloneUrl | default (trimSuffix "/lens-ingest" $ingestion)) -}}
+{{- end -}}
+{{- include (printf "lens.%s" .resource) (dict "Values" $values "Release" $root.Release "Chart" $root.Subcharts.lens.Chart "Capabilities" $root.Capabilities) -}}
 {{- end -}}

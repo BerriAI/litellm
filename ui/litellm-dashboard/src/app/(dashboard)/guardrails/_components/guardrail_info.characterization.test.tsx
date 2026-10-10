@@ -25,6 +25,7 @@ const uiSettings = {
   supported_actions: [],
   pii_entity_categories: [],
   supported_modes: ["pre_call", "post_call"],
+  providers_without_directional_logging_only_scope: [],
 };
 
 const bedrockParams = {
@@ -162,6 +163,124 @@ describe("GuardrailInfoView update payload characterization", () => {
 
     await waitFor(() => expect(networking.updateGuardrailCall).toHaveBeenCalledTimes(1));
     expect(lastPayload()).toEqual({ litellm_params: { skip_system_message_in_guardrail: true } });
+  });
+
+  it("shows and updates the logging-only scope", async () => {
+    const guardrailParams = {
+      guardrailIdentifier: "gr-abc",
+      api_key: "sk-old",
+      mode: "logging_only",
+      logging_only_scope: "input",
+    };
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(guardrail(guardrailParams));
+    const user = userEvent.setup({ delay: null });
+    renderView();
+
+    expect(await screen.findAllByText("Input only (request)")).toHaveLength(2);
+    await openEditor(user);
+    await chooseSelectOption(user, screen.getByLabelText("Logging only scope"), "Output only (response)");
+    await saveChanges(user);
+
+    await waitFor(() => expect(networking.updateGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(lastPayload()).toEqual({
+      litellm_params: { logging_only_scope: "output", logging_only_continue_on_input_failure: false },
+    });
+  });
+
+  it("clears the logging-only scope when the edit choice returns to default", async () => {
+    const guardrailParams = {
+      guardrailIdentifier: "gr-abc",
+      api_key: "sk-old",
+      mode: "logging_only",
+      logging_only_scope: "input",
+    };
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(guardrail(guardrailParams));
+    const user = userEvent.setup({ delay: null });
+    renderView();
+    await openEditor(user);
+
+    await chooseSelectOption(user, screen.getByLabelText("Logging only scope"), "Default (request and response)");
+    await saveChanges(user);
+
+    await waitFor(() => expect(networking.updateGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(lastPayload()).toEqual({
+      litellm_params: { logging_only_scope: null, logging_only_continue_on_input_failure: false },
+    });
+  });
+
+  it("clears a stored directional scope for a provider that does not support it", async () => {
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      ...uiSettings,
+      providers_without_directional_logging_only_scope: ["bedrock"],
+    });
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(
+      guardrail({ guardrailIdentifier: "gr-abc", mode: "logging_only", logging_only_scope: "output" }),
+    );
+    const user = userEvent.setup({ delay: null });
+    renderView();
+    await openEditor(user);
+    await saveChanges(user);
+
+    await waitFor(() => expect(networking.updateGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(lastPayload()).toEqual({
+      litellm_params: { logging_only_scope: null, logging_only_continue_on_input_failure: false },
+    });
+  });
+
+  it("shows a stored continue flag as Default with the toggle on and saves no change", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(
+      guardrail({ guardrailIdentifier: "gr-abc", mode: "logging_only", logging_only_continue_on_input_failure: true }),
+    );
+    const user = userEvent.setup({ delay: null });
+    renderView();
+
+    expect(await screen.findAllByText("Default (request and response)")).not.toHaveLength(0);
+    await openEditor(user);
+    const toggle = await screen.findByRole("switch", {
+      name: "Continue observing the response after a flagged request",
+    });
+    expect(toggle).toBeChecked();
+    await saveChanges(user);
+
+    expect(networking.updateGuardrailCall).not.toHaveBeenCalled();
+  });
+
+  it("sends both scope keys when a stored continue flag is switched off", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(
+      guardrail({ guardrailIdentifier: "gr-abc", mode: "logging_only", logging_only_continue_on_input_failure: true }),
+    );
+    const user = userEvent.setup({ delay: null });
+    renderView();
+    await openEditor(user);
+
+    await user.click(
+      await screen.findByRole("switch", { name: "Continue observing the response after a flagged request" }),
+    );
+    await saveChanges(user);
+
+    await waitFor(() => expect(networking.updateGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(lastPayload()).toEqual({
+      litellm_params: { logging_only_scope: null, logging_only_continue_on_input_failure: false },
+    });
+  });
+
+  it("sends the continue flag when the toggle is switched on", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue(
+      guardrail({ guardrailIdentifier: "gr-abc", mode: "logging_only" }),
+    );
+    const user = userEvent.setup({ delay: null });
+    renderView();
+    await openEditor(user);
+
+    await user.click(
+      await screen.findByRole("switch", { name: "Continue observing the response after a flagged request" }),
+    );
+    await saveChanges(user);
+
+    await waitFor(() => expect(networking.updateGuardrailCall).toHaveBeenCalledTimes(1));
+    expect(lastPayload()).toEqual({
+      litellm_params: { logging_only_scope: null, logging_only_continue_on_input_failure: true },
+    });
   });
 
   it("parses the guardrail information textarea into an object", async () => {

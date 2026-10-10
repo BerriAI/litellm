@@ -1,11 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { bandForWindow, dragUpdate, formatSpan, timelineTicks, type Bucket } from "./Timeline";
+import { bandForWindow, dragUpdate, formatSpan, timelineTicks, type TimeBucket } from "./Timeline";
 
 const HOUR = 3600 * 1000;
 const START = Date.UTC(2026, 8, 30, 0, 0, 0);
 
-const emptyBuckets = (count: number): Bucket[] =>
+const emptyBuckets = (count: number): TimeBucket[] =>
   Array.from({ length: count }, (_, i) => ({
     startMs: START + i * HOUR,
     endMs: START + (i + 1) * HOUR,

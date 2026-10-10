@@ -1241,7 +1241,7 @@
     "paths": {
       "/access_group/list": {
         "get": {
-          "description": "List all access groups.\n\nReturns a list of all access groups with their model names, deployment counts, shared budget\nand the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/list' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nReturns:\n- ListAccessGroupsResponse with all access groups",
+          "description": "List all access groups.\n\nReturns a list of all access groups with their model names, deployment counts, shared budget\nand the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/list' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nReturns:\n- ListAccessGroupsResponse with all access groups",
           "operationId": "list_access_groups_access_group_list_get",
           "responses": {
             "200": {
@@ -1268,7 +1268,7 @@
       },
       "/access_group/new": {
         "post": {
-          "description": "Create a new access group containing multiple model names.\n\nAn access group is a named collection of model groups that can be referenced\nby teams/keys for simplified access control.\n\nExample:\n```bash\ncurl -X POST 'http://localhost:4000/access_group/new' \\\n  -H 'Authorization: Bearer sk-1234' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"access_group\": \"production-models\",\n    \"model_names\": [\"gpt-4\", \"claude-3-opus\", \"gemini-pro\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (e.g., \"production-models\")\n- model_names: List[str] - List of existing model groups to include\n\nReturns:\n- NewModelGroupResponse with the created access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 500: If database operations fail",
+          "description": "Create a new access group containing multiple model names.\n\nAn access group is a named collection of model groups that can be referenced\nby teams/keys for simplified access control.\n\nExample:\n```bash\ncurl -X POST 'http://localhost:4000/access_group/new' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"access_group\": \"production-models\",\n    \"model_names\": [\"gpt-4\", \"claude-3-opus\", \"gemini-pro\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (e.g., \"production-models\")\n- model_names: List[str] - List of existing model groups to include\n\nReturns:\n- NewModelGroupResponse with the created access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 500: If database operations fail",
           "operationId": "create_model_group_access_group_new_post",
           "requestBody": {
             "content": {
@@ -1315,7 +1315,7 @@
       },
       "/access_group/{access_group}/budget": {
         "delete": {
-          "description": "Clear the shared budget of an access group, leaving the group itself in place.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteAccessGroupBudgetResponse; budget_deleted is false when there was nothing to clear\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Clear the shared budget of an access group, leaving the group itself in place.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteAccessGroupBudgetResponse; budget_deleted is false when there was nothing to clear\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "delete_access_group_budget_access_group__access_group__budget_delete",
           "parameters": [
             {
@@ -1361,7 +1361,7 @@
           ]
         },
         "get": {
-          "description": "Get the shared budget of an access group, and the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupBudgetResponse; budget is null when the group has no budget set\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Get the shared budget of an access group, and the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/budget' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupBudgetResponse; budget is null when the group has no budget set\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "get_access_group_budget_access_group__access_group__budget_get",
           "parameters": [
             {
@@ -1407,7 +1407,7 @@
           ]
         },
         "put": {
-          "description": "Set or replace the shared budget of an access group. Idempotent.\n\nEvery key that can reach a model in the group draws from this one budget.\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"max_budget\": 100.0,\n    \"budget_duration\": \"30d\"\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- max_budget: Optional[float] - Requests fail once the group's shared spend exceeds this\n- soft_budget: Optional[float] - Fires an alert when reached; requests still succeed\n- budget_duration: Optional[str] - Frequency of resetting the group's spend (e.g. '30d')\n- budget_id: Optional[str] - Link an existing budget instead of creating one\n\nReturns:\n- AccessGroupBudgetResponse with the stored budget and current spend\n\nRaises:\n- HTTPException 400: If no budget field is given, or budget_duration cannot be parsed\n- HTTPException 404: If access group not found",
+          "description": "Set or replace the shared budget of an access group. Idempotent.\n\nEvery key that can reach a model in the group draws from this one budget.\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/budget' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"max_budget\": 100.0,\n    \"budget_duration\": \"30d\"\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- max_budget: Optional[float] - Requests fail once the group's shared spend exceeds this\n- soft_budget: Optional[float] - Fires an alert when reached; requests still succeed\n- budget_duration: Optional[str] - Frequency of resetting the group's spend (e.g. '30d')\n- budget_id: Optional[str] - Link an existing budget instead of creating one\n\nReturns:\n- AccessGroupBudgetResponse with the stored budget and current spend\n\nRaises:\n- HTTPException 400: If no budget field is given, or budget_duration cannot be parsed\n- HTTPException 404: If access group not found",
           "operationId": "set_access_group_budget_access_group__access_group__budget_put",
           "parameters": [
             {
@@ -1465,7 +1465,7 @@
       },
       "/access_group/{access_group}/delete": {
         "delete": {
-          "description": "Delete an access group.\n\nRemoves the access group from all deployments that have it.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/delete' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteModelGroupResponse with deletion details\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Delete an access group.\n\nRemoves the access group from all deployments that have it.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/delete' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteModelGroupResponse with deletion details\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "delete_access_group_access_group__access_group__delete_delete",
           "parameters": [
             {
@@ -1513,7 +1513,7 @@
       },
       "/access_group/{access_group}/info": {
         "get": {
-          "description": "Get information about a specific access group.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/info' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupInfo with the access group details, its shared budget and its spend\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Get information about a specific access group.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/info' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupInfo with the access group details, its shared budget and its spend\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "get_access_group_info_access_group__access_group__info_get",
           "parameters": [
             {
@@ -1561,7 +1561,7 @@
       },
       "/access_group/{access_group}/update": {
         "put": {
-          "description": "Update an access group's model names.\n\nThis will:\n1. Remove the access group from all current deployments\n2. Add the access group to all deployments for the new model_names list\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/update' \\\n  -H 'Authorization: Bearer sk-1234' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model_names\": [\"gpt-4\", \"claude-3-sonnet\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- model_names: List[str] - New list of model groups to include\n\nReturns:\n- NewModelGroupResponse with the updated access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 404: If access group not found",
+          "description": "Update an access group's model names.\n\nThis will:\n1. Remove the access group from all current deployments\n2. Add the access group to all deployments for the new model_names list\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/update' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model_names\": [\"gpt-4\", \"claude-3-sonnet\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- model_names: List[str] - New list of model groups to include\n\nReturns:\n- NewModelGroupResponse with the updated access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 404: If access group not found",
           "operationId": "update_access_group_access_group__access_group__update_put",
           "parameters": [
             {
@@ -9521,6 +9521,30 @@
           ]
         }
       },
+      "/systemone": {
+        "post": {
+          "operationId": "systemone_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Systemone",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
       "/v1/decisions": {
         "post": {
           "operationId": "decisions_v1_decisions_post",
@@ -9540,6 +9564,30 @@
             }
           ],
           "summary": "Decisions",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
+      "/v1/systemone": {
+        "post": {
+          "operationId": "systemone_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Systemone",
           "tags": [
             "decisions"
           ]
@@ -11572,6 +11620,34 @@
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
             },
+            "logging_only_continue_on_input_failure": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.",
+              "title": "Logging Only Continue On Input Failure"
+            },
+            "logging_only_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "input",
+                    "output"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "title": "Logging Only Scope"
+            },
             "mask_request_content": {
               "anyOf": [
                 {
@@ -11840,6 +11916,34 @@
               "default": true,
               "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
               "title": "Sticky Session Routing"
+            },
+            "stream_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "streaming",
+                    "non_streaming",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": {
+                    "enum": [
+                      "streaming",
+                      "non_streaming",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.",
+              "title": "Stream Scope"
             },
             "template_id": {
               "anyOf": [
@@ -12727,6 +12831,77 @@
           "title": "GuardrailSubmissionSummary",
           "type": "object"
         },
+        "GuardrailUIAddGuardrailSettings": {
+          "properties": {
+            "content_filter_settings": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Content Filter Settings"
+            },
+            "pii_entity_categories": {
+              "items": {
+                "$ref": "#/components/schemas/PiiEntityCategoryMap"
+              },
+              "title": "Pii Entity Categories",
+              "type": "array"
+            },
+            "providers_without_directional_logging_only_scope": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Providers Without Directional Logging Only Scope",
+              "type": "array"
+            },
+            "supported_actions": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Actions",
+              "type": "array"
+            },
+            "supported_entities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Entities",
+              "type": "array"
+            },
+            "supported_modes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Modes",
+              "type": "array"
+            },
+            "supported_modes_by_provider": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "title": "Supported Modes By Provider",
+              "type": "object"
+            }
+          },
+          "required": [
+            "supported_entities",
+            "supported_actions",
+            "supported_modes",
+            "supported_modes_by_provider",
+            "providers_without_directional_logging_only_scope",
+            "pii_entity_categories"
+          ],
+          "title": "GuardrailUIAddGuardrailSettings",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -12868,6 +13043,19 @@
                 "https://akto-ingestion.example.com"
               ],
               "title": "Akto Base Url"
+            },
+            "akto_metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "JSON object sent to Akto. 'policy_name': comma-separated Akto policies to enforce (empty enforces all). Example: {\"policy_name\": \"PII Strict, Secrets\"}.",
+              "title": "Akto Metadata"
             },
             "akto_vxlan_id": {
               "anyOf": [
@@ -13407,6 +13595,22 @@
               "description": "Enable content moderation to check for harmful content (harassment, hate speech, etc.).",
               "title": "Content Moderation Check"
             },
+            "context_source": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "ENDPOINT",
+                    "AGENTIC"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Akto context the traffic belongs to: 'ENDPOINT' (Atlas) or 'AGENTIC' (Argus). Default: AGENTIC.",
+              "title": "Context Source"
+            },
             "contextual_grounding_from_messages": {
               "default": false,
               "description": "ApplyGuardrail: when True, post-call scans of a request with no grounding_source / query content parts send the system and developer messages as the grounding source and the latest user message as the query, so the guardrail's contextual grounding policy can score the response. Bedrock bills contextual grounding units for these scans and rejects queries, sources and responses over its contextual grounding length limits, so leave this off for guardrails without a contextual grounding policy. Default False: plain messages are never sent as grounding context.",
@@ -13618,6 +13822,18 @@
               "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
+            "file_guardrail_timeout": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "HTTP timeout in seconds for checking attached files. Default: 10.",
+              "title": "File Guardrail Timeout"
+            },
             "gateway_name": {
               "anyOf": [
                 {
@@ -13821,6 +14037,34 @@
               ],
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
+            },
+            "logging_only_continue_on_input_failure": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.",
+              "title": "Logging Only Continue On Input Failure"
+            },
+            "logging_only_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "input",
+                    "output"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "title": "Logging Only Scope"
             },
             "mask": {
               "anyOf": [
@@ -14637,6 +14881,34 @@
               "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
               "title": "Sticky Session Routing"
             },
+            "stream_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "streaming",
+                    "non_streaming",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": {
+                    "enum": [
+                      "streaming",
+                      "non_streaming",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.",
+              "title": "Stream Scope"
+            },
             "template_id": {
               "anyOf": [
                 {
@@ -14881,6 +15153,27 @@
           ],
           "title": "PiiAction",
           "type": "string"
+        },
+        "PiiEntityCategoryMap": {
+          "properties": {
+            "category": {
+              "title": "Category",
+              "type": "string"
+            },
+            "entities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Entities",
+              "type": "array"
+            }
+          },
+          "required": [
+            "category",
+            "entities"
+          ],
+          "title": "PiiEntityCategoryMap",
+          "type": "object"
         },
         "PiiEntityType": {
           "enum": [
@@ -16323,7 +16616,9 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/GuardrailUIAddGuardrailSettings"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -26692,7 +26987,7 @@
       },
       "/cursor/chat/completions": {
         "post": {
-          "description": "Cursor BYOK endpoint. Accepts both request shapes Cursor sends to its OpenAI-compatible\nbase URL and always answers in chat completions format.\n\nCursor agent mode sends Responses API format bodies (`input`, flat tool defs, `reasoning`,\ncustom tools) to the chat/completions path while expecting chat completions responses;\nthose are routed through the Responses API pipeline and converted back. Genuine chat\ncompletions bodies (`messages` present) are routed through the standard chat completions\npipeline, after normalizing each level of the `tools` array and `tool_choice` to the chat\ncompletions shapes OpenAI requires. Cursor mixes Responses API shapes into chat bodies\nper level, independently: a flat tool def (`{\"type\": \"custom\", \"name\": \"ApplyPatch\", ...}`)\ngets nested under `custom`, and a flat grammar format\n(`{\"type\": \"grammar\", \"definition\", \"syntax\"}`) gets wrapped as\n`{\"type\": \"grammar\", \"grammar\": {...}}` wherever it appears, including inside tool defs\nCursor already sent pre-nested.\n\n```bash\ncurl -X POST http://localhost:4000/cursor/chat/completions     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n}'\nResponds back in chat completions format.\n```",
+          "description": "Cursor BYOK endpoint. Accepts both request shapes Cursor sends to its OpenAI-compatible\nbase URL and always answers in chat completions format.\n\nCursor agent mode sends Responses API format bodies (`input`, flat tool defs, `reasoning`,\ncustom tools) to the chat/completions path while expecting chat completions responses;\nthose are routed through the Responses API pipeline and converted back. Genuine chat\ncompletions bodies (`messages` present) are routed through the standard chat completions\npipeline, after normalizing each level of the `tools` array and `tool_choice` to the chat\ncompletions shapes OpenAI requires. Cursor mixes Responses API shapes into chat bodies\nper level, independently: a flat tool def (`{\"type\": \"custom\", \"name\": \"ApplyPatch\", ...}`)\ngets nested under `custom`, and a flat grammar format\n(`{\"type\": \"grammar\", \"definition\", \"syntax\"}`) gets wrapped as\n`{\"type\": \"grammar\", \"grammar\": {...}}` wherever it appears, including inside tool defs\nCursor already sent pre-nested.\n\n```bash\ncurl -X POST http://localhost:4000/cursor/chat/completions     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n}'\nResponds back in chat completions format.\n```",
           "operationId": "cursor_chat_completions_cursor_chat_completions_post",
           "responses": {
             "200": {
@@ -28532,7 +28827,7 @@
       },
       "/openai/deployments/{model}/chat/completions": {
         "post": {
-          "description": "Follows the exact same API spec as `OpenAI's Chat API https://platform.openai.com/docs/api-reference/chat`\n\n```bash\ncurl -X POST http://localhost:4000/v1/chat/completions \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer sk-1234\" \n-d '{\n    \"model\": \"gpt-4o\",\n    \"messages\": [\n        {\n            \"role\": \"user\",\n            \"content\": \"Hello!\"\n        }\n    ]\n}'\n```",
+          "description": "Follows the exact same API spec as `OpenAI's Chat API https://platform.openai.com/docs/api-reference/chat`\n\n```bash\ncurl -X POST http://localhost:4000/v1/chat/completions \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \n-d '{\n    \"model\": \"gpt-4o\",\n    \"messages\": [\n        {\n            \"role\": \"user\",\n            \"content\": \"Hello!\"\n        }\n    ]\n}'\n```",
           "operationId": "chat_completion_openai_deployments__model__chat_completions_post",
           "parameters": [
             {
@@ -28665,7 +28960,7 @@
       },
       "/openai/deployments/{model}/completions": {
         "post": {
-          "description": "Follows the exact same API spec as `OpenAI's Completions API https://platform.openai.com/docs/api-reference/completions`\n\n```bash\ncurl -X POST http://localhost:4000/v1/completions \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer sk-1234\" \n-d '{\n    \"model\": \"gpt-3.5-turbo-instruct\",\n    \"prompt\": \"Once upon a time\",\n    \"max_tokens\": 50,\n    \"temperature\": 0.7\n}'\n```",
+          "description": "Follows the exact same API spec as `OpenAI's Completions API https://platform.openai.com/docs/api-reference/completions`\n\n```bash\ncurl -X POST http://localhost:4000/v1/completions \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \n-d '{\n    \"model\": \"gpt-3.5-turbo-instruct\",\n    \"prompt\": \"Once upon a time\",\n    \"max_tokens\": 50,\n    \"temperature\": 0.7\n}'\n```",
           "operationId": "completion_openai_deployments__model__completions_post",
           "parameters": [
             {
@@ -28718,7 +29013,7 @@
       },
       "/openai/deployments/{model}/embeddings": {
         "post": {
-          "description": "Follows the exact same API spec as `OpenAI's Embeddings API https://platform.openai.com/docs/api-reference/embeddings`\n\n```bash\ncurl -X POST http://localhost:4000/v1/embeddings \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer sk-1234\" \n-d '{\n    \"model\": \"text-embedding-ada-002\",\n    \"input\": \"The quick brown fox jumps over the lazy dog\"\n}'\n```",
+          "description": "Follows the exact same API spec as `OpenAI's Embeddings API https://platform.openai.com/docs/api-reference/embeddings`\n\n```bash\ncurl -X POST http://localhost:4000/v1/embeddings \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \n-d '{\n    \"model\": \"text-embedding-ada-002\",\n    \"input\": \"The quick brown fox jumps over the lazy dog\"\n}'\n```",
           "operationId": "embeddings_openai_deployments__model__embeddings_post",
           "parameters": [
             {
@@ -28771,7 +29066,7 @@
       },
       "/openai/deployments/{model}/images/edits": {
         "post": {
-          "description": "Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create\n\n```bash\ncurl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST \"http://localhost:4000/v1/images/edits\"     -H \"Authorization: Bearer sk-1234\"         -F \"model=gpt-image-1\"         -F \"image[]=@soap.png\"         -F 'prompt=Create a studio ghibli image of this'\n```",
+          "description": "Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create\n\n```bash\ncurl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST \"http://localhost:4000/v1/images/edits\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"         -F \"model=gpt-image-1\"         -F \"image[]=@soap.png\"         -F 'prompt=Create a studio ghibli image of this'\n```",
           "operationId": "image_edit_api_openai_deployments__model__images_edits_post",
           "parameters": [
             {
@@ -28957,7 +29252,7 @@
       },
       "/openai/v1/responses": {
         "post": {
-          "description": "Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses\n\nSupports background mode with polling_via_cache for partial response retrieval.\nWhen background=true and polling_via_cache is enabled, returns a polling_id immediately\nand streams the response in the background, updating Redis cache.\n\n```bash\n# Normal request\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\"\n}'\n\n# Background request with polling\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\",\n    \"background\": true\n}'\n```",
+          "description": "Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses\n\nSupports background mode with polling_via_cache for partial response retrieval.\nWhen background=true and polling_via_cache is enabled, returns a polling_id immediately\nand streams the response in the background, updating Redis cache.\n\n```bash\n# Normal request\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\"\n}'\n\n# Background request with polling\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\",\n    \"background\": true\n}'\n```",
           "operationId": "responses_api_openai_v1_responses_post",
           "responses": {
             "200": {
@@ -28990,7 +29285,7 @@
       },
       "/openai/v1/responses/compact": {
         "post": {
-          "description": "Compact a response by running a compaction pass over a conversation.\n\nReturns encrypted, opaque items that can be used to reduce context size.\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact\n\n```bash\ncurl -X POST http://localhost:4000/v1/responses/compact     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n}'\n```",
+          "description": "Compact a response by running a compaction pass over a conversation.\n\nReturns encrypted, opaque items that can be used to reduce context size.\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact\n\n```bash\ncurl -X POST http://localhost:4000/v1/responses/compact     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n}'\n```",
           "operationId": "compact_response_openai_v1_responses_compact_post",
           "responses": {
             "200": {
@@ -29015,7 +29310,7 @@
       },
       "/openai/v1/responses/input_tokens": {
         "post": {
-          "description": "Count the input tokens of a Responses API request without calling the model.\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens\n\n```bash\ncurl -X POST http://localhost:4000/v1/responses/input_tokens     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Hello, how are you?\"\n}'\n```\n\nReturns: `{\"object\": \"response.input_tokens\", \"input_tokens\": <count>}`",
+          "description": "Count the input tokens of a Responses API request without calling the model.\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens\n\n```bash\ncurl -X POST http://localhost:4000/v1/responses/input_tokens     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Hello, how are you?\"\n}'\n```\n\nReturns: `{\"object\": \"response.input_tokens\", \"input_tokens\": <count>}`",
           "operationId": "responses_input_tokens_openai_v1_responses_input_tokens_post",
           "responses": {
             "200": {
@@ -29040,7 +29335,7 @@
       },
       "/openai/v1/responses/{response_id}": {
         "delete": {
-          "description": "Delete a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Deletes from Redis cache\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/delete\n\n```bash\ncurl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer sk-1234\"\n```",
+          "description": "Delete a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Deletes from Redis cache\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/delete\n\n```bash\ncurl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "delete_response_openai_v1_responses__response_id__delete",
           "parameters": [
             {
@@ -29086,7 +29381,7 @@
           ]
         },
         "get": {
-          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer sk-1234\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer sk-1234\"\n```",
+          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "get_response_openai_v1_responses__response_id__get",
           "parameters": [
             {
@@ -29134,7 +29429,7 @@
       },
       "/openai/v1/responses/{response_id}/cancel": {
         "post": {
-          "description": "Cancel a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Cancels background response and updates status in Redis\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/cancel\n\n```bash\n# Cancel polling response\ncurl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H \"Authorization: Bearer sk-1234\"\n\n# Cancel provider response\ncurl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H \"Authorization: Bearer sk-1234\"\n```",
+          "description": "Cancel a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Cancels background response and updates status in Redis\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/cancel\n\n```bash\n# Cancel polling response\ncurl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Cancel provider response\ncurl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "cancel_response_openai_v1_responses__response_id__cancel_post",
           "parameters": [
             {
@@ -31793,6 +32088,18 @@
               ],
               "title": "Registration Url"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "anyOf": [
                 {
@@ -33645,6 +33952,17 @@
               ],
               "title": "Reviewed At"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "title": "Server Id",
               "type": "string"
@@ -34531,6 +34849,18 @@
               ],
               "title": "Registration Url"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "anyOf": [
                 {
@@ -34818,28 +35148,6 @@
           "title": "RegisterGuardrailResponse",
           "type": "object"
         },
-        "Scope": {
-          "additionalProperties": false,
-          "properties": {
-            "all_teams": {
-              "default": false,
-              "title": "All Teams",
-              "type": "boolean"
-            },
-            "api_key_hash": {
-              "default": "",
-              "title": "Api Key Hash",
-              "type": "string"
-            },
-            "team_id": {
-              "default": "",
-              "title": "Team Id",
-              "type": "string"
-            }
-          },
-          "title": "Scope",
-          "type": "object"
-        },
         "ValidationError": {
           "properties": {
             "ctx": {
@@ -34878,95 +35186,6 @@
             "type"
           ],
           "title": "ValidationError",
-          "type": "object"
-        },
-        "Worker": {
-          "additionalProperties": false,
-          "properties": {
-            "analysis_key_id": {
-              "anyOf": [
-                {
-                  "pattern": "^[a-f0-9]{64}$",
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Analysis Key Id"
-            },
-            "id": {
-              "title": "Id",
-              "type": "string"
-            },
-            "last_seen": {
-              "format": "date-time",
-              "title": "Last Seen",
-              "type": "string"
-            },
-            "name": {
-              "title": "Name",
-              "type": "string"
-            },
-            "revoked": {
-              "default": false,
-              "title": "Revoked",
-              "type": "boolean"
-            },
-            "scope": {
-              "$ref": "#/components/schemas/Scope"
-            }
-          },
-          "required": [
-            "id",
-            "name",
-            "scope",
-            "last_seen"
-          ],
-          "title": "Worker",
-          "type": "object"
-        },
-        "WorkerCreated": {
-          "additionalProperties": false,
-          "properties": {
-            "image": {
-              "title": "Image",
-              "type": "string"
-            },
-            "token": {
-              "title": "Token",
-              "type": "string"
-            },
-            "worker": {
-              "$ref": "#/components/schemas/Worker"
-            }
-          },
-          "required": [
-            "image",
-            "worker",
-            "token"
-          ],
-          "title": "WorkerCreated",
-          "type": "object"
-        },
-        "WorkerName": {
-          "properties": {
-            "analysis_key_id": {
-              "pattern": "^[a-f0-9]{64}$",
-              "title": "Analysis Key Id",
-              "type": "string"
-            },
-            "name": {
-              "default": "Lens worker",
-              "minLength": 1,
-              "title": "Name",
-              "type": "string"
-            }
-          },
-          "required": [
-            "analysis_key_id"
-          ],
-          "title": "WorkerName",
           "type": "object"
         }
       }
@@ -36010,52 +36229,6 @@
           ]
         }
       },
-      "/lens/workers/register": {
-        "post": {
-          "operationId": "register_worker_lens_workers_register_post",
-          "requestBody": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorkerName"
-                }
-              }
-            },
-            "required": true
-          },
-          "responses": {
-            "200": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/WorkerCreated"
-                  }
-                }
-              },
-              "description": "Successful Response"
-            },
-            "422": {
-              "content": {
-                "application/json": {
-                  "schema": {
-                    "$ref": "#/components/schemas/HTTPValidationError"
-                  }
-                }
-              },
-              "description": "Validation Error"
-            }
-          },
-          "security": [
-            {
-              "APIKeyHeader": []
-            }
-          ],
-          "summary": "Register Worker",
-          "tags": [
-            "mcp_discoverable"
-          ]
-        }
-      },
       "/register": {
         "post": {
           "operationId": "register_client_register_post",
@@ -36928,6 +37101,17 @@
                 }
               ],
               "title": "Reviewed At"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "title": "Server Id",
@@ -38659,6 +38843,18 @@
               ],
               "title": "Registration Url"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "anyOf": [
                 {
@@ -39201,6 +39397,18 @@
                 }
               ],
               "title": "Registration Url"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "title": "Server Id",
@@ -42047,6 +42255,18 @@
                 }
               ],
               "title": "Registration Url"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "anyOf": [
@@ -56443,7 +56663,7 @@
     "paths": {
       "/v1/indexes": {
         "get": {
-          "description": "List all vector store indexes. Proxy admin only.\n\n```bash\ncurl -L -X GET 'http://0.0.0.0:4000/v1/indexes'         -H 'Authorization: Bearer sk-1234'\n```",
+          "description": "List all vector store indexes. Proxy admin only.\n\n```bash\ncurl -L -X GET 'http://0.0.0.0:4000/v1/indexes'         -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "index_list_v1_indexes_get",
           "responses": {
             "200": {
@@ -56468,7 +56688,7 @@
           ]
         },
         "post": {
-          "description": "Create an index. Just writes the index to the database.\n\n```bash\ncurl -L -X POST 'http://0.0.0.0:4000/v1/indexes'         -H 'Content-Type: application/json'         -H 'Authorization: Bearer sk-1234'         -d '{\n        \"index_name\": \"dall-e-3\",\n        \"litellm_params\": {\n            \"vector_store_index\": \"real-index-name\",\n            \"vector_store_name\": \"azure-ai-search\"\n        }\n    }'\n```",
+          "description": "Create an index. Just writes the index to the database.\n\n```bash\ncurl -L -X POST 'http://0.0.0.0:4000/v1/indexes'         -H 'Content-Type: application/json'         -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"         -d '{\n        \"index_name\": \"dall-e-3\",\n        \"litellm_params\": {\n            \"vector_store_index\": \"real-index-name\",\n            \"vector_store_name\": \"azure-ai-search\"\n        }\n    }'\n```",
           "operationId": "index_create_v1_indexes_post",
           "requestBody": {
             "content": {

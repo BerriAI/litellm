@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 import {
   Providers,
   getPlaceholder,
@@ -6,9 +8,30 @@ import {
   getProviderModels,
   providerLogoMap,
   provider_map,
+  resolveLitellmProviderSlug,
 } from "./provider_info_helpers";
 
+const PROVIDER_CREATE_FIELDS: { provider: string; litellm_provider: string }[] = JSON.parse(
+  readFileSync(resolve(__dirname, "../../../../litellm/proxy/public_endpoints/provider_create_fields.json"), "utf8"),
+);
+
+const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.parse(
+  readFileSync(resolve(__dirname, "../../../../model_prices_and_context_window.json"), "utf8"),
+);
+
 describe("provider_info_helpers", () => {
+  it("maps Microsoft 365 Copilot to its chat model provider and placeholder", () => {
+    expect(provider_map.MICROSOFT_365_COPILOT).toBe("microsoft_365_copilot");
+    expect(getPlaceholder(Providers.MICROSOFT_365_COPILOT)).toBe("microsoft_365_copilot/chat");
+  });
+
+  it("shows the Microsoft 365 Copilot logo rather than the Azure one", () => {
+    const { logo, displayName } = getProviderLogoAndName("microsoft_365_copilot");
+    expect(displayName).toBe("Microsoft 365 Copilot");
+    expect(logo).toContain("microsoft_365_copilot");
+    expect(logo).not.toBe(providerLogoMap[Providers.Azure]);
+  });
+
   describe("getProviderLogoAndName", () => {
     it("should return empty logo and dash display name when providerValue is empty", () => {
       const result = getProviderLogoAndName("");
@@ -214,6 +237,26 @@ describe("provider_info_helpers", () => {
       const { logo } = getProviderLogoAndName("tencent");
       expect(logo).toContain("tencent");
     });
+
+    it("should resolve the typesafe slug and TypeSafe enum key to the TypeSafe name and bundled logo", () => {
+      const fromSlug = getProviderLogoAndName("typesafe");
+      expect(fromSlug.displayName).toBe(Providers.TypeSafe);
+      expect(fromSlug.logo).toContain("typesafe");
+
+      const fromEnumKey = getProviderLogoAndName("TypeSafe");
+      expect(fromEnumKey.displayName).toBe(Providers.TypeSafe);
+      expect(fromEnumKey.logo).toBe(fromSlug.logo);
+    });
+
+    it("should resolve the strands_decider slug and StrandsDecider enum key to the Strands Decider name and bundled logo", () => {
+      const fromSlug = getProviderLogoAndName("strands_decider");
+      expect(fromSlug.displayName).toBe("Strands Decider");
+      expect(fromSlug.logo).toContain("strands");
+
+      const fromEnumKey = getProviderLogoAndName("StrandsDecider");
+      expect(fromEnumKey.displayName).toBe(Providers.StrandsDecider);
+      expect(fromEnumKey.logo).toBe(fromSlug.logo);
+    });
   });
 
   describe("getPlaceholder", () => {
@@ -318,12 +361,51 @@ describe("provider_info_helpers", () => {
       expect(getPlaceholder(Providers.Tencent)).toBe("tencent/deepseek-v4-pro");
     });
 
+    it("should return decision model placeholders for the TypeSafe and StrandsDecider dropdown keys", () => {
+      expect(getPlaceholder("TypeSafe")).toBe("typesafe/jev-latest");
+      expect(getPlaceholder("StrandsDecider")).toBe("strands_decider/strands-decider-2B-hobson-v19");
+    });
+
     it("should return default gpt-3.5-turbo placeholder for unknown provider", () => {
       expect(getPlaceholder("UnknownProvider" as any)).toBe("gpt-3.5-turbo");
     });
 
     it("should return default gpt-3.5-turbo placeholder for OpenAI provider", () => {
       expect(getPlaceholder(Providers.OpenAI)).toBe("gpt-3.5-turbo");
+    });
+  });
+
+  describe("resolveLitellmProviderSlug", () => {
+    it("should resolve every provider the backend serves to the slug that backend declares", () => {
+      const misresolved = PROVIDER_CREATE_FIELDS.filter(
+        (entry) => resolveLitellmProviderSlug(entry.provider) !== entry.litellm_provider,
+      ).map(
+        (entry) =>
+          `${entry.provider} -> ${resolveLitellmProviderSlug(entry.provider)} (want ${entry.litellm_provider})`,
+      );
+      expect(misresolved).toEqual([]);
+    });
+
+    it("should resolve providers the backend spells in caps and provider_map spells in camel case", () => {
+      expect(resolveLitellmProviderSlug("MINIMAX")).toBe("minimax");
+      expect(resolveLitellmProviderSlug("CURSOR")).toBe("cursor");
+      expect(resolveLitellmProviderSlug("RUNWAYML")).toBe("runwayml");
+    });
+
+    it("should resolve providers absent from provider_map to their lowercased value", () => {
+      expect(resolveLitellmProviderSlug("MILVUS")).toBe("milvus");
+      expect(resolveLitellmProviderSlug("LANGFUSE")).toBe("langfuse");
+      expect(resolveLitellmProviderSlug("LITELLM_PROXY")).toBe("litellm_proxy");
+    });
+
+    it("should keep SAGEMAKER on the plain slug rather than the chat variant SageMaker maps to", () => {
+      expect(resolveLitellmProviderSlug("SAGEMAKER")).toBe("sagemaker");
+      expect(resolveLitellmProviderSlug("SageMaker")).toBe("sagemaker_chat");
+    });
+
+    it("should prefer an exact provider_map key over the lowercase fallback", () => {
+      expect(resolveLitellmProviderSlug("Vertex_AI")).toBe("vertex_ai");
+      expect(resolveLitellmProviderSlug("Google_AI_Studio")).toBe("gemini");
     });
   });
 
@@ -434,6 +516,30 @@ describe("provider_info_helpers", () => {
       expect(getProviderModels("Sail" as Providers, modelMap)).toEqual(["sail/openai/gpt-oss-120b"]);
     });
 
+    it("should list only typesafe decision models for the 'TypeSafe' provider key, not the OpenRouter-hosted one", () => {
+      const modelMap = {
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+        "typesafe/jev-preview": { litellm_provider: "typesafe", mode: "evaluation" },
+        "openrouter/typesafe/jev-1.13": { litellm_provider: "openrouter", mode: "evaluation" },
+        "strands_decider/strands-decider-2B-hobson-v19": { litellm_provider: "strands_decider", mode: "evaluation" },
+      };
+      expect(getProviderModels("TypeSafe" as Providers, modelMap)).toEqual([
+        "typesafe/jev-latest",
+        "typesafe/jev-preview",
+      ]);
+    });
+
+    it("should list only strands_decider models for the 'StrandsDecider' provider key", () => {
+      const modelMap = {
+        "strands_decider/strands-decider-2B-hobson-v19": { litellm_provider: "strands_decider", mode: "evaluation" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+        "openrouter/typesafe/jev-1.13": { litellm_provider: "openrouter", mode: "evaluation" },
+      };
+      expect(getProviderModels("StrandsDecider" as Providers, modelMap)).toEqual([
+        "strands_decider/strands-decider-2B-hobson-v19",
+      ]);
+    });
+
     it("should include bedrock converse but exclude standalone bedrock_mantle when called with 'Bedrock' provider key", () => {
       const modelMap = {
         "bedrock-base": { litellm_provider: "bedrock" },
@@ -537,6 +643,34 @@ describe("provider_info_helpers", () => {
       };
       const result = getProviderModels(Providers.Bedrock, modelMap);
       expect(result).toEqual([]);
+    });
+
+    it("should populate models for a provider whose backend key is spelled differently from its provider_map key", () => {
+      const modelMap = {
+        "cursor/composer-1": { litellm_provider: "cursor" },
+        "gpt-4": { litellm_provider: "openai" },
+      };
+      const result = getProviderModels("CURSOR" as Providers, modelMap);
+      expect(result).toEqual(["cursor/composer-1"]);
+    });
+
+    it("should populate models for SAGEMAKER, whose key is absent from provider_map", () => {
+      const modelMap = {
+        "sagemaker-base": { litellm_provider: "sagemaker" },
+        "gpt-4": { litellm_provider: "openai" },
+      };
+      expect(getProviderModels("SAGEMAKER" as Providers, modelMap)).toEqual(["sagemaker-base"]);
+    });
+
+    it("should populate MiniMax's bundled models from the real cost map", () => {
+      const minimaxModels = Object.keys(BUNDLED_MODEL_MAP).filter(
+        (key) => BUNDLED_MODEL_MAP[key]?.litellm_provider === "minimax",
+      );
+      expect(minimaxModels.length).toBeGreaterThan(0);
+
+      const result = getProviderModels("MINIMAX" as Providers, BUNDLED_MODEL_MAP);
+
+      expect([...result].sort()).toEqual([...minimaxModels].sort());
     });
 
     it("should handle multiple providers correctly", () => {

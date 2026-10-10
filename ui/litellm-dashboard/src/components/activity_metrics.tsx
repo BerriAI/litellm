@@ -1,19 +1,24 @@
 import {
   AreaChart,
   BarChart,
+  type ChartColor,
   type ChartTooltipProps,
-  CustomLegend,
+  chartColorValue,
   CustomTooltip,
   formatCategoryName,
   LineChart,
+  stackedUsageColor,
   ValueTooltip,
 } from "@/components/shared/charts";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { resolveTeamAliasFromTeamID } from "@/utils/teamUtils";
-import { Card, CardContent } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { ChevronDown } from "lucide-react";
-import React, { useRef, useState } from "react";
+import { Panel, Stat } from "@/app/(dashboard)/usage/_components/components/overview/Primitives";
+import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
+import { providerForModel } from "@/app/(dashboard)/usage/_components/components/overview/modelProvider";
+import { cn } from "@/lib/cva.config";
+import { Activity, ChevronDown, Coins, Database, KeyRound, Timer } from "lucide-react";
+import React, { type ReactNode, useRef, useState } from "react";
 import { Team } from "./key_team_helpers/key_list";
 import KeyModelUsageView from "./UsagePage/components/KeyModelUsageView";
 import { keyActivityLabel } from "./UsagePage/keyActivityLabel";
@@ -29,8 +34,17 @@ interface ActivityMetricsProps {
   fetchTopApiKeys?: (model: string) => Promise<ModelTopKeysResponse>;
 }
 
+const BRAND: ChartColor = "#2b3fd6";
+const TOKEN_CATEGORIES = ["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"] as const;
+const TOKEN_COLORS: readonly ChartColor[] = ["blue", "cyan", "indigo"];
+const REQUEST_CATEGORIES = ["metrics.successful_requests", "metrics.failed_requests"] as const;
+const CACHE_CATEGORIES = ["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"] as const;
+const CHART_CLASS = "mt-1 h-56";
+
 const modelAverageResponseTimeMs = (metrics: ModelActivityData): number | null =>
   averageResponseTimeMs(metrics.total_response_time_ms ?? 0, metrics.total_timed_requests ?? 0);
+
+const formatSpend = (value: number) => `$${formatNumberWithCommas(value, 2, true)}`;
 
 export const ResponseTimeTooltip = ({ active, payload, label }: ChartTooltipProps) => (
   <ValueTooltip
@@ -39,6 +53,71 @@ export const ResponseTimeTooltip = ({ active, payload, label }: ChartTooltipProp
     label={label}
     valueFormatter={formatResponseTime}
   />
+);
+
+const SeriesKey = ({ categories, colors }: { categories: readonly string[]; colors: readonly ChartColor[] }) => (
+  <div className="flex flex-wrap items-center justify-end gap-x-3 gap-y-1">
+    {categories.map((category, idx) => (
+      <span key={category} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <span
+          aria-hidden="true"
+          className="size-2 shrink-0 rounded-[2px]"
+          style={{ backgroundColor: chartColorValue(colors[idx % colors.length]) }}
+        />
+        {formatCategoryName(category)}
+      </span>
+    ))}
+  </div>
+);
+
+/** A stat value kept as a heading so it stays addressable by its accessible name. */
+const StatValue = ({ children }: { children: ReactNode }) => <h4 className="truncate">{children}</h4>;
+
+const STRIP_COLUMNS = { 4: "lg:grid-cols-4", 5: "lg:grid-cols-5" } as const;
+
+const StatStrip = ({ columns, children }: { columns: keyof typeof STRIP_COLUMNS; children: ReactNode }) => (
+  <div
+    className={cn(
+      "grid grid-cols-1 overflow-hidden rounded-xl border bg-card sm:grid-cols-2 lg:divide-x",
+      STRIP_COLUMNS[columns],
+    )}
+  >
+    {children}
+  </div>
+);
+
+const StatCell = ({ children }: { children: ReactNode }) => (
+  <div className="min-w-0 border-b px-4 pt-3.5 pb-3 last:border-b-0 lg:border-b-0">{children}</div>
+);
+
+/**
+ * Same tile as the Overview leaderboard's model mark: provider logo for model names, a neutral
+ * monogram for anything else (MCP servers, agents), and a series-colored dot so rows read as a set.
+ */
+const ItemMark = ({ label, color }: { label: string; color: string }) => {
+  const provider = providerForModel(label);
+  return (
+    <span className="relative inline-flex size-7 shrink-0 items-center justify-center rounded-md border bg-background">
+      {provider ? (
+        <ProviderLogo provider={provider} className="size-4 rounded-[3px]" />
+      ) : (
+        <span aria-hidden="true" className="text-[11px] font-semibold uppercase text-muted-foreground">
+          {label.charAt(0) || "?"}
+        </span>
+      )}
+      <span
+        aria-hidden="true"
+        className="absolute -right-0.5 -bottom-0.5 size-2 rounded-full ring-2 ring-card"
+        style={{ backgroundColor: color }}
+      />
+    </span>
+  );
+};
+
+const TopKeysPanel = ({ children }: { children: ReactNode }) => (
+  <Panel icon={KeyRound} title="Top Virtual Keys by Spend">
+    {children}
+  </Panel>
 );
 
 const ModelTopKeys = ({
@@ -99,35 +178,29 @@ const ModelTopKeys = ({
 
   if (current === null) {
     return (
-      <Card className="mt-4">
-        <CardContent>
-          <h3 className="text-lg font-medium text-foreground">Top Virtual Keys by Spend</h3>
-          <p className="mt-3 text-sm text-muted-foreground">Loading top keys...</p>
-        </CardContent>
-      </Card>
+      <TopKeysPanel>
+        <p className="py-2 text-xs text-muted-foreground">Loading top keys...</p>
+      </TopKeysPanel>
     );
   }
 
   if (current.failed) {
     return (
-      <Card className="mt-4">
-        <CardContent>
-          <h3 className="text-lg font-medium text-foreground">Top Virtual Keys by Spend</h3>
-          <p className="mt-3 text-sm text-muted-foreground">
-            Could not load top keys.{" "}
-            <button
-              type="button"
-              className="font-medium text-foreground underline"
-              onClick={() => {
-                setSettled(null);
-                setRetryToken((token) => token + 1);
-              }}
-            >
-              Retry
-            </button>
-          </p>
-        </CardContent>
-      </Card>
+      <TopKeysPanel>
+        <p className="py-2 text-xs text-muted-foreground">
+          Could not load top keys.{" "}
+          <button
+            type="button"
+            className="font-medium text-foreground underline"
+            onClick={() => {
+              setSettled(null);
+              setRetryToken((token) => token + 1);
+            }}
+          >
+            Retry
+          </button>
+        </p>
+      </TopKeysPanel>
     );
   }
 
@@ -135,35 +208,30 @@ const ModelTopKeys = ({
   if (rows.length === 0) return null;
 
   return (
-    <Card className="mt-4">
-      <CardContent>
-        <h3 className="text-lg font-medium text-foreground">Top Virtual Keys by Spend</h3>
-        <div className="mt-3">
-          <div className="grid grid-cols-1 gap-2">
-            {rows.map((keyData) => {
-              const keyLabel = keyData.key_alias || `${keyData.api_key.substring(0, 10)}...`;
-              return (
-                <div key={keyData.api_key} className="flex justify-between items-center p-3 bg-muted rounded-lg">
-                  <div>
-                    <p className="font-medium">{keyLabel}</p>
-                    {keyData.team_id && <p className="text-xs text-muted-foreground">Team: {keyData.team_id}</p>}
-                    {keyData.user && keyData.user !== keyLabel && (
-                      <p className="text-xs text-muted-foreground">User: {keyData.user}</p>
-                    )}
-                  </div>
-                  <div className="text-right">
-                    <p className="font-medium">${formatNumberWithCommas(keyData.spend, 2)}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {keyData.requests.toLocaleString()} requests | {keyData.tokens.toLocaleString()} tokens
-                    </p>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      </CardContent>
-    </Card>
+    <TopKeysPanel>
+      <ol className="divide-y divide-border/60">
+        {rows.map((keyData) => {
+          const keyLabel = keyData.key_alias || `${keyData.api_key.substring(0, 10)}...`;
+          return (
+            <li key={keyData.api_key} className="flex items-center justify-between gap-4 py-2.5">
+              <div className="min-w-0">
+                <p className="truncate text-sm font-medium text-foreground">{keyLabel}</p>
+                {keyData.team_id && <p className="truncate text-xs text-muted-foreground">Team: {keyData.team_id}</p>}
+                {keyData.user && keyData.user !== keyLabel && (
+                  <p className="truncate text-xs text-muted-foreground">User: {keyData.user}</p>
+                )}
+              </div>
+              <div className="shrink-0 text-right">
+                <p className="text-sm tabular-nums text-foreground">${formatNumberWithCommas(keyData.spend, 2)}</p>
+                <p className="text-xs tabular-nums text-muted-foreground">
+                  {keyData.requests.toLocaleString()} requests | {keyData.tokens.toLocaleString()} tokens
+                </p>
+              </div>
+            </li>
+          );
+        })}
+      </ol>
+    </TopKeysPanel>
   );
 };
 
@@ -179,195 +247,143 @@ export const ModelSection = ({
   fetchTopApiKeys?: (model: string) => Promise<ModelTopKeysResponse>;
 }) => {
   return (
-    <div className="space-y-2">
-      {/* Summary Cards */}
-      <div className="grid grid-cols-5 gap-4">
-        <Card>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">Total Requests</p>
-            <h3 className="text-lg font-medium text-foreground">{metrics.total_requests.toLocaleString()}</h3>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">Total Successful Requests</p>
-            <h3 className="text-lg font-medium text-foreground">
-              {metrics.total_successful_requests.toLocaleString()}
-            </h3>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">Total Tokens</p>
-            <h3 className="text-lg font-medium text-foreground">{metrics.total_tokens.toLocaleString()}</h3>
-            <p className="text-sm text-muted-foreground">
-              {Math.round(metrics.total_tokens / metrics.total_successful_requests)} avg per successful request
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">Total Spend</p>
-            <h3 className="text-lg font-medium text-foreground">${formatNumberWithCommas(metrics.total_spend, 2)}</h3>
-            <p className="text-sm text-muted-foreground">
-              ${formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3)} per successful
-              request
-            </p>
-          </CardContent>
-        </Card>
-        <Card>
-          <CardContent>
-            <p className="text-sm text-muted-foreground">Avg Response Time</p>
-            <h3 className="text-lg font-medium text-foreground">
-              {formatResponseTime(modelAverageResponseTimeMs(metrics))}
-            </h3>
-            <p className="text-sm text-muted-foreground">
-              over {(metrics.total_timed_requests ?? 0).toLocaleString()} timed successful requests
-            </p>
-          </CardContent>
-        </Card>
-      </div>
+    <div className="grid gap-3">
+      <StatStrip columns={5}>
+        <StatCell>
+          <Stat label="Total Requests" value={<StatValue>{metrics.total_requests.toLocaleString()}</StatValue>} />
+        </StatCell>
+        <StatCell>
+          <Stat
+            label="Total Successful Requests"
+            value={<StatValue>{metrics.total_successful_requests.toLocaleString()}</StatValue>}
+          />
+        </StatCell>
+        <StatCell>
+          <Stat
+            label="Total Tokens"
+            value={<StatValue>{metrics.total_tokens.toLocaleString()}</StatValue>}
+            hint={`${Math.round(metrics.total_tokens / metrics.total_successful_requests)} avg per successful request`}
+          />
+        </StatCell>
+        <StatCell>
+          <Stat
+            label="Total Spend"
+            value={<StatValue>${formatNumberWithCommas(metrics.total_spend, 2)}</StatValue>}
+            hint={`$${formatNumberWithCommas(metrics.total_spend / metrics.total_successful_requests, 3)} per successful request`}
+          />
+        </StatCell>
+        <StatCell>
+          <Stat
+            label="Avg Response Time"
+            value={<StatValue>{formatResponseTime(modelAverageResponseTimeMs(metrics))}</StatValue>}
+            hint={`over ${(metrics.total_timed_requests ?? 0).toLocaleString()} timed successful requests`}
+          />
+        </StatCell>
+      </StatStrip>
 
       {fetchTopApiKeys && <ModelTopKeys modelName={modelName} fetchTopApiKeys={fetchTopApiKeys} />}
 
       {metrics.top_models && metrics.top_models.length > 0 && <KeyModelUsageView topModels={metrics.top_models} />}
 
-      {/* Spend per day - Full width card */}
-      <Card className="mt-4">
-        <CardContent>
-          <div className="flex justify-between items-center">
-            <h3 className="text-lg font-medium text-foreground">Spend per day</h3>
-            <CustomLegend categories={["metrics.spend"]} colors={["green"]} />
-          </div>
-          <BarChart
-            className="mt-4"
+      <Panel icon={Coins} title="Spend per day" action={<SeriesKey categories={["metrics.spend"]} colors={[BRAND]} />}>
+        <BarChart
+          className={CHART_CLASS}
+          data={metrics.daily_data}
+          index="date"
+          categories={["metrics.spend"]}
+          colors={[BRAND]}
+          maxBarSize={28}
+          valueFormatter={formatSpend}
+          yAxisWidth={72}
+          showLegend={false}
+        />
+      </Panel>
+
+      <div className="grid gap-3 lg:grid-cols-2">
+        <Panel title="Total Tokens" action={<SeriesKey categories={TOKEN_CATEGORIES} colors={TOKEN_COLORS} />}>
+          <AreaChart
+            className={CHART_CLASS}
             data={metrics.daily_data}
             index="date"
-            categories={["metrics.spend"]}
-            colors={["green"]}
-            valueFormatter={(value: number) => `$${formatNumberWithCommas(value, 2, true)}`}
-            yAxisWidth={72}
+            categories={TOKEN_CATEGORIES}
+            colors={TOKEN_COLORS}
+            valueFormatter={valueFormatter}
+            customTooltip={CustomTooltip}
+            showLegend={false}
           />
-        </CardContent>
-      </Card>
+        </Panel>
 
-      {/* Charts */}
-      <div className="grid grid-cols-2 gap-4 mt-4">
-        <Card>
-          <CardContent>
-            <div className="flex justify-between items-center">
-              <h3 className="text-lg font-medium text-foreground">Total Tokens</h3>
-              <CustomLegend
-                categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
-                colors={["blue", "cyan", "indigo"]}
-              />
-            </div>
-            <AreaChart
-              className="mt-4"
-              data={metrics.daily_data}
-              index="date"
-              categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
-              colors={["blue", "cyan", "indigo"]}
-              valueFormatter={valueFormatter}
-              customTooltip={CustomTooltip}
-              showLegend={false}
-            />
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardContent>
-            <div className="flex justify-between items-center">
-              <h3 className="text-lg font-medium text-foreground">Requests per day</h3>
-              <CustomLegend categories={["metrics.api_requests"]} colors={["blue"]} />
-            </div>
-            <BarChart
-              className="mt-4"
-              data={metrics.daily_data}
-              index="date"
-              categories={["metrics.api_requests"]}
-              colors={["blue"]}
-              valueFormatter={valueFormatter}
-              customTooltip={CustomTooltip}
-              showLegend={false}
-            />
-          </CardContent>
-        </Card>
+        <Panel title="Requests per day" action={<SeriesKey categories={["metrics.api_requests"]} colors={[BRAND]} />}>
+          <BarChart
+            className={CHART_CLASS}
+            data={metrics.daily_data}
+            index="date"
+            categories={["metrics.api_requests"]}
+            colors={[BRAND]}
+            maxBarSize={28}
+            valueFormatter={valueFormatter}
+            customTooltip={CustomTooltip}
+            showLegend={false}
+          />
+        </Panel>
 
         {(metrics.total_timed_requests ?? 0) > 0 && (
-          <Card>
-            <CardContent>
-              <div className="flex justify-between items-center">
-                <h3 className="text-lg font-medium text-foreground">Avg Response Time per day</h3>
-                <CustomLegend categories={["metrics.avg_response_time_ms"]} colors={["amber"]} />
-              </div>
-              <LineChart
-                className="mt-4"
-                data={metrics.daily_data}
-                index="date"
-                categories={["metrics.avg_response_time_ms"]}
-                colors={["amber"]}
-                valueFormatter={formatResponseTime}
-                customTooltip={ResponseTimeTooltip}
-                connectNulls={true}
-                showLegend={false}
-              />
-            </CardContent>
-          </Card>
-        )}
-
-        <Card>
-          <CardContent>
-            <div className="flex justify-between items-center">
-              <h3 className="text-lg font-medium text-foreground">Success vs Failed Requests</h3>
-              <CustomLegend
-                categories={["metrics.successful_requests", "metrics.failed_requests"]}
-                colors={["green", "red"]}
-              />
-            </div>
-            <AreaChart
-              className="mt-4"
+          <Panel
+            icon={Timer}
+            title="Avg Response Time per day"
+            action={<SeriesKey categories={["metrics.avg_response_time_ms"]} colors={[BRAND]} />}
+          >
+            <LineChart
+              className={CHART_CLASS}
               data={metrics.daily_data}
               index="date"
-              categories={["metrics.successful_requests", "metrics.failed_requests"]}
-              colors={["green", "red"]}
+              categories={["metrics.avg_response_time_ms"]}
+              colors={[BRAND]}
+              valueFormatter={formatResponseTime}
+              customTooltip={ResponseTimeTooltip}
+              connectNulls={true}
+              showLegend={false}
+            />
+          </Panel>
+        )}
+
+        <Panel
+          title="Success vs Failed Requests"
+          action={<SeriesKey categories={REQUEST_CATEGORIES} colors={["green", "red"]} />}
+        >
+          <AreaChart
+            className={CHART_CLASS}
+            data={metrics.daily_data}
+            index="date"
+            categories={REQUEST_CATEGORIES}
+            colors={["green", "red"]}
+            valueFormatter={valueFormatter}
+            customTooltip={CustomTooltip}
+            showLegend={false}
+          />
+        </Panel>
+
+        {!hidePromptCachingMetrics && (
+          <Panel
+            icon={Database}
+            title="Prompt Caching Metrics"
+            action={<SeriesKey categories={CACHE_CATEGORIES} colors={["cyan", "purple"]} />}
+          >
+            <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-xs tabular-nums text-muted-foreground">
+              <p>Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens</p>
+              <p>Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens</p>
+            </div>
+            <AreaChart
+              className={cn(CHART_CLASS, "mt-3")}
+              data={metrics.daily_data}
+              index="date"
+              categories={CACHE_CATEGORIES}
+              colors={["cyan", "purple"]}
               valueFormatter={valueFormatter}
               customTooltip={CustomTooltip}
               showLegend={false}
             />
-          </CardContent>
-        </Card>
-
-        {!hidePromptCachingMetrics && (
-          <Card>
-            <CardContent>
-              <div className="flex justify-between items-center">
-                <h3 className="text-lg font-medium text-foreground">Prompt Caching Metrics</h3>
-                <CustomLegend
-                  categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
-                  colors={["cyan", "purple"]}
-                />
-              </div>
-              <div className="mb-2">
-                <p className="text-sm">
-                  Cache Read: {metrics.total_cache_read_input_tokens?.toLocaleString() || 0} tokens
-                </p>
-                <p className="text-sm">
-                  Cache Creation: {metrics.total_cache_creation_input_tokens?.toLocaleString() || 0} tokens
-                </p>
-              </div>
-              <AreaChart
-                className="mt-4"
-                data={metrics.daily_data}
-                index="date"
-                categories={["metrics.cache_read_input_tokens", "metrics.cache_creation_input_tokens"]}
-                colors={["cyan", "purple"]}
-                valueFormatter={valueFormatter}
-                customTooltip={CustomTooltip}
-                showLegend={false}
-              />
-            </CardContent>
-          </Card>
+          </Panel>
         )}
       </div>
     </div>
@@ -404,13 +420,13 @@ export const ModelCollapsible = ({
       }}
       className="border-b last:border-b-0"
     >
-      <CollapsibleTrigger className="flex w-full items-center gap-2 px-4 py-3 text-left">
+      <CollapsibleTrigger className="flex w-full items-center gap-2 px-4 py-3 text-left outline-none transition-colors hover:bg-muted/40 focus-visible:bg-muted/40">
         <ChevronDown
           className={`size-4 shrink-0 text-muted-foreground transition-transform ${open ? "" : "-rotate-90"}`}
         />
         {header}
       </CollapsibleTrigger>
-      <CollapsibleContent keepMounted={everOpened} className="px-4 pb-4">
+      <CollapsibleContent keepMounted={everOpened} className="border-t bg-muted/30 p-3">
         {children}
       </CollapsibleContent>
     </Collapsible>
@@ -501,118 +517,120 @@ export const ActivityMetrics: React.FC<ActivityMetricsProps> = ({
   const totalTokens = summaryMetrics?.total_tokens ?? totalMetrics.total_tokens;
   const totalSpend = summaryMetrics?.total_spend ?? totalMetrics.total_spend;
 
+  const maxSpend = Math.max(0, ...modelNames.map((name) => modelMetrics[name].total_spend));
+
   return (
-    <div className="space-y-8">
-      {/* Global Summary */}
-      <div className="border rounded-lg p-4">
-        <h3 className="text-lg font-medium text-foreground">{summaryTitle}</h3>
-        <div className="grid grid-cols-4 gap-4 mb-4">
-          <Card>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">Total Requests</p>
-              <h3 className="text-lg font-medium text-foreground">{totalRequests.toLocaleString()}</h3>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">Total Successful Requests</p>
-              <h3 className="text-lg font-medium text-foreground">{totalSuccessfulRequests.toLocaleString()}</h3>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">Total Tokens</p>
-              <h3 className="text-lg font-medium text-foreground">{totalTokens.toLocaleString()}</h3>
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent>
-              <p className="text-sm text-muted-foreground">Total Spend</p>
-              <h3 className="text-lg font-medium text-foreground">${formatNumberWithCommas(totalSpend, 2)}</h3>
-            </CardContent>
-          </Card>
-        </div>
+    <div className="grid gap-3">
+      <section className="grid gap-3">
+        <h3 className="flex items-center gap-2 text-sm font-medium text-foreground">
+          <Activity aria-hidden="true" className="size-4 text-muted-foreground" strokeWidth={1.75} />
+          {summaryTitle}
+        </h3>
+        <StatStrip columns={4}>
+          <StatCell>
+            <Stat label="Total Requests" value={<StatValue>{totalRequests.toLocaleString()}</StatValue>} />
+          </StatCell>
+          <StatCell>
+            <Stat
+              label="Total Successful Requests"
+              value={<StatValue>{totalSuccessfulRequests.toLocaleString()}</StatValue>}
+            />
+          </StatCell>
+          <StatCell>
+            <Stat label="Total Tokens" value={<StatValue>{totalTokens.toLocaleString()}</StatValue>} />
+          </StatCell>
+          <StatCell>
+            <Stat label="Total Spend" value={<StatValue>${formatNumberWithCommas(totalSpend, 2)}</StatValue>} />
+          </StatCell>
+        </StatStrip>
 
-        <div className="grid grid-cols-2 gap-4">
-          <Card>
-            <CardContent>
-              <div className="flex justify-between items-center">
-                <h3 className="text-lg font-medium text-foreground">Total Tokens Over Time</h3>
-                <CustomLegend
-                  categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
-                  colors={["blue", "cyan", "indigo"]}
-                />
-              </div>
-              <AreaChart
-                className="mt-4"
-                data={sortedDailyData}
-                index="date"
-                categories={["metrics.prompt_tokens", "metrics.completion_tokens", "metrics.total_tokens"]}
-                colors={["blue", "cyan", "indigo"]}
-                valueFormatter={valueFormatter}
-                customTooltip={CustomTooltip}
-                showLegend={false}
-                yAxisWidth={80}
-              />
-            </CardContent>
-          </Card>
-          <Card>
-            <CardContent>
-              <div className="flex justify-between items-center">
-                <h3 className="text-lg font-medium text-foreground">Total Requests Over Time</h3>
-                <CustomLegend
-                  categories={["metrics.successful_requests", "metrics.failed_requests"]}
-                  colors={["emerald", "red"]}
-                />
-              </div>
-              <AreaChart
-                className="mt-4"
-                data={sortedDailyData}
-                index="date"
-                categories={["metrics.successful_requests", "metrics.failed_requests"]}
-                colors={["emerald", "red"]}
-                valueFormatter={valueFormatter}
-                customTooltip={CustomTooltip}
-                showLegend={false}
-                yAxisWidth={80}
-              />
-            </CardContent>
-          </Card>
+        <div className="grid gap-3 lg:grid-cols-2">
+          <Panel
+            title="Total Tokens Over Time"
+            action={<SeriesKey categories={TOKEN_CATEGORIES} colors={TOKEN_COLORS} />}
+          >
+            <AreaChart
+              className={CHART_CLASS}
+              data={sortedDailyData}
+              index="date"
+              categories={TOKEN_CATEGORIES}
+              colors={TOKEN_COLORS}
+              valueFormatter={valueFormatter}
+              customTooltip={CustomTooltip}
+              showLegend={false}
+              yAxisWidth={80}
+            />
+          </Panel>
+          <Panel
+            title="Total Requests Over Time"
+            action={<SeriesKey categories={REQUEST_CATEGORIES} colors={["emerald", "red"]} />}
+          >
+            <AreaChart
+              className={CHART_CLASS}
+              data={sortedDailyData}
+              index="date"
+              categories={REQUEST_CATEGORIES}
+              colors={["emerald", "red"]}
+              valueFormatter={valueFormatter}
+              customTooltip={CustomTooltip}
+              showLegend={false}
+              yAxisWidth={80}
+            />
+          </Panel>
         </div>
-      </div>
+      </section>
 
-      {/* Individual Model Sections */}
       {modelNames.length > 0 && (
-        <div className="rounded-lg border">
-          {modelNames.map((modelName) => (
-            <ModelCollapsible
-              key={modelName}
-              defaultOpen={modelName === modelNames[0]}
-              header={
-                <div className="flex justify-between items-center w-full">
-                  <h3 className="text-lg font-medium text-foreground">
-                    {modelMetrics[modelName].label || "Unknown Item"}
-                  </h3>
-                  <div className="flex space-x-4 text-sm text-muted-foreground">
-                    <span>${formatNumberWithCommas(modelMetrics[modelName].total_spend, 2)}</span>
-                    <span>{modelMetrics[modelName].total_requests.toLocaleString()} requests</span>
-                    {modelAverageResponseTimeMs(modelMetrics[modelName]) != null && (
-                      <span>
-                        {formatResponseTime(modelAverageResponseTimeMs(modelMetrics[modelName]))} avg response
-                      </span>
-                    )}
+        <div className="overflow-hidden rounded-xl border bg-card">
+          {modelNames.map((modelName, index) => {
+            const metrics = modelMetrics[modelName];
+            const label = metrics.label || "Unknown Item";
+            const provider = providerForModel(metrics.label || "");
+            const avgResponse = modelAverageResponseTimeMs(metrics);
+            const share = maxSpend > 0 ? (metrics.total_spend / maxSpend) * 100 : 0;
+            return (
+              <ModelCollapsible
+                key={modelName}
+                defaultOpen={modelName === modelNames[0]}
+                header={
+                  <div className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-4">
+                    <div className="flex min-w-0 items-center gap-3">
+                      <ItemMark label={metrics.label || ""} color={stackedUsageColor(index)} />
+                      <div className="min-w-0 flex-1">
+                        <div className="flex min-w-0 items-baseline gap-2">
+                          <span className="truncate text-sm font-medium text-foreground">{label}</span>
+                          {provider && <span className="shrink-0 text-xs text-muted-foreground">{provider}</span>}
+                        </div>
+                        <div
+                          aria-hidden="true"
+                          className="mt-1 h-1 w-full max-w-xs overflow-hidden rounded-full bg-muted"
+                        >
+                          <div
+                            className="h-full rounded-full opacity-80"
+                            style={{ width: `${share}%`, backgroundColor: BRAND }}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex shrink-0 items-center gap-5 text-sm tabular-nums text-muted-foreground">
+                      <span className="text-foreground">${formatNumberWithCommas(metrics.total_spend, 2)}</span>
+                      <span>{metrics.total_requests.toLocaleString()} requests</span>
+                      {avgResponse != null && (
+                        <span className="hidden md:inline">{formatResponseTime(avgResponse)} avg response</span>
+                      )}
+                    </div>
                   </div>
-                </div>
-              }
-            >
-              <ModelSection
-                modelName={modelName || "Unknown Model"}
-                metrics={modelMetrics[modelName]}
-                hidePromptCachingMetrics={hidePromptCachingMetrics}
-                fetchTopApiKeys={fetchTopApiKeys}
-              />
-            </ModelCollapsible>
-          ))}
+                }
+              >
+                <ModelSection
+                  modelName={modelName || "Unknown Model"}
+                  metrics={metrics}
+                  hidePromptCachingMetrics={hidePromptCachingMetrics}
+                  fetchTopApiKeys={fetchTopApiKeys}
+                />
+              </ModelCollapsible>
+            );
+          })}
         </div>
       )}
     </div>
