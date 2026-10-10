@@ -64,12 +64,21 @@ export const useUserDisplayNames = (userIds: readonly string[]) => {
   return useQuery<Record<string, string>>({
     queryKey: userDisplayNameKeys.list({ filters: { ids: JSON.stringify(distinctIds) } }),
     queryFn: async () => {
-      const ids = distinctIds.slice(0, USER_LIST_MAX_PAGE_SIZE);
-      const response = await userListCall(accessToken!, ids, 1, ids.length);
+      const chunks: string[][] = [];
+      for (let i = 0; i < distinctIds.length; i += USER_LIST_MAX_PAGE_SIZE) {
+        chunks.push(distinctIds.slice(i, i + USER_LIST_MAX_PAGE_SIZE));
+      }
+      const responses = await Promise.all(
+        chunks.map((ids) => userListCall(accessToken!, ids, 1, USER_LIST_MAX_PAGE_SIZE)),
+      );
       return Object.fromEntries(
-        response.users.flatMap((user) => {
-          const name = user.user_alias || user.user_email;
-          return name ? [[user.user_id, name]] : [];
+        responses.flatMap((response, chunkIndex) => {
+          const requested = new Set(chunks[chunkIndex]);
+          return response.users.flatMap((user) => {
+            if (!requested.has(user.user_id)) return [];
+            const name = user.user_alias || user.user_email;
+            return name ? [[user.user_id, name]] : [];
+          });
         }),
       );
     },

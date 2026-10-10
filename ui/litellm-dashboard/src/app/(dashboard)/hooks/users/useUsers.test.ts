@@ -456,4 +456,38 @@ describe("useUserDisplayNames", () => {
     expect(result.current.fetchStatus).toBe("idle");
     expect(userListCall).not.toHaveBeenCalled();
   });
+
+  it("pages through ids in chunks of the max page size and merges the names", async () => {
+    const ids = Array.from({ length: 150 }, (_, i) => `u${String(i).padStart(3, "0")}`);
+    const response = buildUserListResponse(1, 1, 0);
+    vi.mocked(userListCall).mockImplementation(async (_token, userIDs) => ({
+      ...response,
+      users: [{ ...response.users[0], user_id: userIDs![0], user_alias: `Alias ${userIDs![0]}` } as UserListResponse["users"][number]],
+    }));
+
+    const { result } = renderHook(() => useUserDisplayNames(ids), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(userListCall).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(userListCall).mock.calls[0][1]).toHaveLength(100);
+    expect(vi.mocked(userListCall).mock.calls[1][1]).toHaveLength(50);
+    expect(result.current.data).toEqual({ u000: "Alias u000", u100: "Alias u100" });
+  });
+
+  it("requests the max page size and keeps only exact id matches", async () => {
+    const response = buildUserListResponse(1, 1, 0);
+    vi.mocked(userListCall).mockResolvedValue({
+      ...response,
+      users: [
+        { ...response.users[0], user_id: "ada-reviewer", user_alias: "Wrong" },
+        { ...response.users[0], user_id: "ada", user_alias: "Ada" },
+      ],
+    });
+
+    const { result } = renderHook(() => useUserDisplayNames(["ada"]), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["ada"], 1, 100);
+    expect(result.current.data).toEqual({ ada: "Ada" });
+  });
 });
