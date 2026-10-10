@@ -689,6 +689,24 @@ def test_e2e_responses_per_user_credential(per_user_credential):
 
 
 @pytest.mark.asyncio
+async def test_e2e_acompletion_bridged_to_responses_per_user_credential(per_user_credential):
+    with (
+        github_http(_copilot_surface_responder(_responses_payload())) as requests,
+        _no_authenticator(),
+    ):
+        response = await litellm.acompletion(
+            model="github_copilot/gpt-5.3-codex",
+            messages=[{"role": "user", "content": "hi"}],
+            litellm_credential_name="copilot-cred",
+            github_copilot_auth_type="per_user_oauth",
+            secret_fields=_secret_fields("user-a", "gho_a"),
+        )
+    _assert_exchange_then_model_call(requests, "gho_a")
+    assert requests[-1].url.path == "/responses"
+    assert response.usage.total_tokens == 6
+
+
+@pytest.mark.asyncio
 async def test_e2e_anthropic_messages_per_user_credential(per_user_credential):
     with (
         github_http(_copilot_surface_responder(_anthropic_messages_payload())) as requests,
