@@ -8962,6 +8962,69 @@ def _mock_mcp_resolution_cache() -> MagicMock:
 
 class TestMCPServerResolutionRegressions:
     @pytest.mark.asyncio
+    async def test_virtual_key_ui_server_list_includes_only_legacy_access_group_servers(self) -> None:
+        group_name: Final = "issue-32186-access-group"
+        visible_id: Final = "issue-32186-visible"
+        hidden_id: Final = "issue-32186-hidden"
+        visible: Final = generate_mock_mcp_server_db_record(server_id=visible_id, alias="Visible MCP").model_copy(
+            update={"mcp_access_groups": [group_name], "credentials": {"auth_value": "secret"}}
+        )
+        key_permission: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id="issue-32186-key-permission",
+            mcp_access_groups=[group_name],
+        )
+        prisma: Final = _mock_mcp_resolution_prisma_client(
+            visible,
+            key_permission,
+            LiteLLM_TeamTable(team_id="issue-32186-team", object_permission=None),
+        )
+        manager: Final = MCPServerManager()
+        manager.registry = {
+            visible_id: MCPServer(
+                server_id=visible_id,
+                name="Visible MCP",
+                alias="Visible MCP",
+                url="https://visible.example.com/mcp",
+                transport=MCPTransport.http,
+                access_groups=[group_name],
+            ),
+            hidden_id: MCPServer(
+                server_id=hidden_id,
+                name="Hidden MCP",
+                alias="Hidden MCP",
+                url="https://hidden.example.com/mcp",
+                transport=MCPTransport.http,
+                access_groups=["another-group"],
+            ),
+        }
+        auth: Final = UserAPIKeyAuth(
+            api_key="synthetic-issue-32186-key",
+            user_id="issue-32186-user",
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            allowed_routes=["mcp_routes"],
+            via_virtual_key=True,
+            object_permission=key_permission,
+        )
+
+        with (
+            patch.object(mgmt_endpoints, "_get_user_mcp_management_mode", return_value="restricted"),
+            patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=prisma),
+            patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+                manager,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+        ):
+            result: Final = await mgmt_endpoints.fetch_all_mcp_servers(user_api_key_dict=auth, team_id=None)
+
+        assert [server.server_id for server in result] == [visible_id]
+        assert result[0].alias == "Visible MCP"
+        assert result[0].credentials is None
+
+    @pytest.mark.asyncio
     async def test_team_granted_database_server_is_visible_to_virtual_key(self) -> None:
         server_id: Final = "lit3974-team-db"
         team_id: Final = "lit3974-team"
