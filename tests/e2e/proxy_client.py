@@ -58,6 +58,7 @@ from models import (
     CredentialCreateBody,
     CredentialCreateResponse,
     CustomerDeleteBody,
+    DecisionsBody,
     EmbedBody,
     EmbedResponse,
     FileListResponse,
@@ -96,6 +97,7 @@ from models import (
     SpendLogsPage,
     SpendLogsPageParams,
     SpendLogsParams,
+    SystemOneBody,
     TeamDeleteBody,
     TeamNewBody,
     TeamNewResponse,
@@ -1006,6 +1008,14 @@ class ProxyClient:
     @step("Send a streaming /v1/responses request to {body.model}")
     def responses_stream(self, key: str, body: ResponsesStreamBody) -> StreamingResponse:
         return self.transport.stream("/v1/responses", headers=self.transport.bearer(key), json=body)
+
+    @step("Send a /v1/decisions request to {body.model}")
+    def decisions(self, key: str, body: DecisionsBody) -> StreamingResponse:
+        return self.transport.send("/v1/decisions", headers=self.transport.bearer(key), json=body)
+
+    @step("Send a /v1/systemone request to {body.model}")
+    def systemone(self, key: str, body: SystemOneBody) -> StreamingResponse:
+        return self.transport.send("/v1/systemone", headers=self.transport.bearer(key), json=body)
 
     @step('Send an /embeddings request to {body.model} for "{body.input}"')
     def embed(self, key: str, body: EmbedBody) -> Result[EmbedResponse]:

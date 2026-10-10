@@ -800,6 +800,48 @@ class RerankResponse(BaseModel):
     results: list[RerankItem] = []
 
 
+# ---------- decisions / systemone ----------
+
+
+class DecisionPredicateQuestion(BaseModel):
+    type: Literal["predicate"] = "predicate"
+    name: str
+    instructions: str
+
+
+class DecisionsBody(BaseModel):
+    """POST /v1/decisions, the OpenAI Decisions shape: one text input and a list of named questions."""
+
+    model: str
+    input: str
+    questions: Sequence[DecisionPredicateQuestion]
+
+
+class SystemOneNoulQuestion(BaseModel):
+    type: Literal["noul"] = "noul"
+    instructions: str
+
+
+class SystemOneBody(BaseModel):
+    """POST /v1/systemone, the System One shape: a state and questions keyed by name."""
+
+    model: str
+    state: str
+    questions: dict[str, SystemOneNoulQuestion]
+
+
+class DecisionUsage(BaseModel):
+    input_tokens: int
+    output_tokens: int
+
+
+class DecisionsResponse(BaseModel):
+    """The usage both routes return; the answers are not read by the spend tests."""
+
+    model: str
+    usage: DecisionUsage
+
+
 # ---------- ocr ----------
 
 

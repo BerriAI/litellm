@@ -273,7 +273,7 @@ quota_management.<behavior>.<variant>.<assertion>
               <spend_tracking> chat_completions | stream | messages_bridge | embeddings
                                | cache_hit | key_rollup | concurrent_burst | tags | end_user
                                | per_model | failure | spend_calculate | pagination | key_attribution
-                               | websearch_interception
+                               | websearch_interception | decisions | systemone
   assertion : blocks_over_limit | resets_after_window | headers_report_remaining | picks_under_tpm
               | blocks_then_resets | resets_windows_independently | alerts_without_blocking
               | isolates_per_model | isolates_per_member | isolates_per_group | enforced_across_keys

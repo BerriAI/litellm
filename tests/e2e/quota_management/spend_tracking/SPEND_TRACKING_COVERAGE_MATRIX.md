@@ -34,6 +34,7 @@ proxy + SpendLogs rows. Status: `covered` / `partial` / `gap`.
 | Embedding | `test_cost_calculator.py` (#29956) | partial | yes (`test_embedding_writes_nonzero_spend_row`) |
 | Pass-through (gemini/anthropic) | `pass_through_tests/*.test.js` + `llm_translation/` suite | covered | yes (llm_translation suite) |
 | Image / audio / rerank / responses / realtime | per-provider unit cost tests | partial/gap | gap |
+| Decisions (`/v1/decisions`, `/v1/systemone`) on every Decisions provider | `tests/integration/cost_calculation/` | covered | yes (`test_decisions_spend_e2e.py`, row spend == usage x the deployment's /model/info rates, header == row) |
 
 ## Entity spend aggregation
 
