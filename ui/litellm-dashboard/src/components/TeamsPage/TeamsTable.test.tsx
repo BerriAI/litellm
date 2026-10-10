@@ -133,7 +133,7 @@ it("renders caller membership spend and budget in the team row", async () => {
 
   expect(await screen.findByText("Member")).toBeInTheDocument();
   expect(screen.getByText("$50.00")).toBeInTheDocument();
-  expect(screen.getByText("· resets Oct 20, 2026")).toBeInTheDocument();
+  expect(screen.getByText("Resets Oct 20, 2026")).toBeInTheDocument();
 });
 
 it("renders the Resources cell with member, model, and key counts", () => {

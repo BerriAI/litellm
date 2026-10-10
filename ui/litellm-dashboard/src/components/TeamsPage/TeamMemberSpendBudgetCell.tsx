@@ -33,11 +33,12 @@ function BudgetLine({ label, spend, maxBudget, resetAt }: BudgetLineProps) {
 
   return (
     <div className="flex flex-col gap-1">
-      <div className="whitespace-nowrap text-xs">
-        <span className="text-[10px] font-semibold text-muted-foreground">{label}</span>{" "}
-        <span className="font-medium tabular-nums text-foreground">{spendText}</span>{" "}
-        <span className="text-muted-foreground">/ {budgetText}</span>
-        {resetText && <span className="text-muted-foreground"> · resets {resetText}</span>}
+      <div className="flex items-baseline justify-between gap-2 whitespace-nowrap text-xs">
+        <span className="text-[10px] font-semibold text-muted-foreground">{label}</span>
+        <span>
+          <span className="font-medium tabular-nums text-foreground">{spendText}</span>{" "}
+          <span className="text-muted-foreground">/ {budgetText}</span>
+        </span>
       </div>
       {budget !== null && budget > 0 && (
         <Meter value={spendValue} max={budget} aria-valuetext={`${label} ${spendText} of ${budgetText}`}>
@@ -46,6 +47,7 @@ function BudgetLine({ label, spend, maxBudget, resetAt }: BudgetLineProps) {
           </MeterTrack>
         </Meter>
       )}
+      {resetText && <div className="text-[10px] text-muted-foreground">Resets {resetText}</div>}
     </div>
   );
 }
