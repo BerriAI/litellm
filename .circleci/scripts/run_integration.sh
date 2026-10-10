@@ -219,7 +219,7 @@ fi
 node_files=()
 case_shards=1
 case_shard_index=0
-if [ "$suite" = extensions ]; then
+if [ "$suite" = extensions ] || [ "$suite" = providers ]; then
   case_shards="${CIRCLE_NODE_TOTAL:-1}"
   case_shard_index="${CIRCLE_NODE_INDEX:-0}"
 elif [ "${CIRCLE_NODE_TOTAL:-1}" -gt 1 ]; then

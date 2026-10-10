@@ -3,7 +3,6 @@ import importlib
 import json
 import logging
 import os
-import threading
 from collections.abc import AsyncIterator, Iterator, Sequence
 from typing import Final, TypedDict
 from unittest.mock import AsyncMock
@@ -23,7 +22,6 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import StandardLoggingPayload
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.integration._support.wire import Reply as WireReply, Request as WireRequest, wire_server
 
 
 @pytest.fixture(autouse=True)
@@ -653,78 +651,88 @@ def _batch_events(body: bytes, log_format: LOG_FORMAT_TYPES) -> tuple[_QueuedLog
             return (_QUEUED_LOG.validate_json(body),)
 
 
-def _received_log_ids(requests: Sequence[WireRequest], log_format: LOG_FORMAT_TYPES) -> Iterator[str]:
+def _received_log_ids(requests: Sequence[httpx.Request], log_format: LOG_FORMAT_TYPES) -> Iterator[str]:
     for request in requests:
-        for event in _batch_events(request.body, log_format):
+        for event in _batch_events(request.content, log_format):
             yield event["id"]
+
+
+class _InProcessLogSink:
+    def __init__(self, *, hold_first: bool = False) -> None:
+        self.hold_first: Final = hold_first
+        self.arrived: Final = asyncio.Event()
+        self.release: Final = asyncio.Event()
+        self.requests: tuple[httpx.Request, ...] = ()
+
+    async def respond(self, request: httpx.Request) -> httpx.Response:
+        self.requests = (*self.requests, request)
+        if self.hold_first and len(self.requests) == 1:
+            self.arrived.set()
+            await self.release.wait()
+        return httpx.Response(200)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("log_format", ("json_array", "ndjson", "single"))
 async def test_generic_api_keeps_failure_arriving_during_success_batch(log_format: LOG_FORMAT_TYPES) -> None:
-    loop: Final = asyncio.get_running_loop()
-    first_arrived: Final = asyncio.Event()
-    release: Final = threading.Event()
-
-    def respond(request: WireRequest) -> WireReply:
-        events: Final = _batch_events(request.body, log_format)
-        if any(event["id"] == "before" for event in events):
-            loop.call_soon_threadsafe(first_arrived.set)
-            assert release.wait(5), "The first HTTP batch was never released"
-        return WireReply()
-
-    with wire_server(respond) as wire:
-        handler: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport(trust_env=False))
-        before_tasks: Final = frozenset(asyncio.all_tasks())
-        logger: Final = GenericAPILogger(
-            endpoint=wire.url,
-            async_httpx_client=handler,
-            log_format=log_format,
-            batch_size=1000,
-            flush_interval=1,
-        )
-        owned_tasks: Final = frozenset(asyncio.all_tasks()) - before_tasks
-        try:
+    sink: Final = _InProcessLogSink(hold_first=True)
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(sink.respond))
+    before_tasks: Final = frozenset(asyncio.all_tasks())
+    logger: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        async_httpx_client=handler,
+        log_format=log_format,
+        batch_size=1000,
+        flush_interval=3600,
+    )
+    owned_tasks: Final = frozenset(asyncio.all_tasks()) - before_tasks
+    try:
+        async with asyncio.TaskGroup() as flushes:
             await logger.async_log_success_event({"standard_logging_object": {"id": "before"}}, None, None, None)
-            first_flush: Final = asyncio.create_task(logger.flush_queue())
-            await first_arrived.wait()
-            await logger.async_log_failure_event({"standard_logging_object": {"id": "during"}}, None, None, None)
-            release.set()
+            first_flush: Final = flushes.create_task(logger.flush_queue())
+            try:
+                await sink.arrived.wait()
+                await logger.async_log_failure_event({"standard_logging_object": {"id": "during"}}, None, None, None)
+            finally:
+                sink.release.set()
             await first_flush
             await logger.flush_queue()
-            assert tuple(_received_log_ids(wire.drain(), log_format)) == ("before", "during")
-        finally:
-            release.set()
-            for task in owned_tasks:
-                task.cancel()
-            await asyncio.gather(*owned_tasks, return_exceptions=True)
-            if logger.async_httpx_client is not None:
-                await logger.async_httpx_client.close()
-            await handler.close()
+            assert tuple(_received_log_ids(sink.requests, log_format)) == ("before", "during")
+    finally:
+        sink.release.set()
+        for task in owned_tasks:
+            task.cancel()
+        await asyncio.gather(*owned_tasks, return_exceptions=True)
+        await handler.close()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("log_format", ("json_array", "ndjson", "single"))
 async def test_generic_api_concurrent_flushes_deliver_each_event_once(log_format: LOG_FORMAT_TYPES) -> None:
-    with wire_server(lambda request: WireReply()) as wire:
-        handler: Final = AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport(trust_env=False))
-        before_tasks: Final = frozenset(asyncio.all_tasks())
-        logger: Final = GenericAPILogger(
-            endpoint=wire.url,
-            async_httpx_client=handler,
-            log_format=log_format,
-            batch_size=1000,
-            flush_interval=1,
-        )
-        owned_tasks: Final = frozenset(asyncio.all_tasks()) - before_tasks
-        try:
-            await logger.async_log_success_event({"standard_logging_object": {"id": "once"}}, None, None, None)
-            await asyncio.gather(logger.flush_queue(), logger.async_send_batch())
-            assert tuple(_received_log_ids(wire.drain(), log_format)) == ("once",)
-        finally:
-            for task in owned_tasks:
-                task.cancel()
-            await asyncio.gather(*owned_tasks, return_exceptions=True)
-            if logger.async_httpx_client is not None:
-                await logger.async_httpx_client.close()
-            await handler.close()
+    sink: Final = _InProcessLogSink(hold_first=True)
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(sink.respond))
+    before_tasks: Final = frozenset(asyncio.all_tasks())
+    logger: Final = GenericAPILogger(
+        endpoint="https://owned-logger.invalid",
+        async_httpx_client=handler,
+        log_format=log_format,
+        batch_size=1000,
+        flush_interval=3600,
+    )
+    owned_tasks: Final = frozenset(asyncio.all_tasks()) - before_tasks
+    try:
+        await logger.async_log_success_event({"standard_logging_object": {"id": "once"}}, None, None, None)
+        async with asyncio.TaskGroup() as flushes:
+            flushes.create_task(logger.flush_queue())
+            flushes.create_task(logger.async_send_batch())
+            try:
+                await sink.arrived.wait()
+            finally:
+                sink.release.set()
+        assert tuple(_received_log_ids(sink.requests, log_format)) == ("once",)
+    finally:
+        sink.release.set()
+        for task in owned_tasks:
+            task.cancel()
+        await asyncio.gather(*owned_tasks, return_exceptions=True)
+        await handler.close()

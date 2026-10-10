@@ -3,13 +3,16 @@ from __future__ import annotations
 import asyncio
 import errno
 import os
+import signal
 import socket
 import subprocess
 import sys
+import time
 from collections import Counter
 from collections.abc import Callable
 from contextlib import AbstractContextManager, ExitStack
 from pathlib import Path
+from types import FrameType
 from typing import Final
 
 import httpx
@@ -19,7 +22,7 @@ import pytest
 
 from tests.integration._support import process as process_support
 from tests.integration._support.async_server import LoopbackServer
-from tests.integration._support.client import Gateway
+from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.database_relay import (
     DatabaseRelay,
     DroppedConnectionRelay,
@@ -75,6 +78,52 @@ def test_upstream_readiness_failure_reaps_the_started_process(monkeypatch: pytes
     finally:
         if slot.process is not None:
             slot.stop()
+
+
+class _InterruptedCleanup(BaseException):
+    pass
+
+
+def test_interrupted_cleanup_reaps_the_owned_root_and_its_child() -> None:
+    child_code: Final = (
+        "import signal,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+        "print('ready',flush=True); time.sleep(60)"
+    )
+    parent_code: Final = (
+        "import signal,subprocess,sys,time; signal.signal(signal.SIGTERM,signal.SIG_IGN); "
+        f"child=subprocess.Popen((sys.executable,'-P','-c',{child_code!r}),stdout=subprocess.PIPE); "
+        "assert child.stdout.readline()==b'ready\\n'; print('ready',flush=True); time.sleep(60)"
+    )
+
+    def interrupt(signum: int, frame: FrameType | None) -> None:
+        raise _InterruptedCleanup
+
+    with subprocess.Popen(
+        (sys.executable, "-P", "-c", parent_code), start_new_session=True, stdout=subprocess.PIPE
+    ) as process:
+        try:
+            assert process.stdout is not None
+            assert process.stdout.readline() == b"ready\n"
+            assert len(process_support.group_members(process.pid)) == 2
+            previous_timer: Final = signal.getitimer(signal.ITIMER_REAL)
+            started: Final = time.monotonic()
+            previous_handler: Final = signal.signal(signal.SIGALRM, interrupt)
+            try:
+                signal.setitimer(signal.ITIMER_REAL, 0.2)
+                with pytest.raises(_InterruptedCleanup):
+                    process_support._stop(process)
+            finally:
+                signal.setitimer(signal.ITIMER_REAL, 0)
+                signal.signal(signal.SIGALRM, previous_handler)
+                remaining: Final = (
+                    max(0.001, previous_timer[0] - (time.monotonic() - started)) if previous_timer[0] else 0
+                )
+                signal.setitimer(signal.ITIMER_REAL, remaining, previous_timer[1])
+            assert process.poll() is not None
+            eventually(lambda: process_support.group_members(process.pid), lambda members: not members, seconds=5)
+        finally:
+            process_support.signal_group(process.pid, signal.SIGKILL)
+            process.wait(timeout=3)
 
 
 @pytest.mark.parametrize("explicit_dotenv", (False, True))

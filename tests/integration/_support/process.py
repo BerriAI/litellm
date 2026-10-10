@@ -105,19 +105,25 @@ def owned_proxy(
 
 
 def _stop(process: subprocess.Popen[bytes]) -> None:
-    root_stopped: Final = stop_root_process(process)
-    residual: Final = group_members(process.pid)
-    if residual:
-        signal_group(process.pid, signal.SIGTERM)
-        psutil.wait_procs(residual, timeout=5)
-    remaining: Final = group_members(process.pid)
-    if remaining:
+    try:
+        root_stopped: Final = stop_root_process(process)
+        residual: Final = group_members(process.pid)
+        if residual:
+            signal_group(process.pid, signal.SIGTERM)
+            psutil.wait_procs(residual, timeout=5)
+        remaining: Final = group_members(process.pid)
+        if remaining:
+            signal_group(process.pid, signal.SIGKILL)
+            psutil.wait_procs(remaining, timeout=3)
+        process.wait(timeout=3)
+        survivors: Final = group_members(process.pid)
+        assert not survivors, "Owned proxy child survived cleanup"
+        assert root_stopped and not remaining, "Owned proxy required forced cleanup"
+    except BaseException:
         signal_group(process.pid, signal.SIGKILL)
-        psutil.wait_procs(remaining, timeout=3)
-    process.wait(timeout=3)
-    survivors: Final = group_members(process.pid)
-    assert not survivors, "Owned proxy child survived cleanup"
-    assert root_stopped and not remaining, "Owned proxy required forced cleanup"
+        process.wait(timeout=3)
+        psutil.wait_procs(group_members(process.pid), timeout=3)
+        raise
 
 
 _PORT_ATTEMPTS: Final = 3

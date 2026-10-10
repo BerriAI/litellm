@@ -3030,23 +3030,31 @@ jobs:
             test -z "$(docker ps -aq --filter name=postgres-db --filter name=redis-cache)"
       - when:
           condition:
-            equal: [extensions, << parameters.suite >>]
+            or:
+              - equal: [extensions, << parameters.suite >>]
+              - equal: [providers, << parameters.suite >>]
           steps:
             - run:
                 name: Prepare this shard's execution record
                 command: |
-                  mkdir -p "/tmp/integration-shards/extensions/$CIRCLE_NODE_INDEX"
-                  cp test-results/integration-extensions/execution.json "/tmp/integration-shards/extensions/$CIRCLE_NODE_INDEX/execution.json"
+                  mkdir -p "/tmp/integration-shards/<< parameters.suite >>/$CIRCLE_NODE_INDEX"
+                  cp test-results/integration-<< parameters.suite >>/execution.json "/tmp/integration-shards/<< parameters.suite >>/$CIRCLE_NODE_INDEX/execution.json"
             - persist_to_workspace:
                 root: /tmp/integration-shards
                 paths:
-                  - extensions
+                  - << parameters.suite >>
       - store_test_results:
           path: test-results
       - store_artifacts:
           path: test-results
 
   integration_shard_coverage:
+    parameters:
+      suite:
+        type: enum
+        enum: [extensions, providers]
+      shards:
+        type: integer
     machine:
       image: ubuntu-2204:2024.04.1
     resource_class: medium
@@ -3056,8 +3064,8 @@ jobs:
       - attach_workspace:
           at: /tmp/integration-shards
       - run:
-          name: Verify every extensions case ran exactly once
-          command: .venv/bin/python -m tests.integration._support.sharding /tmp/integration-shards/extensions --shards 24
+          name: Verify every << parameters.suite >> case ran exactly once
+          command: .venv/bin/python -m tests.integration._support.sharding /tmp/integration-shards/<< parameters.suite >> --shards << parameters.shards >>
 
   routing_parity:
     parameters:
@@ -3349,7 +3357,11 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [sdk, cost, security, browser]
+              suite: [sdk, cost, browser]
+      - integration_contracts:
+          name: integration-security
+          suite: security
+          resource_class: xlarge
       - integration_contracts:
           name: integration-management
           suite: management
@@ -3361,7 +3373,13 @@ workflows:
       - integration_contracts:
           name: integration-providers
           suite: providers
-          parallelism: 10
+          parallelism: 16
+      - integration_shard_coverage:
+          name: integration-providers-coverage
+          suite: providers
+          shards: 16
+          requires:
+            - integration-providers
       - integration_contracts:
           name: integration-database
           suite: database
@@ -3374,8 +3392,11 @@ workflows:
           name: integration-extensions
           suite: extensions
           parallelism: 24
+          resource_class: xlarge
       - integration_shard_coverage:
           name: integration-extensions-coverage
+          suite: extensions
+          shards: 24
           requires:
             - integration-extensions
       - integration_contracts:
