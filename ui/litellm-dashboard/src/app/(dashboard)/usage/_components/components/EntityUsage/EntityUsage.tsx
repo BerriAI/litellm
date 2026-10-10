@@ -2,7 +2,13 @@ import useTeams from "@/app/(dashboard)/hooks/useTeams";
 import { StackedUsageChart, type StackedUsageScale } from "@/components/shared/charts";
 import { DataTable } from "@/components/shared/DataTable";
 import { getProviderSpend, getTopAgents, getTopAPIKeys, getTopModels } from "./entityUsageAggregations";
-import { buildCostBreakdownTiles, buildSummaryTiles, hasFlatCost, type SummaryTile } from "./entityUsageSummary";
+import {
+  buildCostBreakdownTiles,
+  buildSummaryTiles,
+  hasFlatCost,
+  hasPtuHours,
+  type SummaryTile,
+} from "./entityUsageSummary";
 import { MoneyCell } from "@/components/shared/table_cells";
 import { hasCapability, type Capability } from "@/utils/capabilities";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
@@ -340,6 +346,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
 
   const capitalizedEntityLabel = entityType.charAt(0).toUpperCase() + entityType.slice(1);
   const showFlatCost = entityType === "team" && hasFlatCost(spendData.metadata);
+  const showPtuHours = entityType === "team" && hasPtuHours(spendData.metadata);
   const userSpendTeamIds = useMemo(
     () =>
       selectedTags.length > 0
@@ -449,7 +456,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   };
 
   const breakdownTiles = showFlatCost && showCostBreakdown ? buildCostBreakdownTiles(spendData.metadata) : [];
-  const summaryTiles = buildSummaryTiles(spendData.metadata, showFlatCost);
+  const summaryTiles = buildSummaryTiles(spendData.metadata, showFlatCost, showPtuHours);
 
   const modelViewTitle = modelViewType === "groups" ? "Top Public Model Names" : "Top Litellm Models";
   const chartFormat = (value: number) => formatMetricValue(value, breakdown.metric);
@@ -460,7 +467,12 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     <div className="grid gap-3">
       <section className="grid gap-2">
         <h2 className="text-sm font-medium text-foreground">{capitalizedEntityLabel} Spend Overview</h2>
-        <div className="grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border lg:grid-cols-5">
+        <div
+          className={cn(
+            "grid grid-cols-2 gap-px overflow-hidden rounded-xl border bg-border",
+            showPtuHours ? "lg:grid-cols-6" : "lg:grid-cols-5",
+          )}
+        >
           {summaryTiles.map(renderSummaryTile)}
         </div>
         {breakdownTiles.length > 0 && (

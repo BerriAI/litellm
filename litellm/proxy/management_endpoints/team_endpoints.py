@@ -152,6 +152,7 @@ from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # l
 from litellm.proxy.management_endpoints.organization_endpoints import (
     add_member_to_organization,
 )
+from litellm.proxy.management_endpoints.ptu_consumption import single_team_id, with_ptu_consumption
 from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
 from litellm.proxy.management_endpoints.tag_management_endpoints import (
     get_daily_activity,
@@ -6707,6 +6708,7 @@ async def get_team_daily_activity(
         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
     """
     from litellm.proxy.proxy_server import (
+        llm_router,
         prisma_client,
         proxy_logging_obj,
         user_api_key_cache,
@@ -6725,7 +6727,7 @@ async def get_team_daily_activity(
         proxy_logging_obj=proxy_logging_obj,
     )
 
-    return await get_daily_activity(
+    activity: Final = await get_daily_activity(
         prisma_client=prisma_client,
         table_name="litellm_dailyteamspend",
         entity_id_field="team_id",
@@ -6739,6 +6741,7 @@ async def get_team_daily_activity(
         page=page,
         page_size=page_size,
     )
+    return with_ptu_consumption(activity, llm_router, single_team_id(scope.team_ids))
 
 
 _MAX_AGGREGATED_RANGE_DAYS: Final = 400

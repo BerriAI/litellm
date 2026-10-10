@@ -14,9 +14,10 @@ and share the existing unique constraint.
 
 import asyncio
 import json
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -85,7 +86,8 @@ class BackfillResult:
 
 @dataclass(frozen=True, slots=True)
 class PTUModel:
-    """A model deployment carrying valid manual PTU config."""
+    """One team's holding on a deployment carrying valid manual PTU config: the whole count
+    under a single team_id, or that team's share of a split deployment."""
 
     model_id: str
     model_name: str
@@ -101,10 +103,10 @@ def _public_model_name(row: object, model_info: Mapping[str, object]) -> str:
 
     Creating a team-scoped deployment rewrites model_name to a synthetic routing key
     (``model_name_<team_id>_<uuid4>``) and keeps the chosen name in
-    ``model_info.team_public_model_name``. PTU config is only accepted alongside a
-    team_id, so every PTU deployment carries that synthetic name; keying the sentinel
-    row on it would file each charge under a UUID that no usage view can resolve and
-    that never lines up with the same model's request rows.
+    ``model_info.team_public_model_name``. A PTU deployment held by one team_id carries
+    that synthetic name; keying the sentinel row on it would file each charge under a
+    UUID that no usage view can resolve and that never lines up with the same model's
+    request rows. A deployment split into ptu_shares keeps the name it was declared with.
     """
     public_name: Final = model_info.get("team_public_model_name")
     if isinstance(public_name, str) and public_name:
@@ -131,7 +133,7 @@ def _decode_model_info(raw: object) -> "Mapping[str, object] | None":
 
 @dataclass(frozen=True, slots=True)
 class _PTUDeployment:
-    """A deployment in the shape ``_parse_ptu_model`` reads, whatever declared it.
+    """A deployment in the shape ``_parse_ptu_models`` reads, whatever declared it.
 
     A ``LiteLLM_ProxyModelTable`` row already has it. A router entry does not: its id
     lives in ``model_info.id`` rather than on the entry itself.
@@ -163,26 +165,30 @@ def _router_deployment(deployment: Mapping[str, object]) -> _PTUDeployment | Non
     )
 
 
-def _parse_ptu_model(row: object) -> PTUModel | None:
-    """Return a PTUModel when the deployment carries valid manual PTU config, else None.
+def _parse_ptu_models(row: object) -> tuple[PTUModel, ...]:
+    """One PTUModel per team the deployment's valid PTU config attributes capacity to, else empty.
 
-    Valid means model_info has a positive ptu_count, a non-negative
-    cost_per_ptu_per_hour, and a team_id (1 model -> 1 team).
+    A deployment held by one team_id yields one entry carrying the whole count; a deployment
+    split into ptu_shares yields one per team carrying that team's share, so each team's row
+    accrues its share of the flat cost.
     """
     model_info: Final = _decode_model_info(getattr(row, "model_info", None))
     if model_info is None:
-        return None
+        return ()
     terms: Final = ptu_terms(model_info)
     if terms is None:
-        return None
-    return PTUModel(
-        model_id=str(getattr(row, "model_id", "") or ""),
-        model_name=_public_model_name(row, model_info),
-        team_id=terms.team_id,
-        ptu_count=terms.ptu_count,
-        cost_per_ptu_per_hour=terms.cost_per_ptu_per_hour,
-        effective_from=terms.effective_from,
-        effective_to=terms.effective_to,
+        return ()
+    return tuple(
+        PTUModel(
+            model_id=str(getattr(row, "model_id", "") or ""),
+            model_name=_public_model_name(row, model_info),
+            team_id=team_id,
+            ptu_count=share,
+            cost_per_ptu_per_hour=terms.cost_per_ptu_per_hour,
+            effective_from=terms.effective_from,
+            effective_to=terms.effective_to,
+        )
+        for team_id, share in sorted(terms.shares.items())
     )
 
 
@@ -379,9 +385,7 @@ async def _load_ptu_models(prisma_client: "PrismaClient", *, router: object | No
     rows: Final = await _proxy_model_table(prisma_client).find_many()
     db_ids: Final = frozenset(model_id for row in rows if (model_id := str(getattr(row, "model_id", "") or "")))
     config_records: Final = _config_deployments(router, owned_by_db=db_ids)
-    models: Final = tuple(
-        parsed for parsed in (_parse_ptu_model(row) for row in (*rows, *config_records)) if parsed is not None
-    )
+    models: Final = tuple(chain.from_iterable(_parse_ptu_models(row) for row in (*rows, *config_records)))
     return _LoadedDeployments(
         models=models,
         scanned_ids=db_ids
@@ -454,16 +458,17 @@ async def run_ptu_flat_cost_rollup(
             scanned_ids=loaded.scanned_ids,
         )
 
+    models_processed: Final = len(frozenset(model.model_id for model in ptu_models))
     verbose_proxy_logger.info(
         "PTU rollup for %s: %d PTU models processed, %d rows written, %d rows failed",
         date_str,
-        len(ptu_models),
+        models_processed,
         rows_written,
         rows_failed,
     )
     return RollupResult(
         day=day,
-        models_processed=len(ptu_models),
+        models_processed=models_processed,
         rows_written=rows_written,
         rows_failed=rows_failed,
         lapsed=_lapsed_models(ptu_models, run_started),
@@ -488,11 +493,13 @@ def _lapsed_models(ptu_models: tuple[PTUModel, ...], now: datetime) -> tuple[str
     charge the provider does not make for reserved capacity.
     """
     return tuple(
-        _slack_safe(model.model_name)
-        for model in sorted(
-            (m for m in ptu_models if m.effective_to is not None and m.effective_to <= now),
-            key=lambda m: m.effective_to,
-            reverse=True,
+        dict.fromkeys(
+            _slack_safe(model.model_name)
+            for model in sorted(
+                (m for m in ptu_models if m.effective_to is not None and m.effective_to <= now),
+                key=lambda m: m.effective_to or now,
+                reverse=True,
+            )
         )
     )
 
@@ -512,6 +519,15 @@ def _backfill_window(ptu_models: tuple[PTUModel, ...], end: date) -> tuple[date,
         return ()
     start: Final = max(min(starts), floor)
     return tuple(start + timedelta(days=offset) for offset in range((end - start).days + 1))
+
+
+def _unpriced_charges(
+    ptu_models: tuple[PTUModel, ...], days: tuple[date, ...], priced: frozenset[tuple[str, str, str]]
+) -> Iterator[tuple[str, _PTUCharge]]:
+    for day in days:
+        for charge in _aggregate_charges(ptu_models, day):
+            if (charge.team_id, charge.model_id, day.isoformat()) not in priced:
+                yield (day.isoformat(), charge)
 
 
 async def _existing_sentinel_keys(
@@ -569,12 +585,7 @@ async def run_ptu_flat_cost_backfill(
         return BackfillResult(start=end, end=end, days_scanned=0, rows_written=0)
 
     priced: Final = await _existing_sentinel_keys(prisma_client, start=days[0], end=days[-1])
-    missing: Final = tuple(
-        (day.isoformat(), charge)
-        for day in days
-        for charge in _aggregate_charges(ptu_models, day)
-        if (charge.team_id, charge.model_id, day.isoformat()) not in priced
-    )
+    missing: Final = tuple(_unpriced_charges(ptu_models, days, priced))
     if not missing:
         return BackfillResult(start=days[0], end=days[-1], days_scanned=len(days), rows_written=0)
 

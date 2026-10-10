@@ -39,6 +39,11 @@ def is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
 _is_proxy_admin_request = is_proxy_admin_request
 
 
+def team_may_use_deployment(owner_team_id: object, team_id: str | None) -> bool:
+    """A deployment owned by a team (``model_info.team_id``) serves only that team; one with no owner serves every team."""
+    return owner_team_id is None or owner_team_id == team_id
+
+
 def get_request_team_id(request_kwargs: Mapping[str, object] | None) -> str | None:
     """The caller's team id, from whichever metadata bucket this surface writes to."""
     if request_kwargs is None:

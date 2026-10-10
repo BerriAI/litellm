@@ -7312,6 +7312,48 @@ def test_get_wildcard_deployment_usable_by_team_prefers_the_team_pattern():
     assert router.get_credential_deployment(model_id=ocr, team_id="team-b").model_info.id == "shared-wildcard"
 
 
+@pytest.mark.parametrize(
+    ("with_catch_all", "requested", "team_id", "expected_ids"),
+    [
+        pytest.param(False, "rwild-chat", "team-r", ("team-r-wildcard",), id="team-pattern-when-no-proxy-wide-match"),
+        pytest.param(False, "rwild-chat", "team-b", (), id="another-teams-pattern-never-serves"),
+        pytest.param(False, "rwild-chat", None, (), id="no-team-no-team-pattern"),
+        pytest.param(True, "rwild-chat", "team-r", ("catch-all",), id="proxy-wide-pattern-beats-the-team-pattern"),
+        pytest.param(True, "ptu-chat", "team-r", ("ptu-wildcard",), id="only-the-most-specific-proxy-wide-pattern"),
+    ],
+)
+def test_wildcard_route_deployments_is_the_one_pattern_routing_serves_from(
+    with_catch_all: bool, requested: str, team_id: str | None, expected_ids: tuple[str, ...]
+):
+    catch_all: Final = (
+        ({"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "sk-open"}, "model_info": {"id": "catch-all"}},)
+        if with_catch_all
+        else ()
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "ptu-*",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-ptu"},
+                "model_info": {"id": "ptu-wildcard"},
+            },
+            {
+                "model_name": "team-r-internal",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "sk-team-r"},
+                "model_info": {"id": "team-r-wildcard", "team_id": "team-r", "team_public_model_name": "rwild-*"},
+            },
+            *catch_all,
+        ]
+    )
+
+    served: Final = router.wildcard_route_deployments(requested, team_id)
+    early: Final = router._try_early_resolve_deployments_for_model_not_in_names(model=requested, request_team_id=team_id)
+    early_deployments: Final = early[1] if early is not None and isinstance(early[1], list) else []
+
+    assert tuple(Deployment.model_validate(d).model_info.id for d in served) == expected_ids
+    assert tuple(Deployment.model_validate(d).model_info.id for d in early_deployments) == expected_ids
+
+
 def test_get_deployment_credentials_with_provider_aws_bedrock_runtime_endpoint():
     """
     Test that get_deployment_credentials_with_provider correctly copies
@@ -20463,6 +20505,109 @@ def test_bare_model_group_served_by_wildcard_deployment_has_provider_prefixed_co
 
     assert router._has_content_policy_fallback("claude-sonnet-4-6", {}) is True
     assert router._has_content_policy_fallback("claude-haiku-4-5", {}) is False
+
+
+def _shared_ptu_model_list() -> list:
+    return [
+        {
+            "model_name": "gpt-4.1-ptu",
+            "litellm_params": {"model": "gpt-4.1", "mock_response": "shared"},
+            "model_info": {
+                "id": "shared-deployment",
+                "base_model": "azure/gpt-4.1",
+                "ptu_count": 50,
+                "cost_per_ptu_per_hour": 1.0,
+                "ptu_effective_from": "2026-01-01T00:00:00Z",
+                "ptu_shares": {"team-a": 30, "team-b": 20},
+            },
+        },
+        {
+            "model_name": "gpt-4.1-ptu",
+            "litellm_params": {"model": "gpt-4.1", "mock_response": "open"},
+            "model_info": {"id": "open-deployment"},
+        },
+    ]
+
+
+def test_ptu_shares_hide_the_shared_deployment_from_teams_holding_no_share(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    router = Router(model_list=_shared_ptu_model_list())
+    for request_kwargs in ({"metadata": {"user_api_key_team_id": "team-c"}}, {"metadata": {}}, {}):
+        _, deployments = router._common_checks_available_deployment(model="gpt-4.1-ptu", request_kwargs=request_kwargs)
+        assert [d["model_info"]["id"] for d in deployments] == ["open-deployment"]
+    for team_id in ("team-a", "team-b"):
+        _, deployments = router._common_checks_available_deployment(
+            model="gpt-4.1-ptu",
+            request_kwargs={"metadata": {"user_api_key_team_id": team_id}},
+        )
+        assert {d["model_info"]["id"] for d in deployments} == {"shared-deployment", "open-deployment"}
+
+
+def test_ptu_shares_raise_when_only_shared_deployments_remain(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    router = Router(model_list=_shared_ptu_model_list()[:1])
+    with pytest.raises(litellm.BadRequestError, match="reserved for the teams holding a PTU share"):
+        router._common_checks_available_deployment(
+            model="gpt-4.1-ptu",
+            request_kwargs={"metadata": {"user_api_key_team_id": "team-c"}},
+        )
+    _, deployments = router._common_checks_available_deployment(
+        model="gpt-4.1-ptu",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-b"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["shared-deployment"]
+
+
+def test_ptu_shares_hide_the_shared_deployment_even_while_the_feature_is_off(monkeypatch):
+    """The flag switches cost attribution on; a declared split is an access rule and holds
+    without it, so a team never reaches a deployment reserved for others while the flag is
+    off."""
+    monkeypatch.delenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", raising=False)
+    router = Router(model_list=_shared_ptu_model_list())
+    _, deployments = router._common_checks_available_deployment(
+        model="gpt-4.1-ptu",
+        request_kwargs={"metadata": {"user_api_key_team_id": "team-c"}},
+    )
+    assert [d["model_info"]["id"] for d in deployments] == ["open-deployment"]
+
+
+def test_a_shared_ptu_deployment_whose_shares_do_not_add_up_is_refused_at_registration(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    model_list = _shared_ptu_model_list()[:1]
+    model_list[0]["model_info"]["ptu_shares"] = {"team-a": 30}
+    with pytest.raises(ValueError, match=r"gpt-4\.1-ptu.*30 of 50 allocated"):
+        Router(model_list=model_list)
+
+
+def test_a_shared_ptu_deployment_with_a_fractional_count_is_refused_at_registration(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    model_list = _shared_ptu_model_list()[:1]
+    model_list[0]["model_info"]["ptu_count"] = 50.5
+    with pytest.raises(ValueError, match="ptu_count"):
+        Router(model_list=model_list)
+
+
+@pytest.mark.parametrize(("flag", "warned"), [("True", True), ("", False)])
+def test_an_unsized_shared_ptu_deployment_is_warned_about_at_registration_only_with_the_feature_on(
+    monkeypatch, caplog, flag, warned
+):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", flag)
+    model_list = _shared_ptu_model_list()[:1]
+    model_list[0]["litellm_params"]["model"] = "azure/my-ptu-deployment"
+    del model_list[0]["model_info"]["base_model"]
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        Router(model_list=model_list)
+    assert ("'gpt-4.1-ptu'" in caplog.text and "base_model" in caplog.text) is warned
+
+
+def test_a_config_entry_declaring_shares_without_terms_is_refused_even_while_the_feature_is_off(monkeypatch):
+    """The split is enforced with the flag off, so its shape is checked with the flag off too: a
+    malformed one is refused at boot instead of being honoured or ignored without a word."""
+    monkeypatch.delenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", raising=False)
+    model_list = _shared_ptu_model_list()[:1]
+    model_list[0]["model_info"] = {"id": "shared-deployment", "ptu_shares": {"team-a": 30, "team-b": 20}}
+    with pytest.raises(ValueError, match=r"ptu_count and cost_per_ptu_per_hour are required when ptu_shares is set"):
+        Router(model_list=model_list)
 
 
 @pytest.mark.asyncio

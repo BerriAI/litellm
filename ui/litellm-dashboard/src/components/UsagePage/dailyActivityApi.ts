@@ -32,6 +32,7 @@ export const EMPTY_DAILY_ACTIVITY_METADATA: DailyActivityMetadata = {
   total_pages: 1,
   total_spend: 0,
   total_flat_cost: 0,
+  total_ptu_hours: 0,
   total_api_requests: 0,
   total_successful_requests: 0,
   total_failed_requests: 0,

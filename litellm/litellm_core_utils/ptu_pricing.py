@@ -6,13 +6,16 @@ together because they have to agree: a deployment the rollup declines to charge 
 router prices at zero serves its traffic for free.
 """
 
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime, time, timezone
 from types import MappingProxyType
 from typing import Final
 
-from litellm.secret_managers.main import get_secret_bool
+from typing_extensions import TypeIs  # noqa: TID251  # TypeIs reaches typing only on 3.13
+
+from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import ModelInfo
 from litellm.types.utils import AzureSpillover, CustomPricingLiteLLMParams, MirroredPricingParams
 
@@ -22,8 +25,12 @@ AZURE_SPILLOVER_FROM_HEADER: Final = "x-ms-spillover-from-deployment"
 
 
 def is_ptu_cost_attribution_enabled() -> bool:
-    """Whether PTU flat-cost attribution is turned on for this process."""
-    return get_secret_bool(PTU_COST_ATTRIBUTION_ENV_VAR, False) is True
+    """Whether PTU flat-cost attribution is turned on for this process.
+
+    Read from the environment alone: the router and the rate limiter ask on every request,
+    and ``get_secret`` would forward each of those reads to a configured secret manager.
+    """
+    return str_to_bool(os.environ.get(PTU_COST_ATTRIBUTION_ENV_VAR)) is True
 
 
 PTU_ZEROED_PRICING_FIELDS: Final = tuple(f for f in MirroredPricingParams.model_fields if f != "tiered_pricing") + (
@@ -56,9 +63,13 @@ PTU_ZEROED_PRICING: Final[Mapping[str, float | tuple[()] | Mapping[str, float]]]
 
 @dataclass(frozen=True, slots=True)
 class PTUTerms:
-    """The reservation a deployment declares, once every field has been validated."""
+    """The reservation a deployment declares, once every field has been validated.
 
-    team_id: str
+    ``shares`` maps every team the capacity is attributed to onto its PTUs and adds up to
+    ``ptu_count``: a deployment declaring a single ``team_id`` holds the whole count under it.
+    """
+
+    shares: Mapping[str, int]
     ptu_count: int
     cost_per_ptu_per_hour: float
     effective_from: datetime
@@ -127,12 +138,82 @@ def ptu_identity_error(
     return None
 
 
-PTU_MODEL_INFO_FIELDS: Final = ("ptu_count", "cost_per_ptu_per_hour", "ptu_effective_from", "ptu_effective_to")
+PTU_MODEL_INFO_FIELDS: Final = (
+    "ptu_count",
+    "cost_per_ptu_per_hour",
+    "ptu_effective_from",
+    "ptu_effective_to",
+    "ptu_shares",
+)
+
+
+def _is_mapping(
+    value: object,
+) -> TypeIs[Mapping[object, object]]:  # guard-ok: isinstance decides it, keys and values stay object
+    return isinstance(value, Mapping)
+
+
+def _whole_ptus(share: object) -> int | None:
+    """``share`` as a positive whole number of PTUs, with ``2.0`` read as 2, else None.
+
+    ``bool`` is excluded because it is an ``int`` subclass and ``True`` would read as one PTU.
+    """
+    if isinstance(share, bool):
+        return None
+    whole: Final = int(share) if isinstance(share, float) and share.is_integer() else share
+    return whole if isinstance(whole, int) and whole > 0 else None
+
+
+def parsed_ptu_shares(raw: object) -> Mapping[str, int] | None:
+    """``ptu_shares`` as team id -> whole PTUs, else None when empty or any entry is unusable."""
+    if not _is_mapping(raw) or not raw:
+        return None
+    candidates: Final = tuple(
+        (team_id, _whole_ptus(share)) for team_id, share in raw.items() if isinstance(team_id, str) and team_id
+    )
+    entries: Final = tuple((team_id, share) for team_id, share in candidates if share is not None)
+    if len(entries) != len(raw):
+        return None
+    return MappingProxyType(dict(entries))
+
+
+def _parsed_ptu_count(model_info: Mapping[str, object]) -> int | None:
+    """``ptu_count`` as the whole number of reserved units within bounds, else None."""
+    raw: Final = model_info.get("ptu_count")
+    if isinstance(raw, bool) or not isinstance(raw, (int, float, str)):
+        return None
+    if isinstance(raw, float) and not raw.is_integer():
+        return None
+    try:
+        count: Final = int(raw)
+    except (ValueError, OverflowError):
+        return None
+    return count if 0 < count <= ModelInfo.MAX_PTU_COUNT else None
+
+
+def _declared_shares(model_info: Mapping[str, object], ptu_count: int) -> Mapping[str, int] | None:
+    """Who holds the capacity: the single ``team_id`` holding all of it, or the ``ptu_shares``
+    that add up to it, else None."""
+    team_id: Final = model_info.get("team_id")
+    raw_shares: Final = model_info.get("ptu_shares")
+    if team_id and raw_shares is None:
+        return MappingProxyType({str(team_id): ptu_count})
+    if team_id or raw_shares is None:
+        return None
+    shares: Final = parsed_ptu_shares(raw_shares)
+    if shares is None or sum(shares.values()) != ptu_count:
+        return None
+    return shares
 
 
 def declares_ptu(model_info: Mapping[str, object]) -> bool:
     """Whether any PTU field is set here, including one too malformed to charge."""
     return any(model_info.get(field) is not None for field in PTU_MODEL_INFO_FIELDS)
+
+
+def declares_ptu_shares(model_info: Mapping[str, object]) -> bool:
+    """Whether ``ptu_shares`` is set here, including a split too malformed to honour."""
+    return model_info.get("ptu_shares") is not None
 
 
 def ptu_config_error(model_info: Mapping[str, object], *, model_name: str | None = None) -> str | None:
@@ -153,8 +234,11 @@ def ptu_config_error(model_info: Mapping[str, object], *, model_name: str | None
 
     has_count: Final = model_info.get("ptu_count") is not None
     has_rate: Final = model_info.get("cost_per_ptu_per_hour") is not None
-    if not has_count and not has_rate:
+    has_shares: Final = declares_ptu_shares(model_info)
+    if not has_count and not has_rate and not has_shares:
         return None
+    if not has_count and not has_rate:
+        return _named("ptu_count and cost_per_ptu_per_hour are required when ptu_shares is set", model_name)
     if has_count != has_rate:
         return _named("ptu_count and cost_per_ptu_per_hour must be set together", model_name)
     if effective_from is None:
@@ -164,8 +248,36 @@ def ptu_config_error(model_info: Mapping[str, object], *, model_name: str | None
             "today could be billed for days it did not exist",
             model_name,
         )
-    if not model_info.get("team_id"):
-        return _named("team_id is required when PTU fields are set (one model maps to one team)", model_name)
+    return _ptu_holder_error(model_info, model_name)
+
+
+def _ptu_holder_error(model_info: Mapping[str, object], model_name: str | None) -> str | None:
+    """Why the teams this capacity is attributed to cannot be read, else None.
+
+    The shares have to add up to the count exactly: a shortfall would leave PTU-hours the
+    provider bills attributed to nobody, and a surplus would attribute capacity that was
+    never reserved.
+    """
+    team_id: Final = model_info.get("team_id")
+    raw_shares: Final = model_info.get("ptu_shares")
+    if team_id and raw_shares is not None:
+        return _named(
+            "team_id and ptu_shares cannot both be set; ptu_shares lists every team the capacity is split across",
+            model_name,
+        )
+    if not team_id and raw_shares is None:
+        return _named("team_id or ptu_shares is required when PTU fields are set", model_name)
+    if raw_shares is None:
+        return None
+    shares: Final = parsed_ptu_shares(raw_shares)
+    if shares is None:
+        return _named("ptu_shares must map at least one team_id to a positive whole number of PTUs", model_name)
+    ptu_count: Final = _parsed_ptu_count(model_info)
+    if ptu_count is None:
+        return None
+    allocated: Final = sum(shares.values())
+    if allocated != ptu_count:
+        return _named(f"ptu_shares must add up to ptu_count ({allocated} of {ptu_count} allocated)", model_name)
     return None
 
 
@@ -176,17 +288,13 @@ def ptu_terms(model_info: Mapping[str, object]) -> PTUTerms | None:
     present but unparseable bound would read as no bound and widen the window to the whole
     day, so either one leaves the deployment unpriced until the config is fixed.
     """
-    ptu_count: Final = model_info.get("ptu_count")
+    ptu_count_int: Final = _parsed_ptu_count(model_info)
     cost_per_hour: Final = model_info.get("cost_per_ptu_per_hour")
-    team_id: Final = model_info.get("team_id")
-    if ptu_count is None or cost_per_hour is None or not team_id:
+    if ptu_count_int is None or isinstance(cost_per_hour, bool) or not isinstance(cost_per_hour, (int, float, str)):
         return None
     try:
-        ptu_count_int: Final = int(ptu_count)
         cost_per_hour_float: Final = float(cost_per_hour)
-    except (TypeError, ValueError, OverflowError):
-        return None
-    if not 0 < ptu_count_int <= ModelInfo.MAX_PTU_COUNT:
+    except (ValueError, OverflowError):
         return None
     if not 0 <= cost_per_hour_float <= ModelInfo.MAX_COST_PER_PTU_PER_HOUR:
         return None
@@ -199,8 +307,11 @@ def ptu_terms(model_info: Mapping[str, object]) -> PTUTerms | None:
         return None
     if effective_to is not None and effective_to <= effective_from:
         return None
+    shares: Final = _declared_shares(model_info, ptu_count_int)
+    if shares is None:
+        return None
     return PTUTerms(
-        team_id=str(team_id),
+        shares=shares,
         ptu_count=ptu_count_int,
         cost_per_ptu_per_hour=cost_per_hour_float,
         effective_from=effective_from,

@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
 from openai import Timeout as SDKTimeout
-from pydantic import ConfigDict, Field, JsonValue, field_validator, model_validator
+from pydantic import BeforeValidator, ConfigDict, Field, JsonValue, StrictInt, field_validator, model_validator
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
@@ -238,6 +238,10 @@ class ModelAccessWindow(LiteLLMBaseModel):
         return self
 
 
+def _whole_float_as_int(value: object) -> object:
+    return int(value) if isinstance(value, float) and value.is_integer() else value
+
+
 class ModelInfo(MirroredPricingParams):
     id: str | None  # Allow id to be optional on input, but it will always be present as a str in the model instance
     db_model: bool = False  # used for proxy - to separate models which are stored in the db vs. config.
@@ -276,6 +280,7 @@ class ModelInfo(MirroredPricingParams):
     cost_per_ptu_per_hour: float | None = None
     ptu_effective_from: datetime.datetime | None = None
     ptu_effective_to: datetime.datetime | None = None
+    ptu_shares: Mapping[str, Annotated[StrictInt, BeforeValidator(_whole_float_as_int)]] | None = None
 
     # when tag-based routing's "!" or "&" constraints eliminate every deployment
     # in this model group, fall back to the default-tagged pool instead of

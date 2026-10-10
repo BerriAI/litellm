@@ -3,7 +3,7 @@ import io
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass, fields
 from itertools import chain
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock
 
@@ -12,14 +12,17 @@ from fastapi import FastAPI, Request
 from fastapi.testclient import TestClient
 
 from litellm import constants
+from litellm.llms.azure.ptu_capacity import AZURE_PTU_CAPACITY
 from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, LitellmUserRoles, Member, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.daily_activity_routes import (
     _csv_cell,
+    get_daily_activity_llm_router,
     get_daily_activity_prisma_client,
     get_daily_activity_repository,
     router,
 )
+from litellm.router import Router
 from litellm.types.proxy.management_endpoints.common_daily_activity import KeySpendMetrics, SpendMetrics
 from litellm.types.repositories.daily_activity import (
     AggregatedRows,
@@ -190,6 +193,7 @@ def _grouping_row(
     api_key: str | None,
     group_level: int,
     distinct_api_keys: int | None,
+    model_group: str | None = None,
 ) -> GroupingSetsRow:
     metric_values: Final = _metrics(rows)
     return GroupingSetsRow(
@@ -197,7 +201,7 @@ def _grouping_row(
         api_key=api_key,
         **metric_values,
         model=None,
-        model_group=None,
+        model_group=model_group,
         custom_llm_provider=None,
         mcp_namespaced_tool_name=None,
         endpoint=None,
@@ -211,17 +215,29 @@ def _grouping_rows_for_day(
 ) -> tuple[GroupingSetsRow, ...]:
     date_rows: Final = tuple(row for row in rows if row.date == date)
     return (
-        _grouping_row(date_rows, date=date, api_key=None, group_level=63, distinct_api_keys=distinct_api_keys),
-    ) + tuple(
-        _grouping_row(
-            tuple(row for row in date_rows if row.api_key == api_key),
-            date=date,
-            api_key=api_key,
-            group_level=31,
-            distinct_api_keys=None,
+        (_grouping_row(date_rows, date=date, api_key=None, group_level=63, distinct_api_keys=distinct_api_keys),)
+        + tuple(
+            _grouping_row(
+                tuple(row for row in date_rows if row.api_key == api_key),
+                date=date,
+                api_key=api_key,
+                group_level=31,
+                distinct_api_keys=None,
+            )
+            for api_key in top_keys
+            if any(row.api_key == api_key for row in date_rows)
         )
-        for api_key in top_keys
-        if any(row.api_key == api_key for row in date_rows)
+        + tuple(
+            _grouping_row(
+                tuple(row for row in date_rows if row.model_group == model_group),
+                date=date,
+                api_key=None,
+                group_level=55,
+                distinct_api_keys=None,
+                model_group=model_group,
+            )
+            for model_group in sorted({row.model_group for row in date_rows})
+        )
     )
 
 
@@ -562,6 +578,103 @@ def test_aggregated_routes_return_scoped_results(
     assert len(body["results"]) == 2, response.text
 
 
+def _ptu_sized_router(model_group: str, shares: Mapping[str, int] = MappingProxyType({"team-a": 30, "team-b": 20})) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": model_group,
+                "litellm_params": {"model": "azure/gpt-4.1", "api_key": "sk-ptu", "api_base": "https://ptu.example"},
+                "model_info": {
+                    "id": "shared-ptu",
+                    "base_model": "azure/gpt-4.1",
+                    "ptu_count": 50,
+                    "cost_per_ptu_per_hour": 1.0,
+                    "ptu_effective_from": "2024-01-01T00:00:00Z",
+                    "ptu_shares": dict(shares),
+                },
+            }
+        ]
+    )
+
+
+def _inject_llm_router(client: TestClient, llm_router: Router) -> None:
+    app: Final = client.app
+    assert isinstance(app, FastAPI)
+    app.dependency_overrides[get_daily_activity_llm_router] = lambda: llm_router
+
+
+@pytest.mark.parametrize("attribution_enabled", [True, False])
+def test_team_aggregated_route_reports_ptu_hours_for_the_sized_model_group_only_while_attribution_is_on(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    monkeypatch: pytest.MonkeyPatch,
+    attribution_enabled: bool,
+) -> None:
+    """team-a sent one rare-group request of 10 input and 5 output tokens on 2025-01-01, so with
+    gpt-4.1's sizing that day, its model group, and the total carry those tokens normalized
+    (output at the model's output ratio) over one PTU-hour of input; the unsized popular-group,
+    the day without rare-group traffic, and the flag-off run all report zero."""
+    client, _ = daily_activity_client
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True" if attribution_enabled else "False")
+    _inject_llm_router(client, _ptu_sized_router("rare-group"))
+
+    response: Final = client.get("/team/daily/activity/aggregated", params=_entity_params("team_ids", "team-a"))
+
+    assert response.status_code == 200, response.text
+    body: Final = response.json()
+    capacity: Final = AZURE_PTU_CAPACITY["gpt-4.1"]
+    expected: Final = (
+        (10 + 5 * capacity.output_to_input_ratio) / capacity.normalized_tokens_per_ptu_hour
+        if attribution_enabled
+        else 0.0
+    )
+    by_date: Final = {day["date"]: day for day in body["results"]}
+    rare_day: Final = by_date["2025-01-01"]
+    assert body["metadata"]["total_ptu_hours"] == pytest.approx(expected), response.text
+    assert rare_day["metrics"]["ptu_hours"] == pytest.approx(expected), response.text
+    assert rare_day["breakdown"]["model_groups"]["rare-group"]["metrics"]["ptu_hours"] == pytest.approx(expected)
+    assert rare_day["breakdown"]["model_groups"]["popular-group"]["metrics"]["ptu_hours"] == 0, response.text
+    assert by_date["2025-01-02"]["metrics"]["ptu_hours"] == 0, response.text
+    assert body["metadata"]["total_tokens"] == 90, response.text
+
+
+def test_team_aggregated_route_reports_no_ptu_hours_to_a_team_holding_no_share(
+    daily_activity_client: tuple[TestClient, _FakeRepository],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """rare-group is split between team-b and team-c, so team-a's page alone converts none of its
+    rare-group tokens even though the group is sized."""
+    client, _ = daily_activity_client
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    _inject_llm_router(client, _ptu_sized_router("rare-group", shares=MappingProxyType({"team-b": 30, "team-c": 20})))
+
+    response: Final = client.get("/team/daily/activity/aggregated", params=_entity_params("team_ids", "team-a"))
+
+    assert response.status_code == 200, response.text
+    body: Final = response.json()
+    rare_day: Final = {day["date"]: day for day in body["results"]}["2025-01-01"]
+    assert body["metadata"]["total_ptu_hours"] == 0, response.text
+    assert rare_day["breakdown"]["model_groups"]["rare-group"]["metrics"]["ptu_hours"] == 0, response.text
+    assert body["metadata"]["total_tokens"] == 90, response.text
+
+
+def test_ptu_hours_stay_zero_outside_the_team_routes(
+    daily_activity_client: tuple[TestClient, _FakeRepository], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PTU reservations are split per team, so only the team routes convert tokens to PTU-hours;
+    a user's own activity on the same sized model group keeps the field at zero."""
+    client, _ = daily_activity_client
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    _inject_llm_router(client, _ptu_sized_router("rare-group"))
+
+    response: Final = client.get("/user/daily/activity/aggregated", params=_entity_params("user_id", "user-a"))
+
+    assert response.status_code == 200, response.text
+    body: Final = response.json()
+    rare_day: Final = next(day for day in body["results"] if day["date"] == "2025-01-01")
+    assert body["metadata"]["total_ptu_hours"] == 0, response.text
+    assert rare_day["breakdown"]["model_groups"]["rare-group"]["metrics"]["ptu_hours"] == 0, response.text
+
+
 @pytest.mark.parametrize(("prefix", "query_name", "entity_id"), _ENTITY_CASES)
 def test_admin_aggregates_all_entities_when_filter_is_omitted(
     daily_activity_client: tuple[TestClient, _FakeRepository], prefix: str, query_name: str, entity_id: str
@@ -593,6 +706,7 @@ def test_search_folds_each_entity_key_across_days(
                 "metrics": {
                     "spend": 3.0,
                     "flat_cost": 0.0,
+                    "ptu_hours": 0.0,
                     "prompt_tokens": 20,
                     "completion_tokens": 10,
                     "cache_read_input_tokens": 0,

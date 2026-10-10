@@ -103,6 +103,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY
 from litellm.litellm_core_utils.ptu_pricing import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     declares_ptu,
+    declares_ptu_shares,
     is_ptu_cost_attribution_enabled,
     ptu_config_error,
     ptu_identity_error,
@@ -197,6 +198,7 @@ from litellm.router_utils.common_utils import (
     is_proxy_admin_request,
     provider_for_generic_call,
     resolve_model_group_alias,
+    team_may_use_deployment,
     truncate_fallback_error_detail,
     warn_on_provider_credential_mismatch,
     without_router_only_kwargs,
@@ -266,6 +268,7 @@ from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
 from litellm.router_utils.pre_call_checks.prompt_caching_deployment_check import (
     PromptCachingDeploymentCheck,
 )
+from litellm.router_utils.ptu_shares import filter_ptu_shared_deployments, ptu_capacity_warning
 from litellm.router_utils.reasoning_effort_capability import (
     deployment_is_catalog_mapped,
     intersect_supported_reasoning_efforts,
@@ -9352,11 +9355,27 @@ class Router:
             ptu_error: Final = (
                 (ptu_config_error(_model_info, model_name=_model_name) or identity_error) if config_sourced else None
             )
-            if ptu_error is not None and is_ptu_cost_attribution_enabled():
+            declares_split: Final = declares_ptu_shares(_model_info)
+            if ptu_error is not None and (declares_split or is_ptu_cost_attribution_enabled()):
                 raise ValueError(ptu_error)
             access_windows_error: Final = access_windows_config_error(_model_info, model_name=_model_name)
             if access_windows_error is not None:
                 raise ValueError(access_windows_error)
+            capacity_warning: Final = (
+                ptu_capacity_warning(
+                    _model_name,
+                    MappingProxyType(
+                        {  # pyright: ignore[reportUnknownArgumentType]  # router deployment dicts are untyped
+                            "model_info": _model_info,
+                            "litellm_params": _litellm_params,
+                        }
+                    ),
+                )
+                if is_ptu_cost_attribution_enabled()
+                else None
+            )
+            if capacity_warning is not None:
+                verbose_router_logger.warning(capacity_warning)
             zeroed_pricing: Final = zeroed_ptu_pricing(_model_info, _litellm_params) if config_sourced else None
             merged_params: Final[Mapping[str, object]] = (
                 _litellm_params if zeroed_pricing is None else MappingProxyType({**_litellm_params, **zeroed_pricing})
@@ -10734,7 +10753,7 @@ class Router:
         """
         model_info: Final = model.get("model_info") if isinstance(model, dict) else model.model_info
         owner_team_id: Final = cast(Mapping[str, object], model_info).get("team_id") if model_info is not None else None
-        return owner_team_id is None or owner_team_id == team_id
+        return team_may_use_deployment(owner_team_id, team_id)
 
     _deployment_usable_by_team = deployment_usable_by_team
 
@@ -12541,6 +12560,15 @@ class Router:
         ]
         return [{**DeploymentTypedDict(**m), "model_name": model_name} for m in matches]
 
+    def wildcard_route_deployments(self, model: str, team_id: str | None) -> Sequence[Mapping[str, object]]:
+        """The deployments routing serves ``model`` from through a wildcard: the most specific
+        proxy-wide pattern matching it, else ``team_id``'s own pattern, never both."""
+        proxy_wide: Final[Sequence[Mapping[str, object]]] = self.pattern_router.get_deployments_by_pattern(model=model)
+        team_router: Final = self.team_pattern_routers.get(team_id) if team_id is not None else None
+        if proxy_wide or team_router is None:
+            return proxy_wide
+        return team_router.get_deployments_by_pattern(model=model)
+
     def get_model_list_of_routed_group(self, model_group: str) -> list[DeploymentTypedDict]:
         """
         The deployments a request the router has already resolved to model_group is
@@ -13150,19 +13178,9 @@ class Router:
             if team_deployments:
                 return model, team_deployments
 
-        pattern_deployments = self.pattern_router.get_deployments_by_pattern(
-            model=model,
-        )
-
-        if pattern_deployments:
-            return model, pattern_deployments
-
-        if request_team_id is not None and request_team_id in self.team_pattern_routers:
-            pattern_deployments = self.team_pattern_routers[request_team_id].get_deployments_by_pattern(
-                model=model,
-            )
-            if pattern_deployments:
-                return model, pattern_deployments
+        wildcard_deployments: Final = self.wildcard_route_deployments(model, request_team_id)
+        if wildcard_deployments:
+            return model, list(wildcard_deployments)
 
         if self.default_deployment is not None:
             # Shallow copy with nested litellm_params copy (100x+ faster than deepcopy)
@@ -13422,7 +13440,14 @@ class Router:
                 model=model,
                 llm_provider="",
             )
-        return result.deployments
+        shared: Final = filter_ptu_shared_deployments(result.deployments, request_team_id)
+        if shared.withheld and len(shared.deployments) == 0:
+            raise litellm.BadRequestError(
+                message=f"Deployment {model} is reserved for the teams holding a PTU share of it",
+                model=model,
+                llm_provider="",
+            )
+        return shared.deployments
 
     def _filter_deployments_by_model_access_groups(
         self,
