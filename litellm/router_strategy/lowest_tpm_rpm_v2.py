@@ -11,10 +11,11 @@ import httpx
 
 import litellm
 from litellm import token_counter
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import _get_parent_otel_span_from_kwargs
+from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.router import RouterErrors
 from litellm.types.utils import LiteLLMPydanticObjectBase, StandardLoggingPayload
@@ -98,6 +99,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             default_sync_interval=0.1,
         )
 
+    @with_service_target("router_usage")
     def pre_call_check(self, deployment: dict) -> dict | None:
         """
         Pre-call check + update model rpm
@@ -173,6 +175,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 raise e
             return deployment  # don't fail calls if eg. redis fails to connect
 
+    @with_service_target("router_usage")
     async def async_pre_call_check(self, deployment: dict, parent_otel_span: Span | None) -> dict | None:
         """
         Pre-call check + update model rpm
@@ -249,6 +252,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 raise e
             return deployment  # don't fail calls if eg. redis fails to connect
 
+    @with_service_target("router_usage")
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
@@ -291,6 +295,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 "litellm.proxy.hooks.lowest_tpm_rpm_v2.py::log_success_event(): Exception occured - %s", e
             )
 
+    @with_service_target("router_usage")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         if is_batch_retrieve_call_type(kwargs.get("call_type")):
             return
@@ -320,7 +325,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             # Update usage
             # ------------
             # update cache
-            parent_otel_span: Final = _get_parent_otel_span_from_kwargs(kwargs)
+            parent_otel_span: Final = get_parent_otel_span_from_kwargs(kwargs)
             ## TPM
             await self.router_cache.async_increment_cache_post_call(
                 key=tpm_key,
@@ -464,6 +469,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             [f"{prefix}:rpm:{current_minute}" for prefix in prefixes],
         )
 
+    @with_service_target("router_usage")
     async def async_get_available_deployments(
         self,
         model_group: str,
@@ -572,6 +578,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
                 ),
             )
 
+    @with_service_target("router_usage")
     def get_available_deployments(
         self,
         model_group: str,

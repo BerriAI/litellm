@@ -33,6 +33,7 @@ from litellm.types.proxy.management_endpoints.ui_sso import (
     MicrosoftServicePrincipalTeam,
     TeamMappings,
 )
+from tests._master_key import MASTER_KEY
 
 _SSO_PROVIDER_ENV_VARS = (
     "DISABLE_ADMIN_UI",
@@ -939,6 +940,83 @@ def test_build_sso_user_update_data_normalizes_email():
     assert "user_role" not in update_data
 
 
+def test_build_sso_user_update_data_fills_empty_user_alias_from_display_name():
+    """
+    An existing SSO user with no alias gets the IdP display name on login.
+    """
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import _build_sso_user_update_data
+
+    sso_result = CustomOpenID(
+        id="S-1-5-21-adfs-user",
+        email="jane.doe@example.com",
+        first_name="Jane",
+        last_name="Doe",
+        display_name="Doe, Jane",
+        provider="generic",
+        team_ids=[],
+    )
+
+    update_data = _build_sso_user_update_data(
+        result=sso_result,
+        user_email="jane.doe@example.com",
+        user_id="S-1-5-21-adfs-user",
+        existing_user_alias=None,
+    )
+
+    assert update_data == {"user_email": "jane.doe@example.com", "user_alias": "Doe, Jane"}
+
+
+def test_build_sso_user_update_data_keeps_existing_user_alias():
+    """
+    An alias already stored for the user is never overwritten by the IdP display name.
+    """
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import _build_sso_user_update_data
+
+    sso_result = CustomOpenID(
+        id="S-1-5-21-adfs-user",
+        email="jane.doe@example.com",
+        display_name="Doe, Jane",
+        provider="generic",
+        team_ids=[],
+    )
+
+    update_data = _build_sso_user_update_data(
+        result=sso_result,
+        user_email="jane.doe@example.com",
+        user_id="S-1-5-21-adfs-user",
+        existing_user_alias="Admin-set alias",
+    )
+
+    assert update_data == {"user_email": "jane.doe@example.com"}
+
+
+@pytest.mark.parametrize(
+    "result, expected_alias",
+    [
+        (
+            CustomOpenID(id="user-1", display_name="Doe, Jane", first_name="Jane", last_name="Doe", team_ids=[]),
+            "Doe, Jane",
+        ),
+        (CustomOpenID(id="user-1", first_name="Jane", last_name="Doe", team_ids=[]), "Jane Doe"),
+        (CustomOpenID(id="user-1", display_name="user-1", first_name="Jane", team_ids=[]), "Jane"),
+        (CustomOpenID(id="user-1", display_name="user-1", team_ids=[]), None),
+        (CustomOpenID(id="user-1", display_name="   ", first_name=" Jane ", last_name="Doe", team_ids=[]), "Jane Doe"),
+        (CustomOpenID(id="user-1", display_name="   ", first_name=" ", team_ids=[]), None),
+        ({"id": "user-1", "display_name": "Dict User", "first_name": None, "last_name": None}, "Dict User"),
+        (None, None),
+    ],
+)
+def test_get_sso_user_alias(result: CustomOpenID | dict[str, str | None] | None, expected_alias: str | None):
+    """
+    The alias is the IdP display name unless it is just the user id, then the joined first/last name.
+    """
+    from litellm.proxy.management_endpoints.ui_sso import _get_sso_user_alias
+
+    assert _get_sso_user_alias(result) == expected_alias
+
+
 def test_generic_response_convertor_normalizes_email():
     """
     Test that generic_response_convertor normalizes email addresses.
@@ -1020,6 +1098,87 @@ async def test_upsert_sso_user_updates_role_for_existing_user():
     assert call_args.kwargs["where"] == {"user_id": "test-user-123"}
     assert call_args.kwargs["data"]["user_email"] == "test@example.com"
     assert call_args.kwargs["data"]["user_role"] == "proxy_admin"
+
+
+@pytest.mark.asyncio
+async def test_upsert_sso_user_fills_user_alias_for_existing_user():
+    """
+    An existing user row without an alias is updated with the SSO display name on login.
+    """
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import SSOAuthenticationHandler
+
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.update_many = AsyncMock()
+
+    existing_user = LiteLLM_UserTable(
+        user_id="S-1-5-21-adfs-user",
+        user_email="jane.doe@example.com",
+        user_role="internal_user",
+        user_alias=None,
+    )
+    sso_result = CustomOpenID(
+        id="S-1-5-21-adfs-user",
+        email="jane.doe@example.com",
+        first_name="Jane",
+        last_name="Doe",
+        display_name="Doe, Jane",
+        provider="generic",
+        team_ids=[],
+    )
+
+    await SSOAuthenticationHandler.upsert_sso_user(
+        result=sso_result,
+        user_info=existing_user,
+        user_email="jane.doe@example.com",
+        user_defined_values=None,
+        prisma_client=mock_prisma,
+    )
+
+    mock_prisma.db.litellm_usertable.update_many.assert_called_once_with(
+        where={"user_id": "S-1-5-21-adfs-user"},
+        data={"user_email": "jane.doe@example.com", "user_alias": "Doe, Jane"},
+    )
+
+
+@pytest.mark.asyncio
+async def test_insert_sso_user_sets_user_alias_from_display_name():
+    """
+    A newly created SSO user is inserted with the IdP display name as user_alias.
+    """
+    from litellm.proxy._types import NewUserResponse, SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.types import CustomOpenID
+    from litellm.proxy.management_endpoints.ui_sso import insert_sso_user
+
+    sso_result = CustomOpenID(
+        id="S-1-5-21-adfs-user",
+        email="jane.doe@example.com",
+        first_name="Jane",
+        last_name="Doe",
+        display_name="Doe, Jane",
+        provider="generic",
+        team_ids=[],
+    )
+    user_defined_values: SSOUserDefinedValues = {
+        "models": [],
+        "user_id": "S-1-5-21-adfs-user",
+        "user_email": "jane.doe@example.com",
+        "max_budget": None,
+        "user_role": "internal_user",
+        "budget_duration": None,
+    }
+
+    with patch(
+        "litellm.proxy.management_endpoints.ui_sso.new_user",
+        return_value=NewUserResponse(user_id="S-1-5-21-adfs-user", key="sk-xxxxx", teams=None),
+    ) as mock_new_user:
+        await insert_sso_user(result_openid=sso_result, user_defined_values=user_defined_values)
+
+    new_user_request = mock_new_user.call_args.kwargs["data"]
+    assert new_user_request.user_id == "S-1-5-21-adfs-user"
+    assert new_user_request.user_email == "jane.doe@example.com"
+    assert new_user_request.user_alias == "Doe, Jane"
 
 
 @pytest.mark.asyncio
@@ -2111,7 +2270,7 @@ class TestUISSO_FunctionsExistence:
         assert SSOAuthenticationHandler is not None
 
         # Check that the new _get_cli_state method exists
-        assert hasattr(SSOAuthenticationHandler, "_get_cli_state")
+        assert hasattr(SSOAuthenticationHandler, "get_cli_state")
         assert callable(SSOAuthenticationHandler._get_cli_state)
 
 
@@ -2869,7 +3028,7 @@ class TestCLIKeyRegenerationFlow:
                     return_value="https://proxy.example.com/sso/callback",
                 ),
                 patch(
-                    "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler._get_cli_state",
+                    "litellm.proxy.management_endpoints.ui_sso.SSOAuthenticationHandler.get_cli_state",
                     return_value=None,
                 ) as mock_get_cli_state,
             ):
@@ -8002,7 +8161,7 @@ class TestPKCEStateCookieBinding:
             ),
             patch.object(
                 SSOAuthenticationHandler,
-                "_pkce_token_exchange",
+                "pkce_token_exchange",
                 AsyncMock(
                     return_value={
                         "access_token": "tok",
@@ -8014,7 +8173,7 @@ class TestPKCEStateCookieBinding:
             ),
             patch.object(
                 SSOAuthenticationHandler,
-                "_delete_pkce_verifier",
+                "delete_pkce_verifier",
                 AsyncMock(),
             ),
             patch("fastapi_sso.sso.base.DiscoveryDocument"),
@@ -8367,7 +8526,7 @@ async def _render_legacy_login_page(env_overrides, general_settings):
     with (
         # snapshot os.environ so the mutations below are reverted on exit
         patch.dict(os.environ, {}, clear=False),
-        patch("litellm.proxy.proxy_server.master_key", "sk-1234"),
+        patch("litellm.proxy.proxy_server.master_key", MASTER_KEY),
         patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
         patch("litellm.proxy.proxy_server.premium_user", False),
         patch("litellm.proxy.proxy_server.general_settings", general_settings),
@@ -8498,7 +8657,7 @@ async def test_saml_callback_enforces_free_sso_user_limit_after_validation():
     with patch.dict(os.environ, {"DISABLE_ADMIN_UI": "false"}), patch(
         "litellm.proxy.proxy_server.premium_user", False
     ), patch("litellm.proxy.proxy_server.prisma_client", MagicMock()), patch(
-        "litellm.proxy.proxy_server.master_key", "sk-1234"
+        "litellm.proxy.proxy_server.master_key", MASTER_KEY
     ), patch(
         "litellm.proxy.management_endpoints.sso.saml_sso.SAMLAuthHandler.handle_acs",
         new=_fake_handle_acs,
@@ -8665,7 +8824,7 @@ async def test_pkce_arm_captures_sso_assertion():
         ),
         patch.object(
             SSOAuthenticationHandler,
-            "_pkce_token_exchange",
+            "pkce_token_exchange",
             AsyncMock(
                 return_value={
                     "access_token": "tok",
@@ -8676,7 +8835,7 @@ async def test_pkce_arm_captures_sso_assertion():
                 }
             ),
         ),
-        patch.object(SSOAuthenticationHandler, "_delete_pkce_verifier", AsyncMock()),
+        patch.object(SSOAuthenticationHandler, "delete_pkce_verifier", AsyncMock()),
         patch("fastapi_sso.sso.base.DiscoveryDocument"),
         patch("fastapi_sso.sso.generic.create_provider", return_value=MagicMock()),
         patch.dict(
@@ -9501,3 +9660,114 @@ async def test_cli_sign_in_enrolls_only_verified_subjects_before_completing(
         )
     else:
         table.upsert.assert_not_awaited()
+
+
+_GOOGLE_DISCOVERY_DOCUMENT = {
+    "authorization_endpoint": "https://accounts.google.com/o/oauth2/v2/auth",
+    "token_endpoint": "https://oauth2.googleapis.com/token",
+    "userinfo_endpoint": "https://openidconnect.googleapis.com/v1/userinfo",
+}
+
+
+async def _sso_key_generate_on_ui_disabled_node(*, source, key, google_sso_configured, known_login_ids):
+    """Drives GET /sso/key/generate on a node running with DISABLE_ADMIN_UI=true, the worker
+    shape of a control plane deployment, with a real Google redirect builder behind a mocked
+    discovery document."""
+    from litellm.proxy.management_endpoints.ui_sso import _get_cli_sso_flow_cache_key, google_login
+
+    env_without_sso_providers = {name: value for name, value in os.environ.items() if name not in _SSO_PROVIDER_ENV_VARS}
+    env = {
+        **env_without_sso_providers,
+        "DISABLE_ADMIN_UI": "true",
+        "PROXY_BASE_URL": "https://worker.example.com",
+        **(
+            {"GOOGLE_CLIENT_ID": "google-client-id", "GOOGLE_CLIENT_SECRET": "google-client-secret"}
+            if google_sso_configured
+            else {}
+        ),
+    }
+    flows = {_get_cli_sso_flow_cache_key(login_id): {"poll_secret_hash": "h"} for login_id in known_login_ids}
+    cli_cache = MagicMock(redis_cache=None)
+    cli_cache.get_cache.side_effect = lambda key: flows.get(key)
+    mock_request = MagicMock(spec=Request)
+    mock_request.base_url = "https://worker.example.com/"
+    mock_request.url.scheme = "https"
+    mock_request.cookies = {}
+
+    with (
+        patch.dict(os.environ, env, clear=True),
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.master_key", MASTER_KEY),
+        patch("litellm.proxy.proxy_server.general_settings", {}),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        patch("litellm.proxy.proxy_server.cli_sso_session_cache", cli_cache),
+        patch("litellm.proxy.proxy_server.user_custom_ui_sso_sign_in_handler", None),
+        patch("litellm.proxy.management_endpoints.ui_sso.show_missing_vars_in_env", return_value=None),
+        respx.mock(assert_all_called=False) as router,
+    ):
+        router.get("https://accounts.google.com/.well-known/openid-configuration").mock(
+            return_value=httpx.Response(200, json=_GOOGLE_DISCOVERY_DOCUMENT)
+        )
+        return await google_login(request=mock_request, source=source, key=key)
+
+
+@pytest.mark.asyncio
+async def test_cli_sso_login_reaches_the_idp_on_a_ui_disabled_node():
+    """Regression: a Claude Code gateway or `lite login` sign-in whose verification link lands on a
+    worker running DISABLE_ADMIN_UI=true used to get the "Admin UI is Disabled" page instead of the
+    IdP redirect, so sign-in never completed off the admin node."""
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.constants import LITELLM_CLI_SESSION_TOKEN_PREFIX
+
+    login_id = "cli-worker-login-session-0001"
+
+    response = await _sso_key_generate_on_ui_disabled_node(
+        source="litellm-cli", key=login_id, google_sso_configured=True, known_login_ids=(login_id,)
+    )
+
+    assert response.status_code == 303
+    location = urlparse(response.headers["location"])
+    assert location.hostname == "accounts.google.com"
+    query = parse_qs(location.query)
+    assert query["state"] == [f"{LITELLM_CLI_SESSION_TOKEN_PREFIX}:{login_id}"]
+    assert query["redirect_uri"] == ["https://worker.example.com/sso/callback"]
+
+
+@pytest.mark.asyncio
+async def test_admin_ui_login_stays_refused_on_a_ui_disabled_node():
+    """The gate still covers the admin UI: the same SSO-configured worker refuses a plain UI login."""
+    response = await _sso_key_generate_on_ui_disabled_node(
+        source=None, key=None, google_sso_configured=True, known_login_ids=()
+    )
+
+    assert response.status_code == 200
+    assert "Admin UI is Disabled" in response.body.decode()
+
+
+@pytest.mark.asyncio
+async def test_cli_sso_login_with_an_unknown_session_is_rejected_on_a_ui_disabled_node():
+    """Only a login session the proxy issued passes the gate; a made-up key is refused before any redirect."""
+    with pytest.raises(HTTPException) as exc:
+        await _sso_key_generate_on_ui_disabled_node(
+            source="litellm-cli", key="cli-never-issued-session-00", google_sso_configured=True, known_login_ids=()
+        )
+
+    assert exc.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_cli_sso_login_never_serves_the_admin_login_form_on_a_ui_disabled_node():
+    """Without an SSO provider the endpoint falls back to the admin username/password form, which a
+    UI-disabled node must not serve even to a valid CLI login session."""
+    login_id = "cli-worker-login-session-0002"
+
+    response = await _sso_key_generate_on_ui_disabled_node(
+        source="litellm-cli", key=login_id, google_sso_configured=False, known_login_ids=(login_id,)
+    )
+
+    assert response.status_code == 200
+    body = response.body.decode()
+    assert "Admin UI is Disabled" in body
+    assert 'name="username"' not in body

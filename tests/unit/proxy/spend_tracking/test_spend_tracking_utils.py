@@ -8,25 +8,21 @@ from typing import Any, Final, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-from typing_extensions import ReadOnly, TypedDict
+from pydantic import TypeAdapter
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
-from litellm.constants import (
-    LITELLM_TRUNCATED_PAYLOAD_FIELD,
-    LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE,
-    LITTELM_CLI_SERVICE_ACCOUNT_NAME,
-    LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
-    MAX_SPEND_LOG_MODEL_NAME_LENGTH,
-    REDACTED_BY_LITELM_STRING,
-    SESSION_ID_OMITTED_METADATA_KEY,
-    UNKNOWN_MODEL_SPEND_LOG_MODEL,
-)
+import litellm.constants as litellm_constants
+import litellm.proxy.spend_tracking.spend_tracking_utils as spend_tracking_utils
+from litellm.constants import LITELLM_TRUNCATED_PAYLOAD_FIELD, LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE, LITTELM_CLI_SERVICE_ACCOUNT_NAME, LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME, MAX_SPEND_LOG_MODEL_NAME_LENGTH, REDACTED_BY_LITELM_STRING, SESSION_ID_OMITTED_METADATA_KEY, UNKNOWN_MODEL_SPEND_LOG_MODEL
 from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+from litellm.llms.base_llm.ocr.transformation import OCRResponse, OCRUsageInfo
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
+from litellm.proxy._types import SpendLogsMetadata, SpendLogsMetadataFields, SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_tracking_utils import (
+    _extract_usage_for_ocr_call,
     _get_messages_for_spend_logs_payload,
     _get_proxy_server_request_for_spend_logs_payload,
     _get_request_duration_ms,
@@ -34,16 +30,18 @@ from litellm.proxy.spend_tracking.spend_tracking_utils import (
     _get_session_id_for_spend_log,
     _get_spend_logs_metadata,
     _get_vector_store_request_for_spend_logs_payload,
-    _is_master_key,
+    is_master_key,
     _redact_logged_api_key,
     _redact_prompt_leaks_in_error_string,
-    _sanitize_error_information_for_spend_logs,
+    sanitize_error_information_for_spend_logs,
     _sanitize_guardrail_information_for_spend_logs,
     _sanitize_request_body_for_spend_logs_payload,
     _scrub_raw_model_from_error_information,
+    configured_spend_logs_metadata_fields,
     get_logging_payload,
     get_spend_logs_id,
     should_store_prompts_and_responses_in_spend_logs,
+    spend_log_row_with_retained_metadata,
 )
 from litellm.proxy.utils import hash_token
 from litellm.types.router import GenericLiteLLMParams
@@ -83,10 +81,16 @@ def test_classifier_audit_spend_storage_obeys_privacy_and_truncation(monkeypatch
         "classifier_input": {"system": "rubric" * 1000, "messages": [{"role": "user", "content": "ask"}]},
         "originating_request_masked": {"input": "source-only", "api_key": "REDACTED"},
     }
-    stored: Final = json.loads(_get_proxy_server_request_for_spend_logs_payload(
-        metadata={}, litellm_params={"proxy_server_request": {"body": {"model": "classifier"}}},
-        kwargs={"standard_logging_object": audit, "standard_callback_dynamic_params": {"turn_off_message_logging": redact}},
-    ))
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata={},
+            litellm_params={"proxy_server_request": {"body": {"model": "classifier"}}},
+            kwargs={
+                "standard_logging_object": audit,
+                "standard_callback_dynamic_params": {"turn_off_message_logging": redact},
+            },
+        )
+    )
     if not store_prompts or redact:
         assert "classifier_input" not in stored
         assert "originating_request_masked" not in stored
@@ -212,9 +216,7 @@ def test_batch_lifecycle_rows_derive_the_same_session_from_the_batch_id():
     from litellm.proxy.spend_tracking.spend_tracking_utils import _get_batch_trace_session_id
 
     create_session: Final = _get_batch_trace_session_id(call_type="acreate_batch", request_id="batch-uid-1")
-    cost_session: Final = _get_batch_trace_session_id(
-        call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost"
-    )
+    cost_session: Final = _get_batch_trace_session_id(call_type="aretrieve_batch", request_id="batch-uid-1_batch_cost")
     assert create_session == cost_session == "batch-uid-1"
 
 
@@ -517,6 +519,165 @@ def test_sanitize_request_body_for_spend_logs_payload_basic():
         "messages": [{"role": "user", "content": "Hello, how are you?"}],
     }
     assert _sanitize_request_body_for_spend_logs_payload(request_body) == request_body
+
+
+def test_large_request_no_truncation_threshold():
+    """
+    Test that MAX_STRING_LENGTH_PROMPT_IN_DB constant is used for request body sanitization
+    and that the new truncation logic keeps beginning (35%) and end (65%) of the string
+    """
+    from litellm.constants import (
+        MAX_STRING_LENGTH_PROMPT_IN_DB,
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    )
+
+    # Create a large string that exceeds the threshold
+    # Use a pattern that allows us to verify beginning and end are preserved
+    start_pattern = "START" * 250  # 1250 chars
+    middle_pattern = "MIDDLE" * 200  # 1200 chars
+    end_pattern = "END" * 250  # 750 chars
+    large_content = start_pattern + middle_pattern + end_pattern
+
+    request_body = {
+        "messages": [{"role": "user", "content": large_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    # Verify the content was truncated
+    truncated_content = sanitized["messages"][0]["content"]
+
+    # Calculate expected character counts (35% start, 65% end)
+    expected_start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
+    expected_end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
+
+    # Should keep first 35% of MAX_STRING_LENGTH_PROMPT_IN_DB chars
+    assert truncated_content.startswith(large_content[:expected_start_chars])
+
+    # Should keep last 65% of MAX_STRING_LENGTH_PROMPT_IN_DB chars
+    assert truncated_content.endswith(large_content[-expected_end_chars:])
+
+    # Should have truncation marker
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+
+
+def test_small_request_no_truncation():
+    """
+    Test that small strings are not truncated by MAX_STRING_LENGTH_PROMPT_IN_DB
+    """
+    from litellm.constants import MAX_STRING_LENGTH_PROMPT_IN_DB
+
+    # Create a small string that's under the threshold
+    small_content = "x" * (MAX_STRING_LENGTH_PROMPT_IN_DB - 100)
+
+    request_body = {
+        "messages": [{"role": "user", "content": small_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    # Verify the content was NOT truncated
+    assert sanitized["messages"][0]["content"] == small_content
+    assert (
+        len(sanitized["messages"][0]["content"]) == MAX_STRING_LENGTH_PROMPT_IN_DB - 100
+    )
+
+
+def test_configurable_string_length_env_var(monkeypatch):
+    """
+    Test that MAX_STRING_LENGTH_PROMPT_IN_DB can be configured via environment variable
+    """
+    # Set environment variable to a custom value
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "1000")
+
+    # Import after setting env var to ensure it picks up the new value
+    import importlib
+    import litellm.constants
+    import litellm.proxy.spend_tracking.spend_tracking_utils
+
+    importlib.reload(litellm.constants)
+    importlib.reload(litellm.proxy.spend_tracking.spend_tracking_utils)
+
+    from litellm.constants import (
+        MAX_STRING_LENGTH_PROMPT_IN_DB,
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    )
+    from litellm.proxy.spend_tracking.spend_tracking_utils import (
+        _sanitize_request_body_for_spend_logs_payload,
+    )
+
+    # Verify the constant was set to the env var value
+    assert MAX_STRING_LENGTH_PROMPT_IN_DB == 1000
+
+    # Test truncation with the custom value
+    large_content = "A" * 500 + "B" * 800 + "C" * 500  # 1800 chars total
+
+    request_body = {
+        "messages": [{"role": "user", "content": large_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+
+    # Verify truncation occurred with 35% beginning and 65% end preserved
+    truncated_content = sanitized["messages"][0]["content"]
+    expected_start = int(1000 * 0.35)  # 350 chars from beginning
+    expected_end = int(1000 * 0.65)  # 650 chars from end
+
+    assert truncated_content.startswith(large_content[:expected_start])
+    assert truncated_content.endswith(large_content[-expected_end:])
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+    assert "800" in truncated_content  # Should mention skipped 800 chars
+
+
+def test_truncation_preserves_beginning_and_end():
+    """
+    Test that truncation preserves the beginning (35%) and end (65%) of content for better debugging
+    """
+    from litellm.constants import (
+        MAX_STRING_LENGTH_PROMPT_IN_DB,
+        LITELLM_TRUNCATED_PAYLOAD_FIELD,
+    )
+
+    # Create content with distinct beginning, middle, and end
+    beginning = "BEGIN_" * 200  # 1200 chars
+    middle = "MIDDLE_" * 300  # 2100 chars
+    end = "_END" * 300  # 1200 chars
+    large_content = beginning + middle + end
+
+    request_body = {
+        "messages": [{"role": "user", "content": large_content}],
+        "model": "gpt-5.5",
+    }
+
+    sanitized = _sanitize_request_body_for_spend_logs_payload(request_body)
+    truncated_content = sanitized["messages"][0]["content"]
+
+    # Calculate expected splits (35% beginning, 65% end)
+    expected_start_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.35)
+    expected_end_chars = int(MAX_STRING_LENGTH_PROMPT_IN_DB * 0.65)
+
+    # Check that beginning is preserved
+    expected_beginning = large_content[:expected_start_chars]
+    assert truncated_content.startswith(expected_beginning)
+
+    # Check that end is preserved
+    expected_end = large_content[-expected_end_chars:]
+    assert truncated_content.endswith(expected_end)
+
+    # Check truncation marker is present
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in truncated_content
+    assert "skipped" in truncated_content
+
+    # Calculate expected skipped chars
+    total_chars = len(large_content)
+    kept_chars = expected_start_chars + expected_end_chars
+    expected_skipped = total_chars - kept_chars
+    assert str(expected_skipped) in truncated_content
 
 
 def test_sanitize_request_body_for_spend_logs_payload_long_string():
@@ -1324,7 +1485,7 @@ def test_get_logging_payload_persists_no_raw_model_for_a_prompt_shaped_moderatio
         model=_RAW_MODEL_WITH_PROMPT,
         llm_provider="openai",
     )
-    error_information: Final = _sanitize_error_information_for_spend_logs(
+    error_information: Final = sanitize_error_information_for_spend_logs(
         StandardLoggingPayloadSetup.get_error_information(
             original_exception=provider_rejection,
             traceback_str=(
@@ -1491,7 +1652,7 @@ async def test_api_key_preserved_through_failure_hook_to_database():
     If this test fails in CI/CD, the build MUST fail.
     """
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+    from litellm.proxy.hooks.proxy_track_cost_callback import ProxyDBLogger
     from litellm.proxy.utils import hash_token
 
     # Setup
@@ -1575,7 +1736,7 @@ async def test_api_key_preserved_through_failure_hook_to_database():
     exception = Exception("BadRequestError: Invalid parameter 'invalid_param'")
 
     # Execute the ACTUAL failure hook code path
-    logger = _ProxyDBLogger()
+    logger = ProxyDBLogger()
 
     with patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging_obj):
         await logger.async_post_call_failure_hook(
@@ -2641,19 +2802,19 @@ class TestIsMasterKey:
 
     def test_none_api_key_returns_false(self):
         """Regression: _is_master_key(None, 'sk-master') should return False, not raise TypeError."""
-        assert _is_master_key(api_key=None, _master_key="sk-master-key") is False
+        assert is_master_key(api_key=None, _master_key="sk-master-key") is False
 
     def test_none_master_key_returns_false(self):
-        assert _is_master_key(api_key="sk-some-key", _master_key=None) is False
+        assert is_master_key(api_key="sk-some-key", _master_key=None) is False
 
     def test_both_none_returns_false(self):
-        assert _is_master_key(api_key=None, _master_key=None) is False
+        assert is_master_key(api_key=None, _master_key=None) is False
 
     def test_matching_key_returns_true(self):
-        assert _is_master_key(api_key="sk-master", _master_key="sk-master") is True
+        assert is_master_key(api_key="sk-master", _master_key="sk-master") is True
 
     def test_non_matching_key_returns_false(self):
-        assert _is_master_key(api_key="sk-other", _master_key="sk-master") is False
+        assert is_master_key(api_key="sk-other", _master_key="sk-master") is False
 
     def test_master_key_hash_is_rejected(self):
         """
@@ -2664,7 +2825,7 @@ class TestIsMasterKey:
 
         master = "sk-master-key-123"
         hashed = hash_token(master)
-        assert _is_master_key(api_key=hashed, _master_key=master) is False
+        assert is_master_key(api_key=hashed, _master_key=master) is False
 
 
 def test_sanitize_request_body_strips_secret_fields():
@@ -2756,7 +2917,11 @@ def test_proxy_server_request_payload_redacts_provider_credentials(mock_should_s
                 "extra_headers": {"Authorization": "Bearer canary-extra-header"},
                 "tools": [
                     {"type": "function", "function": {"name": "f", "parameters": tool_parameters}},
-                    {"type": "mcp", "server_url": "https://mcp.example.com", "headers": {"Authorization": "canary-mcp"}},
+                    {
+                        "type": "mcp",
+                        "server_url": "https://mcp.example.com",
+                        "headers": {"Authorization": "canary-mcp"},
+                    },
                 ],
                 "fallbacks": [{"model": "azure-b", **credentials}],
                 "metadata": metadata,
@@ -2786,6 +2951,167 @@ def test_sanitize_response_redacts_credential_named_fields() -> None:
 
     assert _sanitize_request_body_for_spend_logs_payload({"response": response}) == {
         "response": {"access_token": REDACTED_BY_LITELM_STRING, "usage": {"prompt_tokens": 1}}
+    }
+
+
+def test_sanitize_response_keeps_logprob_tokens() -> None:
+    response: Final = {
+        "system_fingerprint": "fp_x",
+        "choices": [
+            {
+                "logprobs": {
+                    "content": [
+                        {
+                            "token": "sort",
+                            "logprob": -0.1,
+                            "bytes": [115],
+                            "top_logprobs": [{"token": "sort", "logprob": -0.1}],
+                        }
+                    ]
+                }
+            }
+        ],
+    }
+
+    assert _sanitize_request_body_for_spend_logs_payload({"response": response}) == {
+        "response": {
+            "system_fingerprint": REDACTED_BY_LITELM_STRING,
+            "choices": [
+                {
+                    "logprobs": {
+                        "content": [
+                            {
+                                "token": "sort",
+                                "logprob": -0.1,
+                                "bytes": [115],
+                                "top_logprobs": [{"token": "sort", "logprob": -0.1}],
+                            }
+                        ]
+                    }
+                }
+            ],
+        }
+    }
+
+
+def test_sanitize_request_body_keeps_key_named_tool_payload_fields() -> None:
+    request_body: Final = {
+        "model": "anthropic/claude",
+        "aws_secret_access_key": "AKIAEXAMPLESECRET",
+        "prompt_cache_key": "tenant-42-cache",
+        "metadata": {"user_api_key_alias": "tenant-user"},
+        "secret_fields": {"raw_headers": {"authorization": "Bearer secret"}},
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "input": {"key": "order-123", "sort_key": "created_at"}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_order",
+                            "arguments": {"key": "order-123", "sort_key": "created_at"},
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "content": {"token_type": "bearer", "partition_key": "tenant_42"}},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "content": [{"token_type": "bearer", "partition_key": "tenant_42"}],
+                    }
+                ],
+            },
+        ],
+        "input": [
+            {"type": "function_call", "arguments": {"key": "tenant-42", "access_level": "admin"}},
+            {
+                "type": "function_call_output",
+                "output": {"token_type": "bearer", "partition_key": "tenant_42"},
+            },
+        ],
+    }
+
+    assert _sanitize_request_body_for_spend_logs_payload(request_body) == {
+        "model": "anthropic/claude",
+        "aws_secret_access_key": REDACTED_BY_LITELM_STRING,
+        "prompt_cache_key": REDACTED_BY_LITELM_STRING,
+        "metadata": {"user_api_key_alias": REDACTED_BY_LITELM_STRING},
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "input": {"key": "order-123", "sort_key": "created_at"}},
+                ],
+            },
+            {
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "get_order",
+                            "arguments": {"key": "order-123", "sort_key": "created_at"},
+                        },
+                    }
+                ],
+            },
+            {"role": "tool", "content": {"token_type": "bearer", "partition_key": "tenant_42"}},
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "tool_result",
+                        "content": [{"token_type": "bearer", "partition_key": "tenant_42"}],
+                    }
+                ],
+            },
+        ],
+        "input": [
+            {"type": "function_call", "arguments": {"key": "tenant-42", "access_level": "admin"}},
+            {
+                "type": "function_call_output",
+                "output": {"token_type": "bearer", "partition_key": "tenant_42"},
+            },
+        ],
+    }
+
+
+def test_sanitize_request_body_masks_credentials_beside_tool_blocks() -> None:
+    request_body: Final = {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "tool_use", "api_key": "sk-live", "input": {"key": "order-123"}},
+                    {"type": {"nested": 1}, "input": {"api_key": "x"}},
+                ],
+            }
+        ]
+    }
+
+    assert _sanitize_request_body_for_spend_logs_payload(request_body) == {
+        "messages": [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "tool_use",
+                        "api_key": REDACTED_BY_LITELM_STRING,
+                        "input": {"key": "order-123"},
+                    },
+                    {"type": {"nested": 1}, "input": {"api_key": REDACTED_BY_LITELM_STRING}},
+                ],
+            }
+        ]
     }
 
 
@@ -2886,7 +3212,7 @@ def test_sanitize_error_information_redacts_when_not_storing_prompts(
         ),
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "leaked-prompt-content" not in sanitized["error_message"]
@@ -2911,7 +3237,7 @@ def test_sanitize_error_information_skips_redaction_when_storing_prompts(
         "error_message": ('OpenAIException - {"error":{"input":[{"role":"user","content":"kept"}]}}'),
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     # User opted in via store_prompts_in_spend_logs — no key-level redaction.
@@ -2938,7 +3264,7 @@ def test_sanitize_error_information_caps_size_regardless_of_prompt_flag(
         "error_message": huge_error,
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert len(sanitized["error_message"]) < len(huge_error)
@@ -2947,7 +3273,7 @@ def test_sanitize_error_information_caps_size_regardless_of_prompt_flag(
 
 
 def test_sanitize_error_information_none_passthrough():
-    assert _sanitize_error_information_for_spend_logs(None) is None
+    assert sanitize_error_information_for_spend_logs(None) is None
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
@@ -2978,7 +3304,7 @@ def test_sanitize_error_information_reproduces_lit_2992(mock_should_store):
         "error_message": error_message,
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert huge_conversation_blob not in sanitized["error_message"]
@@ -3057,7 +3383,7 @@ def test_sanitize_error_information_redacts_traceback_when_not_storing_prompts(
         "error_message": "invalid request",
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "tb-leaked-prompt" not in sanitized["traceback"]
@@ -3081,7 +3407,7 @@ def test_sanitize_error_information_skips_traceback_redaction_when_storing_promp
         "error_message": "invalid request",
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "tb-kept" in sanitized["traceback"]
@@ -3197,7 +3523,7 @@ def test_sanitize_error_information_redacts_pydantic_assignment_form(
         ),
     }
 
-    sanitized = _sanitize_error_information_for_spend_logs(error_info)
+    sanitized = sanitize_error_information_for_spend_logs(error_info)
 
     assert sanitized is not None
     assert "leaked-via-pydantic-msg" not in sanitized["error_message"]
@@ -3222,7 +3548,7 @@ def test_sanitize_error_information_persists_no_raw_model_for_an_unknown_model_r
 ):
     error_information: Final = StandardLoggingPayloadSetup.get_error_information(original_exception=original_exception)
 
-    sanitized: Final = _sanitize_error_information_for_spend_logs(
+    sanitized: Final = sanitize_error_information_for_spend_logs(
         error_information, original_exception=original_exception
     )
 
@@ -3241,7 +3567,7 @@ def test_redact_logged_api_key_empty_string_returns_none():
 
 
 def test_redact_logged_api_key_sk_key_is_hashed():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     result = _redact_logged_api_key(raw)
     assert result == hash_token(raw)
     assert result is not None
@@ -3250,14 +3576,14 @@ def test_redact_logged_api_key_sk_key_is_hashed():
 
 
 def test_redact_logged_api_key_bearer_sk_equals_sk_hash():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     result_plain = _redact_logged_api_key(raw)
     result_bearer = _redact_logged_api_key(f"Bearer {raw}")
     assert result_bearer == result_plain
 
 
 def test_redact_logged_api_key_bearer_case_insensitive():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     result_lower = _redact_logged_api_key(f"bearer {raw}")
     result_upper = _redact_logged_api_key(f"BEARER {raw}")
     expected = hash_token(raw)
@@ -3370,6 +3696,24 @@ def test_get_spend_logs_metadata_keeps_user_agent():
 
 
 @pytest.mark.parametrize(
+    "metadata,expected",
+    (
+        (None, False),
+        ({}, False),
+        ({"tags": ["litellm-roi-estimator"]}, False),
+        ({"litellm_roi_estimator": None}, False),
+        ({"litellm_roi_estimator": "true"}, False),
+        ({"litellm_roi_estimator": False}, False),
+        ({"litellm_roi_estimator": True}, True),
+    ),
+)
+def test_new_spend_logs_always_have_an_explicit_roi_estimator_marker(
+    metadata: dict[str, object] | None, expected: bool
+) -> None:
+    assert _get_spend_logs_metadata(metadata)["litellm_roi_estimator"] is expected
+
+
+@pytest.mark.parametrize(
     "client_sent_oauth_token, custom_llm_provider, expected",
     [
         (True, "anthropic", True),
@@ -3439,7 +3783,7 @@ def test_redact_logged_api_key_bearer_only_returns_none():
 
 
 def test_get_spend_logs_metadata_sk_key_hashed():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     meta = _get_spend_logs_metadata({"user_api_key": raw})
     assert meta["user_api_key"] == hash_token(raw)
     assert meta["user_api_key"] is not None
@@ -3450,7 +3794,7 @@ def test_get_spend_logs_metadata_sk_key_hashed():
 
 
 def test_get_spend_logs_metadata_bearer_sk_key_hashed_same_as_plain():
-    raw = "sk-1234secret"
+    raw = "sk-9876secret"
     meta_plain = _get_spend_logs_metadata({"user_api_key": raw})
     meta_bearer = _get_spend_logs_metadata({"user_api_key": f"Bearer {raw}"})
     assert meta_bearer["user_api_key"] == meta_plain["user_api_key"]
@@ -3945,7 +4289,7 @@ async def test_compression_savings_survive_to_spend_log_payload_metadata(monkeyp
         "max_tokens": 512,
         "litellm_call_id": "test-compression-call-id",
         "litellm_metadata": {
-            "user_api_key": "88dc28d0f030c55ed4ab77ed8faf098196cb1c05df778539800c9f1243fe6b4b",
+            "user_api_key": "bc46df66218d24bc910f7c95ef9d861c706d22a191f9e7378f8a51f54146474f",
             "user_api_key_user_id": "u1",
             "user_api_key_team_id": "t1",
         },
@@ -5131,7 +5475,7 @@ ANTHROPIC_MESSAGES_SSE_CHUNKS: Final = (
     'event: content_block_stop\ndata: {"type":"content_block_stop","index":0}\n\n',
     'event: message_delta\ndata: {"type":"message_delta","delta":{"stop_reason":"end_turn"},'
     '"usage":{"output_tokens":4}}\n\n',
-    "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+    'event: message_stop\ndata: {"type":"message_stop"}\n\n',
 )
 
 
@@ -5169,9 +5513,7 @@ def test_spend_log_request_id_is_the_message_id_a_non_streaming_messages_caller_
     """
     logging_obj = _anthropic_messages_logging_obj(stream=False)
 
-    logged_response = logging_obj._handle_anthropic_messages_response_logging(
-        result=ANTHROPIC_MESSAGES_RESPONSE
-    )
+    logged_response = logging_obj._handle_anthropic_messages_response_logging(result=ANTHROPIC_MESSAGES_RESPONSE)
 
     assert logged_response.id == "msg_01Lit6806NonStreaming"
     assert (
@@ -5247,9 +5589,7 @@ def test_spend_log_request_id_still_falls_back_to_litellm_call_id_without_a_prov
         end_time=datetime.datetime.now(timezone.utc),
         logging_obj=logging_obj,
     )
-    assert logging_obj.model_call_details["complete_streaming_response"].id == (
-        "6806cafe-0000-4000-8000-000000000001"
-    )
+    assert logging_obj.model_call_details["complete_streaming_response"].id == ("6806cafe-0000-4000-8000-000000000001")
 
 
 def test_spend_log_request_id_for_chat_completions_is_untouched():
@@ -5330,6 +5670,7 @@ def test_failed_agent_request_keeps_registered_display_name():
     assert payload["model"] == agent_model
     assert payload["status"] == "failure"
     assert payload["model_id"] == "registered-agent"
+
 
 _CLI_SESSION_ALIAS: Final = "cli-session-alice"
 _CLI_SESSION_TOKEN: Final = "cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"
@@ -5462,15 +5803,670 @@ def test_baseline_estimate_metadata_comes_from_the_logging_stamp() -> None:
 def test_untrusted_agent_label_cannot_replace_verified_billing_identity(billing_agent: str | None) -> None:
     kwargs = {
         "model": "gpt-4",
-        "litellm_params": {"metadata": {
-            "user_api_key": "test-key",
-            "agent_id": "header-selected-agent",
-            "billing_agent_id": billing_agent,
-        }},
+        "litellm_params": {
+            "metadata": {
+                "user_api_key": "test-key",
+                "agent_id": "header-selected-agent",
+                "billing_agent_id": billing_agent,
+            }
+        },
     }
     payload = get_logging_payload(
-        kwargs=kwargs, response_obj={"id": "request"},
-        start_time=datetime.datetime.now(timezone.utc), end_time=datetime.datetime.now(timezone.utc),
+        kwargs=kwargs,
+        response_obj={"id": "request"},
+        start_time=datetime.datetime.now(timezone.utc),
+        end_time=datetime.datetime.now(timezone.utc),
     )
     assert payload["agent_id"] == "header-selected-agent"
     assert payload["billing_agent_id"] == billing_agent
+
+
+def _spend_log_row(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({"request_id": "req-1", "spend": 0.5, "metadata": json.dumps(dict(metadata))})
+
+
+_STORED_METADATA: Final = MappingProxyType(
+    {
+        "status": "success",
+        "cold_storage_object_key": "logs/req-1.json",
+        "model_map_information": {"model_map_key": "gpt-4o", "model_map_value": {"max_tokens": 10}},
+        "usage_object": {"prompt_tokens": 3},
+        "user_api_key_alias": "alias",
+    }
+)
+
+
+def test_spend_log_row_keeps_every_metadata_field_when_unconfigured() -> None:
+    row: Final = _spend_log_row(_STORED_METADATA)
+
+    assert spend_log_row_with_retained_metadata(row, None) is row
+
+
+def test_spend_log_row_drops_excluded_metadata_fields_only() -> None:
+    row: Final = _spend_log_row(_STORED_METADATA)
+
+    stored: Final = spend_log_row_with_retained_metadata(
+        row, SpendLogsMetadataFields(exclude=("model_map_information", "user_api_key_alias"))
+    )
+
+    assert json.loads(cast(str, stored["metadata"])) == {
+        "status": "success",
+        "cold_storage_object_key": "logs/req-1.json",
+        "usage_object": {"prompt_tokens": 3},
+    }
+    assert {name: value for name, value in stored.items() if name != "metadata"} == {
+        "request_id": "req-1",
+        "spend": 0.5,
+    }
+
+
+def test_spend_log_row_include_keeps_listed_and_always_kept_fields() -> None:
+    stored: Final = spend_log_row_with_retained_metadata(
+        _spend_log_row(_STORED_METADATA), SpendLogsMetadataFields(include=("usage_object",))
+    )
+
+    assert json.loads(cast(str, stored["metadata"])) == {
+        "status": "success",
+        "cold_storage_object_key": "logs/req-1.json",
+        "usage_object": {"prompt_tokens": 3},
+    }
+
+
+@pytest.mark.parametrize(
+    "configured",
+    [
+        {"include": ["usage_object"], "exclude": ["model_map_information"]},
+        {},
+        {"exclude": ["model_map_informaton"]},
+        {"include": ["usage_object", "not_a_field"]},
+        {"exclude": ["status"]},
+        {"exclude": ["cold_storage_object_key"]},
+        {"exclude": ["model_map_information"], "drop": ["usage_object"]},
+    ],
+)
+def test_spend_logs_metadata_fields_rejects_ambiguous_or_lossy_config(configured: dict[str, list[str]]) -> None:
+    from pydantic import ValidationError
+
+    from litellm.proxy._types import ConfigGeneralSettings
+
+    with pytest.raises(ValidationError):
+        ConfigGeneralSettings.model_validate({"spend_logs_metadata_fields": configured})
+
+
+def test_configured_spend_logs_metadata_fields_ignores_invalid_runtime_value() -> None:
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"spend_logs_metadata_fields": {"include": ["usage_object"], "exclude": ["status"]}},
+    ):
+        assert configured_spend_logs_metadata_fields() is None
+    with patch(
+        "litellm.proxy.proxy_server.general_settings",
+        {"spend_logs_metadata_fields": {"exclude": ["model_map_information"]}},
+    ):
+        assert configured_spend_logs_metadata_fields() == SpendLogsMetadataFields(exclude=("model_map_information",))
+
+
+class _OcrUsageInfoDict(TypedDict, total=False):
+    pages_processed: ReadOnly[int]
+    doc_size_bytes: ReadOnly[int]
+
+
+class _OcrResponseDict(TypedDict):
+    id: ReadOnly[str]
+    object: ReadOnly[str]
+    model: ReadOnly[str]
+    usage_info: ReadOnly[NotRequired[_OcrUsageInfoDict]]
+
+
+class _TokenUsageDict(TypedDict):
+    prompt_tokens: ReadOnly[int]
+    completion_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+
+
+class _CompletionResponseDict(TypedDict):
+    id: ReadOnly[str]
+    object: ReadOnly[str]
+    model: ReadOnly[str]
+    usage: ReadOnly[_TokenUsageDict]
+
+
+class _LoggingMetadata(TypedDict, total=False):
+    user_api_key_user_id: ReadOnly[str]
+    user_api_key_team_id: ReadOnly[str]
+
+
+class _LoggingLitellmParams(TypedDict, total=False):
+    metadata: ReadOnly[_LoggingMetadata]
+
+
+class _LoggingKwargs(TypedDict):
+    model: ReadOnly[str]
+    call_type: ReadOnly[str]
+    litellm_params: ReadOnly[_LoggingLitellmParams]
+    response_cost: ReadOnly[float]
+
+
+class _AdditionalUsageValues(TypedDict, total=False):
+    pages_processed: ReadOnly[int | None]
+    doc_size_bytes: ReadOnly[int | None]
+
+
+class _SpendLogMetadata(TypedDict):
+    additional_usage_values: ReadOnly[_AdditionalUsageValues]
+
+
+_SPEND_LOG_METADATA: Final = TypeAdapter(_SpendLogMetadata)
+_OCR_LOGGED_AT: Final = datetime.datetime(2026, 1, 1, tzinfo=timezone.utc)
+_OCR_RESPONSE_COST: Final = 0.05
+
+
+def _ocr_logging_kwargs(call_type: str = "ocr", metadata: _LoggingMetadata | None = None) -> _LoggingKwargs:
+    return _LoggingKwargs(
+        model="test-ocr-model",
+        call_type=call_type,
+        litellm_params=_LoggingLitellmParams() if metadata is None else _LoggingLitellmParams(metadata=metadata),
+        response_cost=_OCR_RESPONSE_COST,
+    )
+
+
+def _ocr_payload(
+    kwargs: _LoggingKwargs, response_obj: _OcrResponseDict | _CompletionResponseDict | OCRResponse
+) -> SpendLogsPayload:
+    return get_logging_payload(
+        kwargs=dict(kwargs),
+        response_obj=response_obj,
+        start_time=_OCR_LOGGED_AT,
+        end_time=_OCR_LOGGED_AT,
+    )
+
+
+def _additional_usage_values(payload: SpendLogsPayload) -> _AdditionalUsageValues:
+    return _SPEND_LOG_METADATA.validate_json(payload["metadata"])["additional_usage_values"]
+
+
+class TestExtractUsageForOCRCall:
+    def test_extract_usage_from_dict(self) -> None:
+        response_obj_dict: Final = {"usage_info": _OcrUsageInfoDict(pages_processed=5)}
+
+        usage: Final = _extract_usage_for_ocr_call(response_obj_dict, response_obj_dict)
+
+        assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "pages_processed": 5}
+
+    def test_extract_usage_from_pydantic_model(self) -> None:
+        response_obj: Final = OCRResponse(
+            pages=[],
+            model="test-ocr-model",
+            usage_info=OCRUsageInfo(pages_processed=10, doc_size_bytes=1024),
+        )
+
+        usage: Final = _extract_usage_for_ocr_call(response_obj, response_obj.model_dump())
+
+        assert usage["prompt_tokens"] == 0
+        assert usage["completion_tokens"] == 0
+        assert usage["total_tokens"] == 0
+        assert usage["pages_processed"] == 10
+        assert usage["doc_size_bytes"] == 1024
+
+    def test_extract_usage_with_object_attributes(self) -> None:
+        class _SimpleUsageInfo:
+            def __init__(self, pages_processed: int) -> None:
+                self.pages_processed = pages_processed
+
+        class _SimpleOCRResponse:
+            def __init__(self) -> None:
+                self.usage_info = _SimpleUsageInfo(pages_processed=3)
+
+        usage: Final = _extract_usage_for_ocr_call(_SimpleOCRResponse(), {})
+
+        assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "pages_processed": 3}
+
+    def test_extract_usage_missing_usage_info(self) -> None:
+        assert _extract_usage_for_ocr_call({}, {}) == {}
+
+    def test_extract_usage_empty_usage_info(self) -> None:
+        usage: Final = _extract_usage_for_ocr_call({"usage_info": {}}, {"usage_info": {}})
+
+        assert usage == {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "pages_processed": 0}
+
+
+class TestGetLoggingPayloadOCR:
+    def test_ocr_call_with_dict_response(self) -> None:
+        payload: Final = _ocr_payload(
+            _ocr_logging_kwargs(),
+            {
+                "id": "ocr-test-123",
+                "object": "ocr",
+                "model": "test-ocr-model",
+                "usage_info": {"pages_processed": 7, "doc_size_bytes": 2048},
+            },
+        )
+
+        assert payload["call_type"] == "ocr"
+        assert payload["request_id"] == "ocr-test-123"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        assert payload["spend"] == _OCR_RESPONSE_COST
+        assert _additional_usage_values(payload)["pages_processed"] == 7
+        assert _additional_usage_values(payload)["doc_size_bytes"] == 2048
+
+    def test_aocr_call_with_pydantic_response(self) -> None:
+        payload: Final = _ocr_payload(
+            _ocr_logging_kwargs(call_type="aocr"),
+            OCRResponse(pages=[], model="test-ocr-model", usage_info=OCRUsageInfo(pages_processed=12)),
+        )
+
+        assert payload["call_type"] == "aocr"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        assert payload["spend"] == _OCR_RESPONSE_COST
+        assert _additional_usage_values(payload)["pages_processed"] == 12
+
+    def test_ocr_call_missing_usage_info(self) -> None:
+        payload: Final = _ocr_payload(
+            _ocr_logging_kwargs(),
+            {"id": "ocr-test-789", "object": "ocr", "model": "test-ocr-model"},
+        )
+
+        assert payload["call_type"] == "ocr"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        assert payload["spend"] == _OCR_RESPONSE_COST
+        assert "pages_processed" not in _additional_usage_values(payload)
+
+    def test_ocr_call_with_zero_pages(self) -> None:
+        payload: Final = _ocr_payload(
+            _ocr_logging_kwargs(),
+            {
+                "id": "ocr-test-000",
+                "object": "ocr",
+                "model": "test-ocr-model",
+                "usage_info": {"pages_processed": 0},
+            },
+        )
+
+        assert payload["call_type"] == "ocr"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        assert payload["spend"] == _OCR_RESPONSE_COST
+        assert _additional_usage_values(payload)["pages_processed"] == 0
+
+    def test_non_ocr_call_uses_token_based_usage(self) -> None:
+        payload: Final = _ocr_payload(
+            _LoggingKwargs(
+                model="gpt-5.5", call_type="completion", litellm_params=_LoggingLitellmParams(), response_cost=0.02
+            ),
+            {
+                "id": "completion-test-123",
+                "object": "chat.completion",
+                "model": "gpt-5.5",
+                "usage": {"prompt_tokens": 50, "completion_tokens": 100, "total_tokens": 150},
+            },
+        )
+
+        assert payload["call_type"] == "completion"
+        assert payload["prompt_tokens"] == 50
+        assert payload["completion_tokens"] == 100
+        assert payload["total_tokens"] == 150
+        assert payload["spend"] == 0.02
+        assert "pages_processed" not in _additional_usage_values(payload)
+
+    def test_ocr_with_metadata(self) -> None:
+        payload: Final = _ocr_payload(
+            _ocr_logging_kwargs(
+                metadata=_LoggingMetadata(user_api_key_user_id="test-user", user_api_key_team_id="test-team")
+            ),
+            {
+                "id": "ocr-metadata-test",
+                "object": "ocr",
+                "model": "test-ocr-model",
+                "usage_info": {"pages_processed": 5, "doc_size_bytes": 1024},
+            },
+        )
+
+        assert payload["call_type"] == "ocr"
+        assert payload["user"] == "test-user"
+        assert payload["team_id"] == "test-team"
+        assert payload["prompt_tokens"] == 0
+        assert payload["completion_tokens"] == 0
+        assert payload["total_tokens"] == 0
+        assert payload["spend"] == _OCR_RESPONSE_COST
+        assert _additional_usage_values(payload)["pages_processed"] == 5
+        assert _additional_usage_values(payload)["doc_size_bytes"] == 1024
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    ["chatcmpl-9XZmkzS1uPhRCoVdGQvBqqIbSgECt", "", None],
+)
+def test_spend_logs_payload(model_id: str | None):
+
+    kwargs: Final = {
+        "model": "chatgpt-v-3",
+        "messages": [
+            {"role": "system", "content": "you are a helpful assistant.\n"},
+            {"role": "user", "content": "bom dia"},
+        ],
+        "custom_llm_provider": "azure",
+        "optional_params": {
+            "stream": False,
+            "max_tokens": 10,
+            "user": "116544810872468347480",
+            "extra_body": {},
+        },
+        "litellm_params": {
+            "acompletion": True,
+            "api_key": "sk-test-mock-key-707",
+            "force_timeout": 600,
+            "logger_fn": None,
+            "verbose": False,
+            "custom_llm_provider": "azure",
+            "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com//openai/",
+            "litellm_call_id": "b9929bf6-7b80-4c8c-b486-034e6ac0c8b7",
+            "model_alias_map": {},
+            "completion_call_id": None,
+            "metadata": {
+                "tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
+                "user_api_key": "sk-test-mock-api-key-123",
+                "user_api_key_alias": "custom-key-alias",
+                "user_api_end_user_max_budget": None,
+                "litellm_api_version": "0.0.0",
+                "global_max_parallel_requests": None,
+                "user_api_key_user_id": "116544810872468347480",
+                "user_api_key_org_id": "custom-org-id",
+                "user_api_key_team_id": "custom-team-id",
+                "user_api_key_team_alias": "custom-team-alias",
+                "user_api_key_metadata": {},
+                "requester_ip_address": "127.0.0.1",
+                "spend_logs_metadata": {"hello": "world"},
+                "headers": {
+                    "content-type": "application/json",
+                    "user-agent": "PostmanRuntime/7.32.3",
+                    "accept": "*/*",
+                    "postman-token": "92300061-eeaa-423b-a420-0b44896ecdc4",
+                    "host": "localhost:4000",
+                    "accept-encoding": "gzip, deflate, br",
+                    "connection": "keep-alive",
+                    "content-length": "163",
+                },
+                "endpoint": "http://localhost:4000/chat/completions",
+                "model_group": "gpt-5-mini",
+                "deployment": "azure/gpt-4.1-mini",
+                "model_info": {
+                    "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
+                    "db_model": False,
+                },
+                "api_base": "https://openai-gpt-4-test-v-1.openai.azure.com/",
+                "caching_groups": None,
+                "error_information": None,
+                "status": "success",
+                "proxy_server_request": "{}",
+                "raw_request": "\n\nPOST Request Sent from LiteLLM:\ncurl -X POST \\\nhttps://openai-gpt-4-test-v-1.openai.azure.com//openai/ \\\n-H 'Authorization: *****' \\\n-d '{'model': 'chatgpt-v-3', 'messages': [{'role': 'system', 'content': 'you are a helpful assistant.\\n'}, {'role': 'user', 'content': 'bom dia'}], 'stream': False, 'max_tokens': 10, 'user': '116544810872468347480', 'extra_body': {}}'\n",
+            },
+            "model_info": {
+                "id": "4bad40a1eb6bebd1682800f16f44b9f06c52a6703444c99c7f9f32e9de3693b4",
+                "db_model": False,
+            },
+            "proxy_server_request": {
+                "url": "http://localhost:4000/chat/completions",
+                "method": "POST",
+                "headers": {
+                    "content-type": "application/json",
+                    "user-agent": "PostmanRuntime/7.32.3",
+                    "accept": "*/*",
+                    "postman-token": "92300061-eeaa-423b-a420-0b44896ecdc4",
+                    "host": "localhost:4000",
+                    "accept-encoding": "gzip, deflate, br",
+                    "connection": "keep-alive",
+                    "content-length": "163",
+                },
+                "body": {
+                    "messages": [
+                        {
+                            "role": "system",
+                            "content": "you are a helpful assistant.\n",
+                        },
+                        {"role": "user", "content": "bom dia"},
+                    ],
+                    "model": "gpt-5-mini",
+                    "max_tokens": 10,
+                },
+            },
+            "preset_cache_key": None,
+            "no-log": False,
+            "stream_response": {},
+            "input_cost_per_token": None,
+            "input_cost_per_second": None,
+            "output_cost_per_token": None,
+            "output_cost_per_second": None,
+        },
+        "start_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 307665),
+        "stream": False,
+        "user": "116544810872468347480",
+        "call_type": "acompletion",
+        "litellm_call_id": "b9929bf6-7b80-4c8c-b486-034e6ac0c8b7",
+        "completion_start_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 954146),
+        "max_tokens": 10,
+        "extra_body": {},
+        "input": [
+            {"role": "system", "content": "you are a helpful assistant.\n"},
+            {"role": "user", "content": "bom dia"},
+        ],
+        "api_key": "1234",
+        "original_response": "",
+        "additional_args": {
+            "headers": {"Authorization": "Bearer 1234"},
+            "api_base": "openai-gpt-4-test-v-1.openai.azure.com",
+            "acompletion": True,
+            "complete_input_dict": {
+                "model": "chatgpt-v-3",
+                "messages": [
+                    {"role": "system", "content": "you are a helpful assistant.\n"},
+                    {"role": "user", "content": "bom dia"},
+                ],
+                "stream": False,
+                "max_tokens": 10,
+                "user": "116544810872468347480",
+                "extra_body": {},
+            },
+        },
+        "log_event_type": "post_api_call",
+        "end_time": datetime.datetime(2024, 6, 7, 12, 43, 30, 954146),
+        "cache_hit": None,
+        "response_cost": 2.4999999999999998e-05,
+        "standard_logging_object": {
+            "request_tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
+            "metadata": {
+                "user_api_key_end_user_id": "test-user",
+            },
+            "model_map_information": {
+                "tpm": 1000,
+                "rpm": 1000,
+            },
+        },
+    }
+    response_obj: Final = litellm.ModelResponse(
+        id=model_id,
+        choices=[
+            litellm.Choices(
+                finish_reason="length",
+                index=0,
+                message=litellm.Message(content="Bom dia! Como posso ajudar você", role="assistant"),
+            )
+        ],
+        created=1717789410,
+        model="gpt-35-turbo",
+        object="chat.completion",
+        system_fingerprint=None,
+        usage=litellm.Usage(completion_tokens=10, prompt_tokens=20, total_tokens=30),
+    )
+
+    payload: Final[SpendLogsPayload] = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response_obj,
+        start_time=datetime.datetime(2024, 6, 7, 12, 43, 30, 308604),
+        end_time=datetime.datetime(2024, 6, 7, 12, 43, 30, 954146),
+    )
+
+    assert len(payload["request_id"]) > 0
+    expected_metadata_keys: Final = SpendLogsMetadata.__annotations__.keys()
+
+    assert "metadata" in payload
+    assert isinstance(payload["metadata"], str)
+    metadata: Final[Mapping[str, object]] = json.loads(payload["metadata"])
+    assert set(metadata.keys()) == set(expected_metadata_keys)
+
+    assert payload["request_tags"] == '["model-anthropic-claude-v2.1", "app-ishaan-prod"]'
+    assert metadata["user_api_key_org_id"] == "custom-org-id"
+    assert metadata["user_api_key_team_id"] == "custom-team-id"
+    assert metadata["user_api_key_team_alias"] == "custom-team-alias"
+    assert metadata["user_api_key_alias"] == "custom-key-alias"
+
+    assert payload["custom_llm_provider"] == "azure"
+
+
+def test_spend_logs_payload_whisper():
+
+    kwargs: Final = {
+        "model": "whisper-1",
+        "messages": [{"role": "user", "content": "audio_file"}],
+        "optional_params": {},
+        "litellm_params": {
+            "api_base": "",
+            "metadata": {
+                "user_api_key": "sk-test-mock-api-key-123",
+                "user_api_key_alias": None,
+                "user_api_key_end_user_id": "test-user",
+                "user_api_end_user_max_budget": None,
+                "litellm_api_version": "1.40.19",
+                "global_max_parallel_requests": None,
+                "user_api_key_user_id": "default_user_id",
+                "user_api_key_org_id": None,
+                "user_api_key_team_id": None,
+                "user_api_key_team_alias": None,
+                "user_api_key_team_max_budget": None,
+                "user_api_key_team_spend": None,
+                "user_api_key_spend": 0.0,
+                "user_api_key_max_budget": None,
+                "user_api_key_metadata": {},
+                "headers": {
+                    "host": "localhost:4000",
+                    "user-agent": "curl/7.88.1",
+                    "accept": "*/*",
+                    "content-length": "775501",
+                    "content-type": "multipart/form-data; boundary=------------------------21d518e191326d20",
+                },
+                "endpoint": "http://localhost:4000/v1/audio/transcriptions",
+                "litellm_parent_otel_span": None,
+                "model_group": "whisper-1",
+                "deployment": "whisper-1",
+                "model_info": {
+                    "id": "d7761582311451c34d83d65bc8520ce5c1537ea9ef2bec13383cf77596d49eeb",
+                    "db_model": False,
+                },
+                "caching_groups": None,
+            },
+        },
+        "start_time": datetime.datetime(2024, 6, 26, 14, 20, 11, 313291),
+        "stream": False,
+        "user": "",
+        "call_type": "atranscription",
+        "litellm_call_id": "05921cf7-33f9-421c-aad9-33310c1e2702",
+        "completion_start_time": datetime.datetime(2024, 6, 26, 14, 20, 13, 653149),
+        "stream_options": None,
+        "input": "tmp-requestc8640aee-7d85-49c3-b3ef-bdc9255d8e37.wav",
+        "original_response": '{"text": "Four score and seven years ago, our fathers brought forth on this continent a new nation, conceived in liberty and dedicated to the proposition that all men are created equal. Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure."}',
+        "additional_args": {
+            "complete_input_dict": {
+                "model": "whisper-1",
+                "file": "<_io.BufferedReader name='tmp-requestc8640aee-7d85-49c3-b3ef-bdc9255d8e37.wav'>",
+                "language": None,
+                "prompt": None,
+                "response_format": None,
+                "temperature": None,
+            }
+        },
+        "log_event_type": "post_api_call",
+        "end_time": datetime.datetime(2024, 6, 26, 14, 20, 13, 653149),
+        "cache_hit": None,
+        "response_cost": 0.00023398580000000003,
+    }
+
+    response: Final = litellm.utils.TranscriptionResponse(
+        text="Four score and seven years ago, our fathers brought forth on this continent a new nation, conceived in liberty and dedicated to the proposition that all men are created equal. Now we are engaged in a great civil war, testing whether that nation, or any nation so conceived and so dedicated, can long endure."
+    )
+
+    payload: Final[SpendLogsPayload] = get_logging_payload(
+        kwargs=kwargs,
+        response_obj=response,
+        start_time=datetime.datetime(2026, 1, 15, 12, 0, 0),
+        end_time=datetime.datetime(2026, 1, 15, 12, 0, 0),
+    )
+
+    assert payload["call_type"] == "atranscription"
+    assert payload["spend"] == 0.00023398580000000003
+
+
+def test_spend_logs_payload_with_prompts_enabled(monkeypatch: pytest.MonkeyPatch):
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", True)
+
+    kwargs: Final = {
+        "model": "gpt-5-mini",
+        "messages": [{"role": "user", "content": "Hello!"}],
+        "litellm_params": {
+            "proxy_server_request": {
+                "body": {
+                    "model": "gpt-5.5",
+                    "messages": [{"role": "user", "content": "Hello!"}],
+                }
+            }
+        },
+        "standard_logging_object": {
+            "messages": [{"role": "user", "content": "Hello!"}],
+            "response": {"role": "assistant", "content": "Hi there!"},
+            "metadata": {
+                "user_api_key_end_user_id": "test-user",
+            },
+            "request_tags": ["model-anthropic-claude-v2.1", "app-ishaan-prod"],
+            "model_map_information": {
+                "tpm": 1000,
+                "rpm": 1000,
+            },
+        },
+    }
+    response_obj: Final = litellm.ModelResponse(
+        id="chatcmpl-123",
+        choices=[
+            litellm.Choices(
+                finish_reason="stop",
+                index=0,
+                message=litellm.Message(content="Hi there!", role="assistant"),
+            )
+        ],
+        model="gpt-5-mini",
+        usage=litellm.Usage(completion_tokens=2, prompt_tokens=1, total_tokens=3),
+    )
+    logged_at: Final = datetime.datetime(2026, 1, 15, 12, 0, 0)
+
+    payload: Final[SpendLogsPayload] = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=logged_at, end_time=logged_at
+    )
+
+    assert payload["response"] == json.dumps({"role": "assistant", "content": "Hi there!"})
+    proxy_server_request: Final = json.loads(payload["proxy_server_request"] or "{}")
+    assert proxy_server_request["model"] == "gpt-5.5"
+    assert proxy_server_request["messages"] == [{"role": "user", "content": "Hello!"}]
+
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", False)
+
+    payload_disabled: Final[SpendLogsPayload] = get_logging_payload(
+        kwargs=kwargs, response_obj=response_obj, start_time=logged_at, end_time=logged_at
+    )
+    assert payload_disabled["messages"] == "{}"
+    assert payload_disabled["response"] == "{}"

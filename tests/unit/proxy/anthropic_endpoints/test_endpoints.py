@@ -107,7 +107,7 @@ class TestBlockedResponseUsage:
         )
 
         with (
-            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={})),
+            patch.object(ep, "read_request_body", new=AsyncMock(return_value={})),
             patch.object(
                 ep.ProxyBaseLLMRequestProcessing,
                 "base_process_llm_request",
@@ -147,7 +147,7 @@ class TestProxyExceptionAnthropicEnvelope:
         request.headers = {"x-request-id": "req_test_6468"}
 
         with (
-            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={})),
+            patch.object(ep, "read_request_body", new=AsyncMock(return_value={})),
             patch.object(
                 ep.ProxyBaseLLMRequestProcessing,
                 "base_process_llm_request",
@@ -278,7 +278,7 @@ class TestHttpExceptionDictDetail:
         request.headers = {}
 
         with (
-            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(ep, "read_request_body", new=AsyncMock(return_value={})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
             patch.object(  # test-quality-ok: the guardrail raise happens deep inside this call; the test targets the endpoint's except block
                 ep.ProxyBaseLLMRequestProcessing,
                 "base_process_llm_request",
@@ -324,7 +324,7 @@ class TestFailureHookRequestData:
         request.headers = {}
 
         with (
-            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),
+            patch.object(ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),
             patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process),
             patch.object(proxy_server, "proxy_logging_obj") as mock_logging,
         ):
@@ -375,7 +375,7 @@ class TestErrorLogCarriesCallId:
         request.headers = {}
 
         with (
-            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
             patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process),  # test-quality-ok: the provider failure happens inside this call; the test targets the endpoint's except block
             patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
@@ -408,7 +408,7 @@ class TestErrorLogCarriesCallId:
         request.headers = {}
 
         with (
-            patch.object(ep, "_read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+            patch.object(ep, "read_request_body", new=AsyncMock(return_value={"model": "claude-sonnet"})),  # test-quality-ok: endpoint reads the body via a module function; no injection seam
             patch.object(ep.ProxyBaseLLMRequestProcessing, "base_process_llm_request", new=fake_process),  # test-quality-ok: the proxy shaped failure happens inside this call; the test targets the endpoint's except block
             patch.object(proxy_server, "proxy_logging_obj") as mock_logging,  # test-quality-ok: module global imported at call time; no injection seam
         ):
@@ -437,7 +437,7 @@ class TestErrorLogCarriesCallId:
         with (
             patch.object(  # test-quality-ok: endpoint reads the body via a module function; no injection seam
                 ep,
-                "_read_request_body",
+                "read_request_body",
                 new=AsyncMock(return_value={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}),
             ),
             patch.object(proxy_server, "token_counter", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block

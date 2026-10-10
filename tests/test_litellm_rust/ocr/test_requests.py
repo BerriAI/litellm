@@ -527,8 +527,6 @@ async def test_native_failures_raise_the_public_exception_class(
         ("ssl_verify", object()),
         ("ssl_certificate", 1),
         ("ssl_certificate", ""),
-        ("vertex_project", 1),
-        ("vertex_location", ["region"]),
         ("user_url_allowed_hosts", ["example.test", 1]),
     ],
 )
@@ -541,9 +539,33 @@ async def test_native_settings_fail_before_provider_io(
 ) -> None:
     ocr_server.expected_requests = 0
     monkeypatch.setattr(litellm, name, value)
-    with pytest.raises(ValueError, match=r"http_settings|provider_defaults|url_policy"):
+    with pytest.raises(ValueError, match=r"http_settings|url_policy"):
         await call_native(ocr_server, asynchronous, num_retries=0)
     assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("vertex_project", 1),
+        ("vertex_location", ["region"]),
+    ],
+)
+async def test_native_vertex_globals_fail_before_provider_io_only_for_vertex_calls(
+    ocr_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    asynchronous: bool,
+    name: str,
+    value: object,
+) -> None:
+    ocr_server.expected_requests = 1
+    monkeypatch.setattr(litellm, name, value)
+    await call_native(ocr_server, asynchronous, num_retries=0)
+    with pytest.raises(ValueError, match=r"provider_defaults"):
+        await call_native(ocr_server, asynchronous, model="vertex_ai/mistral-ocr-latest", num_retries=0)
+    assert len(ocr_server.requests) == 1
 
 
 @pytest.mark.asyncio
@@ -610,7 +632,8 @@ def test_native_projection_errors_never_select_python(
     from litellm.rust_bridge import runtime, settings
     from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
     from litellm.rust_bridge.configuration import Rollout
-    from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR, LiteLLMOcrRequest
+    from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR
+    from litellm.rust_bridge.public_call import NativeCall
 
     ocr_server.expected_requests = 0
     snapshot: Final = dataclasses.replace(settings.http_settings(), user_agent=1)
@@ -620,15 +643,18 @@ def test_native_projection_errors_never_select_python(
         monkeypatch.setattr(
             litellm, "ssl_verify", ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT) if failure == "live" else object()
         )
-    request: Final = LiteLLMOcrRequest(
-        model="mistral/mistral-ocr-latest",
-        document=OCR_DOCUMENT,
-        api_key="test-key",
-        api_base=ocr_server.base_url,
-        timeout=None,
-        custom_llm_provider="mistral",
-        extra_headers=None,
+    request: Final = NativeCall(
+        args=(),
         kwargs={},
+        base={
+            "model": "mistral/mistral-ocr-latest",
+            "document": OCR_DOCUMENT,
+            "api_key": "test-key",
+            "api_base": ocr_server.base_url,
+            "timeout": None,
+            "custom_llm_provider": "mistral",
+            "extra_headers": None,
+        },
     )
 
     def python_fallback() -> NoReturn:
@@ -638,7 +664,7 @@ def test_native_projection_errors_never_select_python(
         runtime.run(
             RouteContext(Route.OCR, provider="mistral"),
             binding=NATIVE_OCR,
-            native=lambda native: native(request, (), {}),
+            native=lambda native: native(request),
             python=python_fallback,
             rules=(RouteRule(Route.OCR, Rollout.RUST_REQUIRED if required else Rollout.RUST_OPT_OUT),),
         )

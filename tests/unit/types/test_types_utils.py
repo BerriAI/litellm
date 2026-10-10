@@ -1,16 +1,44 @@
 import json
-from typing import Final
+from typing import Final, Protocol, cast
 
 import pytest
 
-
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
+from litellm.types.agents import (
+    AgentCreateResponse,
+    AgentDeleteResult,
+    AgentListResponse,
+    AgentVersionsResponse,
+    LiteLLMSendMessageResponse,
+)
+from litellm.types.containers.main import ContainerFileObject, ContainerObject
+from litellm.types.google_genai.main import GenerateContentResponse
+from litellm.types.interactions.generated import (
+    CancelInteractionResult,
+    DeleteInteractionResult,
+    InteractionsAPIResponse,
+    InteractionsAPIStreamingResponse,
+)
+from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.utils import (
+    EmbeddingResponse,
     HiddenParams,
     ImageObject,
     ImageResponse,
+    ModelResponse,
+    ModelResponseStream,
+    TextCompletionResponse,
     all_litellm_params,
     text_tokens_without_nested_reasoning,
 )
+
+
+class _DictHiddenParamsAccessor(Protocol):
+    @property
+    def hidden_params(self) -> dict[str, object]: ...
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None: ...
 
 
 def test_rust_is_a_known_litellm_param():
@@ -22,6 +50,75 @@ def test_hidden_params_response_ms():
     setattr(hidden_params, "_response_ms", 100)
     hidden_params_dict = hidden_params.model_dump()
     assert hidden_params_dict.get("_response_ms") == 100
+
+
+@pytest.mark.parametrize("response_type", (ModelResponse, ModelResponseStream, EmbeddingResponse))
+def test_hidden_params_public_accessor_preserves_identity_and_instance_isolation(
+    response_type: type[ModelResponse] | type[ModelResponseStream] | type[EmbeddingResponse],
+) -> None:
+    response: Final = response_type()
+    other_response: Final = response_type()
+
+    assert response.hidden_params is response._hidden_params
+
+    response.hidden_params["public_key"] = "visible"
+    assert response._hidden_params["public_key"] == "visible"
+    assert response.hidden_params is not other_response.hidden_params
+    assert "public_key" not in other_response.hidden_params
+
+    replacement: Final = {"replacement_key": "replacement_value"}
+    response.hidden_params = replacement
+    assert response._hidden_params is replacement
+    assert response.hidden_params is replacement
+
+
+def test_text_completion_response_hidden_params_setter_preserves_identity() -> None:
+    response: Final = TextCompletionResponse(id="response-id", choices=[], created=1, model="model")
+    replacement: Final = HiddenParams(model_id="replacement")
+
+    response.hidden_params = replacement
+
+    assert response._hidden_params is replacement
+    assert response.hidden_params["model_id"] == "replacement"
+
+
+def test_image_response_hidden_params_setter_preserves_identity() -> None:
+    response: Final = ImageResponse(created=1, data=[])
+    replacement: Final = {"response_cost": 0.25}
+
+    response.hidden_params = replacement
+
+    assert response._hidden_params is replacement
+    assert response.hidden_params["response_cost"] == 0.25
+
+
+@pytest.mark.parametrize(
+    "response",
+    (
+        AgentCreateResponse.model_construct(),
+        AgentDeleteResult.model_construct(),
+        AgentListResponse.model_construct(),
+        AgentVersionsResponse.model_construct(),
+        LiteLLMSendMessageResponse.model_construct(),
+        ContainerObject.model_construct(),
+        ContainerFileObject.model_construct(),
+        GenerateContentResponse(),
+        InteractionsAPIResponse.model_construct(),
+        InteractionsAPIStreamingResponse.model_construct(),
+        DeleteInteractionResult.model_construct(),
+        CancelInteractionResult.model_construct(),
+        DeleteResponseResult.model_construct(),
+    ),
+)
+def test_hidden_params_public_accessor_updates_its_backing_storage(
+    response: _DictHiddenParamsAccessor,
+) -> None:
+    current: Final = response.hidden_params
+    assert cast(object, getattr(response, HIDDEN_PARAMS_ATTR)) is current
+
+    replacement: Final = {"replacement": "visible"}
+    response.hidden_params = replacement
+    assert cast(object, getattr(response, HIDDEN_PARAMS_ATTR)) is replacement
 
 
 def test_chat_completion_delta_tool_call():

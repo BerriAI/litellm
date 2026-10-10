@@ -11,10 +11,17 @@ repository = "https://github.com/BerriAI/litellm"
 [workspace.dependencies]
 litellm-config = { path = "crates/config" }
 litellm-router = { path = "crates/router" }
+litellm-router-types = { path = "crates/router-types" }
 litellm-tracing = { path = "crates/tracing" }
-litellm-traces = { path = "crates/traces" }
+litellm-spend-clickhouse = { path = "crates/spend-clickhouse" }
 litellm-storage-clickhouse = { path = "crates/storage-clickhouse" }
-litellm-core = { path = "crates/core" }
+litellm-inference = { path = "crates/inference" }
+litellm-inference-transcription = { path = "crates/inference-transcription" }
+litellm-inference-responses = { path = "crates/inference-responses" }
+litellm-inference-messages = { path = "crates/inference-messages" }
+litellm-inference-chat = { path = "crates/inference-chat" }
+litellm-inference-ocr = { path = "crates/inference-ocr" }
+litellm-inference-testing = { path = "crates/inference-testing" }
 litellm-gateway-mcp = { path = "crates/gateway-mcp" }
 litellm-gateway = { path = "crates/gateway" }
 litellm-gateway-inference = { path = "crates/gateway-inference" }
@@ -26,7 +33,7 @@ litellm-host = { path = "crates/host" }
 litellm-host-http = { path = "crates/host-http" }
 litellm-host-native = { path = "crates/host-native" }
 litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
-litellm-framing = { path = "crates/framer" }
+litellm-framer = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }
 litellm-auth-types = { path = "crates/auth-types" }
 litellm-auth-aws = { path = "crates/auth-aws" }
@@ -63,6 +70,7 @@ litellm-token-counter-tiktoken = { path = "crates/token-counter-tiktoken" }
 litellm-host-python = { path = "crates/host-python" }
 litellm-python-compat = { path = "crates/python-compat" }
 
+askama = { version = "0.16.1", default-features = false, features = ["derive", "std"] }
 tracing = "0.1"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "multipart"] }
 axum-login = "0.18.0"
@@ -91,9 +99,12 @@ vaultrs = { version = "=0.8.0", default-features = false, features = ["rustls"] 
 rustls-native-certs = "0.8"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
-serde_with = { version = "=3.16.1", default-features = false, features = ["std", "macros"] }
+serde_with = { version = "=3.21.0", default-features = false, features = ["std", "macros"] }
 sha2 = "0.10"
+syn = { version = "2", default-features = false }
 sqlx = { version = "0.9.0", default-features = false, features = ["json", "macros", "postgres", "runtime-tokio", "chrono", "tls-rustls-ring-native-roots"] }
+proc-macro2 = "1"
+quote = "1"
 subtle = "2"
 thiserror = "2.0"
 tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }

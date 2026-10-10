@@ -18,7 +18,7 @@ from litellm.llms.custom_httpx.aiohttp_transport import LiteLLMAiohttpTransport
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    get_httpx_client,
     get_ssl_configuration,
 )
 from litellm.types.llms.openai import FileTypes
@@ -60,7 +60,7 @@ class BaseLLMAIOHTTPHandler:
         # Create a transport using AsyncHTTPHandler's logic
         try:
             ssl_config: Final = get_ssl_configuration()
-            self.transport = AsyncHTTPHandler._create_aiohttp_transport(
+            self.transport = AsyncHTTPHandler.create_aiohttp_transport(
                 ssl_verify=ssl_config if isinstance(ssl_config, bool) else None,
                 ssl_context=ssl_config if isinstance(ssl_config, ssl.SSLContext) else None,
             )
@@ -94,7 +94,7 @@ class BaseLLMAIOHTTPHandler:
         transport: Final = self.transport or self._get_or_create_transport()
         if transport is not None and hasattr(transport, "_get_valid_client_session"):
             try:
-                return transport._get_valid_client_session()
+                return transport.get_valid_client_session()
             except RuntimeError:
                 pass
 
@@ -401,7 +401,7 @@ class BaseLLMAIOHTTPHandler:
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = get_httpx_client()
         else:
             sync_httpx_client = client
 
@@ -442,7 +442,7 @@ class BaseLLMAIOHTTPHandler:
         client: HTTPHandler | None = None,
     ) -> tuple[Any, dict]:
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = get_httpx_client()
         else:
             sync_httpx_client = client
         stream = True
@@ -625,7 +625,7 @@ class BaseLLMAIOHTTPHandler:
             )
 
         if client is None or not isinstance(client, HTTPHandler):
-            sync_httpx_client = _get_httpx_client()
+            sync_httpx_client = get_httpx_client()
         else:
             sync_httpx_client = client
 

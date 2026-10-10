@@ -91,6 +91,14 @@ class OCRResponse(LiteLLMPydanticObjectBase):
 
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     def set_provider_native_response(self, native_response: Mapping[str, builtins.object]) -> None:
         """Keep the provider's own response payload alongside the normalized one."""
         self._hidden_params[PROVIDER_NATIVE_RESPONSE_KEY] = native_response

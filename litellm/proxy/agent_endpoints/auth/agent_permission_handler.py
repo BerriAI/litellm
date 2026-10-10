@@ -459,9 +459,9 @@ class AgentRequestHandler:
         """
         Resolve unified access group ids to agent IDs.
         """
-        from litellm.proxy.auth.auth_checks import _get_agent_ids_from_access_groups
+        from litellm.proxy.auth.auth_checks import get_agent_ids_from_access_groups
 
-        return await _get_agent_ids_from_access_groups(access_group_ids=access_group_ids, check_db_only=check_db_only)
+        return await get_agent_ids_from_access_groups(access_group_ids=access_group_ids, check_db_only=check_db_only)
 
     @staticmethod
     async def _get_agents_from_access_groups(

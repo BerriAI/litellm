@@ -16,8 +16,8 @@ from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared HTTP factory is private
     get_async_httpx_client,  # pyright: ignore[reportUnknownVariableType]  # shared HTTP factory lacks typed params
+    get_httpx_client,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # shared HTTP factory is private
 )
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.router import GenericLiteLLMParams
@@ -279,7 +279,7 @@ def _status_video_object(
 class FalAIVideoConfig(BaseVideoConfig):
     def __init__(
         self,
-        sync_client_factory: Callable[[], HTTPHandler] = _get_httpx_client,
+        sync_client_factory: Callable[[], HTTPHandler] = get_httpx_client,
         async_client_factory: Callable[[], AsyncHTTPHandler] = _get_fal_ai_async_httpx_client,
     ) -> None:
         super().__init__()

@@ -243,6 +243,27 @@ def test_batch_write_service_is_also_attributed_to_postgres():
     assert attrs["server.address"] == "litellm-prod.abc123.us-east-1.rds.amazonaws.com"
 
 
+def test_resolved_prisma_operation_puts_verb_table_and_summary_on_the_db_keys():
+    from litellm.integrations.otel.model.spans import PostgresOperation
+
+    with patch.dict(os.environ, {"DATABASE_URL": LOCAL_DSN}, clear=False):
+        os.environ.pop("DATABASE_URL_READ_REPLICA", None)
+        attrs = dict(db_span_attributes("postgres", "update_data", PostgresOperation("update", "LiteLLM_TeamTable")))
+        bare = dict(db_span_attributes("postgres", "update_data", PostgresOperation("update", None)))
+    assert attrs == {
+        "db.system.name": "postgresql",
+        "db.system": "postgresql",
+        "db.operation.name": "update",
+        "db.collection.name": "LiteLLM_TeamTable",
+        "db.query.summary": "UPDATE LiteLLM_TeamTable",
+        "server.address": "localhost",
+        "server.port": 5432,
+        "db.namespace": "litellm",
+    }
+    assert bare["db.operation.name"] == "update"
+    assert {"db.collection.name", "db.query.summary"}.isdisjoint(bare)
+
+
 def test_redis_service_never_borrows_the_postgres_endpoint():
     assert _resolve("redis", "set", database_url=REMOTE_DSN) == {
         "db.system.name": "redis",

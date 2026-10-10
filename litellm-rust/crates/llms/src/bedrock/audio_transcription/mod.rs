@@ -1,3 +1,4 @@
+use litellm_auth::AwsParams;
 use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
     constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE},
@@ -30,18 +31,15 @@ pub struct BedrockAudioTranscriptionConfig;
 
 #[derive(Clone, Copy, Deserialize, IntoStaticStr)]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
 enum AudioFormat {
+    #[strum(serialize = "wav")]
     Wav,
+    #[strum(serialize = "mp3")]
     Mp3,
+    #[strum(serialize = "flac")]
     Flac,
+    #[strum(serialize = "ogg")]
     Ogg,
-}
-
-impl AudioFormat {
-    fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 struct AudioInput {
@@ -88,7 +86,7 @@ fn optional_string<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a 
 
 impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
     fn secret_names(&self) -> Vec<&'static str> {
-        litellm_auth_aws::constants::SECRET_NAMES.to_vec()
+        litellm_auth::AwsParams::secret_names().to_vec()
     }
 
     fn get_supported_openai_params(&self) -> &'static [&'static str] {
@@ -118,7 +116,7 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
                 "messages": [{
                     "role": "user",
                     "content": [
-                        {"audio": {"format": audio.format.as_str(), "source": {"bytes": audio.data}}},
+                        {"audio": {"format": <&'static str>::from(audio.format), "source": {"bytes": audio.data}}},
                         {"text": instruction}
                     ]
                 }],
@@ -157,7 +155,11 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
-        let region = resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup);
+        let region = resolve_bedrock_region(
+            model_region.as_deref(),
+            &AwsParams::from_optional_params(optional_params),
+            env_lookup,
+        );
         let endpoint = optional_params
             .get("aws_bedrock_runtime_endpoint")
             .and_then(Value::as_str)
@@ -184,19 +186,13 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         let (_, model_region) = bedrock_model_id_and_region(model);
+        let params = AwsParams::from_optional_params(optional_params);
         Ok(ValidatedEnvironment {
             headers,
             auth: AuthScheme::AwsSigV4 {
-                region: resolve_bedrock_region(
-                    model_region.as_deref(),
-                    optional_params,
-                    env_lookup,
-                ),
+                region: resolve_bedrock_region(model_region.as_deref(), &params, env_lookup),
                 service: BEDROCK_SERVICE,
-                credentials: Box::new(AwsCredentialSource::from_params(
-                    optional_params,
-                    env_lookup,
-                )),
+                credentials: Box::new(AwsCredentialSource::from_params(&params, env_lookup)),
             },
         })
     }

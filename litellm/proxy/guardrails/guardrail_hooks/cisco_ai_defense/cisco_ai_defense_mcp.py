@@ -218,7 +218,7 @@ class _CiscoAIDefenseMcpMixin:
 
         inner: Final[object | None] = getattr(response_obj, "mcp_tool_call_response", None)
         if inner is not None:
-            if _CiscoAIDefenseMcpMixin._replace_mcp_tool_response(inner, replacement_obj):
+            if CiscoAIDefenseMcpMixin._replace_mcp_tool_response(inner, replacement_obj):
                 return True
             try:
                 setattr(response_obj, "mcp_tool_call_response", replacement)
@@ -229,7 +229,7 @@ class _CiscoAIDefenseMcpMixin:
         content: Final = getattr(response_obj, "content", None)
         if isinstance(content, list):
             content[:] = replacement
-            structured_replacement: Final = _CiscoAIDefenseMcpMixin._replacement_structured_content(replacement)
+            structured_replacement: Final = CiscoAIDefenseMcpMixin._replacement_structured_content(replacement)
             if hasattr(response_obj, "structured_content"):
                 try:
                     setattr(response_obj, "structured_content", structured_replacement)
@@ -250,12 +250,12 @@ class _CiscoAIDefenseMcpMixin:
             result: Final = response_obj.get("result")
             if isinstance(result, dict):
                 result["content"] = replacement
-                result["structuredContent"] = _CiscoAIDefenseMcpMixin._replacement_structured_content(replacement)
+                result["structuredContent"] = CiscoAIDefenseMcpMixin._replacement_structured_content(replacement)
                 result["isError"] = True
                 return True
             response_obj["result"] = {
                 "content": replacement,
-                "structuredContent": _CiscoAIDefenseMcpMixin._replacement_structured_content(replacement),
+                "structuredContent": CiscoAIDefenseMcpMixin._replacement_structured_content(replacement),
                 "isError": True,
             }
             return True
@@ -472,7 +472,7 @@ class _CiscoAIDefenseMcpMixin:
                 return {
                     "jsonrpc": "2.0",
                     "id": response.get("id") or "litellm-mcp",
-                    "result": _CiscoAIDefenseMcpMixin._build_mcp_result(content=content, source=response),
+                    "result": CiscoAIDefenseMcpMixin._build_mcp_result(content=content, source=response),
                 }
         if isinstance(response, list):
             if response and all(
@@ -484,7 +484,7 @@ class _CiscoAIDefenseMcpMixin:
                     return {
                         "jsonrpc": "2.0",
                         "id": "litellm-mcp",
-                        "result": _CiscoAIDefenseMcpMixin._build_mcp_result(
+                        "result": CiscoAIDefenseMcpMixin._build_mcp_result(
                             content=inner_content, source=response_fields
                         ),
                     }
@@ -493,7 +493,7 @@ class _CiscoAIDefenseMcpMixin:
             return {
                 "jsonrpc": "2.0",
                 "id": "litellm-mcp",
-                "result": _CiscoAIDefenseMcpMixin._build_mcp_result(content=response),
+                "result": CiscoAIDefenseMcpMixin._build_mcp_result(content=response),
             }
         model_dump: Final = getattr(response, "model_dump", None)
         if callable(model_dump):
@@ -502,13 +502,13 @@ class _CiscoAIDefenseMcpMixin:
             except TypeError:
                 dumped = model_dump()
             if isinstance(dumped, dict):
-                return _CiscoAIDefenseMcpMixin._normalize_mcp_response(dumped)
+                return CiscoAIDefenseMcpMixin._normalize_mcp_response(dumped)
         content = getattr(response, "content", None)
         if isinstance(content, list):
             return {
                 "jsonrpc": "2.0",
                 "id": "litellm-mcp",
-                "result": _CiscoAIDefenseMcpMixin._build_mcp_result(content=content, source=response),
+                "result": CiscoAIDefenseMcpMixin._build_mcp_result(content=content, source=response),
             }
         return None
 
@@ -536,9 +536,9 @@ class _CiscoAIDefenseMcpMixin:
 
         inner: Final[object | None] = getattr(response_obj, "mcp_tool_call_response", None)
         if inner is not None:
-            return _CiscoAIDefenseMcpMixin._set_mcp_tool_response_text(inner, text)
+            return CiscoAIDefenseMcpMixin._set_mcp_tool_response_text(inner, text)
 
-        content_list: Final = _CiscoAIDefenseMcpMixin._coerce_to_content_list(response_obj)
+        content_list: Final = CiscoAIDefenseMcpMixin._coerce_to_content_list(response_obj)
 
         replaced = False
         if isinstance(content_list, list):
@@ -586,7 +586,7 @@ class _CiscoAIDefenseMcpMixin:
             return None
         inner: Final[object | None] = getattr(response_obj, "mcp_tool_call_response", None)
         if inner is not None:
-            return _CiscoAIDefenseMcpMixin._coerce_to_content_list(inner)
+            return CiscoAIDefenseMcpMixin._coerce_to_content_list(inner)
         content: Final = getattr(response_obj, "content", None)
         if isinstance(content, list):
             return content
@@ -643,3 +643,6 @@ class _CiscoAIDefenseMcpMixin:
                     if isinstance(direct, dict) and direct:
                         return dict(direct)
         return None
+
+
+CiscoAIDefenseMcpMixin = _CiscoAIDefenseMcpMixin

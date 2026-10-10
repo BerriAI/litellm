@@ -1,6 +1,6 @@
 import asyncio
 from unittest.mock import Mock
-from litellm.proxy.utils import _get_redoc_url, _get_docs_url
+from litellm.proxy.utils import get_redoc_url, get_docs_url
 
 import pytest
 from fastapi import Request
@@ -36,6 +36,7 @@ class MockPrismaClient:
         self.spend_log_transactions = []
         self.daily_user_spend_transactions = {}
         self.tool_usage_transactions = []
+        self.model_usage_transactions = []
         self.autorouter_turn_transactions = []
         self.baseline_accounting_transactions = []
         self.baseline_accounting_lock = asyncio.Lock()
@@ -49,6 +50,7 @@ class MockPrismaClient:
         self._spend_log_transactions_lock = asyncio.Lock()
         self.spend_log_write_lock = asyncio.Lock()
         self._tool_usage_transactions_lock = asyncio.Lock()
+        self._model_usage_transactions_lock = asyncio.Lock()
         self._autorouter_turn_transactions_lock = asyncio.Lock()
 
     def jsonify_object(self, obj):

@@ -1,5 +1,6 @@
 import math
 from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -14,6 +15,7 @@ from litellm.proxy.db.budget_window_spend_writer import (
 from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
     build_window_spend_transaction,
 )
+from litellm.proxy.db.log_db_metrics import record_db_io
 
 WINDOW_A = datetime(2026, 8, 1, tzinfo=timezone.utc)
 WINDOW_B = datetime(2026, 8, 31, tzinfo=timezone.utc)
@@ -42,10 +44,12 @@ class _FakeDB:
         self.committed = False
 
     async def query_raw(self, query: str, *args: Any) -> list[dict[str, str]]:
+        record_db_io()
         self.query_raw_calls.append((query, args))
         return self.existing_rows
 
     async def execute_raw(self, query: str, *args: Any) -> int:
+        record_db_io()
         self.execute_raw_calls.append((query, args))
         return 1
 
@@ -59,6 +63,7 @@ class _FakeDB:
     @asynccontextmanager
     async def _batch(self):
         yield self.batcher
+        record_db_io()
         self.committed = True
 
     def batch_(self):
@@ -592,3 +597,17 @@ async def test_seed_aggregate_treats_an_entity_with_no_rows_as_zero():
     )
 
     assert totals == WindowSeedTotals(total=0.0, before_batch=0.0)
+
+
+@pytest.mark.asyncio
+async def test_rolling_a_window_row_renders_a_postgres_update_span(
+    postgres_span_names: Callable[[], Awaitable[tuple[str, ...]]],
+) -> None:
+    await roll_window_spend_row(
+        prisma_client=_FakePrismaClient(_FakeDB()),
+        entity_type="team",
+        entity_id="t1",
+        window_duration="30d",
+        new_window_start=WINDOW_B,
+    )
+    assert await postgres_span_names() == ("postgres.update LiteLLM_BudgetWindowSpend",)

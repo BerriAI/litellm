@@ -1,6 +1,6 @@
 use bytes::Bytes;
 use futures_util::{StreamExt, stream::BoxStream};
-use litellm_framing::{frames, sse::SseCodec};
+use litellm_framer::{frames, sse::SseCodec};
 use litellm_llms_types::formats::messages::streaming::MessagesStreamEvent;
 
 use crate::Error;

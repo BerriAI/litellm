@@ -104,7 +104,7 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
             {
                 name: value
                 for name, value in (
-                    ("anthropic-workspace", project_id),
+                    ("anthropic-workspace-id", project_id),
                     ("anthropic-version", None if has_version else DEFAULT_ANTHROPIC_API_VERSION),
                 )
                 if value

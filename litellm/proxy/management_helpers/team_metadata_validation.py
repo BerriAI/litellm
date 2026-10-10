@@ -16,9 +16,10 @@ from types import MappingProxyType
 from typing import Final, Literal, Protocol
 
 from fastapi import HTTPException, status
-from pydantic import BaseModel, JsonValue, TypeAdapter
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamMetadataFieldSchema,
 )
@@ -30,13 +31,13 @@ DEFAULT_TEAM_METADATA_VALIDATION_UNAVAILABLE_MESSAGE: Final = (
 DEFAULT_TEAM_METADATA_VALIDATION_REJECTED_MESSAGE: Final = "Team metadata failed validation."
 
 
-class TeamMetadataRequester(BaseModel):
+class TeamMetadataRequester(LiteLLMBaseModel):
     user_id: str | None = None
     user_email: str | None = None
     user_role: str | None = None
 
 
-class TeamMetadataValidationPayload(BaseModel):
+class TeamMetadataValidationPayload(LiteLLMBaseModel):
     operation: Literal["create", "update"]
     metadata: Mapping[str, JsonValue]
     existing_metadata: Mapping[str, JsonValue] | None = None
@@ -45,7 +46,7 @@ class TeamMetadataValidationPayload(BaseModel):
     requester: TeamMetadataRequester
 
 
-class TeamMetadataValidationResult(BaseModel):
+class TeamMetadataValidationResult(LiteLLMBaseModel):
     valid: bool
     error_message: str | None = None
 

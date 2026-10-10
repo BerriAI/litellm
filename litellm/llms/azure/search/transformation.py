@@ -33,7 +33,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.search.transformation import (
@@ -42,6 +42,7 @@ from litellm.llms.base_llm.search.transformation import (
     SearchResult,
 )
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -61,7 +62,7 @@ _UPSTREAM_ERROR_STATUS: Final = 502
 _RESPONSE_COST_HEADER: Final = "llm_provider-x-litellm-response-cost"
 
 
-class _Annotation(BaseModel):
+class _Annotation(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     type: str = ""
@@ -71,7 +72,7 @@ class _Annotation(BaseModel):
     end_index: int | None = None
 
 
-class _ContentPart(BaseModel):
+class _ContentPart(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     type: str = ""
@@ -79,26 +80,26 @@ class _ContentPart(BaseModel):
     annotations: tuple[_Annotation, ...] = ()
 
 
-class _OutputItem(BaseModel):
+class _OutputItem(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     type: str = ""
     content: tuple[_ContentPart, ...] = ()
 
 
-class _ErrorBody(BaseModel):
+class _ErrorBody(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     message: str | None = None
 
 
-class _IncompleteDetails(BaseModel):
+class _IncompleteDetails(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     reason: str | None = None
 
 
-class _ResponsesEnvelope(BaseModel):
+class _ResponsesEnvelope(LiteLLMBaseModel):
     """A Foundry Responses API body. `output` is required: a body without it is not a
     Responses API response and must not be reported as a successful empty search.
 
@@ -113,7 +114,7 @@ class _ResponsesEnvelope(BaseModel):
     incomplete_details: _IncompleteDetails | None = None
 
 
-class _ErrorEnvelope(BaseModel):
+class _ErrorEnvelope(LiteLLMBaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
     error: _ErrorBody | None = None
@@ -205,41 +206,41 @@ def _capped(results: tuple[SearchResult, ...], max_results: int | None) -> tuple
     return results[:max_results] if max_results is not None else results
 
 
-class _SearchConfiguration(BaseModel):
+class _SearchConfiguration(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     project_connection_id: str
     count: int | None = None
 
 
-class _BingGroundingParams(BaseModel):
+class _BingGroundingParams(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     search_configurations: tuple[_SearchConfiguration, ...]
 
 
-class _BingGroundingTool(BaseModel):
+class _BingGroundingTool(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["bing_grounding"] = "bing_grounding"
     bing_grounding: _BingGroundingParams
 
 
-class _UserLocation(BaseModel):
+class _UserLocation(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["approximate"] = "approximate"
     country: str
 
 
-class _WebSearchTool(BaseModel):
+class _WebSearchTool(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     type: Literal["web_search"] = "web_search"
     user_location: _UserLocation | None = None
 
 
-class _ResponsesRequest(BaseModel):
+class _ResponsesRequest(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     model: str
@@ -421,7 +422,7 @@ class BingGroundingSearchConfig(BaseSearchConfig):
         )
         if get_secret_str(CONNECTION_ID_ENV):
             return response
-        response._hidden_params["additional_headers"] = {_RESPONSE_COST_HEADER: 0.0}
+        response.hidden_params["additional_headers"] = {_RESPONSE_COST_HEADER: 0.0}
         return response
 
     def get_error_class(

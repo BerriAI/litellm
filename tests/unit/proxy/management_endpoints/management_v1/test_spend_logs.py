@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from fastapi import FastAPI, Request
@@ -7,6 +7,7 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LiteLLMRoutes, LitellmUserRoles
+from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
 from litellm.proxy.list_api.common import (
     PROBLEM_TYPE_BASE,
@@ -51,7 +52,7 @@ WINDOW = "filter[startTime][gte]=2026-07-23T00:00:00Z&filter[startTime][lte]=202
 @pytest.fixture
 def mock_prisma_client(monkeypatch):
     prisma_client = MagicMock()
-    prisma_client.db.query_raw = AsyncMock(return_value=[])
+    prisma_client.db.query_raw = AsyncMock(return_value=())
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
     return prisma_client
 
@@ -71,9 +72,10 @@ def _mock_rows(mock_prisma_client, end_users: list[str]) -> AsyncMock:
     return query_raw
 
 
-def _as_role(role: LitellmUserRoles, user_id):
+def _as_role(role: LitellmUserRoles, user_id, log_team_lookup):
     original = app.dependency_overrides.copy()
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_id=user_id, user_role=role)
+    app.dependency_overrides[get_log_team_lookup] = lambda: log_team_lookup
     return original
 
 
@@ -283,13 +285,9 @@ def test_applies_no_scope_for_a_proxy_admin(mock_prisma_client, as_proxy_admin):
 def test_scopes_a_team_admin_to_their_own_rows_and_teams(mock_prisma_client, role):
     """A team admin must not see end users belonging to teams they cannot read."""
     query_raw = _mock_rows(mock_prisma_client, ["cust-a"])
-    original = _as_role(role, user_id="team-admin-1")
+    original = _as_role(role, user_id="team-admin-1", log_team_lookup=AsyncMock(return_value=("team-a", "team-b")))
     try:
-        with patch(
-            "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-            new=AsyncMock(return_value=["team-a", "team-b"]),
-        ):
-            response = _get()
+        response = _get()
     finally:
         app.dependency_overrides = original
 
@@ -297,24 +295,20 @@ def test_scopes_a_team_admin_to_their_own_rows_and_teams(mock_prisma_client, rol
     # Same clause shape ui_view_spend_logs builds, so the two cannot diverge.
     assert '("user" = $3 OR team_id = ANY($4::text[]))' in query_raw.call_args.args[0]
     assert query_raw.call_args.args[3] == "team-admin-1"
-    assert query_raw.call_args.args[4] == ["team-a", "team-b"]
+    assert query_raw.call_args.args[4] == ("team-a", "team-b")
 
 
 def test_scopes_a_teamless_user_to_their_own_rows(mock_prisma_client):
     query_raw = _mock_rows(mock_prisma_client, [])
-    original = _as_role(LitellmUserRoles.INTERNAL_USER, user_id="solo")
+    original = _as_role(LitellmUserRoles.INTERNAL_USER, user_id="solo", log_team_lookup=AsyncMock(return_value=()))
     try:
-        with patch(
-            "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-            new=AsyncMock(return_value=[]),
-        ):
-            response = _get()
+        response = _get()
     finally:
         app.dependency_overrides = original
 
     assert response.status_code == 200
     sql = query_raw.call_args.args[0]
-    assert '("user" = $3)' in sql
+    assert '"user" = $3' in sql
     assert "team_id" not in sql
     assert query_raw.call_args.args[3] == "solo"
 
@@ -322,13 +316,9 @@ def test_scopes_a_teamless_user_to_their_own_rows(mock_prisma_client):
 def test_returns_nothing_when_the_caller_owns_no_scope(mock_prisma_client):
     """Unidentifiable caller must match no rows, never fall through to unscoped."""
     query_raw = _mock_rows(mock_prisma_client, [])
-    original = _as_role(LitellmUserRoles.INTERNAL_USER, user_id=None)
+    original = _as_role(LitellmUserRoles.INTERNAL_USER, user_id=None, log_team_lookup=AsyncMock(return_value=()))
     try:
-        with patch(
-            "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-            new=AsyncMock(return_value=[]),
-        ):
-            response = _get()
+        response = _get()
     finally:
         app.dependency_overrides = original
 
@@ -339,19 +329,17 @@ def test_returns_nothing_when_the_caller_owns_no_scope(mock_prisma_client):
 def test_scopes_when_the_permitted_team_lookup_fails(mock_prisma_client):
     """A failed team lookup must degrade to own-rows-only, never to unscoped."""
     query_raw = _mock_rows(mock_prisma_client, [])
-    original = _as_role(LitellmUserRoles.INTERNAL_USER, user_id="solo")
+    original = _as_role(
+        LitellmUserRoles.INTERNAL_USER, user_id="solo", log_team_lookup=AsyncMock(side_effect=RuntimeError("db down"))
+    )
     try:
-        with patch(
-            "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-            new=AsyncMock(side_effect=RuntimeError("db down")),
-        ):
-            response = _get()
+        response = _get()
     finally:
         app.dependency_overrides = original
 
     assert response.status_code == 200
     sql = query_raw.call_args.args[0]
-    assert '("user" = $3)' in sql
+    assert '"user" = $3' in sql
     assert "team_id" not in sql
 
 
@@ -422,24 +410,22 @@ def test_user_facet_reads_internal_users_from_spend_logs(mock_prisma_client, as_
 def test_user_facet_uses_the_same_team_scope_as_request_logs(mock_prisma_client):
     query_raw = AsyncMock(return_value=[{"user": "member@example.com"}])
     mock_prisma_client.db.query_raw = query_raw
-    original = _as_role(LitellmUserRoles.INTERNAL_USER, user_id="team-admin-1")
+    original = _as_role(
+        LitellmUserRoles.INTERNAL_USER, user_id="team-admin-1", log_team_lookup=AsyncMock(return_value=("team-a",))
+    )
     try:
-        with patch(
-            "litellm.proxy.spend_tracking.spend_management_endpoints._get_permitted_team_ids_for_spend_logs",
-            new=AsyncMock(return_value=["team-a"]),
-        ):
-            response = _get_users()
+        response = _get_users()
     finally:
         app.dependency_overrides = original
 
     assert response.status_code == 200
     assert '("user" = $3 OR team_id = ANY($4::text[]))' in query_raw.call_args.args[0]
     assert query_raw.call_args.args[3] == "team-admin-1"
-    assert query_raw.call_args.args[4] == ["team-a"]
+    assert query_raw.call_args.args[4] == ("team-a",)
 
 
 def test_user_facet_searches_the_internal_user_value(mock_prisma_client, as_proxy_admin):
-    query_raw = AsyncMock(return_value=[])
+    query_raw = AsyncMock(return_value=())
     mock_prisma_client.db.query_raw = query_raw
 
     _get_users(f"{WINDOW}&q=alice%40example.com")

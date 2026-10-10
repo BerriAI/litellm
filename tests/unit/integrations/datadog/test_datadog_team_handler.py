@@ -221,7 +221,7 @@ class TestDataDogHandler:
         assert result.DD_API_KEY == "team_key"
         assert "eu1.datadoghq.com" in result.intake_url
 
-    def test_request_blocked_callback_params_includes_dd(self):
+    def test_team_callback_params_are_blocked_for_requests(self):
         """DD params should be blocked from request-level metadata (security)."""
         from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
             _request_blocked_callback_params,

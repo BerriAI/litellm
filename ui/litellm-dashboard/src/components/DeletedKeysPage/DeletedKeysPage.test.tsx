@@ -14,7 +14,7 @@ vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
 const mockUseDeletedKeys = useDeletedKeys as MockedFunction<typeof useDeletedKeys>;
 
 const mockDeletedKey: DeletedKeyResponse = {
-  token: "sk-1234567890abcdef",
+  token: "sk-9876543210fedcba",
   token_id: "key-1",
   key_type: "llm_api",
   project_id: null,
@@ -64,7 +64,7 @@ const mockDeletedKey: DeletedKeyResponse = {
   end_user_rpm_limit: 10,
   end_user_max_budget: 10,
   last_refreshed_at: Date.now(),
-  api_key: "sk-1234567890abcdef",
+  api_key: "sk-9876543210fedcba",
   user_role: "user",
   rpm_limit_per_model: {},
   tpm_limit_per_model: {},

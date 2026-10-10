@@ -111,7 +111,7 @@ async def test_mcp_cost_tracking():
     local_mcp_server_manager = MCPServerManager()
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Load the server config
@@ -244,7 +244,7 @@ async def test_mcp_cost_tracking_per_tool():
     local_mcp_server_manager = MCPServerManager()
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Load the server config with per-tool costs
@@ -417,7 +417,7 @@ async def test_mcp_tool_call_hook():
     local_mcp_server_manager = MCPServerManager()
 
     with patch(
-        "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPClient",
+        "litellm.proxy._experimental.mcp_server.upstream.MCPClient",
         mock_client_constructor,
     ):
         # Load the server config

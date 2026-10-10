@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import Awaitable, Generator, Mapping
 from contextlib import contextmanager
 from dataclasses import replace
-from types import MappingProxyType
 from typing import Final, Literal, Protocol, TypeAlias, cast
 
 import httpx
@@ -14,7 +13,8 @@ import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.rust_bridge import settings
-from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR, LiteLLMOcrRequest
+from litellm.rust_bridge.ocr.entrypoints import NATIVE_AOCR, NATIVE_OCR
+from litellm.rust_bridge.public_call import NativeCall
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec, recording_service
 from tests.test_litellm_rust.support.requests import OCR_DOCUMENT, OCR_MODEL, OCR_RESPONSE
@@ -59,16 +59,21 @@ class _VaultSecrets(CustomSecretManager):
         return tuple(params for name, params in self.reads if name == "MISTRAL_API_KEY")
 
 
-def _native_request(api_base: str) -> LiteLLMOcrRequest:
-    return LiteLLMOcrRequest(
-        model=OCR_MODEL,
-        document=OCR_DOCUMENT,
-        api_key=None,
-        api_base=api_base,
-        timeout=None,
-        custom_llm_provider=None,
-        extra_headers=None,
-        kwargs=MappingProxyType({}),
+def _native_request(api_base: str) -> NativeCall:
+    supplied: Final = _public_kwargs(api_base)
+    return NativeCall(
+        args=(),
+        kwargs=supplied,
+        base={
+            "model": OCR_MODEL,
+            "document": OCR_DOCUMENT,
+            "api_key": None,
+            "api_base": api_base,
+            "timeout": None,
+            "custom_llm_provider": None,
+            "extra_headers": None,
+            **supplied,
+        },
     )
 
 
@@ -79,13 +84,13 @@ def _public_kwargs(api_base: str) -> dict[str, object]:
 async def _rust_ocr(api_base: str) -> OCRResponse:
     route: Final = NATIVE_OCR.load()
     assert route is not None
-    return route(_native_request(api_base), (), _public_kwargs(api_base))
+    return route(_native_request(api_base))
 
 
 async def _rust_aocr(api_base: str) -> OCRResponse:
     route: Final = NATIVE_AOCR.load()
     assert route is not None
-    return await route(_native_request(api_base), (), _public_kwargs(api_base))
+    return await route(_native_request(api_base))
 
 
 _RUST_PATHS: Final = (_rust_ocr, _rust_aocr)

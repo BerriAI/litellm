@@ -65,7 +65,7 @@ def get_instance_fn(value: str, config_file_path: str | None = None) -> Any:
         raise e
 
 
-def _load_instance_from_remote_storage(remote_url: str, config_file_path: str | None = None) -> Any:
+def _load_instance_from_remote_storage(remote_url: str, config_file_path: str | None = None) -> object:
     """
     Load custom logger instance from S3 or GCS URL.
 

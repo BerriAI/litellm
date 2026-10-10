@@ -22,7 +22,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import owned_proxy_process, ready_deadline_seconds, stop_deadline_seconds
+from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
@@ -936,7 +936,7 @@ _CHAOS_TRAFFIC_SECONDS: Final = 90
 
 
 def _chaos_budget(boots: int, stops: int) -> float:
-    return boots * ready_deadline_seconds() + stops * stop_deadline_seconds() + _CHAOS_TRAFFIC_SECONDS
+    return (boots + stops) * graceful_stop_seconds() + _CHAOS_TRAFFIC_SECONDS
 
 
 @pytest.mark.timeout(_chaos_budget(boots=2, stops=1))

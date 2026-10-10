@@ -13,12 +13,34 @@ from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.litellm_core_utils.get_litellm_params import (
     _OPTIONAL_KWARGS_KEYS,
     InvalidControlOption,
-    _get_base_model_from_litellm_call_metadata,
+    get_base_model_from_litellm_call_metadata,
     get_litellm_params,
     parse_control_options,
     stored_control_options,
 )
 from litellm.types.litellm_params import ControlOptions
+
+
+def _funnel_kwargs_completion_forwards(monkeypatch, wif_kwargs: dict[str, object]) -> dict[str, object]:
+    """completion() names its get_litellm_params arguments one by one, so a key the funnel knows
+    is still dropped unless that call site forwards it from its own kwargs."""
+    from unittest.mock import MagicMock
+
+    import litellm
+    import litellm.main as litellm_main
+
+    spy = MagicMock(wraps=litellm_main.get_litellm_params)
+    monkeypatch.setattr(  # test-quality-ok: completion() has no injection seam for its kwargs funnel
+        litellm_main, "get_litellm_params", spy
+    )
+    litellm.completion(
+        model="anthropic/claude-sonnet-5",
+        messages=[{"role": "user", "content": "hi"}],
+        mock_response="ok",
+        **wif_kwargs,
+    )
+    return spy.call_args.kwargs
+
 
 NAMED_PRICE_PARAMS: Final = frozenset(
     {
@@ -33,25 +55,30 @@ NAMED_PRICE_PARAMS: Final = frozenset(
 
 class TestGetBaseModelFromLitellmCallMetadata:
     def test_none_metadata_returns_none(self):
-        assert _get_base_model_from_litellm_call_metadata(None) is None
+        assert get_base_model_from_litellm_call_metadata(None) is None
 
     def test_empty_metadata_returns_none(self):
-        assert _get_base_model_from_litellm_call_metadata({}) is None
+        assert get_base_model_from_litellm_call_metadata({}) is None
 
     def test_missing_model_info_returns_none(self):
-        assert _get_base_model_from_litellm_call_metadata({"foo": "bar"}) is None
+        assert get_base_model_from_litellm_call_metadata({"foo": "bar"}) is None
 
     def test_model_info_none_returns_none(self):
-        assert _get_base_model_from_litellm_call_metadata({"model_info": None}) is None
+        assert get_base_model_from_litellm_call_metadata({"model_info": None}) is None
 
     def test_model_info_empty_dict_returns_none(self):
-        assert _get_base_model_from_litellm_call_metadata({"model_info": {}}) is None
+        assert get_base_model_from_litellm_call_metadata({"model_info": {}}) is None
 
     def test_returns_base_model(self):
-        result = _get_base_model_from_litellm_call_metadata(
+        result = get_base_model_from_litellm_call_metadata(
             {"model_info": {"base_model": "gpt-4"}}
         )
         assert result == "gpt-4"
+
+    def test_returns_non_string_base_model_without_filtering(self):
+        result = get_base_model_from_litellm_call_metadata({"model_info": {"base_model": 123}})
+
+        assert result == 123
 
 
 class TestGetLitellmParamsKwargsExtraction:
@@ -357,3 +384,126 @@ def test_drop_params_strings_reach_litellm_params_as_flags(
     value: str | bool | None, expected: bool | None
 ) -> None:
     assert get_litellm_params(drop_params=value)["drop_params"] is expected
+
+
+class TestAnthropicWifKeys:
+    """The six anthropic_* WIF keys need dual registration: carried by the kwargs
+    funnel into litellm_params (where the Anthropic auth tier reads them) AND
+    listed in all_litellm_params (so the extra_body sweep never sends them to
+    /v1/messages)."""
+
+    SIX_KEYS = {
+        "anthropic_federation_rule_id": "fdrl_1",
+        "anthropic_organization_id": "org-1",
+        "anthropic_service_account_id": "svcacct_1",
+        "anthropic_federation_workspace_id": "wrkspc_1",
+        "anthropic_identity_token_file": "/var/run/secrets/tok",
+        "anthropic_identity_token": "oidc/env/TOK",
+    }
+
+    def test_keys_survive_into_litellm_params(self):
+        params = get_litellm_params(**self.SIX_KEYS)
+        for key, value in self.SIX_KEYS.items():
+            assert params[key] == value
+
+    def test_keys_are_forwarded_from_completion_kwargs(self, monkeypatch):
+        forwarded = _funnel_kwargs_completion_forwards(monkeypatch, self.SIX_KEYS)
+        assert {key: forwarded[key] for key in self.SIX_KEYS} == self.SIX_KEYS
+
+    def test_keys_stay_out_of_the_provider_body(self):
+        from litellm.types.utils import all_litellm_params
+
+        for key in self.SIX_KEYS:
+            assert key in all_litellm_params
+
+    def test_keys_absent_when_not_configured(self):
+        params = get_litellm_params()
+        for key in self.SIX_KEYS:
+            assert key not in params
+
+
+class TestAnthropicWifIdentitySourceKeys:
+    """Phase 1 adds 11 more anthropic_* WIF keys (the anthropic_identity_source discriminator
+    plus the internal_issuer/keycloak identity-source fields) that need the same dual
+    registration as the original six tested above."""
+
+    NEW_KEYS = {
+        "anthropic_identity_source": "keycloak",
+        "anthropic_issuer_url": "https://issuer.example",
+        "anthropic_issuer_subject": "svc-account",
+        "anthropic_issuer_audience": "https://api.anthropic.com",
+        "anthropic_issuer_ttl_seconds": "300",
+        "anthropic_issuer_signing_key_ref": "oidc/env/ISSUER_KEY",
+        "anthropic_keycloak_token_url": "https://kc.example/realms/r/protocol/openid-connect/token",
+        "anthropic_keycloak_client_id": "litellm",
+        "anthropic_keycloak_auth_method": "client_secret_basic",
+        "anthropic_keycloak_client_secret_ref": "oidc/env/KC_SECRET",
+        "anthropic_keycloak_scope": "anthropic-wif",
+        # Server-set when a client redirects api_base; carried here so it is not dropped in transit
+        "anthropic_disable_workload_identity_federation": True,
+    }
+
+    def test_new_keys_are_exactly_the_non_legacy_registered_set(self):
+        """Fails the moment a key is added to ANTHROPIC_WIF_KWARGS_KEYS without a matching entry
+        here (or vice versa), catching drift between what wif.py dispatches on and what this
+        test (and the funnel/provider-body tests below) actually exercises."""
+        from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
+
+        assert set(self.NEW_KEYS) == ANTHROPIC_WIF_KWARGS_KEYS - set(TestAnthropicWifKeys.SIX_KEYS)
+
+    def test_keys_survive_into_litellm_params(self):
+        params = get_litellm_params(**self.NEW_KEYS)
+        for key, value in self.NEW_KEYS.items():
+            assert params[key] == value
+
+    def test_keys_are_forwarded_from_completion_kwargs(self, monkeypatch):
+        forwarded = _funnel_kwargs_completion_forwards(monkeypatch, self.NEW_KEYS)
+        assert {key: forwarded[key] for key in self.NEW_KEYS} == self.NEW_KEYS
+
+    def test_keys_stay_out_of_the_provider_body(self):
+        from litellm.types.utils import all_litellm_params
+
+        for key in self.NEW_KEYS:
+            assert key in all_litellm_params
+
+    def test_keys_absent_when_not_configured(self):
+        params = get_litellm_params()
+        for key in self.NEW_KEYS:
+            assert key not in params
+
+
+class TestOpenAIWifKeys:
+    """The three openai_* WIF keys carry a deployment's federation identity through the kwargs
+    funnel into litellm_params (where the OpenAI client factory reads them) and stay out of the
+    provider body, exactly like the anthropic_* keys above."""
+
+    THREE_KEYS = {
+        "openai_identity_provider_id": "idp_1",
+        "openai_service_account_id": "user-1",
+        "openai_identity_token_file": "/var/run/secrets/tokens/openai",
+    }
+
+    def test_keys_are_exactly_the_registered_set(self):
+        from litellm.types.workload_identity import OPENAI_WIF_KWARGS_KEYS
+
+        assert set(self.THREE_KEYS) == OPENAI_WIF_KWARGS_KEYS
+
+    def test_keys_survive_into_litellm_params(self):
+        params = get_litellm_params(**self.THREE_KEYS)
+        for key, value in self.THREE_KEYS.items():
+            assert params[key] == value
+
+    def test_keys_are_forwarded_from_completion_kwargs(self, monkeypatch):
+        forwarded = _funnel_kwargs_completion_forwards(monkeypatch, self.THREE_KEYS)
+        assert {key: forwarded[key] for key in self.THREE_KEYS} == self.THREE_KEYS
+
+    def test_keys_stay_out_of_the_provider_body(self):
+        from litellm.types.utils import all_litellm_params
+
+        for key in self.THREE_KEYS:
+            assert key in all_litellm_params
+
+    def test_keys_absent_when_not_configured(self):
+        params = get_litellm_params()
+        for key in self.THREE_KEYS:
+            assert key not in params

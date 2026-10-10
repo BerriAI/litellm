@@ -1,21 +1,22 @@
 import contextlib
+import json
+from collections.abc import Callable
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
-
+# Import proxy_server module first to ensure it's initialized
+import litellm.proxy.proxy_server as ps
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_TeamTable,
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
-
-# Import proxy_server module first to ensure it's initialized
-import litellm.proxy.proxy_server as ps
 
 # Now we can safely import app
 from litellm.proxy.proxy_server import app
@@ -114,9 +115,7 @@ async def test_list_search_tools_config_only(monkeypatch):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             # Mock proxy_config
             mock_proxy_config = MagicMock()
-            mock_proxy_config.get_config = AsyncMock(
-                return_value={"search_tools": config_tools}
-            )
+            mock_proxy_config.get_config = AsyncMock(return_value={"search_tools": config_tools})
             mock_proxy_config.parse_search_tools = MagicMock(return_value=config_tools)
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
@@ -190,9 +189,7 @@ async def test_list_search_tools_filters_duplicate_config_tools(monkeypatch):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             # Mock proxy_config
             mock_proxy_config = MagicMock()
-            mock_proxy_config.get_config = AsyncMock(
-                return_value={"search_tools": config_tools}
-            )
+            mock_proxy_config.get_config = AsyncMock(return_value={"search_tools": config_tools})
             mock_proxy_config.parse_search_tools = MagicMock(return_value=config_tools)
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
@@ -213,11 +210,7 @@ async def test_list_search_tools_filters_duplicate_config_tools(monkeypatch):
 
                     # Verify DB tool is present
                     db_tool = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "existing-tool"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "existing-tool"),
                         None,
                     )
                     assert db_tool is not None
@@ -230,11 +223,7 @@ async def test_list_search_tools_filters_duplicate_config_tools(monkeypatch):
 
                     # Verify unique config tool is present
                     config_tool = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "unique-config-tool"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "unique-config-tool"),
                         None,
                     )
                     assert config_tool is not None
@@ -245,8 +234,7 @@ async def test_list_search_tools_filters_duplicate_config_tools(monkeypatch):
                         (
                             t
                             for t in data["search_tools"]
-                            if t["search_tool_name"] == "existing-tool"
-                            and t["is_from_config"] is True
+                            if t["search_tool_name"] == "existing-tool" and t["is_from_config"] is True
                         ),
                         None,
                     )
@@ -321,11 +309,7 @@ async def test_list_search_tools_datetime_conversion(monkeypatch):
 
                     # Test datetime conversion for tool 1
                     tool1 = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "datetime-test-tool"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "datetime-test-tool"),
                         None,
                     )
                     assert tool1 is not None
@@ -339,11 +323,7 @@ async def test_list_search_tools_datetime_conversion(monkeypatch):
 
                     # Test None handling for tool 2
                     tool2 = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "null-datetime-tool"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "null-datetime-tool"),
                         None,
                     )
                     assert tool2 is not None
@@ -355,11 +335,7 @@ async def test_list_search_tools_datetime_conversion(monkeypatch):
 
                     # Test string passthrough for tool 3
                     tool3 = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "string-datetime-tool"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "string-datetime-tool"),
                         None,
                     )
                     assert tool3 is not None
@@ -399,9 +375,7 @@ async def test_list_search_tools_config_error_handling(monkeypatch):
         with patch("litellm.proxy.proxy_server.prisma_client", mock_prisma):
             # Mock proxy_config to raise an error
             mock_proxy_config = MagicMock()
-            mock_proxy_config.get_config = AsyncMock(
-                side_effect=Exception("Config error")
-            )
+            mock_proxy_config.get_config = AsyncMock(side_effect=Exception("Config error"))
             with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
                 # Mock auth
                 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
@@ -420,13 +394,8 @@ async def test_list_search_tools_config_error_handling(monkeypatch):
                     assert len(data["search_tools"]) == 1
                     assert data["search_tools"][0]["search_tool_name"] == "db-tool-1"
                     # Verify masking of sensitive values
-                    assert (
-                        data["search_tools"][0]["litellm_params"]["api_key"]
-                        != "sk-test"
-                    )
-                    assert (
-                        "****" in data["search_tools"][0]["litellm_params"]["api_key"]
-                    )
+                    assert data["search_tools"][0]["litellm_params"]["api_key"] != "sk-test"
+                    assert "****" in data["search_tools"][0]["litellm_params"]["api_key"]
                 finally:
                     app.dependency_overrides.pop(user_api_key_auth, None)
 
@@ -464,7 +433,7 @@ async def test_list_search_tools_db_masking_sensitive_values(monkeypatch):
             "search_tool_name": "perplexity-tool",
             "litellm_params": {
                 "search_provider": "perplexity",
-                "api_key": "pplx-sk-1234567890abcdef",
+                "api_key": "pplx-sk-9876567890abcdef",
                 "api_base": "https://api.perplexity.ai",
             },
             "search_tool_info": {"description": "Perplexity tool"},
@@ -541,31 +510,18 @@ async def test_list_search_tools_db_masking_sensitive_values(monkeypatch):
 
                     # Test tool 1: api_key should be masked
                     tool1 = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "perplexity-tool"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "perplexity-tool"),
                         None,
                     )
                     assert tool1 is not None
-                    assert (
-                        tool1["litellm_params"]["api_key"] != "pplx-sk-1234567890abcdef"
-                    )
+                    assert tool1["litellm_params"]["api_key"] != "pplx-sk-9876567890abcdef"
                     assert "****" in tool1["litellm_params"]["api_key"]
                     assert tool1["litellm_params"]["search_provider"] == "perplexity"
-                    assert (
-                        tool1["litellm_params"]["api_base"]
-                        == "https://api.perplexity.ai"
-                    )
+                    assert tool1["litellm_params"]["api_base"] == "https://api.perplexity.ai"
 
                     # Test tool 2: api_key should be masked
                     tool2 = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "tavily-tool"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "tavily-tool"),
                         None,
                     )
                     assert tool2 is not None
@@ -575,29 +531,18 @@ async def test_list_search_tools_db_masking_sensitive_values(monkeypatch):
 
                     # Test tool 3: access_token and secret_key should be masked
                     tool3 = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "tool-with-token"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "tool-with-token"),
                         None,
                     )
                     assert tool3 is not None
-                    assert (
-                        tool3["litellm_params"]["access_token"]
-                        != "token-abcdefghijklmnop"
-                    )
+                    assert tool3["litellm_params"]["access_token"] != "token-abcdefghijklmnop"
                     assert "****" in tool3["litellm_params"]["access_token"]
                     assert tool3["litellm_params"]["secret_key"] != "secret-xyz123"
                     assert "****" in tool3["litellm_params"]["secret_key"]
 
                     # Test tool 4: non-sensitive fields should remain unmasked
                     tool4 = next(
-                        (
-                            t
-                            for t in data["search_tools"]
-                            if t["search_tool_name"] == "tool-with-non-sensitive"
-                        ),
+                        (t for t in data["search_tools"] if t["search_tool_name"] == "tool-with-non-sensitive"),
                         None,
                     )
                     assert tool4 is not None
@@ -613,6 +558,7 @@ async def test_get_all_search_tools_from_db_retries_on_transport_error():
     """`SearchToolRegistry.get_all_search_tools_from_db` self-heals across one
     ClientNotConnectedError via call_with_db_reconnect_retry."""
     import prisma
+
     from litellm.proxy.search_endpoints.search_tool_registry import (
         SearchToolRegistry,
     )
@@ -626,25 +572,18 @@ async def test_get_all_search_tools_from_db_retries_on_transport_error():
         return []
 
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db.litellm_searchtoolstable.find_many = AsyncMock(
-        side_effect=_flaky_find_many
-    )
+    mock_prisma_client.db.litellm_searchtoolstable.find_many = AsyncMock(side_effect=_flaky_find_many)
     mock_prisma_client.attempt_db_reconnect = AsyncMock(return_value=True)
     mock_prisma_client._db_auth_reconnect_timeout_seconds = 2.0
     mock_prisma_client._db_auth_reconnect_lock_timeout_seconds = 0.1
 
-    result = await SearchToolRegistry.get_all_search_tools_from_db(
-        prisma_client=mock_prisma_client
-    )
+    result = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=mock_prisma_client)
 
     assert result == []
     assert len(invocations) == 2
     mock_prisma_client.attempt_db_reconnect.assert_awaited_once()
     reconnect_kwargs = mock_prisma_client.attempt_db_reconnect.await_args.kwargs
-    assert (
-        reconnect_kwargs["reason"]
-        == "get_all_search_tools_from_db_lookup_failure"
-    )
+    assert reconnect_kwargs["reason"] == "get_all_search_tools_from_db_lookup_failure"
 
 
 @contextlib.contextmanager
@@ -747,9 +686,7 @@ async def test_list_search_tools_scoped_to_key_object_permission():
 @pytest.mark.asyncio
 async def test_list_search_tools_unrestricted_internal_user_sees_all():
     """An internal user with no search_tools allowlist is unrestricted and sees every tool."""
-    unrestricted_user = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal_user"
-    )
+    unrestricted_user = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal_user")
 
     with (
         _mock_search_tool_backend(_scoping_db_tools()),
@@ -789,9 +726,7 @@ async def test_list_search_tools_scoped_to_team_object_permission():
         response = TestClient(app).get("/search_tools/list")
 
     assert response.status_code == 200
-    assert [t["search_tool_name"] for t in response.json()["search_tools"]] == [
-        "db-tool-2"
-    ]
+    assert [t["search_tool_name"] for t in response.json()["search_tools"]] == ["db-tool-2"]
 
 
 @pytest.mark.asyncio
@@ -1059,9 +994,15 @@ def _live_router_and_db(db_rows: list):
     fake_router.search_tools = list(db_rows)
 
     with contextlib.ExitStack() as stack:
-        stack.enter_context(patch("litellm.proxy.proxy_server.prisma_client", MagicMock()))  # test-quality-ok: proxy globals are the only seam; see the module note above
-        stack.enter_context(patch("litellm.proxy.proxy_server.proxy_config", proxy_config))  # test-quality-ok: proxy globals are the only seam; see the module note above
-        stack.enter_context(patch("litellm.proxy.proxy_server.llm_router", fake_router))  # test-quality-ok: proxy globals are the only seam; see the module note above
+        stack.enter_context(
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock())
+        )  # test-quality-ok: proxy globals are the only seam; see the module note above
+        stack.enter_context(
+            patch("litellm.proxy.proxy_server.proxy_config", proxy_config)
+        )  # test-quality-ok: proxy globals are the only seam; see the module note above
+        stack.enter_context(
+            patch("litellm.proxy.proxy_server.llm_router", fake_router)
+        )  # test-quality-ok: proxy globals are the only seam; see the module note above
         stack.enter_context(
             patch(  # test-quality-ok: proxy globals are the only seam; see the module note above
                 "litellm.proxy.search_endpoints.search_tool_management.SEARCH_TOOL_REGISTRY",
@@ -1148,3 +1089,513 @@ async def test_create_search_tool_survives_a_failing_router_refresh():
 
     assert response.status_code == 200
     assert response.json()["search_tool_name"] == "tavily-search"
+
+
+def _search_caller(
+    virtual_key: bool,
+    key_search_tools: list[str] | None = None,
+    team_id: str | None = None,
+    user_role: LitellmUserRoles = LitellmUserRoles.INTERNAL_USER,
+    api_key: str = "sk-caller",
+) -> UserAPIKeyAuth:
+    caller = UserAPIKeyAuth(
+        api_key=api_key,
+        user_role=user_role,
+        user_id="internal_user",
+        team_id=team_id,
+        object_permission_id=None if key_search_tools is None else "op-key",
+        object_permission=(
+            None
+            if key_search_tools is None
+            else LiteLLM_ObjectPermissionTable(object_permission_id="op-key", search_tools=key_search_tools)
+        ),
+    )
+    caller.via_virtual_key = virtual_key
+    return caller
+
+
+@pytest.fixture
+def search_permission_cache(monkeypatch: pytest.MonkeyPatch) -> Callable[[list[str] | None], None]:
+    from litellm.proxy._types import LiteLLM_UserTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
+
+    cache = UserApiKeyCache()
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    monkeypatch.setattr(ps, "prisma_client", MagicMock())
+
+    def grant_user(search_tools: list[str] | None) -> None:
+        cache.set_cache(
+            key="internal_user", value=LiteLLM_UserTable(user_id="internal_user", object_permission_id="op-user")
+        )
+        cache.set_cache(
+            key=object_permission_cache_key("op-user"),
+            value=LiteLLM_ObjectPermissionTable(object_permission_id="op-user", search_tools=search_tools),
+        )
+
+    return grant_user
+
+
+@pytest.mark.parametrize(
+    "general_settings, user_search_tools, expected",
+    [
+        ({}, None, ["db-tool-1", "db-tool-2"]),
+        ({"search_tool_deny_by_default": False}, [], ["db-tool-1", "db-tool-2"]),
+        ({"search_tool_deny_by_default": True}, None, []),
+        ({"search_tool_deny_by_default": True}, [], []),
+        ({"search_tool_deny_by_default": True}, ["db-tool-2"], ["db-tool-2"]),
+    ],
+)
+@pytest.mark.asyncio
+async def test_filter_visible_search_tools_keyless_user_follows_search_tool_deny_by_default(
+    search_permission_cache: Callable[[list[str] | None], None],
+    general_settings: dict[str, bool],
+    user_search_tools: list[str] | None,
+    expected: list[str],
+):
+    from litellm.proxy.search_endpoints.search_tool_management import _filter_visible_search_tools
+
+    search_permission_cache(user_search_tools)
+    team_lookup = AsyncMock()
+
+    visible = await _filter_visible_search_tools(
+        _search_tool_responses("db-tool-1", "db-tool-2"),
+        _search_caller(virtual_key=False),
+        team_lookup,
+        general_settings,
+    )
+
+    assert [t["search_tool_name"] for t in visible] == expected
+    team_lookup.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "key_search_tools, expected",
+    [(None, []), ([], []), (["db-tool-1"], ["db-tool-1"])],
+)
+@pytest.mark.asyncio
+async def test_filter_visible_search_tools_standalone_key_needs_its_own_grant(
+    search_permission_cache: Callable[[list[str] | None], None], key_search_tools: list[str] | None, expected: list[str]
+):
+    from litellm.proxy.search_endpoints.search_tool_management import _filter_visible_search_tools
+
+    search_permission_cache(["db-tool-1", "db-tool-2"])
+
+    visible = await _filter_visible_search_tools(
+        _search_tool_responses("db-tool-1", "db-tool-2"),
+        _search_caller(virtual_key=True, key_search_tools=key_search_tools),
+        AsyncMock(),
+        {"search_tool_deny_by_default": True},
+    )
+
+    assert [t["search_tool_name"] for t in visible] == expected
+
+
+@pytest.mark.parametrize(
+    "key_search_tools, team_search_tools, expected",
+    [
+        (["db-tool-1"], [], []),
+        ([], ["db-tool-1"], []),
+        (["db-tool-1", "db-tool-2"], ["db-tool-1"], ["db-tool-1"]),
+    ],
+)
+@pytest.mark.asyncio
+async def test_filter_visible_search_tools_team_key_needs_key_and_team_grants(
+    search_permission_cache: Callable[[list[str] | None], None],
+    key_search_tools: list[str],
+    team_search_tools: list[str],
+    expected: list[str],
+):
+    from litellm.proxy.search_endpoints.search_tool_management import _filter_visible_search_tools
+
+    team_lookup = AsyncMock(
+        return_value=LiteLLM_TeamTable(
+            team_id="team-1",
+            object_permission_id="op-team",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-team", search_tools=team_search_tools
+            ),
+        )
+    )
+
+    visible = await _filter_visible_search_tools(
+        _search_tool_responses("db-tool-1", "db-tool-2"),
+        _search_caller(virtual_key=True, key_search_tools=key_search_tools, team_id="team-1"),
+        team_lookup,
+        {"search_tool_deny_by_default": True},
+    )
+
+    assert [t["search_tool_name"] for t in visible] == expected
+
+
+@pytest.mark.parametrize(
+    "caller, expected",
+    [
+        (
+            _search_caller(
+                virtual_key=False, user_role=LitellmUserRoles.PROXY_ADMIN, api_key="litellm_proxy_master_key"
+            ),
+            ["db-tool-1", "db-tool-2"],
+        ),
+        (_search_caller(virtual_key=True, user_role=LitellmUserRoles.PROXY_ADMIN), []),
+    ],
+    ids=["master-key-sees-every-tool", "admin-virtual-key-is-filtered"],
+)
+@pytest.mark.asyncio
+async def test_filter_visible_search_tools_admin_under_search_tool_deny_by_default(
+    search_permission_cache: Callable[[list[str] | None], None], caller: UserAPIKeyAuth, expected: list[str]
+):
+    from litellm.proxy.search_endpoints.search_tool_management import _filter_visible_search_tools
+
+    visible = await _filter_visible_search_tools(
+        _search_tool_responses("db-tool-1", "db-tool-2"),
+        caller,
+        AsyncMock(),
+        {"search_tool_deny_by_default": True},
+    )
+
+    assert [t["search_tool_name"] for t in visible] == expected
+
+
+class _StoredSearchToolRow(SimpleNamespace):
+    def __iter__(self):
+        return iter(self.__dict__.items())
+
+
+class _InMemorySearchToolsTable:
+    """Stands in for prisma's litellm_searchtoolstable: JSON columns are stored parsed, as prisma returns them."""
+
+    def __init__(self, rows=()):
+        self.rows = {row.search_tool_id: row for row in rows}
+
+    async def create(self, data):
+        row = _StoredSearchToolRow(
+            search_tool_id=f"id-{len(self.rows)}",
+            search_tool_name=data["search_tool_name"],
+            litellm_params=json.loads(data["litellm_params"]),
+            search_tool_info=json.loads(data["search_tool_info"]),
+            created_at=data["created_at"],
+            updated_at=data["updated_at"],
+        )
+        self.rows[row.search_tool_id] = row
+        return row
+
+    async def find_unique(self, where):
+        return self.rows.get(where.get("search_tool_id")) or next(
+            (row for row in self.rows.values() if row.search_tool_name == where.get("search_tool_name")),
+            None,
+        )
+
+    async def find_many(self, order=None):
+        return list(self.rows.values())
+
+    async def update(self, where, data):
+        row = self.rows[where["search_tool_id"]]
+        for column, value in data.items():
+            setattr(row, column, json.loads(value) if column in ("litellm_params", "search_tool_info") else value)
+        return row
+
+    async def update_many(self, where, data):
+        row = self.rows.get(where["search_tool_id"])
+        if row is None or row.litellm_params != json.loads(where["litellm_params"]["equals"]):
+            return 0
+        await self.update(where={"search_tool_id": row.search_tool_id}, data=data)
+        return 1
+
+
+class _TableWithEditDuringRotation(_InMemorySearchToolsTable):
+    """Applies an admin edit to a row right before the rotation's first conditional write to it."""
+
+    def __init__(self, rows, edited_id, edited_params):
+        super().__init__(rows)
+        self.pending_edit = (edited_id, edited_params)
+
+    async def update_many(self, where, data):
+        if self.pending_edit and self.pending_edit[0] == where["search_tool_id"]:
+            edited_id, edited_params = self.pending_edit
+            self.pending_edit = None
+            self.rows[edited_id].litellm_params = edited_params
+        return await super().update_many(where, data)
+
+
+def _stored_row(search_tool_id: str, name: str, litellm_params: dict) -> _StoredSearchToolRow:
+    return _StoredSearchToolRow(
+        search_tool_id=search_tool_id,
+        search_tool_name=name,
+        litellm_params=litellm_params,
+        search_tool_info={},
+        created_at=datetime(2026, 9, 1),
+        updated_at=datetime(2026, 9, 1),
+    )
+
+
+def _prisma_client_over(table: _InMemorySearchToolsTable) -> MagicMock:
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_searchtoolstable = table
+    return prisma_client
+
+
+SALT_KEY = "sk-search-tool-salt"
+SECRET_PARAMS = {
+    "search_provider": "bedrock_agentcore",
+    "api_key": "tvly-secret-api-key-0001",
+    "aws_secret_access_key": "aws-secret-0002",
+    "timeout": 30,
+}
+
+
+@pytest.fixture
+def salt_key(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", SALT_KEY)
+    monkeypatch.setattr(ps, "general_settings", {})
+    return SALT_KEY
+
+
+@pytest.fixture
+def master_key_only(monkeypatch):
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr(ps, "master_key", "sk-old-master-key")
+    monkeypatch.setattr(ps, "general_settings", {})
+    return "sk-old-master-key"
+
+
+@pytest.mark.asyncio
+async def test_search_tool_litellm_params_are_encrypted_at_rest_and_decrypted_on_read(salt_key):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
+    from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+
+    table = _InMemorySearchToolsTable()
+    prisma_client = _prisma_client_over(table)
+    registry = SearchToolRegistry()
+
+    created = await registry.add_search_tool_to_db(
+        search_tool={"search_tool_name": "agentcore-search", "litellm_params": SECRET_PARAMS},
+        prisma_client=prisma_client,
+    )
+    await registry.update_search_tool_in_db(
+        search_tool_id=created["search_tool_id"],
+        search_tool={
+            "search_tool_name": "agentcore-search",
+            "litellm_params": {**SECRET_PARAMS, "api_key": "tvly-rotated-api-key-0003"},
+        },
+        prisma_client=prisma_client,
+    )
+
+    stored = table.rows[created["search_tool_id"]].litellm_params
+    assert "tvly-" not in json.dumps(stored)
+    assert "aws-secret-0002" not in json.dumps(stored)
+    assert decrypt_if_encrypted_with(stored["api_key"], salt_key) == "tvly-rotated-api-key-0003"
+    assert decrypt_if_encrypted_with(stored["aws_secret_access_key"], salt_key) == "aws-secret-0002"
+    assert stored["timeout"] == 30
+
+    expected = {**SECRET_PARAMS, "api_key": "tvly-rotated-api-key-0003"}
+    loaded = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
+    assert [tool["litellm_params"] for tool in loaded] == [expected]
+    by_id = await registry.get_search_tool_by_id_from_db(created["search_tool_id"], prisma_client=prisma_client)
+    by_name = await registry.get_search_tool_by_name_from_db("agentcore-search", prisma_client=prisma_client)
+    assert by_id["litellm_params"] == by_name["litellm_params"] == expected
+
+
+@pytest.mark.asyncio
+async def test_search_tool_is_stored_as_written_when_no_encryption_key_is_configured(monkeypatch):
+    from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr(ps, "master_key", None)
+    monkeypatch.setattr(ps, "general_settings", {})
+    table = _InMemorySearchToolsTable()
+
+    created = await SearchToolRegistry().add_search_tool_to_db(
+        search_tool={"search_tool_name": "agentcore-search", "litellm_params": SECRET_PARAMS},
+        prisma_client=_prisma_client_over(table),
+    )
+
+    assert table.rows[created["search_tool_id"]].litellm_params == SECRET_PARAMS
+
+
+@pytest.mark.asyncio
+async def test_plaintext_search_tool_rows_written_before_encryption_still_load(salt_key):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+
+    encrypted_row = _stored_row(
+        "encrypted-id",
+        "encrypted",
+        {"search_provider": encrypt_value_helper("tavily"), "api_key": encrypt_value_helper("tvly-new")},
+    )
+    legacy_row = _stored_row(
+        "legacy-id", "legacy", {"search_provider": "perplexity", "api_key": "pplx-legacy", "max_results": 5}
+    )
+    prisma_client = _prisma_client_over(_InMemorySearchToolsTable([encrypted_row, legacy_row]))
+
+    loaded = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
+
+    assert [tool["litellm_params"] for tool in loaded] == [
+        {"search_provider": "tavily", "api_key": "tvly-new"},
+        {"search_provider": "perplexity", "api_key": "pplx-legacy", "max_results": 5},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_master_key_rotation_reencrypts_only_values_the_current_key_decrypts(master_key_only):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        decrypt_if_encrypted_with,
+        encrypt_value_helper,
+    )
+    from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
+
+    new_key = "sk-new-master-key"
+    foreign_ciphertext = encrypt_value_helper("tvly-foreign", new_encryption_key="sk-some-other-key")
+    legacy_params = {"search_provider": "perplexity", "api_key": "pplx-legacy"}
+    table = _InMemorySearchToolsTable(
+        [
+            _stored_row("encrypted-id", "encrypted", {"api_key": encrypt_value_helper("tvly-new"), "timeout": 30}),
+            _stored_row("legacy-id", "legacy", dict(legacy_params)),
+            _stored_row("foreign-id", "foreign", {"api_key": foreign_ciphertext}),
+        ]
+    )
+
+    await rotate_search_tools_master_key(prisma_client=_prisma_client_over(table), new_master_key=new_key)
+    after_first_rotation = json.dumps({row_id: row.litellm_params for row_id, row in table.rows.items()})
+    await rotate_search_tools_master_key(prisma_client=_prisma_client_over(table), new_master_key=new_key)
+
+    encrypted_params = table.rows["encrypted-id"].litellm_params
+    assert decrypt_if_encrypted_with(encrypted_params["api_key"], new_key) == "tvly-new"
+    assert encrypted_params["timeout"] == 30
+    assert table.rows["legacy-id"].litellm_params == legacy_params
+    assert table.rows["foreign-id"].litellm_params == {"api_key": foreign_ciphertext}
+    assert json.dumps({row_id: row.litellm_params for row_id, row in table.rows.items()}) == after_first_rotation
+
+
+@pytest.mark.asyncio
+async def test_master_key_rotation_keeps_an_edit_made_while_it_runs(master_key_only):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        decrypt_if_encrypted_with,
+        encrypt_value_helper,
+    )
+    from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
+
+    new_key = "sk-new-master-key"
+    table = _TableWithEditDuringRotation(
+        [_stored_row("edited-id", "edited", {"api_key": encrypt_value_helper("tvly-before-edit")})],
+        edited_id="edited-id",
+        edited_params={"api_key": encrypt_value_helper("tvly-after-edit"), "max_results": 3},
+    )
+
+    await rotate_search_tools_master_key(prisma_client=_prisma_client_over(table), new_master_key=new_key)
+
+    rotated = table.rows["edited-id"].litellm_params
+    assert decrypt_if_encrypted_with(rotated["api_key"], new_key) == "tvly-after-edit"
+    assert rotated["max_results"] == 3
+
+
+class _TableWhoseConditionalWritesNeverMatch(_InMemorySearchToolsTable):
+    async def update_many(self, where, data):
+        return 0
+
+
+@pytest.mark.asyncio
+async def test_master_key_rotation_leaves_a_row_that_never_matches_and_finishes(salt_key):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
+
+    stored = {"api_key": encrypt_value_helper("tvly-unmatched")}
+    table = _TableWhoseConditionalWritesNeverMatch([_stored_row("unmatched-id", "unmatched", dict(stored))])
+
+    await rotate_search_tools_master_key(prisma_client=_prisma_client_over(table), new_master_key="sk-new-master-key")
+
+    assert table.rows["unmatched-id"].litellm_params == stored
+
+
+@pytest.mark.asyncio
+async def test_master_key_rotation_with_a_salt_key_keeps_search_tools_readable(salt_key, monkeypatch):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.search_endpoints.search_tool_registry import (
+        SearchToolRegistry,
+        rotate_search_tools_master_key,
+    )
+
+    monkeypatch.setattr(ps, "master_key", "sk-old-master-key")
+    table = _InMemorySearchToolsTable(
+        [
+            _stored_row(
+                "salted-id",
+                "salted",
+                {"search_provider": encrypt_value_helper("tavily"), "api_key": encrypt_value_helper("tvly-salted")},
+            )
+        ]
+    )
+    prisma_client = _prisma_client_over(table)
+
+    await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key="sk-new-master-key")
+    monkeypatch.setattr(ps, "master_key", "sk-new-master-key")
+
+    loaded = await SearchToolRegistry().get_search_tool_by_id_from_db("salted-id", prisma_client=prisma_client)
+    assert loaded["litellm_params"] == {"search_provider": "tavily", "api_key": "tvly-salted"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("legacy_value", ["****", ".", "--", "*"])
+async def test_plaintext_values_that_are_not_base64_load_and_rotate_unchanged(salt_key, legacy_value):
+    from litellm.proxy.search_endpoints.search_tool_registry import (
+        SearchToolRegistry,
+        rotate_search_tools_master_key,
+    )
+
+    legacy_params = {"search_provider": "perplexity", "api_key": legacy_value, "api_base": "https://api.perplexity.ai"}
+    table = _InMemorySearchToolsTable([_stored_row("legacy-id", "legacy", dict(legacy_params))])
+    prisma_client = _prisma_client_over(table)
+
+    loaded = await SearchToolRegistry().get_search_tool_by_id_from_db("legacy-id", prisma_client=prisma_client)
+    await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key="sk-new-master-key")
+
+    assert loaded["litellm_params"] == legacy_params
+    assert table.rows["legacy-id"].litellm_params == legacy_params
+
+
+@pytest.mark.asyncio
+async def test_list_and_info_show_the_loaded_tool_when_db_params_do_not_decrypt(master_key_only):
+    """After /key/regenerate rewrites the rows and before a restart, the admin views read the loaded tool."""
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+
+    rewritten_params = {
+        "search_provider": encrypt_value_helper("perplexity", new_encryption_key="sk-new-master-key"),
+        "api_key": encrypt_value_helper("pplx-loaded-key", new_encryption_key="sk-new-master-key"),
+        "api_base": encrypt_value_helper("https://api.perplexity.ai", new_encryption_key="sk-new-master-key"),
+    }
+    table = _InMemorySearchToolsTable([_stored_row("rotated-id", "rotated", rewritten_params)])
+    loaded_tool = {
+        "search_tool_id": "rotated-id",
+        "search_tool_name": "rotated",
+        "litellm_params": {
+            "search_provider": "perplexity",
+            "api_key": "pplx-loaded-key",
+            "api_base": "https://api.perplexity.ai",
+        },
+    }
+    fake_router = MagicMock()
+    fake_router.search_tools = [loaded_tool]
+
+    with (
+        patch(
+            "litellm.proxy.proxy_server.prisma_client", _prisma_client_over(table)
+        ),  # test-quality-ok: proxy globals are the only seam; see the module note above
+        patch(
+            "litellm.proxy.proxy_server.llm_router", fake_router
+        ),  # test-quality-ok: proxy globals are the only seam; see the module note above
+        patch(  # test-quality-ok: proxy globals are the only seam; see the module note above
+            "litellm.proxy.search_endpoints.search_tool_management.SEARCH_TOOL_REGISTRY", SearchToolRegistry()
+        ),
+        _override_auth(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin_user")),
+    ):
+        listed = TestClient(app).get("/search_tools/list")
+        info = TestClient(app).get("/search_tools/rotated-id")
+
+    assert listed.status_code == 200
+    assert info.status_code == 200
+    listed_params = [tool["litellm_params"] for tool in listed.json()["search_tools"]]
+    assert [params["search_provider"] for params in listed_params] == ["perplexity"]
+    assert info.json()["litellm_params"]["search_provider"] == "perplexity"
+    assert info.json()["litellm_params"]["api_base"] == listed_params[0]["api_base"] != rewritten_params["api_base"]
+    assert "pplx-loaded-key" not in listed.text + info.text
+    assert info.json()["created_at"] == listed.json()["search_tools"][0]["created_at"] == "2026-09-01T00:00:00"

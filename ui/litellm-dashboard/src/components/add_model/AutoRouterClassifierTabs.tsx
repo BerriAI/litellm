@@ -16,6 +16,11 @@ import {
   type ClassifierType,
   type ComplexityRouterConfigValue,
 } from "./ComplexityRouterConfig";
+import {
+  defaultJevClassifierConfig,
+  isOssClassifierProvider,
+  normalizeJevClassifierConfig,
+} from "./jev_classifier_config";
 import { transitionClassifierType } from "./classifier_type_transition";
 import { isForecastClassifier } from "./forecast_classifier_config";
 import {
@@ -27,7 +32,7 @@ import {
   AUTO_ROUTER_CONTACT_URL,
 } from "./AutoRouterAvailability";
 
-function ClassifierOption({
+export function ClassifierOption({
   value,
   label,
   description,
@@ -74,7 +79,7 @@ function ClassifierOption({
   );
 }
 
-function ClassifierMenu({
+export function ClassifierMenu({
   id,
   label,
   value,
@@ -148,6 +153,14 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
     if (next === "llm") changeType("llm");
     if (next === "jev") changeType("jev");
   };
+  const changeProvider = (provider: unknown) => {
+    if (!isOssClassifierProvider(provider)) return;
+    const defaults = defaultJevClassifierConfig(provider);
+    onChange({
+      ...value,
+      jev_classifier_config: { ...defaults, ...value.jev_classifier_config, provider, model: defaults.model },
+    });
+  };
   const approachLabels: Partial<Record<ClassifierType, string>> = { capability: "Capability", llm_v2: "Fuse v2" };
   const approachDescription: Partial<Record<ClassifierType, string>> = {
     capability: "Use the efficient model when it is likely to succeed",
@@ -164,7 +177,11 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
           {[
             { value: "heuristics", label: "Heuristics", description: "Classify locally, with no API call" },
             { value: "llm", label: "LLM", description: "Use a judge model to choose a solver" },
-            { value: "jev", label: "Jev", description: "Use TypeSafe System One Choice to choose a tier" },
+            {
+              value: "jev",
+              label: "OSS Classifier",
+              description: "Use Jev, Laya, Bespoke Nimble, or Databricks to choose a tier",
+            },
           ].map((option) => (
             <Label
               key={option.value}
@@ -189,6 +206,33 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
           ))}
         </RadioGroup>
       </fieldset>
+      {family === "jev" && (
+        <fieldset className="space-y-2">
+          <legend className="text-sm font-medium">OSS provider</legend>
+          <RadioGroup
+            value={normalizeJevClassifierConfig(value.jev_classifier_config).provider}
+            onValueChange={changeProvider}
+            className="flex gap-6"
+          >
+            <Label>
+              <RadioGroupItem value="jev" />
+              Jev
+            </Label>
+            <Label>
+              <RadioGroupItem value="laya" />
+              Laya
+            </Label>
+            <Label>
+              <RadioGroupItem value="bespoke" />
+              Bespoke Nimble
+            </Label>
+            <Label>
+              <RadioGroupItem value="databricks" />
+              Databricks
+            </Label>
+          </RadioGroup>
+        </fieldset>
+      )}
       {family === "custom" && (
         <p className="text-sm text-muted-foreground">This router uses a custom classifier plugin</p>
       )}

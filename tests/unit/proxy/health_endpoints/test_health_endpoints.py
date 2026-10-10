@@ -2,17 +2,18 @@ import asyncio
 import copy
 import json
 import time
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from datetime import datetime, timedelta
-from types import SimpleNamespace
+from importlib import import_module
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from prisma.errors import ClientNotConnectedError, HTTPClientClosedError, PrismaError
 
@@ -22,7 +23,6 @@ from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
 from litellm.models.credentials import CredentialItem
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.router import Router
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     _show_no_redis_warning,
@@ -33,6 +33,14 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
+from litellm.router import Router
+from litellm.types.utils import oauth_token_exchange_litellm_params
+from litellm.types.workload_identity import (
+    ANTHROPIC_WIF_KWARGS_KEYS,
+    OPENAI_WIF_KWARGS_KEYS,
+    WIF_SECRET_BEARING_KEYS,
+)
+from tests._master_key import MASTER_KEY
 
 # Import shared proxy test helpers from conftest
 from tests.unit.proxy.conftest import create_proxy_test_client
@@ -421,7 +429,7 @@ async def test_test_model_connection_loads_config_from_router():
             mock_run_with_timeout,
         ),
         patch(
-            "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+            "litellm.proxy.health_endpoints._health_endpoints.update_litellm_params_for_health_check",
             mock_update_params,
         ),
         patch(
@@ -570,7 +578,7 @@ async def test_test_model_connection_uses_model_info_id_to_disambiguate_duplicat
             mock_run_with_timeout,
         ),
         patch(
-            "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+            "litellm.proxy.health_endpoints._health_endpoints.update_litellm_params_for_health_check",
             mock_update_params,
         ),
         patch(
@@ -672,7 +680,7 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
             mock_run_with_timeout,
         ),
         patch(
-            "litellm.proxy.health_endpoints._health_endpoints._update_litellm_params_for_health_check",
+            "litellm.proxy.health_endpoints._health_endpoints.update_litellm_params_for_health_check",
             mock_update_params,
         ),
         patch(
@@ -692,6 +700,207 @@ async def test_test_model_connection_falls_back_to_deployments_zero_without_id()
         model_params = mock_ahealth_check.call_args.kwargs.get("model_params", {})
         assert model_params.get("api_base") == "https://deployment-A-base.invalid/v1"
         assert model_params.get("api_key") == "fake-key-A"
+
+
+@contextmanager
+def _test_connection_probe(
+    deployment: Mapping[str, object],
+) -> Iterator[AsyncMock]:
+    from litellm.types.router import Deployment, LiteLLM_Params
+
+    async def run_health_check(awaitable: Awaitable[object], _timeout: float) -> dict[str, str]:
+        await awaitable
+        return {"status": "healthy"}
+
+    router: Final = MagicMock()
+    router.get_deployment.side_effect = lambda model_id: (
+        Deployment(
+            model_name=str(deployment["model_name"]),
+            litellm_params=LiteLLM_Params(**deployment["litellm_params"]),  # pyright: ignore[reportArgumentType]  # test fixture dict
+            model_info=deployment["model_info"],  # pyright: ignore[reportArgumentType]  # test fixture dict
+        )
+        if model_id == deployment["model_info"]["id"]  # pyright: ignore[reportIndexIssue]  # test fixture dict
+        else None
+    )
+    ahealth_check: Final = AsyncMock(return_value={"status": "healthy"})
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.llm_router", router),
+        patch("litellm.proxy.proxy_server.premium_user", False),
+        patch(
+            "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+            AsyncMock(),
+        ),
+        patch("litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check", ahealth_check),
+        patch(
+            "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+            AsyncMock(side_effect=run_health_check),
+        ),
+    ):
+        yield ahealth_check
+
+
+MANTLE_CLAUDE_DEPLOYMENT: Final = MappingProxyType(
+    {
+        "model_name": "claude-haiku-4-5",
+        "litellm_params": {
+            "model": "bedrock_mantle/anthropic.claude-haiku-4-5",
+            "api_key": "fake-mantle-key",
+            "aws_region_name": "us-east-2",
+        },
+        "model_info": {"id": "mantle-claude-id"},
+    }
+)
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_without_mode_probes_mantle_claude_over_messages():
+    """
+    The Admin UI model page sends the row's id and no mode. The probe must then resolve
+    the mode the way /health does, so a Bedrock Mantle Claude deployment is checked over
+    the Anthropic Messages API instead of chat completions, which Mantle rejects.
+    """
+    with _test_connection_probe(MANTLE_CLAUDE_DEPLOYMENT) as ahealth_check:
+        result: Final = await health_test_model_connection(
+            request=MagicMock(),
+            mode=None,
+            litellm_params={"model": "bedrock_mantle/anthropic.claude-haiku-4-5"},
+            model_info={"id": "mantle-claude-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert result["status"] == "success"
+    assert ahealth_check.call_args.kwargs["mode"] == "anthropic_messages"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("request_params", "expected_mode"),
+    [
+        ({"model": "bedrock_mantle/anthropic.claude-haiku-4-5"}, "chat"),
+        ({}, "chat"),
+        ({"model": "bedrock_mantle/anthropic.claude-sonnet-4-5"}, "anthropic_messages"),
+    ],
+    ids=["stored_model", "no_model", "overridden_model"],
+)
+async def test_test_model_connection_stored_operator_mode_follows_the_stored_model(
+    request_params: Mapping[str, str], expected_mode: str
+):
+    """
+    A mode the operator stored on the deployment is the probe's mode when the request
+    carries none, ahead of the provider-native rule, but only while the request probes
+    the deployment's own model. A request that selects the deployment by id and swaps in
+    another model resolves the mode from that model instead.
+    """
+    deployment: Final = MappingProxyType(
+        {**MANTLE_CLAUDE_DEPLOYMENT, "model_info": {"id": "mantle-claude-id", "mode": "chat"}}
+    )
+    with _test_connection_probe(deployment) as ahealth_check:
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode=None,
+            litellm_params=dict(request_params),
+            model_info={"id": "mantle-claude-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert ahealth_check.call_args.kwargs["mode"] == expected_mode
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_overridden_model_probe_params_follow_the_probed_model():
+    """
+    When the request selects a deployment by id and swaps in another model, the probe's
+    params are shaped for that model, so the stored mode must not inject `max_tokens`
+    into what is now an embedding probe (Mistral rejects it with a 422 extra_forbidden).
+    """
+    deployment: Final = MappingProxyType(
+        {
+            "model_name": "anthropic-claude-haiku-4-5",
+            "litellm_params": {"model": "anthropic/claude-haiku-4-5", "api_key": "fake-anthropic-key"},
+            "model_info": {"id": "anthropic-messages-id", "mode": "anthropic_messages"},
+        }
+    )
+    with _test_connection_probe(deployment) as ahealth_check:
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode=None,
+            litellm_params={"model": "mistral/mistral-embed", "api_key": "fake-mistral-key"},
+            model_info={"id": "anthropic-messages-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert ahealth_check.call_args.kwargs["mode"] == "embedding"
+    assert "max_tokens" not in ahealth_check.call_args.kwargs["model_params"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("params_mode", [123, ["chat"], {"mode": "chat"}, False], ids=["int", "list", "dict", "bool"])
+async def test_test_model_connection_non_string_params_mode_is_a_bad_request(params_mode: object):
+    with _test_connection_probe(MANTLE_CLAUDE_DEPLOYMENT) as ahealth_check:
+        with pytest.raises(HTTPException) as exc_info:
+            await health_test_model_connection(
+                request=MagicMock(),
+                mode=None,
+                litellm_params={"model": "bedrock_mantle/anthropic.claude-haiku-4-5", "mode": params_mode},
+                model_info={"id": "mantle-claude-id"},
+                user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "litellm_params.mode must be a string" in exc_info.value.detail["error"]
+    ahealth_check.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_string_params_mode_is_the_probe_mode():
+    with _test_connection_probe(MANTLE_CLAUDE_DEPLOYMENT) as ahealth_check:
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode=None,
+            litellm_params={"model": "bedrock_mantle/anthropic.claude-haiku-4-5", "mode": "chat"},
+            model_info={"id": "mantle-claude-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert ahealth_check.call_args.kwargs["mode"] == "chat"
+    assert "mode" not in ahealth_check.call_args.kwargs["model_params"]
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_request_mode_wins_over_resolved_mode():
+    with _test_connection_probe(MANTLE_CLAUDE_DEPLOYMENT) as ahealth_check:
+        await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params={"model": "bedrock_mantle/anthropic.claude-haiku-4-5"},
+            model_info={"id": "mantle-claude-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert ahealth_check.call_args.kwargs["mode"] == "chat"
+
+
+@pytest.mark.asyncio
+async def test_test_model_connection_evaluation_mode_uses_decisions_handler():
+    deployment: Final = MappingProxyType(
+        {
+            "model_name": "typesafe/jev-latest",
+            "litellm_params": {"model": "typesafe/jev-latest", "api_key": "fake-typesafe-key"},
+            "model_info": {"id": "typesafe-jev-id"},
+        }
+    )
+    with _test_connection_probe(deployment) as ahealth_check:
+        result: Final = await health_test_model_connection(
+            request=MagicMock(),
+            mode="evaluation",
+            litellm_params={"model": "typesafe/jev-latest"},
+            model_info={"id": "typesafe-jev-id"},
+            user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
+        )
+
+    assert result["status"] == "success"
+    assert ahealth_check.call_args.kwargs["mode"] == "evaluation"
 
 
 @pytest.mark.asyncio
@@ -890,6 +1099,112 @@ async def test_test_model_connection_uses_loaded_deployment_team_id_via_model_na
 
         passed_model_params = spy_auth_check.call_args.kwargs["model_params"]
         assert passed_model_params.model_info.team_id == deployment_owner_team_id
+
+
+FEDERATED_DEPLOYMENT_ID = "federated-deployment-id"
+FEDERATED_DEPLOYMENT_TEAM_ID = "team-owning-the-federated-deployment"
+
+
+def _federated_deployment():
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    return Deployment(
+        model_name="claude-federated",
+        litellm_params=LiteLLM_Params(
+            model="anthropic/claude-sonnet-4-5",
+            api_base="https://api.anthropic.com",
+            anthropic_federation_rule_id="rule-abc",
+            anthropic_organization_id="org-abc",
+            anthropic_identity_source="oidc/env/PROXY_OIDC_TOKEN",
+        ),
+        model_info=ModelInfo(id=FEDERATED_DEPLOYMENT_ID, team_id=FEDERATED_DEPLOYMENT_TEAM_ID),
+    )
+
+
+async def _probe_federated_deployment_as_team_admin(litellm_params):
+    """Run the Test Connection button against a federated deployment as an admin of its own team.
+
+    ``allow_client_side_credentials`` is on, which is what lets a request-supplied api_base keep
+    the configuration's credentials instead of dropping them, so the federation params are still
+    on the deployment being probed when the request redirects it.
+    """
+    from litellm.proxy._types import LiteLLM_TeamTable
+
+    mock_router = MagicMock()
+    mock_router.get_deployment.return_value = _federated_deployment()
+
+    async def fake_find_unique(*, where):
+        if where["team_id"] != FEDERATED_DEPLOYMENT_TEAM_ID:
+            return None
+        return SimpleNamespace(
+            model_dump=lambda: LiteLLM_TeamTable(
+                team_id=FEDERATED_DEPLOYMENT_TEAM_ID,
+                members_with_roles=[{"user_id": "team-admin-user", "role": "admin"}],
+            ).model_dump()
+        )
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(side_effect=fake_find_unique)
+    mock_ahealth_check = AsyncMock(return_value={"status": "healthy"})
+
+    with (
+        patch.multiple(  # test-quality-ok: proxy module globals, no injection seam
+            "litellm.proxy.proxy_server",
+            prisma_client=mock_prisma_client,
+            llm_router=mock_router,
+            premium_user=True,
+            general_settings={"allow_client_side_credentials": True},
+        ),
+        patch(  # test-quality-ok: the probe params handed to the health check are the assertion
+            "litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check",
+            mock_ahealth_check,
+        ),
+    ):
+        response = await health_test_model_connection(
+            request=MagicMock(),
+            mode="chat",
+            litellm_params=litellm_params,
+            model_info={"id": FEDERATED_DEPLOYMENT_ID},
+            user_api_key_dict=UserAPIKeyAuth(
+                token="requester-token",
+                user_id="team-admin-user",
+                team_id=FEDERATED_DEPLOYMENT_TEAM_ID,
+                user_role=LitellmUserRoles.INTERNAL_USER,
+            ),
+        )
+    return response, mock_ahealth_check
+
+
+@pytest.mark.asyncio
+async def test_test_connection_still_lets_a_team_admin_probe_a_federated_deployment():
+    """A probe that changes nothing about the deployment is not a credential change, so the team
+    admin who owns the deployment can still press Test Connection on it."""
+    response, mock_ahealth_check = await _probe_federated_deployment_as_team_admin(
+        {"model": "anthropic/claude-sonnet-4-5"}
+    )
+
+    assert response["status"] == "success"
+    assert mock_ahealth_check.await_count == 1
+    assert mock_ahealth_check.await_args.kwargs["model_params"]["anthropic_federation_rule_id"] == "rule-abc"
+
+
+@pytest.mark.asyncio
+async def test_test_connection_refuses_a_non_admin_pointing_a_federated_deployment_elsewhere():
+    """A probe carrying its own api_base sends the deployment's minted org-scoped token to a host
+    the caller chose, so it is a credential change and only a proxy admin may make it. The probe
+    used to authorize with nothing declared as incoming, which left this gate unreachable here."""
+    from litellm.proxy._types import ProxyException
+
+    with pytest.raises(ProxyException) as exc_info:
+        await _probe_federated_deployment_as_team_admin(
+            {
+                "model": "anthropic/claude-sonnet-4-5",
+                "api_base": "https://caller-chosen.invalid/v1",
+            }
+        )
+
+    assert exc_info.value.code == "403"
+    assert "workload identity federation or OAuth token exchange" in exc_info.value.message
 
 
 @pytest.mark.asyncio
@@ -1320,8 +1635,23 @@ def test_health_liveness_endpoint(proxy_client):
     # Verify response is fast (should be < 100ms for a simple endpoint)
     assert duration_ms < 100, f"Health check took {duration_ms:.2f}ms, expected < 100ms for a simple endpoint"
 
-    # Log the duration for visibility (useful for CI/CD monitoring)
-    print(f"\n/health/liveness response time: {duration_ms:.2f}ms")
+
+
+def test_proxy_client_serves_full_proxy_routes_after_gateway_import(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.proxy_server import app
+
+    monkeypatch.setattr(app.router, "lifespan_context", app.router.lifespan_context)
+    import_module("gateway.main")
+
+    with create_proxy_test_client(monkeypatch) as client:
+        response: Final = client.post(
+            "/utils/token_counter",
+            headers={"Authorization": f"Bearer {MASTER_KEY}"},
+            json={"model": "gpt-4o", "prompt": "hello"},
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["total_tokens"] > 0
 
 
 def test_health_backlog_includes_admission_control_stats(proxy_client):
@@ -1365,7 +1695,6 @@ def test_health_readiness(proxy_client):
     assert set(response_data.keys()) == {"status", "db"}
     assert response_data["status"] == "healthy"
     assert response_data["db"] in {"connected", "disconnected", "Not connected"}
-    print(f"Response time: {duration_ms:.2f}ms")
 
 
 def test_health_readiness_details_returns_diagnostic_fields(monkeypatch):
@@ -2183,10 +2512,11 @@ async def test_health_endpoint_admin_sees_routing_fields_non_admin_does_not():
 
     # Non-admin response must advertise that api_base/api_version were
     # withheld so clients that previously parsed them can detect the change.
-    assert (
-        non_admin_response.headers.get("Litellm-Health-Field-Notice")
-        == "api_base, api_version, aws_bedrock_runtime_endpoint are admin-only on this endpoint"
-    )
+    notice = non_admin_response.headers.get("Litellm-Health-Field-Notice")
+    assert notice is not None
+    withheld = notice.removesuffix(" are admin-only on this endpoint").split(", ")
+    assert {"api_base", "api_version", "aws_bedrock_runtime_endpoint"} <= set(withheld)
+    assert [field for field in withheld if field in non_admin_eps[0]] == []
     assert "Litellm-Health-Field-Notice" not in admin_response.headers
 
     # Stripping must produce a copy — the shared cache must still carry the
@@ -2194,6 +2524,128 @@ async def test_health_endpoint_admin_sees_routing_fields_non_admin_does_not():
     cached_first = cached_results["healthy_endpoints"][0]
     assert cached_first["api_base"] == "https://us-central1-aiplatform.googleapis.com/v1/projects/p"
     assert cached_first["api_version"] == "2024-10-21"
+
+
+@pytest.mark.asyncio
+async def test_health_endpoint_keeps_federation_identity_admin_only():
+    """A federated deployment's health entry names the identity it mints as: the rule, the workspace,
+    the service account, the issuer it signs against. That is the same routing detail api_base is,
+    so a non-admin who can see the deployment is healthy must not learn which identity it borrows,
+    and an admin debugging a failing exchange must still see all of it.
+    """
+    from fastapi import Response
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.health_endpoints._health_endpoints import health_endpoint
+
+    federation_fields = {
+        "anthropic_federation_rule_id": "fdrl_01H",
+        "anthropic_federation_workspace_id": "wrkspc_01H",
+        "anthropic_organization_id": "org-acme",
+        "anthropic_service_account_id": "svc_01H",
+        "anthropic_identity_source": "oidc/env/OIDC_TOKEN",
+        "anthropic_issuer_url": "https://issuer.internal",
+        "anthropic_keycloak_client_id": "litellm-proxy",
+        "openai_identity_provider_id": "idp_01H",
+        "openai_service_account_id": "sa_01H",
+        "token_exchange_audience": "https://graph.microsoft.com",
+        "token_exchange_endpoint": "https://identity.example.com/token",
+        "token_exchange_profile": "jwt_bearer_obo",
+        "token_exchange_scope": "https://graph.microsoft.com/.default",
+    }
+    full_model_list = [
+        {
+            "model_name": "model-a",
+            "litellm_params": {"model": "anthropic/claude-sonnet-5", **federation_fields},
+            "model_info": {"id": "id-a"},
+        },
+    ]
+    cached_results = {
+        "healthy_endpoints": [{"model": "anthropic/claude-sonnet-5", "model_id": "id-a", **federation_fields}],
+        "unhealthy_endpoints": [],
+        "healthy_count": 1,
+        "unhealthy_count": 0,
+    }
+
+    admin_key = UserAPIKeyAuth(
+        api_key="hashed-admin-key",
+        models=["model-a"],
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+    non_admin_key = UserAPIKeyAuth(api_key="hashed-user-key", models=["model-a"])
+
+    with patch.multiple(  # test-quality-ok: proxy module globals, no injection seam
+        "litellm.proxy.proxy_server",
+        llm_model_list=full_model_list,
+        llm_router=None,
+        prisma_client=None,
+        use_background_health_checks=True,
+        user_model=None,
+        health_check_results=cached_results,
+        health_check_details=True,
+        health_check_concurrency=1,
+    ):
+        admin_result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=admin_key,
+            model=None,
+            model_id=None,
+        )
+        non_admin_result = await health_endpoint(
+            response=Response(),
+            user_api_key_dict=non_admin_key,
+            model=None,
+            model_id=None,
+        )
+
+    admin_endpoint = admin_result["healthy_endpoints"][0]
+    non_admin_endpoint = non_admin_result["healthy_endpoints"][0]
+
+    assert {key: admin_endpoint.get(key) for key in federation_fields} == federation_fields
+    assert [key for key in federation_fields if key in non_admin_endpoint] == []
+    assert non_admin_endpoint["model_id"] == "id-a"
+
+
+@pytest.mark.parametrize(
+    "server_owned_field",
+    sorted(ANTHROPIC_WIF_KWARGS_KEYS | OPENAI_WIF_KWARGS_KEYS | set(oauth_token_exchange_litellm_params)),
+)
+def test_no_server_owned_identity_field_reaches_a_non_admin_health_entry(server_owned_field: str):
+    """Every server-owned identity field is hidden from non-admin health entries."""
+    from litellm.proxy.health_check import clean_endpoint_data
+    from litellm.proxy.health_endpoints._health_endpoints import (
+        _strip_admin_only_fields_from_health_result,
+    )
+
+    canary = f"CANARY-{server_owned_field}-VALUE"
+    cleaned = clean_endpoint_data(
+        {"model": "anthropic/claude-sonnet-5", server_owned_field: canary},
+        details=True,
+    )
+    stripped = _strip_admin_only_fields_from_health_result({"healthy_endpoints": [cleaned], "unhealthy_endpoints": []})
+
+    assert stripped["healthy_endpoints"][0]["model"] == "anthropic/claude-sonnet-5"
+    assert server_owned_field not in stripped["healthy_endpoints"][0]
+    assert canary not in str(stripped)
+
+
+@pytest.mark.parametrize("secret_field", sorted(WIF_SECRET_BEARING_KEYS))
+def test_no_federation_secret_reaches_even_an_admin_health_entry(secret_field: str):
+    """A proxy admin is allowed to read which identity a deployment federates as, but never the
+    token, key, or reference it federates with, so these fields drop at the health-check layer
+    ahead of any per-caller stripping. Reading the same set the drop list is built from is what
+    catches a new secret-bearing field that was only ever added to the admin-gated half."""
+    from litellm.proxy.health_check import clean_endpoint_data
+
+    canary = f"CANARY-{secret_field}-VALUE"
+    cleaned = clean_endpoint_data(
+        {"model": "anthropic/claude-sonnet-5", secret_field: canary},
+        details=True,
+    )
+
+    assert cleaned["model"] == "anthropic/claude-sonnet-5"
+    assert secret_field not in cleaned
+    assert canary not in str(cleaned)
 
 
 @pytest.mark.asyncio
@@ -2956,7 +3408,7 @@ def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
     layer based on user role, not in the cleaning helper. This guarantees
     proxy admins continue to see those fields in the /health response.
     """
-    from litellm.proxy.health_check import _clean_endpoint_data
+    from litellm.proxy.health_check import clean_endpoint_data
 
     raw = {
         "model": "openai/gpt-4o",
@@ -2966,7 +3418,7 @@ def test_clean_endpoint_data_strips_credentials_keeps_routing_fields():
         "aws_access_key_id": "AKIAEXAMPLE",
     }
 
-    cleaned = _clean_endpoint_data(raw, details=True)
+    cleaned = clean_endpoint_data(raw, details=True)
 
     assert "api_key" not in cleaned
     assert "aws_access_key_id" not in cleaned
@@ -2980,7 +3432,7 @@ def test_clean_endpoint_data_strips_extra_headers_and_aws_session_token():
     `extra_headers` / `headers` / `aws_session_token`. Before the fix these
     were returned in plaintext (api_key was stripped, but these were not).
     """
-    from litellm.proxy.health_check import _clean_endpoint_data
+    from litellm.proxy.health_check import clean_endpoint_data
 
     raw = {
         "model": "openai/gpt-4o",
@@ -2994,7 +3446,7 @@ def test_clean_endpoint_data_strips_extra_headers_and_aws_session_token():
         "aws_session_token": "CANARY_AWS_SESSION_TOKEN_VALUE",
     }
 
-    cleaned = _clean_endpoint_data(raw, details=True)
+    cleaned = clean_endpoint_data(raw, details=True)
 
     assert "extra_headers" not in cleaned
     assert "headers" not in cleaned
@@ -3014,6 +3466,11 @@ def test_clean_endpoint_data_strips_extra_headers_and_aws_session_token():
         "aws_secret_access_key",
         "aws_session_token",
         "aws_web_identity_token",
+        "anthropic_identity_token",
+        "anthropic_issuer_signing_key_ref",
+        "anthropic_keycloak_client_secret_ref",
+        "anthropic_identity_token_file",
+        "openai_identity_token_file",
         "vertex_credentials",
         "vertex_ai_credentials",
         "extra_headers",
@@ -3026,10 +3483,10 @@ def test_clean_endpoint_data_never_displays_credential_fields(credential_field, 
     LIT-6239 / gh-36898: /health entries, healthy and unhealthy alike, must never
     carry credential-bearing litellm_params, with or without details.
     """
-    from litellm.proxy.health_check import _clean_endpoint_data
+    from litellm.proxy.health_check import clean_endpoint_data
 
     canary = f"CANARY-{credential_field}-VALUE"
-    cleaned = _clean_endpoint_data(
+    cleaned = clean_endpoint_data(
         {
             "model": "azure/gpt-5-mini",
             "api_base": "https://example.test/v1",
@@ -3642,6 +4099,40 @@ def test_health_test_connection_keeps_error_and_raw_request_through_the_allowlis
     assert not {"api_key", "timeout", "exception"} & set(body["result"])
 
 
+def test_health_test_connection_uses_request_headers_as_secret_fields_and_hides_them() -> None:
+    app: Final = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    ahealth_check: Final = AsyncMock(return_value={"status": "healthy"})
+    authorization: Final = "Bearer a.b.c"
+    body_authorization: Final = "Bearer body-supplied.invalid"
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.ahealth_check", new=ahealth_check),
+    ):
+        response: Final = TestClient(app).post(
+            "/health/test_connection",
+            headers={"Authorization": authorization},
+            json={
+                "mode": "chat",
+                "litellm_params": {
+                    "model": "microsoft_365_copilot/chat",
+                    "secret_fields": {"raw_headers": {"authorization": body_authorization}},
+                },
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "success"
+    model_params: Final = ahealth_check.call_args.kwargs["model_params"]
+    assert model_params["secret_fields"]["raw_headers"]["authorization"] == authorization
+    assert "secret_fields" not in response.text
+    assert "raw_headers" not in response.text
+    assert authorization not in response.text
+    assert body_authorization not in response.text
+
+
 def test_clean_endpoint_data_keeps_only_json_safe_diagnostics():
     """
     LIT-6907: _clean_endpoint_data used to copy every litellm_param not on a
@@ -3650,9 +4141,9 @@ def test_clean_endpoint_data_keeps_only_json_safe_diagnostics():
     """
     from fastapi.encoders import jsonable_encoder
 
-    from litellm.proxy.health_check import _clean_endpoint_data
+    from litellm.proxy.health_check import clean_endpoint_data
 
-    cleaned = _clean_endpoint_data(
+    cleaned = clean_endpoint_data(
         {
             "model": "bedrock/us.amazon.nova-2-lite-v1:0",
             "custom_llm_provider": "bedrock",
@@ -3740,22 +4231,25 @@ class TestConfigBaseForHealthCheck:
         "rpm": 100,
     }
 
-    def _base(self, config, request, allow_client_side_credentials=False):
+    def _base(self, config, request, allow_client_side_credentials=False, *, selected_by_id: bool):
         from litellm.proxy.health_endpoints._health_endpoints import (
             _config_base_for_health_check,
         )
 
         return _config_base_for_health_check(
-            config, request, allow_client_side_credentials=allow_client_side_credentials
+            config,
+            request,
+            allow_client_side_credentials=allow_client_side_credentials,
+            selected_by_id=selected_by_id,
         )
 
     def test_request_without_connection_fields_inherits_config(self):
-        base = self._base(self.CONFIG, {"model": "openai/gpt-4o"})
+        base = self._base(self.CONFIG, {"model": "openai/gpt-4o"}, selected_by_id=False)
         assert base["api_key"] == "sk-configured"
         assert base["api_base"] == "https://configured.example/v1"
 
     def test_request_setting_api_base_does_not_inherit_config_credentials(self):
-        base = self._base(self.CONFIG, {"api_base": "https://caller.example/v1"})
+        base = self._base(self.CONFIG, {"api_base": "https://caller.example/v1"}, selected_by_id=False)
         assert "api_key" not in base
         assert "api_base" not in base
         assert "vertex_credentials" not in base
@@ -3769,7 +4263,7 @@ class TestConfigBaseForHealthCheck:
             "api_base": "https://new-deployment.example/v1",
             "api_key": "sk-new-deployment",
         }
-        merged = {**self._base(self.CONFIG, request), **request}
+        merged = {**self._base(self.CONFIG, request, selected_by_id=False), **request}
         assert merged["api_base"] == "https://new-deployment.example/v1"
         assert merged["api_key"] == "sk-new-deployment"
         assert "sk-configured" not in str(merged)
@@ -3778,7 +4272,7 @@ class TestConfigBaseForHealthCheck:
         """A request that redirects the destination but supplies no credential
         of its own gets none from the configuration."""
         request = {"api_base": "https://elsewhere.example"}
-        merged = {**self._base(self.CONFIG, request), **request}
+        merged = {**self._base(self.CONFIG, request, selected_by_id=False), **request}
         assert "api_key" not in merged
         assert "sk-configured" not in str(merged)
 
@@ -3786,6 +4280,7 @@ class TestConfigBaseForHealthCheck:
         base = self._base(
             {**self.CONFIG, "aws_secret_access_key": "configured-secret"},
             {"aws_bedrock_runtime_endpoint": "https://caller.example"},
+            selected_by_id=False,
         )
         assert "api_key" not in base
         assert "aws_secret_access_key" not in base
@@ -3797,6 +4292,7 @@ class TestConfigBaseForHealthCheck:
             self.CONFIG,
             {"api_base": "https://caller.example/v1"},
             allow_client_side_credentials=True,
+            selected_by_id=False,
         )
         assert base["api_key"] == "sk-configured"
 
@@ -3804,7 +4300,7 @@ class TestConfigBaseForHealthCheck:
         """A stored-credential name resolves to the same secrets downstream, so a
         request that redirects the destination must not keep it either."""
         config = {**self.CONFIG, "litellm_credential_name": "OpenAI-prod"}
-        base = self._base(config, {"api_base": "https://caller.example/v1"})
+        base = self._base(config, {"api_base": "https://caller.example/v1"}, selected_by_id=False)
         assert "litellm_credential_name" not in base
         assert "api_key" not in base
 
@@ -3815,19 +4311,28 @@ class TestConfigBaseForHealthCheck:
         base = self._base(
             config,
             {"model": "openai/gpt-4o", "litellm_credential_name": "OpenAI-prod", "custom_llm_provider": "openai"},
+            selected_by_id=False,
         )
         assert base["litellm_credential_name"] == "OpenAI-prod"
         assert base["api_key"] == "sk-configured"
 
     def test_request_naming_another_credential_does_not_inherit_config_credentials(self):
-        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"})
+        base = self._base(
+            self.CONFIG,
+            {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"},
+            selected_by_id=False,
+        )
         assert "api_key" not in base
         assert "api_base" not in base
         assert "vertex_credentials" not in base
         assert base["rpm"] == 100
 
     def test_blank_credential_name_names_no_credential(self):
-        base = self._base(self.CONFIG, {"model": "openai/gpt-4o", "litellm_credential_name": ""})
+        base = self._base(
+            self.CONFIG,
+            {"model": "openai/gpt-4o", "litellm_credential_name": ""},
+            selected_by_id=False,
+        )
         assert base["api_key"] == "sk-configured"
 
     def test_opt_in_does_not_put_config_credentials_over_a_named_credential(self):
@@ -3835,8 +4340,75 @@ class TestConfigBaseForHealthCheck:
             self.CONFIG,
             {"model": "openai/gpt-4o", "litellm_credential_name": "Another-cred"},
             allow_client_side_credentials=True,
+            selected_by_id=False,
         )
         assert "api_key" not in base
+
+    def test_request_with_its_own_api_key_does_not_inherit_config_auth(self):
+        config: Final = {
+            **self.CONFIG,
+            "token_exchange_endpoint": "https://login.example/token",
+            "client_id": "configured-client-id",
+            "client_secret": "configured-client-secret",
+            "litellm_credential_name": "configured-credential",
+        }
+        request: Final = {"model": "openai/gpt-4o", "api_key": "sk-request"}
+        merged: Final = {**self._base(config, request, selected_by_id=False), **request}
+
+        assert merged["api_key"] == "sk-request"
+        assert {
+            "token_exchange_endpoint",
+            "client_id",
+            "client_secret",
+            "litellm_credential_name",
+            "api_base",
+            "vertex_credentials",
+        }.isdisjoint(merged)
+        assert merged["rpm"] == 100
+        assert "sk-configured" not in str(merged)
+
+    def test_request_api_key_does_not_inherit_config_auth_with_client_credentials_opt_in(self):
+        config: Final = {
+            **self.CONFIG,
+            "token_exchange_endpoint": "https://login.example/token",
+            "client_id": "configured-client-id",
+            "client_secret": "configured-client-secret",
+            "litellm_credential_name": "configured-credential",
+        }
+        request: Final = {"model": "openai/gpt-4o", "api_key": "sk-request"}
+        base: Final = self._base(config, request, allow_client_side_credentials=True, selected_by_id=False)
+        merged: Final = {**base, **request}
+
+        assert merged["api_key"] == "sk-request"
+        assert {
+            "token_exchange_endpoint",
+            "client_id",
+            "client_secret",
+            "litellm_credential_name",
+            "api_base",
+            "vertex_credentials",
+        }.isdisjoint(merged)
+        assert merged["rpm"] == 100
+        assert "sk-configured" not in str(merged)
+
+    def test_blank_request_api_key_inherits_config_auth(self):
+        base: Final = self._base(
+            self.CONFIG,
+            {"model": "openai/gpt-4o", "api_key": ""},
+            selected_by_id=False,
+        )
+
+        assert base["api_key"] == "sk-configured"
+
+    def test_request_api_key_inherits_saved_endpoint_when_selected_by_id(self):
+        config: Final = {**self.CONFIG, "api_version": "test-version"}
+        request: Final = {"model": "openai/gpt-4o", "api_key": "sk-request"}
+        base: Final = self._base(config, request, selected_by_id=True)
+        merged: Final = {**base, **request}
+
+        assert merged["api_base"] == "https://configured.example/v1"
+        assert merged["api_version"] == "test-version"
+        assert merged["api_key"] == "sk-request"
 
 
 class TestTestConnectionUsesTheNamedCredential:
@@ -3912,6 +4484,193 @@ class TestTestConnectionUsesTheNamedCredential:
         assert response.status_code == 200, response.text
         assert response.json()["status"] == "success", response.text
         return probe
+
+    def test_oauth_connection_test_uses_caller_token_and_keeps_401_without_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        caller_token: Final = "a.b.c"
+        body_token: Final = "body.spoof.token"
+        endpoint: Final = "https://identity.example.com/health-check/oauth2/v2.0/token"
+        deployment: Final = {
+            "model_name": "microsoft_365_copilot/chat",
+            "litellm_params": {
+                "model": "microsoft_365_copilot/chat",
+                "custom_llm_provider": "microsoft_365_copilot",
+                "token_exchange_endpoint": endpoint,
+                "client_id": "health-check-client",
+                "client_secret": "health-check-secret",
+                "token_exchange_profile": "jwt_bearer_obo",
+                "token_exchange_scope": "https://graph.microsoft.com/.default",
+            },
+            "model_info": {"mode": "chat"},
+        }
+        request_body: Final = {
+            "mode": "chat",
+            "litellm_params": {
+                "model": "microsoft_365_copilot/chat",
+                "secret_fields": {"raw_headers": {"authorization": f"Bearer {body_token}"}},
+            },
+            "model_info": {"mode": "chat"},
+        }
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+        app: Final = FastAPI()
+        app.include_router(_health_endpoints_module.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+        client: Final = TestClient(app)
+        router: Final = MagicMock()
+        router.get_model_list.return_value = [deployment]
+        router.get_deployment.return_value = None
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            respx.mock(assert_all_called=True) as respx_mock,
+        ):
+            token_route: Final = respx_mock.post(endpoint).respond(
+                json={"access_token": "health-graph-token", "expires_in": 3600}
+            )
+            respx_mock.post("https://graph.microsoft.com/beta/copilot/conversations").respond(
+                status_code=201,
+                json={"id": "health-check-conversation", "state": "active"},
+            )
+            respx_mock.post(
+                "https://graph.microsoft.com/beta/copilot/conversations/health-check-conversation/chat"
+            ).respond(json={"messages": [{"text": "prompt echo"}, {"text": "Copilot response"}]})
+            response: Final = client.post(
+                "/health/test_connection",
+                headers={"Authorization": f"Bearer {caller_token}"},
+                json=request_body,
+            )
+
+            assert response.status_code == 200, response.text
+            assert response.json()["status"] == "success", response.text
+            token_request: Final = respx_mock.calls[0].request
+            assert f"assertion={caller_token}".encode() in token_request.content
+            assert body_token.encode() not in token_request.content
+
+            unauthorized_response: Final = client.post("/health/test_connection", json=request_body)
+
+        assert unauthorized_response.status_code == 200, unauthorized_response.text
+        assert unauthorized_response.json()["status"] == "error"
+        assert (
+            "requires the caller's IdP-issued access token in the Authorization header"
+            in unauthorized_response.json()["result"]["error"]
+        )
+        assert token_route.call_count == 1
+
+    def test_request_api_key_does_not_inherit_microsoft_365_oauth_config(self):
+        deployment: Final = {
+            "model_name": "microsoft_365_copilot/chat",
+            "litellm_params": {
+                "model": "microsoft_365_copilot/chat",
+                "custom_llm_provider": "microsoft_365_copilot",
+                "token_exchange_endpoint": "https://login.example/token",
+                "client_id": "configured-client-id",
+                "client_secret": "configured-client-secret",
+            },
+            "model_info": {},
+        }
+        app: Final = FastAPI()
+        app.include_router(_health_endpoints_module.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        router: Final = MagicMock()
+        router.get_model_list.return_value = [deployment]
+        ahealth_check: Final = MagicMock(return_value={"status": "healthy"})
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.premium_user", False),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                AsyncMock(),
+            ),
+            patch("litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check", ahealth_check),
+            patch(
+                "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+                AsyncMock(return_value={"status": "healthy"}),
+            ),
+        ):
+            response: Final = TestClient(app).post(
+                "/health/test_connection",
+                json={
+                    "litellm_params": {
+                        "model": "microsoft_365_copilot/chat",
+                        "custom_llm_provider": "microsoft_365_copilot",
+                        "api_key": "dummy-static-token",
+                    },
+                    "model_info": {},
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        model_params: Final = ahealth_check.call_args.kwargs["model_params"]
+        assert model_params["api_key"] == "dummy-static-token"
+        assert "token_exchange_endpoint" not in model_params
+        assert "client_id" not in model_params
+        assert "client_secret" not in model_params
+
+    def test_request_api_key_keeps_saved_endpoint_when_deployment_selected_by_id(self):
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        model: Final = "microsoft_365_copilot/chat"
+        saved_api_base: Final = "https://configured.example/v1"
+        saved_api_version: Final = "test-version"
+        deployment: Final = Deployment(
+            model_name=model,
+            litellm_params=LiteLLM_Params(
+                model=model,
+                custom_llm_provider="microsoft_365_copilot",
+                api_key="saved-static-token",
+                api_base=saved_api_base,
+                api_version=saved_api_version,
+            ),
+            model_info={"id": "m365-deployment"},
+        )
+        app: Final = FastAPI()
+        app.include_router(_health_endpoints_module.router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+        router: Final = MagicMock()
+        router.get_deployment.return_value = deployment
+        ahealth_check: Final = MagicMock(return_value={"status": "healthy"})
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch("litellm.proxy.proxy_server.llm_router", router),
+            patch("litellm.proxy.proxy_server.premium_user", False),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                AsyncMock(),
+            ),
+            patch("litellm.proxy.health_endpoints._health_endpoints.litellm.ahealth_check", ahealth_check),
+            patch(
+                "litellm.proxy.health_endpoints._health_endpoints.run_with_timeout",
+                AsyncMock(return_value={"status": "healthy"}),
+            ),
+        ):
+            response: Final = TestClient(app).post(
+                "/health/test_connection",
+                json={
+                    "litellm_params": {
+                        "model": model,
+                        "custom_llm_provider": "microsoft_365_copilot",
+                        "api_key": "replacement-static-token",
+                    },
+                    "model_info": {"id": "m365-deployment"},
+                },
+            )
+
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "success", response.text
+        model_params: Final = ahealth_check.call_args.kwargs["model_params"]
+        assert model_params["api_base"] == saved_api_base
+        assert model_params["api_version"] == saved_api_version
+        assert model_params["api_key"] == "replacement-static-token"
 
     def test_named_credentials_key_is_sent_not_the_matched_deployments_key(self, monkeypatch):
         monkeypatch.setattr(litellm, "credential_list", [self._credential(api_key=self.CREDENTIAL_KEY)])
@@ -4250,6 +5009,41 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
 
     assert response.status_code == 200, response.text
     assert response.json()["status"] == "success"
+
+
+def test_test_model_connection_accepts_evaluation_mode(monkeypatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+
+    app = FastAPI()
+    app.include_router(_health_endpoints_module.router)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    client = TestClient(app)
+
+    with (
+        patch(  # test-quality-ok: endpoint reads the proxy-global DB client and 500s when it is None; it has no injection seam
+            "litellm.proxy.proxy_server.prisma_client", MagicMock()
+        ),
+        respx.mock(assert_all_called=True) as respx_mock,
+    ):
+        upstream = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(
+            json={
+                "model": "jev-latest",
+                "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            }
+        )
+        response = client.post(
+            "/health/test_connection",
+            json={
+                "mode": "evaluation",
+                "litellm_params": {"model": "typesafe/jev-latest", "api_key": "sk-test"},
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["status"] == "success"
+    assert upstream.called
 
 
 def _pointfive_admin() -> UserAPIKeyAuth:

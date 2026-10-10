@@ -66,6 +66,7 @@ from litellm.llms.openai.responses.guardrail_translation.tool_merge import merge
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     AllMessageValues,
     BaseLiteLLMOpenAIResponseObject,
@@ -110,14 +111,14 @@ class _ToolCallShape(NamedTuple):
     arguments: str
 
 
-class _ToolCallFunctionFields(BaseModel):
+class _ToolCallFunctionFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     name: str | None = None
     arguments: str = ""
 
 
-class _ToolCallFields(BaseModel):
+class _ToolCallFields(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     function: _ToolCallFunctionFields
@@ -291,6 +292,51 @@ def _tool_call_output_item_mapping(item: object) -> Mapping[str, object] | None:
 
 def _is_tool_call_output_item(item: object) -> bool:
     return _tool_call_output_item_mapping(item) is not None
+
+
+def _released_tool_call_payload(responses_so_far: Sequence[object], item_id: object) -> str | None:
+    events: Final = tuple(event for event in responses_so_far if stream_item_field(event, "item_id") == item_id)
+    finished: Final = tuple(
+        payload
+        for event in events
+        if isinstance(event_type := stream_item_field(event, "type"), str)
+        and event_type in _TOOL_CALL_PAYLOAD_DONE_EVENT_FIELDS
+        and isinstance(payload := stream_item_field(event, _TOOL_CALL_PAYLOAD_DONE_EVENT_FIELDS[event_type]), str)
+    )
+    if finished:
+        return finished[-1]
+    deltas: Final = tuple(
+        delta
+        for event in events
+        if stream_item_field(event, "type") in _TOOL_CALL_PAYLOAD_DELTA_EVENT_TYPES
+        and isinstance(delta := stream_item_field(event, "delta"), str)
+    )
+    return "".join(deltas) if deltas else None
+
+
+def _with_released_payload(item: Mapping[str, object], responses_so_far: Sequence[object]) -> Mapping[str, object]:
+    field: Final = _TOOL_CALL_PAYLOAD_FIELDS[str(item.get("type"))]
+    payload: Final = _released_tool_call_payload(responses_so_far, item.get("id"))
+    return item if payload is None else {**item, field: payload}
+
+
+def _released_message_item(text: str) -> Mapping[str, object]:
+    content: Final = [{"type": "output_text", "text": text}]
+    return {"type": "message", "role": "assistant", "content": content}
+
+
+def _released_tool_call_items(responses_so_far: Sequence[object]) -> tuple[Mapping[str, object], ...]:
+    announced: Final = tuple(
+        item
+        for item in (
+            _tool_call_output_item_mapping(stream_item_field(event, "item"))
+            for event in responses_so_far
+            if stream_item_field(event, "type") in _OUTPUT_ITEM_EVENT_TYPES
+        )
+        if item is not None
+    )
+    latest_by_id: Final = MappingProxyType({item.get("id"): item for item in announced})
+    return tuple(_with_released_payload(item, responses_so_far) for item in latest_by_id.values())
 
 
 def _last_message_role(messages: Sequence[object]) -> str | None:
@@ -1323,6 +1369,27 @@ class OpenAIResponsesHandler(BaseTranslation):
             texts=(self.get_streaming_string_so_far(responses_so_far),),
             tool_calls_in_flight=self._has_streamed_tool_call_events(responses_so_far),
         )
+
+    def released_stream_as_ended(self, responses_so_far: Sequence[object]) -> tuple[object, ...]:
+        if self._check_streaming_has_ended(responses_so_far):
+            return tuple(responses_so_far)
+        ends_on_finished_item: Final = (
+            bool(responses_so_far)
+            and stream_item_field(responses_so_far[-1], "type") == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE.value
+        )
+        if not ends_on_finished_item and not self._has_streamed_tool_call_events(responses_so_far):
+            return tuple(responses_so_far)
+        text_events: Final = tuple(
+            event for event in responses_so_far if stream_item_field(event, "type") in _OUTPUT_TEXT_EVENT_TYPES
+        )
+        released_text: Final = self.get_streaming_string_so_far(text_events)
+        message_items: Final = (_released_message_item(released_text),) if released_text else ()
+        tool_items: Final = _released_tool_call_items(responses_so_far)
+        output: Final = [*message_items, *tool_items]
+        response: Final = {"status": "incomplete", "output": output}
+        incomplete: Final = ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE.value
+        envelope: Final = {"type": incomplete, "response": response}
+        return (*responses_so_far, envelope)
 
     @staticmethod
     def _has_streamed_tool_call_events(responses_so_far: Sequence[object]) -> bool:

@@ -103,7 +103,7 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
     import httpx
 
     import litellm
-    from litellm.litellm_core_utils.get_model_cost_map import git_blob_id
+    from litellm.litellm_core_utils.get_model_cost_map import _finalize_model_cost_map, git_blob_id
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -142,7 +142,7 @@ def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every
     assert {key: status_response.json()[key] for key in expected} == expected
     assert public_response.status_code == 200
     assert "gpt-4o" in public_response.json()
-    assert reload_body["models_count"] == len(litellm.model_cost)
+    assert reload_body["models_count"] == len(_finalize_model_cost_map(json.loads(body)))
 
 
 def test_reload_model_cost_map_fetch_failure_502_keeps_map(

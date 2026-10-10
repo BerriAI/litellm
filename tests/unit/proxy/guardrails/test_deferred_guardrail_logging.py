@@ -241,14 +241,14 @@ class TestHasPostCallGuardrailsForPassthrough:
 @pytest.mark.asyncio
 async def test_deferred_flag_stores_and_executes_closure():
     """
-    When _defer_async_logging is True on logging_obj:
+    When defer_async_logging is True on logging_obj:
     1. wrapper_async stores a callable closure instead of calling create_task
     2. Calling the closure fires create_task
     3. Sync callbacks fire immediately (not deferred)
     """
     mock_logging_obj = MagicMock()
-    mock_logging_obj._defer_async_logging = True
-    mock_logging_obj._enqueue_deferred_logging = None
+    mock_logging_obj.defer_async_logging = True
+    mock_logging_obj.enqueue_deferred_logging = None
 
     await litellm.acompletion(
         model="gpt-3.5-turbo",
@@ -258,7 +258,7 @@ async def test_deferred_flag_stores_and_executes_closure():
     )
 
     # Closure was stored
-    enqueue_fn = mock_logging_obj._enqueue_deferred_logging
+    enqueue_fn = mock_logging_obj.enqueue_deferred_logging
     assert callable(enqueue_fn), "Closure should be stored on logging_obj"
 
     # Sync callbacks fired immediately
@@ -294,8 +294,8 @@ async def test_deferred_slot_keeps_the_innermost_wrapper_result():
     has_logged dedupe keeps the first fired task, so the spend log reads usage from the
     innermost provider-shaped response and never from an outer wrapper's translation of it."""
     logging_obj: Final = MagicMock()
-    logging_obj._defer_async_logging = True
-    logging_obj._enqueue_deferred_logging = None
+    logging_obj.defer_async_logging = True
+    logging_obj.enqueue_deferred_logging = None
     logging_obj.async_success_handler = AsyncMock()
     inner_result: Final = object()
     outer_result: Final = object()
@@ -310,7 +310,7 @@ async def test_deferred_slot_keeps_the_innermost_wrapper_result():
             is_litellm_internal_call=False,
         )
 
-    logging_obj._enqueue_deferred_logging()
+    logging_obj.enqueue_deferred_logging()
     await _wait_until(lambda: logging_obj.async_success_handler.await_count > 0)
 
     logging_obj.async_success_handler.assert_awaited_once()
@@ -370,7 +370,7 @@ async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the
         function_id="deferred-nested-anthropic-messages",
         dynamic_async_success_callbacks=[recorder],
     )
-    logging_obj._defer_async_logging = True
+    logging_obj.defer_async_logging = True
 
     response: Final = await litellm.anthropic_messages(
         model="azure/gpt-5.4-nano",
@@ -392,7 +392,7 @@ async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the
     assert response["usage"]["input_tokens"] == 3
     assert response["usage"]["cache_read_input_tokens"] == 7333
 
-    logging_obj._enqueue_deferred_logging()
+    logging_obj.enqueue_deferred_logging()
     await _wait_until(lambda: recorder.standard_logging_object is not None)
 
     assert recorder.standard_logging_object is not None
@@ -408,7 +408,7 @@ async def test_deferred_anthropic_messages_bridged_to_the_responses_api_logs_the
 
 @pytest.mark.asyncio
 async def test_no_flag_fires_create_task_normally():
-    """Without _defer_async_logging, wrapper_async calls create_task as before."""
+    """Without defer_async_logging, wrapper_async calls create_task as before."""
     created_tasks = []
     real_create_task = asyncio.create_task
 
@@ -448,7 +448,7 @@ def test_native_pending_logging_is_released_only_for_ocr(call_type: str, excepti
     logger: Final = MagicMock(
         call_type=call_type,
         _native_pending_logging=pending,
-        _enqueue_deferred_logging=enqueue,
+        enqueue_deferred_logging=enqueue,
     )
 
     ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
@@ -484,7 +484,7 @@ def test_flush_deferred_async_logging_fires_on_success():
         enqueue_called = True
 
     logging_obj = MagicMock()
-    logging_obj._enqueue_deferred_logging = mock_enqueue
+    logging_obj.enqueue_deferred_logging = mock_enqueue
 
     ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
         logging_obj=logging_obj,
@@ -492,7 +492,7 @@ def test_flush_deferred_async_logging_fires_on_success():
     )
 
     assert enqueue_called is True
-    assert logging_obj._enqueue_deferred_logging is None
+    assert logging_obj.enqueue_deferred_logging is None
 
 
 def test_flush_deferred_async_logging_suppressed_on_exception():
@@ -517,7 +517,7 @@ def test_flush_deferred_async_logging_suppressed_on_exception():
         enqueue_called = True
 
     logging_obj = MagicMock()
-    logging_obj._enqueue_deferred_logging = mock_enqueue
+    logging_obj.enqueue_deferred_logging = mock_enqueue
 
     ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
         logging_obj=logging_obj,
@@ -529,7 +529,7 @@ def test_flush_deferred_async_logging_suppressed_on_exception():
         "post_call_failure_hook writes its own failure log."
     )
     # Slot is still cleared so a follow-up flush does not double-fire.
-    assert logging_obj._enqueue_deferred_logging is None
+    assert logging_obj.enqueue_deferred_logging is None
 
 
 def test_flush_deferred_async_logging_noop_when_no_closure_stored():
@@ -541,7 +541,7 @@ def test_flush_deferred_async_logging_noop_when_no_closure_stored():
     class _Bare:
         pass
 
-    logging_obj = _Bare()  # no _enqueue_deferred_logging attribute
+    logging_obj = _Bare()  # no enqueue_deferred_logging attribute
 
     ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
         logging_obj=logging_obj,
@@ -553,7 +553,7 @@ def test_flush_deferred_async_logging_noop_when_no_closure_stored():
     )
 
     # Helper must not create the attribute as a side effect.
-    assert not hasattr(logging_obj, "_enqueue_deferred_logging")
+    assert not hasattr(logging_obj, "enqueue_deferred_logging")
 
 
 def test_proxy_finally_block_routes_through_flush_helper():
@@ -576,11 +576,11 @@ def test_proxy_finally_block_routes_through_flush_helper():
         "the request path must call _flush_deferred_async_logging from its "
         "finally block — do not inline the gating logic."
     )
-    # Belt-and-braces: the inlined `_enqueue_deferred_logging = None` reset
+    # Belt-and-braces: the inlined `enqueue_deferred_logging = None` reset
     # was the symptom of the duplicate-log bug; assert it stays inside the
     # helper, not in the request-processing function.
-    assert "_enqueue_deferred_logging = None" not in src, (
-        "Reset of _enqueue_deferred_logging must live inside "
+    assert "enqueue_deferred_logging = None" not in src, (
+        "Reset of enqueue_deferred_logging must live inside "
         "_flush_deferred_async_logging, not in the request path."
     )
 
@@ -595,14 +595,14 @@ def test_flush_deferred_async_logging_swallows_closure_errors():
         raise RuntimeError("logger failure")
 
     logging_obj = MagicMock()
-    logging_obj._enqueue_deferred_logging = boom
+    logging_obj.enqueue_deferred_logging = boom
 
     # Should not raise.
     ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(
         logging_obj=logging_obj,
         exception_raised=False,
     )
-    assert logging_obj._enqueue_deferred_logging is None
+    assert logging_obj.enqueue_deferred_logging is None
 
 
 # ---------------------------------------------------------------------------
@@ -1114,7 +1114,7 @@ class TestDeferredStreamingClosure:
         with (
             patch("litellm.callbacks", [guardrail]),
             patch(
-                "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+                "litellm.proxy.utils.check_and_merge_model_level_guardrails",
                 side_effect=mock_merge,
             ),
         ):
@@ -1178,7 +1178,7 @@ class TestDeferredStreamingClosure:
         with (
             patch("litellm.callbacks", [guardrail_a, guardrail_b]),
             patch(
-                "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+                "litellm.proxy.utils.check_and_merge_model_level_guardrails",
                 side_effect=mock_merge,
             ),
         ):
@@ -1216,7 +1216,7 @@ class TestDeferredStreamingClosure:
             raise RuntimeError("Simulated init failure")
 
         with patch(
-            "litellm.proxy.utils._check_and_merge_model_level_guardrails",
+            "litellm.proxy.utils.check_and_merge_model_level_guardrails",
             side_effect=exploding_merge,
         ):
             await ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
@@ -1265,7 +1265,7 @@ class TestDeferredStreamingClosure:
         )
         # litellm_params with no recognized async marker -> classified sync.
         logging_obj.model_call_details["litellm_params"] = {}
-        assert LiteLLMLoggingObj._is_sync_litellm_request({}) is True
+        assert LiteLLMLoggingObj.is_sync_litellm_request({}) is True
 
         with (
             patch.object(

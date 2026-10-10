@@ -9,11 +9,6 @@ ignoreUntil = 2026-10-14
 reason = "mlflow has no fixed release published (3.16.0, 2026-09-04, and master still store gateway secret api_base unvalidated); remove this entry once one exists"
 
 [[IgnoredVulns]]
-id = "GHSA-hj66-6f7g-4r5v"
-ignoreUntil = 2026-10-02
-reason = "oauthlib 4.0.0 (the only fixed release, 2026-09-28) is inside the 3-day uv exclude-newer cooldown; bump oauthlib and remove this entry once it clears"
-
-[[IgnoredVulns]]
-id = "GHSA-xpv3-w29h-x7cv"
-ignoreUntil = 2026-10-02
-reason = "oauthlib 4.0.0 (the only fixed release, 2026-09-28) is inside the 3-day uv exclude-newer cooldown; bump oauthlib and remove this entry once it clears"
+id = "GHSA-vfj7-8cjw-p6xm"
+ignoreUntil = 2026-11-03
+reason = "braces has no fixed release published (3.0.3, 2024-05-21, is latest and last_affected); dev-only via knip > fast-glob > micromatch; remove this entry once one exists"

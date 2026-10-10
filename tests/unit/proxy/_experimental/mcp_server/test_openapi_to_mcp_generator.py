@@ -20,9 +20,9 @@ from respx import MockRouter
 from litellm.types.mcp import MCPAuth, MCPAuthType
 
 from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import (
-    _request_auth_header,
-    _request_extra_headers,
-    _request_resolved_auth_headers,
+    request_auth_header,
+    request_extra_headers,
+    request_resolved_auth_headers,
     _request_upstream_url,
     _resolve_param_list,
     _resolve_ref,
@@ -99,7 +99,7 @@ async def test_authorization_validates_credentials_before_http(
         "/echo", "get", {}, "https://upstream.example", auth_type=auth_type,
     )
     destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="authenticated")
-    caller_token: Final = _request_auth_header.set(value)
+    caller_token: Final = request_auth_header.set(value)
     try:
         if accepted:
             assert await tool() == TextResult("authenticated")
@@ -111,7 +111,7 @@ async def test_authorization_validates_credentials_before_http(
             assert exc.value.status_code == 500
             assert destination.call_count == 0
     finally:
-        _request_auth_header.reset(caller_token)
+        request_auth_header.reset(caller_token)
 
 
 @pytest.mark.asyncio
@@ -132,9 +132,9 @@ async def test_static_auth_validates_headers_after_existing_precedence(
     )
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="authenticated")
-    caller_token: Final = _request_auth_header.set(caller)
-    extra_token: Final = _request_extra_headers.set(forwarded)
-    resolved_token: Final = _request_resolved_auth_headers.set(resolved)
+    caller_token: Final = request_auth_header.set(caller)
+    extra_token: Final = request_extra_headers.set(forwarded)
+    resolved_token: Final = request_resolved_auth_headers.set(resolved)
     try:
         if expected is None:
             with pytest.raises(HTTPException, match="requires a usable upstream credential") as exc:
@@ -146,9 +146,9 @@ async def test_static_auth_validates_headers_after_existing_precedence(
             assert destination.call_count == 1
             assert destination.calls.last.request.headers["authorization"] == expected
     finally:
-        _request_auth_header.reset(caller_token)
-        _request_extra_headers.reset(extra_token)
-        _request_resolved_auth_headers.reset(resolved_token)
+        request_auth_header.reset(caller_token)
+        request_extra_headers.reset(extra_token)
+        request_resolved_auth_headers.reset(resolved_token)
 
 
 @pytest.mark.asyncio
@@ -204,13 +204,13 @@ async def test_static_validation_preserves_no_auth_and_resolved_oauth(
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     tool: Final = create_tool_function("/echo", "get", {}, "https://upstream.example", auth_type=auth_type)
     destination: Final = respx_mock.get("https://upstream.example/echo").respond(200, text="echo")
-    token: Final = _request_resolved_auth_headers.set(resolved)
+    token: Final = request_resolved_auth_headers.set(resolved)
     try:
         assert await tool() == TextResult("echo")
         assert destination.call_count == 1
         assert destination.calls.last.request.headers.get("authorization") == (resolved or {}).get("Authorization")
     finally:
-        _request_resolved_auth_headers.reset(token)
+        request_resolved_auth_headers.reset(token)
 
 
 def _create_mock_client(method: str, response_text: str, status_code: int = 200) -> AsyncMock:
@@ -1214,11 +1214,11 @@ class TestRequestExtraHeaders:
             async_client = _create_mock_client("get", "ok")
             mock_client.return_value = async_client
 
-            token = _request_extra_headers.set({"X-TOKEN": "secret-value"})
+            token = request_extra_headers.set({"X-TOKEN": "secret-value"})
             try:
                 result = await func()
             finally:
-                _request_extra_headers.reset(token)
+                request_extra_headers.reset(token)
 
             assert result == TextResult("ok")
             call_args = async_client.get.call_args
@@ -1265,11 +1265,11 @@ class TestRequestExtraHeaders:
             async_client = _create_mock_client("post", "created")
             mock_client.return_value = async_client
 
-            token = _request_extra_headers.set({"X-TOKEN": "dynamic-value"})
+            token = request_extra_headers.set({"X-TOKEN": "dynamic-value"})
             try:
                 result = await func()
             finally:
-                _request_extra_headers.reset(token)
+                request_extra_headers.reset(token)
 
             assert result == TextResult("created")
             call_args = async_client.post.call_args
@@ -1293,11 +1293,11 @@ class TestRequestExtraHeaders:
             async_client = _create_mock_client("get", "ok")
             mock_client.return_value = async_client
 
-            token = _request_extra_headers.set({"X-Tenant": "caller-spoofed"})
+            token = request_extra_headers.set({"X-Tenant": "caller-spoofed"})
             try:
                 result = await func()
             finally:
-                _request_extra_headers.reset(token)
+                request_extra_headers.reset(token)
 
             assert result == TextResult("ok")
             call_args = async_client.get.call_args
@@ -1321,11 +1321,11 @@ class TestRequestExtraHeaders:
             async_client = _create_mock_client("get", "ok")
             mock_client.return_value = async_client
 
-            token = _request_extra_headers.set({"x-tenant": "caller-spoofed"})
+            token = request_extra_headers.set({"x-tenant": "caller-spoofed"})
             try:
                 result = await func()
             finally:
-                _request_extra_headers.reset(token)
+                request_extra_headers.reset(token)
 
             assert result == TextResult("ok")
             call_args = async_client.get.call_args
@@ -1349,15 +1349,15 @@ class TestRequestExtraHeaders:
             async_client = _create_mock_client("get", "secure-data")
             mock_client.return_value = async_client
 
-            extra_token = _request_extra_headers.set(
+            extra_token = request_extra_headers.set(
                 {"Authorization": "Bearer extra", "X-TOKEN": "token-value"}
             )
-            auth_token = _request_auth_header.set("Bearer byok-credential")
+            auth_token = request_auth_header.set("Bearer byok-credential")
             try:
                 result = await func()
             finally:
-                _request_auth_header.reset(auth_token)
-                _request_extra_headers.reset(extra_token)
+                request_auth_header.reset(auth_token)
+                request_extra_headers.reset(extra_token)
 
             assert result == TextResult("secure-data")
             call_args = async_client.get.call_args
@@ -1380,8 +1380,8 @@ class TestRequestExtraHeaders:
             async_client = _create_mock_client("get", "ok")
             mock_client.return_value = async_client
 
-            token = _request_extra_headers.set({"X-TOKEN": "first-call"})
-            _request_extra_headers.reset(token)
+            token = request_extra_headers.set({"X-TOKEN": "first-call"})
+            request_extra_headers.reset(token)
 
             await func()
 
@@ -1409,15 +1409,15 @@ class TestRequestExtraHeaders:
             async_client = _create_mock_client("get", "secure-data")
             mock_client.return_value = async_client
 
-            extra_token = _request_extra_headers.set({"Authorization": "Bearer caller-forwarded"})
-            auth_token = _request_auth_header.set("Bearer byok-credential")
-            resolved_token = _request_resolved_auth_headers.set({"Authorization": "Bearer resolved-oauth"})
+            extra_token = request_extra_headers.set({"Authorization": "Bearer caller-forwarded"})
+            auth_token = request_auth_header.set("Bearer byok-credential")
+            resolved_token = request_resolved_auth_headers.set({"Authorization": "Bearer resolved-oauth"})
             try:
                 result = await func()
             finally:
-                _request_auth_header.reset(auth_token)
-                _request_extra_headers.reset(extra_token)
-                _request_resolved_auth_headers.reset(resolved_token)
+                request_auth_header.reset(auth_token)
+                request_extra_headers.reset(extra_token)
+                request_resolved_auth_headers.reset(resolved_token)
 
             assert result == TextResult("secure-data")
             headers_sent = async_client.get.call_args[1]["headers"]
@@ -1439,8 +1439,8 @@ class TestRequestExtraHeaders:
             async_client = _create_mock_client("get", "ok")
             mock_client.return_value = async_client
 
-            token = _request_resolved_auth_headers.set({"Authorization": "Bearer resolved-oauth"})
-            _request_resolved_auth_headers.reset(token)
+            token = request_resolved_auth_headers.set({"Authorization": "Bearer resolved-oauth"})
+            request_resolved_auth_headers.reset(token)
 
             await func()
 

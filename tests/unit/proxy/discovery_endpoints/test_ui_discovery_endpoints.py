@@ -460,3 +460,23 @@ def test_ui_discovery_endpoints_is_control_plane_false_when_no_workers():
         data = response.json()
         assert data["is_control_plane"] is False
         assert data["workers"] == []
+
+
+@pytest.mark.parametrize(("flag", "expected"), [(None, False), ("false", False), ("true", True)])
+def test_ui_config_tells_the_dashboard_whether_stdio_mcp_servers_are_enabled(monkeypatch, flag, expected):
+    if flag is None:
+        monkeypatch.delenv("LITELLM_ENABLE_MCP_STDIO", raising=False)
+    else:
+        monkeypatch.setenv("LITELLM_ENABLE_MCP_STDIO", flag)
+    app = FastAPI()
+    app.include_router(router)
+
+    with (
+        patch("litellm.proxy.utils.get_server_root_path", return_value="/"),
+        patch("litellm.proxy.utils.get_proxy_base_url", return_value=None),
+        patch("litellm.proxy.auth.auth_utils.has_user_setup_sso", return_value=False),
+    ):
+        response = TestClient(app).get("/.well-known/litellm-ui-config")
+
+    assert response.status_code == 200
+    assert response.json()["mcp_stdio_enabled"] is expected

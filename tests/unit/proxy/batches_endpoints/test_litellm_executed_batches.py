@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
 from openai.types.batch_request_counts import BatchRequestCounts
 
 from litellm.models.managed_files import LiteLLM_ManagedFileTable
@@ -30,7 +30,7 @@ from litellm.proxy.batches_endpoints.litellm_executed_batches import (
     upstream_lacks_files_api,
 )
 from litellm.proxy.openai_files_endpoints.common_utils import (
-    _is_base64_encoded_unified_file_id,
+    is_base64_encoded_unified_file_id,
     get_batch_id_from_unified_batch_id,
     is_litellm_executed_batch,
 )
@@ -181,7 +181,7 @@ class FakeManagedBatchStore:
         return self.objects[unified_batch_id].batch()
 
 
-REAL_HOOK: Final = _PROXY_LiteLLMManagedFiles(internal_usage_cache=MagicMock(), prisma_client=MagicMock())
+REAL_HOOK: Final = PROXY_LiteLLMManagedFiles(internal_usage_cache=MagicMock(), prisma_client=MagicMock())
 
 
 class RealIdManagedBatchStore(FakeManagedBatchStore):
@@ -1129,7 +1129,7 @@ async def test_run_completes_under_the_real_hooks_base64_batch_id() -> None:
     harness = make_runner(store_factory=RealIdManagedBatchStore)
     created, finished = await harness.create_and_finish()
 
-    assert _is_base64_encoded_unified_file_id(created.id)
+    assert is_base64_encoded_unified_file_id(created.id)
     assert finished.status == "completed"
     assert [call.model_object_id.startswith("litellm_batch_") for call in harness.store.calls] == [True]
     assert [write.unified_object_id for write in harness.table.writes] == [created.id] * 3

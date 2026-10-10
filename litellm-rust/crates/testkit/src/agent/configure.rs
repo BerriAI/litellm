@@ -5,7 +5,7 @@ use semver::Version;
 
 use crate::Error;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::VariantArray)]
 pub enum Wire {
     ChatCompletions,
     Messages,

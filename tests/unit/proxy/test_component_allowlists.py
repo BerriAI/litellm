@@ -26,7 +26,21 @@ RDS IAM token when ``IAM_TOKEN_DB_AUTH`` is set).
 import json
 import os
 import sys
-from typing import Final
+from collections.abc import AsyncGenerator, Mapping
+from contextlib import asynccontextmanager
+from functools import partial
+from typing import Final, Literal, NoReturn
+
+import pytest
+from fastapi import FastAPI
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
+from starlette.testclient import TestClient
+from starlette.types import Lifespan
+
+from tests._master_key import MASTER_KEY
 
 # Importing ``litellm.proxy.proxy_server`` runs its module-level setup, which
 # reads ``DATABASE_URL`` (Prisma) and ``LITELLM_MASTER_KEY``. Tier-zero CI
@@ -37,13 +51,12 @@ from typing import Final
 # treat a phantom database as available instead of skipping).
 _THROWAWAY_ENV = {
     "DATABASE_URL": "sqlite:///:memory:",
-    "LITELLM_MASTER_KEY": "sk-test-component-allowlist",
+    "LITELLM_MASTER_KEY": MASTER_KEY,
 }
 _PRE_EXISTING_ENV = {key: os.environ.get(key) for key in _THROWAWAY_ENV}
 for _key, _value in _THROWAWAY_ENV.items():
     os.environ.setdefault(_key, _value)
 
-from fastapi.routing import Mount
 from prometheus_client import make_asgi_app
 
 # gateway/ and backend/ live at the repo root, not inside litellm/.
@@ -53,6 +66,10 @@ if _REPO_ROOT not in sys.path:
 
 from backend.routes.allowlist import BACKEND_MOUNT_PATHS
 from gateway.routes.allowlist import GATEWAY_MOUNT_PATHS
+from litellm.proxy import tracing_endpoints
+from litellm.proxy._lazy_features import LazyFeature, attach_lazy_features
+from litellm.proxy.auth.authorization_dependencies import get_log_team_lookup
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.proxy_server import app
 from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
@@ -74,7 +91,10 @@ _DB_ENV_KEYS = (
 )
 _PRE_DB_ENV = {_key: os.environ.pop(_key, None) for _key in _DB_ENV_KEYS}
 _PRE_COMPONENT_LIFESPAN = app.router.lifespan_context
-from gateway.main import _is_gateway_route
+from gateway.main import _gateway_lifespan, _is_gateway_route
+
+app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
+from backend.main import _backend_lifespan
 
 app.router.lifespan_context = _PRE_COMPONENT_LIFESPAN
 for _key, _previous in _PRE_DB_ENV.items():
@@ -85,7 +105,7 @@ for _key, _previous in _PRE_DB_ENV.items():
 _COVERAGE_PROBE: Final = """
 import json, os, sys
 sys.path.insert(0, os.environ["LITELLM_COMPONENT_ALLOWLIST_REPO_ROOT"])
-from fastapi.routing import Mount
+from starlette.routing import Mount
 from backend.routes.allowlist import BACKEND_EXACT_PATHS, BACKEND_PATH_PREFIXES
 from gateway.routes.allowlist import GATEWAY_EXACT_PATHS, GATEWAY_PATH_PREFIXES
 from litellm.proxy._lazy_features import loaded_lazy_modules
@@ -110,6 +130,128 @@ json.dump({
     )),
 }, sys.stdout)
 """
+
+
+@pytest.mark.parametrize(
+    "component_lifespan", (None, _gateway_lifespan, _backend_lifespan), ids=("proxy", "gateway", "backend")
+)
+@pytest.mark.parametrize("eager", (False, True), ids=("lazy", "eager"))
+@pytest.mark.parametrize("state_kind", ("enabled", "disabled", "stateless"))
+def test_composed_lifespan_preserves_request_state_and_teardown(
+    monkeypatch: pytest.MonkeyPatch,
+    component_lifespan: Lifespan[Starlette] | None,
+    eager: bool,
+    state_kind: Literal["enabled", "disabled", "stateless"],
+) -> None:
+    monkeypatch.setenv("LITELLM_DISABLE_LAZY_ROUTES", str(eager).lower())
+    receiver: Final = object()
+    resource: Final = object()
+    state: Final[Mapping[str, object]] = {
+        "tracing_receiver": receiver if state_kind == "enabled" else None,
+        "other_resource": resource,
+    }
+    events: Final[list[str]] = []  # mutable-ok: observe startup, requests and teardown across the ASGI boundary
+
+    async def trace_state(request: Request) -> JSONResponse:
+        events.append("request")
+        assert events[0] == "startup" and "shutdown" not in events
+        assert getattr(request.state, "other_resource", None) is (resource if state_kind != "stateless" else None)
+        assert getattr(request.state, "tracing_receiver", None) is (receiver if state_kind == "enabled" else None)
+        return JSONResponse({"keys": sorted(request.scope["state"])})
+
+    def register_trace_route(application: Starlette, module: object) -> None:
+        application.router.routes.append(Route("/v1/traces", trace_state))
+
+    @asynccontextmanager
+    async def stateful_lifespan(application: Starlette) -> AsyncGenerator[Mapping[str, object], None]:
+        events.append("startup")
+        application.router.routes.append(Route("/not-a-component-route", trace_state))
+        try:
+            yield state
+        finally:
+            events.append("shutdown")
+
+    @asynccontextmanager
+    async def stateless_lifespan(application: Starlette) -> AsyncGenerator[None, None]:
+        async with stateful_lifespan(application):
+            yield
+
+    application: Final = type(app)(lifespan=stateless_lifespan if state_kind == "stateless" else stateful_lifespan)
+    feature: Final = LazyFeature("traces", __name__, ("/v1/traces",), register_fn=register_trace_route)
+    attach_lazy_features(application, (feature,))
+    if component_lifespan is not None:
+        application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)
+
+    with TestClient(application) as client:
+        response: Final = client.get("/v1/traces")
+        assert response.status_code == 200, response.text
+        assert response.json() == {"keys": [] if state_kind == "stateless" else sorted(state)}
+        filtered: Final = client.get("/not-a-component-route")
+        assert filtered.status_code == (200 if component_lifespan is None else 404), filtered.text
+        assert events == (["startup", "request", "request"] if component_lifespan is None else ["startup", "request"])
+    assert events == (
+        ["startup", "request", "request", "shutdown"] if component_lifespan is None else ["startup", "request", "shutdown"]
+    )
+
+
+@pytest.mark.parametrize(
+    "component_lifespan", (None, _gateway_lifespan, _backend_lifespan), ids=("proxy", "gateway", "backend")
+)
+@pytest.mark.parametrize("eager", (False, True), ids=("lazy", "eager"))
+@pytest.mark.parametrize("phase", ("startup", "shutdown"))
+def test_composed_lifespan_propagates_lifecycle_failures(
+    monkeypatch: pytest.MonkeyPatch, component_lifespan: Lifespan[Starlette] | None, eager: bool, phase: str
+) -> None:
+    monkeypatch.setenv("LITELLM_DISABLE_LAZY_ROUTES", str(eager).lower())
+    failure: Final = RuntimeError(f"{phase} failed")
+    events: Final[list[str]] = []  # mutable-ok: observe lifecycle events across the ASGI boundary
+
+    @asynccontextmanager
+    async def inner_lifespan(application: Starlette) -> AsyncGenerator[Mapping[str, object], None]:
+        events.append("startup")
+        if phase == "startup":
+            raise failure
+        yield {}
+        events.append("shutdown")
+        raise failure
+
+    application: Final = type(app)(lifespan=inner_lifespan)
+    attach_lazy_features(application, ())
+    if component_lifespan is not None:
+        application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)
+
+    with pytest.raises(RuntimeError) as caught:
+        with TestClient(application):
+            events.append("serving")
+    assert caught.value is failure
+    assert events == (["startup"] if phase == "startup" else ["startup", "serving", "shutdown"])
+
+
+@pytest.mark.parametrize("component_lifespan", (_gateway_lifespan, _backend_lifespan), ids=("gateway", "backend"))
+@pytest.mark.parametrize("endpoint", ("/v1/traces", "/v1/logs"), ids=("traces", "logs"))
+@pytest.mark.parametrize("authorization", (None, "Bearer team-a-key", "Bearer team-b-key"))
+def test_retired_otlp_routes_reject_uploads_without_dependencies_on_each_component(
+    component_lifespan: Lifespan[Starlette], endpoint: str, authorization: str | None
+) -> None:
+    application: Final = FastAPI()
+    application.include_router(tracing_endpoints.router)
+
+    def unused_dependency() -> NoReturn:
+        pytest.fail("Retired uploads must not resolve authentication, tenant, or storage dependencies")
+
+    application.dependency_overrides[tracing_endpoints.provide_receiver] = unused_dependency
+    application.dependency_overrides[get_log_team_lookup] = unused_dependency
+    application.dependency_overrides[user_api_key_auth] = unused_dependency
+    application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)
+    headers: Final = {"content-type": "application/json"} | (
+        {"Authorization": authorization} if authorization is not None else {}
+    )
+
+    with TestClient(application) as client:
+        response: Final = client.post(endpoint, content=b'{"resourceLogs": []}', headers=headers)
+
+    assert response.status_code == 410, response.text
+    assert response.json() == {"message": "Send traces and logs directly to the Lens endpoint shown in Lens setup."}
 
 
 def test_gateway_plus_backend_covers_full_app():
@@ -259,3 +401,54 @@ def test_every_app_mount_is_assigned_to_a_component():
         f"Add them to GATEWAY_MOUNT_PATHS, BACKEND_MOUNT_PATHS, or serve them "
         f"from the UI container:\n  " + "\n  ".join(sorted(unassigned))
     )
+
+
+@pytest.mark.skipif(sys.version_info < (3, 12), reason="Admin MCP requires Python 3.12+")
+@pytest.mark.parametrize(
+    "component_lifespan", (None, _gateway_lifespan, _backend_lifespan), ids=("proxy", "gateway", "backend")
+)
+@pytest.mark.parametrize("enabled", (False, True))
+def test_admin_mcp_survives_only_management_component_lifespans(
+    monkeypatch: pytest.MonkeyPatch, component_lifespan: Lifespan[Starlette] | None, enabled: bool
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.admin_mcp import admin_mcp_lifespan
+
+    monkeypatch.setattr(proxy_server, "premium_user", True)
+    monkeypatch.setenv("LITELLM_ENABLE_ADMIN_MCP", str(enabled).lower())
+    for name in (
+        "PROXY_BASE_URL", "LITELLM_MCP_PUBLIC_URL", "LITELLM_ADMIN_TOOLS", "LITELLM_ADMIN_READ_ONLY",
+        "LITELLM_ADMIN_RESPONSE_VIEW", "LITELLM_ADMIN_SCHEMA_MODE",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    @asynccontextmanager
+    async def lifespan(application: FastAPI) -> AsyncGenerator[Mapping[str, object], None]:
+        async with admin_mcp_lifespan(application):
+            yield {"tracing_receiver": None}
+
+    application: Final = FastAPI(lifespan=lifespan)
+
+    @application.get("/user/info")
+    async def user_info() -> dict[str, object]:
+        return {"user_id": "admin", "user_info": {"user_id": "admin", "user_role": "proxy_admin"}}
+
+    if component_lifespan is not None:
+        application.router.lifespan_context = partial(component_lifespan, lifespan=application.router.lifespan_context)
+    for _ in range(2):
+        with TestClient(application, base_url="http://localhost:4000") as client:
+            response: Final = client.post(
+                "/admin/mcp",
+                headers={"Authorization": "Bearer admin", "Accept": "application/json, text/event-stream"},
+                json={
+                    "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-03-26", "capabilities": {},
+                        "clientInfo": {"name": "component-test", "version": "1"},
+                    },
+                },
+            )
+            expected_status: Final = 200 if enabled and component_lifespan is not _gateway_lifespan else 404
+            assert response.status_code == expected_status, response.text
+            if response.status_code == 200:
+                assert response.json()["result"]["serverInfo"]["name"] == "litellm-admin-mcp"

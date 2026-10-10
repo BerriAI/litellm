@@ -6,7 +6,7 @@ from datetime import datetime, timedelta
 from types import MappingProxyType
 from typing import Final, Literal, TypeVar
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -20,9 +20,11 @@ from litellm.constants import (
     SPEND_LOG_KEY_METADATA_ROWS_PER_PROBE,
 )
 from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
+from litellm.proxy.db.db_span import db_span, db_spanned
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.llms.base import LiteLLMBaseModel
 
 _T = TypeVar("_T")
 
@@ -117,7 +119,7 @@ class KeyMetadataDict(TypedDict, total=False):
     key_exists: ReadOnly[bool]
 
 
-class _TokenDigestRow(BaseModel):
+class _TokenDigestRow(LiteLLMBaseModel):
     digest: str
     key_alias: str | None = None
     team_id: str | None = None
@@ -130,7 +132,7 @@ def _unanimous(first: str | None, last: str | None) -> str | None:
     return first if last is None or first == last else None
 
 
-class _SpendLogDigestRow(BaseModel):
+class _SpendLogDigestRow(LiteLLMBaseModel):
     digest: str
     first_alias: str | None = None
     last_alias: str | None = None
@@ -147,7 +149,7 @@ class _SpendLogDigestRow(BaseModel):
         )
 
 
-class _DailyUserSpendOwnerRow(BaseModel):
+class _DailyUserSpendOwnerRow(LiteLLMBaseModel):
     api_key: str
     first_owner: str | None = None
     last_owner: str | None = None
@@ -171,11 +173,9 @@ async def _db_or_empty(
     warning: str,
     count: int,
 ) -> _T | None:
-    from prisma.errors import PrismaError
-
     try:
         return await load()
-    except PrismaError as e:
+    except Exception as e:
         verbose_proxy_logger.warning(warning, count, e)
         return None
 
@@ -184,9 +184,13 @@ async def _rows_within_the_statement_timeout(
     prisma_client: PrismaClient,
     sql: str,
     *params: object,
+    table: str,
     planner_settings: tuple[str, ...] = (),
 ) -> Sequence[Mapping[str, object]]:
-    async with prisma_client.db.tx(timeout=_SPEND_LOG_TRANSACTION_TIMEOUT) as transaction:
+    async with (
+        db_span("recover_key_metadata", table),
+        prisma_client.db.tx(timeout=_SPEND_LOG_TRANSACTION_TIMEOUT) as transaction,
+    ):
         await transaction.execute_raw(_SPEND_LOG_STATEMENT_TIMEOUT_SQL)
         for setting in planner_settings:
             await transaction.execute_raw(setting)
@@ -198,10 +202,11 @@ async def _reverse_hash_key_metadata(
     sql: str,
     wanted: AbstractSet[str],
     *,
+    table: str,
     warning: str,
 ) -> Mapping[str, KeyMetadataDict]:
     rows: Final = await _db_or_empty(
-        lambda: prisma_client.db.query_raw(sql, sorted(wanted)),
+        lambda: db_spanned("recover_key_metadata", table, lambda: prisma_client.db.query_raw(sql, sorted(wanted))),
         warning,
         len(wanted),
     )
@@ -223,7 +228,9 @@ async def recover_key_owner_from_daily_spend(
     if not keys:
         return _EMPTY_KEY_OWNERS
     rows: Final = await _db_or_empty(
-        lambda: _rows_within_the_statement_timeout(prisma_client, _DAILY_USER_SPEND_OWNER_SQL, sorted(keys)),
+        lambda: _rows_within_the_statement_timeout(
+            prisma_client, _DAILY_USER_SPEND_OWNER_SQL, sorted(keys), table="LiteLLM_DailyUserSpend"
+        ),
         "Failed daily-spend key owner recovery for %d keys: %s",
         len(keys),
     )
@@ -255,7 +262,11 @@ async def _details_for_user_ids(
     if not user_ids:
         return _EMPTY_USER_DETAILS
     users: Final = await _db_or_empty(
-        lambda: find_many_in(UserRepository(prisma_client).table, "user_id", user_ids),
+        lambda: db_spanned(
+            "recover_user_details",
+            "LiteLLM_UserTable",
+            lambda: find_many_in(UserRepository(prisma_client).table, "user_id", user_ids),
+        ),
         "Failed user detail recovery for %d user ids: %s",
         len(user_ids),
     )
@@ -358,6 +369,7 @@ async def recover_double_hashed_key_metadata(
         prisma_client,
         _ACTIVE_TOKEN_DIGEST_SQL,
         sha_missing,
+        table="LiteLLM_VerificationToken",
         warning="Failed reverse-hash recovery against active keys for %d missing keys: %s",
     )
     still_missing: Final = sha_missing - frozenset(from_active)
@@ -367,6 +379,7 @@ async def recover_double_hashed_key_metadata(
         prisma_client,
         _DELETED_TOKEN_DIGEST_SQL,
         still_missing,
+        table="LiteLLM_DeletedVerificationToken",
         warning="Failed reverse-hash recovery against deleted keys for %d missing keys: %s",
     )
     return MappingProxyType({**from_active, **from_deleted})
@@ -409,6 +422,7 @@ async def _query_spend_log_metadata(
             sorted(digests),
             start,
             end,
+            table="LiteLLM_SpendLogs",
             planner_settings=(_SPEND_LOG_NO_BITMAP_SCAN_SQL,),
         ),
         "Failed spend-log alias recovery for %d missing keys: %s",
@@ -426,6 +440,10 @@ async def _query_spend_log_metadata(
     )
 
 
+def _remember_short_lived_miss(cache: InMemoryCache, key: str) -> None:
+    cache.set_cache(key, KeyMetadataDict(), ttl=SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL)
+
+
 def _remember_spend_log_metadata(
     cache: InMemoryCache, digest: str, window: tuple[datetime, datetime], meta: KeyMetadataDict | None
 ) -> None:
@@ -437,7 +455,7 @@ def _remember_spend_log_metadata(
     if cache.get_cache(missed_before) is not None:
         cache.set_cache(key, KeyMetadataDict())
         return
-    cache.set_cache(key, KeyMetadataDict(), ttl=SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL)
+    _remember_short_lived_miss(cache, key)
     cache.set_cache(missed_before, True)
 
 
@@ -454,10 +472,13 @@ async def _spend_log_metadata_one_query_at_a_time(
         fresh: Final = (
             await _query_spend_log_metadata(prisma_client, pending, window) if pending else _EMPTY_KEY_METADATA
         )
-        found: Final = fresh if fresh is not None else _EMPTY_KEY_METADATA
+        if fresh is None:
+            for digest in pending:
+                _remember_short_lived_miss(cache, _spend_log_cache_key(digest, window))
+            return settled
         for digest in pending:
-            _remember_spend_log_metadata(cache, digest, window, found.get(digest))
-        return MappingProxyType({**settled, **found})
+            _remember_spend_log_metadata(cache, digest, window, fresh.get(digest))
+        return MappingProxyType({**settled, **fresh})
 
 
 async def recover_key_metadata_from_spend_logs(

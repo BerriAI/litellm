@@ -27,6 +27,7 @@ from litellm.harness.types import (
     ToolResult,
 )
 from litellm.llms.base_llm.harness.transformation import BaseHarnessConfig
+from litellm.llms.base_llm.harness.utils import gateway_headers
 
 if TYPE_CHECKING:
     from litellm.harness.context import SessionContext
@@ -68,23 +69,6 @@ WRITE_TOOLS: Final = frozenset({"write_file", "edit_file", "delete"})
 EXECUTE_TOOLS: Final = frozenset({"execute"})
 APPROVAL_TOOLS: Final = WRITE_TOOLS | EXECUTE_TOOLS
 _APPROVAL_DECISIONS: Final = ("approve", "reject")
-
-
-# ---------------------------------------------------------------------------
-# Pure helpers (unit tested directly; kept module-level so they port cleanly)
-# ---------------------------------------------------------------------------
-
-
-def gateway_headers(
-    ctx: SessionContext,
-) -> dict[str, str]:  # mutable-ok: ChatLiteLLM.extra_headers is a pydantic dict field
-    """Same attribution headers the session endpoint adds for CLI harnesses."""
-    metadata = ctx.metadata
-    metadata_json = json.dumps(dict(metadata), default=str) if metadata else None  # mutable-ok: for json.dumps
-    metadata_header = (("x-litellm-spend-logs-metadata", metadata_json),) if metadata_json is not None else ()
-    return dict(  # mutable-ok: ChatLiteLLM.extra_headers is a pydantic dict field
-        (("x-litellm-tags", f"harness,{ctx.harness.value}"), *metadata_header)
-    )
 
 
 def chat_model_kwargs(
@@ -189,7 +173,7 @@ def stream_events(
     ]
 
 
-def tool_call_event(call: Mapping[str, Any]) -> ToolCall:
+def tool_call_event(call: Mapping[str, object]) -> ToolCall:
     native = str(call.get("name") or "")
     args = call.get("args")
     return ToolCall(
@@ -201,7 +185,7 @@ def tool_call_event(call: Mapping[str, Any]) -> ToolCall:
     )
 
 
-def _node_messages(update: Mapping[Any, Any]) -> Iterator[object]:
+def _node_messages(update: Mapping[object, object]) -> Iterator[object]:
     for node, delta in update.items():
         if node not in _EVENT_NODES or not isinstance(delta, Mapping):
             continue
@@ -247,7 +231,7 @@ def interrupts_in(
     return list(items)  # mutable-ok: list return; callers/tests compare to lists
 
 
-def final_ai_text(messages: Sequence[Any]) -> str:
+def final_ai_text(messages: Sequence[object]) -> str:
     for message in reversed(messages):
         if getattr(message, "type", None) == "ai":
             text = content_text(getattr(message, "content", ""))

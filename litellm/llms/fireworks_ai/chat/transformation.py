@@ -43,7 +43,9 @@ from ..common_utils import (
     FIREROUTER,
     FireworksAIException,
     FireworksAIMixin,
+    get_fireworks_forwarded_user_id,
     resolve_fireworks_resource_name,
+    without_caller_user,
 )
 
 if TYPE_CHECKING:
@@ -189,7 +191,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             top_p=top_p,
             response_format=response_format,
         )
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -674,13 +676,24 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                     **stream_options,
                     "include_usage": True,
                 }
-        return super().transform_request(
+        request: Final = super().transform_request(
             model=resolved_model,
             messages=messages,
             optional_params=optional_params,
             litellm_params=litellm_params,
             headers=headers,
         )
+        forwarded_user_id: Final = get_fireworks_forwarded_user_id(litellm_params)
+        return request if forwarded_user_id is None else {**request, "user": forwarded_user_id}
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: Mapping[str, object],
+    ) -> Mapping[str, object]:
+        return without_caller_user(extra_body, get_fireworks_forwarded_user_id(litellm_params))
 
     def _handle_message_content_with_tool_calls(
         self,
@@ -756,7 +769,7 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
                 tool_calls=optional_params.get("tools", None),
             )
 
-        response._hidden_params = {
+        response.hidden_params = {
             "additional_headers": additional_headers,
             **_extract_fireworks_hidden_params(completion_response),
         }
@@ -786,6 +799,13 @@ class FireworksAIConfig(FireworksAIMixin, OpenAIGPTConfig):
             or get_secret_str("FIREWORKS_AI_TOKEN")
         )
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def get_models(self, api_key: str | None = None, api_base: str | None = None):
         api_base, api_key = self._get_openai_compatible_provider_info(api_base=api_base, api_key=api_key)

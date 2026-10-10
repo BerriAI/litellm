@@ -24,6 +24,7 @@ from litellm.proxy.ui_crud_endpoints.latest_release_endpoints import (
     count_release_bullets,
     get_latest_release_info,
 )
+from tests._master_key import MASTER_KEY
 
 SAMPLE_BODY: Final = """## What's Changed
 * feat(proxy): add upgrade banner by @kerry in https://github.com/BerriAI/litellm/pull/1
@@ -255,6 +256,6 @@ class TestLatestReleaseInfoEndpoint:
         assert len(client.calls) == 1
 
     def test_rejects_unauthenticated_requests(self, monkeypatch):
-        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-1234")
+        monkeypatch.setattr("litellm.proxy.proxy_server.master_key", MASTER_KEY)
         response = TestClient(app).get("/get/latest_release_info")
         assert response.status_code in (401, 403)

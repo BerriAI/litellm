@@ -4,7 +4,8 @@ Each guardrail is configured against an owned sink that records the request and 
 ~20s. With `timeout: 1` the outbound call must abort near the bound, so the chat round trip
 completes in seconds instead of waiting on the sink. A control guardrail without `timeout`
 points at a sink path that sleeps ~3s and must wait for the reply, proving unset keeps the
-handler default. All probes are sent concurrently so their waits overlap.
+handler default. Probes are sent eight at a time so their waits overlap without starving the
+proxy's two workers.
 """
 
 from __future__ import annotations
@@ -16,8 +17,10 @@ import threading
 import time
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass, field
 from functools import partial
+from http.client import HTTPResponse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from types import MappingProxyType
@@ -35,6 +38,7 @@ from integration._support.wire import Reply, Request, wire_server
 SLOW_SECONDS: Final = 20
 FAST_SECONDS: Final = 3
 BOUND_SECONDS: Final = 8
+PROBE_CONCURRENCY: Final = 8
 TOKEN_PATH: Final = "/token"
 TOKEN_REPLY: Final = json.dumps(
     {"access_token": "synthetic-google-token", "expires_in": 3600, "token_type": "Bearer"}
@@ -209,8 +213,10 @@ class Sink:
         class Server(ThreadingHTTPServer):
             allow_reuse_address = True
             daemon_threads = True
+            request_queue_size: Final = socket.SOMAXCONN
 
         self.server = Server(("127.0.0.1", self.port), Handler)
+        self.port = self.server.server_port
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
 
@@ -337,10 +343,7 @@ class Rig:
 @pytest.fixture(scope="module")
 def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     root: Final = tmp_path_factory.mktemp("guardrail-timeout")
-    with socket.socket() as reserve:
-        reserve.bind(("127.0.0.1", 0))
-        port: Final = reserve.getsockname()[1]
-    sink: Final = Sink(port)
+    sink: Final = Sink(0)
     sink.start()
     with gateway_from_environment() as gateway, wire_server(_provider) as provider:
         config: Final = _rig_config(sink.url, root)
@@ -410,7 +413,7 @@ def outcomes(rig: Rig) -> Mapping[str, Outcome]:
     values: Final = tuple(_provider_values())
     names: Final = (*(value[0] for value in values), "control-generic")
     exchanges: Final = (*(value[4] for value in values), False)
-    with ThreadPoolExecutor(max_workers=len(names)) as pool:
+    with ThreadPoolExecutor(max_workers=PROBE_CONCURRENCY) as pool:
         results: Final = tuple(pool.map(partial(_chat, rig), names, exchanges))
     return MappingProxyType(dict(zip(names, results, strict=True)))
 
@@ -444,3 +447,42 @@ def test_unset_timeout_waits_for_sink_response(rig: Rig, outcomes: Mapping[str, 
     )
     assert isinstance(outcome.response, httpx.Response), f"control-generic: client gave up: {outcome.response!r}"
     assert outcome.response.status_code in (200, 400, 500), outcome.response.text
+
+
+def _connect_sink(port: int, _index: int) -> socket.socket | OSError:
+    try:
+        return socket.create_connection(("127.0.0.1", port), timeout=1)
+    except OSError as error:
+        return error
+
+
+def _read_sink_probe(stream: socket.socket) -> tuple[int, bytes]:
+    stream.sendall(b"GET /token/capacity-probe/ HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+    with HTTPResponse(stream) as response:
+        response.begin()
+        return response.status, response.read()
+
+
+def test_owned_sink_records_every_connection_from_a_concurrent_probe_burst(rig: Rig) -> None:
+    server: Final = rig.sink.server
+    original_thread: Final = rig.sink.thread
+    assert server is not None and original_thread is not None
+    connection_count: Final = len(PROVIDERS) + 1
+    server.shutdown()
+    original_thread.join(timeout=5)
+    try:
+        with ThreadPoolExecutor(max_workers=connection_count) as pool:
+            opened: Final = tuple(pool.map(partial(_connect_sink, rig.sink.port), range(connection_count)))
+    finally:
+        resumed: Final = threading.Thread(target=server.serve_forever, daemon=True)
+        rig.sink.thread = resumed
+        resumed.start()
+    with ExitStack() as clients:
+        connected: Final = tuple(stream for stream in opened if isinstance(stream, socket.socket))
+        for stream in connected:
+            clients.enter_context(stream)
+        assert len(connected) == connection_count, tuple(type(value).__name__ for value in opened)
+        with ThreadPoolExecutor(max_workers=connection_count) as pool:
+            replies: Final = tuple(pool.map(_read_sink_probe, connected))
+        assert replies == ((200, TOKEN_REPLY),) * connection_count
+        assert len(rig.sink.calls_for("capacity-probe")) == connection_count

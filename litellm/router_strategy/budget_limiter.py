@@ -28,6 +28,7 @@ from types import MappingProxyType
 from typing import Any, Final
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache, RedisPipelineIncrementOperation, log_redis_failure
@@ -36,9 +37,9 @@ from litellm.litellm_core_utils.core_helpers import (
     get_metadata_variable_name_from_kwargs,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
-from litellm.router_strategy.tag_based_routing import _get_tags_from_request_kwargs
+from litellm.router_strategy.tag_based_routing import get_tags_from_request_kwargs
 from litellm.router_utils.cooldown_callbacks import (
-    _get_prometheus_logger_from_callbacks,
+    get_prometheus_logger_from_callbacks,
 )
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params, RouterErrors
@@ -127,6 +128,7 @@ class RouterBudgetLimiting(CustomLogger):
         if isinstance(litellm.callbacks, list):
             litellm.logging_callback_manager.add_litellm_callback(self)
 
+    @with_service_target("router_budgets")
     async def async_filter_deployments(
         self,
         model: str,
@@ -188,7 +190,7 @@ class RouterBudgetLimiting(CustomLogger):
                 deployment_providers=deployment_providers,
                 spend_map=spend_map,
                 potential_deployments=potential_deployments,
-                request_tags=_get_tags_from_request_kwargs(
+                request_tags=get_tags_from_request_kwargs(
                     request_kwargs=request_kwargs,
                     metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs or {}),
                 ),
@@ -205,14 +207,14 @@ class RouterBudgetLimiting(CustomLogger):
 
     def _filter_out_deployments_above_budget(
         self,
-        potential_deployments: list[dict[str, Any]],
+        potential_deployments: list[dict[str, object]],
         healthy_deployments: list[dict[str, Any]],
         provider_configs: dict[str, GenericBudgetInfo],
         deployment_configs: dict[str, GenericBudgetInfo],
         deployment_providers: list[str | None],
         spend_map: dict[str, float],
         request_tags: list[str],
-    ) -> tuple[list[dict[str, Any]], str]:
+    ) -> tuple[list[dict[str, object]], str]:
         """
         Filter out deployments that have exceeded their budget limit.
         Follow budget checks are run here:
@@ -315,7 +317,7 @@ class RouterBudgetLimiting(CustomLogger):
         # Resolve tags once before the loop (loop-invariant)
         _request_tags: list[str] = []
         if self.tag_budget_config:
-            _request_tags = _get_tags_from_request_kwargs(
+            _request_tags = get_tags_from_request_kwargs(
                 request_kwargs=request_kwargs,
                 metadata_variable_name=get_metadata_variable_name_from_kwargs(request_kwargs or {}),
             )
@@ -468,6 +470,7 @@ class RouterBudgetLimiting(CustomLogger):
             flush_task.result()
             raise
 
+    @with_service_target("router_budgets")
     async def _write_queued_increment_operations(self, redis_cache: RedisCache) -> bool:
         increment_operations_to_flush: Final = await self._detach_queued_increment_operations()
         if len(increment_operations_to_flush) == 0:
@@ -488,6 +491,7 @@ class RouterBudgetLimiting(CustomLogger):
         await self._clear_detached_increment_operations()
         return True
 
+    @with_service_target("router_budgets")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Original method now uses helper functions"""
         verbose_router_logger.debug("in RouterBudgetLimiting.async_log_success_event")
@@ -528,7 +532,7 @@ class RouterBudgetLimiting(CustomLogger):
                 response_cost=response_cost,
             )
 
-        request_tags: Final = _get_tags_from_request_kwargs(
+        request_tags: Final = get_tags_from_request_kwargs(
             kwargs,
             metadata_variable_name=get_metadata_variable_name_from_kwargs(kwargs or {}),
         )
@@ -594,6 +598,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         verbose_router_logger.debug("Incremented spend for %s by %s", spend_key, response_cost)
 
+    @with_service_target("router_budgets")
     async def periodic_sync_in_memory_spend_with_redis(self):
         """
         Handler that triggers sync_in_memory_spend_with_redis every DEFAULT_REDIS_SYNC_INTERVAL seconds
@@ -742,7 +747,7 @@ class RouterBudgetLimiting(CustomLogger):
         This is helpful for debugging and monitoring provider budget limits.
         """
 
-        prometheus_logger: Final = _get_prometheus_logger_from_callbacks()
+        prometheus_logger: Final = get_prometheus_logger_from_callbacks()
         if prometheus_logger:
             prometheus_logger.track_provider_remaining_budget(
                 provider=provider,
@@ -750,6 +755,7 @@ class RouterBudgetLimiting(CustomLogger):
                 budget_limit=budget_limit,
             )
 
+    @with_service_target("router_budgets")
     async def _get_current_provider_spend(self, provider: str) -> float | None:
         """
         GET the current spend for a provider from cache
@@ -776,6 +782,7 @@ class RouterBudgetLimiting(CustomLogger):
             current_spend = await self.dual_cache.async_get_cache(spend_key)
         return float(current_spend) if current_spend is not None else 0.0
 
+    @with_service_target("router_budgets")
     async def _get_current_provider_budget_reset_at(self, provider: str) -> str | None:
         budget_config: Final = self._get_budget_config_for_provider(provider)
         if budget_config is None:

@@ -462,7 +462,13 @@ def test_owner_lookup_failure_keeps_tools_listed_without_a_user(gateway: Gateway
     config: Final = _proxy_config(tmp_path, model, gateway.upstream_url, {})
     with (
         scratch_database() as database_url,
-        owned_proxy(gateway, tmp_path, {"DATABASE_URL": database_url}, config=config) as candidate,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {"DATABASE_URL": database_url},
+            config=config,
+            remove_environment=("DATABASE_URL_READ_REPLICA",),
+        ) as candidate,
     ):
         alias: Final = "fault-owner-" + uuid.uuid4().hex
         user: Final = string_value(

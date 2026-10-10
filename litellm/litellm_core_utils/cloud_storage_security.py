@@ -116,7 +116,7 @@ def encode_s3_object_key_for_url(object_key: str) -> str:
 
 
 def should_allow_legacy_cloud_file_ids(
-    litellm_params: Mapping[str, Any] | None = None,
+    litellm_params: Mapping[str, object] | None = None,
 ) -> bool:
     value = None
     if isinstance(litellm_params, Mapping):

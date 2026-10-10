@@ -370,3 +370,31 @@ void isClientForwardedTokenMode;
 void normalizeEnvVars;
 void preservedAdminCredentials;
 export type { MCPServer };
+
+it.each([
+  [AUTH_TYPE.OAUTH2, OAUTH_FLOW.INTERACTIVE, true],
+  [AUTH_TYPE.OAUTH2, OAUTH_FLOW.M2M, false],
+  [AUTH_TYPE.TRUE_PASSTHROUGH, OAUTH_FLOW.INTERACTIVE, false],
+])("applies a pending DCR client only to an interactive gateway OAuth save (%s, %s)", (authType, flow, useDcr) => {
+  const values: EditServerFormValues = {
+    auth_type: authType,
+    oauth_flow_type: flow,
+    transport: "http",
+    credentials: { client_id: "configured-client", client_secret: "configured-secret" },
+  };
+  const ui: EditServerUiState = {
+    ...baseUi,
+    dcrClient: {
+      client_id: "new-client",
+      client_secret: null,
+      dcr_issuer: "https://new.example",
+      dcr_server_url: "https://new.example/mcp",
+    },
+  };
+  const result = buildEditServerPayload(values, ui);
+  expect(result.kind).toBe("ok");
+  if (result.kind !== "ok") throw new Error("Expected valid MCP server payload");
+  expect(result.payload.credentials?.client_id).toBe(useDcr ? "new-client" : "configured-client");
+  expect(result.payload.credentials?.client_secret).toBe(useDcr ? null : "configured-secret");
+  expect(result.payload.credentials?.dcr_issuer).toBe(useDcr ? "https://new.example" : undefined);
+});

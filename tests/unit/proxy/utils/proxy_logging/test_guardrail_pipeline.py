@@ -11,10 +11,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncGenerator, Iterator
 from copy import deepcopy
 import logging
-from collections.abc import Iterator
-from typing import Any, Callable, Dict, List
+from typing import Any, Callable, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -26,10 +26,13 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
 )
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.llms.base_llm.guardrail_translation.utils import stream_item_field
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
+from litellm.llms.openai.chat.guardrail_translation.handler import OpenAIChatCompletionsHandler
+from litellm.proxy.policy_engine.pipeline_executor import recorded_guardrail_information
 from litellm.proxy.utils import ProxyLogging, _streamable_post_call_pipelines, stream_gated_guardrail_names
 from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import ContentFilterGuardrail
 from litellm.types.guardrails import BlockedWord, ContentFilterAction, GuardrailEventHooks
@@ -2933,3 +2936,335 @@ async def test_streaming_iterator_hook_pipeline_discards_dropped_tool_call_on_re
 
     assert delivered == _responses_function_call_events()
     assert any("'gr-post'" in message and "discarded" in message for message in _warnings(caplog))
+
+
+class _RaisingAcloseIterator:
+    """Non-generator async iterator whose aclose raises after the stream ended."""
+
+    def __init__(self, response: AsyncGenerator[Any, None]) -> None:
+        self._response = response
+
+    def __aiter__(self) -> "_RaisingAcloseIterator":
+        return self
+
+    async def __anext__(self) -> Any:
+        return await self._response.__anext__()
+
+    async def aclose(self) -> None:
+        raise RuntimeError("cleanup failed")
+
+
+class RaisingAcloseCallback(CustomLogger):
+    """Iterator hook returning a non-generator async iterator whose aclose raises."""
+
+    def async_post_call_streaming_iterator_hook(  # pyright: ignore[reportIncompatibleMethodOverride]  # a custom async iterator worked before aclose handling
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        response: AsyncGenerator[Any, None],
+        request_data: dict[str, object],
+    ) -> _RaisingAcloseIterator:
+        return _RaisingAcloseIterator(response)
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_pipeline_releases_buffered_content_when_a_callback_aclose_raises(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(
+        litellm, "callbacks", [_rewriting_stream_guardrail(lambda inputs: {}), RaisingAcloseCallback()]
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(stream=True)
+    chunks = _tool_call_stream_chunks()
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        delivered = [
+            item
+            async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+                response=_async_chunk_iter(chunks),
+                request_data=data,
+            )
+        ]
+
+    assert [chunk.model_dump() for chunk in delivered] == [chunk.model_dump() for chunk in chunks]
+    assert any(
+        "RaisingAcloseCallback" in message and "RuntimeError" in message and "cleanup failed" not in message
+        for message in _warnings(caplog)
+    )
+
+
+# ---------------------------------------------------------------------------
+# detect-only post_call pipelines streaming live (streaming_buffer_until_moderated: false)
+# ---------------------------------------------------------------------------
+
+
+_DETECT_ONLY_STEP: PipelineStep = PipelineStep(guardrail="gr-post", on_pass="allow", on_fail="next")
+
+
+def _live_scan_guardrail(
+    seen: Dict[str, Any],
+    *,
+    guardrail_name: str = "gr-post",
+    buffer_until_moderated: bool | None = False,
+    mask_response_content: bool = False,
+    rewrite: str | None = None,
+    raises: Exception | None = None,
+) -> CustomGuardrail:
+    class LiveScanGuardrail(CustomGuardrail):
+        async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+            seen["count"] = seen.get("count", 0) + 1
+            seen["texts"] = list(inputs.get("texts") or [])
+            if raises is not None:
+                raise raises
+            if rewrite is not None:
+                return {**inputs, "texts": [rewrite]}
+            return inputs
+
+    guardrail = LiveScanGuardrail(
+        guardrail_name=guardrail_name,
+        event_hook=GuardrailEventHooks.post_call,
+        default_on=False,
+        mask_response_content=mask_response_content,
+    )
+    if buffer_until_moderated is not None:
+        guardrail.streaming_buffer_until_moderated = buffer_until_moderated
+    return guardrail
+
+
+def _delta_contents(chunks: List[Any]) -> List[tuple[str | None, str | None]]:
+    return [(chunk.choices[0].delta.content, chunk.choices[0].finish_reason) for chunk in chunks]
+
+
+def _post_call_statuses(data: Dict[str, Any]) -> List[str]:
+    return [str(entry.get("guardrail_status")) for entry in recorded_guardrail_information(data)]
+
+
+async def _deliver_with_scan_counts(
+    proxy_logging: ProxyLogging, user_api_key_dict: UserAPIKeyAuth, data: Dict[str, Any], seen: Dict[str, Any]
+) -> tuple[List[Any], List[int]]:
+    delivered: List[Any] = []
+    scans_before_delivery: List[int] = []
+    async for item in proxy_logging.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=user_api_key_dict, response=_async_chunk_iter(_stream_chunks()), request_data=data
+    ):
+        delivered.append(item)
+        scans_before_delivery.append(seen.get("count", 0))
+    return delivered, scans_before_delivery
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_live_pipeline_releases_every_chunk_before_the_end_of_stream_scan(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_live_scan_guardrail(seen)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(step=_DETECT_ONLY_STEP, stream=True)
+
+    delivered, scans_before_delivery = await _deliver_with_scan_counts(
+        proxy_logging, make_user_api_key_auth(request_route="/v1/chat/completions"), data, seen
+    )
+
+    assert scans_before_delivery == [0, 0]
+    assert _delta_contents(delivered) == [("hello ", None), ("world", "stop")]
+    assert seen["count"] == 1
+    assert seen["texts"] == ["hello world"]
+    assert _post_call_statuses(data) == ["success"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("step", "guardrail_kwargs"),
+    (
+        pytest.param(PipelineStep(guardrail="gr-post", on_pass="allow", on_fail="block"), {}, id="on_fail-block"),
+        pytest.param(
+            PipelineStep(guardrail="gr-post", on_pass="allow", on_fail="next", on_error="block"),
+            {},
+            id="on_error-block",
+        ),
+        pytest.param(
+            PipelineStep(guardrail="gr-post", on_pass="allow", on_fail="modify_response"),
+            {},
+            id="on_fail-modify_response",
+        ),
+        pytest.param(_DETECT_ONLY_STEP, {"buffer_until_moderated": None}, id="flag-unset"),
+        pytest.param(_DETECT_ONLY_STEP, {"buffer_until_moderated": True}, id="flag-true"),
+        pytest.param(_DETECT_ONLY_STEP, {"mask_response_content": True}, id="mask-response-content"),
+    ),
+)
+async def test_streaming_iterator_hook_pipeline_keeps_buffering_unless_a_detect_only_step_opted_out(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+    step: PipelineStep,
+    guardrail_kwargs: Dict[str, Any],
+) -> None:
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_live_scan_guardrail(seen, **guardrail_kwargs)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(step=step, stream=True)
+
+    delivered, scans_before_delivery = await _deliver_with_scan_counts(
+        proxy_logging, make_user_api_key_auth(request_route="/v1/chat/completions"), data, seen
+    )
+
+    assert scans_before_delivery == [1, 1]
+    assert _delta_contents(delivered) == [("hello ", None), ("world", "stop")]
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_live_pipeline_discards_each_rewrite_before_the_next_step_scans(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    first_seen: Final[Dict[str, Any]] = {}
+    second_seen: Final[Dict[str, Any]] = {}
+    monkeypatch.setattr(
+        litellm,
+        "callbacks",
+        [
+            _live_scan_guardrail(first_seen, guardrail_name="gr-first", rewrite="hello [MASKED]"),
+            _live_scan_guardrail(second_seen, guardrail_name="gr-second"),
+        ],
+    )
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    pipeline: Final = GuardrailPipeline(
+        mode="post_call",
+        steps=[
+            PipelineStep(guardrail="gr-first", on_pass="next", on_fail="next"),
+            PipelineStep(guardrail="gr-second", on_pass="allow", on_fail="next"),
+        ],
+    )
+    data: Final = _post_call_pipeline_data(stream=True)
+    data["metadata"]["_guardrail_pipelines"] = [("response-governance", pipeline)]
+    data["metadata"]["_pipeline_managed_guardrails"] = {"gr-first", "gr-second"}
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        delivered, scans_before_delivery = await _deliver_with_scan_counts(
+            proxy_logging, make_user_api_key_auth(request_route="/v1/chat/completions"), data, second_seen
+        )
+
+    assert scans_before_delivery == [0, 0]
+    assert _delta_contents(delivered) == [("hello ", None), ("world", "stop")]
+    assert first_seen["texts"] == ["hello world"]
+    assert second_seen["texts"] == ["hello world"]
+    assert any(
+        "'gr-first'" in message and "already received the stream live" in message and "discarded" in message
+        for message in _warnings(caplog)
+    )
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_live_pipeline_scans_what_a_disconnected_client_received(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_live_scan_guardrail(seen)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(step=_DETECT_ONLY_STEP, stream=True)
+    stream = proxy_logging.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+        response=_async_chunk_iter(_stream_chunks()),
+        request_data=data,
+    )
+
+    first = await stream.__anext__()
+    await stream.aclose()
+
+    assert first.choices[0].delta.content == "hello "
+    assert seen["texts"] == ["hello "]
+    assert _post_call_statuses(data) == ["success"]
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_live_pipeline_records_a_scan_that_failed_after_the_client_disconnected(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_live_scan_guardrail(seen, raises=RuntimeError("scanner down"))])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data = _post_call_pipeline_data(step=_DETECT_ONLY_STEP, stream=True)
+    stream = proxy_logging.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+        response=_async_chunk_iter(_stream_chunks()),
+        request_data=data,
+    )
+
+    await stream.__anext__()
+    await stream.aclose()
+
+    assert seen["count"] == 1
+    assert _post_call_statuses(data) == ["guardrail_failed_to_respond"]
+
+
+async def _provider_error_after_first_chunk(chunks: List[Any]) -> AsyncGenerator[Any, None]:
+    yield chunks[0]
+    raise RuntimeError("provider dropped the stream")
+
+
+@pytest.mark.asyncio
+async def test_streaming_iterator_hook_live_pipeline_scans_what_the_client_received_before_a_provider_error(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: Final[Dict[str, Any]] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_live_scan_guardrail(seen)])
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None, raising=False)
+    data: Final = _post_call_pipeline_data(step=_DETECT_ONLY_STEP, stream=True)
+    stream: Final = proxy_logging.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+        response=_provider_error_after_first_chunk(_stream_chunks()),
+        request_data=data,
+    )
+
+    first: Final = await stream.__anext__()
+    with pytest.raises(RuntimeError, match="provider dropped the stream"):
+        await stream.__anext__()
+
+    assert first.choices[0].delta.content == "hello "
+    assert seen["texts"] == ["hello "]
+    assert _post_call_statuses(data) == ["success"]
+
+
+class _EndingRaisesTranslation(OpenAIChatCompletionsHandler):
+    def released_stream_as_ended(self, responses_so_far):
+        raise RuntimeError("synthetic translation failure")
+
+
+@pytest.mark.asyncio
+async def test_live_pipeline_disconnect_scan_that_cannot_run_records_every_step_guardrail_as_failed(
+    proxy_logging: ProxyLogging,
+    make_user_api_key_auth: Callable[..., UserAPIKeyAuth],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    seen: Dict[str, Any] = {}
+    monkeypatch.setattr(litellm, "callbacks", [_live_scan_guardrail(seen)])
+    data = _post_call_pipeline_data(step=_DETECT_ONLY_STEP, stream=True)
+
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await proxy_logging._scan_pipeline_stream_cut_short(
+            released=_stream_chunks()[:1],
+            user_api_key_dict=make_user_api_key_auth(request_route="/v1/chat/completions"),
+            request_data=data,
+            pipelines=tuple(data["metadata"]["_guardrail_pipelines"]),
+            translation=("completion", _EndingRaisesTranslation()),
+        )
+
+    assert seen.get("count") is None
+    assert _post_call_statuses(data) == ["guardrail_failed_to_respond"]
+    assert any("cut short" in message and "RuntimeError" in message for message in _warnings(caplog))
+

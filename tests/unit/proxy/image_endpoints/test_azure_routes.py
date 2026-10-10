@@ -100,7 +100,7 @@ def test_azure_image_generation_route(client_no_auth):
 
 
 def test_azure_image_edit_route(client_no_auth):
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     client, _, mock_aimage_edit = client_no_auth
     image_path = os.path.join(
         os.path.dirname(__file__),

@@ -1,28 +1,205 @@
-from collections.abc import Sequence
-from datetime import datetime, timedelta, timezone
+from collections.abc import Mapping, Sequence
+from datetime import date, datetime
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from fastapi import HTTPException
 
+import litellm.proxy.management_endpoints.common_daily_activity as common_daily_activity_module
+from litellm.constants import USAGE_TOP_API_KEYS_DEFAULT
 from litellm.proxy.management_endpoints.common_daily_activity import (
-    _adjust_dates_for_timezone,
-    _build_aggregated_sql_query,
-    _build_entity_rollup_sql_query,
+    CanonicalDateRange,
+    InvalidDateRange,
     _is_user_agent_tag,
+    _ProxyDailyActivityReads,
     _record_to_spend_metrics,
+    compute_tag_metadata_totals,
+    daily_activity_repository,
+    daily_activity_scope,
     get_api_key_metadata,
     get_daily_activity,
-    get_daily_activity_aggregated,
+    parse_canonical_date,
+    parse_canonical_date_range,
+    raise_public,
     update_metrics,
 )
+from litellm.proxy.management_endpoints.common_daily_activity import (
+    get_daily_activity_aggregated as _get_daily_activity_aggregated,
+)
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
-from litellm.proxy.utils import hash_token
+from litellm.proxy.utils import PrismaClient, hash_token
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
+    SpendAnalyticsPaginatedResponse,
     SpendMetrics,
 )
+from litellm.types.repositories.daily_activity import GroupingSetsRow, KeyMetadataRow
+
+
+async def _run_aggregated_daily_activity(
+    *,
+    prisma_client: PrismaClient,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,
+    entity_metadata_field: Mapping[str, dict[str, object]] | None = None,
+    start_date: str,
+    end_date: str,
+    model: str | None,
+    api_key: str | list[str] | None,
+    exclude_entity_ids: list[str] | None = None,
+    timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
+    include_entity_breakdown: bool = False,
+    api_key_limit: int = USAGE_TOP_API_KEYS_DEFAULT,
+) -> SpendAnalyticsPaginatedResponse:
+    repository: Final = daily_activity_repository(prisma_client)
+    scope: Final = daily_activity_scope(
+        table_name,
+        entity_id_field,
+        entity_id,
+        exclude_entity_ids,
+        api_key,
+        start_date,
+        end_date,
+        model,
+        timezone_offset_minutes,
+        include_current_utc_day,
+    )
+    return await _get_daily_activity_aggregated(
+        repository,
+        scope,
+        entity_metadata_field=entity_metadata_field,
+        include_entity_breakdown=include_entity_breakdown,
+        api_key_limit=api_key_limit,
+    )
+
+
+async def get_daily_activity_aggregated(
+    *,
+    prisma_client: PrismaClient,
+    table_name: str,
+    entity_id_field: str,
+    entity_id: str | list[str] | None,
+    entity_metadata_field: Mapping[str, dict[str, object]] | None = None,
+    start_date: str,
+    end_date: str,
+    model: str | None,
+    api_key: str | list[str] | None,
+    exclude_entity_ids: list[str] | None = None,
+    timezone_offset_minutes: int | None = None,
+    include_current_utc_day: bool = False,
+    include_entity_breakdown: bool = False,
+    api_key_limit: int = USAGE_TOP_API_KEYS_DEFAULT,
+) -> SpendAnalyticsPaginatedResponse:
+    return await _run_aggregated_daily_activity(
+        prisma_client=prisma_client,
+        table_name=table_name,
+        entity_id_field=entity_id_field,
+        entity_id=entity_id,
+        entity_metadata_field=entity_metadata_field,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        api_key=api_key,
+        exclude_entity_ids=exclude_entity_ids,
+        timezone_offset_minutes=timezone_offset_minutes,
+        include_current_utc_day=include_current_utc_day,
+        include_entity_breakdown=include_entity_breakdown,
+        api_key_limit=api_key_limit,
+    )
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_requires_a_database():
+    with pytest.raises(HTTPException) as error:
+        await get_daily_activity(
+            prisma_client=None,
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            entity_metadata_field=None,
+            start_date="2026-06-16",
+            end_date="2026-06-16",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+        )
+
+    assert error.value.status_code == 500
+    assert error.value.detail == {"error": common_daily_activity_module.CommonProxyErrors.db_not_connected_error.value}
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_maps_repository_failures_to_http_errors():
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=0)
+    mock_table.find_many = AsyncMock(side_effect=RuntimeError("daily rows unavailable"))
+    mock_prisma.db.litellm_dailyuserspend = mock_table
+
+    with pytest.raises(HTTPException) as error:
+        await get_daily_activity(
+            prisma_client=mock_prisma,
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id="user-1",
+            entity_metadata_field=None,
+            start_date="2026-06-16",
+            end_date="2026-06-16",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+        )
+
+    assert error.value.status_code == 500
+    assert error.value.detail == {"error": "Failed to fetch analytics: daily rows unavailable"}
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_maps_repository_failures_to_http_errors():
+    repository = MagicMock()
+    repository.aggregated = AsyncMock(side_effect=RuntimeError("daily aggregate unavailable"))
+    scope = daily_activity_scope(
+        "litellm_dailyuserspend",
+        "user_id",
+        "user-1",
+        None,
+        None,
+        "2026-06-16",
+        "2026-06-16",
+        None,
+        None,
+    )
+
+    with pytest.raises(HTTPException) as error:
+        await _get_daily_activity_aggregated(repository, scope)
+
+    assert error.value.status_code == 500
+    assert error.value.detail == {"error": "Failed to fetch analytics: daily aggregate unavailable"}
+
+
+def test_compute_tag_metadata_totals_deduplicates_and_ignores_user_agent_tags():
+    smaller = _spend_record("key-1", spend=1.0)
+    smaller.request_id = "request-1"
+    smaller.tag = "environment: small"
+    larger = _spend_record("key-1", spend=4.0)
+    larger.request_id = "request-1"
+    larger.tag = "environment: large"
+    larger.api_requests = 1
+    user_agent = _spend_record("key-2", spend=10.0)
+    user_agent.request_id = "request-2"
+    user_agent.tag = "User-Agent: test"
+    user_agent.api_requests = 3
+
+    totals = compute_tag_metadata_totals((smaller, larger, user_agent))
+
+    assert (totals.spend, totals.api_requests) == (4.0, 1)
 
 
 @pytest.mark.asyncio
@@ -39,12 +216,12 @@ async def test_get_daily_activity_empty_entity_id_list():
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
 
     # Set the table name dynamically
-    mock_prisma.db.litellm_dailyspend = mock_table
+    mock_prisma.db.litellm_dailyteamspend = mock_table
 
     # Call the function with empty entity_id list
-    result = await get_daily_activity(
+    await get_daily_activity(
         prisma_client=mock_prisma,
-        table_name="litellm_dailyspend",
+        table_name="litellm_dailyteamspend",
         entity_id_field="team_id",
         entity_id=[],
         entity_metadata_field=None,
@@ -87,11 +264,11 @@ async def test_get_daily_activity_order_has_id_tiebreaker():
     mock_table.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_verificationtoken = MagicMock()
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
-    mock_prisma.db.litellm_dailyspend = mock_table
+    mock_prisma.db.litellm_dailyteamspend = mock_table
 
     await get_daily_activity(
         prisma_client=mock_prisma,
-        table_name="litellm_dailyspend",
+        table_name="litellm_dailyteamspend",
         entity_id_field="team_id",
         entity_id="team-1",
         entity_metadata_field=None,
@@ -105,9 +282,39 @@ async def test_get_daily_activity_order_has_id_tiebreaker():
 
     mock_table.find_many.assert_called_once()
     order = mock_table.find_many.call_args[1]["order"]
-    assert order == [{"date": "desc"}, {"id": "asc"}], (
+    assert order == ({"date": "desc"}, {"id": "asc"}), (
         f"order must include the id tiebreaker after date for stable offset pagination (see #30164); got {order!r}"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("page, page_size", [(0, 10), (-1, 10), (1, 0), (1, -5)])
+async def test_get_daily_activity_rejects_non_positive_pagination_with_400(page, page_size):
+    from fastapi import HTTPException
+
+    mock_prisma = MagicMock()
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=0)
+    mock_table.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_dailyteamspend = mock_table
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_daily_activity(
+            prisma_client=mock_prisma,
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id=None,
+            entity_metadata_field=None,
+            start_date="2026-09-18",
+            end_date="2026-09-25",
+            model=None,
+            api_key=None,
+            page=page,
+            page_size=page_size,
+        )
+
+    assert exc_info.value.status_code == 400, exc_info.value.detail
+    mock_table.find_many.assert_not_called()
 
 
 def test_is_user_agent_tag():
@@ -169,6 +376,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
             "endpoint": "/v1/chat/completions",
             "api_key": None,
             "group_level": 62,
+            "distinct_api_keys": None,
             "spend": 15.0,
             "prompt_tokens": 150,
             "completion_tokens": 75,
@@ -181,31 +389,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
             "endpoint": "/v1/embeddings",
             "api_key": None,
             "group_level": 62,
-            "spend": 3.0,
-            "prompt_tokens": 30,
-            "completion_tokens": 0,
-            "api_requests": 1,
-            "successful_requests": 1,
-        },
-        # (date, endpoint, api_key) — populates the per-key sub-bucket
-        {
-            **base,
-            "date": "2024-01-01",
-            "endpoint": "/v1/chat/completions",
-            "api_key": "key-1",
-            "group_level": 30,
-            "spend": 15.0,
-            "prompt_tokens": 150,
-            "completion_tokens": 75,
-            "api_requests": 2,
-            "successful_requests": 2,
-        },
-        {
-            **base,
-            "date": "2024-01-01",
-            "endpoint": "/v1/embeddings",
-            "api_key": "key-2",
-            "group_level": 30,
+            "distinct_api_keys": None,
             "spend": 3.0,
             "prompt_tokens": 30,
             "completion_tokens": 0,
@@ -219,6 +403,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
             "endpoint": None,
             "api_key": None,
             "group_level": 63,
+            "distinct_api_keys": None,
             "spend": 18.0,
             "prompt_tokens": 180,
             "completion_tokens": 75,
@@ -232,11 +417,39 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
             "endpoint": None,
             "api_key": None,
             "group_level": 127,
+            "distinct_api_keys": None,
             "spend": 18.0,
             "prompt_tokens": 180,
             "completion_tokens": 75,
             "api_requests": 3,
             "successful_requests": 3,
+        },
+        # (date, endpoint, api_key) — populates the per-key sub-bucket
+        {
+            **base,
+            "date": "2024-01-01",
+            "endpoint": "/v1/chat/completions",
+            "api_key": "key-1",
+            "group_level": 30,
+            "distinct_api_keys": 2,
+            "spend": 15.0,
+            "prompt_tokens": 150,
+            "completion_tokens": 75,
+            "api_requests": 2,
+            "successful_requests": 2,
+        },
+        {
+            **base,
+            "date": "2024-01-01",
+            "endpoint": "/v1/embeddings",
+            "api_key": "key-2",
+            "group_level": 30,
+            "distinct_api_keys": 2,
+            "spend": 3.0,
+            "prompt_tokens": 30,
+            "completion_tokens": 0,
+            "api_requests": 1,
+            "successful_requests": 1,
         },
     ]
 
@@ -314,6 +527,49 @@ async def test_get_api_key_metadata_returns_active_key_metadata():
 
 
 @pytest.mark.asyncio
+async def test_recovered_key_metadata_preserves_resolved_tags_after_user_details(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    resolved: Final = KeyMetadataRow(
+        api_key="key-hash",
+        key_alias="key alias",
+        team_id="team-id",
+        user_id="user-id",
+        user_email=None,
+        key_exists=True,
+        tags=("production", "internal"),
+    )
+    attach_details: Final = AsyncMock(
+        return_value={
+            "key-hash": {
+                "key_alias": "key alias",
+                "team_id": "team-id",
+                "user_id": "user-id",
+                "user_email": "user@example.com",
+                "key_exists": True,
+            }
+        }
+    )
+    monkeypatch.setattr(common_daily_activity_module, "attach_user_details", attach_details)
+    reads: Final = _ProxyDailyActivityReads(MagicMock())
+
+    result: Final = await reads.recover_key_metadata({"key-hash": resolved}, frozenset(("key-hash",)), None)
+
+    assert result == {
+        "key-hash": KeyMetadataRow(
+            api_key="key-hash",
+            key_alias="key alias",
+            team_id="team-id",
+            user_id="user-id",
+            user_email="user@example.com",
+            key_exists=True,
+            tags=("production", "internal"),
+        )
+    }
+    attach_details.assert_awaited_once()
+
+
+@pytest.mark.asyncio
 async def test_get_api_key_metadata_falls_back_to_deleted_keys():
     """Test that get_api_key_metadata should fall back to deleted keys table for missing keys."""
     mock_prisma = MagicMock()
@@ -341,7 +597,6 @@ async def test_get_api_key_metadata_falls_back_to_deleted_keys():
     # Verify deleted table was queried with the missing key
     mock_prisma.db.litellm_deletedverificationtoken.find_many.assert_called_once_with(
         where={"token": {"in": ["deleted-key-hash-456"]}},
-        order={"deleted_at": "desc"},
     )
 
 
@@ -437,11 +692,13 @@ async def test_get_api_key_metadata_regenerated_key_uses_most_recent_deleted_rec
     mock_deleted_1.token = "old-key-hash"
     mock_deleted_1.key_alias = "latest-alias"
     mock_deleted_1.team_id = "latest-team"
+    mock_deleted_1.deleted_at = datetime(2024, 1, 2)
 
     mock_deleted_2 = MagicMock()
     mock_deleted_2.token = "old-key-hash"
     mock_deleted_2.key_alias = "older-alias"
     mock_deleted_2.team_id = "older-team"
+    mock_deleted_2.deleted_at = datetime(2024, 1, 1)
 
     # Ordered by deleted_at desc, so first record is the most recent
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[mock_deleted_1, mock_deleted_2])
@@ -629,12 +886,15 @@ def test_key_metadata_includes_recovered_user_email():
 
     meta = _key_metadata(
         {
-            "dirty-key": {
-                "key_alias": "batch-worker",
-                "team_id": "team-1",
-                "user_id": "alice",
-                "user_email": "alice@example.com",
-            }
+            "dirty-key": KeyMetadataRow(
+                api_key="dirty-key",
+                key_alias="batch-worker",
+                team_id="team-1",
+                user_id="alice",
+                user_email="alice@example.com",
+                key_exists=True,
+                tags=(),
+            )
         },
         "dirty-key",
     )
@@ -649,11 +909,15 @@ def test_key_metadata_includes_user_id_without_user_email():
 
     meta = _key_metadata(
         {
-            "dirty-key": {
-                "key_alias": "batch-worker",
-                "team_id": "team-1",
-                "user_id": "user-123",
-            }
+            "dirty-key": KeyMetadataRow(
+                api_key="dirty-key",
+                key_alias="batch-worker",
+                team_id="team-1",
+                user_id="user-123",
+                user_email=None,
+                key_exists=True,
+                tags=(),
+            )
         },
         "dirty-key",
     )
@@ -694,11 +958,15 @@ def test_update_breakdown_metrics_includes_user_email():
         user_id="alice",
     )
     api_key_metadata = {
-        "dirty-key": {
-            "key_alias": "batch-worker",
-            "team_id": "team-1",
-            "user_email": "alice@example.com",
-        }
+        "dirty-key": KeyMetadataRow(
+            api_key="dirty-key",
+            key_alias="batch-worker",
+            team_id="team-1",
+            user_id=None,
+            user_email="alice@example.com",
+            key_exists=True,
+            tags=(),
+        )
     }
 
     update_breakdown_metrics(
@@ -870,6 +1138,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
             "endpoint": "/v1/chat/completions",
             "api_key": None,
             "group_level": 62,
+            "distinct_api_keys": None,
             "spend": 10.0,
             "prompt_tokens": 100,
             "completion_tokens": 50,
@@ -882,6 +1151,7 @@ async def test_aggregated_activity_preserves_metadata_for_deleted_keys():
             "endpoint": "/v1/chat/completions",
             "api_key": "deleted-key-hash",
             "group_level": 30,
+            "distinct_api_keys": 1,
             "spend": 10.0,
             "prompt_tokens": 100,
             "completion_tokens": 50,
@@ -963,10 +1233,21 @@ async def test_aggregated_activity_flags_only_keys_that_key_info_can_still_resol
         return_value=[{**base, "api_key": key} for key in ("active-key", "deleted-key", "session-key")]
     )
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(
-        return_value=[SimpleNamespace(token="active-key", key_alias="active", team_id=None, user_id="owner")]
+        return_value=[
+            SimpleNamespace(token="active-key", key_alias="active", team_id=None, user_id="owner", metadata=None)
+        ]
     )
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(
-        return_value=[SimpleNamespace(token="deleted-key", key_alias="deleted", team_id=None, user_id="owner")]
+        return_value=[
+            SimpleNamespace(
+                token="deleted-key",
+                key_alias="deleted",
+                team_id=None,
+                user_id="owner",
+                metadata=None,
+                deleted_at=datetime(2024, 1, 2),
+            )
+        ]
     )
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
 
@@ -1128,261 +1409,6 @@ async def test_model_groups_breakdown_keys_by_public_name_with_model_fallback():
     assert breakdown.models["claude-x"].metrics.spend == 2.0
 
 
-class TestAdjustDatesForTimezone:
-    """
-    Regression tests for the timezone double-counting bug.
-
-    Background: the previous implementation expanded the SQL date range by a full
-    UTC day on whichever side a non-UTC timezone offset pointed. Because spend is
-    bucketed in whole UTC days in the aggregation table, that expansion caused
-    single-day queries from non-UTC timezones to include a second full UTC day's
-    worth of data, producing approximately 2x over-counting. The sum of single-day
-    spends across a window then exceeded the equivalent multi-day aggregate, which
-    is mathematically impossible.
-
-    These tests pin the function to a pass-through and assert the additivity
-    invariant that any future implementation must preserve.
-    """
-
-    @pytest.mark.parametrize(
-        "offset_minutes",
-        [
-            None,
-            0,
-            -330,  # IST UTC+5:30
-            -540,  # JST UTC+9
-            -60,  # CET UTC+1
-            240,  # AST UTC-4
-            300,  # EST UTC-5
-            480,  # PST UTC-8
-        ],
-    )
-    def test_returns_input_dates_unchanged_for_any_offset(self, offset_minutes):
-        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-05-29", offset_minutes)
-        assert start == "2026-05-29"
-        assert end == "2026-05-29"
-
-    def test_single_day_query_does_not_widen_to_two_utc_days(self):
-        """
-        Pins the boundary that caused the original 2x bug: a single IST day must
-        not be translated into a SQL filter covering two UTC days.
-        """
-        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-05-29", -330)
-        assert start == end == "2026-05-29", (
-            "Single-day IST query expanded to a multi-day UTC range; this is "
-            "the regression that produced approximately 2x over-counting."
-        )
-
-    def test_multi_day_range_endpoints_are_preserved(self):
-        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-06-02", -330)
-        assert (start, end) == ("2026-05-29", "2026-06-02")
-
-    @pytest.mark.parametrize("offset_minutes", [-330, 480])
-    def test_single_day_sums_match_multi_day_window(self, offset_minutes):
-        """
-        Additivity invariant: querying each day in a window separately and summing
-        the resulting SQL ranges must cover exactly the same range as querying the
-        whole window at once. The bug broke this; without it, single-day sums
-        exceeded the multi-day total by ~50% over a 5-day IST window.
-        """
-        days = ["2026-05-29", "2026-05-30", "2026-05-31", "2026-06-01", "2026-06-02"]
-        single_day_ranges = [_adjust_dates_for_timezone(d, d, offset_minutes) for d in days]
-        multi_day_range = _adjust_dates_for_timezone(days[0], days[-1], offset_minutes)
-
-        per_day_starts = [r[0] for r in single_day_ranges]
-        per_day_ends = [r[1] for r in single_day_ranges]
-        assert min(per_day_starts) == multi_day_range[0]
-        assert max(per_day_ends) == multi_day_range[1]
-        assert per_day_starts == days
-        assert per_day_ends == days
-
-
-class TestAdjustDatesForTimezoneLiveEnd:
-    """
-    Regression tests for the stale-evening bug: a caller west of UTC whose range
-    ends on their local "today" was capped at that local date's UTC bucket, so
-    once UTC rolled past their local midnight (5pm PT), everything sent that
-    evening sat in the next UTC bucket and the dashboard reported $0 for it
-    until local midnight. A range that reaches the caller's current day and
-    opts in via include_current_utc_day must extend to today's UTC bucket; the
-    only part of that bucket outside the range is the future, which is empty,
-    so the extension cannot over-count. Callers that do not opt in keep the
-    pass-through byte for byte.
-    """
-
-    PT_EVENING_UTC: Final = datetime(2026, 8, 6, 4, 30, tzinfo=timezone.utc)
-
-    def test_pt_evening_range_ending_today_extends_to_utc_today(self):
-        start, end = _adjust_dates_for_timezone(
-            "2026-07-06", "2026-08-05", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
-        )
-        assert (start, end) == ("2026-07-06", "2026-08-06")
-
-    def test_without_opt_in_live_range_keeps_pass_through(self):
-        start, end = _adjust_dates_for_timezone("2026-07-06", "2026-08-05", 420, utc_now=self.PT_EVENING_UTC)
-        assert (start, end) == ("2026-07-06", "2026-08-05")
-
-    def test_pt_historical_range_is_untouched(self):
-        start, end = _adjust_dates_for_timezone(
-            "2026-07-01", "2026-08-04", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
-        )
-        assert (start, end) == ("2026-07-01", "2026-08-04")
-
-    def test_east_of_utc_local_today_already_covers_utc_today(self):
-        ist_evening_utc: Final = datetime(2026, 8, 5, 17, 0, tzinfo=timezone.utc)
-        start, end = _adjust_dates_for_timezone(
-            "2026-07-07", "2026-08-06", -330, include_current_utc_day=True, utc_now=ist_evening_utc
-        )
-        assert (start, end) == ("2026-07-07", "2026-08-06")
-
-    def test_missing_offset_stays_pass_through_even_for_live_range(self):
-        start, end = _adjust_dates_for_timezone(
-            "2026-07-06", "2026-08-05", None, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
-        )
-        assert (start, end) == ("2026-07-06", "2026-08-05")
-
-    def test_utc_caller_range_ending_today_is_unchanged(self):
-        utc_noon: Final = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
-        start, end = _adjust_dates_for_timezone(
-            "2026-07-06", "2026-08-05", 0, include_current_utc_day=True, utc_now=utc_noon
-        )
-        assert (start, end) == ("2026-07-06", "2026-08-05")
-
-    def test_future_end_date_extends_no_further_than_requested(self):
-        start, end = _adjust_dates_for_timezone(
-            "2026-07-06", "2026-08-09", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
-        )
-        assert (start, end) == ("2026-07-06", "2026-08-09")
-
-
-class TestBuildAggregatedSqlQuery:
-    """
-    Asserts the SQL emitted by the aggregated query path stays anchored to the
-    user-supplied date range. The original bug shipped a function that returned
-    expanded dates from _adjust_dates_for_timezone, so the regression surface is
-    not just the helper but the SQL it feeds into.
-    """
-
-    @pytest.mark.parametrize("offset_minutes", [None, 0, -330, 480])
-    def test_sql_date_bounds_are_user_supplied_dates(self, offset_minutes):
-        sql, params = _build_aggregated_sql_query(
-            table_name="litellm_dailyuserspend",
-            entity_id_field="user_id",
-            entity_id="user-1",
-            start_date="2026-05-29",
-            end_date="2026-05-29",
-            model=None,
-            api_key=None,
-            timezone_offset_minutes=offset_minutes,
-        )
-
-        assert params[0] == "2026-05-29"
-        assert params[1] == "2026-05-29"
-        assert "date >= $1" in sql
-        assert "date <= $2" in sql
-
-    @pytest.mark.parametrize("build", [_build_aggregated_sql_query, _build_entity_rollup_sql_query])
-    def test_include_current_utc_day_extends_live_end_bound(self, build):
-        """
-        An offset larger than 24h keeps the caller's local date behind UTC at any
-        wall-clock hour, so the live-end extension is deterministic: a range ending
-        on the caller's local today must reach today's UTC bucket (LIT-5818, guards
-        the #36051 behavior on the aggregated path).
-        """
-        offset_minutes: Final = 1500
-        caller_local_today: Final = (datetime.now(timezone.utc) - timedelta(minutes=offset_minutes)).date().isoformat()
-        utc_today: Final = datetime.now(timezone.utc).date().isoformat()
-
-        _sql, params = build(
-            table_name="litellm_dailyuserspend",
-            entity_id_field="user_id",
-            entity_id="user-1",
-            start_date="2026-05-01",
-            end_date=caller_local_today,
-            model=None,
-            api_key=None,
-            timezone_offset_minutes=offset_minutes,
-            include_current_utc_day=True,
-        )
-
-        assert params[0] == "2026-05-01"
-        assert params[1] == utc_today
-
-    def test_optional_filters_appear_in_params_in_order(self):
-        sql, params = _build_aggregated_sql_query(
-            table_name="litellm_dailyuserspend",
-            entity_id_field="user_id",
-            entity_id="user-1",
-            start_date="2026-05-29",
-            end_date="2026-06-02",
-            model="bedrock/global.anthropic.claude-opus-4-8",
-            api_key="sk-test",
-            timezone_offset_minutes=-330,
-        )
-
-        assert params == [
-            "2026-05-29",
-            "2026-06-02",
-            "user-1",
-            "bedrock/global.anthropic.claude-opus-4-8",
-            "sk-test",
-        ]
-        assert "model = $4" in sql
-        assert "api_key = $5" in sql
-
-
-class TestAggregatedEmptyEntityFilter:
-    _BUILDERS: Final = (_build_aggregated_sql_query, _build_entity_rollup_sql_query)
-
-    @pytest.mark.parametrize("build", _BUILDERS)
-    def test_empty_entity_list_emits_no_degenerate_in_clause(self, build):
-        sql, params = build(
-            table_name="litellm_dailyteamspend",
-            entity_id_field="team_id",
-            entity_id=[],
-            start_date="2026-08-01",
-            end_date="2026-08-19",
-            model=None,
-            api_key=None,
-        )
-
-        normalized = " ".join(sql.split())
-        assert "IN ()" not in normalized
-        assert '"team_id" IN' not in normalized
-        assert params == ["2026-08-01", "2026-08-19"]
-
-    @pytest.mark.parametrize("build", _BUILDERS)
-    def test_empty_entity_list_matches_nothing_rather_than_everything(self, build):
-        sql, _ = build(
-            table_name="litellm_dailyteamspend",
-            entity_id_field="team_id",
-            entity_id=[],
-            start_date="2026-08-01",
-            end_date="2026-08-19",
-            model=None,
-            api_key=None,
-        )
-
-        assert "FALSE" in " ".join(sql.split())
-
-    @pytest.mark.parametrize("build", _BUILDERS)
-    def test_populated_entity_list_still_filters_on_its_ids(self, build):
-        sql, params = build(
-            table_name="litellm_dailyteamspend",
-            entity_id_field="team_id",
-            entity_id=["team-alpha", "team-beta"],
-            start_date="2026-08-01",
-            end_date="2026-08-19",
-            model=None,
-            api_key=None,
-        )
-
-        normalized = " ".join(sql.split())
-        assert '"team_id" IN ($3, $4)' in normalized
-        assert "FALSE" not in normalized
-        assert params == ["2026-08-01", "2026-08-19", "team-alpha", "team-beta"]
-
-
 @pytest.mark.asyncio
 async def test_get_daily_activity_aggregated_empty_result_set():
     """Regression test for the empty-range 500.
@@ -1405,6 +1431,7 @@ async def test_get_daily_activity_aggregated_empty_result_set():
             "mcp_namespaced_tool_name": None,
             "endpoint": None,
             "group_level": 127,
+            "distinct_api_keys": None,
             "spend": None,
             "prompt_tokens": None,
             "completion_tokens": None,
@@ -1438,6 +1465,7 @@ async def test_get_daily_activity_aggregated_empty_result_set():
 
     assert result.results == []
     assert result.metadata.total_spend == 0.0
+    assert result.metadata.entity_total_api_keys is None
     assert result.metadata.total_prompt_tokens == 0
     assert result.metadata.total_completion_tokens == 0
     assert result.metadata.total_tokens == 0
@@ -1517,20 +1545,6 @@ class TestEverySavingsDriverSurvivesTheReadPath:
         assert drivers, "expected the dashboard response to expose at least one savings driver"
         return drivers
 
-    def test_every_driver_is_summed_by_the_rollup_query(self):
-        sql, _ = _build_aggregated_sql_query(
-            table_name="litellm_dailyuserspend",
-            entity_id_field="user_id",
-            entity_id="user-1",
-            start_date="2026-07-01",
-            end_date="2026-07-31",
-            model=None,
-            api_key=None,
-            timezone_offset_minutes=None,
-        )
-        for driver in self._drivers():
-            assert f"SUM({driver})" in sql, f"{driver} is never summed, so it reads as zero"
-
     def test_every_driver_is_accumulated_across_rows(self):
         for driver in self._drivers():
             record = _no_spend_record()
@@ -1557,20 +1571,6 @@ class TestResponseTimeSurvivesTheReadPath:
     a single-row conversion, and coalesced when a NULL aggregate comes back."""
 
     _FIELDS = ("total_response_time_ms", "timed_requests")
-
-    def test_both_halves_are_summed_by_the_rollup_query(self):
-        sql, _ = _build_aggregated_sql_query(
-            table_name="litellm_dailyuserspend",
-            entity_id_field="user_id",
-            entity_id="user-1",
-            start_date="2026-09-01",
-            end_date="2026-09-30",
-            model=None,
-            api_key=None,
-            timezone_offset_minutes=None,
-        )
-        for field in self._FIELDS:
-            assert f"SUM({field})" in sql, f"{field} is never summed, so the average reads as zero"
 
     def test_accumulating_rows_keeps_sum_and_count_paired(self):
         first = _no_spend_record()
@@ -1608,6 +1608,12 @@ def ptu_cost_attribution_enabled(monkeypatch):
 def _spend_record(api_key, *, model="gpt-4o-mini-ptu", spend=0.0, ptu_flat_cost=0.0):
     return SimpleNamespace(
         api_key=api_key,
+        user_id=None,
+        team_id=None,
+        tag=None,
+        organization_id=None,
+        end_user_id=None,
+        agent_id=None,
         model=model,
         model_group=None,
         mcp_namespaced_tool_name=None,
@@ -1630,6 +1636,7 @@ def _spend_record(api_key, *, model="gpt-4o-mini-ptu", spend=0.0, ptu_flat_cost=
         successful_requests=0,
         failed_requests=0,
         ptu_flat_cost=ptu_flat_cost,
+        request_id=None,
     )
 
 
@@ -1669,9 +1676,7 @@ def _grouping_row(
     spend=0.0,
     ptu_flat_cost=0.0,
 ):
-    from litellm.proxy.management_endpoints.common_daily_activity import _GroupingSetsRow
-
-    return _GroupingSetsRow(
+    return GroupingSetsRow(
         date="2024-01-01",
         api_key=api_key,
         model=model,
@@ -1680,6 +1685,7 @@ def _grouping_row(
         mcp_namespaced_tool_name=mcp_namespaced_tool_name,
         endpoint=endpoint,
         group_level=group_level,
+        distinct_api_keys=None,
         spend=spend,
         ptu_flat_cost=ptu_flat_cost,
         prompt_tokens=0,
@@ -2186,57 +2192,6 @@ class TestFlagIsNotReadOnTheHotPath:
         assert reads > 0
 
 
-def test_entity_rollup_sql_query_and_api_key_list_filter():
-    """The entity rollup companion query keeps its own two grouping sets keyed
-    by GROUPING(api_key), shares the WHERE builder (list api_key becomes a
-    parameterized IN, an empty list must match nothing), and the main
-    aggregated query stays entity-free."""
-    from litellm.proxy.management_endpoints.common_daily_activity import (
-        _build_entity_rollup_sql_query,
-    )
-
-    sql, params = _build_entity_rollup_sql_query(
-        table_name="litellm_dailyteamspend",
-        entity_id_field="team_id",
-        entity_id=None,
-        start_date="2024-01-01",
-        end_date="2024-01-31",
-        model=None,
-        api_key=["key-1", "key-2"],
-    )
-    assert '"team_id" AS entity_id' in sql
-    assert "GROUPING(api_key) AS api_key_rolled" in sql
-    assert '(date, "team_id"),' in sql
-    assert '(date, "team_id", api_key)' in sql
-    assert "api_key IN ($3, $4)" in sql
-    assert "SUM(ptu_flat_cost)::float" in sql
-    assert params == ["2024-01-01", "2024-01-31", "key-1", "key-2"]
-
-    plain_sql, _ = _build_aggregated_sql_query(
-        table_name="litellm_dailyteamspend",
-        entity_id_field="team_id",
-        entity_id=None,
-        start_date="2024-01-01",
-        end_date="2024-01-31",
-        model=None,
-        api_key=None,
-    )
-    assert "entity_id" not in plain_sql
-    assert "GROUPING(date" in plain_sql
-
-    empty_sql, empty_params = _build_aggregated_sql_query(
-        table_name="litellm_dailyteamspend",
-        entity_id_field="team_id",
-        entity_id=None,
-        start_date="2024-01-01",
-        end_date="2024-01-31",
-        model=None,
-        api_key=[],
-    )
-    assert "FALSE" in empty_sql
-    assert empty_params == ["2024-01-01", "2024-01-31"]
-
-
 @pytest.mark.asyncio
 async def test_get_daily_activity_aggregated_with_entity_breakdown():
     """include_entity_breakdown must run the companion entity rollup query and
@@ -2268,19 +2223,44 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
         "successful_requests": 0,
     }
     main_rows = [
-        {**base, "date": None, "group_level": 127, "spend": 18.0},
-        {**base, "date": "2024-01-01", "group_level": 63, "spend": 18.0},
-        {**base, "date": "2024-01-01", "model": "gpt-4o", "group_level": 47, "spend": 18.0},
-        {**base, "date": "2024-01-01", "api_key": "key-1", "group_level": 31, "spend": 12.0},
+        {**base, "date": None, "group_level": 127, "distinct_api_keys": None, "spend": 18.0},
+        {**base, "date": "2024-01-01", "group_level": 63, "distinct_api_keys": None, "spend": 18.0},
+        {**base, "date": "2024-01-01", "model": "gpt-4o", "group_level": 47, "distinct_api_keys": None, "spend": 18.0},
+        {**base, "date": "2024-01-01", "api_key": "key-1", "group_level": 31, "distinct_api_keys": 1, "spend": 12.0},
     ]
-    entity_base = {
-        key: value
-        for key, value in base.items()
-        if key not in ("model", "model_group", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint")
+    entity_base: Final = {
+        **{
+            key: value
+            for key, value in base.items()
+            if key not in ("model", "model_group", "custom_llm_provider", "mcp_namespaced_tool_name", "endpoint")
+        },
+        "distinct_api_keys": None,
     }
     entity_rows = [
-        {**entity_base, "date": "2024-01-01", "entity_id": "team-a", "api_key_rolled": 1, "spend": 12.0},
-        {**entity_base, "date": "2024-01-01", "entity_id": "team-b", "api_key_rolled": 1, "spend": 6.0},
+        {
+            **entity_base,
+            "date": "2024-01-01",
+            "entity_id": "team-a",
+            "api_key_rolled": 1,
+            "distinct_api_keys": 3,
+            "spend": 12.0,
+        },
+        {
+            **entity_base,
+            "date": "2024-01-01",
+            "entity_id": "team-b",
+            "api_key_rolled": 1,
+            "distinct_api_keys": 2,
+            "spend": 4.0,
+        },
+        {
+            **entity_base,
+            "date": "2024-01-01",
+            "entity_id": None,
+            "api_key_rolled": 1,
+            "distinct_api_keys": 1,
+            "spend": 2.0,
+        },
         {
             **entity_base,
             "date": "2024-01-01",
@@ -2295,7 +2275,17 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
             "entity_id": "team-b",
             "api_key": "key-2",
             "api_key_rolled": 0,
-            "spend": 6.0,
+            "distinct_api_keys": None,
+            "spend": 4.0,
+        },
+        {
+            **entity_base,
+            "date": "2024-01-01",
+            "entity_id": None,
+            "api_key": "key-3",
+            "api_key_rolled": 0,
+            "distinct_api_keys": None,
+            "spend": 2.0,
         },
     ]
 
@@ -2320,22 +2310,25 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
     main_sql = mock_prisma.db.query_raw.call_args_list[0][0][0]
     entity_sql = mock_prisma.db.query_raw.call_args_list[1][0][0]
     assert "entity_id" not in main_sql
-    assert '"team_id" AS entity_id' in entity_sql
-    assert '(date, "team_id"),' in entity_sql
+    assert "COALESCE(\"team_id\", '') AS entity_id" in entity_sql
+    assert "GROUP BY date, COALESCE(\"team_id\", '')" in entity_sql
+    assert '"team_id" AS entity_id' not in entity_sql
 
     assert result.metadata.total_spend == 18.0
+    assert result.metadata.entity_total_api_keys == {"team-a": 3, "team-b": 2, "Unassigned": 1}
     assert len(result.results) == 1
     daily = result.results[0]
     assert daily.metrics.spend == 18.0
 
     entities = daily.breakdown.entities
-    assert set(entities) == {"team-a", "team-b"}
+    assert set(entities) == {"team-a", "team-b", "Unassigned"}
     assert entities["team-a"].metrics.spend == 12.0
     assert entities["team-a"].metadata == {"team_alias": "Alpha"}
     assert entities["team-a"].api_key_breakdown["key-1"].metrics.spend == 12.0
-    assert entities["team-b"].metrics.spend == 6.0
+    assert entities["Unassigned"].api_key_breakdown["key-3"].metrics.spend == 2.0
+    assert entities["team-b"].metrics.spend == 4.0
     assert entities["team-b"].metadata == {}
-    assert entities["team-b"].api_key_breakdown["key-2"].metrics.spend == 6.0
+    assert entities["team-b"].api_key_breakdown["key-2"].metrics.spend == 4.0
 
     # Rollups with the entity bit set must still land in their usual buckets
     assert daily.breakdown.models["gpt-4o"].metrics.spend == 18.0
@@ -2374,17 +2367,17 @@ async def test_get_api_key_metadata_resolves_session_key_via_spend_log_window():
 
 
 def test_spend_logs_window_pads_min_minus_one_day_and_max_plus_two_days():
-    from litellm.proxy.management_endpoints.common_daily_activity import _spend_logs_window
+    from litellm.proxy.management_endpoints.common_daily_activity import spend_logs_window
 
-    window = _spend_logs_window({"2026-09-08", "2026-09-05", "not-a-date"})
+    window = spend_logs_window({"2026-09-08", "2026-09-05", "not-a-date"})
 
     assert window == (datetime(2026, 9, 4), datetime(2026, 9, 10))
 
 
 def test_spend_logs_window_is_none_when_no_date_parses():
-    from litellm.proxy.management_endpoints.common_daily_activity import _spend_logs_window
+    from litellm.proxy.management_endpoints.common_daily_activity import spend_logs_window
 
-    assert _spend_logs_window({"garbage", ""}) is None
+    assert spend_logs_window({"garbage", ""}) is None
 
 
 @pytest.mark.asyncio
@@ -2489,3 +2482,63 @@ async def test_get_api_key_metadata_does_not_recover_daily_spend_owner_for_activ
     assert active_metadata.get("user_email") == "active-owner@example.com"
     assert active_metadata.get("key_exists") is True
     recovery_query_raw.assert_not_awaited()
+
+
+def test_raise_public_maps_invalid_date_range_to_400() -> None:
+    with pytest.raises(HTTPException) as excinfo:
+        raise_public(InvalidDateRange(reason="Date range must be at most 400 days"))
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.detail == {"error": "Date range must be at most 400 days"}
+
+
+@pytest.mark.parametrize("value", ("2026-9-24", "２０２６-09-24", "2026-09-4", "2026-02-30", "20260924", ""))
+def test_parse_canonical_date_rejects_spellings_that_do_not_round_trip(value: str) -> None:
+    assert parse_canonical_date(value) is None
+
+
+def test_parse_canonical_date_accepts_the_exact_yyyy_mm_dd_spelling() -> None:
+    assert parse_canonical_date("2026-09-24") == date(2026, 9, 24)
+    assert parse_canonical_date("0001-01-01") == date(1, 1, 1)
+
+
+def test_parse_canonical_date_range_reports_missing_then_malformed_dates() -> None:
+    assert parse_canonical_date_range(None, "2026-09-24") == InvalidDateRange(
+        reason="Please provide start_date and end_date"
+    )
+    assert parse_canonical_date_range("2026-09-24", "2026-9-26") == InvalidDateRange(
+        reason="start_date and end_date must be valid YYYY-MM-DD dates"
+    )
+    assert parse_canonical_date_range("2026-09-24", "2026-09-26") == CanonicalDateRange(
+        start=date(2026, 9, 24), end=date(2026, 9, 26)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("start_date", ("2026-9-24", "２０２６-09-24", "2026-09-4"))
+async def test_get_daily_activity_rejects_non_canonical_dates_before_querying(start_date: str) -> None:
+    mock_prisma = MagicMock()
+    mock_prisma.db = MagicMock()
+    mock_table = MagicMock()
+    mock_table.count = AsyncMock(return_value=0)
+    mock_table.find_many = AsyncMock(return_value=[])
+    mock_prisma.db.litellm_dailyteamspend = mock_table
+
+    with pytest.raises(HTTPException) as error:
+        await get_daily_activity(
+            prisma_client=mock_prisma,
+            table_name="litellm_dailyteamspend",
+            entity_id_field="team_id",
+            entity_id="team-a",
+            entity_metadata_field=None,
+            start_date=start_date,
+            end_date="2026-09-26",
+            model=None,
+            api_key=None,
+            page=1,
+            page_size=10,
+        )
+
+    assert error.value.status_code == 400
+    assert error.value.detail == {"error": "start_date and end_date must be valid YYYY-MM-DD dates"}
+    mock_table.count.assert_not_awaited()
+    mock_table.find_many.assert_not_awaited()

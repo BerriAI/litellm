@@ -127,6 +127,45 @@ describe("UISettings", () => {
     expect(toast.success).toHaveBeenCalledWith("UI settings updated successfully");
   });
 
+  it("disconnects Moyai by patching moyai_url to null", () => {
+    const mutateMock = vi.fn((_settings, options) => {
+      options?.onSuccess?.();
+    });
+
+    mockUseUpdateUISettings.mockReturnValue({
+      mutate: mutateMock,
+      isPending: false,
+      error: null,
+    });
+    mockUseUISettings.mockReturnValue(
+      buildSettingsResponse({
+        data: {
+          ...buildSettingsResponse().data,
+          values: { ...buildSettingsResponse().data.values, moyai_url: "https://moyai.example.com" },
+        },
+      }),
+    );
+
+    render(<UISettings />);
+
+    expect(screen.getByText("Connected to https://moyai.example.com")).toBeInTheDocument();
+    act(() => {
+      fireEvent.click(screen.getByRole("button", { name: "Disconnect" }));
+    });
+
+    expect(mutateMock).toHaveBeenCalledWith(
+      { moyai_url: null },
+      expect.objectContaining({ onSuccess: expect.any(Function) }),
+    );
+  });
+
+  it("shows a link to the Moyai page when not connected", () => {
+    render(<UISettings />);
+
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Connect from the Moyai page" })).toHaveAttribute("href", "/ui/moyai");
+  });
+
   it("should toggle require auth for public AI Hub setting and call update", () => {
     const mutateMock = vi.fn((_settings, options) => {
       options?.onSuccess?.();

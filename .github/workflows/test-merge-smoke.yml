@@ -1,4 +1,4 @@
-name: Merge smoke checks
+name: smoke
 
 on:
   pull_request:
@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   dashboard-build:
-    name: Dashboard build
+    name: dashboard-build
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     steps:
@@ -27,7 +27,7 @@ jobs:
         run: docker build --target ui-builder -f Dockerfile .
 
   core-checks:
-    name: Core checks (Python ${{ matrix.python-version }})
+    name: py${{ matrix.python-version }}
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     strategy:
@@ -79,9 +79,6 @@ jobs:
       - name: Proxy startup check
         run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py proxy-startup --diagnostics-dir "${RUNNER_TEMP}/smoke-diagnostics"
 
-      - name: Run curated smoke cases
-        run: $IN_NETNS .venv/bin/python .github/scripts/run_merge_smoke.py pytest --manifest .github/merge-smoke-tests.json
-
       - name: Upload smoke diagnostics
         if: always()
         uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
@@ -93,3 +90,167 @@ jobs:
       - name: Remove the network namespace
         if: always()
         run: sudo ip netns delete smoke
+
+  all-extras:
+    name: all-extras-py${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13"]
+    env:
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Install every extra and dependency group
+        run: .github/scripts/uv_sync_with_retries.sh --frozen --all-groups --all-extras --python ${{ matrix.python-version }}
+
+      - name: Import the SDK, the proxy server and the enterprise package
+        run: .venv/bin/python -c "import litellm, litellm.proxy.proxy_server, litellm_enterprise"
+
+  windows-sdk:
+    name: windows-sdk
+    runs-on: windows-2025
+    timeout-minutes: 10
+    env:
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.11"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Install dependencies
+        run: .github/scripts/uv_sync_with_retries.sh --frozen --no-install-workspace --group dev --python 3.11
+
+      - name: Run the Windows tests
+        run: uv run --no-sync python -m pytest --tb=short -v tests/windows_tests
+
+  proxy-build-from-pip:
+    name: proxy-build-from-pip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: circle_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Install the test client dependencies
+        run: .github/scripts/uv_sync_with_retries.sh --frozen --no-install-workspace --extra proxy --group dev --python 3.12
+
+      - name: Build the image from the published package
+        run: docker build -t litellm-build-from-pip:smoke -f docker/build_from_pip/Dockerfile.build_from_pip .
+
+      - name: Start the fake OpenAI endpoint
+        run: |
+          nohup .venv/bin/python tests/_fake_openai_endpoint_server.py --host 0.0.0.0 --port 8190 > "${RUNNER_TEMP}/fake-openai.log" 2>&1 &
+          for _ in $(seq 1 30); do
+            curl -sf http://localhost:8190/health > /dev/null && exit 0
+            sleep 1
+          done
+          cat "${RUNNER_TEMP}/fake-openai.log"
+          exit 1
+
+      - name: Generate a master key
+        run: |
+          key="sk-$(openssl rand -hex 16)"
+          echo "::add-mask::${key}"
+          echo "LITELLM_MASTER_KEY=${key}" >> "${GITHUB_ENV}"
+
+      - name: Start the proxy container
+        run: |
+          docker run -d \
+            -p 4000:4000 \
+            -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
+            -e LITELLM_MASTER_KEY \
+            -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
+            -e OTEL_EXPORTER=in_memory \
+            -e USE_DDTRACE=True \
+            -e GCS_FLUSH_INTERVAL=1 \
+            -e LITELLM_LOG=ERROR \
+            --add-host host.docker.internal:host-gateway \
+            --name litellm-build-from-pip \
+            -v "${GITHUB_WORKSPACE}/docker/build_from_pip/litellm_config.yaml:/app/config.yaml" \
+            litellm-build-from-pip:smoke \
+            --config /app/config.yaml \
+            --port 4000
+          for _ in $(seq 1 150); do
+            curl -sf --max-time 5 -o /dev/null http://localhost:4000 && exit 0
+            sleep 2
+          done
+          exit 1
+
+      - name: Run the startup tests
+        run: .venv/bin/python -m pytest --tb=short -vv tests/basic_proxy_startup_tests
+
+      - name: Show the proxy logs
+        if: always()
+        run: docker logs litellm-build-from-pip || true
+
+  smoke-passed:
+    name: smoke passed
+    needs: [dashboard-build, core-checks, all-extras, windows-sdk, proxy-build-from-pip]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    permissions: {}
+    steps:
+      - name: Require every smoke job to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
+          jq -e 'all(.[]; .result == "success")' <<< "$NEEDS" > /dev/null

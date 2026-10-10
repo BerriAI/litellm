@@ -558,7 +558,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         returned_response.model = "snowflake/" + (returned_response.model or "")
 
         if model is not None:
-            returned_response._hidden_params["model"] = model
+            returned_response.hidden_params["model"] = model
 
         return returned_response
 
@@ -623,7 +623,7 @@ class SnowflakeConfig(SnowflakeBaseConfig, OpenAIGPTConfig):
         model_response.id = response_json.get("id", "")
 
         if model is not None:
-            model_response._hidden_params["model"] = model
+            model_response.hidden_params["model"] = model
 
         return model_response
 
