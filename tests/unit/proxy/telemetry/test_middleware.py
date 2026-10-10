@@ -1,13 +1,13 @@
-from collections.abc import Coroutine
+from collections.abc import Callable, Coroutine
 from dataclasses import dataclass
 from typing import Final
 
 import pytest
+from httpx import ASGITransport, AsyncClient
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route
-from httpx import ASGITransport, AsyncClient
 
 from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.request_context import AttemptObservation, current_request
@@ -90,7 +90,9 @@ async def _rejected(request: Request) -> Response:
     return JSONResponse({"error": "bad key"}, status_code=401)
 
 
-def _client(sink: _RecordingSink, spawned: _Spawned, *, settle_timeout_s: float = 0.0) -> AsyncClient:
+def _client(
+    sink: _RecordingSink | Callable[[], _RecordingSink | None], spawned: _Spawned, *, settle_timeout_s: float = 0.0
+) -> AsyncClient:
     app: Final = Starlette(
         routes=[
             Route("/v1/chat/completions", _retried_then_served, methods=["POST"]),
@@ -101,7 +103,11 @@ def _client(sink: _RecordingSink, spawned: _Spawned, *, settle_timeout_s: float 
         ]
     )
     wrapped: Final = TelemetryMiddleware(
-        app, sink_provider=lambda: sink, spawn=spawned, settle_timeout_s=lambda: settle_timeout_s, clock=_Clock()
+        app,
+        sink_provider=sink if callable(sink) else lambda: sink,
+        spawn=spawned,
+        settle_timeout_s=lambda: settle_timeout_s,
+        clock=_Clock(),
     )
     return AsyncClient(transport=ASGITransport(app=wrapped), base_url="http://proxy")
 
@@ -180,3 +186,18 @@ async def test_only_a_response_carrying_the_rust_header_counts_as_handled_by_rus
         ("/responses", True),
         ("/v1/messages", False),
     ]
+
+
+@pytest.mark.asyncio
+async def test_a_request_finishing_after_the_groups_change_is_recorded_into_the_current_sink() -> None:
+    before: Final = _RecordingSink()
+    after: Final = _RecordingSink()
+    sinks: Final = [before]  # mutable-ok: the runtime swaps its sink between windows
+    spawned: Final = _Spawned()
+    async with _client(lambda: sinks[-1], spawned) as client:
+        response: Final = await client.post("/v1/chat/completions", json={})
+    assert response.status_code == 200, response.text
+    sinks.append(after)
+    await spawned.drain()
+
+    assert (before.requests, len(after.requests)) == ((), 1)

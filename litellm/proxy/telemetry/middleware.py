@@ -162,17 +162,19 @@ class TelemetryMiddleware:
         finally:
             current_request.reset(token)
             header_keys: Final = frozenset(name.decode("latin-1").lower() for name, _ in _headers(scope))
-            self._spawn(self._finish(sink, classification[1], observer.timing(), header_keys, accumulator))
+            self._spawn(self._finish(classification[1], observer.timing(), header_keys, accumulator))
 
     async def _finish(
         self,
-        sink: TelemetrySink,
         endpoint: str,
         timing: ResponseTiming,
         header_keys: frozenset[str],
         accumulator: RequestAccumulator,
     ) -> None:
         await accumulator.wait_for_success(self._settle_timeout_s())
+        sink: Final = self._sink_provider()
+        if sink is None:
+            return
         try:
             sink.record_request(
                 build_request_record(
