@@ -214,6 +214,10 @@ from litellm.router_utils.cooldown_handlers import (
     is_caller_timeout_408,
     set_cooldown_deployments,
 )
+from litellm.router_utils.embedding_batch_size_check import (
+    effective_embedding_input,
+    raise_if_embedding_batch_too_large,
+)
 from litellm.router_utils.fallback_event_handlers import (
     MID_STREAM_FALLBACK_CONTROLS_KEY,
     AttemptedFallbackTargets,
@@ -6233,6 +6237,13 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data: Final = deployment["litellm_params"].copy()
             model_name = data["model"]
+            custom_llm_provider: Final = data.get("custom_llm_provider")
+            raise_if_embedding_batch_too_large(
+                input=effective_embedding_input(input, kwargs.get("extra_body", data.get("extra_body"))),
+                model_info=kwargs["model_info"],
+                model=model,
+                llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else "",
+            )
 
             potential_model_client: Final = self._get_client(deployment=deployment, kwargs=kwargs, client_type="sync")
             # check if provided keys == client keys #
@@ -6309,6 +6320,13 @@ class Router:
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs)
             data: Final = deployment["litellm_params"].copy()
             model_name = data["model"]
+            custom_llm_provider: Final = data.get("custom_llm_provider")
+            raise_if_embedding_batch_too_large(
+                input=effective_embedding_input(input, kwargs.get("extra_body", data.get("extra_body"))),
+                model_info=kwargs["model_info"],
+                model=model,
+                llm_provider=custom_llm_provider if isinstance(custom_llm_provider, str) else "",
+            )
             model_client: Final = self._get_async_openai_model_client(
                 deployment=deployment,
                 kwargs=kwargs,
