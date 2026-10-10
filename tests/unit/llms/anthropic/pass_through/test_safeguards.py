@@ -115,8 +115,8 @@ class _TextPartsClassifier:
         self._parts = parts
 
     async def __call__(self, *, messages: Sequence[Mapping[str, object]], **kwargs: object) -> ModelResponse:
-        text_parts: Final = Message.model_construct(
-            role="assistant", content=[{"type": "text", "text": part} for part in self._parts]
+        text_parts: Final = Message().model_copy(
+            update={"content": [{"type": "text", "text": part} for part in self._parts]}
         )
         return ModelResponse(choices=[Choices(index=0, finish_reason="stop", message=text_parts)])
 
