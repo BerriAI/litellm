@@ -7647,7 +7647,7 @@ class ProxyConfig:
         proxy_logging_obj: ProxyLogging,
         *,
         config_loader: Callable[[], Awaitable[Mapping[str, object]]] | None = None,
-        model_decryptor: Callable[[Sequence[object]], Sequence[object]] | None = None,
+        model_decryptor: Callable[[Sequence[object]], Sequence[DeploymentTypedDict]] | None = None,
         router_settings_loader: Callable[[Router | None, PrismaClient | None], Awaitable[None]] | None = None,
     ) -> frozenset[str] | None:
         global llm_router, llm_model_list, master_key, general_settings
@@ -7658,9 +7658,10 @@ class ProxyConfig:
         config_data: dict | None = None
         search_tools = None
         try:
-            config_data = await (  # rebind-ok: config load is intentionally isolated
+            loaded_config = await (  # rebind-ok: normalize injected and production config loaders
                 config_loader() if config_loader is not None else proxy_config.get_config()
-            )
+            )  # noqa: LIT010  # isolate the injected config-loading boundary
+            config_data = dict(loaded_config)  # rebind-ok: adapt mapping loader output for legacy consumers
             search_tools = self.parse_search_tools(config_data)
         except Exception as e:
             verbose_proxy_logger.warning(
@@ -7679,11 +7680,15 @@ class ProxyConfig:
                 )
                 return
 
-            models_list: Final[list] = new_models if isinstance(new_models, list) else []
+            models_list: Final[list[object]] = (
+                cast(list[object], new_models)  # cast-ok: JSON list contains DB model records at this boundary
+                if isinstance(new_models, list)
+                else []
+            )
             if llm_router is None and master_key is not None:
                 verbose_proxy_logger.debug("len new_models: %s", len(models_list))
 
-                _model_list: Final[Sequence[object]] = (
+                _model_list: Final[Sequence[DeploymentTypedDict]] = (
                     model_decryptor(models_list)
                     if model_decryptor is not None
                     else self.decrypt_model_list_from_db(new_models=models_list)

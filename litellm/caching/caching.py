@@ -446,9 +446,9 @@ class Cache:
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
         else:
-            cache_key += self._get_proxy_cache_scope(
+            cache_key += self._get_proxy_cache_scope(  # rebind-ok: append authenticated proxy scope to the cache key
                 cast(Mapping[str, object], kwargs)  # cast-ok: cache kwargs are string-keyed
-            )
+            )  # noqa: LIT010  # preserve the existing cache-key assembly path
 
         hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)
