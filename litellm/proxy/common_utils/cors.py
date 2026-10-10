@@ -33,7 +33,7 @@ def get_cors_config(
         return origins, credentials_raw.strip().lower() == "true"
     credentials: Final = current_settings.get("cors_allow_credentials")
     if credentials is not None:
-        return origins, _BOOLEAN.validate_python(credentials, strict=True)
+        return origins, _BOOLEAN.validate_python(credentials, strict=True) and "*" not in origins
     return origins, "*" not in origins
 
 

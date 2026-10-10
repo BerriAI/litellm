@@ -267,3 +267,62 @@ def test_implicit_credentials_follow_effective_origin_policy(cors_client):
     response = preflight(client)
     assert response.headers["access-control-allow-origin"] == "*"
     assert "access-control-allow-credentials" not in response.headers
+
+
+@pytest.mark.parametrize("origins", [None, ["*"], ["https://trusted.example", "*"]])
+def test_yaml_credentials_cannot_enable_wildcard_policy(cors_client, origins):
+    client, settings = cors_client
+    settings["cors_allow_credentials"] = True
+    if origins is None:
+        del settings["cors_allow_origins"]
+    else:
+        settings["cors_allow_origins"] = origins
+    response = preflight(client, origin="https://untrusted.example")
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert "access-control-allow-credentials" not in response.headers
+    response = client.get("/ping", headers={"Origin": "https://untrusted.example", "Cookie": "session=fixture"})
+    assert response.status_code == 200
+    assert "access-control-allow-credentials" not in response.headers
+
+
+@pytest.mark.parametrize("origins_env", ["", "   ", "\t", "*"])
+def test_empty_or_wildcard_environment_disables_yaml_credentials(cors_client, monkeypatch, origins_env):
+    client, settings = cors_client
+    settings["cors_allow_credentials"] = True
+    monkeypatch.setenv("LITELLM_CORS_ORIGINS", origins_env)
+    response = preflight(client, origin="https://untrusted.example")
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == "*"
+    assert "access-control-allow-credentials" not in response.headers
+    response = client.get("/ping", headers={"Origin": "https://untrusted.example", "Cookie": "session=fixture"})
+    assert "access-control-allow-credentials" not in response.headers
+
+
+def test_explicit_yaml_origins_allow_credentials_only_for_listed_origin(cors_client):
+    client, settings = cors_client
+    settings["cors_allow_credentials"] = True
+    response = preflight(client)
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-credentials"] == "true"
+    response = preflight(client, origin="https://untrusted.example")
+    assert response.status_code == 400
+    assert "access-control-allow-origin" not in response.headers
+    response = client.get("/ping", headers={"Origin": "https://untrusted.example", "Cookie": "session=fixture"})
+    assert "access-control-allow-origin" not in response.headers
+
+
+@pytest.mark.parametrize("credentials_env", ["true", "false"])
+def test_explicit_environment_credentials_override_yaml_wildcard_guard(cors_client, monkeypatch, credentials_env):
+    client, settings = cors_client
+    settings["cors_allow_origins"] = ["*"]
+    settings["cors_allow_credentials"] = credentials_env == "false"
+    monkeypatch.setenv("LITELLM_CORS_ALLOW_CREDENTIALS", credentials_env)
+    response = preflight(client, origin="https://untrusted.example")
+    assert response.status_code == 200
+    if credentials_env == "true":
+        assert response.headers["access-control-allow-origin"] == "https://untrusted.example"
+        assert response.headers["access-control-allow-credentials"] == "true"
+    else:
+        assert response.headers["access-control-allow-origin"] == "*"
+        assert "access-control-allow-credentials" not in response.headers
