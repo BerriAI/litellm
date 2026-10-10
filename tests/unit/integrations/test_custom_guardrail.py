@@ -3651,3 +3651,104 @@ def test_subclass_that_skips_super_init_still_runs_with_default_scope():
             self.default_on = True
 
     assert NoSuperInit().should_run_guardrail({"stream": True}, GuardrailEventHooks.pre_call) is True
+
+
+def test_get_guardrail_from_metadata() -> None:
+    guardrail: Final = CustomGuardrail(guardrail_name="test-guardrail")
+
+    assert guardrail.get_guardrail_from_metadata({}) == []
+    assert guardrail.get_guardrail_from_metadata(
+        {"metadata": {"guardrails": ["guardrail1", "guardrail2"]}}
+    ) == ["guardrail1", "guardrail2"]
+    assert guardrail.get_guardrail_from_metadata(
+        {"metadata": {"guardrails": [{"test-guardrail": {"extra_body": {"key": "value"}}}]}}
+    ) == [{"test-guardrail": {"extra_body": {"key": "value"}}}]
+
+
+def test_guardrail_is_in_requested_guardrails() -> None:
+    guardrail: Final = CustomGuardrail(guardrail_name="test-guardrail")
+
+    assert guardrail._guardrail_is_in_requested_guardrails(["test-guardrail", "other"]) is True
+    assert guardrail._guardrail_is_in_requested_guardrails(["other"]) is False
+    assert guardrail._guardrail_is_in_requested_guardrails(
+        [{"test-guardrail": {"extra_body": {"extra_key": "extra_value"}}}]
+    ) is True
+    assert guardrail._guardrail_is_in_requested_guardrails(
+        [
+            {
+                "other-guardrail": {"extra_body": {"extra_key": "extra_value"}},
+                "test-guardrail": {"extra_body": {"extra_key": "extra_value"}},
+            }
+        ]
+    ) is True
+    assert guardrail._guardrail_is_in_requested_guardrails(
+        [{"other-guardrail": {"extra_body": {"extra_key": "extra_value"}}}]
+    ) is False
+
+
+def test_should_run_guardrail() -> None:
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="test-guardrail", event_hook=GuardrailEventHooks.pre_call
+    )
+
+    assert (
+        guardrail.should_run_guardrail(
+            {"metadata": {"guardrails": ["test-guardrail"]}},
+            GuardrailEventHooks.pre_call,
+        )
+        is True
+    )
+    assert (
+        guardrail.should_run_guardrail(
+            {"metadata": {"guardrails": ["test-guardrail"]}},
+            GuardrailEventHooks.during_call,
+        )
+        is False
+    )
+    assert (
+        guardrail.should_run_guardrail(
+            {"metadata": {"guardrails": ["other-guardrail"]}},
+            GuardrailEventHooks.pre_call,
+        )
+        is False
+    )
+
+
+def test_get_guardrail_dynamic_request_body_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    guardrail: Final = CustomGuardrail(guardrail_name="test-guardrail")
+
+    assert guardrail.get_guardrail_dynamic_request_body_params(
+        {"metadata": {"guardrails": [{"test-guardrail": {}}]}}
+    ) == {}
+    assert guardrail.get_guardrail_dynamic_request_body_params(
+        {"metadata": {"guardrails": [{"test-guardrail": {"extra_body": {"key": "value"}}}]}}
+    ) == {"key": "value"}
+    assert guardrail.get_guardrail_dynamic_request_body_params(
+        {"metadata": {"guardrails": [{"other-guardrail": {"extra_body": {"key": "value"}}}]}}
+    ) == {}
+
+
+def test_default_on_guardrail() -> None:
+    guardrail: Final = CustomGuardrail(
+        guardrail_name="test-guardrail",
+        event_hook=GuardrailEventHooks.pre_call,
+        default_on=True,
+    )
+
+    assert guardrail.should_run_guardrail({"metadata": {}}, GuardrailEventHooks.pre_call) is True
+    assert guardrail.should_run_guardrail({"metadata": {}}, GuardrailEventHooks.post_call) is False
+    assert (
+        guardrail.should_run_guardrail(
+            {"metadata": {"guardrails": ["test-guardrail-5"]}},
+            GuardrailEventHooks.pre_call,
+        )
+        is True
+    )
+    assert (
+        guardrail.should_run_guardrail(
+            {"metadata": {"guardrails": []}},
+            GuardrailEventHooks.pre_call,
+        )
+        is True
+    )

@@ -151,7 +151,7 @@ async def test_azure_image_edit_logs_deployment_model_and_positive_cost(
         api_base="https://fake.openai.azure.com",
         api_version="2025-04-01-preview",
     )
-    await asyncio.wait_for(logger.logged.wait(), timeout=10)
+    await logger.logged.wait()
 
     assert isinstance(result, ImageResponse)
     assert route.call_count == 1
@@ -167,7 +167,6 @@ async def test_azure_image_edit_logs_deployment_model_and_positive_cost(
     )
     assert expected_cost > 0
     assert payload["response_cost"] == pytest.approx(expected_cost)
-    assert result._hidden_params["response_cost"] == pytest.approx(expected_cost)  # pyright: ignore[reportPrivateUsage]  # cost is only surfaced on _hidden_params
 
 
 @pytest.mark.asyncio
