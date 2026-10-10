@@ -13,40 +13,45 @@ from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
 
+ANTHROPIC_MODEL: Final = "anthropic/claude-fable-5-1"
+AZURE_AI_MODEL: Final = "azure_ai/claude-fable-5-1"
+VERTEX_AI_MODEL: Final = "vertex_ai/claude-fable-5-1"
+BEDROCK_CONVERSE_MODEL: Final = "bedrock/converse/us.anthropic.claude-fable-5-1"
+BEDROCK_INVOKE_MODEL: Final = "bedrock/invoke/us.anthropic.claude-opus-4-6-v1"
 CHAT_ROUTES: Final = (
     pytest.param(
         "anthropic_direct",
-        "anthropic/claude-fable-5-1",
+        ANTHROPIC_MODEL,
         ("ANTHROPIC_API_KEY",),
         id="anthropic-direct",
         marks=pytest.mark.covers("llm.chat_completions.anthropic.thinking.nonstream.works"),
     ),
     pytest.param(
         "azure_ai",
-        "azure_ai/claude-fable-5-1",
+        AZURE_AI_MODEL,
         ("AZURE_AI_API_BASE", "AZURE_AI_API_KEY"),
         id="azure-ai",
     ),
     pytest.param(
         "vertex_ai",
-        "vertex_ai/claude-fable-5-1",
+        VERTEX_AI_MODEL,
         ("VERTEXAI_PROJECT", "VERTEXAI_CREDENTIALS", "VERTEXAI_LOCATION"),
         id="vertex-ai",
     ),
     pytest.param(
         "bedrock_converse",
-        "bedrock/converse/us.anthropic.claude-fable-5-1",
+        BEDROCK_CONVERSE_MODEL,
         ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"),
         id="bedrock-converse",
     ),
     pytest.param(
         "bedrock_invoke_chat",
-        "bedrock/invoke/us.anthropic.claude-opus-4-6-v1",
+        BEDROCK_INVOKE_MODEL,
         ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"),
         id="bedrock-invoke-chat",
     ),
 )
-MESSAGE_MODEL: Final = "bedrock/invoke/us.anthropic.claude-opus-4-6-v1"
+MESSAGE_MODEL: Final = BEDROCK_INVOKE_MODEL
 
 
 def _deployment_params(route_name: str, model: str) -> LiteLLMParamsBody:
@@ -89,11 +94,11 @@ class TestReasoningEffort:
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.ANTHROPIC, Provider.AZURE_AI, Provider.VERTEX_AI, Provider.BEDROCK),
             models=(
-                "anthropic/claude-fable-5-1",
-                "azure_ai/claude-fable-5-1",
-                "vertex_ai/claude-fable-5-1",
-                "bedrock/converse/us.anthropic.claude-fable-5-1",
-                "bedrock/invoke/us.anthropic.claude-opus-4-6-v1",
+                ANTHROPIC_MODEL,
+                AZURE_AI_MODEL,
+                VERTEX_AI_MODEL,
+                BEDROCK_CONVERSE_MODEL,
+                BEDROCK_INVOKE_MODEL,
             ),
             capabilities=(Capability.REASONING,),
             mode=Mode.NONSTREAM,
