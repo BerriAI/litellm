@@ -3309,7 +3309,7 @@ class Logging(LiteLLMLoggingBaseClass):
                         input_cost=batch_prompt_cost,
                         output_cost=batch_completion_cost,
                         total_cost=batch_cost,
-                        cost_for_built_in_tools_cost_usd_dollar=0.0,
+                        cost_for_built_in_tools_cost_usd_dollar=kwargs.get("batch_tool_cost", 0.0),
                     )
 
             elif should_compute_batch_data:
@@ -3330,7 +3330,7 @@ class Logging(LiteLLMLoggingBaseClass):
                     input_cost=batch_result.prompt_cost,
                     output_cost=batch_result.completion_cost,
                     total_cost=batch_result.cost,
-                    cost_for_built_in_tools_cost_usd_dollar=0.0,
+                    cost_for_built_in_tools_cost_usd_dollar=batch_result.tool_cost,
                 )
 
         self.truncated_messages_for_logging = await truncate_base64_in_messages_async(
