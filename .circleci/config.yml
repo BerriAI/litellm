@@ -808,7 +808,7 @@ jobs:
       - *python312_image
     working_directory: ~/project
     resource_class: large
-    parallelism: 4
+    parallelism: 1
     environment:
       FAKE_OPENAI_API_BASE: http://127.0.0.1:8190
     steps:
