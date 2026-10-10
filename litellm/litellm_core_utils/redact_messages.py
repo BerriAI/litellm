@@ -79,6 +79,8 @@ def _redact_streaming_response(streaming_response):
         redact_vertex_ai_metadata_from_logged_object(streaming_response)
     elif hasattr(streaming_response, "output"):
         _redact_responses_api_output(streaming_response.output)
+        if getattr(streaming_response, "instructions", None) is not None:
+            streaming_response.instructions = REDACTED_BY_LITELLM  # rebind-ok: redact the logged stream in place
         if hasattr(streaming_response, "reasoning") and streaming_response.reasoning is not None:
             streaming_response.reasoning = None
 
@@ -195,7 +197,8 @@ def _redact_standard_logging_object(payload: Mapping[str, object]) -> dict[str, 
     response: Final = standard_logging_object.get("response")
     if response is not None:
         if isinstance(response, dict) and "output" in response:
-            # ResponsesAPIResponse format - redact content in output items
+            if "instructions" in response and response["instructions"] is not None:
+                response["instructions"] = redacted_str
             if isinstance(response.get("output"), list):
                 _redact_responses_api_output_dict(response["output"], redacted_str)
             redact_vertex_ai_metadata_from_logged_object(response)
@@ -330,11 +333,15 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
                 _redact_model_response_dict_choices(_result["choices"], REDACTED_BY_LITELLM)
             redact_vertex_ai_metadata_from_logged_object(_result)
         elif isinstance(_result, dict) and "output" in _result:
+            if "instructions" in _result and _result["instructions"] is not None:
+                _result["instructions"] = REDACTED_BY_LITELLM
             if isinstance(_result.get("output"), list):
                 _redact_responses_api_output_dict(_result["output"], REDACTED_BY_LITELLM)
         elif isinstance(_result, litellm.ResponsesAPIResponse):
             if hasattr(_result, "output"):
                 _redact_responses_api_output(_result.output)
+            if getattr(_result, "instructions", None) is not None:
+                _result.instructions = REDACTED_BY_LITELLM
             # Redact reasoning field in ResponsesAPIResponse
             if hasattr(_result, "reasoning") and _result.reasoning is not None:
                 _result.reasoning = None

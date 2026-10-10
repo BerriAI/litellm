@@ -910,7 +910,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         import litellm
         from litellm import Choices, Message, ModelResponse
         from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS
-        from litellm.litellm_core_utils.redact_messages import redacted_litellm_params
+        from litellm.litellm_core_utils.redact_messages import (
+            redacted_litellm_params,
+            redacted_standard_logging_payload,
+        )
 
         turn_off_message_logging: Final[bool] = getattr(self, "turn_off_message_logging", False)
         excluded_fields: Final[list[str] | None] = getattr(litellm, "standard_logging_payload_excluded_fields", None)
@@ -945,22 +948,12 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
             if "response" not in (excluded_fields or ()) and standard_logging_object_copy.get("response") is not None:
                 response: Final = standard_logging_object_copy["response"]
-                # Check if this is a ResponsesAPIResponse (has "output" field)
                 if isinstance(response, dict) and "output" in response:
-                    # Make a copy to avoid modifying the original
-                    from copy import deepcopy
-
-                    response_copy: Final = deepcopy(response)
-                    # Redact content in output array
-                    if isinstance(response_copy.get("output"), list):
-                        for output_item in response_copy["output"]:
-                            if isinstance(output_item, dict) and "content" in output_item:
-                                if isinstance(output_item["content"], list):
-                                    # Redact text in content items
-                                    for content_item in output_item["content"]:
-                                        if isinstance(content_item, dict) and "text" in content_item:
-                                            content_item["text"] = redacted_str
-                    standard_logging_object_copy["response"] = response_copy
+                    redaction_payload: Final[dict[str, object]] = {}  # mutable-ok: populate the typed wrapper once
+                    redaction_payload["response"] = response
+                    standard_logging_object_copy["response"] = redacted_standard_logging_payload(redaction_payload)[
+                        "response"
+                    ]
                 else:
                     # Standard ModelResponse format
                     model_response: Final = ModelResponse(choices=[Choices(message=Message(content=redacted_str))])
