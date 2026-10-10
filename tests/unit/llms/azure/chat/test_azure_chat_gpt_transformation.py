@@ -685,3 +685,71 @@ async def test_aaaaazure_tenant_id_auth(respx_mock: MockRouter):
             "model": "gpt-4.1-mini",
             "stream": False,
         }
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_chat_completion_preserves_safety_result(respx_mock: MockRouter) -> None:
+    url: Final = "https://example-resource.openai.azure.com/openai/deployments/gpt-4.1-mini/chat/completions"
+    content_filter_results: Final = {
+        "hate": {"filtered": False, "severity": "safe"},
+        "violence": {"filtered": False, "severity": "safe"},
+    }
+    payload: Final = {
+        "id": "chatcmpl-safety",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4.1-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+                "content_filter_results": content_filter_results,
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+    }
+    route: Final = respx_mock.post(url__startswith=url).mock(return_value=httpx.Response(200, json=payload))
+    response: Final = litellm.completion(
+        model="azure/gpt-4.1-mini",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://example-resource.openai.azure.com",
+        api_key="azure-test-key",
+        api_version="2024-12-01-preview",
+    )
+
+    assert route.call_count == 1
+    assert response.choices[0].message.content == "Hello"
+    assert response.choices[0].provider_specific_fields == {"content_filter_results": content_filter_results}
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_deployment_id_selects_chat_completions_endpoint(respx_mock: MockRouter) -> None:
+    url: Final = "https://example-resource.openai.azure.com/openai/deployments/deployment-gpt-4o/chat/completions"
+    payload: Final = {
+        "id": "chatcmpl-deployment",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "deployment-gpt-4o",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "Hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+    }
+    route: Final = respx_mock.post(url__startswith=url).mock(return_value=httpx.Response(200, json=payload))
+    response: Final = litellm.completion(
+        model="gpt-3.5-turbo",
+        deployment_id="deployment-gpt-4o",
+        messages=[{"role": "user", "content": "Hello"}],
+        api_base="https://example-resource.openai.azure.com",
+        api_key="azure-test-key",
+        api_version="2024-12-01-preview",
+    )
+
+    assert route.call_count == 1
+    assert route.calls[0].request.url.path.endswith("/deployments/deployment-gpt-4o/chat/completions")
+    assert response.choices[0].message.content == "Hello"

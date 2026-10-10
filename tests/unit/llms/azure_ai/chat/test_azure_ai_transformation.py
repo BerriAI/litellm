@@ -1,8 +1,11 @@
 import json
 import traceback
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
+import respx
+from httpx import Response
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -104,6 +107,96 @@ def test_azure_ai_validate_environment_with_api_key():
     )
     assert headers["api-key"] == "test-api-key"
     assert headers["Content-Type"] == "application/json"
+
+
+def test_azure_ai_request_body_preserves_messages_and_model() -> None:
+    messages: Final = [{"role": "user", "content": "hi"}]
+    request: Final = AzureAIStudioConfig().transform_request(
+        model="azure_ai/gpt-4.1-mini",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+
+    assert request == {"model": "azure_ai/gpt-4.1-mini", "messages": messages}
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_model_router_stream_chunks_report_selected_model(respx_mock: respx.MockRouter) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    stream_body: Final = (
+        'data: {"id":"chatcmpl-router","object":"chat.completion.chunk","created":1700000000,'
+        '"model":"gpt-4.1-nano-2025-04-14","choices":[{"index":0,"delta":{"role":"assistant",'
+        '"content":"hello"},"finish_reason":null}]}\n\n'
+        'data: {"id":"chatcmpl-router","object":"chat.completion.chunk","created":1700000000,'
+        '"model":"gpt-4.1-nano-2025-04-14","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}\n\n'
+        "data: [DONE]\n\n"
+    )
+    route: Final = respx_mock.post(url__startswith=api_url).mock(
+        return_value=Response(
+            200,
+            text=stream_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+    chunks: Final = tuple(
+        litellm.completion(
+            model="azure_ai/model_router/test-router",
+            messages=[{"role": "user", "content": "hello"}],
+            api_base="https://example-resource.services.ai.azure.com/models",
+            api_key="azure-ai-test-key",
+            api_version="2024-05-01-preview",
+            stream=True,
+        )
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert route.call_count == 1
+    assert request_body["model"] == "test-router"
+    assert chunks[0].model == "gpt-4.1-nano-2025-04-14"
+    assert chunks[0].model != "azure_ai/model_router/test-router"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_azure_ai_completion_cost_uses_response_usage(respx_mock: respx.MockRouter) -> None:
+    api_url: Final = "https://example-resource.services.ai.azure.com/models/chat/completions"
+    response_body: Final = {
+        "id": "chatcmpl-azure-ai",
+        "object": "chat.completion",
+        "created": 1700000000,
+        "model": "gpt-4.1-mini",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "hello"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 3, "total_tokens": 14},
+    }
+    route: Final = respx_mock.post(url__startswith=api_url).mock(return_value=Response(200, json=response_body))
+    messages: Final = [{"role": "user", "content": "hello"}]
+    response: Final = litellm.completion(
+        model="azure_ai/gpt-4.1-mini",
+        messages=messages,
+        api_base="https://example-resource.services.ai.azure.com/models",
+        api_key="azure-ai-test-key",
+        api_version="2024-05-01-preview",
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+    model_info: Final = litellm.get_model_info(model="gpt-4.1-mini", custom_llm_provider="azure_ai")
+    expected_cost: Final = 11 * model_info["input_cost_per_token"] + 3 * model_info["output_cost_per_token"]
+    cost: Final = litellm.completion_cost(
+        completion_response=response,
+        model="gpt-4.1-mini",
+        custom_llm_provider="azure_ai",
+    )
+
+    assert route.call_count == 1
+    assert request_body == {"model": "gpt-4.1-mini", "messages": messages}
+    assert response.choices[0].message.content == "hello"
+    assert cost == pytest.approx(expected_cost)
 
 
 def test_azure_ai_validate_environment_with_azure_ad_token():
