@@ -391,10 +391,11 @@ class Cache:
             return value if isinstance(value, Mapping) else {}
 
         litellm_params = as_mapping(kwargs.get("litellm_params"))
-        metadata_sources: list[Mapping[str, object]] = []
-        for source in (kwargs, litellm_params):
-            for key in ("metadata", "litellm_metadata"):
-                metadata_sources.append(as_mapping(source.get(key)))
+        metadata_sources: list[Mapping[str, object]] = [
+            as_mapping(source.get(key))
+            for source in (kwargs, litellm_params)
+            for key in ("metadata", "litellm_metadata")
+        ]
 
         scope_values: list[tuple[str, object | None]] = []
         for field in self._PROXY_CACHE_SCOPE_FIELDS:
