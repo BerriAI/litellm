@@ -1,6 +1,7 @@
 import os
 import pytest
 import uuid
+from typing import Final
 from unittest.mock import patch, MagicMock
 from httpx import Response, Request
 from fastapi import HTTPException
@@ -17,12 +18,11 @@ from litellm.proxy.guardrails.guardrail_hooks.lasso.lasso import (
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 
 
-def test_lasso_guard_config(monkeypatch):
-    """Test Lasso guard configuration with init_guardrails_v2."""
-    litellm.set_verbose = True
-    litellm.guardrail_name_config_map = {}
+def test_lasso_guard_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
 
-    # Set environment variable for testing
+    monkeypatch.setattr(IN_MEMORY_GUARDRAIL_HANDLER, "IN_MEMORY_GUARDRAILS", {})
+    monkeypatch.setattr(IN_MEMORY_GUARDRAIL_HANDLER, "guardrail_id_to_custom_guardrail", {})
     monkeypatch.setenv("LASSO_API_KEY", "test-key")
 
     init_guardrails_v2(
@@ -39,8 +39,11 @@ def test_lasso_guard_config(monkeypatch):
         config_file_path="",
     )
 
-    # Clean up
-    del os.environ["LASSO_API_KEY"]
+    guardrails: Final = tuple(IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.values())
+    assert len(guardrails) == 1
+    assert guardrails[0]["guardrail_name"] == "violence-guard"
+    assert guardrails[0]["litellm_params"]["guardrail"] == "lasso"
+    assert guardrails[0]["litellm_params"]["mode"] == "pre_call"
 
 
 class TestLassoGuardrail:

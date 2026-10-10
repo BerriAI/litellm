@@ -11,7 +11,6 @@ from litellm import Router
 from litellm.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy.utils import ProxyLogging
-from litellm.types.guardrails import GuardrailEventHooks
 
 
 class MockGuardrail(CustomGuardrail):

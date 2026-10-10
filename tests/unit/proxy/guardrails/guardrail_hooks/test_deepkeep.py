@@ -1,4 +1,5 @@
 import os
+from typing import Final
 import pytest
 from unittest.mock import patch, MagicMock, AsyncMock
 from httpx import Response, Request
@@ -16,8 +17,10 @@ from litellm.exceptions import GuardrailRaisedException
 
 
 def test_deepkeep_guard_config(monkeypatch: pytest.MonkeyPatch):
-    """Test DeepKeep guard configuration with init_guardrails_v2."""
-    monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    monkeypatch.setattr(IN_MEMORY_GUARDRAIL_HANDLER, "IN_MEMORY_GUARDRAILS", {})
+    monkeypatch.setattr(IN_MEMORY_GUARDRAIL_HANDLER, "guardrail_id_to_custom_guardrail", {})
 
     monkeypatch.setenv("DEEPKEEP_API_KEY", "test-key")
     monkeypatch.setenv("DEEPKEEP_API_BASE", "https://test.deepkeep.ai")
@@ -38,7 +41,11 @@ def test_deepkeep_guard_config(monkeypatch: pytest.MonkeyPatch):
         config_file_path="",
     )
 
-    # Clean up
+    guardrails: Final = tuple(IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.values())
+    assert len(guardrails) == 1
+    assert guardrails[0]["guardrail_name"] == "deepkeep-firewall"
+    assert guardrails[0]["litellm_params"]["guardrail"] == "deepkeep"
+    assert guardrails[0]["litellm_params"]["mode"] == "pre_call"
 
 
 class TestDeepKeepGuardrail:
