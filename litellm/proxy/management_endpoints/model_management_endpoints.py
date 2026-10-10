@@ -2215,7 +2215,7 @@ class ModelManagementAuthChecks:
             raise ProxyException(
                 message=(
                     f"Only proxy admins can change the credentials of a deployment configured for "
-                    f"workload identity federation ({wif_fields[0]!r})."
+                    f"workload identity federation or OAuth token exchange ({wif_fields[0]!r})."
                 ),
                 type=ProxyErrorTypes.auth_error.value,
                 code=status.HTTP_403_FORBIDDEN,

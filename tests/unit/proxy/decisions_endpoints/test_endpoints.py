@@ -257,6 +257,51 @@ def test_proxy_decisions_dispatches_strands_decider(
     assert "authorization" not in upstream.calls[0].request.headers
 
 
+def test_proxy_systemone_dispatches_databricks_serving_endpoint(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("DATABRICKS_API_BASE", raising=False)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "databricks-decider",
+                "litellm_params": {
+                    "model": "databricks/databricks-openjev-qwen35-4b",
+                    "api_base": "https://workspace.example/serving-endpoints",
+                    "api_key": "dapi-deployment",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    upstream: Final = respx_mock.post(
+        "https://workspace.example/serving-endpoints/databricks-openjev-qwen35-4b/invocations"
+    ).respond(json={**_RESPONSE, "model": "/mosaicml/local_model"})
+
+    response: Final = client.post(
+        "/v1/systemone",
+        json={
+            "model": "databricks-decider",
+            "state": {"source": "proxy-test"},
+            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == _RESPONSE["answers"]
+    assert upstream.called
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "databricks-openjev-qwen35-4b",
+        "state": {"source": "proxy-test"},
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer dapi-deployment"
+
+
 def test_proxy_decisions_without_model_uses_the_proxy_default_model(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -528,6 +573,68 @@ def test_openai_format_decisions_reach_an_openai_deployment_unchanged_including_
     )
     assert expected_cost > 0
     assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
+
+
+@pytest.mark.parametrize("safety_identifier", (7, ["end-user-1"]), ids=("numeric", "list"))
+@pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
+def test_a_non_string_safety_identifier_is_refused_unless_the_deployment_drops_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    safety_identifier: object,
+    deployment_drops_params: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "decider",
+                    "litellm_params": {
+                        "model": "openai/gpt-6-luna",
+                        "api_key": "k",
+                        "drop_params": deployment_drops_params,
+                    },
+                }
+            ]
+        ),
+    )
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(
+        json={
+            "model": "gpt-6-luna",
+            "answers": _OPENAI_FORMAT_ANSWERS[:1],
+            "usage": {
+                "input_tokens": _INPUT_TOKENS,
+                "output_tokens": _OUTPUT_TOKENS,
+                "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
+            },
+        }
+    )
+    request_body: Final = {
+        "model": "decider",
+        "input": "The package arrived with a broken screen.",
+        "questions": _OPENAI_FORMAT_REQUEST["questions"][:1],
+        "safety_identifier": safety_identifier,
+    }
+
+    response: Final = client.post("/v1/decisions", json=request_body)
+
+    if not deployment_drops_params:
+        assert response.status_code == 400, response.text
+        assert "safety_identifier" in response.json()["error"]["message"]
+        assert not upstream.called
+        return
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": "The package arrived with a broken screen.",
+        "questions": _OPENAI_FORMAT_REQUEST["questions"][:1],
+    }
 
 
 def _decisions_feature() -> LazyFeature:
