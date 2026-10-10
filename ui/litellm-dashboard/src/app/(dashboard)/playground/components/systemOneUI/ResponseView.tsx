@@ -7,6 +7,8 @@ import { ChevronDown, LoaderCircle } from "lucide-react";
 import { useState } from "react";
 import type { SystemOneAnswer, SystemOneResponse } from "./lib/schemas";
 
+const SCORE_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 });
+
 interface ResponseViewProps {
   response?: SystemOneResponse;
   fallbackModel?: string;
@@ -85,7 +87,7 @@ function AnswerDetails({ answer }: { answer: SystemOneAnswer }) {
     <div className="grid gap-4">
       <div className="flex flex-wrap items-center gap-2">
         <span className="text-xs text-muted-foreground">Score</span>
-        <Badge>{answer.score}</Badge>
+        <Badge>{SCORE_FORMAT.format(answer.score)}</Badge>
         {answer.confidence !== undefined && (
           <Badge variant="outline">{Math.round(answer.confidence * 100)}% confidence</Badge>
         )}
