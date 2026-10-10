@@ -9,6 +9,7 @@ This test suite ensures that:
 5. Path parameters are properly URL encoded
 """
 
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, patch
@@ -312,6 +313,11 @@ def test_parse_openapi_spec_rejects_non_object_document() -> None:
         gen._parse_openapi_spec("- not an OpenAPI object\n")
 
 
+def test_parse_openapi_spec_rejects_json_scalar() -> None:
+    with pytest.raises(TypeError, match="OpenAPI spec must be a JSON or YAML object"):
+        gen._parse_openapi_spec("42")
+
+
 def test_parse_openapi_spec_rejects_yaml_merge_aliases() -> None:
     import yaml
 
@@ -328,6 +334,13 @@ merged:
   <<: *base
 """
         )
+
+
+def test_parse_openapi_spec_rejects_yaml_merge_keys() -> None:
+    import yaml
+
+    with pytest.raises(yaml.YAMLError, match="YAML merge keys are not supported"):
+        gen._parse_openapi_spec("<<: {openapi: 3.0.0}\n")
 
 
 def test_parse_openapi_spec_rejects_yaml_aliases() -> None:
@@ -353,6 +366,24 @@ def test_parse_openapi_spec_rejects_oversized_yaml_integer() -> None:
     oversized_integer: Final = "1" + ":11" * gen._MAX_YAML_INT_LENGTH
     with pytest.raises(yaml.YAMLError, match="YAML integer is too long"):
         gen._parse_openapi_spec(f"openapi: 3.0.0\nx-expensive: {oversized_integer}\n")
+
+
+def test_parse_openapi_spec_accepts_yaml_integer() -> None:
+    assert gen._parse_openapi_spec("openapi: 3.0.0\nrevision: 1\n") == {
+        "openapi": "3.0.0",
+        "revision": 1,
+    }
+
+
+@pytest.mark.asyncio
+async def test_load_openapi_spec_async_reads_local_yaml(tmp_path: Path) -> None:
+    spec_path = tmp_path / "openapi.yaml"
+    spec_path.write_text("openapi: 3.0.0\npaths: {}\n", encoding="utf-8")
+
+    assert await gen.load_openapi_spec_async(str(spec_path)) == {
+        "openapi": "3.0.0",
+        "paths": {},
+    }
 
 
 def _create_mock_client(method: str, response_text: str, status_code: int = 200) -> AsyncMock:
