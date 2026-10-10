@@ -754,6 +754,7 @@ from litellm.proxy.spend_tracking.spend_event_producer import (
 )
 from litellm.proxy.telemetry.middleware import TelemetryMiddleware
 from litellm.proxy.telemetry.runtime import TelemetryRuntime
+from litellm.proxy.telemetry.settings import describe_errors as describe_telemetry_errors
 from litellm.proxy.telemetry.settings import load_settings as load_telemetry_settings
 
 try:
@@ -1738,7 +1739,7 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[ProxyLifespanState
         telemetry_settings: Final = load_telemetry_settings()
         if isinstance(telemetry_settings, ValidationError):
             verbose_proxy_logger.warning(
-                "telemetry: invalid LITELLM_TELEMETRY_* settings, leaving it off: %s", telemetry_settings
+                "telemetry: invalid settings, leaving it off: %s", describe_telemetry_errors(telemetry_settings)
             )
         else:
             await telemetry_runtime.start(

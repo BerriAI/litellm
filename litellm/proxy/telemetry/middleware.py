@@ -9,7 +9,7 @@ from starlette.types import ASGIApp, Message, Receive, Scope, Send
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.middleware.billable_request_metrics_middleware import classify_billable_request
 from litellm.proxy.telemetry.request_context import AttemptObservation, RequestAccumulator, current_request
-from litellm.telemetry.records import RequestRecord, StatusClass, TokenCounts
+from litellm.telemetry.records import BlockCounts, RequestRecord, StatusClass, TokenCounts
 from litellm.telemetry.sink import TelemetrySink
 
 RUST_RESPONSE_HEADER: Final = b"x-litellm-rust"
@@ -32,7 +32,12 @@ def _final_observation(observations: tuple[AttemptObservation, ...]) -> AttemptO
 
 
 def build_request_record(
-    *, endpoint: str, timing: ResponseTiming, header_keys: frozenset[str], observations: tuple[AttemptObservation, ...]
+    *,
+    endpoint: str,
+    timing: ResponseTiming,
+    header_keys: frozenset[str],
+    observations: tuple[AttemptObservation, ...],
+    blocks: BlockCounts | None = None,
 ) -> RequestRecord:
     final: Final = _final_observation(observations)
     return RequestRecord(
@@ -49,7 +54,7 @@ def build_request_record(
         tokens=final.tokens if final is not None else TokenCounts(),
         latency_to_headers_ms=timing.to_headers_ms,
         latency_to_first_byte_ms=timing.to_first_byte_ms,
-        blocks=final.blocks if final is not None else None,
+        blocks=blocks,
         header_keys=header_keys,
     )
 
@@ -171,7 +176,11 @@ class TelemetryMiddleware:
         try:
             sink.record_request(
                 build_request_record(
-                    endpoint=endpoint, timing=timing, header_keys=header_keys, observations=accumulator.observations
+                    endpoint=endpoint,
+                    timing=timing,
+                    header_keys=header_keys,
+                    observations=accumulator.observations,
+                    blocks=accumulator.blocks,
                 )
             )
         except Exception:  # noqa: BLE001 -- telemetry must never surface into request handling
