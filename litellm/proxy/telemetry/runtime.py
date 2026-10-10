@@ -33,6 +33,18 @@ def proxy_hash_secret() -> bytes:
     return salt_key.encode() if salt_key is not None else secrets.token_bytes(32)
 
 
+async def deployment_hash_secret(store: TelemetryStore | None, fallback: Callable[[], bytes]) -> bytes:
+    if store is None:
+        return fallback()
+    try:
+        return await store.deployment_hash_secret()
+    except store_read_errors() as e:
+        verbose_proxy_logger.warning(
+            "telemetry: hashing deployments with the salt key, stored secret unreadable: %s", e
+        )
+        return fallback()
+
+
 def deployment_hasher(secret: bytes) -> Callable[[str], str]:
     key: Final = hashlib.sha256(b"litellm-telemetry-deployment:" + secret).digest()
     return lambda model_id: hmac.new(key, model_id.encode(), hashlib.sha256).hexdigest()[:16]
@@ -111,7 +123,9 @@ class TelemetryRuntime:
         self._exporter = _RememberingExporter(_exporter(endpoint, store, http_client))
         register(
             TelemetryAttemptLogger(
-                lambda: self.sink, deployment_hasher(hash_secret()), blocks_enabled=self._counts_blocks
+                lambda: self.sink,
+                deployment_hasher(await deployment_hash_secret(store, hash_secret)),
+                blocks_enabled=self._counts_blocks,
             )
         )
         await self.refresh()

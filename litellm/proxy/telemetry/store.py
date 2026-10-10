@@ -1,4 +1,5 @@
 import json
+import secrets
 import uuid
 from collections.abc import Awaitable
 from typing import Final, Protocol
@@ -13,6 +14,7 @@ from litellm.telemetry.report import Report, report_to_json
 from litellm.telemetry.sink import ExportOutcome
 
 INSTANCE_ID_PARAM: Final = "telemetry_instance_id"
+HASH_SECRET_PARAM: Final = "telemetry_deployment_hash_secret"
 SETTINGS_PARAM: Final = "telemetry_settings"
 
 
@@ -21,10 +23,10 @@ class Database(Protocol):
     def execute_raw(self, query: LiteralString, *args: object) -> Awaitable[int]: ...
 
 
-class _InstanceRow(BaseModel):
+class _ValueRow(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    instance_id: str
+    value: str
 
 
 class StoredReport(BaseModel):
@@ -49,31 +51,37 @@ class _SettingsRow(BaseModel):
 
 
 _SETTINGS_ROWS: Final = TypeAdapter(tuple[_SettingsRow, ...])
-_INSTANCE_ROWS: Final = TypeAdapter(tuple[_InstanceRow, ...])
+_VALUE_ROWS: Final = TypeAdapter(tuple[_ValueRow, ...])
 _REPORT_ROWS: Final = TypeAdapter(tuple[StoredReport, ...])
 
 
 class TelemetryStore:
-    """The proxy DB side of telemetry: the install's stable instance id and the local report table"""
+    """The proxy DB side of telemetry: the install's stable instance id, deployment hash secret and report table"""
 
     def __init__(self, db: Database, retention_days: int) -> None:
         self._db: Final = db
         self._retention_days: Final = retention_days
 
     async def instance_id(self) -> str:
+        return await self._persisted(INSTANCE_ID_PARAM, uuid.uuid4().hex)
+
+    async def deployment_hash_secret(self) -> bytes:
+        return (await self._persisted(HASH_SECRET_PARAM, secrets.token_hex(32))).encode()
+
+    async def _persisted(self, param: str, candidate: str) -> str:
         await self._db.execute_raw(
             """INSERT INTO "LiteLLM_Config" (param_name, param_value) VALUES ($1, to_jsonb($2::text))
             ON CONFLICT (param_name) DO NOTHING""",
-            INSTANCE_ID_PARAM,
-            uuid.uuid4().hex,
+            param,
+            candidate,
         )
-        rows: Final = _INSTANCE_ROWS.validate_python(
+        rows: Final = _VALUE_ROWS.validate_python(
             await self._db.query_raw(
-                """SELECT param_value #>> '{}' AS instance_id FROM "LiteLLM_Config" WHERE param_name = $1""",
-                INSTANCE_ID_PARAM,
+                """SELECT param_value #>> '{}' AS value FROM "LiteLLM_Config" WHERE param_name = $1""",
+                param,
             )
         )
-        return rows[0].instance_id
+        return rows[0].value
 
     async def consent(self) -> TelemetryConsent | ConsentError | None:
         rows: Final = _SETTINGS_ROWS.validate_python(

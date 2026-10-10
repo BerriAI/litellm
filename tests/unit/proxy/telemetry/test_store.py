@@ -7,9 +7,9 @@ import pytest
 from prisma.errors import PrismaError
 
 from litellm.proxy.telemetry.attempt_logger import TelemetryAttemptLogger
-from litellm.proxy.telemetry.runtime import TelemetryRuntime
+from litellm.proxy.telemetry.runtime import TelemetryRuntime, deployment_hash_secret
 from litellm.proxy.telemetry.settings import TelemetrySettings
-from litellm.proxy.telemetry.store import LocalTableExporter, TelemetryStore
+from litellm.proxy.telemetry.store import HASH_SECRET_PARAM, LocalTableExporter, TelemetryStore
 from litellm.telemetry.records import AttemptRecord, InstanceInfo, StatusClass
 from litellm.telemetry.report import Report
 from litellm.telemetry.sink import ExportOutcome
@@ -18,12 +18,16 @@ from litellm.telemetry.sink import ExportOutcome
 @dataclass
 class _FakeDatabase:
     instance_id: str = "persisted-install"
+    hash_secret: str = "persisted-secret"
+    fail_reads: bool = False
     fail_writes: bool = False
     fail_prune: bool = False
     executed: tuple[tuple[str, tuple[object, ...]], ...] = ()
 
     async def query_raw(self, query: LiteralString, *args: object) -> object:
-        return ({"instance_id": self.instance_id},)
+        if self.fail_reads:
+            raise PrismaError("database is down")
+        return ({"value": self.instance_id if args[0] == "telemetry_instance_id" else self.hash_secret},)
 
     async def execute_raw(self, query: LiteralString, *args: object) -> int:
         if self.fail_writes or (self.fail_prune and query.lstrip().startswith("DELETE")):
@@ -93,3 +97,25 @@ async def test_without_an_endpoint_the_runtime_keeps_reports_locally_under_the_p
     stored: Final = tuple(args for query, args in db.executed if 'INSERT INTO "LiteLLM_TelemetryReport"' in query)
     assert len(stored) == 1
     assert '"instance_id": "persisted-install"' in str(stored[0][3])
+
+
+@pytest.mark.asyncio
+async def test_deployments_are_hashed_with_the_secret_stored_in_the_database_not_the_salt_key() -> None:
+    db: Final = _FakeDatabase()
+    secret: Final = await deployment_hash_secret(TelemetryStore(db, retention_days=7), lambda: b"salt-key")
+    ((_, (param, candidate)),) = db.executed
+    assert secret == b"persisted-secret"
+    assert param == HASH_SECRET_PARAM
+    assert len(str(candidate)) == 64, "a fresh install stores a 32 byte random secret"
+
+
+@pytest.mark.parametrize(
+    "store",
+    [None, TelemetryStore(_FakeDatabase(fail_reads=True), retention_days=7)],
+    ids=["no_database", "unreadable_database"],
+)
+@pytest.mark.asyncio
+async def test_without_a_readable_stored_secret_deployments_are_hashed_with_the_salt_key(
+    store: TelemetryStore | None,
+) -> None:
+    assert await deployment_hash_secret(store, lambda: b"salt-key") == b"salt-key"
