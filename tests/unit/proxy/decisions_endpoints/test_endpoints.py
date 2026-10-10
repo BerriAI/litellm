@@ -11,17 +11,19 @@ import respx
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 from starlette.routing import Match
 
 import litellm
 from litellm.proxy._lazy_features import attach_lazy_features
-from litellm.proxy.decisions_endpoints.endpoints import decisions, systemone
+from litellm.proxy.decisions_endpoints.endpoints import decisions, router, systemone
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import SafeRouteAdder
 from litellm.proxy.proxy_server import (
     app,
     cleanup_router_config_variables,
     initialize,
 )
+from litellm.types.decisions import DecisionsRequestBody, OpenAIDecisionRequestBody
 
 _INPUT_TOKENS: Final[int] = 367
 _OUTPUT_TOKENS: Final[int] = 3
@@ -615,3 +617,63 @@ def test_a_config_pass_through_at_v1_decisions_keeps_its_route_and_the_native_ap
     assert _serving_endpoint(bare, "/decisions") is decisions
     assert _serving_endpoint(bare, "/v1/systemone") is systemone
     assert _serving_endpoint(bare, "/systemone") is systemone
+
+
+@pytest.fixture(scope="module")
+def decisions_openapi() -> dict[str, object]:
+    app = FastAPI()
+    app.include_router(router)
+    return app.openapi()
+
+
+@pytest.mark.parametrize(
+    ("path", "body_adapter", "response_schema", "required"),
+    (
+        ("/v1/systemone", TypeAdapter(DecisionsRequestBody), "DecisionsResponse", {"model", "state", "questions"}),
+        ("/systemone", TypeAdapter(DecisionsRequestBody), "DecisionsResponse", {"model", "state", "questions"}),
+        (
+            "/v1/decisions",
+            TypeAdapter(OpenAIDecisionRequestBody),
+            "OpenAIDecisionResponse",
+            {"model", "input", "questions"},
+        ),
+        (
+            "/decisions",
+            TypeAdapter(OpenAIDecisionRequestBody),
+            "OpenAIDecisionResponse",
+            {"model", "input", "questions"},
+        ),
+    ),
+)
+def test_swagger_documents_the_request_format_and_response_of_each_decisions_route(
+    decisions_openapi: dict[str, object],
+    path: str,
+    body_adapter: TypeAdapter[DecisionsRequestBody] | TypeAdapter[OpenAIDecisionRequestBody],
+    response_schema: str,
+    required: set[str],
+) -> None:
+    operation = decisions_openapi["paths"][path]["post"]
+    media = operation["requestBody"]["content"]["application/json"]
+
+    assert "Decisions" in operation["summary"] or "System One" in operation["summary"]
+    assert "docs.litellm.ai/docs/decisions" in operation["description"]
+    assert required <= set(media["schema"]["required"])
+    assert required <= set(media["schema"]["properties"])
+    assert "$ref" not in json.dumps(media["schema"])
+    assert media["schema"]["properties"]["model"]["description"]
+
+    example = {key: value for key, value in media["example"].items() if key != "model"}
+    assert len(body_adapter.validate_python(example).questions) == 3
+
+    response_ref = operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+    assert response_ref == f"#/components/schemas/{response_schema}"
+    assert "answers" in decisions_openapi["components"]["schemas"][response_schema]["properties"]
+
+
+def test_the_two_decisions_routes_document_different_request_formats(decisions_openapi: dict[str, object]) -> None:
+    def properties(path: str) -> set[str]:
+        operation = decisions_openapi["paths"][path]["post"]
+        return set(operation["requestBody"]["content"]["application/json"]["schema"]["properties"])
+
+    assert "state" in properties("/v1/systemone") and "state" not in properties("/v1/decisions")
+    assert "input" in properties("/v1/decisions") and "input" not in properties("/v1/systemone")
