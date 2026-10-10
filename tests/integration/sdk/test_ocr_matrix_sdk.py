@@ -36,6 +36,7 @@ DOCUMENTS: Final = {
     "/documents/scan.png": (PNG_BYTES, "image/png"),
 }
 DI_ANALYZE_PATH: Final = "/documentintelligence/documentModels/prebuilt-layout"
+OCR_CALL_TYPES: Final = frozenset({"ocr", "aocr"})
 _JSON: Final = TypeAdapter(dict[str, JsonValue])
 _STRING_KEYED: Final = TypeAdapter(dict[str, object])
 _FLOAT: Final = TypeAdapter(float)
@@ -104,7 +105,8 @@ class RecordingLogger(CustomLogger):
 
     def _record(self, kwargs: Mapping[str, object], response_obj: object) -> None:
         payload: Final = _STRING_KEYED.validate_python(kwargs.get("standard_logging_object"))
-        self.calls = (*self.calls, LoggedCall(payload, response_obj))
+        if payload.get("call_type") in OCR_CALL_TYPES:
+            self.calls = (*self.calls, LoggedCall(payload, response_obj))
 
     def log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
