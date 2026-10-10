@@ -226,7 +226,7 @@ class VertexAIModelRoute(str, Enum):
 VERTEX_AI_MODEL_ROUTES: Final = [f"{route.value}/" for route in VertexAIModelRoute]
 
 
-def get_vertex_ai_model_route(model: str, litellm_params: dict | None = None) -> VertexAIModelRoute:
+def get_vertex_ai_model_route(model: str, litellm_params: Mapping[str, object] | None = None) -> VertexAIModelRoute:
     """
     Determine which handler to use for a Vertex AI model based on the model name.
 
@@ -257,10 +257,9 @@ def get_vertex_ai_model_route(model: str, litellm_params: dict | None = None) ->
         VertexAIPartnerModels,
     )
 
-    # Check base_model in litellm_params for gemini override
-    if litellm_params and litellm_params.get("base_model") is not None:
-        if "gemini" in litellm_params["base_model"]:
-            return VertexAIModelRoute.GEMINI
+    base_model: Final = litellm_params.get("base_model") if litellm_params else None
+    if isinstance(base_model, str) and "gemini" in base_model:
+        return VertexAIModelRoute.GEMINI
 
     # Check for agent_engine models (Reasoning Engines)
     if "agent_engine/" in model:
