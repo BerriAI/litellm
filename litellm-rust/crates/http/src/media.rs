@@ -1,7 +1,7 @@
 use std::{
     future::Future,
     io,
-    net::{IpAddr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     pin::Pin,
     sync::Arc,
     time::Duration,
@@ -287,38 +287,57 @@ fn validate_addresses(addresses: &[SocketAddr]) -> Result<(), Error> {
     Ok(())
 }
 
+/// Ranges the IANA special-purpose registries mark as not globally reachable, plus multicast
+/// and the Azure Wire Server, matching `_is_blocked_ip` in `litellm/litellm_core_utils/url_utils.py`.
+const BLOCKED_V4: [(Ipv4Addr, u32); 15] = [
+    (Ipv4Addr::new(0, 0, 0, 0), 8),
+    (Ipv4Addr::new(10, 0, 0, 0), 8),
+    (Ipv4Addr::new(100, 64, 0, 0), 10),
+    (Ipv4Addr::new(127, 0, 0, 0), 8),
+    (Ipv4Addr::new(168, 63, 129, 16), 32),
+    (Ipv4Addr::new(169, 254, 0, 0), 16),
+    (Ipv4Addr::new(172, 16, 0, 0), 12),
+    (Ipv4Addr::new(192, 0, 0, 0), 24),
+    (Ipv4Addr::new(192, 0, 2, 0), 24),
+    (Ipv4Addr::new(192, 88, 99, 0), 24),
+    (Ipv4Addr::new(192, 168, 0, 0), 16),
+    (Ipv4Addr::new(198, 18, 0, 0), 15),
+    (Ipv4Addr::new(198, 51, 100, 0), 24),
+    (Ipv4Addr::new(203, 0, 113, 0), 24),
+    (Ipv4Addr::new(224, 0, 0, 0), 3),
+];
+
+const BLOCKED_V6: [(Ipv6Addr, u32); 12] = [
+    (Ipv6Addr::UNSPECIFIED, 128),
+    (Ipv6Addr::LOCALHOST, 128),
+    (Ipv6Addr::new(0x64, 0xff9b, 1, 0, 0, 0, 0, 0), 48),
+    (Ipv6Addr::new(0x100, 0, 0, 0, 0, 0, 0, 0), 64),
+    (Ipv6Addr::new(0x2001, 0, 0, 0, 0, 0, 0, 0), 23),
+    (Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 0), 32),
+    (Ipv6Addr::new(0x3fff, 0, 0, 0, 0, 0, 0, 0), 20),
+    (Ipv6Addr::new(0x5f00, 0, 0, 0, 0, 0, 0, 0), 16),
+    (Ipv6Addr::new(0xfc00, 0, 0, 0, 0, 0, 0, 0), 7),
+    (Ipv6Addr::new(0xfe80, 0, 0, 0, 0, 0, 0, 0), 10),
+    (Ipv6Addr::new(0xfec0, 0, 0, 0, 0, 0, 0, 0), 10),
+    (Ipv6Addr::new(0xff00, 0, 0, 0, 0, 0, 0, 0), 8),
+];
+
+fn in_network<const BITS: u32>(address: u128, network: u128, prefix: u32) -> bool {
+    (address ^ network).checked_shr(BITS - prefix).unwrap_or(0) == 0
+}
+
 fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(ip) => {
-            let [first, second, third, _] = ip.octets();
-            first == 0
-                || first == 10
-                || first == 127
-                || (first == 100 && (64..=127).contains(&second))
-                || (first == 169 && second == 254)
-                || (first == 172 && (16..=31).contains(&second))
-                || (first == 192 && second == 0 && (third == 0 || third == 2))
-                || (first == 192 && second == 168)
-                || (first == 192 && second == 88 && third == 99)
-                || (first == 198 && (second == 18 || second == 19))
-                || (first == 198 && second == 51 && third == 100)
-                || (first == 203 && second == 0 && third == 113)
-                || first >= 224
-        }
+        IpAddr::V4(ip) => BLOCKED_V4.iter().any(|(network, prefix)| {
+            in_network::<32>(u32::from(ip).into(), u32::from(*network).into(), *prefix)
+        }),
         IpAddr::V6(ip) => {
-            let segments = ip.segments();
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_multicast()
-                || (segments[0] & 0xfe00) == 0xfc00
-                || (segments[0] & 0xffc0) == 0xfe80
-                || (segments[0] & 0xffc0) == 0xfec0
-                || (segments[0] == 0x2001 && segments[1] == 0x0db8)
-                || ip
-                    .to_ipv4_mapped()
-                    .or_else(|| ip.to_ipv4())
-                    .map(|ipv4| is_blocked_ip(IpAddr::V4(ipv4)))
-                    .unwrap_or(false)
+            BLOCKED_V6.iter().any(|(network, prefix)| {
+                in_network::<128>(u128::from(ip), u128::from(*network), *prefix)
+            }) || ip
+                .to_ipv4_mapped()
+                .or_else(|| ip.to_ipv4())
+                .is_some_and(|ipv4| is_blocked_ip(IpAddr::V4(ipv4)))
         }
     }
 }
@@ -499,17 +518,35 @@ mod tests {
     #[case::documentation_v4_first_range("198.51.100.1")]
     #[case::documentation_v4_second_range("203.0.113.1")]
     #[case::multicast_v4("224.0.0.1")]
+    #[case::broadcast_v4("255.255.255.255")]
+    #[case::ietf_protocol_assignments_v4("192.0.0.9")]
+    #[case::azure_wire_server("168.63.129.16")]
+    #[case::unspecified_v6("::")]
     #[case::loopback_v6("::1")]
+    #[case::local_use_nat64("64:ff9b:1::1")]
+    #[case::discard_only_v6("100::1")]
+    #[case::teredo("2001::1")]
+    #[case::documentation_v6("2001:db8::1")]
+    #[case::documentation_v6_second_range("3fff::1")]
+    #[case::segment_routing_sids("5f00::1")]
     #[case::unique_local_v6("fc00::1")]
     #[case::link_local_v6("fe80::1")]
-    #[case::documentation_v6("2001:db8::1")]
+    #[case::site_local_v6("fec0::1")]
+    #[case::multicast_v6("ff02::1")]
     #[case::mapped_loopback_v6("::ffff:127.0.0.1")]
+    #[case::mapped_azure_wire_server("::ffff:168.63.129.16")]
     fn blocks_non_public_addresses(#[case] address: &str) {
         assert!(is_blocked_ip(address.parse().expect("valid test address")));
     }
 
     #[rstest::rstest]
     #[case::public("8.8.8.8")]
+    #[case::next_to_azure_wire_server("168.63.129.17")]
+    #[case::next_to_carrier_grade_nat("100.128.0.1")]
+    #[case::last_unicast_before_multicast("223.255.255.255")]
+    #[case::public_v6("2606:4700::1111")]
+    #[case::above_ietf_protocol_assignments_v6("2001:200::1")]
+    #[case::mapped_public_v6("::ffff:8.8.8.8")]
     fn allows_a_public_address(#[case] address: &str) {
         assert!(!is_blocked_ip(
             address.parse().expect("valid public address")
