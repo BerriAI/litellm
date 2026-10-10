@@ -1434,6 +1434,12 @@ def responses(
         if _file_search_dispatch is not None:
             return _file_search_dispatch
 
+        if responses_api_provider_config is None or use_chat_completions_api is True:
+            input = ResponsesAPIRequestUtils._normalize_function_call_ids_in_input(
+                request_input=input,
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+            )
         if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
             bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
             return litellm_completion_transformation_handler.response_api_handler(
