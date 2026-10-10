@@ -281,7 +281,11 @@ def _batch_web_search_cost(
         shared_info: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider)
     except Exception:  # noqa: BLE001  # unmapped custom deployments can still supply their own rates
         return get_cost_for_anthropic_web_search(model_info=model_info, usage=usage)
-    resolved_info: Final[ModelInfo] = {**shared_info, **model_info} if model_info is not None else shared_info
+    resolved_info: Final = (
+        model_info
+        if model_info is not None and model_info.get("search_context_cost_per_query") is not None
+        else shared_info
+    )
     return get_cost_for_anthropic_web_search(model_info=resolved_info, usage=usage)
 
 

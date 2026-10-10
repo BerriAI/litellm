@@ -3382,3 +3382,36 @@ async def test_anthropic_batch_cache_ttl_and_search_costs(
     assert result.tool_cost == pytest.approx(expected_tools)
     assert result.cost == pytest.approx(expected_prompt + 20.0 + expected_tools)
     assert (bu.get_web_search_requests_from_usage(result.usage) or 0) == searches
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("search_rate,expected", [(None, 21.0), (0.0, 0.0), (5.0, 15.0)])
+async def test_batch_deployment_search_price_preserves_published_default(
+    monkeypatch: pytest.MonkeyPatch, search_rate: float | None, expected: float
+) -> None:
+    from typing import Final
+    from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info
+
+    model: Final = "claude-batch-search-test"
+    shared: Final = {
+        "litellm_provider": "anthropic", "mode": "chat",
+        "input_cost_per_token": 2.0, "output_cost_per_token": 4.0,
+        "search_context_cost_per_query": {"search_context_size_medium": 7.0},
+    }
+    custom: Final = {
+        "litellm_provider": "anthropic", "mode": "chat", "input_cost_per_token": 3.0,
+        "search_context_cost_per_query": (
+            None if search_rate is None else {"search_context_size_medium": search_rate}
+        ),
+    }
+    monkeypatch.setitem(litellm.model_cost, model, shared)
+    monkeypatch.setitem(litellm.model_cost, "batch-search-deployment", custom)
+    rates: Final = deployment_pricing_model_info("batch-search-deployment", "anthropic/" + model)
+    assert rates is not None
+    row: Final = {"custom_id": "search", "result": {"type": "succeeded", "message": {
+        "model": model, "usage": {"input_tokens": 100, "output_tokens": 10,
+                                  "server_tool_use": {"web_search_requests": 3}},
+    }}}
+    result: Final = await calculate_batch_cost_and_usage([row], "anthropic", model_info=rates)
+    assert result.tool_cost == pytest.approx(expected)
+    assert result.cost == pytest.approx(result.prompt_cost + result.completion_cost + expected)

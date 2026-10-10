@@ -8074,3 +8074,44 @@ def test_batch_cache_ttl_with_standard_rate_fallback(
     prompt, output = batch_cost_calculator(usage, "claude-opus-5-5", "anthropic", model_info=rates)
     assert prompt == pytest.approx(expected)
     assert output == pytest.approx(20.0)
+
+
+@pytest.mark.parametrize(
+    "extra_rates,expected",
+    [
+        ({"tiered_pricing": [{"range": [0, 1000], "input_cost_per_token": 2.0,
+                             "cache_creation_input_token_cost": 6.0}]}, 140.0),
+        ({"tiered_pricing": [{"range": [0, 1000], "input_cost_per_token": 2.0,
+                             "cache_creation_input_token_cost_above_1hr": 0.0}]}, 100.0),
+        ({"tiered_pricing": [{"range": [0, 1000], "input_cost_per_token": 2.0,
+                             "cache_creation_input_token_cost_above_1hr": 10.0}]}, 150.0),
+        ({"cache_creation_input_token_cost_above_1hr": 10.0,
+          "tiered_pricing": [{"range": [0, 1000], "input_cost_per_token": 2.0,
+                             "cache_creation_input_token_cost": 6.0}]}, 140.0),
+        ({"input_cost_per_token_above_110_tokens": 3.0,
+          "cache_creation_input_token_cost_above_1hr_above_110_tokens": 10.0}, 140.0),
+        ({"input_cost_per_token_above_200_tokens": 3.0,
+          "cache_creation_input_token_cost_above_1hr_above_200_tokens": 10.0}, 140.0),
+        ({"input_cost_per_token_above_100_tokens": 3.0,
+          "cache_creation_input_token_cost_above_1hr_above_100_tokens": 10.0}, 150.0),
+        ({"input_cost_per_token_above_100_tokens": 3.0,
+          "cache_creation_input_token_cost_above_1hr_above_100_tokens": 0.0}, 100.0),
+    ],
+)
+def test_batch_cache_hour_price_must_apply_to_request(extra_rates: ModelInfo, expected: float) -> None:
+    from litellm.types.utils import CacheCreationTokenDetails
+
+    usage: Final = Usage(
+        prompt_tokens=110, completion_tokens=10,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            cache_creation_tokens=10,
+            cache_creation_token_details=CacheCreationTokenDetails(ephemeral_1h_input_tokens=10),
+        ),
+    )
+    rates: Final[ModelInfo] = {
+        "input_cost_per_token": 2.0, "output_cost_per_token": 4.0,
+        "input_cost_per_token_batches": 1.0, "cache_creation_input_token_cost": 6.0,
+        "cache_creation_input_token_cost_batches": 4.0, **extra_rates,
+    }
+    prompt, _ = batch_cost_calculator(usage, "claude-opus-5-5", "anthropic", model_info=rates)
+    assert prompt == pytest.approx(expected)
