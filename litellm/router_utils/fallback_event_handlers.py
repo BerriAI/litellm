@@ -585,16 +585,15 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
                 generic_fallback_idx = idx
         elif isinstance(item, str):
             fallback_model_group = [item]
-    ## if none, check for generic fallback
-    if fallback_model_group is None:
-        if stripped_model_fallback is not None:
-            fallback_model_group = stripped_model_fallback
-        elif provider_wildcard_fallback_idx is not None:
-            fallback_model_group = next(iter(fallbacks[provider_wildcard_fallback_idx].values()))
-        elif generic_fallback_idx is not None:
-            fallback_model_group = fallbacks[generic_fallback_idx]["*"]
-
-    return fallback_model_group, generic_fallback_idx
+    if fallback_model_group is not None:
+        return fallback_model_group, generic_fallback_idx
+    if stripped_model_fallback is not None:
+        return stripped_model_fallback, generic_fallback_idx
+    if provider_wildcard_fallback_idx is not None:
+        return next(iter(fallbacks[provider_wildcard_fallback_idx].values())), generic_fallback_idx
+    if generic_fallback_idx is not None:
+        return fallbacks[generic_fallback_idx]["*"], generic_fallback_idx
+    return None, None
 
 
 PROVIDER_SCOPED_RESOURCE_KEYS: Final = ("input_file_id", "training_file", "batch_id", "file_id", "fine_tuning_job_id")
