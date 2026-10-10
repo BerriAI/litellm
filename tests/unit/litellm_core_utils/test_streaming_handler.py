@@ -14,6 +14,8 @@ from litellm.litellm_core_utils.streaming_handler import (
     CustomStreamWrapper,
     _ProviderChunkEarlyReturn,
     _ProviderChunkParsed,
+    convert_generic_chunk_to_model_response_stream,
+    generic_chunk_has_all_required_fields,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.types.utils import (
@@ -6119,6 +6121,25 @@ async def test_async_stream_without_usage_counts_tokens_off_the_event_loop():
     assert chunks[-1].usage.prompt_tokens > 100_000
     assert chunks[-1].usage.completion_tokens > 100_000
     assert_loop_stayed_free(took, lags)
+
+
+def test_generic_chunk_predicate_rejects_partial_chunk():
+    partial_chunk = {"is_finished": False}
+    assert generic_chunk_has_all_required_fields(partial_chunk) is False
+
+    full_chunk = {
+        "text": "hello",
+        "is_finished": True,
+        "finish_reason": "stop",
+        "usage": None,
+        "index": 0,
+    }
+    assert generic_chunk_has_all_required_fields(full_chunk) is True
+    assert generic_chunk_has_all_required_fields({**full_chunk, "unknown_extra_key": "value"}) is False
+
+    stream = convert_generic_chunk_to_model_response_stream(full_chunk)
+    assert stream.choices[0].delta.content == "hello"
+    assert stream.finish_reason == "stop"
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])
