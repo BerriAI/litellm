@@ -995,3 +995,33 @@ async def test_guardrails_only_and_skip_guardrails_are_mutually_exclusive(
             guardrails_only=True,
             skip_guardrails=True,
         )
+
+
+@pytest.mark.asyncio
+async def test_skip_content_enforcers_skips_enforcers_but_not_other_hooks(proxy_logging, monkeypatch):
+    enforcer = _Enforcer()
+    accountant = _Accountant()
+    monkeypatch.setattr(litellm, "callbacks", [enforcer, accountant])
+
+    await proxy_logging.pre_call_hook(
+        user_api_key_dict=MagicMock(),
+        data={"model": "m", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+        skip_guardrails=True,
+        skip_content_enforcers=True,
+    )
+
+    assert enforcer.calls == 0
+    assert accountant.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_skip_content_enforcers_and_guardrails_only_are_mutually_exclusive(proxy_logging):
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        await proxy_logging.pre_call_hook(
+            user_api_key_dict=MagicMock(),
+            data={"model": "m"},
+            call_type="acompletion",
+            guardrails_only=True,
+            skip_content_enforcers=True,
+        )
