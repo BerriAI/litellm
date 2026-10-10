@@ -9,6 +9,7 @@ import pytest
 from cost_rows import CostRow, approx_equal, poll_cost_row
 from e2e_config import settle_propagation, unique_marker
 from e2e_http import NoBody, StreamingResponse, unwrap
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import (
     BedrockGuardrailParams,
@@ -30,8 +31,9 @@ from models import (
 )
 from spend_e2e_client import SpendClient
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.quiet_stack]
 
+BACKEND_MODEL: Final = "openai/gpt-6.1-sol"
 INPUT_RATE: Final = 0.00005
 OUTPUT_RATE: Final = 0.0001
 DISCOUNT: Final = 0.25
@@ -141,7 +143,7 @@ def _register_model(client: SpendClient, resources: ResourceManager, prefix: str
     model_id: Final = client.proxy.create_model(
         model,
         LiteLLMParamsBody(
-            model="openai/gpt-4o-mini",
+            model=BACKEND_MODEL,
             api_key="os.environ/OPENAI_API_KEY",
             input_cost_per_token=INPUT_RATE,
             output_cost_per_token=OUTPUT_RATE,
@@ -219,6 +221,15 @@ class TestPricingConfigSpend:
         "quota_management.spend_tracking.discount_config.logs_cost",
         exercised_on=["chat_completions"],
     )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.SPEND_REPORTING,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_configured_discount_reaches_persisted_spend_row(
         self,
         client: SpendClient,
@@ -245,6 +256,15 @@ class TestPricingConfigSpend:
     @pytest.mark.covers(
         "quota_management.spend_tracking.margin_config.logs_cost",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.SPEND_REPORTING,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_configured_margin_reaches_persisted_spend_row(
         self,
@@ -276,6 +296,15 @@ class TestPricingConfigSpend:
     @pytest.mark.covers(
         "quota_management.spend_tracking.guardrail_cost.logs_cost",
         exercised_on=["chat_completions"],
+    )
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.SPEND_REPORTING,
+            providers=(Provider.OPENAI, Provider.BEDROCK),
+            models=(BACKEND_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_bedrock_guardrail_cost_reaches_persisted_spend_row(
         self,
