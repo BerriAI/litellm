@@ -471,6 +471,7 @@ def test_default_max_retries_env_var_reaches_azure_sdk_client():
             "llm_passthrough_route",
             "asearch",
             "adecisions",
+            "asystemone",
             "avector_store_create",
             "avector_store_search",
             "acreate_skill",
