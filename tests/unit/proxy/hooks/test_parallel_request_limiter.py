@@ -167,6 +167,32 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
 
 
 @pytest.mark.asyncio
+async def test_async_log_failure_event_skips_batch_line_item_events():
+    """Failed line children were never admitted by the limiter, so the failure
+    hook must not decrement request counters they never incremented."""
+    parallel_request_handler = PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    local_cache = parallel_request_handler.internal_usage_cache.dual_cache.in_memory_cache
+
+    await parallel_request_handler.async_log_failure_event(
+        kwargs={
+            "exception": "litellm.APIError: upstream 500",
+            "litellm_params": {
+                "batch_parent_id": "batch_1",
+                "metadata": {"user_api_key": hash_token("sk-line-item")},
+            },
+            "model": "gpt-3.5-turbo",
+        },
+        response_obj=None,
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
+    assert local_cache.cache_dict == {}
+
+
+@pytest.mark.asyncio
 async def test_a_pre_call_across_a_minute_rollover_lands_in_the_bucket_of_its_first_clock_read():
     internal_usage_cache: Final = InternalUsageCache(DualCache())
     handler: Final = PROXY_MaxParallelRequestsHandler(

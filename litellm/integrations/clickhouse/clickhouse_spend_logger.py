@@ -19,6 +19,7 @@ from litellm._logging import verbose_logger
 from litellm.integrations.clickhouse.clickhouse_batch_logger import ClickHouseBatchLogger
 from litellm.integrations.clickhouse.context import is_lens_analysis
 from litellm.integrations.clickhouse.schema import SPEND_LOGS_TABLE
+from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.tracing.types import SpendLogPayload, SpendLogRecord
@@ -205,9 +206,17 @@ class ClickHouseSpendLogger(ClickHouseBatchLogger):
     table = SPEND_LOGS_TABLE
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        # Batch line items are billed by the aggregate aretrieve_batch row; a per-line
+        # spend row here would bill the batch twice.
+        if is_batch_line_item_event(kwargs):
+            return
         self._log(kwargs)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        # Failed batch lines are part of the same aggregate row's request counts;
+        # per-line rows here would inflate spend-log request counts.
+        if is_batch_line_item_event(kwargs):
+            return
         self._log(kwargs)
 
     def _log(self, kwargs: Mapping[str, Any]) -> None:

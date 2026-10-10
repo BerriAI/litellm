@@ -536,6 +536,92 @@ async def test_trace_ingest_and_invalid_payload_do_not_write_spend():
     storage.ensure_schema.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+async def test_batch_line_item_success_event_does_not_write_spend(monkeypatch: pytest.MonkeyPatch):
+    # A batch line item carries call_type=acompletion + litellm_params.batch_parent_id.
+    # The aggregate aretrieve_batch row already bills the batch, so a per-line spend row
+    # would bill it twice.
+    monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
+    storage = MagicMock()
+    logger = ClickHouseSpendLogger(storage=storage)
+    now = datetime.now(timezone.utc)
+
+    await logger.async_log_success_event(
+        {
+            "standard_logging_object": _minimal_payload("chatcmpl-line-1", status="success", cost=0.25),
+            "call_type": "acompletion",
+            "litellm_params": {"batch_parent_id": "batch-1"},
+        },
+        None,
+        now,
+        now,
+    )
+
+    assert logger.log_queue == []
+
+    await logger.async_log_success_event(
+        {
+            "standard_logging_object": _minimal_payload("chatcmpl-live-1", status="success", cost=0.25),
+            "call_type": "acompletion",
+            "litellm_params": {},
+        },
+        None,
+        now,
+        now,
+    )
+
+    # The aggregate aretrieve_batch event bills the batch; it must still write one
+    # row with the batch's full cost even while line items are skipped.
+    await logger.async_log_success_event(
+        {
+            "standard_logging_object": {
+                **_minimal_payload("batch-1", status="success", cost=0.0001032),
+                "call_type": "aretrieve_batch",
+            },
+            "call_type": "aretrieve_batch",
+            "response_cost": 0.0001032,
+            "litellm_params": {},
+        },
+        None,
+        now,
+        now,
+    )
+
+    assert len(logger.log_queue) == 2
+    assert logger.log_queue[0]["request_id"] == "chatcmpl-live-1"
+    assert logger.log_queue[1]["call_type"] == "aretrieve_batch"
+    assert logger.log_queue[1]["request_id"] == "batch-1"
+    assert logger.log_queue[1]["spend"] == 0.0001032
+
+    # A FAILED batch line is still part of the aggregate row's request counts and
+    # must not add its own spend row; a genuine live failure still writes one.
+    await logger.async_log_failure_event(
+        {
+            "standard_logging_object": _minimal_payload("chatcmpl-line-2", status="failure", cost=0.0),
+            "call_type": "acompletion",
+            "litellm_params": {"batch_parent_id": "batch-1"},
+        },
+        None,
+        now,
+        now,
+    )
+    await logger.async_log_failure_event(
+        {
+            "standard_logging_object": _minimal_payload("chatcmpl-live-2", status="failure", cost=0.0),
+            "call_type": "acompletion",
+            "litellm_params": {},
+        },
+        None,
+        now,
+        now,
+    )
+
+    assert len(logger.log_queue) == 3
+    assert logger.log_queue[-1]["request_id"] == "chatcmpl-live-2"
+    assert logger.log_queue[-1]["status"] == "failure"
+    if logger._flush_task is not None:
+        logger._flush_task.cancel()
+
 @pytest.mark.parametrize(
     "status,llm_cost,guardrail_cost,expected",
     [

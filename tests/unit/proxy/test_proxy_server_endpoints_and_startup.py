@@ -8120,6 +8120,43 @@ async def test_update_general_settings_store_model_in_db_false():
 
 
 @pytest.mark.asyncio
+async def test_update_general_settings_store_batch_line_items_in_callbacks():
+    """
+    Verify _update_general_settings sets the litellm module flag when the DB
+    general_settings carries store_batch_line_items_in_callbacks, and that a
+    YAML-explicit value wins over the DB value.
+    """
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    proxy_config = ProxyConfig()
+    saved_flag = litellm.store_batch_line_items_in_callbacks
+    try:
+        with patch("litellm.proxy.proxy_server.general_settings", {}):  # test-quality-ok: module-global seam
+            await proxy_config._update_general_settings(
+                db_general_settings={"store_batch_line_items_in_callbacks": True}
+            )
+        assert litellm.store_batch_line_items_in_callbacks is True
+
+        proxy_config._yaml_general_settings_keys = {"store_batch_line_items_in_callbacks"}
+        with patch(  # test-quality-ok: module-global seam
+            "litellm.proxy.proxy_server.general_settings",
+            {"store_batch_line_items_in_callbacks": "false"},
+        ):
+            await proxy_config._update_general_settings(
+                db_general_settings={"store_batch_line_items_in_callbacks": True}
+            )
+        assert litellm.store_batch_line_items_in_callbacks is False
+
+        proxy_config._yaml_general_settings_keys = set()
+        litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: seed the prior opt-in so its removal is observable
+        with patch("litellm.proxy.proxy_server.general_settings", {}):  # test-quality-ok: module-global seam
+            await proxy_config._update_general_settings(db_general_settings={})
+        assert litellm.store_batch_line_items_in_callbacks is False
+    finally:
+        litellm.store_batch_line_items_in_callbacks = saved_flag  # test-quality-ok: restores the prior flag
+
+
+@pytest.mark.asyncio
 async def test_update_general_settings_propagates_apply_user_budget_to_team_keys():
     """The Admin UI toggle writes to the DB config, so the flag has to be in the
     runtime propagation allowlist. The reverted skip_user_budget_on_team_key was
@@ -13295,6 +13332,7 @@ def _patched_coordination_redis_module_state(
         patch.object(proxy_server_module, "spend_counter_cache", spend_cache),
         patch.object(proxy_server_module, "user_api_key_cache", DualCache()),
         patch.object(proxy_server_module, "cli_sso_session_cache", DualCache()),
+        patch.object(proxy_server_module, "batch_line_item_claim_cache", DualCache()),
         patch.object(proxy_server_module, "llm_router", None),
         patch.object(proxy_server_module, "litellm_config_cache", config_cache),
         patch.object(proxy_server_module, "RedisCache", redis_cache_class),

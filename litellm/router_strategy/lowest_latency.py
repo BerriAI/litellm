@@ -13,7 +13,11 @@ from litellm import ModelResponse, token_counter, verbose_logger
 from litellm._internal_context import with_service_target
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.core_helpers import get_parent_otel_span_from_kwargs, safe_divide_seconds
+from litellm.litellm_core_utils.core_helpers import (
+    get_parent_otel_span_from_kwargs,
+    is_batch_line_item_event,
+    safe_divide_seconds,
+)
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
@@ -61,7 +65,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
     @with_service_target("router_usage")
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
-        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")) or is_batch_line_item_event(kwargs):
             return
         try:
             """
@@ -188,7 +192,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
         """
         Check if Timeout Error, if timeout set deployment latency -> 100
         """
-        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")) or is_batch_line_item_event(kwargs):
             return
         try:
             metadata_field: Final = self._select_metadata_field(kwargs)
@@ -245,7 +249,7 @@ class LowestLatencyLoggingHandler(CustomLogger):
 
     @with_service_target("router_usage")
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        if is_batch_retrieve_call_type(kwargs.get("call_type")):
+        if is_batch_retrieve_call_type(kwargs.get("call_type")) or is_batch_line_item_event(kwargs):
             return
         try:
             """

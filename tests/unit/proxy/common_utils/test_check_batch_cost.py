@@ -1446,10 +1446,10 @@ class TestCheckBatchCost:
                 Logging, "async_success_handler", new_callable=AsyncMock
             ) as success_handler,
         ):
-            provider.get("https://api.openai.com/v1/files/file-output-123/content").mock(
+            output_route = provider.get("https://api.openai.com/v1/files/file-output-123/content").mock(
                 return_value=httpx.Response(200, content=f"{succeeded_line}\n{rejected_line}\n".encode())
             )
-            provider.get("https://api.openai.com/v1/files/file-error-456/content").mock(
+            error_route = provider.get("https://api.openai.com/v1/files/file-error-456/content").mock(
                 return_value=httpx.Response(200, content=f"{error_file_lines}\n\n".encode())
             )
             await check_batch_cost_instance.check_batch_cost()
@@ -1458,6 +1458,10 @@ class TestCheckBatchCost:
         assert len(spend_log_calls) == 1
         handler_kwargs = spend_log_calls[0]
         assert handler_kwargs["batch_successful_requests"] == 1
+        assert output_route.call_count == 1
+        assert error_route.call_count == 1
+        assert handler_kwargs["batch_output_file_content"] == f"{succeeded_line}\n{rejected_line}\n".encode()
+        assert handler_kwargs["batch_error_file_content"] == f"{error_file_lines}\n\n".encode()
         assert handler_kwargs["batch_failed_requests"] == 3, (
             "2 error-file lines must add to the output file's 1 rejected request"
         )

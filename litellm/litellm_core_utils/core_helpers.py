@@ -793,6 +793,18 @@ def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: flo
     hidden_params["additional_headers"] = merged
 
 
+BATCH_PARENT_ID_KEY: Final = "batch_parent_id"
+
+
+def is_batch_line_item_event(kwargs: Any) -> bool:  # noqa: ANN401  # every hook passes its own unannotated callback kwargs
+    """Whether a callback event is one JSONL line of a completed batch rather than a request"""
+    match kwargs:
+        case {"litellm_params": {"batch_parent_id": str() as batch_parent_id}}:
+            return bool(batch_parent_id)
+        case _:
+            return False
+
+
 _HIDDEN_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _PROVIDER_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
 

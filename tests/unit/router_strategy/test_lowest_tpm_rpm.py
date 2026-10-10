@@ -145,6 +145,43 @@ async def test_v2_subclass_overriding_async_get_available_deployments_with_the_o
     }
 
 
+@pytest.mark.asyncio
+async def test_usage_based_routing_handlers_skip_batch_line_items(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    Batch line-item callbacks carry call_type=acompletion plus
+    litellm_params.batch_parent_id, so the call-type-only batch guard does not fire.
+    They are historical batch traffic and must not update the TPM/RPM usage counters.
+    """
+    import litellm
+    from litellm.router_strategy.lowest_tpm_rpm import LowestTPMLoggingHandler
+
+    monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
+    router: Final = Router(
+        model_list=[_deployment(HIGH_USAGE_DEPLOYMENT_ID)],
+        routing_strategy="usage-based-routing",
+    )
+    handler: Final = LowestTPMLoggingHandler(router_cache=router.cache, routing_args={})
+    line_item_kwargs: Final = {
+        "call_type": "acompletion",
+        "litellm_params": {
+            "batch_parent_id": "batch-1",
+            "metadata": {"model_group": MODEL_GROUP},
+            "model_info": {"id": HIGH_USAGE_DEPLOYMENT_ID},
+        },
+    }
+    response_obj: Final = {"usage": {"total_tokens": 600}}
+
+    handler.log_success_event(line_item_kwargs, response_obj, None, None)
+    await handler.async_log_success_event(line_item_kwargs, response_obj, None, None)
+
+    moved: Final = sorted(
+        f"{key}={router.cache.in_memory_cache.cache_dict[key]}"
+        for key in router.cache.in_memory_cache.cache_dict
+        if ":tpm:" in key or ":rpm:" in key
+    )
+    assert moved == []
+
+
 def _rate_limited_router(num_allowed_send: int) -> tuple[Router, tuple[list[dict[str, str]], ...]]:
     conversations: Final = tuple(
         [{"role": "user", "content": f"{index}. Hey, how's it going?"}] for index in range(num_allowed_send)

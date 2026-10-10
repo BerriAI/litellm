@@ -33,7 +33,11 @@ from litellm._logging import (
     verbose_logger,
 )
 from litellm._uuid import uuid
-from litellm.batches.batch_utils import batch_cost_is_final, handle_completed_batch
+from litellm.batches.batch_utils import (
+    BatchResultFiles,
+    batch_cost_is_final,
+    handle_completed_batch_with_files,
+)
 from litellm.caching.caching import DualCache
 from litellm.caching.caching_handler import LLMCachingHandler
 from litellm.caching.redis_batch import flush_post_call_redis_batches
@@ -71,6 +75,7 @@ from litellm.litellm_core_utils.classifier_logging import (
     is_classifier_call,
 )
 from litellm.litellm_core_utils.core_helpers import (
+    BATCH_PARENT_ID_KEY,
     get_provider_response_headers_from_hidden_params,
     is_expected_client_error,
     proxy_stamped_used_client_oauth_token,
@@ -687,6 +692,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.streaming_chunks: list[object] = []
         self.sync_streaming_chunks: list[object] = []
         self.log_raw_request_response = log_raw_request_response
+        self._litellm_internal_model_credentials: Mapping[str, object] | None = None
         self.raw_request_only = raw_request_only
 
         # Initialize dynamic callbacks
@@ -957,10 +963,17 @@ class Logging(LiteLLMLoggingBaseClass):
         if model is not None:
             self.model = model
         self.user = user
+        marked_batch_parent_id: Final[object] = self.litellm_params.get(BATCH_PARENT_ID_KEY)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # Logging.litellm_params is untyped upstream
         self.litellm_params = {
             **self.litellm_params,
             **scrub_sensitive_keys_in_metadata(litellm_params),
         }
+        # Every spend, budget and metering hook skips an event carrying batch_parent_id, so only
+        # mark_batch_line_item may set it; the incoming params can hold caller request fields
+        if marked_batch_parent_id is None:
+            self.litellm_params.pop(BATCH_PARENT_ID_KEY, None)  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped upstream
+        else:
+            self.litellm_params[BATCH_PARENT_ID_KEY] = marked_batch_parent_id  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped upstream
         self.litellm_request_debug = litellm_params.get("litellm_request_debug", False)
         self.logger_fn = litellm_params.get("logger_fn", None)
         if is_debugging_on() or self.litellm_request_debug:
@@ -983,6 +996,10 @@ class Logging(LiteLLMLoggingBaseClass):
                 **additional_params,
             }
         )
+        # Provider params / additional kwargs are caller-influenced; they must not
+        # overwrite the internal litellm_params, or a request body carrying
+        # `litellm_params` could forge logging markers (e.g. batch_parent_id).
+        self.model_call_details["litellm_params"] = self.litellm_params
 
         ## check if stream options is set ##  - used by CustomStreamWrapper for easy instrumentation
         if "stream_options" in additional_params:
@@ -993,6 +1010,10 @@ class Logging(LiteLLMLoggingBaseClass):
 
         if "custom_llm_provider" in self.model_call_details:
             self.custom_llm_provider = self.model_call_details["custom_llm_provider"]
+
+    def mark_batch_line_item(self, batch_id: str) -> None:
+        """Mark this logging object as one JSONL line of the completed batch ``batch_id``"""
+        self.litellm_params[BATCH_PARENT_ID_KEY] = batch_id  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped upstream
 
     def update_from_kwargs(
         self,
@@ -3290,8 +3311,11 @@ class Logging(LiteLLMLoggingBaseClass):
             batch_models = kwargs.get("batch_models", None)
             batch_successful_requests: Final = kwargs.get("batch_successful_requests", None)
             batch_failed_requests: Final = kwargs.get("batch_failed_requests", None)
+            batch_output_file_content: Final = kwargs.get("batch_output_file_content", None)
+            batch_error_file_content: Final = kwargs.get("batch_error_file_content", None)
             has_explicit_batch_data: Final = all(x is not None for x in (batch_cost, batch_usage, batch_models))
             should_compute_batch_data: Final = not has_explicit_batch_data and batch_cost_is_final(result)
+            result_files: BatchResultFiles | None = None  # rebind-ok: one batch-data branch below supplies the bytes
             if has_explicit_batch_data:
                 set_hidden_param(result, "response_cost", batch_cost)
                 set_hidden_param(result, "batch_models", batch_models)
@@ -3311,15 +3335,21 @@ class Logging(LiteLLMLoggingBaseClass):
                         total_cost=batch_cost,
                         cost_for_built_in_tools_cost_usd_dollar=0.0,
                     )
+                if batch_output_file_content is not None or batch_error_file_content is not None:
+                    result_files = BatchResultFiles(  # rebind-ok: the caller supplied the files
+                        output=batch_output_file_content if isinstance(batch_output_file_content, bytes) else None,
+                        error=batch_error_file_content if isinstance(batch_error_file_content, bytes) else None,
+                    )
 
             elif should_compute_batch_data:
-                batch_result: Final = await handle_completed_batch(
+                batch_result, fetched_result_files = await handle_completed_batch_with_files(
                     batch=result,
                     custom_llm_provider=self.custom_llm_provider,
                     model_name=self.get_deployment_model_for_cost(),
                     litellm_params=self.litellm_params,
                     model_info=self.get_router_deployment_model_info(),
                 )
+                result_files = fetched_result_files  # rebind-ok: the files this branch fetched
 
                 set_hidden_param(result, "response_cost", batch_result.cost)
                 set_hidden_param(result, "batch_models", batch_result.models)
@@ -3332,6 +3362,28 @@ class Logging(LiteLLMLoggingBaseClass):
                     total_cost=batch_result.cost,
                     cost_for_built_in_tools_cost_usd_dollar=0.0,
                 )
+
+            if litellm.store_batch_line_items_in_callbacks and (has_explicit_batch_data or should_compute_batch_data):
+                from litellm.batches.batch_line_item_logging import spawn_batch_line_items
+
+                _line_item_litellm_params: Final = cast(  # cast-ok: shared attribute is an untyped dict
+                    "dict[str, object] | None", self.litellm_params
+                )
+                try:
+                    spawn_batch_line_items(
+                        batch=result,
+                        custom_llm_provider=self.custom_llm_provider,
+                        parent=self,
+                        model_name=self.get_deployment_model_for_cost(),
+                        litellm_params=_line_item_litellm_params,
+                        model_info=self.get_router_deployment_model_info(),
+                        result_files=result_files,
+                    )
+                except Exception:  # noqa: BLE001  # starting the line fan-out must never break the aggregate aretrieve_batch path
+                    verbose_logger.exception(
+                        "batch line item logging failed for batch_id=%s; aggregate logging unaffected",
+                        result.id,
+                    )
 
         self.truncated_messages_for_logging = await truncate_base64_in_messages_async(
             StandardLoggingPayloadSetup.append_system_prompt_messages(
@@ -4289,19 +4341,10 @@ class Logging(LiteLLMLoggingBaseClass):
             verbose_logger.warning("LiteLLM: the anthropic_messages stream assembled no response, logging an empty one")
             return litellm.ModelResponse(model=self.model)
         else:
-            from litellm.types.llms.anthropic import AnthropicResponse
+            from litellm.llms.anthropic.chat.transformation import anthropic_message_to_model_response
 
-            pydantic_result: Final = AnthropicResponse.model_validate(result)
-            import httpx
-
-            result = litellm.AnthropicConfig().transform_parsed_response(
-                completion_response=pydantic_result.model_dump(),
-                raw_response=httpx.Response(
-                    status_code=200,
-                    headers={},
-                ),
-                model_response=litellm.ModelResponse(id=provider_response_id),
-                json_mode=None,
+            result = anthropic_message_to_model_response(
+                cast(Mapping[str, object], result),  # cast-ok: handler result is typed Any upstream
                 speed=self.optional_params.get("speed") if self.optional_params else None,
             )
         return result
@@ -6535,8 +6578,12 @@ def _extract_response_obj_and_hidden_params(
         response_obj = {}
 
     if original_exception is not None and hidden_params is None:
-        response_headers: Final = _get_response_headers(original_exception)
-        if response_headers is not None:
+        exception_hidden_params: Final[Mapping[str, object] | None] = getattr(
+            original_exception, "_hidden_params", None
+        )
+        if isinstance(exception_hidden_params, dict) and exception_hidden_params:
+            hidden_params = dict(exception_hidden_params)  # rebind-ok: the exception carries the hidden params
+        elif (response_headers := _get_response_headers(original_exception)) is not None:
             hidden_params = dict(
                 StandardLoggingHiddenParams(
                     additional_headers=StandardLoggingPayloadSetup.get_additional_headers(dict(response_headers)),

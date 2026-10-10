@@ -33,6 +33,7 @@ from litellm.integrations.otel.model.metadata import flatten_metadata
 from litellm.integrations.otel.model.semconv import LiteLLM, Metric
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.integrations.otel.routing import routing_decision_attributes
+from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.secret_redaction import redact_string
@@ -1669,6 +1670,11 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         return True
 
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
+        # A batch line item's tokens and cost are metered by the aggregate
+        # aretrieve_batch event; per-line samples here would double-count them.
+        # Spans for line items are still emitted by _handle_success.
+        if is_batch_line_item_event(kwargs):
+            return
         duration_s: Final = (end_time - start_time).total_seconds()
         params: Final = kwargs.get("litellm_params") or {}
         provider: Final = _provider_label(params.get("custom_llm_provider"))

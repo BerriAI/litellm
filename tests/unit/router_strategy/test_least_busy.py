@@ -219,6 +219,31 @@ async def test_an_open_circuit_breaker_falls_back_without_a_warning_per_request(
     assert sum("circuit breaker is open" in record.getMessage() for record in caplog.records) == 2
 
 
+@pytest.mark.asyncio
+async def test_batch_line_item_success_does_not_release_in_flight_slots(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A batch line item is historical batch traffic (call_type=acompletion +
+    litellm_params.batch_parent_id): it never started a live request, so its success
+    callback must not decrement the in-flight count a live request still holds."""
+    import litellm
+
+    monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
+    shared: Final = SharedRedisCounters()
+    worker: Final = _worker(shared)
+    worker.log_pre_api_call(model="m", messages=[], kwargs=_call_kwargs("dep-a"))
+
+    line_item_kwargs: Final = {
+        "call_type": "acompletion",
+        "litellm_params": {
+            "batch_parent_id": "batch-1",
+            "metadata": {"model_group": GROUP},
+            "model_info": {"id": "dep-a"},
+        },
+    }
+    await worker.async_log_success_event(line_item_kwargs, None, None, None)
+
+    assert shared.count(f"{GROUP}_request_count:dep-a") == 1
+
+
 def test_model_added():
     test_cache = DualCache()
     least_busy_logger = LeastBusyLoggingHandler(router_cache=test_cache)

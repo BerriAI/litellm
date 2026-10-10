@@ -735,9 +735,10 @@ class CheckBatchCost:
 
         """
         from litellm.batches.batch_utils import (
-            count_error_file_failed_requests,
             get_file_content_as_dictionary,
             calculate_batch_cost_and_usage,
+            count_error_file_failed_requests_from_content,
+            fetch_batch_error_file_content,
         )
         from litellm.files.main import afile_content
         from litellm.files.types import FileContentCallOptions
@@ -874,7 +875,7 @@ class CheckBatchCost:
             model_name=model_name,
             model_info=deployment_model_info,
         )
-        error_file_failed_requests: Final = await count_error_file_failed_requests(
+        error_file_content = await fetch_batch_error_file_content(
             response,
             custom_llm_provider=batch_file_provider,
             litellm_params={
@@ -882,6 +883,7 @@ class CheckBatchCost:
                 "_litellm_internal_model_credentials": MappingProxyType(dict(credentials)),
             },
         )
+        error_file_failed_requests: Final = count_error_file_failed_requests_from_content(error_file_content)
         batch_result: Final = (
             output_file_result
             if not error_file_failed_requests
@@ -921,6 +923,7 @@ class CheckBatchCost:
             optional_params={},
             custom_llm_provider=str(llm_provider) if llm_provider else None,
         )
+        logging_obj._litellm_internal_model_credentials = MappingProxyType(dict(credentials))  # pyright: ignore[reportPrivateUsage]  # trusted credentials transport, consumed by batch_line_item_logging
 
         if not await self._claim_job_for_costing(job):
             verbose_proxy_logger.info(
@@ -939,6 +942,8 @@ class CheckBatchCost:
                 batch_failed_requests=batch_result.failed_requests,
                 batch_prompt_cost=batch_result.prompt_cost,
                 batch_completion_cost=batch_result.completion_cost,
+                batch_output_file_content=content_bytes,
+                batch_error_file_content=error_file_content,
             )
         except Exception:
             await self._release_job_claim(job)

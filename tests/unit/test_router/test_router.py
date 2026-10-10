@@ -1305,6 +1305,53 @@ def test_sync_deployment_callback_on_success_skips_batch_retrieves(
         == expected_successes
     )
 
+
+@pytest.mark.asyncio
+async def test_deployment_callbacks_skip_batch_line_items(monkeypatch: pytest.MonkeyPatch):
+    """
+    Batch line-item callbacks carry call_type=acompletion plus
+    litellm_params.batch_parent_id, so the call-type-only batch guards do not fire.
+    They describe historical batch traffic already reported by the aggregate
+    aretrieve_batch event and must not consume live TPM/RPM quota.
+    """
+    monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": _BATCH_GROUP,
+                "litellm_params": {"model": _BATCH_DEPLOYMENT_MODEL, "api_base": _BATCH_API_BASE, "api_key": "sk-fake"},
+                "model_info": {"id": "batch-dep"},
+            }
+        ]
+    )
+    now = datetime.now()
+    line_item_kwargs = {
+        "call_type": "acompletion",
+        "standard_logging_object": {"total_tokens": _BATCH_TOKENS_PER_ROW},
+        "litellm_params": {
+            "batch_parent_id": _BATCH_ID,
+            "metadata": {"model_group": _BATCH_GROUP, "deployment": _BATCH_DEPLOYMENT_MODEL},
+            "model_info": {"id": "batch-dep"},
+        },
+    }
+
+    await router.deployment_callback_on_success(
+        kwargs=line_item_kwargs, completion_response=None, start_time=now, end_time=now
+    )
+    sync_key = router.sync_deployment_callback_on_success(
+        kwargs=line_item_kwargs, completion_response=None, start_time=now, end_time=now
+    )
+    await router.async_deployment_callback_on_failure(
+        kwargs=line_item_kwargs, completion_response=None, start_time=now, end_time=now
+    )
+
+    assert sync_key is None
+    assert (
+        get_deployment_successes_for_current_minute(litellm_router_instance=router, deployment_id="batch-dep") == 0
+    )
+    assert await _moved_routing_counters(router) == []
+    assert await _router_usage_keys(router) == []
+
 _ROUTING_STRATEGY_CACHE_MARKERS = ("_map", "_request_count", ":tpm:", ":rpm:")
 
 
@@ -1389,6 +1436,81 @@ async def test_arouter_aretrieve_batch_does_not_feed_routing_strategies(
         moved_counters = await _moved_routing_counters(router)
 
     assert response.id == _BATCH_ID
+    assert moved_counters == []
+
+
+_BATCH_INPUT_JSONL = "\n".join(
+    json.dumps(
+        {
+            "custom_id": f"row-{row}",
+            "method": "POST",
+            "url": "/v1/chat/completions",
+            "body": {"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+        }
+    )
+    for row in range(_BATCH_ROWS)
+)
+
+
+def _mock_batch_input_file(respx_mock):
+    respx_mock.get(f"{_BATCH_API_BASE}/files/file-in-1/content").mock(
+        return_value=httpx.Response(200, text=_BATCH_INPUT_JSONL)
+    )
+
+
+async def _line_item_payloads(collector: "_BatchPayloadCollector", minimum: int, timeout: float = 5.0) -> list:
+    loop = asyncio.get_event_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
+        line_items = [p for p in collector.payloads if p and p.get("call_type") == "acompletion"]
+        if len(line_items) >= minimum:
+            return line_items
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"expected at least {minimum} batch line-item payloads, saw {len(collector.payloads)} total")
+
+
+@pytest.mark.parametrize(
+    "routing_strategy",
+    [
+        "usage-based-routing",
+        "usage-based-routing-v2",
+        "latency-based-routing",
+        "cost-based-routing",
+        "least-busy",
+    ],
+)
+@pytest.mark.asyncio
+async def test_arouter_aretrieve_batch_line_items_do_not_feed_routing_strategies(
+    monkeypatch: pytest.MonkeyPatch, routing_strategy: str
+):
+    """
+    With the line-item flag on, retrieving a completed batch also emits one child
+    callback per JSONL line (call_type=acompletion + litellm_params.batch_parent_id,
+    inheriting the parent deployment's model_info). Those children are historical
+    batch traffic: like the aggregate poll, they must not move the counters that
+    decide where the next live chat request goes.
+    """
+    from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache
+
+    batch_line_item_claim_cache.in_memory_cache.flush_cache()
+    monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
+    collector = _BatchPayloadCollector()
+    monkeypatch.setattr(litellm, "callbacks", [collector])
+    monkeypatch.setattr(litellm, "input_callback", [])
+    router = _batch_fan_out_router(routing_strategy)
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        _mock_batch_provider(respx_mock)
+        _mock_batch_input_file(respx_mock)
+        respx_mock.get(f"{_UNRELATED_BATCH_API_BASE}/batches/{_BATCH_ID}").mock(
+            return_value=httpx.Response(404, json=_BATCH_NOT_FOUND)
+        )
+        response = await router.aretrieve_batch(batch_id=_BATCH_ID)
+        line_items = await _line_item_payloads(collector, minimum=_BATCH_ROWS)
+        moved_counters = await _moved_routing_counters(router)
+
+    assert response.id == _BATCH_ID
+    assert len(line_items) == _BATCH_ROWS
     assert moved_counters == []
 
 

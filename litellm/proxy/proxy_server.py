@@ -73,6 +73,7 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
+    MAX_TIME_TO_CLEAR_QUEUE,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
@@ -271,6 +272,11 @@ import litellm._redis
 from litellm import Router
 from litellm._internal_context import service_target, with_service_target
 from litellm._logging import redact_string, verbose_proxy_logger, verbose_router_logger
+from litellm.batches.batch_line_item_logging import (
+    _LINE_ITEM_CLAIM_TTL_SECONDS,  # pyright: ignore[reportPrivateUsage]  # the claim window is defined next to the cache it expires
+    batch_line_item_claim_cache,
+    drain_batch_line_items,
+)
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.dual_cache import DeclaredBatchRead
 from litellm.caching.redis_batch import (
@@ -1181,6 +1187,10 @@ async def _flush_spend_logs_queue_on_shutdown() -> None:
 async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = None) -> None:
     global prisma_client, master_key, user_custom_auth, user_custom_key_generate, user_custom_key_update
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
+    # Batch line fan-outs run outside the logging queue and keep their batch claim
+    # once started, so let them finish while the claim cache, database and
+    # callback clients are still open.
+    await drain_batch_line_items(timeout=MAX_TIME_TO_CLEAR_QUEUE)
     if worker_heartbeat is not None and prisma_client:
         await worker_heartbeat.deregister()
     if prisma_client:
@@ -5102,8 +5112,8 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     """
     Wires an established coordination Redis into the proxy-level caches that
     consume it directly: the spend counter cache, the CLI SSO login-session
-    cache, the cluster-wide config cache, and (only when opted in) the
-    virtual-key auth cache.
+    cache, the batch line-item claim cache, the cluster-wide config cache,
+    and (only when opted in) the virtual-key auth cache.
 
     The CLI SSO login-session cache is always backed by Redis when available so
     that the browser SSO flow behind `lite login` survives landing on different
@@ -5116,6 +5126,10 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     cli_sso_session_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
+    )
+    batch_line_item_claim_cache.attach_redis_cache(
+        redis_cache,
+        default_redis_ttl=_LINE_ITEM_CLAIM_TTL_SECONDS,
     )
     if enable_redis_auth_cache is True:
         user_api_key_cache.attach_redis_cache(
@@ -7053,6 +7067,10 @@ class ProxyConfig:
             health_check_interval = general_settings.get("health_check_interval", DEFAULT_HEALTH_CHECK_INTERVAL)
             health_check_concurrency = general_settings.get("health_check_concurrency", None)
             health_check_details = general_settings.get("health_check_details", True)
+            ### BATCH LINE ITEM CALLBACKS ###
+            _store_batch_line_items: Final = coerce_bool(general_settings.get("store_batch_line_items_in_callbacks"))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # general_settings is untyped upstream
+            if _store_batch_line_items is not None:
+                litellm.store_batch_line_items_in_callbacks = bool(_store_batch_line_items)
             # Health-check-driven routing (opt-in, passes through to Router later)
             _enable_hc_routing = general_settings.get("enable_health_check_routing", False)
             _hc_staleness = general_settings.get("health_check_staleness_threshold", None)
@@ -8072,6 +8090,7 @@ class ProxyConfig:
             self._apply_alerting_settings,
             self._apply_pass_through_settings,
             self._apply_boolean_settings,
+            self._apply_batch_line_items_setting,
             partial(self._apply_cache_size_setting, cache_size_was_db=cache_size_was_db),
             self._apply_store_model_in_db_setting,
             partial(self._apply_retention_settings, previous_cleanup_schedule=previous_cleanup_schedule),
@@ -8132,6 +8151,11 @@ class ProxyConfig:
                 continue
             if (value := self.settings.get(key)) is not None:
                 self.settings[key] = coerce_bool(value)
+
+    async def _apply_batch_line_items_setting(self, db_values: Mapping[str, SettingsJsonValue]) -> None:
+        key: Final = "store_batch_line_items_in_callbacks"
+        value: Final = coerce_bool(self.settings.get(key))
+        litellm.store_batch_line_items_in_callbacks = bool(value) if value is not None else False
 
     async def _apply_cache_size_setting(
         self,

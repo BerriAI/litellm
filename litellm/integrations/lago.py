@@ -11,6 +11,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
@@ -121,6 +122,9 @@ class LagoLogger(CustomLogger):
         return returned_val
 
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
+        # A batch line item is billed by the aggregate aretrieve_batch event.
+        if is_batch_line_item_event(kwargs):
+            return
         _url = os.getenv("LAGO_API_BASE")
         assert _url is not None and isinstance(_url, str), (
             f"LAGO_API_BASE missing or not set correctly. LAGO_API_BASE={_url}"
@@ -153,6 +157,8 @@ class LagoLogger(CustomLogger):
             raise e
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_line_item_event(kwargs):
+            return
         try:
             verbose_logger.debug("ENTERS LAGO CALLBACK")
             _url = os.getenv("LAGO_API_BASE")

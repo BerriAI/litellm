@@ -2507,6 +2507,60 @@ async def test_flag_sends_every_vertex_row_down_the_native_path_when_a_model_is_
     assert (result.successful_requests, result.failed_requests) == (0, 1)
 
 
+@pytest.mark.asyncio
+async def testhandle_completed_batch_with_files_returns_bytes_and_fetches_error_once(monkeypatch):
+    rows = [_success_row(model="gpt-4o", usage=_usage(10, 5))]
+    output_bytes = _vertex_jsonl(rows)
+    error_bytes = _vertex_jsonl([{"custom_id": "req-bad", "error": {"message": "rejected"}}])
+
+    fetched = []
+
+    async def fake_fetch(batch, custom_llm_provider, litellm_params=None):
+        return output_bytes
+
+    async def fake_afile_content(**kw):
+        fetched.append(kw["file_id"])
+        return type("R", (), {"content": error_bytes})()
+
+    import litellm.cost_calculator as cc
+    import litellm.files.main as files_main
+
+    monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+    monkeypatch.setattr(cc, "batch_cost_calculator", lambda **kw: (2.0, 1.3))
+
+    batch = _batch("of").model_copy(update={"error_file_id": "ef"})
+
+    result, files = await bu.handle_completed_batch_with_files(batch, custom_llm_provider="openai")
+
+    assert result.cost == 3.3
+    assert result.failed_requests == 1
+    assert files.output == output_bytes
+    assert files.error == error_bytes
+    assert fetched == ["ef"]
+
+
+@pytest.mark.asyncio
+async def testhandle_completed_batch_with_files_no_output_returns_error_bytes(monkeypatch):
+    error_bytes = _vertex_jsonl([{"custom_id": "req-bad", "error": {"message": "rejected"}}])
+
+    async def fake_afile_content(**kw):
+        return type("R", (), {"content": error_bytes})()
+
+    import litellm.files.main as files_main
+
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+
+    batch = _batch(None).model_copy(update={"error_file_id": "ef"})
+
+    result, files = await bu.handle_completed_batch_with_files(batch, custom_llm_provider="openai")
+
+    assert result.failed_requests == 1
+    assert result.usage.total_tokens == 0
+    assert files.output is None
+    assert files.error == error_bytes
+
+
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
@@ -2934,7 +2988,7 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
     logging_obj.custom_llm_provider = "openai"
 
     # Mock handle_completed_batch to return cost data
-    from litellm.batches.batch_utils import BatchCostUsageResult
+    from litellm.batches.batch_utils import BatchCostUsageResult, BatchResultFiles
 
     expected_cost = 0.05
     expected_usage = litellm.Usage(
@@ -2945,14 +2999,17 @@ async def test_batch_retrieve_cost_tracking_with_completed_batch_no_explicit_cos
     expected_models = ["gpt-5-mini"]
 
     with patch(
-        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch",
+        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch_with_files",
         new=AsyncMock(
-            return_value=BatchCostUsageResult(
-                cost=expected_cost,
-                usage=expected_usage,
-                models=expected_models,
-                successful_requests=10,
-                failed_requests=0,
+            return_value=(
+                BatchCostUsageResult(
+                    cost=expected_cost,
+                    usage=expected_usage,
+                    models=expected_models,
+                    successful_requests=10,
+                    failed_requests=0,
+                ),
+                BatchResultFiles(output=None, error=None),
             )
         ),
     ) as mock_handle_batch:
@@ -3083,7 +3140,7 @@ async def test_batch_retrieve_cost_tracking_with_explicit_cost_data():
     explicit_models = ["gpt-5-mini", "gpt-5.5"]
 
     with patch(
-        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch",
+        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch_with_files",
         new=AsyncMock(),
     ) as mock_handle_batch:
         # Call async_success_handler with explicit cost data
@@ -3216,7 +3273,7 @@ async def test_batch_retrieve_cost_tracking_with_unified_file_id_incomplete_batc
     logging_obj.custom_llm_provider = "openai"
 
     with patch(
-        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch",
+        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch_with_files",
         new=AsyncMock(),
     ) as mock_handle_batch:
         # Call async_success_handler with in_progress batch (unified file ID)
@@ -3302,17 +3359,20 @@ async def test_batch_retrieve_cost_tracking_with_partial_explicit_data():
     )
     expected_models = ["gpt-5-mini"]
 
-    from litellm.batches.batch_utils import BatchCostUsageResult
+    from litellm.batches.batch_utils import BatchCostUsageResult, BatchResultFiles
 
     with patch(
-        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch",
+        "litellm.litellm_core_utils.litellm_logging.handle_completed_batch_with_files",
         new=AsyncMock(
-            return_value=BatchCostUsageResult(
-                cost=expected_cost,
-                usage=expected_usage,
-                models=expected_models,
-                successful_requests=8,
-                failed_requests=0,
+            return_value=(
+                BatchCostUsageResult(
+                    cost=expected_cost,
+                    usage=expected_usage,
+                    models=expected_models,
+                    successful_requests=8,
+                    failed_requests=0,
+                ),
+                BatchResultFiles(output=None, error=None),
             )
         ),
     ) as mock_handle_batch:

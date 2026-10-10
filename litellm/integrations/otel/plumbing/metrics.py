@@ -33,6 +33,7 @@ from litellm.integrations.otel.model.semconv import (
     resolve_provider,
 )
 from litellm.integrations.otel.model.utils import to_seconds
+from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -221,6 +222,12 @@ class GenAIMetricRecorder:
         start_time: datetime,
         end_time: datetime,
     ) -> None:
+        # A batch line item is metered by the aggregate aretrieve_batch event, and
+        # its child interval (parent retrieve start -> line emission) measures
+        # retrieval and callback processing rather than the line's model call, so
+        # skip every metric for it; spans for line items are still emitted.
+        if is_batch_line_item_event(kwargs):
+            return
         common_attrs: Final = self._filter_attributes(self._bounded_attributes(kwargs))
         duration_s: Final = (end_time - start_time).total_seconds()
         usage_is_replayed: Final = is_unbilled_non_inference_call_from_params(
@@ -246,6 +253,10 @@ class GenAIMetricRecorder:
         start_time: datetime,
         end_time: datetime,
     ) -> None:
+        # A batch line item's interval measures retrieval and emission, not the
+        # line's model call, so its duration would be synthetic here too.
+        if is_batch_line_item_event(kwargs):
+            return
         """Record the one metric a failed request can honestly report: the
         operation's duration, tagged with ``error.type``.
 

@@ -44,6 +44,7 @@ from litellm.integrations.prometheus_helpers.shared_prometheus_series_admissions
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     get_metadata_variable_name_from_kwargs,
+    is_batch_line_item_event,
 )
 from litellm.litellm_core_utils.service_tier_utils import (
     get_service_tier_from_standard_logging_payload,
@@ -1506,6 +1507,10 @@ class PrometheusLogger(CustomLogger):
         self._track_end_user_metric_series(counter, metric_name, _labels)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        # A batch line item is metered by the aggregate aretrieve_batch event; a
+        # per-line sample here would double-count spend and requests.
+        if is_batch_line_item_event(kwargs):
+            return
         # Define prometheus client
         verbose_logger.debug(
             "prometheus Logging - Enters success logging function (kwargs keys: %s)",
@@ -2602,6 +2607,8 @@ class PrometheusLogger(CustomLogger):
             )
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_line_item_event(kwargs):
+            return
         verbose_logger.debug(
             "prometheus Logging - Enters failure logging function (kwargs keys: %s)",
             list(kwargs.keys()) if isinstance(kwargs, dict) else type(kwargs).__name__,

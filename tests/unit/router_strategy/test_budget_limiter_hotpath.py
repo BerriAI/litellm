@@ -391,6 +391,29 @@ async def test_push_task_failure_is_logged_once_and_not_leaked(disable_budget_sy
     unretrieved.assert_not_called()
 
 
+@pytest.mark.asyncio
+async def test_batch_line_item_events_do_not_charge_the_provider_budget(disable_budget_sync):
+    limiter = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={"openai": BudgetConfig(max_budget=100.0, budget_duration="1d")},
+    )
+    await asyncio.gather(*(task for task in asyncio.all_tasks() if task is not asyncio.current_task()))
+
+    await limiter.async_log_success_event(
+        kwargs={
+            "call_type": "acompletion",
+            "litellm_params": {"custom_llm_provider": "openai", "batch_parent_id": "batch_x"},
+            "standard_logging_object": {"response_cost": 1.0, "model_id": "dep-1"},
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    assert limiter.dual_cache.in_memory_cache.get_cache("provider_spend:openai:1d") in (None, 0)
+    assert limiter.redis_increment_operation_queue == []
+
+
 _SPEND_KEY = "provider_spend:openai:1d"
 
 

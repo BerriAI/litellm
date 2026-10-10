@@ -29789,6 +29789,11 @@ export interface components {
             /** @description Which keys of LiteLLM_SpendLogs.metadata are written to the database. Set exactly one of 'include' (write only these keys) or 'exclude' (drop these keys). 'status' and 'cold_storage_object_key' are always written. Daily spend tables, budgets and logging callbacks still see every key. Unset writes every key */
             spend_logs_metadata_fields?: components["schemas"]["SpendLogsMetadataFields"] | null;
             /**
+             * Store Batch Line Items In Callbacks
+             * @description If True, a completed batch logged via aretrieve_batch also emits one callback event per JSONL line item (request paired with its response or error). The aggregate batch callback is unchanged. Default is False.
+             */
+            store_batch_line_items_in_callbacks?: boolean | null;
+            /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
              */

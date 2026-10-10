@@ -32,6 +32,7 @@ from litellm.caching.caching import DualCache
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, REDACTED_BY_LITELLM, SENTRY_PII_DENYLIST
 from litellm.cost_calculator import ocr_batch_cost
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import BATCH_PARENT_ID_KEY, is_batch_line_item_event
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
     Logging,
@@ -335,15 +336,16 @@ async def test_mcp_native_structured_replacement_must_match_returned_content(
     )
     logging_obj.dynamic_success_callbacks = [NativeReplacement()]
     returned = await logging_obj.async_post_mcp_tool_call_hook(
-        kwargs={"original_response": result}, response_obj=result,
-        start_time=datetime.datetime.now(), end_time=datetime.datetime.now(),
+        kwargs={"original_response": result},
+        response_obj=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
     )
     assert returned is result
     assert result.content == [TextContent(type="text", text="native-safe" if same_content else "final-safe")]
     assert result.structured_content == ({"result": "native-safe"} if replace_structured and same_content else None)
     assert result.is_error is not (replace_structured and same_content)
     assert "SECRET-1234" not in result.model_dump_json()
-
 
 
 @pytest.mark.asyncio
@@ -363,8 +365,10 @@ async def test_mcp_direct_content_edit_invalidates_stale_structured_data(logging
     )
     logging_obj.dynamic_success_callbacks = [DirectRedactor()]
     returned = await logging_obj.async_post_mcp_tool_call_hook(
-        kwargs={"original_response": result}, response_obj=result,
-        start_time=datetime.datetime.now(), end_time=datetime.datetime.now(),
+        kwargs={"original_response": result},
+        response_obj=result,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
     )
     assert returned is result
     assert result.content == [TextContent(type="text", text="[REDACTED]")]
@@ -439,6 +443,8 @@ def test_sentry_environment(monkeypatch):
         set_callbacks(["sentry"])
         mock_init.assert_called_once()
         assert mock_init.call_args[1]["environment"] == environment
+
+
 def test_use_custom_pricing_for_model():
     from litellm.litellm_core_utils.litellm_logging import use_custom_pricing_for_model
 
@@ -1281,19 +1287,24 @@ class TestRetrieveBatchCostPassesModelIdentity:
 
         captured: dict[str, object] = {}
 
-        from litellm.batches.batch_utils import BatchCostUsageResult
+        from litellm.batches.batch_utils import BatchCostUsageResult, BatchResultFiles
 
-        async def fake_handle_completed_batch(**kwargs: object) -> BatchCostUsageResult:
+        async def fake_handle_completed_batch(
+            **kwargs: object,
+        ) -> tuple[BatchCostUsageResult, BatchResultFiles]:
             captured.update(kwargs)
-            return BatchCostUsageResult(
-                cost=1.25,
-                usage=Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800),
-                models=["m"],
-                successful_requests=1,
-                failed_requests=0,
+            return (
+                BatchCostUsageResult(
+                    cost=1.25,
+                    usage=Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800),
+                    models=["m"],
+                    successful_requests=1,
+                    failed_requests=0,
+                ),
+                BatchResultFiles(output=None, error=None),
             )
 
-        monkeypatch.setattr(logging_module, "handle_completed_batch", fake_handle_completed_batch)
+        monkeypatch.setattr(logging_module, "handle_completed_batch_with_files", fake_handle_completed_batch)
 
         obj = LitellmLogging(
             model="bedrock/global.anthropic.claude-sonnet-4-6",
@@ -1376,7 +1387,7 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         from litellm.litellm_core_utils import litellm_logging as logging_module
 
         handle_completed_batch = AsyncMock()
-        monkeypatch.setattr(logging_module, "handle_completed_batch", handle_completed_batch)
+        monkeypatch.setattr(logging_module, "handle_completed_batch_with_files", handle_completed_batch)
         batch = self._batch(status, output_file_id)
 
         await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
@@ -1386,20 +1397,23 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
 
     @pytest.mark.asyncio
     async def test_completed_batch_with_output_is_priced(self, monkeypatch) -> None:
-        from litellm.batches.batch_utils import BatchCostUsageResult
+        from litellm.batches.batch_utils import BatchCostUsageResult, BatchResultFiles
         from litellm.litellm_core_utils import litellm_logging as logging_module
         from litellm.types.utils import Usage
 
         handle_completed_batch = AsyncMock(
-            return_value=BatchCostUsageResult(
-                cost=8e-06,
-                usage=Usage(prompt_tokens=26, completion_tokens=9, total_tokens=35),
-                models=["gpt-5.6-luna"],
-                successful_requests=2,
-                failed_requests=0,
+            return_value=(
+                BatchCostUsageResult(
+                    cost=8e-06,
+                    usage=Usage(prompt_tokens=26, completion_tokens=9, total_tokens=35),
+                    models=["gpt-5.6-luna"],
+                    successful_requests=2,
+                    failed_requests=0,
+                ),
+                BatchResultFiles(output=None, error=None),
             )
         )
-        monkeypatch.setattr(logging_module, "handle_completed_batch", handle_completed_batch)
+        monkeypatch.setattr(logging_module, "handle_completed_batch_with_files", handle_completed_batch)
         batch = self._batch("completed", "file-out")
 
         await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
@@ -2881,8 +2895,13 @@ async def test_shadow_snapshot_stays_private_and_is_invalidated_before_logging_g
 
     class RecordingShadowLogger(ShadowEvalLogger):
         async def async_log_success_event(
-            self, kwargs: Mapping[str, object], response_obj: object, start_time: object,
-            end_time: object, *, guardrail_snapshot: GuardrailRequestSnapshot | None = None,
+            self,
+            kwargs: Mapping[str, object],
+            response_obj: object,
+            start_time: object,
+            end_time: object,
+            *,
+            guardrail_snapshot: GuardrailRequestSnapshot | None = None,
         ) -> None:
             shadow_snapshots.append(guardrail_snapshot)
             await super().async_log_success_event(
@@ -2891,13 +2910,20 @@ async def test_shadow_snapshot_stays_private_and_is_invalidated_before_logging_g
 
     class RecordingLogger(CustomLogger):
         async def async_log_success_event(
-            self, kwargs: Mapping[str, object], response_obj: object, start_time: object, end_time: object,
+            self,
+            kwargs: Mapping[str, object],
+            response_obj: object,
+            start_time: object,
+            end_time: object,
         ) -> None:
             other_payloads.append(kwargs)
 
     class LoggingGuardrail(CustomGuardrail):
         async def async_logging_hook(
-            self, kwargs: dict[str, object], result: object, call_type: str,
+            self,
+            kwargs: dict[str, object],
+            result: object,
+            call_type: str,
         ) -> tuple[dict[str, object], object]:
             hook_snapshots.append(logging_obj.shadow_eval_request_snapshot)
             if hook_mode == "raises":
@@ -2909,26 +2935,36 @@ async def test_shadow_snapshot_stays_private_and_is_invalidated_before_logging_g
         "user_api_key_hash": "test-key",
     }
     snapshot: Final = GuardrailRequestSnapshot.capture(
-        {"messages": [{"role": "user", "content": "snapshot-only"}]}, metadata,
+        {"messages": [{"role": "user", "content": "snapshot-only"}]},
+        metadata,
     )
     assert snapshot is not None
     shadow: Final = RecordingShadowLogger(prisma_provider=no_prisma, jobs_cache=InMemoryCache())
     guardrail: Final = LoggingGuardrail(
-        guardrail_name="late-mask", default_on=True,
+        guardrail_name="late-mask",
+        default_on=True,
         event_hook=GuardrailEventHooks.pre_call if hook_mode == "disabled" else GuardrailEventHooks.logging_only,
     )
     monkeypatch.setattr(litellm, "_async_success_callback", [])
     logging_obj: Final = LitellmLogging(
-        model="test-model", messages=[], stream=stream, call_type="anthropic_messages",
-        start_time=datetime.datetime.now(), litellm_call_id="private-snapshot", function_id="private-snapshot",
+        model="test-model",
+        messages=[],
+        stream=stream,
+        call_type="anthropic_messages",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="private-snapshot",
+        function_id="private-snapshot",
         dynamic_async_success_callbacks=[shadow, RecordingLogger(), guardrail],
     )
     logging_obj.update_messages([{"role": "user", "content": "logged input"}])
     logging_obj.update_environment_variables(litellm_params={"metadata": metadata}, optional_params={})
     logging_obj.shadow_eval_request_snapshot = snapshot
     payload: Final = {
-        "id": "private-snapshot", "call_type": "anthropic_messages", "metadata": metadata,
-        "model_group": "test-model", "model_parameters": {},
+        "id": "private-snapshot",
+        "call_type": "anthropic_messages",
+        "metadata": metadata,
+        "model_group": "test-model",
+        "model_parameters": {},
     }
 
     await logging_obj.async_success_handler(result=ModelResponse(), standard_logging_object=payload)
@@ -3383,7 +3419,9 @@ def test_sentry_event_scrubber_initialization(monkeypatch):
     call_args = mock_init.call_args[1]
     assert call_args["send_default_pii"] is False
     assert call_args["event_scrubber"].recursive is True
-    assert {name.lower() for name in SENTRY_PII_DENYLIST} <= {name.lower() for name in call_args["event_scrubber"].denylist}
+    assert {name.lower() for name in SENTRY_PII_DENYLIST} <= {
+        name.lower() for name in call_args["event_scrubber"].denylist
+    }
     assert call_args["before_send"] is call_args["before_send_transaction"]
 
 
@@ -3398,7 +3436,9 @@ def test_sentry_send_default_pii_opt_in(monkeypatch):
 
     call_args = mock_init.call_args[1]
     assert call_args["send_default_pii"] is True
-    assert not {name.lower() for name in SENTRY_PII_DENYLIST} & {name.lower() for name in call_args["event_scrubber"].denylist}
+    assert not {name.lower() for name in SENTRY_PII_DENYLIST} & {
+        name.lower() for name in call_args["event_scrubber"].denylist
+    }
 
 
 def test_get_masked_values():
@@ -5766,6 +5806,34 @@ def test_handle_anthropic_messages_response_logging_keeps_the_served_response_id
     assert result.service_tier == "flex"
 
 
+@pytest.mark.parametrize("as_model", [False, True], ids=["dict", "pydantic"])
+def test_handle_anthropic_messages_response_logging_keeps_the_message_id_of_a_parsed_message(as_model):
+    from litellm.types.llms.anthropic import AnthropicResponse
+
+    message: Final = {
+        "id": "msg_served",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": 3, "output_tokens": 1},
+    }
+    logging_obj = _anthropic_messages_logging_obj()
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+
+    result = logging_obj._handle_anthropic_messages_response_logging(
+        result=AnthropicResponse.model_validate(message) if as_model else message
+    )
+
+    assert isinstance(result, ModelResponse)
+    assert result.id == "msg_served"
+    choice: Final = result.choices[0]
+    assert isinstance(choice, litellm.Choices)
+    assert choice.message.content == "hi"
+
+
 def test_handle_anthropic_messages_response_logging_passes_model_response_through():
     """Anthropic-native path already yields a ModelResponse; it must be returned unchanged."""
     logging_obj = _anthropic_messages_logging_obj()
@@ -6677,8 +6745,8 @@ def test_restore_correlation_context_safe_to_call_repeatedly(monkeypatch):
 
 
 def test_restore_correlation_context_does_not_resanitize(monkeypatch):
-    from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm._logging import _sanitize_correlation_id
+    from litellm.litellm_core_utils.litellm_logging import Logging
 
     monkeypatch.setattr(litellm, "request_correlation_in_logs", True)
     trace_id_var.set("outer-trace")
@@ -6825,11 +6893,11 @@ class TestNonInferenceCallTypesAreNotBilled:
         assert cost == 0.0
 
     def test_retrieved_usage_is_not_re_reported_in_standard_logging_payload(self):
+        from datetime import datetime
+
         from litellm.litellm_core_utils.litellm_logging import (
             get_standard_logging_object_payload,
         )
-
-        from datetime import datetime
 
         logging_obj = self._logging_obj("aget_responses")
         now = datetime.now()
@@ -7134,7 +7202,9 @@ def test_debugging_log_with_json_logs_tolerates_missing_headers(logging_obj, mon
     logging_obj.litellm_request_debug = True
 
     with patch("litellm.litellm_core_utils.litellm_logging.verbose_logger.warning") as warning:
-        logging_obj._print_llm_call_debugging_log(api_base="https://api.openai.com/v1", headers=None, additional_args={})
+        logging_obj._print_llm_call_debugging_log(
+            api_base="https://api.openai.com/v1", headers=None, additional_args={}
+        )
 
     assert "https://api.openai.com/v1" in warning.call_args.kwargs["extra"]["api_base"]
 
@@ -9025,8 +9095,6 @@ def test_get_assembled_streaming_response_bills_a_provider_reported_usage_cost()
     assert logging_obj.response_cost_calculator(result=assembled) == 0.0042
 
 
-
-
 def test_response_cost_calculator_prices_terminal_responses_event_from_its_response():
     logging_obj: Final = _responses_stream_logging_obj()
     inner_response: Final = ResponsesAPIResponse(
@@ -9549,13 +9617,222 @@ def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
             custom_logger_init_args={},
         )
         assert created is None
-        assert not [
-            cb for cb in logging_module._in_memory_loggers if getattr(cb, "callback_name", None) == "signoz"
-        ]
+        assert not [cb for cb in logging_module._in_memory_loggers if getattr(cb, "callback_name", None) == "signoz"]
     finally:
         logging_module._in_memory_loggers.clear()
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
+
+
+class TestRetrieveBatchReusesFetchedResultFiles:
+    """The aggregate path and log_batch_line_items must share one fetch of each
+    result file: output and error are fetched once total (not once each per
+    consumer), and forwarded bytes keep line-item logging off the wire."""
+
+    @staticmethod
+    def _batch_file_bytes() -> dict[str, bytes]:
+        input_jsonl = json.dumps(
+            {
+                "custom_id": "a",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {"model": "gpt-4o", "messages": [{"role": "user", "content": "hi"}]},
+            }
+        ).encode()
+        output_jsonl = json.dumps(
+            {
+                "custom_id": "a",
+                "response": {
+                    "status_code": 200,
+                    "body": {
+                        "id": "chatcmpl-1",
+                        "model": "gpt-4o",
+                        "choices": [
+                            {
+                                "index": 0,
+                                "message": {"role": "assistant", "content": "hi back"},
+                                "finish_reason": "stop",
+                            }
+                        ],
+                        "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                    },
+                },
+            }
+        ).encode()
+        error_jsonl = json.dumps({"custom_id": "b", "error": {"message": "rejected"}}).encode()
+        return {"file-in": input_jsonl, "file-out": output_jsonl, "file-err": error_jsonl}
+
+    @staticmethod
+    def _logging_obj() -> LitellmLogging:
+        obj = LitellmLogging(
+            model="gpt-4o",
+            messages=[{"role": "user", "content": "Hey"}],
+            stream=False,
+            call_type="aretrieve_batch",
+            start_time=time.time(),
+            litellm_call_id="batch-call-reuse",
+            function_id="f",
+        )
+        obj.custom_llm_provider = "openai"
+        obj.update_environment_variables(
+            litellm_params={"metadata": {}},
+            optional_params={},
+            custom_llm_provider="openai",
+        )
+        return obj
+
+    @staticmethod
+    def _batch():
+        from litellm.types.utils import LiteLLMBatch
+
+        return LiteLLMBatch(
+            id="batch_reuse_fetched_files",
+            completion_window="24h",
+            created_at=1,
+            endpoint="/v1/chat/completions",
+            input_file_id="file-in",
+            object="batch",
+            status="completed",
+            output_file_id="file-out",
+            error_file_id="file-err",
+        )
+
+    @pytest.mark.asyncio
+    async def test_compute_path_fetches_each_result_file_once(self, monkeypatch) -> None:
+        from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache, pending_batch_line_item_tasks
+
+        batch_line_item_claim_cache.in_memory_cache.flush_cache()
+        file_bytes = self._batch_file_bytes()
+
+        async def fake_afile_content(**kwargs):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(content=file_bytes[kwargs["file_id"]])
+
+        file_mock = AsyncMock(side_effect=fake_afile_content)
+        monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
+        monkeypatch.setattr("litellm.files.main.afile_content", file_mock)
+        monkeypatch.setattr("litellm.cost_calculator.batch_cost_calculator", lambda **kw: (0.01, 0.02))
+
+        await self._logging_obj()._async_success_handler_body(result=self._batch(), start_time=None, end_time=None)
+        await asyncio.gather(*pending_batch_line_item_tasks())
+
+        fetched = sorted(call.kwargs["file_id"] for call in file_mock.await_args_list)
+        assert fetched == ["file-err", "file-in", "file-out"], (
+            "each result file must be fetched exactly once across aggregate costing and line-item logging"
+        )
+
+    @pytest.mark.asyncio
+    async def test_explicit_kwargs_path_forwards_result_files(self, monkeypatch) -> None:
+        from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache, pending_batch_line_item_tasks
+
+        batch_line_item_claim_cache.in_memory_cache.flush_cache()
+        from litellm.types.utils import Usage
+
+        file_bytes = self._batch_file_bytes()
+
+        async def fake_afile_content(**kwargs):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(content=file_bytes[kwargs["file_id"]])
+
+        file_mock = AsyncMock(side_effect=fake_afile_content)
+        monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
+        monkeypatch.setattr("litellm.files.main.afile_content", file_mock)
+
+        await self._logging_obj().async_success_handler(
+            result=self._batch(),
+            batch_cost=1.5,
+            batch_usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+            batch_models=["gpt-4o"],
+            batch_successful_requests=1,
+            batch_failed_requests=1,
+            batch_output_file_content=file_bytes["file-out"],
+            batch_error_file_content=file_bytes["file-err"],
+        )
+        await asyncio.gather(*pending_batch_line_item_tasks())
+
+        assert file_mock.await_count == 1
+        assert file_mock.await_args.kwargs["file_id"] == "file-in", (
+            "forwarded output/error bytes must leave only the input file to fetch"
+        )
+
+    @pytest.mark.asyncio
+    async def test_line_item_logging_failure_leaves_aggregate_result_intact(self, monkeypatch) -> None:
+        from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache
+
+        batch_line_item_claim_cache.in_memory_cache.flush_cache()
+        from litellm.types.utils import Usage
+
+        monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
+        monkeypatch.setattr(
+            "litellm.batches.batch_line_item_logging.log_batch_line_items",
+            AsyncMock(side_effect=RuntimeError("claim backend exploded")),
+        )
+
+        batch = self._batch()
+        await self._logging_obj().async_success_handler(
+            result=batch,
+            batch_cost=1.5,
+            batch_usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+            batch_models=["gpt-4o"],
+            batch_successful_requests=1,
+            batch_failed_requests=1,
+        )
+
+        assert batch._hidden_params["response_cost"] == 1.5
+        assert batch.usage.total_tokens == 15
+
+
+def test_caller_supplied_litellm_params_cannot_forge_logging_markers(logging_obj):
+    """A request body key `litellm_params` flows into optional_params; the logging
+    kwargs must keep the internal litellm_params or a caller could forge markers
+    (batch_parent_id) that spend sinks and router counters use to skip events."""
+    from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
+
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {"model_group": "gpt-4o"}},
+        optional_params={"litellm_params": {"batch_parent_id": "fake-batch"}},
+    )
+
+    assert logging_obj.model_call_details["litellm_params"] is logging_obj.litellm_params
+    assert "batch_parent_id" not in logging_obj.model_call_details["litellm_params"]
+    assert not is_batch_line_item_event(logging_obj.model_call_details)
+
+
+def test_a_top_level_batch_parent_id_request_field_is_not_a_line_item_marker(logging_obj):
+    """moderation, transcription and speech build litellm_params from every request kwarg,
+    so a body field named batch_parent_id lands in the litellm_params argument itself"""
+    logging_obj.update_environment_variables(
+        litellm_params={"metadata": {"model_group": "tts-1"}, BATCH_PARENT_ID_KEY: "batch_forged_by_caller"},
+        optional_params={},
+    )
+
+    assert BATCH_PARENT_ID_KEY not in logging_obj.model_call_details["litellm_params"]
+    assert logging_obj.model_call_details["litellm_params"]["metadata"] == {"model_group": "tts-1"}
+    assert not is_batch_line_item_event(logging_obj.model_call_details)
+
+
+def test_a_marked_batch_line_item_keeps_its_batch_through_later_updates(logging_obj):
+    logging_obj.update_environment_variables(litellm_params={}, optional_params={})
+    logging_obj.mark_batch_line_item("batch_abc")
+
+    logging_obj.update_environment_variables(
+        litellm_params={BATCH_PARENT_ID_KEY: "batch_forged_by_caller"}, optional_params={}
+    )
+
+    assert logging_obj.model_call_details["litellm_params"][BATCH_PARENT_ID_KEY] == "batch_abc"
+    assert is_batch_line_item_event(logging_obj.model_call_details)
+
+
+def test_hidden_params_carry_batch_line_fields_only_for_batch_line_items():
+    plain: Final = StandardLoggingPayloadSetup.get_hidden_params({"model_id": "m"})
+    line: Final = StandardLoggingPayloadSetup.get_hidden_params(
+        {"batch_id": "batch_abc", "batch_custom_id": "r1", "batch_line_status_code": 200}
+    )
+
+    assert {"batch_id", "batch_custom_id", "batch_line_status_code"}.isdisjoint(plain)
+    assert (line["batch_id"], line["batch_custom_id"], line["batch_line_status_code"]) == ("batch_abc", "r1", 200)
 
 
 def test_enterprise_alerting_loggers_resolves_real_classes():
@@ -9563,6 +9840,7 @@ def test_enterprise_alerting_loggers_resolves_real_classes():
     from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
     from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import SendGridEmailLogger
     from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
+
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
     logging_module._enterprise_alerting_loggers.cache_clear()
@@ -9582,6 +9860,7 @@ def test_enterprise_alerting_loggers_falls_back_without_disabling_callback_contr
     from litellm_enterprise.enterprise_callbacks.callback_controls import (
         EnterpriseCallbackControls,
     )
+
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
@@ -9602,10 +9881,7 @@ def test_enterprise_alerting_loggers_falls_back_without_disabling_callback_contr
     )
     logging_module._enterprise_alerting_loggers.cache_clear()
     for module_name in tuple(sys.modules):
-        if any(
-            module_name == prefix or module_name.startswith(f"{prefix}.")
-            for prefix in module_prefixes
-        ):
+        if any(module_name == prefix or module_name.startswith(f"{prefix}.") for prefix in module_prefixes):
             monkeypatch.delitem(sys.modules, module_name, raising=False)
     monkeypatch.setattr(sys, "meta_path", [BlockPagerDutyFinder(), *sys.meta_path])
 
@@ -9625,10 +9901,11 @@ def test_init_email_alerting_logger_reuses_instance(
     integration: Literal["smtp_email", "resend_email", "sendgrid_email"],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from litellm.litellm_core_utils import litellm_logging as logging_module
     from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import ResendEmailLogger
     from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import SendGridEmailLogger
     from litellm_enterprise.enterprise_callbacks.send_emails.smtp_email import SMTPEmailLogger
+
+    from litellm.litellm_core_utils import litellm_logging as logging_module
 
     logger_class: Final = (
         SMTPEmailLogger
@@ -9663,9 +9940,10 @@ def test_init_email_alerting_logger_reuses_instance(
 
 
 def test_init_pagerduty_logger_reuses_instance(monkeypatch):
-    from litellm.types.integrations.pagerduty import AlertingConfig
     from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
+
     from litellm.litellm_core_utils import litellm_logging as logging_module
+    from litellm.types.integrations.pagerduty import AlertingConfig
 
     monkeypatch.setenv("PAGERDUTY_API_KEY", "test-pagerduty-key")
     logging_module._in_memory_loggers.clear()
@@ -10176,8 +10454,8 @@ def test_get_hidden_params():
     assert result["response_cost"] is None
     assert result["additional_headers"] is None
 
-    # assert all fields in StandardLoggingHiddenParams are present
-    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__)
+    # assert all required fields in StandardLoggingHiddenParams are present
+    assert all(field in result for field in StandardLoggingHiddenParams.__required_keys__)
 
     # Test with valid params
     hidden_params = {
@@ -10197,8 +10475,8 @@ def test_get_hidden_params():
     assert result["response_cost"] == 0.001
     assert result["additional_headers"] is not None
     assert result["additional_headers"]["x_ratelimit_limit_requests"] == 2000
-    # assert all fields in StandardLoggingHiddenParams are present
-    assert all(field in result for field in StandardLoggingHiddenParams.__annotations__)
+    # assert all required fields in StandardLoggingHiddenParams are present
+    assert all(field in result for field in StandardLoggingHiddenParams.__required_keys__)
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
 def test_get_final_response_obj():

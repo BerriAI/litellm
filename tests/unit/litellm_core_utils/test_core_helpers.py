@@ -16,6 +16,7 @@ from litellm.litellm_core_utils.core_helpers import (
     get_parent_otel_span_from_kwargs,
     get_or_create_metadata_bucket,
     get_provider_response_headers_from_hidden_params,
+    is_batch_line_item_event,
     map_finish_reason,
     normalize_drop_params,
     process_response_headers,
@@ -523,6 +524,16 @@ class TestIsExpectedClientError:
             category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
         )
         assert is_expected_client_error(vendor_limit) is False
+
+
+def test_is_batch_line_item_event():
+    assert is_batch_line_item_event({"litellm_params": {"batch_parent_id": "batch_1"}}) is True
+    assert is_batch_line_item_event({"litellm_params": {"batch_parent_id": "batch_1", "metadata": {}}}) is True
+    assert is_batch_line_item_event({"litellm_params": {"metadata": {}}}) is False
+    assert is_batch_line_item_event({"litellm_params": {"batch_parent_id": None}}) is False
+    assert is_batch_line_item_event({}) is False
+    assert is_batch_line_item_event({"litellm_params": "not-a-mapping"}) is False
+    assert is_batch_line_item_event({"litellm_params": None}) is False
 
 
 class TestProviderResponseHeadersInHiddenParams:
