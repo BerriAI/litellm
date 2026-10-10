@@ -11,17 +11,18 @@ from mcp.types import Tool as MCPTool
 import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.proxy._experimental.mcp_server import operations
-from litellm.proxy._experimental.mcp_server import rest_endpoints
+from litellm.proxy._experimental.mcp_server import operations, rest_endpoints
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     HTTPException as MCPServerManagerHTTPException,
+)
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     ListedToolsCaller,
 )
 from litellm.proxy._experimental.mcp_server.operations import GatewayOperations, prepare_context
 from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PROXY_MaxParallelRequestsHandler_v3,
 )
@@ -542,9 +543,12 @@ async def test_tools_call_warmup_does_not_consume_mcp_server_rpm() -> None:
     )
     with (
         patch.object(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[server])),
-        patch.object(operations.global_mcp_server_manager, "server_exposes_tool", return_value=False),
+        patch.object(
+            operations.global_mcp_server_manager, "server_exposes_tool", side_effect=[False, True]
+        ),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
         patch.object(operations.global_mcp_server_manager, "get_tools_from_server", upstream),
+        patch.object(operations.global_mcp_server_manager, "_get_tools_from_server", upstream),
     ):
         await operations._list_tools_before_first_call(
             server=server,
@@ -1038,8 +1042,8 @@ async def test_discovery_preserves_caller_scope_and_proxy_restrictions():
 
 @pytest.mark.asyncio
 async def test_discovery_denial_cannot_advertise_tools():
-    from mcp.types import DiscoverRequest
     from fastapi import HTTPException
+    from mcp.types import DiscoverRequest
 
     denied = AsyncMock(side_effect=HTTPException(status_code=403, detail="Forbidden"))
     with patch("litellm.proxy._experimental.mcp_server.operations._execute_handle_list_tools", denied):
@@ -1052,9 +1056,16 @@ async def test_discovery_denial_cannot_advertise_tools():
 @pytest.mark.parametrize("available", ["none", "resources", "templates", "prompts"])
 async def test_discovery_lists_each_capability_with_the_same_caller(available):
     from mcp.types import (
-        DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult,
-        ListResourceTemplatesResult, Prompt, Resource, ResourceTemplate,
+        DiscoverRequest,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
+        ListToolsResult,
+        Prompt,
+        Resource,
+        ResourceTemplate,
     )
+
     from litellm.proxy._experimental.mcp_server import operations
 
     context = prepare_context(UserAPIKeyAuth(user_id="scoped"), mcp_servers=["authorized"])
@@ -1175,7 +1186,14 @@ async def test_discovery_shares_one_server_admission_across_catalog_listings() -
 @pytest.mark.asyncio
 @pytest.mark.parametrize("outcome", ["success", "failure", "cancel"])
 async def test_discovery_concurrent_listings_drain_on_failure_and_cancellation(outcome):
-    from mcp.types import DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult, ListResourceTemplatesResult
+    from mcp.types import (
+        DiscoverRequest,
+        ListPromptsResult,
+        ListResourcesResult,
+        ListResourceTemplatesResult,
+        ListToolsResult,
+    )
+
     from litellm.proxy._experimental.mcp_server import operations
 
     ready = [asyncio.Event() for _ in range(4)]
@@ -1227,6 +1245,7 @@ async def test_discovery_concurrent_listings_drain_on_failure_and_cancellation(o
 @pytest.mark.parametrize("log_enabled", [False, True])
 async def test_tools_listing_preserves_explicit_spend_log_policy(log_enabled):
     from mcp.types import PaginatedRequestParams
+
     from litellm.proxy._experimental.mcp_server import operations
 
     listing = AsyncMock(return_value=operations.AggregateToolListing(tools=[], outcomes={}))
@@ -1269,9 +1288,13 @@ async def test_list_mcp_tools_records_the_catalog_only_when_asked(
 @pytest.mark.asyncio
 async def test_discovery_keeps_one_catalog_revision_across_concurrent_listings(monkeypatch):
     from mcp.types import (
-        DiscoverRequest, ListToolsResult, ListPromptsResult, ListResourcesResult,
+        DiscoverRequest,
+        ListPromptsResult,
+        ListResourcesResult,
         ListResourceTemplatesResult,
+        ListToolsResult,
     )
+
     from litellm.proxy import proxy_server
     from litellm.proxy._experimental.mcp_server import operations
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
@@ -1486,6 +1509,7 @@ async def test_optional_catalog_preserves_revoked_user_error(monkeypatch, reques
     from types import SimpleNamespace
 
     from mcp import MCPError, types
+
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy import proxy_server
 

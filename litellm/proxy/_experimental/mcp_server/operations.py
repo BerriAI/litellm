@@ -76,6 +76,7 @@ from litellm.proxy._experimental.mcp_server.contracts import (
 )
 from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
 from litellm.proxy._experimental.mcp_server.exceptions import (
+    MCPServerListError,
     MCPToolResultError,
     MCPUpstreamAuthError,
 )
@@ -98,6 +99,7 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa:
     MCPServerManager,
     _caller_authorization_fans_out,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _client_forwarded_authorization_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _resolve_byok_mcp_auth_header,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _resolve_openapi_tool_auth,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _should_strip_caller_authorization,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     caller_authorization_fans_out,
@@ -138,7 +140,9 @@ from litellm.proxy._experimental.mcp_server.utils import (
     get_server_prefix,
     is_tool_name_prefixed,
     iter_known_server_prefixes,
+    iter_known_tool_name_spellings,
     logging_safe_mcp_headers,
+    match_known_server_prefix,
     match_known_tool_name,
     normalize_server_name,
     split_server_prefix_from_name,
@@ -1031,6 +1035,49 @@ def _aggregate_server_key(server: MCPServer) -> str:
 
 
 @catalog_operation(lambda: global_mcp_server_manager)
+async def _prepare_tool_listing_headers(
+    server: MCPServer,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    mcp_auth_header: str | None,
+    mcp_server_auth_headers: dict[str, dict[str, str]] | None,  # mutable-ok: mirrors _prepare_mcp_server_headers
+    oauth2_headers: dict[str, str] | None,  # mutable-ok: mirrors _prepare_mcp_server_headers
+    raw_headers: dict[str, str] | None,  # mutable-ok: mirrors _prepare_mcp_server_headers
+    scope_servers: list[MCPServer],  # mutable-ok: mirrors _prepare_mcp_server_headers
+    prefetched_creds: dict[str, OAuthCredentialPayload] | None = None,  # mutable-ok: prefetched creds
+) -> tuple[dict[str, str] | str | None, dict[str, str] | None]:  # mutable-ok: typed contract
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import to_server_spec
+
+    server_auth_header, caller_extra_headers = _prepare_mcp_server_headers(
+        server=server,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        mcp_auth_header=mcp_auth_header,
+        oauth2_headers=oauth2_headers,
+        raw_headers=raw_headers,
+        user_api_key_auth=user_api_key_auth,
+        scope_servers=scope_servers,
+    )
+    needs_stored_oauth: Final = (
+        to_server_spec(server) is None
+        and server.auth_type == MCPAuth.oauth2
+        and (
+            caller_extra_headers is None
+            or (getattr(server, "needs_user_oauth_token", False) and user_api_key_auth is not None)
+        )
+    )
+    stored_headers: Final = (
+        await _get_user_oauth_extra_headers_from_db(server, user_api_key_auth, prefetched_creds=prefetched_creds)
+        if needs_stored_oauth
+        else None
+    )
+    extra_headers: Final = stored_headers if caller_extra_headers is None or stored_headers else caller_extra_headers
+    effective_auth_header: Final = (
+        await _get_byok_credential(server, user_api_key_auth)
+        if server.is_byok and server.auth_type != MCPAuth.oauth2 and server_auth_header is None
+        else server_auth_header
+    )
+    return effective_auth_header, extra_headers
+
+
 async def _get_tools_from_mcp_servers(
     user_api_key_auth: UserAPIKeyAuth | None,
     mcp_auth_header: str | None,
@@ -1800,10 +1847,8 @@ def _challenge_missing_token_exchange_subject(
 ) -> None:
     """Raise the RFC 9728 challenge when a token-exchange server is called without a subject token.
 
-    The listing that fills a cold catalog absorbs the upstream 401 by design, so without this
-    check a missing subject surfaces as an unknown-tool error instead of the challenge the
-    warm path already raises. Gated to servers the key may reach so an unauthorized caller
-    learns nothing about the catalog.
+    Challenge a missing subject before attempting to fill a cold catalog. Gated to servers
+    the key may reach so an unauthorized caller learns nothing about the catalog.
     """
     if server is None or server.auth_type != MCPAuth.oauth2_token_exchange:
         return
@@ -1846,20 +1891,39 @@ async def _list_tools_before_first_call(
         return
     if all(allowed.server_id != server.server_id for allowed in allowed_mcp_servers):
         return
-    try:
-        await _get_tools_from_mcp_servers(
-            user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=mcp_auth_header,
-            mcp_servers=[server.server_id],
-            mcp_server_auth_headers=mcp_server_auth_headers,
-            oauth2_headers=oauth2_headers,
-            raw_headers=raw_headers,
-            client_ip=client_ip,
-            record_listing=False,
-            enforce_rate_limits=False,
+    if any(
+        global_mcp_tool_registry.get_tool(spelling) is not None
+        for spelling in iter_known_tool_name_spellings(tool_name, server)
+    ):
+        return
+    effective_mcp_auth_header: Final = await _resolve_byok_mcp_auth_header(server, user_api_key_auth, mcp_auth_header)
+    server_auth_header, extra_headers = await _prepare_tool_listing_headers(
+        server=server,
+        user_api_key_auth=user_api_key_auth,
+        mcp_auth_header=effective_mcp_auth_header,
+        mcp_server_auth_headers=mcp_server_auth_headers,
+        oauth2_headers=oauth2_headers,
+        raw_headers=raw_headers,
+        scope_servers=[server],
+    )
+    from litellm.proxy.proxy_server import proxy_logging_obj
+
+    await global_mcp_server_manager._get_tools_from_server(  # pyright: ignore[reportPrivateUsage]  # internal seam call
+        server=server,
+        mcp_auth_header=server_auth_header,
+        extra_headers=extra_headers,
+        add_prefix=True,
+        raw_headers=raw_headers,
+        client_ip=client_ip,
+        user_api_key_auth=user_api_key_auth,
+        oauth2_headers=oauth2_headers,
+        proxy_logging_obj=proxy_logging_obj,
+    )
+    if not global_mcp_server_manager.server_exposes_tool(server, tool_name):
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "tool_not_found", "message": f"Tool {tool_name} not found"},
         )
-    except Exception as e:  # noqa: BLE001  # best effort: resolution below answers as it did before
-        verbose_logger.debug("MCP tools/call: listing %s before its first call failed: %s", server.name, e)
 
 
 async def execute_mcp_tool(
@@ -1963,23 +2027,49 @@ async def _execute_mcp_tool(
         )
 
     name_is_prefixed = False
+    matched_registry_prefix: tuple[str, str] | None = None
     if requested_server is not None and MCP_TOOL_PREFIX_SEPARATOR in name:
         all_registry_prefixes: Final[set[str]] = set()
         for registry_server in global_mcp_server_manager.get_registry().values():
             for known_prefix in iter_known_server_prefixes(registry_server):
                 all_registry_prefixes.add(normalize_server_name(known_prefix))
         name_is_prefixed = is_tool_name_prefixed(name, known_server_prefixes=all_registry_prefixes)
+        # Globally longest matched form, not per-server any-match: nested
+        # prefixes ("x" vs "x-y") must not read as a collision.
+        matched_registry_prefix = match_known_server_prefix(name, all_registry_prefixes)
 
-    first_call_target: Final = (
-        requested_server
-        if requested_server is not None and not name_is_prefixed
-        else global_mcp_server_manager.server_owning_tool_name_prefix(name)
-    )
-    first_call_tool_name: Final = (
-        name
-        if first_call_target is None or (requested_server is not None and not name_is_prefixed)
-        else strip_known_server_prefix(name, first_call_target)
-    )
+    if requested_server is not None and matched_registry_prefix is not None:
+        matched_form: Final[str] = matched_registry_prefix[0]
+        owners: Final[tuple[MCPServer, ...]] = tuple(
+            registry_server
+            for registry_server in global_mcp_server_manager.get_registry().values()
+            if matched_form in {normalize_server_name(p) for p in iter_known_server_prefixes(registry_server)}
+        )
+        requested_server_owners: Final = {
+            normalize_server_name(value)
+            for value in (*iter_known_server_prefixes(requested_server), requested_server.name)
+            if value
+        }
+        mapped_owner: Final = global_mcp_server_manager.tool_name_to_mcp_server_name_mapping.get(name)
+        requested_server_owns_tool: Final = global_mcp_server_manager.server_exposes_tool(requested_server, name) or (
+            mapped_owner is not None and normalize_server_name(mapped_owner) in requested_server_owners
+        )
+        if len(owners) == 1 and owners[0].server_id != requested_server.server_id and not requested_server_owns_tool:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "tool_server_mismatch",
+                    "message": (
+                        f"Tool '{name}' belongs to MCP server "
+                        f"'{owners[0].name}' but request specified "
+                        f"server_id for '{requested_server.name}'."
+                    ),
+                },
+            )
+
+    prefix_owner: Final = global_mcp_server_manager.server_owning_tool_name_prefix(name)
+    first_call_target: Final = requested_server or prefix_owner
+    first_call_tool_name: Final = strip_known_server_prefix(name, first_call_target) if first_call_target else name
     _challenge_missing_token_exchange_subject(
         server=first_call_target,
         requested_server=requested_server,
@@ -2482,22 +2572,13 @@ async def call_mcp_tool(
             raise HTTPException(status_code=400, detail="Request arguments are required")
 
         ## CHECK IF USER IS ALLOWED TO CALL THIS TOOL
-        allowed_mcp_server_ids: Final = await global_mcp_server_manager.get_allowed_mcp_servers(
+        # Shared resolver: grants, IP filtering, oauth2_flow backstop, and name
+        # scoping in one place, so a session-path call cannot reach discovery or
+        # dispatch for a server restricted to internal networks.
+        allowed_mcp_servers: Final[list[MCPServer]] = await _get_allowed_mcp_servers(
             user_api_key_auth=user_api_key_auth,
-        )
-
-        allowed_mcp_servers: list[MCPServer] = []
-        for allowed_mcp_server_id in allowed_mcp_server_ids:
-            allowed_server = global_mcp_server_manager.get_mcp_server_by_id(allowed_mcp_server_id)
-            if allowed_server is not None:
-                # Same request-time oauth2_flow backstop the listing path applies,
-                # so a null-flow M2M-shape row is treated as M2M on tool calls too.
-                allowed_server = MCPServerManager.resolve_oauth2_flow_for_request(allowed_server)
-                allowed_mcp_servers.append(allowed_server)
-
-        allowed_mcp_servers = await _get_allowed_mcp_servers_from_mcp_server_names(
             mcp_servers=mcp_servers,
-            allowed_mcp_servers=allowed_mcp_servers,
+            client_ip=client_ip,
         )
         if mcp_servers and not allowed_mcp_servers:
             await raise_denied_scoped_mcp_access(
@@ -3019,6 +3100,26 @@ async def _execute_mcp_server_tool_call(
             content=[
                 TextContent(
                     text=f"Error: upstream authentication required (HTTP {e.status_code})",
+                    type="text",
+                )
+            ],
+            is_error=True,
+        )
+    except MCPServerListError as e:
+        fault: Final = classify_list_exception(e)
+        wire_detail: Final = " ".join(f"{key}={value}" for key, value in outcome_wire_value(fault).items())
+        verbose_logger.info(
+            "MCP mcp_server_tool_call: listing tools from %s failed with a %s fault",
+            e.server_name,
+            fault.tag,
+        )
+        return CallToolResult(
+            content=[
+                TextContent(
+                    text=(
+                        f"Error: failed to discover tools from MCP server {e.server_name!r} "
+                        f"before execution ({wire_detail})"
+                    ),
                     type="text",
                 )
             ],
