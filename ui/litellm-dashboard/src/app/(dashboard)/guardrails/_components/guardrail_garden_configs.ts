@@ -341,4 +341,10 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     mode: "pre_call",
     defaultOn: false,
   },
+  highflame: {
+    provider: "Highflame",
+    guardrailNameSuggestion: "Highflame",
+    mode: "pre_call",
+    defaultOn: false,
+  },
 };

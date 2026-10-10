@@ -165,12 +165,12 @@ def get_session_id_from_request_data(request_data: dict[str, Any]) -> str | None
     if session_id:
         return str(session_id)
 
-    metadata: Final = request_data.get("metadata") or {}
+    metadata: Final[Mapping[str, object]] = request_data.get("metadata") or {}
     session_id = metadata.get("session_id")
     if session_id:
         return str(session_id)
 
-    litellm_metadata: Final = request_data.get("litellm_metadata") or {}
+    litellm_metadata: Final[Mapping[str, object]] = request_data.get("litellm_metadata") or {}
     session_id = litellm_metadata.get("session_id")
     if session_id:
         return str(session_id)

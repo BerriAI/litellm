@@ -11,6 +11,7 @@ import deepkeepLogo from "../../../../../public/assets/logos/deepkeep.svg";
 import enkryptAiLogo from "../../../../../public/assets/logos/enkrypt_ai.avif";
 import googleLogo from "../../../../../public/assets/logos/google.svg";
 import guardrailsAiLogo from "../../../../../public/assets/logos/guardrails_ai.jpeg";
+import highflameLogo from "../../../../../public/assets/logos/highflame.png";
 import javelinLogo from "../../../../../public/assets/logos/javelin.png";
 import lakeraAiLogo from "../../../../../public/assets/logos/lakeraai.jpeg";
 import lassoLogo from "../../../../../public/assets/logos/lasso.png";
@@ -89,6 +90,7 @@ export const guardrail_provider_map: Record<string, string> = {
   Alice: "alice",
   "LLM Shield Proxy": "llm_shield_proxy",
   Conduct: "conduct",
+  Highflame: "highflame",
 };
 
 // Function to populate provider map from API response - updates the original map
@@ -312,6 +314,7 @@ export const guardrailLogoMap = {
   "Microsoft Agent 365": microsoftAzureLogo.src,
   "LLM Shield Proxy": llmShieldProxyLogo.src,
   "Conduct Guard": conductLogo.src,
+  Highflame: highflameLogo.src,
 } satisfies Record<string, string>;
 
 export const getGuardrailLogo = (displayName: string): string | undefined =>
