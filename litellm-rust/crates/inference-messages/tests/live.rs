@@ -9,3 +9,6 @@ mod github_copilot;
 
 #[path = "live/vertex_ai.rs"]
 mod vertex_ai;
+
+#[path = "live/minimax.rs"]
+mod minimax;

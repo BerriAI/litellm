@@ -12,6 +12,9 @@ use super::*;
 #[rstest]
 #[case::anthropic_key("anthropic", Some("sk-ant"), &[], ("x-api-key", "sk-ant"), &["authorization"])]
 #[case::azure_key("azure_ai", Some("sk-azure"), &[], ("x-api-key", "sk-azure"), &["authorization"])]
+#[case::minimax_key("minimax", Some("sk-test"), &[], ("x-api-key", "sk-test"), &["authorization"])]
+#[case::minimax_forwarded_key("minimax", None, &[("X-Api-Key", "caller")], ("x-api-key", "caller"), &["authorization"])]
+#[case::minimax_forwarded_bearer("minimax", None, &[("Authorization", "Bearer caller")], ("authorization", "Bearer caller"), &["x-api-key"])]
 #[case::deepseek_key("deepseek", Some("sk-deepseek"), &[], ("x-api-key", "sk-deepseek"), &["authorization"])]
 #[case::deepseek_forwards_caller_authorization(
     "deepseek",
@@ -97,6 +100,7 @@ async fn credentials_become_exactly_one_auth_header(
 #[case::deepseek("deepseek")]
 #[case::edenai("edenai")]
 #[case::openrouter("openrouter")]
+#[case::minimax("minimax")]
 #[tokio::test]
 async fn a_call_without_credentials_fails_before_sending(
     call: MessagesCall,
@@ -135,6 +139,8 @@ async fn a_call_without_credentials_fails_before_sending(
 #[case::azure_ai(MODEL, Some("azure_ai"), "", "/anthropic/v1/messages")]
 #[case::deepseek(MODEL, Some("deepseek"), "", "/anthropic/v1/messages")]
 #[case::deepseek_openai_compatible_base(MODEL, Some("deepseek"), "/beta", "/anthropic/v1/messages")]
+#[case::minimax(MODEL, Some("minimax"), "", "/v1/messages")]
+#[case::minimax_prefix("minimax/claude-sonnet-4-5", None, "/v1/messages", "/v1/messages")]
 #[case::edenai(MODEL, Some("edenai"), "/v3", "/v3/v1/messages")]
 #[case::openrouter(MODEL, Some("openrouter"), "/api/v1", "/api/v1/messages")]
 #[case::provider_from_model_prefix("anthropic/claude-sonnet-4-5", None, "", "/v1/messages")]
