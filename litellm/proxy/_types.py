@@ -1188,8 +1188,8 @@ class KeyRequestBase(GenerateRequestBase):
     enable_prompt_caching: bool | None = None
     throttle_on_budget_exceeded: bool | None = None
     enforced_params: list[str] | None = None
-    allowed_routes: list | None = []
-    allowed_passthrough_routes: list | None = None
+    allowed_routes: list[Any] | None = []
+    allowed_passthrough_routes: list[object] | None = None
     denied_passthrough_routes: list[str] | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     rpm_limit_type: Literal["guaranteed_throughput", "best_effort_throughput", "dynamic"] | None = (
@@ -1278,13 +1278,17 @@ class GenerateKeyResponse(KeyRequestBase):
         return values
 
 
+def _is_mapping(value: object) -> TypeIs[Mapping[object, object]]:  # guard-ok: raw before-validator payload
+    return isinstance(value, Mapping)
+
+
 class UpdateKeyRequest(KeyRequestBase):
     # Note: the defaults of all Params here MUST BE NONE
     # else they will get overwritten
     duration: str | None = None
     spend: float | None = None
     soft_budget: float | None = None
-    metadata: dict | None = None
+    metadata: dict[Any, Any] | None = None
     temp_budget_increase: float | None = None
     temp_budget_expiry: datetime | None = None
     auto_rotate: bool | None = None
@@ -1299,7 +1303,7 @@ class UpdateKeyRequest(KeyRequestBase):
     @model_validator(mode="before")
     @classmethod
     def drop_blank_team_id(cls, values: object) -> object:
-        if isinstance(values, Mapping) and values.get("team_id") == "":
+        if _is_mapping(values) and values.get("team_id") == "":
             return MappingProxyType({k: v for k, v in values.items() if k != "team_id"})
         return values
 
@@ -1330,7 +1334,7 @@ class RegenerateKeyRequest(GenerateKeyRequest):
     new_key: str | None = None
     duration: str | None = None
     spend: float | None = None
-    metadata: dict | None = None
+    metadata: dict[Any, Any] | None = None
     new_master_key: str | None = None
     grace_period: str | None = None  # Duration to keep old key valid (e.g. "24h", "2d"); None = immediate revoke
 
@@ -1754,19 +1758,9 @@ class MCPSubmissionsSummary(LiteLLMPydanticObjectBase):
 ######## Skills API Types ########
 
 
-class NewSkillRequest(LiteLLMPydanticObjectBase):
-    """Request to create a new skill in LiteLLM database"""
-
-    display_title: str | None = None
-    description: str | None = None
-    instructions: str | None = None
-    file_content: bytes | None = None  # Binary content of skill files (zip)
-    file_name: str | None = None  # Original filename
-    file_type: str | None = None  # MIME type (e.g., "application/zip")
-    metadata: dict[str, Any] | None = None
-    authorization_url: str | None = None
-    token_url: str | None = None
-    registration_url: str | None = None
+from litellm.models.skills import (  # noqa: E402  # public re-export
+    NewSkillRequest as NewSkillRequest,  # noqa: PLC0414  # public re-export
+)
 
 
 class UpdateSkillRequest(LiteLLMPydanticObjectBase):
@@ -2008,6 +2002,7 @@ class NewTeamRequest(TeamBase):
     team_member_tpm_limit: int | None = None  # allow user to set TPM limit for all team members
     team_member_key_duration: str | None = None  # e.g. "1d", "1w", "1m"
     team_member_budget_duration: str | None = None  # e.g. "30d", "1mo"
+    team_member_model_max_budget: GenericBudgetConfigType | None = None
     allowed_vector_store_indexes: list[AllowedVectorStoreIndexItem] | None = None
     enforced_batch_output_expires_after: dict | None = None
     enforced_file_expires_after: dict | None = None
@@ -2067,6 +2062,7 @@ class UpdateTeamRequest(LiteLLMPydanticObjectBase):
     require_trace_id: bool | None = None
     team_member_budget: float | None = None
     team_member_budget_duration: str | None = None
+    team_member_model_max_budget: GenericBudgetConfigType | None = None
     team_member_rpm_limit: int | None = None
     team_member_tpm_limit: int | None = None
     team_member_key_duration: str | None = None
@@ -3265,6 +3261,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # and validating it here would make one malformed row fail auth outright.
     # resolve_model_budget validates the single entry a request actually needs.
     user_model_max_budget: Mapping[str, object] | None = None
+    team_member_model_max_budget: Mapping[str, object] | None = Field(default=None, exclude=True)
     request_route: str | None = None
     is_session_token: bool = False
     # Server-only marker set exclusively by the MCP gateway admission path
@@ -4552,6 +4549,13 @@ class TeamMemberUpdateRequest(TeamMemberDeleteRequest):
         default=None,
         description="UTC expiry for temp_budget_increase",
     )
+    model_max_budget: GenericBudgetConfigType | None = Field(
+        default=None,
+        description=(
+            "Per-model spend caps for this team member, each with its own budget_duration. "
+            "Overrides the team's default per-model member budget. Pass an empty dict to fall back to the team default."
+        ),
+    )
 
     @model_validator(mode="after")
     def validate_temp_budget(self) -> "TeamMemberUpdateRequest":
@@ -4570,6 +4574,7 @@ class TeamMemberUpdateResponse(MemberUpdateResponse):
     allowed_models: list[str] | None = None
     temp_budget_increase: float | None = None
     temp_budget_expiry: datetime | None = None
+    model_max_budget: GenericBudgetConfigType | None = None
 
 
 class TeamModelAddRequest(LiteLLMBaseModel):
