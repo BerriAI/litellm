@@ -229,6 +229,12 @@ def test_anthropic_tool_search_returns_a_message(
     assert message.usage.input_tokens > 0, f"tool search response had no input usage: {message.usage!r}"
 
 
+@pytest.mark.parametrize("backend", TOOL_SEARCH_BACKENDS)
+@pytest.mark.covers(
+    "llm.messages.anthropic.tool_search.nonstream.works",
+    "llm.messages.bedrock_converse.tool_search.nonstream.works",
+    "llm.messages.bedrock_invoke.tool_search.nonstream.works",
+)
 @meta(
     Subject(
         domain=Domain.LLM_TRANSLATION,
@@ -237,12 +243,6 @@ def test_anthropic_tool_search_returns_a_message(
         models=(ANTHROPIC_MODEL, BEDROCK_MODEL_ID),
         mode=Mode.STREAM,
     )
-)
-@pytest.mark.parametrize("backend", TOOL_SEARCH_BACKENDS)
-@pytest.mark.covers(
-    "llm.messages.anthropic.tool_search.nonstream.works",
-    "llm.messages.bedrock_converse.tool_search.nonstream.works",
-    "llm.messages.bedrock_invoke.tool_search.nonstream.works",
 )
 def test_anthropic_tool_search_streaming_returns_a_message(
     proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str
