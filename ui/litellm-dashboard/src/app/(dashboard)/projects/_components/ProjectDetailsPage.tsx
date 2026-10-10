@@ -115,23 +115,23 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
             <dt className="text-muted-foreground">Description</dt>
             <dd className="text-foreground">{project.description || "—"}</dd>
             <dt className="text-muted-foreground">Created</dt>
-            <dd className="flex min-w-0 items-center gap-1 text-foreground">
+            <dd className="flex min-w-0 flex-wrap items-center gap-x-1 text-foreground">
               <span className="shrink-0 whitespace-nowrap">{new Date(project.created_at).toLocaleString()}</span>
               {project.created_by && (
-                <>
-                  <span>by</span>
+                <span className="flex min-w-0 grow basis-24 items-center gap-1">
+                  <span className="shrink-0">by</span>
                   <UserReference userId={project.created_by} displayName={displayNames?.[project.created_by]} />
-                </>
+                </span>
               )}
             </dd>
             <dt className="text-muted-foreground">Last Updated</dt>
-            <dd className="flex min-w-0 items-center gap-1 text-foreground">
+            <dd className="flex min-w-0 flex-wrap items-center gap-x-1 text-foreground">
               <span className="shrink-0 whitespace-nowrap">{new Date(project.updated_at).toLocaleString()}</span>
               {project.updated_by && (
-                <>
-                  <span>by</span>
+                <span className="flex min-w-0 grow basis-24 items-center gap-1">
+                  <span className="shrink-0">by</span>
                   <UserReference userId={project.updated_by} displayName={displayNames?.[project.updated_by]} />
-                </>
+                </span>
               )}
             </dd>
           </dl>

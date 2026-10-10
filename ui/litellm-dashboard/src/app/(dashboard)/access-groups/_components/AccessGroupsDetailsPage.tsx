@@ -131,23 +131,23 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
             <dt className="text-muted-foreground">Description</dt>
             <dd className="text-foreground">{accessGroup.description || "—"}</dd>
             <dt className="text-muted-foreground">Created</dt>
-            <dd className="flex min-w-0 items-center gap-1 text-foreground">
+            <dd className="flex min-w-0 flex-wrap items-center gap-x-1 text-foreground">
               <span className="shrink-0 whitespace-nowrap">{new Date(accessGroup.created_at).toLocaleString()}</span>
               {accessGroup.created_by && (
-                <>
-                  <span>by</span>
+                <span className="flex min-w-0 grow basis-24 items-center gap-1">
+                  <span className="shrink-0">by</span>
                   <UserReference userId={accessGroup.created_by} displayName={accessGroup.created_by_user?.name} />
-                </>
+                </span>
               )}
             </dd>
             <dt className="text-muted-foreground">Last Updated</dt>
-            <dd className="flex min-w-0 items-center gap-1 text-foreground">
+            <dd className="flex min-w-0 flex-wrap items-center gap-x-1 text-foreground">
               <span className="shrink-0 whitespace-nowrap">{new Date(accessGroup.updated_at).toLocaleString()}</span>
               {accessGroup.updated_by && (
-                <>
-                  <span>by</span>
+                <span className="flex min-w-0 grow basis-24 items-center gap-1">
+                  <span className="shrink-0">by</span>
                   <UserReference userId={accessGroup.updated_by} displayName={accessGroup.updated_by_user?.name} />
-                </>
+                </span>
               )}
             </dd>
           </dl>
