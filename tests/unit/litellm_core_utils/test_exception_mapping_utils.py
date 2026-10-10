@@ -373,6 +373,31 @@ def test_openai_compatible_429_still_maps_to_rate_limit():
 
 @pytest.mark.parametrize(
     "error_message",
+    (
+        "The api_key client option must be set either by passing api_key to the client "
+        "or by setting the OPENAI_API_KEY environment variable",
+        "Missing credentials. Please pass an `api_key`, `workload_identity`, "
+        "`admin_api_key`, or set the `OPENAI_API_KEY` or `OPENAI_ADMIN_KEY` "
+        "environment variable.",
+    ),
+)
+def test_openai_missing_credentials_maps_to_authentication_error(error_message: str) -> None:
+    original_exception: Final = OpenAIError(status_code=500, message=error_message)
+
+    with pytest.raises(litellm.AuthenticationError) as excinfo:
+        exception_type(
+            model="test-model",
+            original_exception=original_exception,
+            custom_llm_provider="openai",
+        )
+
+    assert excinfo.value.status_code == 401
+    assert excinfo.value.response.status_code == 401
+    assert excinfo.value.llm_provider == "openai"
+
+
+@pytest.mark.parametrize(
+    "error_message",
     [
         "AnthropicException - prompt is too long: 250000 tokens > 200000 maximum",
         "AnthropicException - input length and max_tokens exceed context limit: "
