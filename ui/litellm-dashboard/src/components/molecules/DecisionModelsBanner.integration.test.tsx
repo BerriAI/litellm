@@ -30,9 +30,8 @@ describe("DecisionModelsBanner", () => {
       "href",
       "https://docs.litellm.ai/docs/decisions#supported-providers",
     );
-    expect(screen.getByRole("paragraph")).toHaveTextContent(
-      "Search decision in Add Model to find them. Call them at /v1/decisions or /v1/systemone",
-    );
+    expect(screen.getByRole("paragraph")).not.toHaveTextContent("Add Model");
+    expect(screen.getByRole("paragraph")).toHaveTextContent("Call them at /v1/decisions or /v1/systemone");
   });
 
   it("shows the announcement even if the old feedback banner was dismissed", () => {
