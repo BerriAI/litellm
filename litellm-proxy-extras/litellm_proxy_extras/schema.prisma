@@ -309,6 +309,7 @@ model LiteLLM_UserTable {
     last_breach_check_at DateTime?
     teams    String[] @default([])
     user_role  String?
+    blocked    Boolean  @default(false)
 		max_budget Float?
     spend      Float    @default(0.0)
     user_email    String?

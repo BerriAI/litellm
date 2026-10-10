@@ -28,6 +28,7 @@ class LiteLLM_UserTable(LiteLLMPydanticObjectBase):
     last_breach_check_at: datetime | None = None
     teams: list[str] = []
     user_role: str | None = None
+    blocked: bool = False
     max_budget: float | None = None
     spend: float = 0.0
     user_email: str | None = None

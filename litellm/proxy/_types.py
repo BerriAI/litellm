@@ -3718,6 +3718,7 @@ class UserInfoV2Response(LiteLLMPydanticObjectBase):
     updated_at: datetime | None = None
     sso_user_id: str | None = None
     teams: list[str] = []  # Just team IDs, not full team objects
+    blocked: bool = False
     object_permission: LiteLLM_ObjectPermissionTable | None = None
     model_max_budget: Mapping[str, object] | None = None
     model_max_budget_usage: Mapping[str, Mapping[str, object]] | None = None
@@ -5102,7 +5103,7 @@ class UserManagementEndpointParamDocStringEnums(str, enum.Enum):
     aliases_doc_str = """Optional[dict] - Model aliases for the user - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)"""
     config_doc_str = """Optional[dict] - [DEPRECATED PARAM] User-specific config."""
     allowed_cache_controls_doc_str = """Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-"""
-    blocked_doc_str = """Optional[bool] - [Not Implemented Yet] Whether the user is blocked."""
+    blocked_doc_str = """Optional[bool] - Block (true) or unblock (false) the user. Every request a blocked user makes, under any auth method (virtual key, JWT, UI session), is refused with 401. Proxy admin only."""
     guardrails_doc_str = """Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user"""
     permissions_doc_str = (
         """Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking."""

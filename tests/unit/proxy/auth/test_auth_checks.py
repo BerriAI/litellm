@@ -1534,6 +1534,7 @@ def _prisma_client_serving(user_id: str) -> SimpleNamespace:
     row: Final = {
         "user_id": user_id,
         "user_role": "internal_user",
+        "blocked": False,
         "teams": [],
         "spend": 0.0,
         "models": [],
@@ -1649,3 +1650,43 @@ def test_is_model_cost_zero_judges_an_alias_chain_by_the_deployment_its_entry_ro
 
     assert verdicts == expected
     assert {name: is_model_cost_zero(model=name, llm_router=router) for name in order} == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("blocked", [True, False], ids=["blocked", "not-blocked"])
+async def test_common_checks_refuses_a_blocked_user_with_401(blocked: bool) -> None:
+    """``common_checks`` is the one gate every auth method (virtual key, JWT, UI session) passes
+    through, so a blocked user row must be refused there with 401 and an unblocked one must pass."""
+    from fastapi import Request
+
+    from litellm.proxy._types import ProxyErrorTypes, ProxyException
+    from litellm.proxy.auth.auth_checks import common_checks
+
+    user: Final = LiteLLM_UserTable(user_id="user-blocked-gate", blocked=blocked)
+    request: Final = Request(scope={"type": "http", "method": "POST", "path": "/chat/completions", "headers": []})
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", None),  # test-quality-ok: the gate reads this module global
+        patch(  # test-quality-ok: the gate reads this module global
+            "litellm.proxy.proxy_server.user_api_key_cache", UserApiKeyCache()
+        ),
+    ):
+        outcome: Final = common_checks(
+            request_body={"model": "gpt-4o", "messages": [{"role": "user", "content": "ping"}]},
+            team_object=None,
+            user_object=user,
+            end_user_object=None,
+            global_proxy_spend=None,
+            general_settings={},
+            route="/chat/completions",
+            llm_router=None,
+            proxy_logging_obj=MagicMock(),
+            valid_token=UserAPIKeyAuth(user_id=user.user_id, api_key="sk-user-blocked-gate"),
+            request=request,
+        )
+        if not blocked:
+            assert await outcome is True
+            return
+        with pytest.raises(ProxyException) as exc_info:
+            await outcome
+    assert (exc_info.value.code, exc_info.value.type) == ("401", ProxyErrorTypes.auth_error)
+    assert user.user_id in exc_info.value.message

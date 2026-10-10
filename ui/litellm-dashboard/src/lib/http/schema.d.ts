@@ -18098,6 +18098,9 @@ export interface paths {
          *     - all_users: Optional[bool] - Set to true to update all users in the system
          *     - user_updates: Optional[UpdateUserRequest] - Updates to apply when all_users=True
          *
+         *     Any field accepted by `/user/update` can be set here, including `blocked` (proxy admin only), which
+         *     blocks or unblocks every listed user in one call.
+         *
          *     Returns:
          *     - results: List of individual update results
          *     - total_requested: Total number of users requested for update
@@ -18118,6 +18121,16 @@ export interface paths {
          *                 "user_role": "internal_user_viewer",
          *                 "max_budget": 50.0
          *             }
+         *         ]
+         *     }'
+         *     ```
+         *
+         *     Example request blocking several users at once:
+         *     ```bash
+         *     curl --location 'http://0.0.0.0:4000/user/bulk_update'     --header "Authorization: Bearer $LITELLM_MASTER_KEY"     --header 'Content-Type: application/json'     --data '{
+         *         "users": [
+         *             {"user_id": "user1", "blocked": true},
+         *             {"user_id": "user2", "blocked": true}
          *         ]
          *     }'
          *     ```
@@ -18598,7 +18611,7 @@ export interface paths {
          *         - aliases: Optional[dict] - Model aliases for the user - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
          *         - config: Optional[dict] - [DEPRECATED PARAM] User-specific config.
          *         - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-
-         *         - blocked: Optional[bool] - [Not Implemented Yet] Whether the user is blocked.
+         *         - blocked: Optional[bool] - Block (true) or unblock (false) the user. Every request a blocked user makes, under any auth method (virtual key, JWT, UI session), is refused with 401. Proxy admin only.
          *         - guardrails: Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user
          *         - policies: Optional[List[str]] - List of policy names to apply to the user. Policies define guardrails, conditions, and inheritance rules.
          *         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
@@ -35215,6 +35228,11 @@ export interface components {
              * @default []
              */
             allowed_cache_controls: string[];
+            /**
+             * Blocked
+             * @default false
+             */
+            blocked: boolean;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Reset At */
@@ -35307,6 +35325,11 @@ export interface components {
              * @default []
              */
             allowed_cache_controls: string[];
+            /**
+             * Blocked
+             * @default false
+             */
+            blocked: boolean;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Reset At */
@@ -48413,6 +48436,11 @@ export interface components {
          *     This is a lightweight alternative to UserInfoResponse.
          */
         UserInfoV2Response: {
+            /**
+             * Blocked
+             * @default false
+             */
+            blocked: boolean;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Budget Reset At */

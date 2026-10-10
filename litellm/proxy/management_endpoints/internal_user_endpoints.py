@@ -122,7 +122,7 @@ if TYPE_CHECKING:
 router: Final = APIRouter()
 _USER_MODEL_BUDGET_ADAPTER: Final = TypeAdapter(dict[str, float | BudgetConfig])
 _USER_BUDGET_CACHE_INVALIDATION_BATCH_SIZE: Final = 50
-_USER_LIMIT_CACHE_FIELDS: Final = frozenset({"max_budget", "model_max_budget", "tpm_limit", "rpm_limit"})
+_USER_LIMIT_CACHE_FIELDS: Final = frozenset({"max_budget", "model_max_budget", "tpm_limit", "rpm_limit", "blocked"})
 
 
 def _user_table(
@@ -1173,6 +1173,7 @@ async def user_info_v2(
             updated_at=user_data.get("updated_at"),
             sso_user_id=user_data.get("sso_user_id"),
             teams=user_data.get("teams") or [],
+            blocked=user_data.get("blocked", False),
             object_permission=user_data.get("object_permission"),
             model_max_budget=user_data.get("model_max_budget"),
             model_max_budget_usage=await build_model_max_budget_usage(
@@ -1388,6 +1389,14 @@ async def _schedule_user_update_audit_log(
         verbose_proxy_logger.warning("Failed to create audit log for user %s: %s", response.get("user_id"), audit_error)
 
 
+BLOCKED_REQUIRES_PROXY_ADMIN: Final = "Only proxy admins can block or unblock users."
+
+
+def _bulk_update_sets_blocked(data: BulkUpdateUserRequest) -> bool:
+    updates: Final = (data.user_updates, *(data.users or ()))
+    return any(update.blocked is not None for update in updates if update is not None)
+
+
 def _check_user_update_authz(
     user_request: UpdateUserRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1396,6 +1405,9 @@ def _check_user_update_authz(
     """Authorization checks for /user/update — raises HTTPException on failure."""
     if user_request.user_role is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
         raise HTTPException(status_code=403, detail="Only proxy admins can modify user roles.")
+
+    if user_request.blocked is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(status_code=403, detail=BLOCKED_REQUIRES_PROXY_ADMIN)
 
     if existing_user_row is not None:
         typed_row: Final = LiteLLM_UserTable.model_validate(existing_user_row.model_dump(exclude_none=True))
@@ -1717,7 +1729,7 @@ async def user_update(
         - aliases: Optional[dict] - Model aliases for the user - [Docs](https://litellm.vercel.app/docs/proxy/virtual_keys#model-aliases)
         - config: Optional[dict] - [DEPRECATED PARAM] User-specific config.
         - allowed_cache_controls: Optional[list] - List of allowed cache control values. Example - ["no-cache", "no-store"]. See all values - https://docs.litellm.ai/docs/proxy/caching#turn-on--off-caching-per-request-
-        - blocked: Optional[bool] - [Not Implemented Yet] Whether the user is blocked.
+        - blocked: Optional[bool] - Block (true) or unblock (false) the user. Every request a blocked user makes, under any auth method (virtual key, JWT, UI session), is refused with 401. Proxy admin only.
         - guardrails: Optional[List[str]] - [Not Implemented Yet] List of active guardrails for the user
         - policies: Optional[List[str]] - List of policy names to apply to the user. Policies define guardrails, conditions, and inheritance rules.
         - permissions: Optional[dict] - [Not Implemented Yet] User-specific permissions, eg. turning off pii masking.
@@ -1870,6 +1882,9 @@ async def bulk_user_update(
     - users: Optional[List[UpdateUserRequest]] - List of specific user update requests
     - all_users: Optional[bool] - Set to true to update all users in the system
     - user_updates: Optional[UpdateUserRequest] - Updates to apply when all_users=True
+
+    Any field accepted by `/user/update` can be set here, including `blocked` (proxy admin only), which
+    blocks or unblocks every listed user in one call.
     
     Returns:
     - results: List of individual update results
@@ -1898,6 +1913,19 @@ async def bulk_user_update(
     }'
     ```
     
+    Example request blocking several users at once:
+    ```bash
+    curl --location 'http://0.0.0.0:4000/user/bulk_update' \
+    --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
+    --header 'Content-Type: application/json' \
+    --data '{
+        "users": [
+            {"user_id": "user1", "blocked": true},
+            {"user_id": "user2", "blocked": true}
+        ]
+    }'
+    ```
+
     Example request for all users:
     ```bash
     curl --location 'http://0.0.0.0:4000/user/bulk_update' \
@@ -1929,6 +1957,8 @@ async def bulk_user_update(
             status_code=403,
             detail="Only proxy admins can modify user roles.",
         )
+    if _bulk_update_sets_blocked(data) and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value:
+        raise HTTPException(status_code=403, detail=BLOCKED_REQUIRES_PROXY_ADMIN)
 
     # Determine the list of users to update
     users_to_update: list[UpdateUserRequest] | list[UpdateUserRequestNoUserIDorEmail] = []

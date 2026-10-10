@@ -3097,6 +3097,7 @@ async def run_centralized_common_checks(
         user_object = LiteLLM_UserTable(
             user_id=user_api_key_auth_obj.user_id or litellm_proxy_admin_name,
             user_role=LitellmUserRoles.PROXY_ADMIN,
+            blocked=user_object.blocked if user_object is not None else False,
             spend=user_object.spend if user_object is not None else 0.0,
             object_permission_id=(
                 user_object.object_permission_id if isinstance(user_object, LiteLLM_UserTable) else None
