@@ -1,7 +1,10 @@
+import os
+
 import litellm
 from litellm import Router
 from litellm import router as litellm_router_module
 from litellm import utils as litellm_utils_module
+from tests.unit.host_environment import WINDOWS_HOST_ENVIRONMENT, is_host_only
 
 CANARY_MODEL = "conftest-isolation-canary-model"
 
@@ -34,3 +37,8 @@ def test_live_router_membership_is_scoped_to_this_test():
 def test_live_router_membership_was_rolled_back():
     assert _CanaryRouterHolder.router is not None
     assert _CanaryRouterHolder.router not in litellm_router_module._live_routers
+
+
+def test_windows_system_variables_are_kept_only_on_windows():
+    scheduled_for_deletion = {name for name in WINDOWS_HOST_ENVIRONMENT if is_host_only(name)}
+    assert scheduled_for_deletion == (set() if os.name == "nt" else set(WINDOWS_HOST_ENVIRONMENT))
