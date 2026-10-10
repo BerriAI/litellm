@@ -10,7 +10,7 @@ import httpx
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, string_value
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
-from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse
+from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 from pydantic import JsonValue
 
 _FILE: Final = {
@@ -198,3 +198,74 @@ def test_fine_tuning_create_from_own_managed_files_still_dispatches(gateway: Gat
         )
         assert created.status_code == 200, created.text
         assert _upstream_creates(gateway, tenants.handle, "/fine_tuning/jobs") == 1
+
+
+def _upstream_calls(gateway: Gateway, handle: ScenarioHandle, method: str, suffix: str) -> int:
+    response: Final = httpx.get(f"{gateway.upstream_url}/__observations", timeout=15, trust_env=False)
+    assert response.status_code == 200, response.text
+    requests: Final = JSON_OBJECT.validate_json(response.content)["requests"]
+    assert isinstance(requests, list), response.text
+    return sum(
+        1
+        for request in requests
+        if isinstance(request, dict)
+        and request.get("method") == method
+        and handle.scenario_id in str(request.get("path"))
+        and str(request.get("path")).endswith(suffix)
+    )
+
+
+def test_batch_create_from_another_teams_file_is_403_before_the_rate_limiter_reads_it(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        scenario_id: Final = f"managed-file-create-ownership-{uuid.uuid4().hex}"
+        handle: Final = register_scenario(scenario_id, _routes())
+        scenario.cleanups.callback(delete_scenario, handle)
+        model: Final = scenario.model(api_base=handle.api_base())
+        line: Final = json.dumps(
+            {
+                "custom_id": "req-1",
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {"model": model, "messages": [{"role": "user", "content": "ping"}], "max_tokens": 5},
+            }
+        )
+        register_scenario(
+            scenario_id,
+            RoutedResponse(
+                content_type="application/x-routed",
+                routes={
+                    **_routes().routes,
+                    "GET /files/file-in-$REQUEST_ID/content": TextResponse(
+                        content_type="application/jsonl", body=line + "\n"
+                    ),
+                },
+            ),
+        )
+        team_a: Final = scenario.team(models=[model])
+        team_b: Final = scenario.team(models=[model])
+        owner: Final = scenario.key(user_id=scenario.user(user_role="internal_user"), team_id=team_a)
+        outsider: Final = scenario.key(user_id=scenario.user(user_role="internal_user"), team_id=team_b, tpm_limit=1)
+        owner_file_id: Final = _upload(scenario, owner, model, "batch")
+        denied: Final = _create_batch(gateway, outsider, model, owner_file_id)
+        assert denied.status_code == 403, denied.text
+        assert owner_file_id in denied.text, denied.text
+        assert _upstream_calls(gateway, handle, "GET", "/content") == 0
+
+
+def test_regenerated_key_without_user_or_team_keeps_its_managed_files(gateway: Gateway) -> None:
+    with gateway.scenario() as scenario:
+        tenants: Final = _tenants(scenario, "batch")
+        original: Final = string_value(gateway.post("/key/generate", {})["key"])
+        file_id: Final = _upload(scenario, original, tenants.model, "batch")
+        regenerated: Final = string_value(gateway.post("/key/regenerate", {"key": original})["key"])
+        scenario.cleanups.callback(scenario.delete_key, regenerated)
+        batch: Final = _create_batch(gateway, regenerated, tenants.model, file_id)
+        retrieved: Final = gateway.request("GET", f"/v1/files/{file_id}", key=regenerated)
+        stranger: Final = _create_batch(
+            gateway, string_value(gateway.post("/key/generate", {})["key"]), tenants.model, file_id
+        )
+        assert (batch.status_code, retrieved.status_code, stranger.status_code) == (200, 200, 403), (
+            batch.text,
+            retrieved.text,
+            stranger.text,
+        )
