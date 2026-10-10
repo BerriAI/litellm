@@ -53,7 +53,6 @@ from litellm.proxy._types import (
     LiteLLM_DeletedVerificationToken,
     LiteLLM_TeamTable,
     LiteLLM_UserTable,
-    UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET
 from litellm.repositories.base_repository import BaseRepository
@@ -69,6 +68,7 @@ from litellm.types.integrations.prometheus import (
     sanitize_prometheus_label_value,
     validate_prometheus_deployment_and_latency_caller_identity,
 )
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 from litellm.types.proxy.carried_budget_state import (
     KeyBudgetSnapshot,
     OrgBudgetSnapshot,

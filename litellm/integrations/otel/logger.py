@@ -87,7 +87,7 @@ if TYPE_CHECKING:
     from opentelemetry.metrics import MeterProvider
 
     from litellm.caching.dual_cache import DualCache
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.services import ServiceLoggerPayload
     from litellm.types.utils import (
         CallTypesLiteral,

@@ -33,8 +33,8 @@ from litellm.types.utils import ModelResponse
 from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 # Anthropic-only keys already mapped by the translator; strip on extra_kwargs re-merge.
 ANTHROPIC_ONLY_REQUEST_KEYS: Final[frozenset[str]] = frozenset({"output_config", "safeguards"})

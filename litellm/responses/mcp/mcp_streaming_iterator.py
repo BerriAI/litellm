@@ -27,8 +27,8 @@ if TYPE_CHECKING:
 
     from mcp.types import Tool as MCPTool
 
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.responses.mcp.litellm_proxy_mcp_handler import MCPToolResult
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 else:
     MCPTool = Any
 

@@ -13,8 +13,8 @@ from .editors import apply_clear_tool_uses_20250919, apply_compact_20260112
 from .result import PolyfillResult
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 EditorResult: TypeAlias = "PolyfillResult | tuple[list[dict[str, object]], AppliedEdit | None]"
 
