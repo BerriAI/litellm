@@ -20,7 +20,7 @@ from litellm.types.llms.openai import (
     ChatCompletionToolCallFunctionChunk,
 )
 from litellm.types.responses.main import OutputCodeInterpreterCall
-from litellm.types.utils import ModelResponseStream
+from litellm.types.utils import ChatCompletionDeltaToolCall, ModelResponseStream
 
 
 @pytest.mark.asyncio
@@ -801,6 +801,78 @@ async def test_anthropic_stream_options_return_usage_after_the_finish_chunk(
     assert usage_chunk.usage.cache_read_input_tokens == 12
     assert usage_chunk.usage.cache_creation_input_tokens == 4
     assert json.loads(route.calls[0].request.content)["stream"] is True
+
+
+_SNOOZE_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "snooze",
+        "parameters": {"type": "object", "properties": {}, "required": []},
+    },
+}
+
+
+def _stream_one_anthropic_tool_use(content_block: dict[str, object]) -> tuple[ChatCompletionDeltaToolCall, ...]:
+    events: Final = (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_snooze",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-sonnet-4-6",
+                "content": [],
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": content_block},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": ""}},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 9},
+        },
+        {"type": "message_stop"},
+    )
+    body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+    with respx.mock:
+        respx.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(200, text=body, headers={"content-type": "text/event-stream"})
+        )
+        chunks: Final = tuple(
+            litellm.completion(
+                model="anthropic/claude-sonnet-4-6",
+                api_key="test-key",
+                messages=[{"role": "user", "content": "Hit the snooze button."}],
+                tools=[_SNOOZE_TOOL],
+                stream=True,
+            )
+        )
+    return tuple(
+        chunk.choices[0].delta.tool_calls[0] for chunk in chunks if chunk.choices and chunk.choices[0].delta.tool_calls
+    )
+
+
+def test_anthropic_stream_no_argument_tool_call_streams_an_empty_json_object():
+    tool_calls: Final = _stream_one_anthropic_tool_use(
+        {"type": "tool_use", "id": "toolu_snooze", "name": "snooze", "input": {}}
+    )
+
+    assert tuple(tool_call.id for tool_call in tool_calls if tool_call.id is not None) == ("toolu_snooze",)
+    assert tool_calls[0].function.name == "snooze"
+    assert json.loads("".join(tool_call.function.arguments or "" for tool_call in tool_calls)) == {}
+
+
+def test_anthropic_stream_tool_call_keeps_the_programmatic_caller():
+    caller: Final = {"type": "code_execution_20250825", "tool_id": "srvtoolu_snooze"}
+
+    tool_calls: Final = _stream_one_anthropic_tool_use(
+        {"type": "tool_use", "id": "toolu_snooze", "name": "snooze", "input": {}, "caller": caller}
+    )
+
+    assert tool_calls[0].id == "toolu_snooze"
+    assert tool_calls[0].model_dump()["caller"] == caller
 
 
 def test_streaming_thinking_deltas_count_reasoning_tokens_in_usage():

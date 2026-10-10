@@ -8,6 +8,7 @@ import respx
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.cohere.embed.transformation import CohereEmbeddingConfig
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.utils import CallTypes, EmbeddingResponse
 
 
@@ -152,3 +153,27 @@ async def test_embedding_with_extra_headers_are_sent_to_cohere(
 
     assert route.calls.last.request.headers["x-request-id"] == "test-request"
     assert response.data[0]["embedding"] == [0.1, 0.2]
+
+
+async def test_aembedding_sends_extra_headers_through_the_caller_supplied_async_client() -> None:
+    requests: Final[list[httpx.Request]] = []
+
+    def handle_request(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return httpx.Response(
+            200,
+            json={"embeddings": {"float": [[0.3, 0.4]]}, "meta": {"billed_units": {"input_tokens": 2}}},
+        )
+
+    response: Final = await litellm.aembedding(
+        model="cohere/embed-english-v3.0",
+        input=["hello world"],
+        api_key="test-key",
+        extra_headers={"my-test-param": "hello-world"},
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(handle_request)),
+    )
+
+    assert len(requests) == 1
+    assert str(requests[0].url) == "https://api.cohere.ai/v2/embed"
+    assert requests[0].headers["my-test-param"] == "hello-world"
+    assert response.data[0]["embedding"] == [0.3, 0.4]
