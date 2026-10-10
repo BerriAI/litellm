@@ -8,6 +8,7 @@ use litellm_llms::{
     bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
     deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
     edenai::messages::transformation::EDENAI_MESSAGES_CONFIG,
+    github_copilot::messages::transformation::COPILOT_MESSAGES_CONFIG,
     vertex_ai::messages::transformation::VERTEX_ANTHROPIC_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
@@ -23,6 +24,7 @@ pub(crate) enum MessagesProvider {
     Bedrock,
     Deepseek,
     Edenai,
+    GithubCopilot,
     VertexAi,
 }
 
@@ -34,6 +36,7 @@ impl MessagesProvider {
             Self::Bedrock => LlmProviders::Bedrock,
             Self::Deepseek => LlmProviders::Deepseek,
             Self::Edenai => LlmProviders::Edenai,
+            Self::GithubCopilot => LlmProviders::GithubCopilot,
             Self::VertexAi => LlmProviders::VertexAi,
         }
         .into()
@@ -46,6 +49,7 @@ impl MessagesProvider {
             Self::Bedrock => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
             Self::Deepseek => &DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
             Self::Edenai => &EDENAI_MESSAGES_CONFIG,
+            Self::GithubCopilot => &COPILOT_MESSAGES_CONFIG,
             Self::VertexAi => &VERTEX_ANTHROPIC_MESSAGES_CONFIG,
         }
     }
@@ -60,6 +64,9 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
         LlmProviders::Bedrock => Some(MessagesProvider::Bedrock),
         LlmProviders::Deepseek => Some(MessagesProvider::Deepseek),
         LlmProviders::Edenai => Some(MessagesProvider::Edenai),
+        LlmProviders::GithubCopilot if model.to_ascii_lowercase().contains("claude") => {
+            Some(MessagesProvider::GithubCopilot)
+        }
         LlmProviders::VertexAi if model.to_ascii_lowercase().contains("claude") => {
             Some(MessagesProvider::VertexAi)
         }
@@ -88,6 +95,7 @@ mod tests {
     #[case::azure_ai("azure_ai", MessagesProvider::AzureAi)]
     #[case::bedrock("bedrock", MessagesProvider::Bedrock)]
     #[case::deepseek("deepseek", MessagesProvider::Deepseek)]
+    #[case::github_copilot("github_copilot", MessagesProvider::GithubCopilot)]
     #[case::vertex_ai("vertex_ai", MessagesProvider::VertexAi)]
     fn provider_round_trips_through_its_python_name(
         #[case] name: &str,
@@ -102,6 +110,7 @@ mod tests {
 
     #[rstest]
     #[case::openai(LlmProviders::Openai, "gpt-5")]
+    #[case::copilot_non_claude(LlmProviders::GithubCopilot, "native-model")]
     #[case::vertex_gemini(LlmProviders::VertexAi, "gemini-2.5-pro")]
     fn provider_without_a_messages_config_is_rejected(
         #[case] provider: LlmProviders,

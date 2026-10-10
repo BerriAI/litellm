@@ -870,3 +870,256 @@ async fn edenai_preserves_native_thinking_and_strips_billing_and_cache_extension
         })
     );
 }
+
+struct CopilotToken {
+    acquisitions: std::sync::atomic::AtomicUsize,
+    api_base: &'static str,
+}
+
+impl litellm_auth_copilot::CopilotSessionSource for CopilotToken {
+    fn acquire(&self, _: u64) -> litellm_auth_copilot::SessionFuture<'_> {
+        self.acquisitions
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        Box::pin(async move {
+            litellm_auth_copilot::CopilotSession::new(
+                litellm_auth::SecretValue::new("session-token"),
+                Some(self.api_base),
+                200,
+            )
+        })
+    }
+}
+
+struct CopilotWire {
+    upstream: String,
+    seen: Mutex<Vec<litellm_host::interceptors::WireRequest>>,
+}
+
+impl litellm_host::interceptors::Interceptors<Error> for CopilotWire {
+    async fn before_provider_request(
+        &self,
+        wire: litellm_host::interceptors::WireRequest,
+        _: litellm_host::interceptors::RequestContext,
+    ) -> Result<litellm_host::interceptors::WireRequest, Error> {
+        self.seen.lock().unwrap().push(wire.clone());
+        Ok(litellm_host::interceptors::WireRequest {
+            url: format!("{}/v1/messages", self.upstream),
+            ..wire
+        })
+    }
+
+    async fn after_provider_response(
+        &self,
+        _: litellm_host::interceptors::RawResponse,
+    ) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+#[rstest]
+#[case::complete(false, "https://tenant.githubcopilot.com")]
+#[case::complete_endpoint(false, "https://tenant.githubcopilot.com/v1/messages")]
+#[case::stream(true, "https://tenant.githubcopilot.com")]
+#[tokio::test]
+async fn copilot_binds_session_auth_to_its_endpoint_and_preserves_native_messages(
+    call: MessagesCall,
+    #[case] stream: bool,
+    #[case] api_base: &'static str,
+) {
+    use futures_util::TryStreamExt;
+    use litellm_inference_messages::MessagesCallResponse;
+
+    const SSE: &str = "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+    let template = if stream {
+        ResponseTemplate::new(200)
+            .insert_header("content-type", "text/event-stream")
+            .set_body_string(SSE)
+    } else {
+        message_response()
+    };
+    let attacker = upstream([]).await;
+    let upstream = upstream([template.clone(), template]).await;
+    let tokens = Arc::new(CopilotToken {
+        acquisitions: std::sync::atomic::AtomicUsize::new(0),
+        api_base,
+    });
+    let route = copilot_route(tokens.clone());
+    let intercept = CopilotWire {
+        upstream: upstream.uri(),
+        seen: Mutex::new(Vec::new()),
+    };
+    let request_body = with_fields(call, json!({"model": "claude-test", "stream": stream})).body;
+    let request = || MessagesCall {
+        custom_llm_provider: Some("github_copilot".into()),
+        api_key: Some("caller-key".into()),
+        api_base: Some(attacker.uri()),
+        extra_headers: headers([
+            ("Authorization", "Bearer caller-one"),
+            ("authorization", "Bearer caller-two"),
+            ("openai-intent", "caller-intent"),
+            ("x-interaction-type", "caller-type"),
+            ("x-github-api-version", "caller-version"),
+            ("editor-version", "caller-editor"),
+            ("anthropic-beta", "caller-beta"),
+        ]),
+        body: request_body.clone(),
+        litellm_params: Default::default(),
+        provider_specific_header: None,
+        timeout: Some(Duration::from_secs(5)),
+        shaping: Default::default(),
+    };
+    let first = route.execute(request(), &intercept, None).await.unwrap();
+    let second = route.execute(request(), &intercept, None).await.unwrap();
+    match (first, second) {
+        (MessagesCallResponse::Complete(first), MessagesCallResponse::Complete(second)) => {
+            assert_eq!(
+                *first,
+                serde_json::from_value::<MessagesResponse>(message_body()).unwrap()
+            );
+            assert_eq!(first, second);
+        }
+        (
+            MessagesCallResponse::Stream { chunks: first, .. },
+            MessagesCallResponse::Stream { chunks: second, .. },
+        ) => {
+            assert_eq!(
+                first.try_collect::<Vec<_>>().await.unwrap().concat(),
+                SSE.as_bytes()
+            );
+            assert_eq!(
+                second.try_collect::<Vec<_>>().await.unwrap().concat(),
+                SSE.as_bytes()
+            );
+        }
+        _ => panic!("the requested delivery mode must survive authentication"),
+    }
+    assert!(received(&attacker).await.is_empty());
+    let sent = received(&upstream).await;
+    assert_eq!(sent.len(), 2);
+    assert_eq!(
+        sent[0].header_values("authorization"),
+        ["Bearer session-token"]
+    );
+    assert_eq!(sent[0].header("editor-version"), Some("caller-editor"));
+    assert_eq!(sent[0].header("openai-intent"), Some("messages-proxy"));
+    assert_eq!(sent[0].header("x-interaction-type"), Some("messages-proxy"));
+    assert_ne!(
+        sent[0].header("x-github-api-version"),
+        Some("caller-version")
+    );
+    assert_eq!(sent[0].header("anthropic-beta"), Some("caller-beta"));
+    assert_eq!(
+        sent[0].json(),
+        json!({
+            "model": "claude-test", "max_tokens": 16, "stream": stream,
+            "messages": [{"role": "user", "content": "hi"}]
+        })
+    );
+    let first_id = sent[0].header("x-request-id").expect("request identity");
+    let second_id = sent[1].header("x-request-id").expect("request identity");
+    assert!(!first_id.is_empty());
+    assert_ne!(first_id, second_id);
+    assert_eq!(
+        tokens
+            .acquisitions
+            .load(std::sync::atomic::Ordering::SeqCst),
+        1
+    );
+    let seen = intercept.seen.into_inner().unwrap();
+    assert_eq!(seen.len(), 2);
+    assert!(
+        seen.iter()
+            .all(|wire| wire.url == "https://tenant.githubcopilot.com/v1/messages")
+    );
+}
+
+fn copilot_route(
+    source: Arc<dyn litellm_auth_copilot::CopilotSessionSource>,
+) -> litellm_inference_messages::MessagesRoute {
+    let resources = litellm_inference_testing::resources();
+    litellm_inference_messages::MessagesRoute::new(
+        litellm_inference_testing::provider_http(
+            &resources,
+            &litellm_inference_testing::http_config(),
+        ),
+        Arc::new(litellm_auth::AuthServices {
+            copilot: litellm_auth_copilot::CopilotAuthService::new(source, Arc::new(|| 100)),
+            ..Default::default()
+        }),
+        litellm_inference_testing::no_secrets(),
+    )
+}
+
+struct CopilotLoginRequired;
+
+impl litellm_auth_copilot::CopilotSessionSource for CopilotLoginRequired {
+    fn acquire(&self, _: u64) -> litellm_auth_copilot::SessionFuture<'_> {
+        Box::pin(async {
+            Err(litellm_auth::Error::ProviderAuthentication(
+                "login required".into(),
+            ))
+        })
+    }
+}
+
+#[rstest]
+#[tokio::test]
+async fn caller_credentials_cannot_bypass_a_failed_copilot_session(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let error = copilot_route(Arc::new(CopilotLoginRequired))
+        .execute(
+            MessagesCall {
+                custom_llm_provider: Some("github_copilot".into()),
+                api_key: Some("caller-key".into()),
+                api_base: Some(upstream.uri()),
+                extra_headers: headers([("Authorization", "Bearer caller")]),
+                ..call
+            },
+            &(),
+            None,
+        )
+        .await
+        .err()
+        .expect("missing session cannot send inference");
+    assert_eq!(
+        error,
+        Error::Auth(litellm_auth::Error::ProviderAuthentication(
+            "login required".into()
+        ))
+    );
+    assert!(received(&upstream).await.is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn unprojected_per_user_sessions_cannot_fall_back_to_shared_credentials(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let tokens = Arc::new(CopilotToken {
+        acquisitions: std::sync::atomic::AtomicUsize::new(0),
+        api_base: "https://tenant.githubcopilot.com",
+    });
+    let intercept = CopilotWire {
+        upstream: upstream.uri(),
+        seen: Mutex::new(Vec::new()),
+    };
+    let error = copilot_route(tokens.clone())
+        .execute(MessagesCall {
+            custom_llm_provider: Some("github_copilot".into()),
+            litellm_params: serde_json::from_value(json!({
+                "model": "claude-test",
+                "github_copilot_user_session": {"token": "caller-session", "api_base": upstream.uri()}
+            })).unwrap(),
+            ..call
+        }, &intercept, None).await.err().expect("a session must be projected through a trusted boundary");
+    assert_eq!(
+        error,
+        Error::Unsupported("native Copilot per-user session projection")
+    );
+    assert_eq!(
+        tokens
+            .acquisitions
+            .load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+    assert!(received(&upstream).await.is_empty());
+}

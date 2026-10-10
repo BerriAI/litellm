@@ -7,6 +7,7 @@ pub mod cohere;
 pub mod deepseek;
 pub mod edenai;
 mod error;
+pub mod github_copilot;
 pub mod mistral;
 pub mod openai;
 pub mod openai_like;
