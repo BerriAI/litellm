@@ -21,4 +21,4 @@ litellm-cache-testing.workspace = true
 rstest.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
-wiremock = "0.6.5"
+wiremock.workspace = true

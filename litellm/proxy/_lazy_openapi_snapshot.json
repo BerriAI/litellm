@@ -1241,7 +1241,7 @@
     "paths": {
       "/access_group/list": {
         "get": {
-          "description": "List all access groups.\n\nReturns a list of all access groups with their model names, deployment counts, shared budget\nand the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/list' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nReturns:\n- ListAccessGroupsResponse with all access groups",
+          "description": "List all access groups.\n\nReturns a list of all access groups with their model names, deployment counts, shared budget\nand the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/list' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nReturns:\n- ListAccessGroupsResponse with all access groups",
           "operationId": "list_access_groups_access_group_list_get",
           "responses": {
             "200": {
@@ -1268,7 +1268,7 @@
       },
       "/access_group/new": {
         "post": {
-          "description": "Create a new access group containing multiple model names.\n\nAn access group is a named collection of model groups that can be referenced\nby teams/keys for simplified access control.\n\nExample:\n```bash\ncurl -X POST 'http://localhost:4000/access_group/new' \\\n  -H 'Authorization: Bearer sk-1234' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"access_group\": \"production-models\",\n    \"model_names\": [\"gpt-4\", \"claude-3-opus\", \"gemini-pro\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (e.g., \"production-models\")\n- model_names: List[str] - List of existing model groups to include\n\nReturns:\n- NewModelGroupResponse with the created access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 500: If database operations fail",
+          "description": "Create a new access group containing multiple model names.\n\nAn access group is a named collection of model groups that can be referenced\nby teams/keys for simplified access control.\n\nExample:\n```bash\ncurl -X POST 'http://localhost:4000/access_group/new' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"access_group\": \"production-models\",\n    \"model_names\": [\"gpt-4\", \"claude-3-opus\", \"gemini-pro\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (e.g., \"production-models\")\n- model_names: List[str] - List of existing model groups to include\n\nReturns:\n- NewModelGroupResponse with the created access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 500: If database operations fail",
           "operationId": "create_model_group_access_group_new_post",
           "requestBody": {
             "content": {
@@ -1315,7 +1315,7 @@
       },
       "/access_group/{access_group}/budget": {
         "delete": {
-          "description": "Clear the shared budget of an access group, leaving the group itself in place.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteAccessGroupBudgetResponse; budget_deleted is false when there was nothing to clear\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Clear the shared budget of an access group, leaving the group itself in place.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/budget' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteAccessGroupBudgetResponse; budget_deleted is false when there was nothing to clear\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "delete_access_group_budget_access_group__access_group__budget_delete",
           "parameters": [
             {
@@ -1361,7 +1361,7 @@
           ]
         },
         "get": {
-          "description": "Get the shared budget of an access group, and the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupBudgetResponse; budget is null when the group has no budget set\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Get the shared budget of an access group, and the spend drawn against it.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/budget' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupBudgetResponse; budget is null when the group has no budget set\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "get_access_group_budget_access_group__access_group__budget_get",
           "parameters": [
             {
@@ -1407,7 +1407,7 @@
           ]
         },
         "put": {
-          "description": "Set or replace the shared budget of an access group. Idempotent.\n\nEvery key that can reach a model in the group draws from this one budget.\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/budget' \\\n  -H 'Authorization: Bearer sk-1234' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"max_budget\": 100.0,\n    \"budget_duration\": \"30d\"\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- max_budget: Optional[float] - Requests fail once the group's shared spend exceeds this\n- soft_budget: Optional[float] - Fires an alert when reached; requests still succeed\n- budget_duration: Optional[str] - Frequency of resetting the group's spend (e.g. '30d')\n- budget_id: Optional[str] - Link an existing budget instead of creating one\n\nReturns:\n- AccessGroupBudgetResponse with the stored budget and current spend\n\nRaises:\n- HTTPException 400: If no budget field is given, or budget_duration cannot be parsed\n- HTTPException 404: If access group not found",
+          "description": "Set or replace the shared budget of an access group. Idempotent.\n\nEvery key that can reach a model in the group draws from this one budget.\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/budget' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"max_budget\": 100.0,\n    \"budget_duration\": \"30d\"\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- max_budget: Optional[float] - Requests fail once the group's shared spend exceeds this\n- soft_budget: Optional[float] - Fires an alert when reached; requests still succeed\n- budget_duration: Optional[str] - Frequency of resetting the group's spend (e.g. '30d')\n- budget_id: Optional[str] - Link an existing budget instead of creating one\n\nReturns:\n- AccessGroupBudgetResponse with the stored budget and current spend\n\nRaises:\n- HTTPException 400: If no budget field is given, or budget_duration cannot be parsed\n- HTTPException 404: If access group not found",
           "operationId": "set_access_group_budget_access_group__access_group__budget_put",
           "parameters": [
             {
@@ -1465,7 +1465,7 @@
       },
       "/access_group/{access_group}/delete": {
         "delete": {
-          "description": "Delete an access group.\n\nRemoves the access group from all deployments that have it.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/delete' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteModelGroupResponse with deletion details\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Delete an access group.\n\nRemoves the access group from all deployments that have it.\n\nExample:\n```bash\ncurl -X DELETE 'http://localhost:4000/access_group/production-models/delete' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- DeleteModelGroupResponse with deletion details\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "delete_access_group_access_group__access_group__delete_delete",
           "parameters": [
             {
@@ -1513,7 +1513,7 @@
       },
       "/access_group/{access_group}/info": {
         "get": {
-          "description": "Get information about a specific access group.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/info' \\\n  -H 'Authorization: Bearer sk-1234'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupInfo with the access group details, its shared budget and its spend\n\nRaises:\n- HTTPException 404: If access group not found",
+          "description": "Get information about a specific access group.\n\nExample:\n```bash\ncurl -X GET 'http://localhost:4000/access_group/production-models/info' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n\nReturns:\n- AccessGroupInfo with the access group details, its shared budget and its spend\n\nRaises:\n- HTTPException 404: If access group not found",
           "operationId": "get_access_group_info_access_group__access_group__info_get",
           "parameters": [
             {
@@ -1561,7 +1561,7 @@
       },
       "/access_group/{access_group}/update": {
         "put": {
-          "description": "Update an access group's model names.\n\nThis will:\n1. Remove the access group from all current deployments\n2. Add the access group to all deployments for the new model_names list\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/update' \\\n  -H 'Authorization: Bearer sk-1234' \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model_names\": [\"gpt-4\", \"claude-3-sonnet\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- model_names: List[str] - New list of model groups to include\n\nReturns:\n- NewModelGroupResponse with the updated access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 404: If access group not found",
+          "description": "Update an access group's model names.\n\nThis will:\n1. Remove the access group from all current deployments\n2. Add the access group to all deployments for the new model_names list\n\nExample:\n```bash\ncurl -X PUT 'http://localhost:4000/access_group/production-models/update' \\\n  -H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \\\n  -H 'Content-Type: application/json' \\\n  -d '{\n    \"model_names\": [\"gpt-4\", \"claude-3-sonnet\"]\n  }'\n```\n\nParameters:\n- access_group: str - The access group name (URL path parameter)\n- model_names: List[str] - New list of model groups to include\n\nReturns:\n- NewModelGroupResponse with the updated access group details\n\nRaises:\n- HTTPException 400: If any model names don't exist\n- HTTPException 404: If access group not found",
           "operationId": "update_access_group_access_group__access_group__update_put",
           "parameters": [
             {
@@ -2378,6 +2378,19 @@
               "title": "Agent Name",
               "type": "string"
             },
+            "enabled": {
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "execution_mode": {
+              "enum": [
+                "autonomous",
+                "delegated",
+                "both"
+              ],
+              "title": "Execution Mode",
+              "type": "string"
+            },
             "extra_headers": {
               "anyOf": [
                 {
@@ -2391,6 +2404,16 @@
                 }
               ],
               "title": "Extra Headers"
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/EntraIdentityConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "kill_switch": {
               "anyOf": [
@@ -2470,8 +2493,7 @@
             }
           },
           "required": [
-            "agent_name",
-            "agent_card_params"
+            "agent_name"
           ],
           "title": "AgentConfig",
           "type": "object"
@@ -2519,6 +2541,91 @@
             }
           },
           "title": "AgentExtension",
+          "type": "object"
+        },
+        "AgentIdentityBinding": {
+          "properties": {
+            "active": {
+              "default": true,
+              "title": "Active",
+              "type": "boolean"
+            },
+            "agent_id": {
+              "title": "Agent Id",
+              "type": "string"
+            },
+            "client_id": {
+              "title": "Client Id",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "last_authenticated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Authenticated At"
+            },
+            "provider": {
+              "const": "microsoft_entra",
+              "title": "Provider",
+              "type": "string"
+            },
+            "required_roles": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Roles",
+              "type": "array"
+            },
+            "required_scopes": {
+              "default": [
+                "user_impersonation"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Scopes",
+              "type": "array"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "string"
+            },
+            "service_principal_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Service Principal Id"
+            },
+            "tenant_id": {
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "agent_id",
+            "provider",
+            "tenant_id",
+            "client_id",
+            "issuer",
+            "revision"
+          ],
+          "title": "AgentIdentityBinding",
           "type": "object"
         },
         "AgentInterface": {
@@ -2972,6 +3079,21 @@
               ],
               "title": "Created By"
             },
+            "enabled": {
+              "default": true,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "execution_mode": {
+              "default": "autonomous",
+              "enum": [
+                "autonomous",
+                "delegated",
+                "both"
+              ],
+              "title": "Execution Mode",
+              "type": "string"
+            },
             "extra_headers": {
               "anyOf": [
                 {
@@ -2985,6 +3107,26 @@
                 }
               ],
               "title": "Extra Headers"
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AgentIdentityBinding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "identity_managed": {
+              "default": false,
+              "title": "Identity Managed",
+              "type": "boolean"
+            },
+            "jwt_auth_configured": {
+              "default": false,
+              "title": "Jwt Auth Configured",
+              "type": "boolean"
             },
             "keys": {
               "anyOf": [
@@ -3290,6 +3432,53 @@
           "title": "BreakdownMetrics",
           "type": "object"
         },
+        "DailyActivityKeyPageResponse": {
+          "properties": {
+            "api_keys": {
+              "items": {
+                "$ref": "#/components/schemas/KeySpendActivityRow"
+              },
+              "title": "Api Keys",
+              "type": "array"
+            },
+            "limit": {
+              "title": "Limit",
+              "type": "integer"
+            },
+            "offset": {
+              "title": "Offset",
+              "type": "integer"
+            },
+            "total_api_keys": {
+              "title": "Total Api Keys",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "api_keys",
+            "total_api_keys",
+            "offset",
+            "limit"
+          ],
+          "title": "DailyActivityKeyPageResponse",
+          "type": "object"
+        },
+        "DailyActivityKeySearchResponse": {
+          "properties": {
+            "api_keys": {
+              "items": {
+                "$ref": "#/components/schemas/KeyActivityRow"
+              },
+              "title": "Api Keys",
+              "type": "array"
+            }
+          },
+          "required": [
+            "api_keys"
+          ],
+          "title": "DailyActivityKeySearchResponse",
+          "type": "object"
+        },
         "DailySpendData": {
           "properties": {
             "breakdown": {
@@ -3313,6 +3502,33 @@
         },
         "DailySpendMetadata": {
           "properties": {
+            "api_key_limit": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.",
+              "title": "Api Key Limit"
+            },
+            "entity_total_api_keys": {
+              "anyOf": [
+                {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distinct API keys per entity over the requested range, set when the entity breakdown is included. When an entity's count exceeds api_key_limit, its api_key_breakdown lists only its keys among the top api_key_limit keys overall.",
+              "title": "Entity Total Api Keys"
+            },
             "has_more": {
               "default": false,
               "title": "Has More",
@@ -3322,6 +3538,18 @@
               "default": 1,
               "title": "Page",
               "type": "integer"
+            },
+            "total_api_keys": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.",
+              "title": "Total Api Keys"
             },
             "total_api_requests": {
               "default": 0,
@@ -3417,6 +3645,71 @@
           "title": "DailySpendMetadata",
           "type": "object"
         },
+        "EntraIdentityConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "client_id": {
+              "title": "Client Id",
+              "type": "string"
+            },
+            "provider": {
+              "const": "microsoft_entra",
+              "title": "Provider",
+              "type": "string"
+            },
+            "required_roles": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Roles",
+              "type": "array"
+            },
+            "required_scopes": {
+              "default": [
+                "user_impersonation"
+              ],
+              "description": "Required delegated scopes. An empty list accepts any nonempty scope granted for this gateway.",
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Scopes",
+              "type": "array"
+            },
+            "service_principal_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Service Principal Id"
+            },
+            "tenant_id": {
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "tenant_id",
+            "client_id"
+          ],
+          "title": "EntraIdentityConfig",
+          "type": "object"
+        },
+        "ExportType": {
+          "enum": [
+            "daily",
+            "daily_with_keys",
+            "daily_with_models",
+            "daily_with_users"
+          ],
+          "title": "ExportType",
+          "type": "string"
+        },
         "HTTPAuthSecurityScheme": {
           "description": "Defines a security scheme using HTTP authentication.",
           "properties": {
@@ -3470,6 +3763,27 @@
             }
           },
           "title": "HTTPValidationError",
+          "type": "object"
+        },
+        "KeyActivityRow": {
+          "properties": {
+            "api_key": {
+              "title": "Api Key",
+              "type": "string"
+            },
+            "metadata": {
+              "$ref": "#/components/schemas/KeyMetadata"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/SpendMetrics"
+            }
+          },
+          "required": [
+            "api_key",
+            "metrics",
+            "metadata"
+          ],
+          "title": "KeyActivityRow",
           "type": "object"
         },
         "KeyMetadata": {
@@ -3550,6 +3864,78 @@
           "title": "KeyMetricWithMetadata",
           "type": "object"
         },
+        "KeySpendActivityRow": {
+          "properties": {
+            "api_key": {
+              "title": "Api Key",
+              "type": "string"
+            },
+            "metadata": {
+              "$ref": "#/components/schemas/KeyMetadata"
+            },
+            "metrics": {
+              "$ref": "#/components/schemas/KeySpendMetrics"
+            }
+          },
+          "required": [
+            "api_key",
+            "metrics",
+            "metadata"
+          ],
+          "title": "KeySpendActivityRow",
+          "type": "object"
+        },
+        "KeySpendMetrics": {
+          "properties": {
+            "api_requests": {
+              "default": 0,
+              "title": "Api Requests",
+              "type": "integer"
+            },
+            "cache_creation_input_tokens": {
+              "default": 0,
+              "title": "Cache Creation Input Tokens",
+              "type": "integer"
+            },
+            "cache_read_input_tokens": {
+              "default": 0,
+              "title": "Cache Read Input Tokens",
+              "type": "integer"
+            },
+            "completion_tokens": {
+              "default": 0,
+              "title": "Completion Tokens",
+              "type": "integer"
+            },
+            "failed_requests": {
+              "default": 0,
+              "title": "Failed Requests",
+              "type": "integer"
+            },
+            "prompt_tokens": {
+              "default": 0,
+              "title": "Prompt Tokens",
+              "type": "integer"
+            },
+            "spend": {
+              "default": 0.0,
+              "title": "Spend",
+              "type": "number"
+            },
+            "successful_requests": {
+              "default": 0,
+              "title": "Successful Requests",
+              "type": "integer"
+            },
+            "total_tokens": {
+              "default": 0,
+              "title": "Total Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "KeySpendMetrics",
+          "type": "object"
+        },
         "MakeAgentsPublicRequest": {
           "properties": {
             "agent_ids": {
@@ -3564,6 +3950,54 @@
             "agent_ids"
           ],
           "title": "MakeAgentsPublicRequest",
+          "type": "object"
+        },
+        "ManagedAgentIdentityStatus": {
+          "properties": {
+            "enabled": {
+              "default": true,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "execution_mode": {
+              "default": "autonomous",
+              "enum": [
+                "autonomous",
+                "delegated",
+                "both"
+              ],
+              "title": "Execution Mode",
+              "type": "string"
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AgentIdentityBinding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "identity_managed": {
+              "default": false,
+              "title": "Identity Managed",
+              "type": "boolean"
+            },
+            "last_authenticated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Authenticated At"
+            }
+          },
+          "title": "ManagedAgentIdentityStatus",
           "type": "object"
         },
         "MetricWithMetadata": {
@@ -3588,6 +4022,32 @@
             "metrics"
           ],
           "title": "MetricWithMetadata",
+          "type": "object"
+        },
+        "ModelTopKeysResponse": {
+          "properties": {
+            "api_keys": {
+              "items": {
+                "$ref": "#/components/schemas/KeySpendActivityRow"
+              },
+              "title": "Api Keys",
+              "type": "array"
+            },
+            "by_model_group": {
+              "title": "By Model Group",
+              "type": "boolean"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            }
+          },
+          "required": [
+            "model",
+            "by_model_group",
+            "api_keys"
+          ],
+          "title": "ModelTopKeysResponse",
           "type": "object"
         },
         "MutualTLSSecurityScheme": {
@@ -3766,6 +4226,19 @@
               "title": "Agent Name",
               "type": "string"
             },
+            "enabled": {
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "execution_mode": {
+              "enum": [
+                "autonomous",
+                "delegated",
+                "both"
+              ],
+              "title": "Execution Mode",
+              "type": "string"
+            },
             "extra_headers": {
               "anyOf": [
                 {
@@ -3779,6 +4252,16 @@
                 }
               ],
               "title": "Extra Headers"
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/EntraIdentityConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "kill_switch": {
               "anyOf": [
@@ -4168,6 +4651,876 @@
           ]
         }
       },
+      "/agent/daily/activity/aggregated": {
+        "get": {
+          "operationId": "get_agent_daily_activity_aggregated_agent_daily_activity_aggregated_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "api_key_limit",
+              "required": false,
+              "schema": {
+                "default": 100,
+                "maximum": 1000,
+                "minimum": 1,
+                "title": "Api Key Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SpendAnalyticsPaginatedResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Aggregated",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/aggregated/keys": {
+        "get": {
+          "operationId": "get_agent_daily_activity_aggregated_keys_agent_daily_activity_aggregated_keys_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "offset",
+              "required": false,
+              "schema": {
+                "default": 0,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 50,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/DailyActivityKeyPageResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Aggregated Keys",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/aggregated/model_top_keys": {
+        "get": {
+          "operationId": "get_agent_daily_activity_model_top_keys_agent_daily_activity_aggregated_model_top_keys_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "model_group",
+              "required": true,
+              "schema": {
+                "minLength": 1,
+                "title": "Model Group",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "by_model_group",
+              "required": false,
+              "schema": {
+                "default": true,
+                "title": "By Model Group",
+                "type": "boolean"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 5,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ModelTopKeysResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Model Top Keys",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/aggregated/search": {
+        "get": {
+          "operationId": "get_agent_daily_activity_aggregated_search_agent_daily_activity_aggregated_search_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "search",
+              "required": true,
+              "schema": {
+                "minLength": 1,
+                "title": "Search",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "limit",
+              "required": false,
+              "schema": {
+                "default": 100,
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/DailyActivityKeySearchResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Aggregated Search",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/export": {
+        "get": {
+          "operationId": "get_agent_daily_activity_export_agent_daily_activity_export_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "export_type",
+              "required": false,
+              "schema": {
+                "$ref": "#/components/schemas/ExportType",
+                "default": "daily"
+              }
+            },
+            {
+              "in": "query",
+              "name": "format",
+              "required": false,
+              "schema": {
+                "default": "csv",
+                "enum": [
+                  "csv",
+                  "json"
+                ],
+                "title": "Format",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "text/csv": {
+                  "schema": {
+                    "type": "string"
+                  }
+                }
+              },
+              "description": "Streamed daily activity export"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Export",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
       "/v1/agents": {
         "get": {
           "description": "Example usage:\n```\ncurl -X GET \"http://localhost:4000/v1/agents\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nPass `?health_check=true` to filter out agents whose URL is unreachable:\n```\ncurl -X GET \"http://localhost:4000/v1/agents?health_check=true\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nPass `?query=<task>` to get the best matching agents ranked by semantic similarity:\n```\ncurl -X GET \"http://localhost:4000/v1/agents?query=translate+a+PDF+document&top_k=5\"       -H \"Content-Type: application/json\"       -H \"Authorization: Bearer your-key\"     ```\n\nReturns: List[AgentResponse]",
@@ -4296,6 +5649,36 @@
             }
           ],
           "summary": "Create Agent",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/v1/agents/identity/providers": {
+        "get": {
+          "operationId": "get_agent_identity_providers_v1_agents_identity_providers_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Response Get Agent Identity Providers V1 Agents Identity Providers Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Identity Providers",
           "tags": [
             "agents"
           ]
@@ -4547,6 +5930,53 @@
             }
           ],
           "summary": "Update Agent",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/v1/agents/{agent_id}/identity": {
+        "get": {
+          "operationId": "get_agent_identity_status_v1_agents__agent_id__identity_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "agent_id",
+              "required": true,
+              "schema": {
+                "title": "Agent Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ManagedAgentIdentityStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Identity Status",
           "tags": [
             "agents"
           ]
@@ -8062,6 +9492,109 @@
       }
     }
   },
+  "decisions": {
+    "components": {
+      "schemas": {}
+    },
+    "paths": {
+      "/decisions": {
+        "post": {
+          "operationId": "decisions_decisions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Decisions",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
+      "/systemone": {
+        "post": {
+          "operationId": "systemone_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Systemone",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
+      "/v1/decisions": {
+        "post": {
+          "operationId": "decisions_v1_decisions_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Decisions",
+          "tags": [
+            "decisions"
+          ]
+        }
+      },
+      "/v1/systemone": {
+        "post": {
+          "operationId": "systemone_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Systemone",
+          "tags": [
+            "decisions"
+          ]
+        }
+      }
+    }
+  },
   "evals": {
     "components": {
       "schemas": {
@@ -10087,6 +11620,23 @@
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
             },
+            "logging_only_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "input",
+                    "output",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "title": "Logging Only Scope"
+            },
             "mask_request_content": {
               "anyOf": [
                 {
@@ -10355,6 +11905,34 @@
               "default": true,
               "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
               "title": "Sticky Session Routing"
+            },
+            "stream_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "streaming",
+                    "non_streaming",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": {
+                    "enum": [
+                      "streaming",
+                      "non_streaming",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.",
+              "title": "Stream Scope"
             },
             "template_id": {
               "anyOf": [
@@ -11242,6 +12820,77 @@
           "title": "GuardrailSubmissionSummary",
           "type": "object"
         },
+        "GuardrailUIAddGuardrailSettings": {
+          "properties": {
+            "content_filter_settings": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Content Filter Settings"
+            },
+            "pii_entity_categories": {
+              "items": {
+                "$ref": "#/components/schemas/PiiEntityCategoryMap"
+              },
+              "title": "Pii Entity Categories",
+              "type": "array"
+            },
+            "providers_without_directional_logging_only_scope": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Providers Without Directional Logging Only Scope",
+              "type": "array"
+            },
+            "supported_actions": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Actions",
+              "type": "array"
+            },
+            "supported_entities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Entities",
+              "type": "array"
+            },
+            "supported_modes": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Supported Modes",
+              "type": "array"
+            },
+            "supported_modes_by_provider": {
+              "additionalProperties": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "title": "Supported Modes By Provider",
+              "type": "object"
+            }
+          },
+          "required": [
+            "supported_entities",
+            "supported_actions",
+            "supported_modes",
+            "supported_modes_by_provider",
+            "providers_without_directional_logging_only_scope",
+            "pii_entity_categories"
+          ],
+          "title": "GuardrailUIAddGuardrailSettings",
+          "type": "object"
+        },
         "HTTPValidationError": {
           "properties": {
             "detail": {
@@ -11383,6 +13032,19 @@
                 "https://akto-ingestion.example.com"
               ],
               "title": "Akto Base Url"
+            },
+            "akto_metadata": {
+              "anyOf": [
+                {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "JSON object sent to Akto. 'policy_name': comma-separated Akto policies to enforce (empty enforces all). Example: {\"policy_name\": \"PII Strict, Secrets\"}.",
+              "title": "Akto Metadata"
             },
             "akto_vxlan_id": {
               "anyOf": [
@@ -11922,6 +13584,22 @@
               "description": "Enable content moderation to check for harmful content (harassment, hate speech, etc.).",
               "title": "Content Moderation Check"
             },
+            "context_source": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "ENDPOINT",
+                    "AGENTIC"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Akto context the traffic belongs to: 'ENDPOINT' (Atlas) or 'AGENTIC' (Argus). Default: AGENTIC.",
+              "title": "Context Source"
+            },
             "contextual_grounding_from_messages": {
               "default": false,
               "description": "ApplyGuardrail: when True, post-call scans of a request with no grounding_source / query content parts send the system and developer messages as the grounding source and the latest user message as the query, so the guardrail's contextual grounding policy can score the response. Bedrock bills contextual grounding units for these scans and rejects queries, sources and responses over its contextual grounding length limits, so leave this off for guardrails without a contextual grounding policy. Default False: plain messages are never sent as grounding context.",
@@ -12133,6 +13811,30 @@
               "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
+            "file_guardrail_timeout": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "HTTP timeout in seconds for checking attached files. Default: 10.",
+              "title": "File Guardrail Timeout"
+            },
+            "gateway_name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "noma_v2 only: name of this gateway, used as the gateway_host label on Noma scans",
+              "title": "Gateway Name"
+            },
             "grounding_check": {
               "anyOf": [
                 {
@@ -12324,6 +14026,23 @@
               ],
               "description": "Google Cloud location/region (e.g., us-central1)",
               "title": "Location"
+            },
+            "logging_only_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "input",
+                    "output",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.",
+              "title": "Logging Only Scope"
             },
             "mask": {
               "anyOf": [
@@ -13140,6 +14859,34 @@
               "description": "When True (default), after sensitive data is detected and routed, all subsequent requests in the same session will continue routing to the same model.",
               "title": "Sticky Session Routing"
             },
+            "stream_scope": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "streaming",
+                    "non_streaming",
+                    "both"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "additionalProperties": {
+                    "enum": [
+                      "streaming",
+                      "non_streaming",
+                      "both"
+                    ],
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Whether this guardrail runs on streaming requests, non-streaming requests, or both. A string applies to every configured mode. A map overrides named modes (pre_call, during_call, post_call, ...); omitted keys default to both. Unset means both, matching historical behavior.",
+              "title": "Stream Scope"
+            },
             "template_id": {
               "anyOf": [
                 {
@@ -13384,6 +15131,27 @@
           ],
           "title": "PiiAction",
           "type": "string"
+        },
+        "PiiEntityCategoryMap": {
+          "properties": {
+            "category": {
+              "title": "Category",
+              "type": "string"
+            },
+            "entities": {
+              "items": {
+                "type": "string"
+              },
+              "title": "Entities",
+              "type": "array"
+            }
+          },
+          "required": [
+            "category",
+            "entities"
+          ],
+          "title": "PiiEntityCategoryMap",
+          "type": "object"
         },
         "PiiEntityType": {
           "enum": [
@@ -14826,7 +16594,9 @@
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/GuardrailUIAddGuardrailSettings"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -24876,6 +26646,30 @@
           ]
         }
       },
+      "/bespoke/v1/systemone": {
+        "post": {
+          "operationId": "bespoke_proxy_route_bespoke_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Bespoke Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/cohere/{endpoint}": {
         "delete": {
           "description": "[Docs](https://docs.litellm.ai/docs/pass_through/cohere)",
@@ -25171,7 +26965,7 @@
       },
       "/cursor/chat/completions": {
         "post": {
-          "description": "Cursor BYOK endpoint. Accepts both request shapes Cursor sends to its OpenAI-compatible\nbase URL and always answers in chat completions format.\n\nCursor agent mode sends Responses API format bodies (`input`, flat tool defs, `reasoning`,\ncustom tools) to the chat/completions path while expecting chat completions responses;\nthose are routed through the Responses API pipeline and converted back. Genuine chat\ncompletions bodies (`messages` present) are routed through the standard chat completions\npipeline, after normalizing each level of the `tools` array and `tool_choice` to the chat\ncompletions shapes OpenAI requires. Cursor mixes Responses API shapes into chat bodies\nper level, independently: a flat tool def (`{\"type\": \"custom\", \"name\": \"ApplyPatch\", ...}`)\ngets nested under `custom`, and a flat grammar format\n(`{\"type\": \"grammar\", \"definition\", \"syntax\"}`) gets wrapped as\n`{\"type\": \"grammar\", \"grammar\": {...}}` wherever it appears, including inside tool defs\nCursor already sent pre-nested.\n\n```bash\ncurl -X POST http://localhost:4000/cursor/chat/completions     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n}'\nResponds back in chat completions format.\n```",
+          "description": "Cursor BYOK endpoint. Accepts both request shapes Cursor sends to its OpenAI-compatible\nbase URL and always answers in chat completions format.\n\nCursor agent mode sends Responses API format bodies (`input`, flat tool defs, `reasoning`,\ncustom tools) to the chat/completions path while expecting chat completions responses;\nthose are routed through the Responses API pipeline and converted back. Genuine chat\ncompletions bodies (`messages` present) are routed through the standard chat completions\npipeline, after normalizing each level of the `tools` array and `tool_choice` to the chat\ncompletions shapes OpenAI requires. Cursor mixes Responses API shapes into chat bodies\nper level, independently: a flat tool def (`{\"type\": \"custom\", \"name\": \"ApplyPatch\", ...}`)\ngets nested under `custom`, and a flat grammar format\n(`{\"type\": \"grammar\", \"definition\", \"syntax\"}`) gets wrapped as\n`{\"type\": \"grammar\", \"grammar\": {...}}` wherever it appears, including inside tool defs\nCursor already sent pre-nested.\n\n```bash\ncurl -X POST http://localhost:4000/cursor/chat/completions     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n}'\nResponds back in chat completions format.\n```",
           "operationId": "cursor_chat_completions_cursor_chat_completions_post",
           "responses": {
             "200": {
@@ -26319,6 +28113,30 @@
           ]
         }
       },
+      "/laya/v1/systemone": {
+        "post": {
+          "operationId": "laya_proxy_route_laya_v1_systemone_post",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {}
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Laya Proxy Route",
+          "tags": [
+            "llm_passthrough"
+          ]
+        }
+      },
       "/milvus/{endpoint}": {
         "delete": {
           "description": "Enable using Milvus `/vectors` endpoint as a pass-through endpoint.",
@@ -26987,7 +28805,7 @@
       },
       "/openai/deployments/{model}/chat/completions": {
         "post": {
-          "description": "Follows the exact same API spec as `OpenAI's Chat API https://platform.openai.com/docs/api-reference/chat`\n\n```bash\ncurl -X POST http://localhost:4000/v1/chat/completions \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer sk-1234\" \n-d '{\n    \"model\": \"gpt-4o\",\n    \"messages\": [\n        {\n            \"role\": \"user\",\n            \"content\": \"Hello!\"\n        }\n    ]\n}'\n```",
+          "description": "Follows the exact same API spec as `OpenAI's Chat API https://platform.openai.com/docs/api-reference/chat`\n\n```bash\ncurl -X POST http://localhost:4000/v1/chat/completions \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \n-d '{\n    \"model\": \"gpt-4o\",\n    \"messages\": [\n        {\n            \"role\": \"user\",\n            \"content\": \"Hello!\"\n        }\n    ]\n}'\n```",
           "operationId": "chat_completion_openai_deployments__model__chat_completions_post",
           "parameters": [
             {
@@ -27120,7 +28938,7 @@
       },
       "/openai/deployments/{model}/completions": {
         "post": {
-          "description": "Follows the exact same API spec as `OpenAI's Completions API https://platform.openai.com/docs/api-reference/completions`\n\n```bash\ncurl -X POST http://localhost:4000/v1/completions \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer sk-1234\" \n-d '{\n    \"model\": \"gpt-3.5-turbo-instruct\",\n    \"prompt\": \"Once upon a time\",\n    \"max_tokens\": 50,\n    \"temperature\": 0.7\n}'\n```",
+          "description": "Follows the exact same API spec as `OpenAI's Completions API https://platform.openai.com/docs/api-reference/completions`\n\n```bash\ncurl -X POST http://localhost:4000/v1/completions \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \n-d '{\n    \"model\": \"gpt-3.5-turbo-instruct\",\n    \"prompt\": \"Once upon a time\",\n    \"max_tokens\": 50,\n    \"temperature\": 0.7\n}'\n```",
           "operationId": "completion_openai_deployments__model__completions_post",
           "parameters": [
             {
@@ -27173,7 +28991,7 @@
       },
       "/openai/deployments/{model}/embeddings": {
         "post": {
-          "description": "Follows the exact same API spec as `OpenAI's Embeddings API https://platform.openai.com/docs/api-reference/embeddings`\n\n```bash\ncurl -X POST http://localhost:4000/v1/embeddings \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer sk-1234\" \n-d '{\n    \"model\": \"text-embedding-ada-002\",\n    \"input\": \"The quick brown fox jumps over the lazy dog\"\n}'\n```",
+          "description": "Follows the exact same API spec as `OpenAI's Embeddings API https://platform.openai.com/docs/api-reference/embeddings`\n\n```bash\ncurl -X POST http://localhost:4000/v1/embeddings \n-H \"Content-Type: application/json\" \n-H \"Authorization: Bearer $LITELLM_MASTER_KEY\" \n-d '{\n    \"model\": \"text-embedding-ada-002\",\n    \"input\": \"The quick brown fox jumps over the lazy dog\"\n}'\n```",
           "operationId": "embeddings_openai_deployments__model__embeddings_post",
           "parameters": [
             {
@@ -27226,7 +29044,7 @@
       },
       "/openai/deployments/{model}/images/edits": {
         "post": {
-          "description": "Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create\n\n```bash\ncurl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST \"http://localhost:4000/v1/images/edits\"     -H \"Authorization: Bearer sk-1234\"         -F \"model=gpt-image-1\"         -F \"image[]=@soap.png\"         -F 'prompt=Create a studio ghibli image of this'\n```",
+          "description": "Follows the OpenAI Images API spec: https://platform.openai.com/docs/api-reference/images/create\n\n```bash\ncurl -s -D >(grep -i x-request-id >&2)     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png)     -X POST \"http://localhost:4000/v1/images/edits\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"         -F \"model=gpt-image-1\"         -F \"image[]=@soap.png\"         -F 'prompt=Create a studio ghibli image of this'\n```",
           "operationId": "image_edit_api_openai_deployments__model__images_edits_post",
           "parameters": [
             {
@@ -27412,7 +29230,7 @@
       },
       "/openai/v1/responses": {
         "post": {
-          "description": "Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses\n\nSupports background mode with polling_via_cache for partial response retrieval.\nWhen background=true and polling_via_cache is enabled, returns a polling_id immediately\nand streams the response in the background, updating Redis cache.\n\n```bash\n# Normal request\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\"\n}'\n\n# Background request with polling\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\",\n    \"background\": true\n}'\n```",
+          "description": "Follows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses\n\nSupports background mode with polling_via_cache for partial response retrieval.\nWhen background=true and polling_via_cache is enabled, returns a polling_id immediately\nand streams the response in the background, updating Redis cache.\n\n```bash\n# Normal request\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\"\n}'\n\n# Background request with polling\ncurl -X POST http://localhost:4000/v1/responses     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Tell me about AI\",\n    \"background\": true\n}'\n```",
           "operationId": "responses_api_openai_v1_responses_post",
           "responses": {
             "200": {
@@ -27445,7 +29263,7 @@
       },
       "/openai/v1/responses/compact": {
         "post": {
-          "description": "Compact a response by running a compaction pass over a conversation.\n\nReturns encrypted, opaque items that can be used to reduce context size.\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact\n\n```bash\ncurl -X POST http://localhost:4000/v1/responses/compact     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n}'\n```",
+          "description": "Compact a response by running a compaction pass over a conversation.\n\nReturns encrypted, opaque items that can be used to reduce context size.\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/compact\n\n```bash\ncurl -X POST http://localhost:4000/v1/responses/compact     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": [{\"role\": \"user\", \"content\": \"Hello\"}]\n}'\n```",
           "operationId": "compact_response_openai_v1_responses_compact_post",
           "responses": {
             "200": {
@@ -27470,7 +29288,7 @@
       },
       "/openai/v1/responses/input_tokens": {
         "post": {
-          "description": "Count the input tokens of a Responses API request without calling the model.\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens\n\n```bash\ncurl -X POST http://localhost:4000/v1/responses/input_tokens     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer sk-1234\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Hello, how are you?\"\n}'\n```\n\nReturns: `{\"object\": \"response.input_tokens\", \"input_tokens\": <count>}`",
+          "description": "Count the input tokens of a Responses API request without calling the model.\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/input-tokens\n\n```bash\ncurl -X POST http://localhost:4000/v1/responses/input_tokens     -H \"Content-Type: application/json\"     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"     -d '{\n    \"model\": \"gpt-4o\",\n    \"input\": \"Hello, how are you?\"\n}'\n```\n\nReturns: `{\"object\": \"response.input_tokens\", \"input_tokens\": <count>}`",
           "operationId": "responses_input_tokens_openai_v1_responses_input_tokens_post",
           "responses": {
             "200": {
@@ -27495,7 +29313,7 @@
       },
       "/openai/v1/responses/{response_id}": {
         "delete": {
-          "description": "Delete a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Deletes from Redis cache\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/delete\n\n```bash\ncurl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer sk-1234\"\n```",
+          "description": "Delete a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Deletes from Redis cache\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/delete\n\n```bash\ncurl -X DELETE http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "delete_response_openai_v1_responses__response_id__delete",
           "parameters": [
             {
@@ -27541,7 +29359,7 @@
           ]
         },
         "get": {
-          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer sk-1234\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer sk-1234\"\n```",
+          "description": "Get a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Returns cumulative cached content from background responses\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/get\n\n```bash\n# Get polling response\ncurl -X GET http://localhost:4000/v1/responses/litellm_poll_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Get provider response\ncurl -X GET http://localhost:4000/v1/responses/resp_abc123     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "get_response_openai_v1_responses__response_id__get",
           "parameters": [
             {
@@ -27589,7 +29407,7 @@
       },
       "/openai/v1/responses/{response_id}/cancel": {
         "post": {
-          "description": "Cancel a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Cancels background response and updates status in Redis\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/cancel\n\n```bash\n# Cancel polling response\ncurl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H \"Authorization: Bearer sk-1234\"\n\n# Cancel provider response\ncurl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H \"Authorization: Bearer sk-1234\"\n```",
+          "description": "Cancel a response by ID.\n\nSupports both:\n- Polling IDs (litellm_poll_*): Cancels background response and updates status in Redis\n- Provider response IDs: Passes through to provider API\n\nFollows the OpenAI Responses API spec: https://platform.openai.com/docs/api-reference/responses/cancel\n\n```bash\n# Cancel polling response\ncurl -X POST http://localhost:4000/v1/responses/litellm_poll_abc123/cancel     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n\n# Cancel provider response\ncurl -X POST http://localhost:4000/v1/responses/resp_abc123/cancel     -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "cancel_response_openai_v1_responses__response_id__cancel_post",
           "parameters": [
             {
@@ -29762,6 +31580,28 @@
               ],
               "title": "Client Secret"
             },
+            "dcr_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Issuer"
+            },
+            "dcr_server_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Server Url"
+            },
             "id_jag_resource": {
               "anyOf": [
                 {
@@ -30225,6 +32065,18 @@
                 }
               ],
               "title": "Registration Url"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "anyOf": [
@@ -32078,6 +33930,17 @@
               ],
               "title": "Reviewed At"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "title": "Server Id",
               "type": "string"
@@ -32477,6 +34340,28 @@
                 }
               ],
               "title": "Client Secret"
+            },
+            "dcr_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Issuer"
+            },
+            "dcr_server_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Server Url"
             },
             "id_jag_resource": {
               "anyOf": [
@@ -32941,6 +34826,18 @@
                 }
               ],
               "title": "Registration Url"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "anyOf": [
@@ -34040,7 +35937,7 @@
       },
       "/callback": {
         "get": {
-          "description": "OAuth 2.0 authorization response handler for MCP loopback clients.\n\nAccepts either:\n\n- A successful authorization response (``code`` + ``state``), which is\n  forwarded back to the validated client ``redirect_uri`` with the\n  original (un-wrapped) ``state``.\n- An error response (``error``[+``error_description``/``error_uri``]), per\n  RFC 6749 \u00a74.1.2.1. When ``state`` is present and decodes to a trusted\n  ``redirect_uri``, the error params are propagated back to the client so\n  its OAuth library can surface them. Otherwise we render an HTML error\n  page so the user is not left on an opaque 422 / blank screen.",
+          "description": "OAuth 2.0 authorization response handler for MCP loopback clients.\n\nAccepts either:\n\n- A successful authorization response (``code`` + ``state``), which is\n  forwarded back to the validated client ``redirect_uri`` with the\n  original (un-wrapped) ``state``, once the RFC 9207 ``iss`` (when the\n  authorization server sent one) matches the issuer /authorize sealed\n  into the state.\n- An error response (``error``[+``error_description``/``error_uri``]), per\n  RFC 6749 \u00a74.1.2.1. When ``state`` is present and decodes to a trusted\n  ``redirect_uri``, the error params are propagated back to the client so\n  its OAuth library can surface them. Otherwise we render an HTML error\n  page so the user is not left on an opaque 422 / blank screen.",
           "operationId": "callback_callback_get",
           "parameters": [
             {
@@ -34073,6 +35970,22 @@
                   }
                 ],
                 "title": "State"
+              }
+            },
+            {
+              "in": "query",
+              "name": "iss",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Iss"
               }
             },
             {
@@ -35167,6 +37080,17 @@
               ],
               "title": "Reviewed At"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "title": "Server Id",
               "type": "string"
@@ -35783,6 +37707,28 @@
                 }
               ],
               "title": "Client Secret"
+            },
+            "dcr_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Issuer"
+            },
+            "dcr_server_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Server Url"
             },
             "id_jag_resource": {
               "anyOf": [
@@ -36875,6 +38821,18 @@
               ],
               "title": "Registration Url"
             },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
+            },
             "server_id": {
               "anyOf": [
                 {
@@ -37417,6 +39375,18 @@
                 }
               ],
               "title": "Registration Url"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "title": "Server Id",
@@ -39778,6 +41748,28 @@
               ],
               "title": "Client Secret"
             },
+            "dcr_issuer": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Issuer"
+            },
+            "dcr_server_url": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Dcr Server Url"
+            },
             "id_jag_resource": {
               "anyOf": [
                 {
@@ -40241,6 +42233,18 @@
                 }
               ],
               "title": "Registration Url"
+            },
+            "rpm": {
+              "anyOf": [
+                {
+                  "minimum": 0.0,
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Rpm"
             },
             "server_id": {
               "anyOf": [
@@ -40774,6 +42778,39 @@
           "title": "ModelInsightDailyMetric",
           "type": "object"
         },
+        "ModelInsightDailyTotal": {
+          "properties": {
+            "completion_tokens": {
+              "title": "Completion Tokens",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "prompt_tokens": {
+              "title": "Prompt Tokens",
+              "type": "integer"
+            },
+            "requests": {
+              "title": "Requests",
+              "type": "integer"
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            }
+          },
+          "required": [
+            "date",
+            "spend",
+            "prompt_tokens",
+            "completion_tokens",
+            "requests"
+          ],
+          "title": "ModelInsightDailyTotal",
+          "type": "object"
+        },
         "ModelInsightMetric": {
           "properties": {
             "completion_tokens": {
@@ -40905,6 +42942,13 @@
               "title": "Daily",
               "type": "array"
             },
+            "daily_totals": {
+              "items": {
+                "$ref": "#/components/schemas/ModelInsightDailyTotal"
+              },
+              "title": "Daily Totals",
+              "type": "array"
+            },
             "end_date": {
               "title": "End Date",
               "type": "string"
@@ -40925,6 +42969,7 @@
             "start_date",
             "end_date",
             "daily",
+            "daily_totals",
             "top_models"
           ],
           "title": "ModelInsightsResponse",
@@ -50250,6 +52295,16 @@
               ],
               "title": "Updated By"
             },
+            "user": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/ToolDiscoveryUser"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "user_agent": {
               "anyOf": [
                 {
@@ -50286,6 +52341,41 @@
             "tool"
           ],
           "title": "ToolDetailResponse",
+          "type": "object"
+        },
+        "ToolDiscoveryUser": {
+          "properties": {
+            "user_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Alias"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
+            },
+            "user_id": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "user_id"
+          ],
+          "title": "ToolDiscoveryUser",
           "type": "object"
         },
         "ToolListResponse": {
@@ -54551,7 +56641,7 @@
     "paths": {
       "/v1/indexes": {
         "get": {
-          "description": "List all vector store indexes. Proxy admin only.\n\n```bash\ncurl -L -X GET 'http://0.0.0.0:4000/v1/indexes'         -H 'Authorization: Bearer sk-1234'\n```",
+          "description": "List all vector store indexes. Proxy admin only.\n\n```bash\ncurl -L -X GET 'http://0.0.0.0:4000/v1/indexes'         -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"\n```",
           "operationId": "index_list_v1_indexes_get",
           "responses": {
             "200": {
@@ -54576,7 +56666,7 @@
           ]
         },
         "post": {
-          "description": "Create an index. Just writes the index to the database.\n\n```bash\ncurl -L -X POST 'http://0.0.0.0:4000/v1/indexes'         -H 'Content-Type: application/json'         -H 'Authorization: Bearer sk-1234'         -d '{\n        \"index_name\": \"dall-e-3\",\n        \"litellm_params\": {\n            \"vector_store_index\": \"real-index-name\",\n            \"vector_store_name\": \"azure-ai-search\"\n        }\n    }'\n```",
+          "description": "Create an index. Just writes the index to the database.\n\n```bash\ncurl -L -X POST 'http://0.0.0.0:4000/v1/indexes'         -H 'Content-Type: application/json'         -H \"Authorization: Bearer $LITELLM_MASTER_KEY\"         -d '{\n        \"index_name\": \"dall-e-3\",\n        \"litellm_params\": {\n            \"vector_store_index\": \"real-index-name\",\n            \"vector_store_name\": \"azure-ai-search\"\n        }\n    }'\n```",
           "operationId": "index_create_v1_indexes_post",
           "requestBody": {
             "content": {

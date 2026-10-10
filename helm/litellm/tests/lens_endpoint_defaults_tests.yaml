@@ -1,0 +1,86 @@
+suite: Lens endpoint defaults
+templates:
+  - gateway/deployment.yaml
+  - gateway/configmap.yaml
+set:
+  lensWorker.enabled: true
+  ingress.enabled: true
+  ingress.host: gateway.example
+  ingress.tls:
+    - hosts: [gateway.example]
+      secretName: tls
+tests:
+  - it: derives the trace endpoint from the deployment hostname and TLS
+    template: gateway/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_PUBLIC_URL
+            value: https://gateway.example/lens-ingest
+  - it: preserves an explicitly configured public address
+    set:
+      lensWorker.publicUrl: https://custom.example/prefix
+    template: gateway/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_PUBLIC_URL
+            value: https://custom.example/prefix
+  - it: uses the dedicated Lens ingress when configured
+    set:
+      lensWorker.ingress.enabled: true
+      lensWorker.ingress.host: traces.example
+      lensWorker.ingress.tls:
+        - hosts: [traces.example]
+          secretName: traces-tls
+    template: gateway/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_PUBLIC_URL
+            value: https://traces.example
+  - it: uses HTTPS for a dedicated ALB ingress with certificate annotations
+    set:
+      lensWorker.ingress.enabled: true
+      lensWorker.ingress.host: traces.example
+      lensWorker.ingress.className: alb
+      lensWorker.ingress.tls: []
+      lensWorker.ingress.annotations:
+        alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-west-2:123456789012:certificate/test
+        alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+        alb.ingress.kubernetes.io/ssl-redirect: "443"
+    template: gateway/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_PUBLIC_URL
+            value: https://traces.example
+  - it: uses HTTP for a dedicated ingress without its own TLS
+    set:
+      lensWorker.ingress.enabled: true
+      lensWorker.ingress.host: traces.example
+      lensWorker.ingress.tls: []
+      lensWorker.ingress.annotations: {}
+    template: gateway/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_PUBLIC_URL
+            value: http://traces.example
+  - it: uses HTTP when ingress has no TLS
+    set:
+      ingress.tls: []
+    template: gateway/deployment.yaml
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: LITELLM_LENS_PUBLIC_URL
+            value: http://gateway.example/lens-ingest
+values:
+  - ./values/required.yaml

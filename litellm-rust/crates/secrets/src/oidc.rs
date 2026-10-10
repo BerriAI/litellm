@@ -23,17 +23,22 @@ const OIDC_ALLOWED_CREDENTIAL_DIRS: &str = "LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS
 const DEFAULT_CREDENTIAL_DIRS: &str = "/var/run/secrets,/run/secrets";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, strum::EnumString, strum::AsRefStr)]
-#[strum(serialize_all = "snake_case")]
 pub enum OidcProvider {
+    #[strum(serialize = "google")]
     Google,
     #[strum(serialize = "circleci")]
     CircleCi,
     #[strum(serialize = "circleci_v2")]
     CircleCiV2,
+    #[strum(serialize = "github")]
     Github,
+    #[strum(serialize = "azure")]
     Azure,
+    #[strum(serialize = "file")]
     File,
+    #[strum(serialize = "env")]
     Env,
+    #[strum(serialize = "env_path")]
     EnvPath,
 }
 

@@ -70,8 +70,6 @@ class ZscalerAIGuard(CustomGuardrail):
             if send_user_api_key_team_id is not None
             else os.getenv("SEND_USER_API_KEY_TEAM_ID", "False").lower() in ("true", "1")
         )
-        self.timeout = self._resolve_timeout(timeout)
-
         verbose_proxy_logger.debug(
             "send_user_api_key_alias: %s, \n            send_user_api_key_user_id:%s, \n            send_user_api_key_team_id:%s",
             self.send_user_api_key_alias,
@@ -80,6 +78,7 @@ class ZscalerAIGuard(CustomGuardrail):
         )
 
         super().__init__(**kwargs)
+        self.timeout = self._resolve_timeout(timeout)
 
         verbose_proxy_logger.debug("ZscalerAIGuard Initializing ...")
 

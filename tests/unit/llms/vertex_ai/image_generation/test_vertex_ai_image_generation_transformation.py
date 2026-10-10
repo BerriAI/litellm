@@ -1,6 +1,8 @@
 from unittest.mock import MagicMock, patch
 
 import httpx
+import pytest
+from pydantic import ValidationError
 
 
 from litellm.llms.vertex_ai.image_generation import (
@@ -12,6 +14,7 @@ from litellm.llms.vertex_ai.image_generation.vertex_gemini_transformation import
 from litellm.llms.vertex_ai.image_generation.vertex_imagen_transformation import (
     VertexAIImagenImageGenerationConfig,
 )
+from litellm.types.utils import ImageResponse
 
 
 class TestVertexAIGeminiImageGenerationConfig:
@@ -635,3 +638,64 @@ class TestVertexAIImageGenerationIntegration:
         assert "us-central1" in url
         assert "imagegeneration@006" in url
         assert "predict" in url
+
+
+def _transform_gemini_response(payload: object) -> ImageResponse:
+    return VertexAIGeminiImageGenerationConfig().transform_image_generation_response(
+        model="gemini-2.5-flash-image",
+        raw_response=httpx.Response(200, json=payload),
+        model_response=ImageResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+def test_gemini_image_generation_response_maps_usage_by_modality():
+    response = _transform_gemini_response(
+        {
+            "candidates": [{"content": {"parts": [{"inlineData": {"data": "aGVsbG8="}}]}}],
+            "usageMetadata": {
+                "promptTokenCount": 5,
+                "candidatesTokenCount": 7,
+                "totalTokenCount": 12,
+                "promptTokensDetails": [
+                    {"modality": "TEXT", "tokenCount": 3},
+                    {"modality": "IMAGE", "tokenCount": 2},
+                ],
+            },
+        }
+    )
+
+    assert [image.b64_json for image in response.data] == ["aGVsbG8="]
+    assert response.usage.input_tokens == 5
+    assert response.usage.output_tokens == 7
+    assert response.usage.total_tokens == 12
+    assert response.usage.input_tokens_details.text_tokens == 3
+    assert response.usage.input_tokens_details.image_tokens == 2
+
+
+@pytest.mark.parametrize("usage_metadata", [None, {}, [], "", 0])
+def test_gemini_image_generation_response_with_falsy_usage_metadata_keeps_zeroed_usage(usage_metadata: object):
+    response = _transform_gemini_response(
+        {
+            "candidates": [{"content": {"parts": []}, "groundingMetadata": {"webSearchQueries": ["a"]}}],
+            "usageMetadata": usage_metadata,
+        }
+    )
+
+    assert response.data == []
+    assert (response.usage.input_tokens, response.usage.output_tokens, response.usage.total_tokens) == (0, 0, 0)
+    assert response.usage.web_search_requests == 1
+
+
+@pytest.mark.parametrize("usage_metadata", ["not an object", ["not", "an", "object"], 7, True])
+def test_gemini_image_generation_response_rejects_non_object_usage_metadata_without_echoing_it(
+    usage_metadata: object,
+):
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_gemini_response({"candidates": [], "usageMetadata": usage_metadata})
+
+    assert "input_value" not in str(exc_info.value)

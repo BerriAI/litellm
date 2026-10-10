@@ -6,13 +6,16 @@ use crate::coercion::{FieldSpec, ProjectionError};
 const MODULE: &str = "litellm.rust_bridge.settings";
 
 #[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq)]
-#[strum(serialize_all = "snake_case")]
 pub(crate) enum PythonSettings {
     #[strum(serialize = "http_settings")]
     Http,
+    #[strum(serialize = "url_policy")]
     UrlPolicy,
+    #[strum(serialize = "provider_defaults")]
     ProviderDefaults,
+    #[strum(serialize = "secret_manager")]
     SecretManager,
+    #[strum(serialize = "secret_manager_binding")]
     SecretManagerBinding,
 }
 
@@ -23,17 +26,16 @@ pub(crate) struct Snapshot<'py> {
 
 impl Snapshot<'_> {
     pub(crate) fn read<T>(&self, spec: &FieldSpec<T>) -> Result<T, ProjectionError> {
-        spec.read(&self.value, self.group.name())
+        spec.read(&self.value, self.group.into())
     }
 }
 
 impl PythonSettings {
-    pub(crate) fn name(self) -> &'static str {
-        self.into()
-    }
-
     pub(crate) fn read(self, py: Python<'_>) -> PyResult<Snapshot<'_>> {
-        let value = py.import(MODULE)?.getattr(self.name())?.call0()?;
+        let value = py
+            .import(MODULE)?
+            .getattr(<&'static str>::from(self))?
+            .call0()?;
         Ok(Snapshot { group: self, value })
     }
 
@@ -58,7 +60,7 @@ impl PythonSettings {
     }
 }
 
-fn missing_module(py: Python<'_>, error: &PyErr, expected: &str) -> PyResult<bool> {
+pub(crate) fn missing_module(py: Python<'_>, error: &PyErr, expected: &str) -> PyResult<bool> {
     if !error.is_instance_of::<PyModuleNotFoundError>(py) {
         return Ok(false);
     }
@@ -66,7 +68,7 @@ fn missing_module(py: Python<'_>, error: &PyErr, expected: &str) -> PyResult<boo
         .value(py)
         .getattr("name")?
         .extract::<Option<String>>()?
-        .is_some_and(|name| name == expected))
+        .is_some_and(|name| name == expected || name.starts_with(&format!("{expected}."))))
 }
 
 #[cfg(test)]

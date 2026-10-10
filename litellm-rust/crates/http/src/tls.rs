@@ -42,30 +42,28 @@ impl KeyExchangeGroup {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, strum::EnumString)]
+#[strum(
+    parse_err_ty = Unsupported,
+    parse_err_fn = unsupported_cipher_token
+)]
 pub enum Tls12CipherSuite {
+    #[strum(serialize = "ECDHE-ECDSA-AES128-GCM-SHA256")]
     EcdheEcdsaAes128Gcm,
+    #[strum(serialize = "ECDHE-ECDSA-AES256-GCM-SHA384")]
     EcdheEcdsaAes256Gcm,
+    #[strum(serialize = "ECDHE-ECDSA-CHACHA20-POLY1305")]
     EcdheEcdsaChacha20,
+    #[strum(serialize = "ECDHE-RSA-AES128-GCM-SHA256")]
     EcdheRsaAes128Gcm,
+    #[strum(serialize = "ECDHE-RSA-AES256-GCM-SHA384")]
     EcdheRsaAes256Gcm,
+    #[strum(serialize = "ECDHE-RSA-CHACHA20-POLY1305")]
     EcdheRsaChacha20,
 }
 
-impl FromStr for Tls12CipherSuite {
-    type Err = Unsupported;
-
-    fn from_str(name: &str) -> Result<Self, Self::Err> {
-        match name {
-            "ECDHE-ECDSA-AES128-GCM-SHA256" => Ok(Self::EcdheEcdsaAes128Gcm),
-            "ECDHE-ECDSA-AES256-GCM-SHA384" => Ok(Self::EcdheEcdsaAes256Gcm),
-            "ECDHE-ECDSA-CHACHA20-POLY1305" => Ok(Self::EcdheEcdsaChacha20),
-            "ECDHE-RSA-AES128-GCM-SHA256" => Ok(Self::EcdheRsaAes128Gcm),
-            "ECDHE-RSA-AES256-GCM-SHA384" => Ok(Self::EcdheRsaAes256Gcm),
-            "ECDHE-RSA-CHACHA20-POLY1305" => Ok(Self::EcdheRsaChacha20),
-            _ => Err(Unsupported::CipherToken(name.to_owned())),
-        }
-    }
+fn unsupported_cipher_token(name: &str) -> Unsupported {
+    Unsupported::CipherToken(name.to_owned())
 }
 
 impl Tls12CipherSuite {
@@ -364,6 +362,39 @@ mod tests {
         assert_eq!(
             tls.crypto_provider().cipher_suites.len(),
             provider.cipher_suites.len()
+        );
+    }
+
+    #[rstest]
+    #[case::ecdhe_ecdsa_aes128(
+        "ECDHE-ECDSA-AES128-GCM-SHA256",
+        Tls12CipherSuite::EcdheEcdsaAes128Gcm
+    )]
+    #[case::ecdhe_ecdsa_aes256(
+        "ECDHE-ECDSA-AES256-GCM-SHA384",
+        Tls12CipherSuite::EcdheEcdsaAes256Gcm
+    )]
+    #[case::ecdhe_ecdsa_chacha20(
+        "ECDHE-ECDSA-CHACHA20-POLY1305",
+        Tls12CipherSuite::EcdheEcdsaChacha20
+    )]
+    #[case::ecdhe_rsa_aes128("ECDHE-RSA-AES128-GCM-SHA256", Tls12CipherSuite::EcdheRsaAes128Gcm)]
+    #[case::ecdhe_rsa_aes256("ECDHE-RSA-AES256-GCM-SHA384", Tls12CipherSuite::EcdheRsaAes256Gcm)]
+    #[case::ecdhe_rsa_chacha20("ECDHE-RSA-CHACHA20-POLY1305", Tls12CipherSuite::EcdheRsaChacha20)]
+    fn tls12_cipher_suite_parses_each_openssl_name(
+        #[case] name: &str,
+        #[case] expected: Tls12CipherSuite,
+    ) {
+        assert_eq!(name.parse::<Tls12CipherSuite>().unwrap(), expected);
+    }
+
+    #[rstest]
+    #[case::unknown("AES128-SHA")]
+    #[case::case_sensitive("ecdhe-rsa-aes256-gcm-sha384")]
+    fn unsupported_cipher_token_keeps_the_verbatim_name(#[case] name: &str) {
+        assert_eq!(
+            name.parse::<Tls12CipherSuite>().unwrap_err(),
+            Unsupported::CipherToken(name.to_owned())
         );
     }
 

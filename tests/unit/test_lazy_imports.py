@@ -39,6 +39,7 @@ from litellm._lazy_imports import (
     UTILS_MODULE_NAMES,
     _lazy_import_utils_module,
 )
+from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 
 def test_import_litellm_does_not_load_fastapi_or_bpe_table():
@@ -46,7 +47,7 @@ def test_import_litellm_does_not_load_fastapi_or_bpe_table():
         [
             sys.executable,
             "-c",
-            "import sys, litellm; print(','.join(m for m in ('fastapi','starlette','litellm.litellm_core_utils.default_encoding') if m in sys.modules))",
+            "import sys, litellm; print(','.join(m for m in ('fastapi','starlette','litellm.proxy.proxy_cli','litellm.litellm_core_utils.default_encoding') if m in sys.modules))",
         ],
         check=True,
         capture_output=True,
@@ -365,3 +366,14 @@ def test_utils_module_lazy_imports():
         assert name in utils_globals
 
         _verify_only_requested_name_imported_in_utils(name, UTILS_MODULE_NAMES)
+
+
+@pytest.mark.parametrize(
+    "module",
+    ["litellm.litellm_core_utils.get_litellm_params", "litellm.batches.batch_utils", "litellm.types.utils"],
+)
+def test_kwargs_funnel_and_its_importers_load_first_in_fresh_process(module: str):
+    """These modules are often the first to pull in litellm.types.utils, and the WIF key sets shared between
+    the funnel and all_litellm_params must not turn that into a cycle."""
+    result = run_child_interpreter(f"import {module}", timeout=120)
+    assert result.returncode == 0, result.stderr

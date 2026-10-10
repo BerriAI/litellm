@@ -1,14 +1,12 @@
 use litellm_auth::CredentialPlacement;
-use litellm_types::{
-    llms::{
-        anthropic::{AnthropicBeta, BetaSet},
-        anthropic_messages::anthropic_request::{
-            AnthropicMessage, AnthropicMessagesOptionalParams, AnthropicMessagesRequest,
-            ContextEdit, ContextManagement, Speed,
-        },
+use litellm_llms_types::{
+    formats::messages::{
+        ContextEdit, ContextManagement, Message, MessagesOptionalParams, MessagesRequest, Speed,
     },
+    providers::anthropic::{AnthropicBeta, BetaProvider, BetaSet},
     recognized::Recognized,
 };
+use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value, json};
 
 use super::{handler::shape_anthropic_messages_request, thinking::translate_thinking};
@@ -24,7 +22,7 @@ use crate::{
     },
     base_llm::{
         auth::AuthScheme,
-        messages::transformation::{BaseAnthropicMessagesConfig, Headers, ValidatedEnvironment},
+        messages::transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
     },
 };
 
@@ -37,12 +35,12 @@ pub struct AnthropicMessagesConfig;
 
 pub const ANTHROPIC_MESSAGES_CONFIG: AnthropicMessagesConfig = AnthropicMessagesConfig;
 
-impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
+impl BaseMessagesConfig for AnthropicMessagesConfig {
     fn shape_request(
         &self,
-        request: AnthropicMessagesRequest,
+        request: MessagesRequest,
         reasoning_auto_summary: bool,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<MessagesRequest, Error> {
         shape_anthropic_messages_request(request, reasoning_auto_summary)
     }
 
@@ -50,6 +48,8 @@ impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
         &self,
         api_base: Option<&str>,
         _model: &str,
+        _litellm_params: &LitellmParams,
+        _stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
         Ok(complete_anthropic_url(api_base, env_lookup))
@@ -57,9 +57,9 @@ impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
 
     fn transform_anthropic_messages_request(
         &self,
-        request: AnthropicMessagesRequest,
+        request: MessagesRequest,
         context: &MessagesTransformContext,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<MessagesRequest, Error> {
         transform_messages_request(request, context)
     }
 
@@ -79,6 +79,7 @@ impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         _model: &str,
+        _litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         let headers = match optionally_handle_anthropic_oauth(headers, api_key) {
@@ -112,15 +113,15 @@ impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
         DEFAULT_HEADERS
     }
 
-    fn request_headers(&self, headers: Headers, request: &AnthropicMessagesRequest) -> Headers {
+    fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
         update_headers_with_anthropic_beta(headers, request)
     }
 }
 
 pub(crate) fn transform_messages_request(
-    request: AnthropicMessagesRequest,
+    request: MessagesRequest,
     context: &MessagesTransformContext,
-) -> Result<AnthropicMessagesRequest, Error> {
+) -> Result<MessagesRequest, Error> {
     if request.params.max_tokens.is_none() {
         return Err(Error::MissingField("max_tokens"));
     }
@@ -136,9 +137,9 @@ pub(crate) fn transform_messages_request(
     } else {
         strip_advisor_blocks(request.messages)
     };
-    Ok(AnthropicMessagesRequest {
+    Ok(MessagesRequest {
         messages: strip_encrypted_reasoning_blocks(messages),
-        params: AnthropicMessagesOptionalParams {
+        params: MessagesOptionalParams {
             context_management,
             ..request.params
         },
@@ -148,12 +149,21 @@ pub(crate) fn transform_messages_request(
 
 pub(crate) fn update_headers_with_anthropic_beta(
     headers: Headers,
-    request: &AnthropicMessagesRequest,
+    request: &MessagesRequest,
 ) -> Headers {
     merge_beta_headers(headers, feature_betas(request))
 }
 
-fn feature_betas(request: &AnthropicMessagesRequest) -> BetaSet {
+/// The betas a request needs on a host other than the first-party API: the Anthropic set
+/// filtered and renamed through the host's `BetaProvider` policy.
+pub(crate) fn provider_feature_betas(request: &MessagesRequest, provider: BetaProvider) -> BetaSet {
+    feature_betas(request)
+        .iter()
+        .filter_map(|beta| beta.on(provider))
+        .collect()
+}
+
+fn feature_betas(request: &MessagesRequest) -> BetaSet {
     let params = &request.params;
     let tools = params.tools.as_deref();
     [
@@ -192,7 +202,7 @@ fn context_management_betas(
         .chain(other.then_some(AnthropicBeta::ContextManagement20250627))
 }
 
-fn uses_structured_output(params: &AnthropicMessagesOptionalParams) -> bool {
+fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
     params.output_format.is_some()
         || params
             .output_config
@@ -201,7 +211,7 @@ fn uses_structured_output(params: &AnthropicMessagesOptionalParams) -> bool {
             .is_some_and(|config| config.format.is_some())
 }
 
-fn messages_carry_output_config(messages: &[AnthropicMessage]) -> bool {
+fn messages_carry_output_config(messages: &[Message]) -> bool {
     messages
         .iter()
         .any(|message| message.extra.contains_key("output_config"))
@@ -217,9 +227,9 @@ fn unsupported_param(model: &str, param: &str, value: &str, hint: &str) -> Error
 }
 
 fn drop_unsupported_params(
-    request: AnthropicMessagesRequest,
+    request: MessagesRequest,
     context: &MessagesTransformContext,
-) -> Result<AnthropicMessagesRequest, Error> {
+) -> Result<MessagesRequest, Error> {
     let capabilities = &context.thinking.capabilities;
     let model = request.model.clone();
     let reject = |param: &str, value: String, hint: &str| -> Result<(), Error> {
@@ -237,8 +247,8 @@ fn drop_unsupported_params(
         _ => params.speed.clone(),
     };
     if capabilities.supports_sampling_params {
-        return Ok(AnthropicMessagesRequest {
-            params: AnthropicMessagesOptionalParams { speed, ..params },
+        return Ok(MessagesRequest {
+            params: MessagesOptionalParams { speed, ..params },
             ..request
         });
     }
@@ -259,8 +269,8 @@ fn drop_unsupported_params(
     if let Some(top_k) = params.top_k {
         reject("top_k", json!(top_k).to_string(), "")?;
     }
-    Ok(AnthropicMessagesRequest {
-        params: AnthropicMessagesOptionalParams {
+    Ok(MessagesRequest {
+        params: MessagesOptionalParams {
             speed,
             temperature,
             top_p: None,
@@ -273,7 +283,7 @@ fn drop_unsupported_params(
 
 fn speed_text(speed: &Recognized<Speed>) -> String {
     match speed {
-        Recognized::Known(speed) => speed.as_str().to_string(),
+        Recognized::Known(speed) => <&'static str>::from(*speed).to_string(),
         Recognized::Unrecognized(Value::String(text)) => text.clone(),
         Recognized::Unrecognized(other) => other.to_string(),
     }
@@ -366,7 +376,7 @@ mod tests {
         )
     }
 
-    fn request(fields: Value) -> AnthropicMessagesRequest {
+    fn request(fields: Value) -> MessagesRequest {
         serde_json::from_value(body(fields)).unwrap()
     }
 
@@ -818,7 +828,13 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(
-            ANTHROPIC_MESSAGES_CONFIG.get_complete_url(api_base, "claude", &env(vars)),
+            ANTHROPIC_MESSAGES_CONFIG.get_complete_url(
+                api_base,
+                "claude",
+                &LitellmParams::default(),
+                false,
+                &env(vars),
+            ),
             Ok(expected.to_string())
         );
     }
@@ -836,6 +852,7 @@ mod tests {
             headers(forwarded),
             api_key,
             "claude",
+            &LitellmParams::default(),
             &env(vars),
         )
     }
@@ -1111,8 +1128,20 @@ mod tests {
             requested.borrow_mut().push(name.to_string());
             None
         };
-        let _ = ANTHROPIC_MESSAGES_CONFIG.validate_environment(Vec::new(), None, "claude", &record);
-        let _ = ANTHROPIC_MESSAGES_CONFIG.get_complete_url(None, "claude", &record);
+        let _ = ANTHROPIC_MESSAGES_CONFIG.validate_environment(
+            Vec::new(),
+            None,
+            "claude",
+            &LitellmParams::default(),
+            &record,
+        );
+        let _ = ANTHROPIC_MESSAGES_CONFIG.get_complete_url(
+            None,
+            "claude",
+            &LitellmParams::default(),
+            false,
+            &record,
+        );
         let requested = requested.into_inner();
         assert!(!requested.is_empty());
         let undeclared: Vec<&String> = requested

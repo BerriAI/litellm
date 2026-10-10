@@ -8,17 +8,19 @@ otherwise record its own duration instead of the call's.
 import json
 import logging
 import threading
+import time
 import uuid
 from base64 import b64encode
 from datetime import datetime, timedelta, timezone
 from time import monotonic, sleep
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Final
 
 import httpx
 import opentelemetry.trace as otel_trace
 import pytest
 from langfuse import LangfuseOtelSpanAttributes as A
+from langfuse.api.core import http_client as langfuse_http_client
 from langfuse.api.core.api_error import ApiError
 from langfuse.api.core.request_options import RequestOptions
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
@@ -877,7 +879,7 @@ def test_flush_langfuse_tracing_exports_the_queued_spans_of_every_channel(monkey
     graceful restart must reach the exporter without waiting for the batch interval."""
     exporters: Final[
         list[InMemorySpanExporter]
-    ] = []  # mutable-ok: collects the exporters the patched builder hands out
+    ] = []
 
     def build_in_memory(*, public_key: str, secret_key: str, base_url: str) -> InMemorySpanExporter:
         exporters.append(InMemorySpanExporter())
@@ -1042,28 +1044,35 @@ def test_auth_check_fails_when_the_keys_reach_no_project():
 
 
 @pytest.mark.parametrize("status", [500, 503, 429], ids=["http-500", "http-503", "http-429"])
-def test_auth_check_and_project_id_make_one_round_trip_when_langfuse_is_down(status):
+def test_auth_check_and_project_id_make_one_round_trip_when_langfuse_is_down(
+    status: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Both run on the event loop; the generated client's default retries sleep for seconds, or for Retry-After."""
-    requests: list[httpx.Request] = []
+    requests: Final[list[httpx.Request]] = []
+    sleeps: Final[list[float]] = []
+    monkeypatch.setattr(
+        langfuse_http_client,
+        "time",
+        SimpleNamespace(sleep=sleeps.append, time=time.time),
+    )
 
     def fail(request: httpx.Request) -> httpx.Response:
         requests.append(request)
         return httpx.Response(status, request=request, headers={"retry-after": "20"}, json={"message": "down"})
 
-    client = build_langfuse_client(
+    client: Final = build_langfuse_client(
         public_key="pk",
         secret_key="sk",
         base_url="http://127.0.0.1:1",
         httpx_client=httpx.Client(transport=httpx.MockTransport(fail)),
     )
 
-    started = monotonic()
-    failure = client.auth_check()
+    failure: Final = client.auth_check()
     with pytest.raises(ApiError):
         client.project_id()
     assert failure is not None and f"status_code: {status}" in failure.reason
     assert len(requests) == 2
-    assert monotonic() - started < 0.5
+    assert sleeps == [], "failed auth checks should not sleep for REST retries"
 
 
 @pytest.mark.parametrize(
@@ -1543,12 +1552,12 @@ def test_exporter_reports_failure_when_no_span_of_the_batch_can_be_encoded(monke
 
 def test_built_exporter_uses_the_shared_litellm_handler_and_langfuse_headers(monkeypatch):
     """No private requests session or TLS adapter: the channel is the same handler the rest of litellm uses."""
-    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+    from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
     monkeypatch.delenv("LANGFUSE_TIMEOUT", raising=False)
     monkeypatch.delenv("LANGFUSE_MAX_RETRIES", raising=False)
     default = _build_span_exporter(public_key="pk", secret_key="sk", base_url="https://lf.internal.example")
-    assert default.handler is _get_httpx_client()
+    assert default.handler is get_httpx_client()
     assert default.timeout == 20
     assert len(default.delays) == 3
 

@@ -2,11 +2,14 @@
 
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
+import { credentialLabelsByName } from "@/components/shared/credentialOptions";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import DeleteResourceModal from "@/components/common_components/DeleteResourceModal";
 import ModelSettingsModal from "@/components/model_dashboard/ModelSettingsModal/ModelSettingsModal";
 import { ModelData } from "@/components/model_dashboard/types";
 import { toast } from "@/lib/toast";
+import { isProxyAdminRole } from "@/utils/roles";
 import { uiHref } from "@/utils/uiHref";
 import { modelDeleteCall, modelPatchUpdateCall } from "@/components/networking";
 import { useQueryClient } from "@tanstack/react-query";
@@ -80,6 +83,11 @@ const AllModelsTab = ({
   const { data: modelCostMapData, isLoading: isLoadingModelCostMap } = useModelCostMap();
   const { accessToken, userId, userRole, isViewOnly } = useAuthorized();
   const { data: teams, isLoading: isLoadingTeams } = useTeams();
+  const { data: credentialsResponse } = useCredentials({ enabled: isProxyAdminRole(userRole ?? "") });
+  const credentialLabels = useMemo(
+    () => credentialLabelsByName(credentialsResponse?.credentials ?? []),
+    [credentialsResponse],
+  );
   const queryClient = useQueryClient();
 
   const [tableState, setTableState] = useQueryStates(TABLE_STATE);
@@ -324,6 +332,7 @@ const AllModelsTab = ({
           onDeleteClick={handleDeleteClick}
           onTogglePauseClick={handleTogglePause}
           pausingModelId={pausingModelId}
+          credentialLabels={credentialLabels}
         />
 
         {modelViewMode === "current_team" && (
