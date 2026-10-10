@@ -20,9 +20,7 @@ from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.databricks.decisions.transformation import DATABRICKS_DECISIONS_CONFIG
 from litellm.llms.laya.common_utils import laya_response_model
-from litellm.proxy.pass_through_endpoints.llm_provider_handlers.typesafe_passthrough_logging_handler import (
-    TypeSafePassthroughLoggingHandler,
-)
+from litellm.llms.pass_through.typesafe_logging_handler import TypeSafePassthroughLoggingHandler
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS as _DEFAULT_JEV_INSTRUCTIONS
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN

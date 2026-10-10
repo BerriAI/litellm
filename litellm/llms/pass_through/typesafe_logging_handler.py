@@ -1,0 +1,127 @@
+from collections.abc import Mapping
+from datetime import datetime
+from typing import TYPE_CHECKING, Final
+
+import httpx
+from pydantic import TypeAdapter, ValidationError
+
+import litellm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import (
+    get_standard_logging_object_payload,  # pyright: ignore[reportUnknownVariableType]  # legacy helper has an untyped signature
+)
+from litellm.llms.laya.common_utils import laya_response_model
+from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.utils import ModelResponse, StandardPassThroughResponseObject, Usage
+
+if TYPE_CHECKING:
+    from litellm.proxy._types import PassThroughEndpointLoggingTypedDict
+
+
+class _TypeSafeUsage(LiteLLMBaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cost: float | None = None
+
+
+class _TypeSafeResponse(LiteLLMBaseModel):
+    model: str | None = None
+    usage: _TypeSafeUsage | None = None
+
+
+class _RegistryPricing(LiteLLMBaseModel):
+    input_cost_per_token: float = 0.0
+    output_cost_per_token: float = 0.0
+
+
+_TYPESAFE_RESPONSE_ADAPTER: Final = TypeAdapter(_TypeSafeResponse)
+_REGISTRY_PRICING_ADAPTER: Final = TypeAdapter(_RegistryPricing)
+
+
+def _parse_typesafe_response(response_body: Mapping[str, object]) -> _TypeSafeResponse:
+    try:
+        return _TYPESAFE_RESPONSE_ADAPTER.validate_python(response_body)
+    except ValidationError:
+        return _TypeSafeResponse()
+
+
+def _pricing_for(model_keys: tuple[str, ...]) -> _RegistryPricing:
+    for model_key in model_keys:
+        if model_key not in litellm.model_cost:  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
+            continue
+        try:
+            return _REGISTRY_PRICING_ADAPTER.validate_python(
+                litellm.model_cost[model_key]  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
+            )
+        except ValidationError:
+            continue
+    return _RegistryPricing()
+
+
+class TypeSafePassthroughLoggingHandler:
+    @staticmethod
+    def typesafe_passthrough_handler(
+        httpx_response: httpx.Response,
+        response_body: Mapping[str, object],
+        logging_obj: LiteLLMLoggingObj,
+        url_route: str,
+        result: str,
+        start_time: datetime,
+        end_time: datetime,
+        cache_hit: bool,
+        request_body: Mapping[str, object],
+        custom_llm_provider: str,
+        **kwargs: object,
+    ) -> "PassThroughEndpointLoggingTypedDict":
+        response: Final = _parse_typesafe_response(response_body)
+        request_model_value: Final = request_body.get("model")
+        request_model: Final = request_model_value if isinstance(request_model_value, str) else None
+        response_model: Final = (
+            laya_response_model(response_body, request_model) if custom_llm_provider == "laya" else response.model
+        )
+        logged_model: Final = response_model or request_model or "unknown"
+        model_name: Final = f"{custom_llm_provider}/{logged_model}"
+        usage: Final = response.usage or _TypeSafeUsage()
+        input_tokens: Final = usage.input_tokens
+        output_tokens: Final = usage.output_tokens
+        candidate_model_keys: Final = tuple(
+            f"{custom_llm_provider}/{model}" for model in (response_model, request_model) if model is not None
+        )
+        pricing: Final = _pricing_for(candidate_model_keys)
+        response_cost: Final = (
+            usage.cost
+            if custom_llm_provider == "openrouter" and usage.cost is not None
+            else input_tokens * pricing.input_cost_per_token + output_tokens * pricing.output_cost_per_token
+        )
+        usage_object: Final = Usage(
+            prompt_tokens=input_tokens,
+            completion_tokens=output_tokens,
+            total_tokens=input_tokens + output_tokens,
+        )
+        updated_kwargs: Final = {
+            **kwargs,
+            "model": model_name,
+            "custom_llm_provider": custom_llm_provider,
+            "response_cost": response_cost,
+            "combined_usage_object": usage_object,
+        }
+        logging_obj.model_call_details.update(
+            model=model_name,
+            custom_llm_provider=custom_llm_provider,
+            response_cost=response_cost,
+        )
+        standard_logging_object: Final = get_standard_logging_object_payload(
+            kwargs=updated_kwargs,
+            init_response_obj=ModelResponse(model=model_name, usage=usage_object),
+            start_time=start_time,
+            end_time=end_time,
+            logging_obj=logging_obj,
+            status="success",
+        )
+        return {
+            "result": StandardPassThroughResponseObject(response=result),
+            "kwargs": {
+                **updated_kwargs,
+                "standard_logging_object": standard_logging_object,
+            },
+        }
