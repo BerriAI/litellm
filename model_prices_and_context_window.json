@@ -66876,7 +66876,7 @@
         "supports_audio_input": true
     },
     "azure/gpt-realtime-translate": {
-        "deprecation_date": "2027-05-06",
+        "deprecation_date": "2027-11-09",
         "input_cost_per_second": 0.000566666666667,
         "litellm_provider": "azure",
         "max_input_tokens": 32000,

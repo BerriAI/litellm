@@ -1,4 +1,5 @@
 import asyncio, importlib, re
+import ast
 import base64
 import copy
 import contextlib
@@ -12,7 +13,7 @@ import threading
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
-from pathlib import PurePath
+from pathlib import Path, PurePath
 from typing import Final, cast
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -2133,6 +2134,118 @@ class TestProxyFunctionCalling:
             f"Proxy model {proxy_model_name} should return {expected_proxy_result} "
             f"(without config context). Description: {description}"
         )
+
+
+@pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
+def test_register_model_price_is_used_for_completion_cost() -> None:
+    model: Final = "migration-custom-pricing-model"
+    price: Final = {
+        "input_cost_per_token": 0.001,
+        "output_cost_per_token": 0.002,
+        "litellm_provider": "openai",
+        "mode": "chat",
+    }
+    litellm.register_model({model: price}, persist_across_reloads=False)
+    response: Final = ModelResponse(
+        model=model,
+        choices=[],
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+    )
+
+    cost: Final = litellm.completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+    )
+
+    assert cost == pytest.approx(0.02)
+
+
+@respx.mock
+@pytest.mark.usefixtures("isolated_openai_model_sets", "local_model_cost_map")
+def test_completion_registers_test_owned_model_prices() -> None:
+    model: Final = "migration-owned-pricing-model"
+    messages: Final = [{"role": "user", "content": "price control"}]
+    litellm.register_model(
+        {
+            model: {
+                "input_cost_per_token": 0.0001,
+                "output_cost_per_token": 0.0002,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        },
+        persist_across_reloads=False,
+    )
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-priced",
+                "object": "chat.completion",
+                "created": 123,
+                "model": model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "response"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 8, "completion_tokens": 5, "total_tokens": 13},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model=model,
+        messages=messages,
+        api_key="test-api-key",
+        input_cost_per_token=0.001,
+        output_cost_per_token=0.002,
+    )
+
+    assert json.loads(route.calls[0].request.content) == {"model": model, "messages": messages}
+    assert litellm.model_cost[model]["input_cost_per_token"] == 0.001
+    assert litellm.model_cost[model]["output_cost_per_token"] == 0.002
+    assert response._hidden_params["response_cost"] == pytest.approx(0.018)
+
+
+@pytest.mark.usefixtures("isolated_openai_model_sets")
+def test_add_known_models_skips_region_scoped_bedrock_pricing_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    price: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "mode": "chat"}
+    model_cost_map: Final = {
+        "migration.bedrock-model-v1:0": {**price, "litellm_provider": "bedrock"},
+        "bedrock/us-west-1/migration.bedrock-model-v1:0": {**price, "litellm_provider": "bedrock"},
+        "migration-openai-model": {**price, "litellm_provider": "openai"},
+    }
+    monkeypatch.setattr(litellm, "bedrock_models", set(litellm.bedrock_models))
+    monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
+
+    litellm.add_known_models(model_cost_map=model_cost_map)
+
+    assert "migration.bedrock-model-v1:0" in litellm.bedrock_models
+    assert "bedrock/us-west-1/migration.bedrock-model-v1:0" not in litellm.bedrock_models
+    assert "migration-openai-model" in litellm.models_by_provider["openai"]
+
+
+def test_utils_defines_tests_without_invoking_them_at_module_scope() -> None:
+    tree: Final = ast.parse(Path(__file__).read_text())
+    defined: Final = frozenset(
+        node.name
+        for node in tree.body
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef))
+    )
+    invoked: Final = tuple(
+        node.value.func.id
+        for node in tree.body
+        if isinstance(node, ast.Expr)
+        and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+        and node.value.func.id in defined
+    )
+
+    assert invoked == ()
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets")
@@ -9557,3 +9670,43 @@ async def test_responses_retry_on_auth_error(sync_mode, respx_mock: respx.MockRo
 
             assert mock_retry.called
             assert mock_retry.call_args.kwargs.get("num_retries") == num_retries
+
+
+@respx.mock
+def test_pre_call_rules_see_messages_passed_positionally(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "pre_call_rules", [lambda text: "forbidden" not in text])
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-rules",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": "ok"}}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 1, "total_tokens": 6},
+            },
+        )
+    )
+
+    with pytest.raises(litellm.APIResponseValidationError, match="failed post-call-rule check"):
+        litellm.completion(
+            "gpt-4o-mini", [{"role": "user", "content": "say something forbidden"}], api_key="sk-test"
+        )
+    allowed: Final = litellm.completion("gpt-4o-mini", [{"role": "user", "content": "say hi"}], api_key="sk-test")
+
+    assert route.call_count == 1
+    assert json.loads(route.calls[0].request.content)["messages"] == [{"role": "user", "content": "say hi"}]
+    assert allowed.choices[0].message.content == "ok"
+
+
+def test_vertex_llama3_model_info_resolves_without_the_meta_prefix():
+    llama3_models: Final = sorted(litellm.vertex_llama3_models)
+    assert llama3_models != []
+
+    for model in llama3_models:
+        short_name = model.removeprefix("meta/")
+        assert short_name != model
+        prefixed_info = litellm.get_model_info(model=model, custom_llm_provider="vertex_ai")
+        assert litellm.get_model_info(model=short_name, custom_llm_provider="vertex_ai") == prefixed_info, model
+        assert prefixed_info["key"] == f"vertex_ai/{model}", model
