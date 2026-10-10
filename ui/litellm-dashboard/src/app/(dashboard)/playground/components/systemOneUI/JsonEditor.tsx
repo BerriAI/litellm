@@ -83,7 +83,7 @@ export default function JsonEditor({ value, onChange, validation }: JsonEditorPr
   return (
     <div
       className={cn(
-        "flex min-h-96 flex-1 flex-col overflow-hidden rounded-md border bg-[#1e1e1e]",
+        "flex min-h-96 flex-1 flex-col overflow-hidden rounded-md border bg-background",
         hasErrors && "border-destructive/60",
       )}
     >
@@ -96,7 +96,7 @@ export default function JsonEditor({ value, onChange, validation }: JsonEditorPr
           {lineCount} {lineCount === 1 ? "line" : "lines"}
         </span>
       </div>
-      <div className="relative min-h-80 flex-1">
+      <div className="relative min-h-80 flex-1 bg-[#1e1e1e]">
         <div
           aria-hidden="true"
           className={cn(GUTTER_WIDTH, "absolute inset-y-0 left-0 border-r border-zinc-700 bg-zinc-800/60")}
