@@ -5,6 +5,7 @@ Unit tests for Tool Permission Guardrail (OpenAI tool_calls semantics)
 import json
 import logging
 import re
+from typing import Literal
 from unittest.mock import patch
 
 import pytest
@@ -24,6 +25,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.tool_permission import (
     PermissionError,
 )
 from litellm.types.utils import (
+    CallTypesLiteral,
     ChatCompletionMessageToolCall,
     Choices,
     ModelResponse,
@@ -1176,6 +1178,117 @@ class TestToolPermissionGuardrailAnthropicMessages:
 
     def _tool_use(self, name, tool_id="tu_1"):
         return {"type": "tool_use", "id": tool_id, "name": name, "input": {"command": "ls"}}
+
+    def _always_on_pre_call(self, on_disallowed_action: Literal["block", "rewrite"]) -> ToolPermissionGuardrail:
+        return ToolPermissionGuardrail(
+            guardrail_name=f"anthropic-pre-call-{on_disallowed_action}",
+            rules=self.rules,
+            default_action="deny",
+            on_disallowed_action=on_disallowed_action,
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "denied_tool",
+        [
+            {"name": "Read", "input_schema": {"type": "object", "properties": {}}},
+            {"type": "custom", "name": "Read", "input_schema": {"type": "object", "properties": {}}},
+            {"type": "function", "name": "Read", "parameters": {"type": "object", "properties": {}}},
+        ],
+        ids=["anthropic", "anthropic_custom_type", "responses_api_flat_function"],
+    )
+    async def test_pre_call_blocks_denied_request_tool_in_flat_format(self, denied_tool: dict[str, object]) -> None:
+        data = {"model": "claude-sonnet-4-5", "messages": [{"role": "user", "content": "hi"}], "tools": [denied_tool]}
+
+        with pytest.raises(HTTPException) as excinfo:
+            await self._always_on_pre_call("block").async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(default_in_memory_ttl=1),
+                data=data,
+                call_type="anthropic_messages",
+            )
+
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.detail["detection_message"] == "Tool 'Read' denied by rule 'deny_read'"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("rule_tool_type", "call_type"),
+        [(r"^custom$", "responses"), (r"^function$", "anthropic_messages")],
+        ids=["responses_custom_stays_custom", "anthropic_custom_reads_as_function"],
+    )
+    async def test_pre_call_tool_type_rules_follow_the_request_format(
+        self, rule_tool_type: str, call_type: CallTypesLiteral
+    ) -> None:
+        guardrail = ToolPermissionGuardrail(
+            guardrail_name=f"tool-type-{call_type}",
+            rules=[{"id": "deny_type", "tool_type": rule_tool_type, "decision": "deny"}],
+            default_action="allow",
+            on_disallowed_action="block",
+            event_hook=GuardrailEventHooks.pre_call,
+            default_on=True,
+        )
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"type": "custom", "name": "apply_patch", "input_schema": {"type": "object", "properties": {}}}],
+        }
+
+        with pytest.raises(HTTPException) as excinfo:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=DualCache(default_in_memory_ttl=1),
+                data=data,
+                call_type=call_type,
+            )
+
+        assert excinfo.value.status_code == 400
+        assert excinfo.value.detail["detection_message"] == "Tool 'apply_patch' denied by rule 'deny_type'"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tool_shape", "tool_choice", "call_type", "expected_tool_choice"),
+        [
+            (
+                {"input_schema": {"type": "object", "properties": {}}},
+                {"type": "tool", "name": "Read"},
+                "anthropic_messages",
+                {"type": "none"},
+            ),
+            (
+                {"type": "function", "parameters": {"type": "object", "properties": {}}},
+                {"type": "function", "name": "Read"},
+                "responses",
+                "none",
+            ),
+        ],
+        ids=["anthropic", "responses_api"],
+    )
+    async def test_pre_call_rewrite_strips_denied_flat_tool_and_forced_choice(
+        self,
+        tool_shape: dict[str, object],
+        tool_choice: dict[str, str],
+        call_type: CallTypesLiteral,
+        expected_tool_choice: dict[str, str] | str,
+    ) -> None:
+        data = {
+            "model": "claude-sonnet-4-5",
+            "messages": [{"role": "user", "content": "hi"}],
+            "tools": [{"name": "Bash", **tool_shape}, {"name": "Read", **tool_shape}],
+            "tool_choice": tool_choice,
+        }
+
+        result = await self._always_on_pre_call("rewrite").async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            cache=DualCache(default_in_memory_ttl=1),
+            data=data,
+            call_type=call_type,
+        )
+
+        assert [tool["name"] for tool in result["tools"]] == ["Bash"]
+        assert result["tool_choice"] == expected_tool_choice
 
     @pytest.mark.asyncio
     async def test_denied_anthropic_tool_use_is_blocked(self):
