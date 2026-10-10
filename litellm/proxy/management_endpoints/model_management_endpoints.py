@@ -1212,6 +1212,17 @@ async def patch_model(
                 param=None,
             )
 
+        # Pause/resume (`blocked`) is proxy-admin only. A non-admin team member
+        # otherwise goes through member auto-router authorization, which refuses
+        # a blocked-only patch as an auto-router write. Check the flag first.
+        if patch_data.blocked is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+            raise ProxyException(
+                message="Only proxy admins can change a model's blocked flag.",
+                type=ProxyErrorTypes.auth_error.value,
+                code=status.HTTP_403_FORBIDDEN,
+                param="blocked",
+            )
+
         write_authorization: Final = await ModelManagementAuthChecks.can_user_make_model_call(
             model_params=db_model,
             user_api_key_dict=user_api_key_dict,
@@ -1247,17 +1258,6 @@ async def patch_model(
             if member_marker is not None
             else patch_data
         )
-
-        # Pause/resume (`blocked`) is a proxy-admin-only privilege. Team admins
-        # passed the auth check above for team-scoped models, but they must not
-        # be able to unblock (or block) a model their proxy admin has paused.
-        if patch_data.blocked is not None and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
-            raise ProxyException(
-                message="Only proxy admins can change a model's blocked flag.",
-                type=ProxyErrorTypes.auth_error.value,
-                code=status.HTTP_403_FORBIDDEN,
-                param="blocked",
-            )
 
         ModelManagementAuthChecks.can_user_attach_credential(
             litellm_params=patch_data.litellm_params,

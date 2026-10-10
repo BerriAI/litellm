@@ -4913,6 +4913,60 @@ class TestPatchModelBlockedAuthGate:
             assert "proxy admin" in getattr(err, "message", "").lower()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.ORG_ADMIN])
+    async def test_non_admin_blocked_only_patch_is_not_an_auto_router_refusal(self, role: LitellmUserRoles):
+        """A member who sends only `blocked` must get the blocked-flag refusal.
+
+        Member auto-router authorization runs for non-admins and would answer
+        "This team does not allow you to manage your own auto routers." The
+        blocked check has to win before that path is entered.
+        """
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            patch_model,
+        )
+
+        member = UserAPIKeyAuth(user_id="member", user_role=role)
+        existing_row = MagicMock()
+        existing_row.litellm_params = {"model": "openai/gpt-4o-mini"}
+        existing_row.model_dump.return_value = {
+            "model_name": "gpt-4o-mini",
+            "litellm_params": existing_row.litellm_params,
+            "model_info": {"id": "m1", "team_id": "team-1"},
+        }
+        existing_row.model_dump_json.return_value = "{}"
+        team = LiteLLM_TeamTable(
+            team_id="team-1",
+            members_with_roles=[Member(user_id="member", role="user")],
+            team_member_permissions=[],
+        )
+        team_row = MagicMock()
+        team_row.model_dump.return_value = team.model_dump()
+
+        mock_prisma = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=existing_row)
+        mock_prisma.db.litellm_proxymodeltable.update = AsyncMock()
+        mock_prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team_row)
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.llm_router", MagicMock(**{"get_model_ids.return_value": ["m1"]})),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+        ):
+            with pytest.raises(
+                ProxyException, match="Only proxy admins can change a model's blocked flag\\."
+            ) as exc_info:
+                await patch_model(
+                    model_id="m1",
+                    patch_data=updateDeployment(blocked=True),
+                    user_api_key_dict=member,
+                )
+
+        assert exc_info.value.code == "403"
+        assert exc_info.value.param == "blocked"
+        mock_prisma.db.litellm_proxymodeltable.update.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_proxy_admin_can_toggle_blocked(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             patch_model,
