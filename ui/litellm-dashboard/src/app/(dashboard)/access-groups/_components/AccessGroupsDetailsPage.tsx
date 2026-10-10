@@ -127,7 +127,7 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
           <CardTitle>Group Details</CardTitle>
         </CardHeader>
         <CardContent>
-          <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
+          <dl className="grid w-1/2 grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
             <dt className="text-muted-foreground">Description</dt>
             <dd className="text-foreground">{accessGroup.description || "—"}</dd>
             <dt className="text-muted-foreground">Created</dt>
