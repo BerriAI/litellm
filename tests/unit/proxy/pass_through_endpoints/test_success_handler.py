@@ -634,8 +634,12 @@ def test_non_vertex_predict_url_normalizes_without_predictions_keyerror() -> Non
     # Issue #45787: a plain passthrough URL containing the substring "predict"
     # used to be misrouted to the Vertex handler, whose unguarded
     # response["predictions"] access then raised KeyError inside the logging
-    # worker and silently dropped the spend row.
-    normalized = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
+    # worker and silently dropped the spend row. After the fix the URL is no
+    # longer classified as a Vertex route, so normalization returns the generic
+    # (no-op) payload instead of crashing.
+    handler = PassThroughEndpointLogging()
+    assert handler.is_vertex_route("http://example.com/api/predict/laya") is False
+    normalized = handler.normalize_llm_passthrough_logging_payload(
         httpx_response=httpx.Response(200, request=httpx.Request("GET", "http://example.com/api/predict/laya")),
         response_body={},  # no "predictions" key
         request_body={},
@@ -648,4 +652,8 @@ def test_non_vertex_predict_url_normalizes_without_predictions_keyerror() -> Non
         custom_llm_provider=None,
     )
 
-    assert normalized["standard_logging_response_object"] is not None
+    # No longer misrouted to the Vertex handler, so no KeyError and no
+    # vertex-specific payload is produced.
+    assert normalized["standard_logging_response_object"] is None
+    assert "standard_logging_response_object" in normalized
+    assert "kwargs" in normalized
