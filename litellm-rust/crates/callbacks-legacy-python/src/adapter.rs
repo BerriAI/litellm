@@ -467,6 +467,7 @@ impl LegacyLogging {
             Cost::CacheHit | Cost::Deferred => None,
         };
         logger.setattr("_provider_reported_cost", reported_cost)?;
+        details.call_method1("pop", ("response_cost", py.None()))?;
         self.cache_key = match &facts.source {
             ResultSource::Provider => None,
             ResultSource::Cache { key } => Some(key.clone()),
@@ -971,6 +972,7 @@ check = lambda: None
     fn result_ready_hands_only_a_reported_cost_to_the_spend_logging_record(
         #[case] reported: Option<f64>,
         #[case] cache_hit: bool,
+        #[values(0.001, 7.0)] existing_cost: f64,
     ) {
         Python::initialize();
         Python::attach(|py| {
@@ -1015,6 +1017,11 @@ logger._provider_reported_cost = None
                 source: litellm_host::interceptors::ResultSource::Provider,
             };
             logging.result_ready(py, &previous).unwrap();
+            local(&locals, "logger")
+                .getattr("model_call_details")
+                .unwrap()
+                .set_item("response_cost", existing_cost)
+                .unwrap();
             let step = logging.result_ready(py, &facts).unwrap();
             assert!(matches!(step, HookStep::Ready(())));
             locals.set_item("reported", reported).unwrap();
@@ -1023,7 +1030,7 @@ logger._provider_reported_cost = None
                 py,
                 &locals,
                 c"
-assert logger.model_call_details['response_cost'] == 7.0, logger.model_call_details
+assert logger.model_call_details.get('response_cost') is None, logger.model_call_details
 assert logger._provider_reported_cost == reported, logger._provider_reported_cost
 assert logger.model_call_details['cache_hit'] is cache_hit, logger.model_call_details
 assert logger.update['custom_llm_provider'] == 'edenai', logger.update
