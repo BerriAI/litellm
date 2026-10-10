@@ -230,7 +230,7 @@ class CustomStreamWrapper:
         _response_headers: dict | httpx.Headers | None = None,
         count_prompt_tokens: Callable[[], int] | None = None,
     ):
-        self.model: str = model if isinstance(model, str) else ""
+        self.model = model
         self.make_call = make_call
         self.count_prompt_tokens = count_prompt_tokens
         self.custom_llm_provider = custom_llm_provider
@@ -285,13 +285,11 @@ class CustomStreamWrapper:
         self.logging_loop = None
         self.rules = Rules()
         self.stream_options = stream_options or getattr(logging_obj, "stream_options", None)
-        self.messages: Sequence[object] | None = getattr(logging_obj, "messages", None)
+        self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
         self.tool_call = False
-        self.chunks: list[
-            ModelResponseStream
-        ] = []  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
+        self.chunks: list = []  # keep track of the returned chunks - used for calculating the input/output tokens for stream options
         self._repeated_messages_count = 1
         self.is_function_call = self.check_is_function_call(logging_obj=logging_obj)
         self.created: int | None = None
@@ -417,21 +415,21 @@ class CustomStreamWrapper:
         if (
             litellm.disable_streaming_logging
             or self._terminal_logging_scheduled
-            or not self.chunks
+            or not self.chunks  # pyright: ignore[reportUnknownMemberType]  # self.chunks is untyped upstream
             or self.logging_obj.model_call_details.get("has_dispatched_final_stream_success")
         ):
             return None
         self._terminal_logging_scheduled = True
         partial_response: Final = litellm.stream_chunk_builder(  # pyright: ignore[reportUnknownMemberType]  # stream_chunk_builder's params are untyped upstream
-            chunks=self.chunks,
-            messages=self.messages if isinstance(self.messages, list) else None,
+            chunks=self.chunks,  # pyright: ignore[reportUnknownMemberType]  # self.chunks is untyped upstream
+            messages=self.messages if isinstance(self.messages, list) else None,  # pyright: ignore[reportUnknownMemberType]  # self.messages is untyped upstream
             logging_obj=self.logging_obj,
             count_prompt_tokens=self.count_prompt_tokens,
         )
         if partial_response is None:
             return None
-        if self.model:
-            partial_response.model = self.model
+        if self.model:  # pyright: ignore[reportUnknownMemberType]  # self.model is untyped upstream
+            partial_response.model = self.model  # pyright: ignore[reportUnknownMemberType]  # self.model is untyped upstream
         return partial_response
 
     async def _log_partial_stream_success(self) -> None:
@@ -454,7 +452,7 @@ class CustomStreamWrapper:
             partial_response: Final = self._build_partial_stream_response()
             if partial_response is None:
                 return
-            self.run_success_logging_and_cache_storage(
+            self.run_success_logging_and_cache_storage(  # pyright: ignore[reportUnknownMemberType]  # run_success_logging_and_cache_storage's params are untyped upstream
                 partial_response,
                 self.custom_llm_provider == "cached_response",
             )
@@ -463,7 +461,7 @@ class CustomStreamWrapper:
 
     def close(self) -> None:
         self._stream_closed = True
-        stream_to_close: Final = getattr(self, "completion_stream", None)
+        stream_to_close: Final[object] = getattr(self, "completion_stream", None)
         self.completion_stream = None
         if stream_to_close is not None:
             close_fn: Final = getattr(stream_to_close, "close", None)
@@ -556,9 +554,7 @@ class CustomStreamWrapper:
         last_content: Final = self.chunks[-1].choices[0].delta.content
 
         if (
-            last_content is None
-            or not isinstance(last_content, str)  # pyright: ignore[reportUnnecessaryIsInstance]  # providers can stuff non-str content into a delta despite the declared type
-            or len(last_content) <= 2
+            last_content is None or not isinstance(last_content, str) or len(last_content) <= 2
         ):  # ignore empty content - https://github.com/BerriAI/litellm/issues/5158#issuecomment-2287156946
             self._repeated_messages_count = 1
             return
@@ -1790,7 +1786,7 @@ class CustomStreamWrapper:
         if not cache_hit and self.logging_obj.llm_caching_handler is not None:
             await self.logging_obj.llm_caching_handler.add_streaming_response_to_cache(processed_chunk)
 
-    def run_success_logging_and_cache_storage(self, processed_chunk: object, cache_hit: bool):
+    def run_success_logging_and_cache_storage(self, processed_chunk, cache_hit: bool):
         """
         Runs success logging in a thread and adds the response to the cache
         """
@@ -2568,7 +2564,7 @@ def _coerce_token_details(
     return details_type(**(raw if isinstance(raw, dict) else raw.model_dump()))
 
 
-def calculate_total_usage(chunks: Iterable[ModelResponse | ModelResponseStream]) -> Usage:
+def calculate_total_usage(chunks: list[ModelResponse]) -> Usage:
     """Assume most recent usage chunk has total usage uptil then."""
     from litellm.litellm_core_utils.streaming_chunk_builder_utils import (
         attach_cache_creation_token_details,
