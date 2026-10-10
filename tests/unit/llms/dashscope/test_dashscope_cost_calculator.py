@@ -249,6 +249,7 @@ class TestDashscopeCostCalculator:
         assert math.isclose(prompt_cost, expected_prompt_cost, rel_tol=1e-10)
         assert math.isclose(completion_cost, expected_completion_cost, rel_tol=1e-10)
 
+    @pytest.mark.parametrize("implicit_cache_rate", [2e-07, "2e-7"])
     @pytest.mark.parametrize(
         ("cache_type", "expected_cache_rate"),
         [
@@ -258,14 +259,14 @@ class TestDashscopeCostCalculator:
         ],
     )
     def test_dashscope_flat_pricing_distinguishes_explicit_and_implicit_cache_reads(
-        self, cache_type: str | None, expected_cache_rate: float
-    ):
+        self, cache_type: str | None, expected_cache_rate: float, implicit_cache_rate: float | str
+    ) -> None:
         litellm.model_cost["dashscope/qwen-context-cache-mode-test"] = {
             "litellm_provider": "dashscope",
             "mode": "chat",
             "input_cost_per_token": 1e-06,
             "output_cost_per_token": 4e-06,
-            "implicit_cache_read_input_token_cost": 2e-07,
+            "implicit_cache_read_input_token_cost": implicit_cache_rate,
             "cache_read_input_token_cost": 1e-07,
         }
         prompt_tokens_details: dict[str, int | str] = {"cached_tokens": 600}
@@ -371,11 +372,17 @@ class TestDashscopeCostCalculator:
 
         assert math.isclose(prompt_cost, (400 * 1e-06) + (600 * 2e-07), rel_tol=1e-10)
 
-    def test_dashscope_tiered_pricing_uses_model_level_implicit_cache_read_rate(self):
+    @pytest.mark.parametrize(
+        ("implicit_cache_rate", "expected_cache_rate"),
+        [(2e-07, 2e-07), ("2e-7", 2e-07), (0.0, 0.0), ("0", 0.0)],
+    )
+    def test_dashscope_tiered_pricing_uses_model_level_implicit_cache_read_rate(
+        self, implicit_cache_rate: float | str, expected_cache_rate: float
+    ) -> None:
         litellm.model_cost["dashscope/qwen-tiered-model-implicit-rate-test"] = {
             "litellm_provider": "dashscope",
             "mode": "chat",
-            "implicit_cache_read_input_token_cost": 2e-07,
+            "implicit_cache_read_input_token_cost": implicit_cache_rate,
             "tiered_pricing": [
                 {
                     "range": [0, 1000],
@@ -396,7 +403,7 @@ class TestDashscopeCostCalculator:
             usage=usage,
         )
 
-        assert math.isclose(prompt_cost, (400 * 1e-06) + (600 * 2e-07), rel_tol=1e-10)
+        assert math.isclose(prompt_cost, (400 * 1e-06) + (600 * expected_cache_rate), rel_tol=1e-10)
 
     def test_dashscope_prompt_caching_savings_uses_implicit_cache_read_rate(self):
         model_info: ModelInfo = {

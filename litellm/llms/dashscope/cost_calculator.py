@@ -105,7 +105,7 @@ def _flat_cache_read_rate(
     if cache_read_mode == "implicit":
         implicit_rate: Final = model_info.get("implicit_cache_read_input_token_cost")
         if implicit_rate is not None:
-            return implicit_rate
+            return float(implicit_rate)
     return _flat_rate(model_info, "cache_read_input_token_cost", "input_cost_per_token")
 
 
