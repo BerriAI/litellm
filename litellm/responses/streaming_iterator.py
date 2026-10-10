@@ -323,6 +323,12 @@ class BaseResponsesAPIStreamingIterator:
         self._output_started = False
         self._generated_content = ""
         self._generated_tool_arguments = ""
+        # Output items delivered via response.output_item.done, kept so a terminal
+        # response.completed whose output list is empty (chatgpt/Codex behavior) can
+        # still be backfilled before the chunk reaches the client. Independent of
+        # the usage-estimation state above, which only feeds billing estimates.
+        self._streamed_output_items: dict[int, object] = {}  # mutable-ok: stream accumulator
+        self._text_only_output_items: dict[int, object] = {}  # mutable-ok: stream accumulator
         self._completed_response_cached = False
         self._completed_response_logged = False
         self._completed_response_cache_hit: bool | None = None
@@ -420,6 +426,29 @@ class BaseResponsesAPIStreamingIterator:
                     _args_delta: Final = getattr(openai_responses_api_chunk, "delta", None)
                     if isinstance(_args_delta, str):
                         self._generated_tool_arguments += _args_delta
+                elif _event_type == ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE:
+                    _done_output_index: Final = getattr(openai_responses_api_chunk, "output_index", None)
+                    _done_item: Final = getattr(openai_responses_api_chunk, "item", None)
+                    if isinstance(_done_output_index, int) and _done_item is not None:
+                        self._streamed_output_items[_done_output_index] = _done_item
+                elif _event_type == ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE:
+                    # Some providers never emit output_item.done for an item; a full
+                    # text part is enough to reconstruct a minimal message item.
+                    _text_done_index: Final = getattr(openai_responses_api_chunk, "output_index", None)
+                    _text_done: Final = getattr(openai_responses_api_chunk, "text", None)
+                    if (
+                        isinstance(_text_done, str)
+                        and _text_done
+                        and isinstance(_text_done_index, int)
+                        and _text_done_index not in self._streamed_output_items
+                    ):
+                        self._text_only_output_items[_text_done_index] = {
+                            "id": f"msg_{uuid.uuid4().hex[:12]}",
+                            "type": "message",
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "annotations": [], "text": _text_done}],
+                        }
                 _stream_model_id: Final = _model_id_from_metadata(self.litellm_metadata)
                 if _event_type in (
                     ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED,
@@ -488,6 +517,12 @@ class BaseResponsesAPIStreamingIterator:
                     openai_types.ResponsesAPIStreamEvents.RESPONSE_FAILED,
                 ):
                     _response_obj: Final[object] = getattr(openai_responses_api_chunk, "response", None)
+                    if _chunk_type == openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
+                        # Backfill before the billed terminal response is derived so
+                        # the stamped usage lands on the same object the client sees.
+                        _backfill_empty_streamed_output(
+                            _response_obj, self._streamed_output_items, self._text_only_output_items
+                        )
                     _estimate_wanted: Final[bool] = _chunk_type in (
                         openai_types.ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
                         openai_types.ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE,
@@ -1474,6 +1509,80 @@ def _add_text_like_part_events(
                 refusal=refusal,
             )
         )
+
+
+_BACKFILL_EXCLUDED_ITEM_KEYS: Final = frozenset({"phase", "logprobs"})
+
+
+def _strip_sse_part(part: object) -> object:
+    """Copy an untyped provider SSE content-part dict without provider-internal keys."""
+    if not isinstance(part, dict):
+        return part
+    stripped: Final[dict[str, object]] = {}  # mutable-ok: rebuilt per part
+    for key, value in part.items():  # pyright: ignore[reportUnknownVariableType]  # untyped SSE payload
+        if isinstance(key, str) and key not in _BACKFILL_EXCLUDED_ITEM_KEYS:
+            stripped[key] = value
+    return stripped
+
+
+def _strip_provider_internal_item_fields(item: object) -> object:
+    """Return a copy of a streamed output item without provider-internal fields.
+
+    chatgpt/Codex items carry ``phase``/``logprobs`` keys that do not exist on the
+    public Responses API item shapes; reconstructed output must not leak them.
+    """
+    if not isinstance(item, dict):
+        return item
+    cleaned: Final[dict[str, object]] = {}  # mutable-ok: rebuilt per item
+    for key, value in item.items():  # pyright: ignore[reportUnknownVariableType]  # provider SSE payload dicts are untyped on purpose
+        if isinstance(key, str) and key not in _BACKFILL_EXCLUDED_ITEM_KEYS:
+            cleaned[key] = value
+    content: Final = cleaned.get("content")
+    if isinstance(content, list):
+        cleaned["content"] = [
+            _strip_sse_part(
+                part  # pyright: ignore[reportUnknownArgumentType]  # raw SSE part
+            )
+            if isinstance(part, dict)
+            else part
+            for part in content  # pyright: ignore[reportUnknownVariableType]  # SSE parts
+        ]
+    return cleaned
+
+
+def _backfill_empty_streamed_output(
+    response_obj: object,
+    streamed_output_items: Mapping[int, object],
+    text_only_output_items: Mapping[int, object],
+) -> None:
+    """Backfill a terminal response whose ``output`` list is empty.
+
+    Some providers (e.g. the chatgpt/Codex backend) deliver every output item via
+    ``response.output_item.done`` events but leave ``response.output`` empty on
+    ``response.completed``; without backfill the client receives no output at all.
+    Items recorded from ``output_item.done`` win over text-only reconstructions,
+    and provider-internal fields are stripped by ``_strip_provider_internal_item_fields``.
+    Response objects that refuse mutation are left untouched so the stream still
+    completes after the client has seen every chunk.
+    """
+    if response_obj is None:
+        return
+    output: Final = getattr(response_obj, "output", None)
+    if output:
+        return
+    merged: Final[dict[int, object]] = {  # mutable-ok: built fresh per terminal chunk
+        **text_only_output_items,
+        **streamed_output_items,
+    }
+    if not merged:
+        return
+    backfilled_items: Final[list[object]] = [  # mutable-ok: built by comprehension
+        _strip_provider_internal_item_fields(item) for _, item in sorted(merged.items())
+    ]
+    try:
+        setattr(response_obj, "output", backfilled_items)  # noqa: B010  # object-typed
+    except (AttributeError, TypeError, ValueError):
+        verbose_logger.debug("could not backfill empty response.output; model likely immutable")
 
 
 def _billed_terminal_response(

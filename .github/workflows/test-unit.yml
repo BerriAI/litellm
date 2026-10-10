@@ -715,6 +715,7 @@ jobs:
               tests/unit/responses/test_rust_bridge_websocket.py
               tests/unit/responses/test_sse_output_recovery.py
               tests/unit/responses/test_streaming_iterator.py
+              tests/unit/responses/test_streaming_iterator_empty_output_backfill.py
               tests/unit/responses/test_streaming_iterator_error_events.py
               tests/unit/responses/test_text_format_conversion.py
               tests/unit/types
