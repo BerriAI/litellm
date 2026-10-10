@@ -81,8 +81,8 @@ class DecisionsBase64Video(LiteLLMPydanticObjectBase):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
-DecisionsAudio: TypeAlias = Annotated[str, Field(pattern=r"^data:audio/[^,]+;base64,.+$")] | DecisionsBase64Audio
-DecisionsVideo: TypeAlias = Annotated[str, Field(pattern=r"^data:video/[^,]+;base64,.+$")] | DecisionsBase64Video
+DecisionsAudio: TypeAlias = Annotated[str, Field(pattern=r"^data:audio/[^;,\s]+;base64,.+$")] | DecisionsBase64Audio
+DecisionsVideo: TypeAlias = Annotated[str, Field(pattern=r"^data:video/[^;,\s]+;base64,.+$")] | DecisionsBase64Video
 
 
 class DecisionsMediaBody(LiteLLMPydanticObjectBase):

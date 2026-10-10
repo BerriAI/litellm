@@ -1692,7 +1692,7 @@ async def test_clef_omni_media_reaches_upstream_in_both_formats(
     audio: Final = [
         "data:audio/wav;base64,YQ==",
         {"content_type": "audio/mpeg", "base64": "Yg=="},
-        "data:audio/webm;codecs=opus;base64,ZQ==",
+        {"content_type": "audio/webm;codecs=opus", "base64": "ZQ=="},
     ]
     videos: Final = ["data:video/mp4;base64,Yw==", {"content_type": "video/webm;codecs=vp9", "base64": "ZA=="}]
     route: Final = respx_mock.post("https://example.com/ai/run/@cf/cloudflare/clef-omni").respond(
@@ -1769,6 +1769,8 @@ async def test_decisions_rejects_media_for_other_models_before_http(
         {"videos": [{"content_type": "video/mp4"}]},
         {"audio": [{"content_type": "video/mp4", "base64": "YQ=="}]},
         {"videos": ["data:audio/wav;base64,YQ=="]},
+        {"audio": ["data:audio/webm;codecs=opus;base64,YQ=="]},
+        {"videos": ["data:video/webm;codecs=vp9;base64,YQ=="]},
         {"audio": ["data:audio/wav;base64,YQ=="] * 5},
         {"videos": ["data:video/mp4;base64,YQ=="] * 3},
     ),
