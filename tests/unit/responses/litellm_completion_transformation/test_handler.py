@@ -12,6 +12,7 @@ capture the forwarded kwargs; if the flag-setting line is removed the captured
 kwargs lack the flag and these tests fail.
 """
 
+import asyncio
 import json
 from collections.abc import Mapping
 from typing import Final
@@ -19,8 +20,12 @@ from unittest.mock import patch
 
 import httpx
 import pytest
+from openai import AsyncOpenAI
 
 import litellm
+from litellm._internal_context import is_internal_call
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
@@ -55,12 +60,13 @@ def test_sync_fallback_tags_skip_responses_api_bridge():
 
 
 @pytest.mark.asyncio
-async def test_async_fallback_tags_skip_responses_api_bridge():
+async def test_async_fallback_tags_internal_call_and_skip_responses_api_bridge():
     handler = LiteLLMCompletionTransformationHandler()
     captured: dict = {}
 
     async def fake_acompletion(**kwargs):
         captured.update(kwargs)
+        captured["is_internal_call"] = is_internal_call.get()
         raise _StopForwarding()
 
     with patch("litellm.acompletion", fake_acompletion):
@@ -75,6 +81,8 @@ async def test_async_fallback_tags_skip_responses_api_bridge():
             await coro
 
     assert captured.get("_skip_responses_api_bridge") is True
+    assert captured["is_internal_call"] is True
+    assert is_internal_call.get() is False
 
 
 _CODEX_ADDITIONAL_TOOLS_ITEM = {
@@ -179,7 +187,7 @@ async def test_async_fallback_returns_hoisted_nested_custom_tool_call_as_custom_
     assert tool_calls == [("custom_tool_call", "exec", "ls")]
 
 
-class _RecordingAnthropicHandler:
+class _RecordingProviderHandler:
     def __init__(self, reply: Mapping[str, object]) -> None:
         self.reply: Final = reply
         self.request_body: Mapping[str, object] | None = None
@@ -200,10 +208,69 @@ _ANTHROPIC_MESSAGE_PAYLOAD: Final = {
     "usage": {"input_tokens": 12, "output_tokens": 1},
 }
 
+_OPENAI_CHAT_PAYLOAD: Final = {
+    "id": "chatcmpl-123",
+    "object": "chat.completion",
+    "created": 1677652288,
+    "model": "my-custom-model",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "14"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 9, "completion_tokens": 1, "total_tokens": 10},
+}
+
+
+class _SuccessCounter(CustomLogger):
+    def __init__(self, call_id: str) -> None:
+        self.call_id: Final = call_id
+        self.concurrent_logging: Final = asyncio.Event()
+        self.logging_hook_count = 0
+        self.log_count = 0
+
+    async def async_logging_hook(
+        self, kwargs: dict[str, object], result: object, call_type: str
+    ) -> tuple[dict[str, object], object]:
+        self.logging_hook_count += 1
+        if self.logging_hook_count > 1:
+            self.concurrent_logging.set()
+        try:
+            await asyncio.wait_for(self.concurrent_logging.wait(), timeout=1.0)
+        except TimeoutError:
+            pass
+        return kwargs, result
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        if kwargs.get("litellm_call_id") == self.call_id:
+            self.log_count += 1
+
+
+@pytest.mark.asyncio
+async def test_bridged_success_logs_spend_once(monkeypatch: pytest.MonkeyPatch):
+    call_id: Final = "test-bridged-success-logs-spend-once"
+    spend_logger: Final = _SuccessCounter(call_id)
+    monkeypatch.setattr(litellm, "callbacks", [spend_logger])
+    provider: Final = _RecordingProviderHandler(_OPENAI_CHAT_PAYLOAD)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(provider)) as http_client:
+        openai_client: Final = AsyncOpenAI(
+            api_key="fake-provider-api-key",
+            base_url="https://api.openai.com/v1",
+            http_client=http_client,
+        )
+        await litellm.aresponses(
+            model="openai/my-custom-model",
+            api_key="fake-provider-api-key",
+            input="What is seven times two?",
+            client=openai_client,
+            litellm_call_id=call_id,
+            use_chat_completions_api=True,
+        )
+    await asyncio.sleep(0)
+    await GLOBAL_LOGGING_WORKER.flush()
+
+    assert spend_logger.log_count == 1, f"Expected one spend log, got {spend_logger.log_count}"
+
 
 @pytest.mark.asyncio
 async def test_bridged_follow_up_turn_keeps_the_addressed_response_id_off_the_provider_body():
-    provider: Final = _RecordingAnthropicHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
+    provider: Final = _RecordingProviderHandler(_ANTHROPIC_MESSAGE_PAYLOAD)
     client: Final = AsyncHTTPHandler()
     client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
 
