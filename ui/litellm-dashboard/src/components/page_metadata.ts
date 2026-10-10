@@ -42,6 +42,7 @@ export const pageDescriptions: Record<string, string> = {
   skills: "Browse and manage Claude Code skills",
   usage: "View legacy usage dashboard",
   "router-settings": "Configure routing and load balancing settings",
+  fallbacks: "Pick which models to try when a model fails",
   "logging-and-alerts": "Set up logging and alert configurations",
   "admin-panel": "Access admin panel and settings",
 };

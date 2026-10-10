@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -245,6 +246,15 @@ def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
             if stripped_model_group == fallback_key:
                 return True
     return False
+
+
+def _matches_wildcard_fallback_key(model_group: str, fallback_key: str) -> bool:
+    if fallback_key == "*" or "*" not in fallback_key:
+        return False
+    if re.fullmatch(re.escape(fallback_key).replace(r"\*", ".*"), model_group) is not None:
+        return True
+    provider, separator, rest = fallback_key.partition("/")
+    return separator == "/" and rest == "*" and "/" not in model_group and inferred_provider(model_group) == provider
 
 
 def _provider_prefixed_model_group(model_group: str, fallback_keys: Sequence[str]) -> str | None:
@@ -562,9 +572,11 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
             if fallback_key == model_group:  # check exact match
                 fallback_model_group = item[model_group]
                 break
-            elif fallback_key == prefixed_model_group or _check_stripped_model_group(
-                model_group=model_group, fallback_key=fallback_key
-            ):  # check generic fallback
+            elif (
+                fallback_key == prefixed_model_group
+                or _check_stripped_model_group(model_group=model_group, fallback_key=fallback_key)
+                or _matches_wildcard_fallback_key(model_group=model_group, fallback_key=fallback_key)
+            ):
                 stripped_model_fallback = item[fallback_key]
             elif fallback_key == "*":  # check generic fallback
                 generic_fallback_idx = idx

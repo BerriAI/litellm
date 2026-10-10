@@ -307,6 +307,10 @@ describe("Sidebar (leftnav)", () => {
     expect(placementsOf("router-settings")).toEqual(["SETTINGS > settings"]);
   });
 
+  it("puts Fallbacks at the top level of AI GATEWAY so it is one click away", () => {
+    expect(placementsOf("fallbacks")).toEqual(["AI GATEWAY"]);
+  });
+
   it("has no duplicate keys among all menu items and their children", () => {
     // React keys must be unique across the whole nav config, otherwise the
     // active-item highlight and group expansion collide.
