@@ -80,7 +80,7 @@ fn the_url_is_the_openrouter_messages_endpoint(
 #[rstest]
 fn extended_cache_hints_reach_openrouter_unchanged() {
     let body = json!({"system": [{"type": "text", "text": "s", "cache_control": {"type": "ephemeral", "ttl": "1h"}}]});
-    let (wire, _) = OPENROUTER_MESSAGES_CONFIG.wire_body(body.clone(), Vec::new());
+    let wire = OPENROUTER_MESSAGES_CONFIG.wire_body(body.clone());
     assert_eq!(wire, body);
 }
 
