@@ -32,6 +32,7 @@ from litellm._uuid import uuid
 
 if TYPE_CHECKING:
     from aiohttp import ClientSession
+    from tenacity import RetryCallState
 
 import dotenv
 import httpx
@@ -78,6 +79,7 @@ from litellm.litellm_core_utils.chat_completion_agentic_loop import (
 )
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.dd_tracing import tracer
+from litellm.litellm_core_utils.exception_mapping_utils import _get_response_headers
 from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
     OAUTH_TOKEN_EXCHANGE_KWARGS_KEYS,
@@ -6049,6 +6051,19 @@ def completion(
         )
 
 
+def _retry_after_wait(retry_state: "RetryCallState", fallback_wait: Callable[["RetryCallState"], float]) -> float:
+    """Use a provider retry hint when available, otherwise keep the configured backoff."""
+    if retry_state.outcome is not None:
+        exception: Final = retry_state.outcome.exception()
+        if isinstance(exception, Exception):
+            response_headers: Final = _get_response_headers(exception)
+            retry_after: Final = litellm.utils._get_retry_after_from_exception_header(response_headers)
+            if retry_after is not None and retry_after > 0:
+                return min(retry_after, 60)
+
+    return fallback_wait(retry_state)
+
+
 def completion_with_retries(*args, **kwargs):
     """
     Executes a litellm.completion() with 3 retries
@@ -6064,14 +6079,16 @@ def completion_with_retries(*args, **kwargs):
     kwargs["num_retries"] = 0
     retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
     original_function: Final = kwargs.pop("original_function", completion)
-    if retry_strategy == "exponential_backoff_retry":
-        retryer = tenacity.Retrying(
-            wait=tenacity.wait_exponential(multiplier=1, max=10),
-            stop=tenacity.stop_after_attempt(num_retries),
-            reraise=True,
-        )
-    else:
-        retryer = tenacity.Retrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+    fallback_wait: Final = (
+        tenacity.wait_exponential(multiplier=1, max=10)
+        if retry_strategy == "exponential_backoff_retry"
+        else tenacity.wait_none()
+    )
+    retryer = tenacity.Retrying(
+        wait=partial(_retry_after_wait, fallback_wait=fallback_wait),
+        stop=tenacity.stop_after_attempt(num_retries),
+        reraise=True,
+    )
     return retryer(original_function, *args, **kwargs)
 
 
@@ -6090,14 +6107,16 @@ async def acompletion_with_retries(*args, **kwargs):
     kwargs["num_retries"] = 0
     retry_strategy: Final[RetryStrategy] = kwargs.pop("retry_strategy", "constant_retry")
     original_function: Final = kwargs.pop("original_function", completion)
-    if retry_strategy == "exponential_backoff_retry":
-        retryer = tenacity.AsyncRetrying(
-            wait=tenacity.wait_exponential(multiplier=1, max=10),
-            stop=tenacity.stop_after_attempt(num_retries),
-            reraise=True,
-        )
-    else:
-        retryer = tenacity.AsyncRetrying(stop=tenacity.stop_after_attempt(num_retries), reraise=True)
+    fallback_wait: Final = (
+        tenacity.wait_exponential(multiplier=1, max=10)
+        if retry_strategy == "exponential_backoff_retry"
+        else tenacity.wait_none()
+    )
+    retryer = tenacity.AsyncRetrying(
+        wait=partial(_retry_after_wait, fallback_wait=fallback_wait),
+        stop=tenacity.stop_after_attempt(num_retries),
+        reraise=True,
+    )
     return await retryer(original_function, *args, **kwargs)
 
 

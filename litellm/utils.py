@@ -7257,7 +7257,7 @@ _should_retry = should_retry
 
 def _get_retry_after_from_exception_header(
     response_headers: httpx.Headers | None = None,
-):
+) -> float | int:
     """
     Reimplementation of openai's calculate retry after, since that one can't be imported.
     https://github.com/openai/openai-python/blob/af67cfab4210d8e497c05390ce14f39105c77519/src/openai/_base_client.py#L631
@@ -7270,23 +7270,29 @@ def _get_retry_after_from_exception_header(
         # <http-date>". See https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Retry-After#syntax for
         # details.
         if response_headers is not None:
-            retry_header: Final[str] = response_headers.get("retry-after")
-            try:
-                retry_after = int(retry_header)
-            except Exception:
-                retry_date_tuple: Final = email.utils.parsedate_tz(retry_header)
-                if retry_date_tuple is None:
-                    retry_after = -1
-                else:
-                    retry_date: Final = email.utils.mktime_tz(retry_date_tuple)
-                    retry_after = int(retry_date - time.time())
+            retry_header: Final[str | None] = response_headers.get("retry-after")
+            retry_after_ms_header: Final[str | None] = response_headers.get("retry-after-ms")
+            if retry_header is None and retry_after_ms_header is not None:
+                retry_after = float(retry_after_ms_header) / 1000
+            elif retry_header is not None:
+                try:
+                    retry_after = int(retry_header)
+                except Exception:
+                    retry_date_tuple: Final = email.utils.parsedate_tz(retry_header)
+                    if retry_date_tuple is None:
+                        retry_after = -1
+                    else:
+                        retry_date: Final = email.utils.mktime_tz(retry_date_tuple)
+                        retry_after = int(retry_date - time.time())
+            else:
+                retry_after = -1
         else:
             retry_after = -1
 
         return retry_after
 
     except Exception:
-        retry_after = -1
+        return -1
 
 
 def calculate_retry_after(
