@@ -104,14 +104,12 @@ class TestCognitionProviderIdentity:
         provider = JSONProviderRegistry.get("cognition")
         assert provider is not None
 
-        api_base, api_key = create_config_class(provider)()._get_openai_compatible_provider_info(None, None)
+        api_base, api_key = create_config_class(provider)().get_openai_compatible_provider_info(None, None)
         assert api_base == "https://api.cognition.ai/v1"
         assert api_key == "sk-cognition-env"
 
 
 class TestCognitionCostTracking:
-
-
     def test_supported_endpoints_matrix(self):
         matrix = json.loads((Path(litellm.__file__).parent / "provider_endpoints_support_backup.json").read_text())
 

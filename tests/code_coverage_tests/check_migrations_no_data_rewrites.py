@@ -7,21 +7,29 @@ anything whose cost scales with existing table size turns into downtime. A singl
 plus a doubled heap that plain autovacuum will not give back.
 
 What is banned is the row-rewriting DML behind that, not everything whose cost
-scales that way. A non-concurrent `CREATE INDEX`, an `ALTER COLUMN ... TYPE` that is
-not binary coercible, a volatile `DEFAULT` on a new column, a `CREATE TABLE ... AS
-SELECT` or `SELECT ... INTO` filling a new table from an existing one, the rename
-that pairs with one of those to swap a table out, and a `REFRESH MATERIALIZED VIEW`
-all read the whole table and all pass. That is deliberate: a rule wide enough to
-reach them fires on most ordinary migrations, and a marker everyone adds by reflex
-stops carrying information. The outage this was written for was a backfill.
+scales that way. A non-concurrent `CREATE INDEX` passes except on a request-log
+table, where it blocks writes until the build finishes. An `ALTER COLUMN ... TYPE`
+that is not binary coercible, a volatile `DEFAULT` on a new column, a `CREATE TABLE
+... AS SELECT` or `SELECT ... INTO` filling a new table from an existing one, the
+rename that pairs with one of those to swap a table out, and a `REFRESH MATERIALIZED
+VIEW` all read the whole table and all pass. That is deliberate: a rule wide enough
+to reach them fires on most ordinary migrations, and a marker everyone adds by
+reflex stops carrying information. The outage this was written for was a backfill.
 
-The one schema change banned outright is `ADD COLUMN ... DEFAULT` on a table in
+One column change banned outright is `ADD COLUMN ... DEFAULT` on a table in
 `REQUEST_LOG_TABLES`, the tables that hold a row per request. Postgres 11 stores such
 a default as metadata and touches no rows, but Postgres 10, which is supported,
 rewrites the whole heap and rebuilds every index under an `ACCESS EXCLUSIVE` lock,
 which on a spend-log-sized table is the same outage as a backfill. Every other table
 is small enough that the rewrite is not worth a rule, and a column added to a log
 table without a default is still free on every version.
+
+An index on a request-log table cannot ship as a migration at all. A plain `CREATE
+INDEX` blocks writes to the table until the build finishes, and `CREATE INDEX
+CONCURRENTLY` is refused by Postgres on a partitioned parent, which LiteLLM_SpendLogs
+is wherever the operator ran db_scripts/partition_spend_logs.sql. The migration job builds
+those indexes after `migrate deploy`, concurrently and per partition, from the list in
+litellm_proxy_extras/request_log_indexes.py, so that list is where a new one goes.
 
 Flagged, per statement, by its leading keyword:
 
@@ -44,6 +52,8 @@ Flagged, per statement, by its leading keyword:
               actions adds a column with a `DEFAULT`. An `ALTER COLUMN ... SET
               DEFAULT` written after the column exists changes metadata alone, so it
               passes, as does an `ADD CONSTRAINT`
+  CREATE      only a `CREATE [UNIQUE] INDEX` on a request-log table, concurrent or
+              not; the migration job builds those
 
 Referential actions (`ON DELETE CASCADE`, `ON UPDATE CASCADE`) are schema, never a
 statement's leading keyword, so they pass.
@@ -85,7 +95,9 @@ below line up with the statements they exempt.
 Add a column and let the application populate it, or run the rewrite as an opt-in
 batched job outside boot. When a rewrite is genuinely bounded and must ship inside
 the migration, put `-- data-migration-ok: <reason>` on the statement or on the line
-above it, naming what bounds it. The reason is required. A marker sharing a line
+above it, naming what bounds it. The reason is required. A marker never exempts a
+`CREATE INDEX` on a request-log table, since no bound makes that statement safe:
+the migration job is the only place such an index is built. A marker sharing a line
 with the statement it follows exempts that statement alone, so the next statement
 down is still checked rather than picking the marker up as its own. A marker on an
 `EXECUTE` or on the assignment feeding one covers the single-quoted SQL that
@@ -108,6 +120,7 @@ import sys
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 MIGRATIONS_DIR = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "migrations"
@@ -115,6 +128,9 @@ MIGRATIONS_DIR = REPO_ROOT / "litellm-proxy-extras" / "litellm_proxy_extras" / "
 GRANDFATHERED = frozenset(
     {
         "20250425182129_add_session_id",
+        "20250510142544_add_session_id_index_spend_logs",
+        "20260228100000_add_spend_logs_composite_index",
+        "20250326162113_baseline",
         "20260817000000_shadow_eval_multi_key",
         "20260818000000_add_spend_log_timestamps",
         "20260818224500_add_shadow_eval_stopped_by",
@@ -139,9 +155,7 @@ WORD_OR_ASSIGN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|:=|(?<![<>!:=])=(?![=>])")
 PRECEDING_WORD = re.compile(r"([A-Za-z_][A-Za-z0-9_]*)[^A-Za-z0-9_]*$")
 QUALIFIER_GAP = re.compile(r"[\s.]*")
 EXPLAIN_OPTIONS = re.compile(r"\bEXPLAIN\b(?:\s+(?:ANALYZE|ANALYSE|VERBOSE)\b)+", re.IGNORECASE)
-DEFINES_A_ROUTINE = re.compile(
-    r"\bCREATE\b(?:\s+OR\s+REPLACE)?\s+(?:FUNCTION|PROCEDURE)\b", re.IGNORECASE
-)
+DEFINES_A_ROUTINE = re.compile(r"\bCREATE\b(?:\s+OR\s+REPLACE)?\s+(?:FUNCTION|PROCEDURE)\b", re.IGNORECASE)
 QUALIFIED_NAME = r"(?:\"[^\"]*\"|[A-Za-z_][A-Za-z0-9_$]*)"
 ROUTINE_NAME = re.compile(rf"\s*(?:{QUALIFIED_NAME}\s*\.\s*)?({QUALIFIED_NAME})")
 TABLE_NAME = ROUTINE_NAME
@@ -204,6 +218,12 @@ statement with the bound spelled out:
     -- data-migration-ok: <what bounds this>
     UPDATE ...
 
+An index on a request-log table is not a migration, and no marker exempts one. Declare it with `@@index` in
+schema.prisma and add it to REQUEST_LOG_INDEXES in
+litellm_proxy_extras/request_log_indexes.py under the name Prisma derives for it; the
+migration job builds it after `migrate deploy`, concurrently on a plain table and per
+partition on a partitioned one, which no single migration statement can do.
+
 On Postgres 10 an `ADD COLUMN ... DEFAULT` on a request-log table rewrites the table
 too. Add the column nullable with no default, then set the default in a separate
 `ALTER COLUMN ... SET DEFAULT`, which never touches existing rows.
@@ -215,10 +235,11 @@ class Violation:
     migration: str
     line: int
     keyword: str
+    consequence: str = "rewrites existing rows at boot"
 
     def render(self) -> str:
         location = f"{MIGRATIONS_DIR.relative_to(REPO_ROOT)}/{self.migration}/migration.sql"
-        return f"{location}:{self.line}: {self.keyword} rewrites existing rows at boot"
+        return f"{location}:{self.line}: {self.keyword} {self.consequence}"
 
 
 @dataclass(frozen=True, slots=True)
@@ -578,6 +599,35 @@ def rewrites_a_log_table(clause: str, region: str, base: int) -> str | None:
     return f"ADD COLUMN ... DEFAULT on {named.group(1)}"
 
 
+def builds_a_log_index(clause: str, region: str, base: int) -> str | None:
+    """The keyword to report when a `CREATE INDEX` targets a request-log table, concurrent or
+    not: a plain build blocks writes for its whole duration, and a concurrent one fails with
+    P3018 on a partitioned parent, so the migration job builds those instead."""
+    created: Final[re.Match[str] | None] = re.match(
+        r"\s*CREATE\s+(?:UNIQUE\s+)?INDEX\b(?:\s+CONCURRENTLY\b)?", clause, re.IGNORECASE
+    )
+    if created is None:
+        return None
+    on: Final[re.Match[str] | None] = re.search(r"\bON\b(?:\s+ONLY\b)?", clause[created.end() :], re.IGNORECASE)
+    if on is None:
+        return None
+    named: Final[re.Match[str] | None] = TABLE_NAME.match(
+        region, skip_comments(region, base + created.end() + on.end())
+    )
+    if named is None or named.group(1).strip('"') not in REQUEST_LOG_TABLES:
+        return None
+    return f"CREATE INDEX on {named.group(1)}"
+
+
+def consequence_of(found: str) -> str:
+    if found.startswith("CREATE INDEX"):
+        return (
+            "blocks writes until the build finishes, or fails on a partitioned table; "
+            "add it to REQUEST_LOG_INDEXES in litellm_proxy_extras/request_log_indexes.py instead"
+        )
+    return "rewrites existing rows at boot"
+
+
 def skip_comments(sql: str, start: int) -> int:
     index = start
     while index < len(sql):
@@ -746,8 +796,7 @@ def read_markers(sql: str) -> Markers:
     return Markers(
         sql,
         tuple(
-            Marker(match.start(), match.end(), alone_on_its_line(sql, match.start()))
-            for match in MARKER.finditer(sql)
+            Marker(match.start(), match.end(), alone_on_its_line(sql, match.start())) for match in MARKER.finditer(sql)
         ),
     )
 
@@ -760,9 +809,7 @@ def scan(sql: str, migration: str, markers: Markers) -> Iterator[Violation]:
     yield from scan_region(sql, sql, migration, markers, 0)
 
 
-def scan_region(
-    document: str, region: str, migration: str, markers: Markers, offset: int
-) -> Iterator[Violation]:
+def scan_region(document: str, region: str, migration: str, markers: Markers, offset: int) -> Iterator[Violation]:
     """Violations in one region of `document`, whose text begins at `offset`. Positions are
     always counted against the whole document, so a statement nested in a dollar-quoted body
     reports its real file line and lines up with the markers read from that file. A single-quoted
@@ -790,13 +837,18 @@ def scan_region(
                             offset + start,
                         )
 
-            keyword = offending_keyword(clause)
-            if exempt:
-                continue
-            found = keyword or rewrites_a_log_table(clause, region, base)
+            index = builds_a_log_index(clause, region, base)
+            found = (
+                index if exempt else offending_keyword(clause) or rewrites_a_log_table(clause, region, base) or index
+            )
             if found is None:
                 continue
-            yield Violation(migration, line_of(document, offset + keyword_start(clause, base)), found)
+            yield Violation(
+                migration,
+                line_of(document, offset + keyword_start(clause, base)),
+                found,
+                consequence_of(found),
+            )
 
     for body in bodies:
         if not runs_when_applied(masked, region, bodies, runnable, identifiers, body):

@@ -5,6 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timedelta
 from functools import cache
 from typing import Final
+from urllib.parse import unquote
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -31,13 +32,19 @@ from litellm.types.utils import StandardLoggingPayload
 
 AZURE_STORAGE_TOKEN_SCOPE: Final = "https://storage.azure.com/.default"
 _ADLS_SAFE_NAME: Final = str.maketrans("/", "_", "=")
+_DOT_OR_EMPTY_SEGMENTS: Final = frozenset(("", ".", ".."))
 
 
 def adls_safe_file_name(payload_id: str | None) -> str:
-    """`=` padding and `/` in a base64 payload id are what the Data Lake service rejects, so the name drops the
-    padding and maps `/` to `_`. Standard base64 has no `_` and its padding is fixed by the length, so ids from
-    that alphabet stay distinct; anything else is left as is."""
-    return f"{(payload_id or str(uuid.uuid4())).translate(_ADLS_SAFE_NAME)}.json"
+    """A Responses API id is base64 behind `resp_`, and the Data Lake service rejects its `=` padding and `/`, so
+    that name drops the padding and maps `/` to `_`. Standard base64 has no `_` and its padding is fixed by the
+    length, so those ids stay distinct. Every other id, including a caller's `x-litellm-call-id`, is used as is
+    unless it has an empty, `.` or `..` path segment, which gets the same rewrite so the file keeps its own name in
+    the log directory"""
+    name: Final = payload_id or str(uuid.uuid4())
+    if not name.startswith("resp_") and _DOT_OR_EMPTY_SEGMENTS.isdisjoint(unquote(name).split("/")):
+        return f"{name}.json"
+    return f"{name.translate(_ADLS_SAFE_NAME)}.json"
 
 
 @cache
@@ -54,6 +61,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         build_credential_chain_token_provider: Callable[
             [], Callable[[], str]
         ] = _cached_credential_chain_token_provider,
+        clock: Callable[[], float] = time.time,
         **kwargs,
     ):
         try:
@@ -77,6 +85,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
             self.azure_storage_endpoint_suffix: str = (
                 os.getenv("AZURE_STORAGE_ENDPOINT_SUFFIX") or AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX
             )
+            self._clock: Callable[[], float] = clock
             self._service_client = None
             # Time that the azure service client expires, in order to reset the connection pool and keep it fresh
             self._service_client_timeout: float | None = None
@@ -339,7 +348,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
         from azure.storage.filedatalake.aio import DataLakeServiceClient
 
         # expire old clients to recover from connection issues
-        if self._service_client_timeout and self._service_client and self._service_client_timeout > time.time():
+        if self._service_client_timeout and self._service_client and self._service_client_timeout <= self._clock():
             await self._service_client.close()
             self._service_client = None
         if not self._service_client:
@@ -347,7 +356,7 @@ class AzureBlobStorageLogger(CustomBatchLogger):
                 account_url=self.azure_storage_dfs_endpoint,
                 credential=self.azure_storage_account_key,
             )
-            self._service_client_timeout = time.time() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS
+            self._service_client_timeout = self._clock() + _DEFAULT_TTL_FOR_HTTPX_CLIENTS
         return self._service_client
 
     async def upload_to_azure_data_lake_with_azure_account_key(self, payload: StandardLoggingPayload):

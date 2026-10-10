@@ -28,7 +28,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_environment_value,
 )
 from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
-from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+from litellm.llms.custom_httpx.http_handler import get_httpx_client
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.langfuse import *
 from litellm.types.llms.openai import HttpxBinaryResponseContent, ResponsesAPIResponse
@@ -324,7 +324,7 @@ class LangFuseLogger:
             self.langfuse_client = create_mock_langfuse_client()
             self.is_mock_mode = True
         else:
-            self._http_handler: Final = _get_httpx_client()
+            self._http_handler: Final = get_httpx_client()
             self.langfuse_client = self._http_handler.client
             self.is_mock_mode = False
 
@@ -868,10 +868,8 @@ class LangFuseLogger:
                 "id": clean_metadata.pop("generation_id", generation_id),
                 "input": masked_input if not mask_input else "redacted-by-litellm",
                 "output": masked_output if not mask_output else "redacted-by-litellm",
-                "cost_details": {"total": cost}  # mutable-ok: langfuse serializes this payload
-                if usage is not None and isinstance(cost, (int, float))
-                else None,
-                "metadata": {  # mutable-ok: langfuse serializes this payload, a proxy is not json-encodable
+                "cost_details": {"total": cost} if usage is not None and isinstance(cost, (int, float)) else None,
+                "metadata": {
                     **log_requester_metadata(redact_user_api_key_info(metadata=allowlisted_metadata)),  # pyright: ignore[reportArgumentType]  # TypedDict in, plain metadata dict out
                     **enrichments,
                     **_lookup_ids(litellm_call_id, response_obj),
@@ -1025,7 +1023,7 @@ class LangFuseLogger:
                 _cache_key = _hidden_params.get("cache_key", None)
                 if _cache_key is None and litellm.cache is not None:
                     # fallback to using "preset_cache_key"
-                    _preset_cache_key: Final = litellm.cache._get_preset_cache_key_from_kwargs(**kwargs)  # pyright: ignore[reportPrivateUsage]  # kwargs-ok: no public preset-cache-key accessor
+                    _preset_cache_key: Final = litellm.cache.get_preset_cache_key_from_kwargs(**kwargs)
                     _cache_key = _preset_cache_key
                 tags.append(f"cache_key:{_cache_key}")
         return tags

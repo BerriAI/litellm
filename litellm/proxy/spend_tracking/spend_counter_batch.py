@@ -9,6 +9,7 @@ from typing import Final
 
 from pydantic import TypeAdapter
 
+from litellm._internal_context import service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_batch import BatchResult, RedisBatch, active_request_redis_batch
 from litellm.caching.redis_cache import RedisCache
@@ -20,6 +21,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
 
 _CounterValues: Final = TypeAdapter(dict[str, float | None])
 _NO_VALUES: Final[Mapping[str, float | None]] = MappingProxyType({})
+SPEND_COUNTERS_TARGET: Final = "spend_counters"
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,7 +114,8 @@ class SpendCounterBatch:
         pending: Final = self._keys - self._fetched
         if pending:
             self._fetched = self._fetched | pending
-            self._inflight.append(self._request_batch.mget(sorted(pending)))
+            with service_target(SPEND_COUNTERS_TARGET):
+                self._inflight.append(self._request_batch.mget(sorted(pending)))
 
     async def _collect_inflight(self) -> None:
         results: Final = tuple(self._inflight)
@@ -127,9 +130,9 @@ class SpendCounterBatch:
 
     async def _fetch(self, keys: frozenset[str]) -> Mapping[str, float | None]:
         try:
-            return _CounterValues.validate_python(
-                await self._redis_cache.async_batch_get_cache(key_list=sorted(keys))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped cache API
-            )
+            with service_target(SPEND_COUNTERS_TARGET):
+                values: Final = await self._redis_cache.async_batch_get_cache(key_list=sorted(keys))  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API
+            return _CounterValues.validate_python(values)  # pyright: ignore[reportUnknownArgumentType]  # untyped cache API
         except Exception as e:  # noqa: BLE001  # per-key reads take over and apply their own Redis fallback
             verbose_proxy_logger.debug("spend counter batch read failed, falling back to per-key reads: %s", e)
             return _NO_VALUES

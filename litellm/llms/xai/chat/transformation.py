@@ -3,6 +3,7 @@ from types import MappingProxyType
 from typing import Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -30,6 +31,8 @@ from ...openai.chat.gpt_transformation import (
     OpenAIGPTConfig,
 )
 
+_RESPONSE_BODY: Final = TypeAdapter(dict[object, object], config=ConfigDict(hide_input_in_errors=True))
+
 
 def _usage_restated_from_xai_ticks(usage: Usage | None) -> Usage | None:
     reported_cost: Final = xai_reported_cost_in_usd(getattr(usage, "cost_in_usd_ticks", None))
@@ -49,6 +52,13 @@ class XAIChatConfig(OpenAIGPTConfig):
         api_base = api_base or get_secret_str("XAI_API_BASE") or XAI_API_BASE
         dynamic_api_key: Final = XAIModelInfo.get_api_key(api_key)
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def validate_environment(
         self,
@@ -164,6 +174,12 @@ class XAIChatConfig(OpenAIGPTConfig):
             return False
         return True
 
+    def supports_stop_reason(
+        self,
+        model: str,
+    ) -> bool:
+        return self._supports_stop_reason(model)
+
     def _supports_frequency_penalty(self, model: str) -> bool:
         """
         From manual testing grok-4 does not support `frequency_penalty`
@@ -227,9 +243,7 @@ class XAIChatConfig(OpenAIGPTConfig):
                 "Dropping 'web_search_options'. Use the Responses API for XAI web search."
             )
 
-        chat_params: Final = {  # mutable-ok: base transform_request takes a plain dict of optional params
-            key: value for key, value in optional_params.items() if key != "web_search_options"
-        }
+        chat_params: Final = {key: value for key, value in optional_params.items() if key != "web_search_options"}
         return super().transform_request(
             model, strip_name_from_messages(messages), chat_params, litellm_params, headers
         )
@@ -291,7 +305,7 @@ class XAIChatConfig(OpenAIGPTConfig):
 
         # Handle X.AI web search usage tracking
         try:
-            raw_response_json: Final = raw_response.json()
+            raw_response_json: Final = _RESPONSE_BODY.validate_python(raw_response.json())
             self._enhance_usage_with_xai_web_search_fields(response, raw_response_json)
         except Exception as e:
             verbose_logger.debug("Error extracting X.AI web search usage: %s", e)
@@ -405,6 +419,13 @@ class XAIChatConfig(OpenAIGPTConfig):
         if int(usage.total_tokens or 0) < expected_total:
             usage.total_tokens = expected_total
 
+    @classmethod
+    def normalize_openai_compatible_usage_totals(
+        cls,
+        usage: Usage | dict[str, object] | None,  # mutable-ok: mirrors override contract
+    ) -> None:
+        return cls._normalize_openai_compatible_usage_totals(usage)
+
 
 class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
     def chunk_parser(self, chunk: dict) -> ModelResponseStream:
@@ -427,7 +448,7 @@ class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
 
         if "usage" in chunk and chunk["usage"] is not None:
             XAIChatConfig.fold_reasoning_tokens_into_completion(chunk["usage"])
-            XAIChatConfig._normalize_openai_compatible_usage_totals(chunk["usage"])
+            XAIChatConfig.normalize_openai_compatible_usage_totals(chunk["usage"])
 
         parsed_chunk: Final = super().chunk_parser(chunk)
         restated_usage: Final = _usage_restated_from_xai_ticks(getattr(parsed_chunk, "usage", None))

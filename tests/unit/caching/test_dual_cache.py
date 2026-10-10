@@ -925,3 +925,100 @@ async def test_shared_batch_read_keeps_a_caches_own_tier_failure_to_itself_like_
 
     assert shared == separate == [None, None, [3]]
     assert redis.async_batch_get_cache.await_args_list[0].args[0] == ["b1", "c1"]
+
+
+def _write_through_dual_cache() -> tuple[DualCache, MagicMock]:
+    redis_cache: Final = MagicMock(spec=RedisCache)
+    return DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis_cache), redis_cache
+
+
+@pytest.mark.asyncio
+async def test_a_written_value_is_read_back_from_memory_without_a_redis_read():
+    dual_cache, redis_cache = _write_through_dual_cache()
+
+    dual_cache.set_cache("sync-key", {"v": 1})
+    await dual_cache.async_set_cache("async-key", {"v": 2})
+
+    assert dual_cache.get_cache("sync-key") == {"v": 1}
+    assert await dual_cache.async_get_cache("async-key") == {"v": 2}
+    redis_cache.set_cache.assert_called_once()
+    redis_cache.async_set_cache.assert_awaited_once()
+    redis_cache.get_cache.assert_not_called()
+    redis_cache.async_get_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_local_only_reads_and_writes_never_reach_redis():
+    dual_cache, redis_cache = _write_through_dual_cache()
+
+    dual_cache.set_cache("sync-key", "sync", local_only=True)
+    await dual_cache.async_set_cache("async-key", "async", local_only=True)
+
+    assert dual_cache.get_cache("sync-key", local_only=True) == "sync"
+    assert await dual_cache.async_get_cache("async-key", local_only=True) == "async"
+    assert dual_cache.get_cache("missing", local_only=True) is None
+    assert await dual_cache.async_get_cache("missing", local_only=True) is None
+    redis_cache.set_cache.assert_not_called()
+    redis_cache.async_set_cache.assert_not_called()
+    redis_cache.get_cache.assert_not_called()
+    redis_cache.async_get_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_batch_reads_of_written_keys_are_served_from_memory():
+    dual_cache, redis_cache = _write_through_dual_cache()
+    entries: Final = (("a", {"v": "a"}), ("b", {"v": "b"}), ("c", {"v": "c"}))
+
+    await dual_cache.async_set_cache_pipeline(entries)
+    dual_cache.set_cache("d", {"v": "d"})
+
+    assert await dual_cache.async_batch_get_cache(["a", "b", "c"]) == [{"v": "a"}, {"v": "b"}, {"v": "c"}]
+    assert dual_cache.batch_get_cache(["d"], parent_otel_span=None) == [{"v": "d"}]
+    redis_cache.async_set_cache_pipeline.assert_awaited_once()
+    redis_cache.async_batch_get_cache.assert_not_called()
+    redis_cache.batch_get_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_local_only_increments_count_in_memory_without_touching_redis():
+    dual_cache, redis_cache = _write_through_dual_cache()
+
+    assert dual_cache.increment_cache("sync-counter", 2, local_only=True) == 2
+    assert dual_cache.increment_cache("sync-counter", 3, local_only=True) == 5
+    assert await dual_cache.async_increment_cache("async-counter", 4, local_only=True) == 4
+    redis_cache.increment_cache.assert_not_called()
+    redis_cache.async_increment.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_set_members_added_through_the_dual_cache_are_read_from_memory():
+    dual_cache, redis_cache = _write_through_dual_cache()
+
+    await dual_cache.async_set_cache_sadd("members", ["value1", "value2", "value3"])
+
+    assert set(await dual_cache.async_get_cache("members")) == {"value1", "value2", "value3"}
+    redis_cache.async_set_cache_sadd.assert_awaited_once()
+    redis_cache.async_get_cache.assert_not_called()
+
+
+def test_the_batch_read_throttle_tracks_at_least_the_default_number_of_keys():
+    assert DualCache().last_redis_batch_access_time.max_size >= DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE
+
+
+@pytest.mark.asyncio
+async def test_async_batch_reads_of_missing_keys_hit_redis_once_per_expiry_window():
+    redis_cache: Final = MagicMock(spec=RedisCache)
+    keys: Final = ["miss-a", "miss-b", "miss-c"]
+    redis_cache.async_batch_get_cache = AsyncMock(return_value=dict.fromkeys(keys))
+    dual_cache: Final = DualCache(
+        in_memory_cache=InMemoryCache(), redis_cache=redis_cache, default_redis_batch_cache_expiry=60
+    )
+
+    await dual_cache.async_batch_get_cache(keys)
+    await dual_cache.async_batch_get_cache(keys)
+    assert redis_cache.async_batch_get_cache.await_count == 1
+    assert all(key in dual_cache.last_redis_batch_access_time for key in keys)
+
+    dual_cache.last_redis_batch_access_time.update({key: time.time() - 61 for key in keys})
+    await dual_cache.async_batch_get_cache(keys)
+    assert redis_cache.async_batch_get_cache.await_count == 2

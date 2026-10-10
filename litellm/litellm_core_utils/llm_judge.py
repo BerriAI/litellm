@@ -44,7 +44,7 @@ def parse_json_verdict(raw: str) -> dict[str, object]:  # mutable-ok: plain pars
         parsed = json.loads(text[start : end + 1])
     if not isinstance(parsed, dict):
         raise ValueError("judge response is not a JSON object")
-    return {str(k): v for k, v in parsed.items()}  # mutable-ok: plain parsed-JSON payload
+    return {str(k): v for k, v in parsed.items()}
 
 
 def extract_text_from_content(content: object) -> str:

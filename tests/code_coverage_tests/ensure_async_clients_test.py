@@ -2,9 +2,9 @@ import ast
 import os
 
 ALLOWED_FILES = [
-    # The standalone Lens process reuses one client for its entire lifetime, without importing the proxy SDK.
-    "../../litellm/proxy/engine/worker.py",
-    "./litellm/proxy/engine/worker.py",
+    # Lens data traffic owns one pool per app lifespan, isolated from model traffic and closed on shutdown.
+    "../../litellm/tracing/remote.py",
+    "./litellm/tracing/remote.py",
     # local files
     "../../litellm/__init__.py",
     "../../litellm/llms/custom_httpx/http_handler.py",

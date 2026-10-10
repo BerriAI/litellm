@@ -71,7 +71,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             or get_secret_str("AWS_REGION")
             or BEDROCK_MANTLE_DEFAULT_REGION
         )
-        BaseAWSLLM._validate_aws_region_name(region)
+        BaseAWSLLM.validate_aws_region_name(region)
         # The base path segment is data-driven per model (use_openai_responses_path
         # flag): gemma-4-* and gpt-5.x are served on /openai/v1, everything else on
         # /v1. An explicit api_base still wins over the derived default.
@@ -82,6 +82,15 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         )
         dynamic_api_key: Final = self._resolve_bearer_token(api_key)
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+        litellm_params: GenericLiteLLMParams | None = None,
+        model: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key, litellm_params, model)
 
     def validate_environment(
         self,
@@ -117,7 +126,7 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             )
             if supported and param not in base_params
         )
-        return [*base_params, *extra_params]  # mutable-ok: fresh list required by the inherited signature
+        return [*base_params, *extra_params]
 
     def _supports_reasoning(self, model: str) -> bool:
         try:

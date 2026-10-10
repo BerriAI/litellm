@@ -1,4 +1,4 @@
-import asyncio
+import asyncio, boto3, importlib, logging, os, pytest_asyncio
 import copy
 import json
 import re
@@ -6,8 +6,9 @@ import sys
 import textwrap
 import time
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine
 from contextlib import asynccontextmanager
+from contextvars import Context
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -17,10 +18,18 @@ import httpx
 import pytest
 import respx
 
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.s3_v2 import S3BatchUploadError, S3Logger
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 from litellm.types.utils import StandardLoggingPayload
+from collections import defaultdict
+from litellm._logging import verbose_logger
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 _real_sleep: Final = asyncio.sleep
 _NOW: Final = 1_000_000.0
@@ -140,7 +149,7 @@ class TestS3V2UnitTests:
         mock_sync_client.put.return_value = mock_response
 
         with patch(
-            "litellm.integrations.s3_v2._get_httpx_client",
+            "litellm.integrations.s3_v2.get_httpx_client",
             return_value=mock_sync_client,
         ):
             s3_logger_sync.upload_data_to_s3(test_element)
@@ -281,7 +290,7 @@ class TestS3V2UnitTests:
         mock_sync_client.put.return_value = mock_response
 
         with patch(
-            "litellm.integrations.s3_v2._get_httpx_client",
+            "litellm.integrations.s3_v2.get_httpx_client",
             return_value=mock_sync_client,
         ):
             s3_logger_sync_virtual.upload_data_to_s3(test_element)
@@ -772,7 +781,7 @@ def test_sync_upload_retries_403_with_fresh_signature(rotating_profile: str, mon
     handler.client = httpx.Client(transport=httpx.MockTransport(respond))
     with (
         patch(  # test-quality-ok: sync upload builds its HTTPHandler per call, there is no injection seam for it
-            "litellm.integrations.s3_v2._get_httpx_client", return_value=handler
+            "litellm.integrations.s3_v2.get_httpx_client", return_value=handler
         ),
         patch("time.sleep") as mock_sleep,
     ):
@@ -818,7 +827,7 @@ def test_sync_upload_retries_on_s3_503():
     mock_sync_client.put = MagicMock(side_effect=[response_503, response_200])
 
     with patch(
-        "litellm.integrations.s3_v2._get_httpx_client",
+        "litellm.integrations.s3_v2.get_httpx_client",
         return_value=mock_sync_client,
     ):
         with patch("time.sleep") as mock_sleep:
@@ -1223,9 +1232,43 @@ async def test_strip_base64_recursive_redaction():
 # --------------------------------------------------------------
 # Shared fixture that silences asyncio.create_task during tests
 # --------------------------------------------------------------
+@pytest_asyncio.fixture(loop_scope="function")
+async def cancel_s3_periodic_flush_tasks(monkeypatch: pytest.MonkeyPatch) -> AsyncIterator[None]:
+    periodic_flush_tasks: list[asyncio.Task[object]] = []
+    original_create_task = asyncio.create_task
+
+    def track_create_task(
+        coro: Coroutine[object, object, object],
+        *,
+        name: str | None = None,
+        context: Context | None = None,
+    ) -> asyncio.Task[object]:
+        if context is None:
+            task = original_create_task(coro, name=name)
+        else:
+            task = original_create_task(coro, name=name, context=context)
+        if coro.__qualname__.endswith("periodic_flush"):
+            periodic_flush_tasks.append(task)
+        return task
+
+    monkeypatch.setattr(asyncio, "create_task", track_create_task)
+    yield
+    for task in periodic_flush_tasks:
+        if not task.done():
+            task.cancel()
+    await asyncio.gather(*periodic_flush_tasks, return_exceptions=True)
+
+
 @pytest.fixture(autouse=True)
-def patch_asyncio_create_task():
+def patch_asyncio_create_task(request):
     """Prevent 'no running event loop' errors when S3Logger calls asyncio.create_task()."""
+    if request.node.originalname in {
+        "test_basic_s3_logging",
+        "test_basic_s3_v2_logging",
+        "test_basic_s3_v2_logging_failure",
+    }:
+        yield
+        return
     with patch("asyncio.create_task"):
         yield
 
@@ -1846,7 +1889,7 @@ def test_sync_upload_sets_content_md5_header(monkeypatch):
     mock_sync_client.put.return_value = response
 
     with patch(
-        "litellm.integrations.s3_v2._get_httpx_client",
+        "litellm.integrations.s3_v2.get_httpx_client",
         return_value=mock_sync_client,
     ):
         logger.upload_data_to_s3(test_element)
@@ -1977,7 +2020,7 @@ def test_sync_upload_sets_sse_kms_key_id_header_when_configured():
     mock_sync_client.put.return_value = response
 
     with patch(
-        "litellm.integrations.s3_v2._get_httpx_client",
+        "litellm.integrations.s3_v2.get_httpx_client",
         return_value=mock_sync_client,
     ):
         logger.upload_data_to_s3(test_element)
@@ -2254,7 +2297,7 @@ def test_sync_upload_signs_object_key_with_space_the_way_s3_does():
     mock_sync_client = MagicMock()
     mock_sync_client.put.return_value = response
 
-    with patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client):
+    with patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client):
         logger.upload_data_to_s3(_element_with_space())
 
     call = mock_sync_client.put.call_args
@@ -2352,7 +2395,7 @@ def test_sync_upload_percent_encodes_reserved_characters_in_object_key(s3_object
     mock_sync_client = MagicMock()
     mock_sync_client.put.return_value = response
 
-    with patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client):
+    with patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client):
         logger.upload_data_to_s3(_element_for(s3_object_key))
 
     call = mock_sync_client.put.call_args
@@ -2550,6 +2593,253 @@ def test_prompts_only_toggle_is_exposed_to_admin_ui_for_both_s3_callbacks(callba
     from litellm.integrations.custom_logger import CustomLogger
 
     assert "S3_LOG_PROMPTS_ONLY" in CustomLogger.get_callback_env_vars(callback_name)
+
+
+_PARTITION_START: Final = datetime(2026, 9, 29, 14, 5, 9, 123456)
+_PARTITION_ID: Final = "chatcmpl-partition"
+
+
+def _partition_payload(response_id: str = _PARTITION_ID) -> StandardLoggingPayload:
+    return StandardLoggingPayload(
+        id=response_id,
+        metadata={"user_api_key_team_alias": "team-a", "user_api_key_alias": "key-a"},
+        messages=[],
+    )
+
+
+def _partition_logger(
+    monkeypatch: pytest.MonkeyPatch, callback_params: dict[str, object], **kwargs: object
+) -> S3Logger:
+    import litellm
+
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {"s3_bucket_name": "test-bucket", "s3_region_name": "us-east-1", "s3_path": "logs", **callback_params},
+    )
+    return S3Logger(
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_use_team_prefix=True,
+        s3_use_key_prefix=True,
+        **kwargs,
+    )
+
+
+_DAILY_KEY: Final = f"logs/team-a/key-a/2026-09-29/time-14-05-09-123456_{_PARTITION_ID}.json"
+_HOURLY_KEY: Final = f"logs/team-a/key-a/2026-09-29/14/time-14-05-09-123456_{_PARTITION_ID}.json"
+
+
+@pytest.mark.parametrize(
+    ("callback_params", "expected_key"),
+    [
+        ({}, _DAILY_KEY),
+        ({"s3_partition_granularity": None}, _DAILY_KEY),
+        ({"s3_partition_granularity": "day"}, _DAILY_KEY),
+        ({"s3_partition_granularity": "hour"}, _HOURLY_KEY),
+    ],
+)
+def test_partition_granularity_sets_request_log_folder(
+    monkeypatch: pytest.MonkeyPatch, callback_params: dict[str, object], expected_key: str
+) -> None:
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    logger = _partition_logger(monkeypatch, callback_params)
+
+    element = logger.create_s3_batch_logging_element(_PARTITION_START, _partition_payload())
+
+    assert element is not None
+    assert element.s3_object_key == expected_key
+
+
+@pytest.mark.parametrize("invalid", ["hourly", "HOUR", "1", 1, True])
+def test_invalid_partition_granularity_warns_and_keeps_daily_folder(
+    monkeypatch: pytest.MonkeyPatch, invalid: object
+) -> None:
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    with patch("litellm.integrations.s3.verbose_logger") as mock_logger:
+        logger = _partition_logger(monkeypatch, {"s3_partition_granularity": invalid})
+        element = logger.create_s3_batch_logging_element(_PARTITION_START, _partition_payload())
+        second = logger.create_s3_batch_logging_element(_PARTITION_START, _partition_payload())
+
+    assert element is not None
+    assert second is not None
+    assert element.s3_object_key == second.s3_object_key == _DAILY_KEY
+    mock_logger.warning.assert_called_once()
+    assert mock_logger.warning.call_args.args[1:] == (invalid,)
+
+
+def test_partition_granularity_reads_admin_ui_env_var_below_callback_params(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("S3_PARTITION_GRANULARITY", "hour")
+
+    from_env = _partition_logger(monkeypatch, {}).create_s3_batch_logging_element(
+        _PARTITION_START, _partition_payload()
+    )
+    from_params = _partition_logger(monkeypatch, {"s3_partition_granularity": "day"}).create_s3_batch_logging_element(
+        _PARTITION_START, _partition_payload()
+    )
+
+    assert from_env is not None and from_env.s3_object_key == _HOURLY_KEY
+    assert from_params is not None and from_params.s3_object_key == _DAILY_KEY
+
+
+def test_partition_granularity_constructor_argument_and_os_environ_reference(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    monkeypatch.setenv("MY_S3_PARTITION", "hour")
+
+    from_ctor = _partition_logger(monkeypatch, {}, s3_partition_granularity="hour")
+    from_secret = _partition_logger(monkeypatch, {"s3_partition_granularity": "os.environ/MY_S3_PARTITION"})
+
+    for logger in (from_ctor, from_secret):
+        element = logger.create_s3_batch_logging_element(_PARTITION_START, _partition_payload())
+        assert element is not None and element.s3_object_key == _HOURLY_KEY
+
+
+def test_hourly_partition_long_key_keeps_hour_folder_within_s3_limit(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.constants import MAX_S3_OBJECT_KEY_BYTES
+
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    logger = _partition_logger(monkeypatch, {"s3_partition_granularity": "hour", "s3_path": "p" * 1100})
+
+    element = logger.create_s3_batch_logging_element(_PARTITION_START, _partition_payload("r" * 600))
+
+    assert element is not None
+    assert len(element.s3_object_key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES
+    assert re.search(r"/2026-09-29/14/[0-9a-f]{64}\.json$", element.s3_object_key)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("granularity", "hour_folder"), [("hour", True), ("day", False), (None, False)])
+async def test_audit_log_key_follows_audit_callback_params_partition_granularity(
+    monkeypatch: pytest.MonkeyPatch, granularity: str | None, hour_folder: bool
+) -> None:
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    logger = S3Logger(
+        s3_callback_params_override={
+            "s3_bucket_name": "audit-bucket",
+            "s3_path": "audit",
+            "s3_partition_granularity": granularity,
+        }
+    )
+
+    await logger.async_log_audit_log_event({"id": "audit-1"})
+
+    (element,) = logger.log_queue
+    match = re.fullmatch(
+        r"audit/audit_logs/\d{4}-\d{2}-\d{2}/(?:(\d{2})/)?(\d{2})-\d{2}-\d{2}_audit-1\.json", element.s3_object_key
+    )
+    assert match is not None, element.s3_object_key
+    assert (match.group(1) is not None) is hour_folder
+    if hour_folder:
+        assert match.group(1) == match.group(2)
+
+
+@pytest.mark.asyncio
+async def test_hourly_batch_file_upload_writes_one_file_per_hour_folder(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    logger = _partition_logger(monkeypatch, {"s3_partition_granularity": "hour"}, s3_batch_file_upload=True)
+    put = _RecordingPut()
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+    before = logger.create_s3_batch_logging_element(datetime(2026, 9, 29, 13, 59, 59), _partition_payload("before"))
+    after = logger.create_s3_batch_logging_element(datetime(2026, 9, 29, 14, 0, 1), _partition_payload("after"))
+    assert before is not None and after is not None
+    logger.log_queue = [before, after]
+
+    await logger.async_send_batch()
+
+    by_folder = {
+        re.sub(r"/batch_\d{2}-\d{2}-\d{2}_[0-9a-f]{32}\.jsonl$", "", url.split(".com/", 1)[-1]): data
+        for url, data, _headers in put.calls
+    }
+    assert sorted(by_folder) == ["logs/team-a/key-a/2026-09-29/13", "logs/team-a/key-a/2026-09-29/14"]
+    assert [json.loads(line)["id"] for line in (by_folder["logs/team-a/key-a/2026-09-29/13"] or "").splitlines()] == [
+        "before"
+    ]
+    assert [json.loads(line)["id"] for line in (by_folder["logs/team-a/key-a/2026-09-29/14"] or "").splitlines()] == [
+        "after"
+    ]
+
+
+@pytest.mark.parametrize("granularity", [None, "day", "hour"])
+def test_cold_storage_object_key_matches_the_uploaded_request_log_key(
+    monkeypatch: pytest.MonkeyPatch, granularity: str | None
+) -> None:
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    monkeypatch.setattr(
+        litellm,
+        "s3_callback_params",
+        {"s3_bucket_name": "test-bucket", "s3_path": "coldlogs", "s3_partition_granularity": granularity},
+    )
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
+    logger = S3Logger()
+    uploaded = logger.create_s3_batch_logging_element(
+        _PARTITION_START, StandardLoggingPayload(id=_PARTITION_ID, metadata={}, messages=[])
+    )
+
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    cold_key = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+        start_time=_PARTITION_START, response_id=_PARTITION_ID
+    )
+
+    assert uploaded is not None
+    assert cold_key == uploaded.s3_object_key
+    assert ("/2026-09-29/14/" in cold_key) is (granularity == "hour")
+
+
+def test_cold_storage_key_matches_upload_when_env_var_changes_mid_request(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    monkeypatch.setattr(litellm, "s3_callback_params", {"s3_bucket_name": "test-bucket", "s3_path": "coldlogs"})
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "s3_v2")
+    logger = S3Logger()
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+
+    cold_key = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+        start_time=_PARTITION_START, response_id=_PARTITION_ID
+    )
+    monkeypatch.setenv("S3_PARTITION_GRANULARITY", "hour")
+    uploaded = logger.create_s3_batch_logging_element(
+        _PARTITION_START,
+        StandardLoggingPayload(id=_PARTITION_ID, metadata={"cold_storage_object_key": cold_key}, messages=[]),
+    )
+
+    assert uploaded is not None
+    assert cold_key == uploaded.s3_object_key == f"coldlogs/2026-09-29/time-14-05-09-123456_{_PARTITION_ID}.json"
+
+
+def test_hour_upload_ignores_a_cold_storage_key_owned_by_another_logger(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    monkeypatch.delenv("S3_PARTITION_GRANULARITY", raising=False)
+    monkeypatch.setattr(
+        litellm, "s3_callback_params", {"s3_bucket_name": "test-bucket", "s3_partition_granularity": "hour"}
+    )
+    monkeypatch.setattr(litellm, "cold_storage_custom_logger", "gcs_bucket")
+    logger = S3Logger()
+    cold_key = StandardLoggingPayloadSetup._generate_cold_storage_object_key(
+        start_time=_PARTITION_START, response_id=_PARTITION_ID
+    )
+    uploaded = logger.create_s3_batch_logging_element(
+        _PARTITION_START,
+        StandardLoggingPayload(id=_PARTITION_ID, metadata={"cold_storage_object_key": cold_key}, messages=[]),
+    )
+
+    assert cold_key == f"2026-09-29/time-14-05-09-123456_{_PARTITION_ID}.json"
+    assert uploaded is not None
+    assert uploaded.s3_object_key == f"2026-09-29/14/time-14-05-09-123456_{_PARTITION_ID}.json"
+
+
+@pytest.mark.parametrize("callback_name", ["s3", "s3_v2"])
+def test_partition_granularity_is_exposed_to_admin_ui(callback_name: str) -> None:
+    from litellm.integrations.custom_logger import CustomLogger
+
+    assert "S3_PARTITION_GRANULARITY" in CustomLogger.get_callback_env_vars(callback_name)
 
 
 def _element(payload: dict[str, object], key_suffix: str) -> s3BatchLoggingElement:
@@ -3459,7 +3749,7 @@ def test_sync_upload_404_is_single_attempt_without_sleep() -> None:
     sync_client: Final = _SyncRecordingClient(_coded_failure_response(404, "NoSuchKey"))
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=sync_client),
         patch("time.sleep") as mock_sleep,
     ):
         logger.upload_data_to_s3(_element({"id": "sync-404"}, "sync-404"))
@@ -3489,7 +3779,7 @@ def test_sync_upload_retry_set_matches_base(status: int, expected_puts: int, exp
     sync_client: Final = _SyncRecordingClient(_coded_failure_response(status, "SlowDown"))
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=sync_client),
         patch("time.sleep") as mock_sleep,
     ):
         logger.upload_data_to_s3(_element({"id": "sync"}, "sync"))
@@ -3845,7 +4135,7 @@ def test_sync_terminal_code_is_retried_like_base_when_the_drop_flag_is_off() -> 
     logger.handle_callback_failure = failures
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep"),
     ):
         logger.upload_data_to_s3(_element({"id": "x"}, "x"))
@@ -3862,7 +4152,7 @@ def test_sync_terminal_code_is_retried_like_base_when_the_drop_flag_is_off() -> 
     mock_sync_client.put = MagicMock(side_effect=[_coded_failure_response(403, "InvalidRequest"), _ok_response()])
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep"),
     ):
         dropping.upload_data_to_s3(_element({"id": "x"}, "x"))
@@ -3884,7 +4174,7 @@ def test_sync_retry_lines_stay_at_warning_level(caplog) -> None:
 
     with (
         caplog.at_level("WARNING"),
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep"),
     ):
         logger.upload_data_to_s3(_element({"id": "x"}, "x"))
@@ -3962,7 +4252,7 @@ def test_init_bypassed_sync_logger_retries_a_503_and_reports_a_404() -> None:
     mock_sync_client.put = MagicMock(side_effect=[_transient_failure_response(503), _ok_response()])
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep"),
     ):
         logger.upload_data_to_s3(_element({"id": "x"}, "x"))
@@ -3973,7 +4263,7 @@ def test_init_bypassed_sync_logger_retries_a_503_and_reports_a_404() -> None:
 
     mock_sync_client.put = MagicMock(return_value=_coded_failure_response(404, None))
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep"),
     ):
         logger.upload_data_to_s3(_element({"id": "y"}, "y"))
@@ -4392,7 +4682,7 @@ def test_sync_upload_retries_access_denied_403(caplog):
     mock_sync_client.put = MagicMock(return_value=_coded_failure_response(403, "AccessDenied"))
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep") as mock_sleep,
     ):
         logger.upload_data_to_s3(test_element)
@@ -4421,7 +4711,7 @@ def test_sync_upload_drops_terminal_object_once_and_logs_it_only_when_opted_in(c
     mock_sync_client.put = MagicMock(return_value=_coded_failure_response(400, "EntityTooLarge"))
 
     with (
-        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("litellm.integrations.s3_v2.get_httpx_client", return_value=mock_sync_client),
         patch("time.sleep") as mock_sleep,
     ):
         logger.upload_data_to_s3(test_element)
@@ -4822,3 +5112,431 @@ async def test_send_batch_time_grows_linearly_with_the_batch() -> None:
     quadrupled: Final = await _timed_send_batch(8_000)
 
     assert quadrupled / baseline < 8, f"2k took {baseline:.3f}s, 8k took {quadrupled:.3f}s"
+
+
+class QueueOnlyS3LoggerWithoutCredentialsOrPeriodicFlush(S3Logger):
+    def __init__(self) -> None:
+        CustomLogger.__init__(self)
+        self.log_queue: list[s3BatchLoggingElement] = []
+        self.batch_size = 100
+        self.s3_strip_base64_files = False
+        self.s3_use_team_prefix = False
+        self.s3_use_key_prefix = False
+        self.s3_path = ""
+        self.s3_log_prompts_only = None
+        self.s3_batch_file_upload = False
+        self._upload_semaphore = asyncio.Semaphore(1)
+
+
+@pytest.mark.parametrize("stream", [False, True])
+@pytest.mark.parametrize("concurrent", [False, True])
+@pytest.mark.asyncio
+async def test_repeated_failure_notifications_upload_once(
+    monkeypatch: pytest.MonkeyPatch,
+    stream: bool,
+    concurrent: bool,
+) -> None:
+    sink: Final = QueueOnlyS3LoggerWithoutCredentialsOrPeriodicFlush()
+    upload: Final = AsyncMock(return_value=True)
+    monkeypatch.setattr(sink, "async_upload_data_to_s3", upload)
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [sink])
+    logging_obj: Final = Logging(
+        model="openai/gpt-4o-mini",
+        messages=[],
+        stream=stream,
+        call_type="acompletion",
+        start_time=datetime.now(),
+        litellm_call_id="synthetic-request",
+        function_id="synthetic-function",
+    )
+    error: Final = litellm.ServiceUnavailableError(
+        message="synthetic deployment-selection failure",
+        llm_provider="openai",
+        model="openai/gpt-4o-mini",
+    )
+
+    if concurrent:
+        await asyncio.gather(
+            *(logging_obj.async_failure_handler(error, "synthetic traceback") for _ in range(3))
+        )
+    else:
+        for _ in range(3):
+            await logging_obj.async_failure_handler(error, "synthetic traceback")
+
+    assert len(sink.log_queue) == 1
+    assert all(entry.payload["status"] == "failure" for entry in sink.log_queue)
+    await sink.async_send_batch()
+    await asyncio.sleep(0)
+    assert upload.await_count == 1
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest_asyncio.fixture(loop_scope="function")
+async def drain_logging_worker(isolate_litellm_state: None) -> AsyncIterator[None]:
+    yield
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS)
+
+LOGGING_WORKER_DRAIN_TIMEOUT_SECONDS: Final = LOGGING_WORKER_MAX_TIME_PER_COROUTINE + 5.0
+
+@pytest.fixture(scope="function", autouse=True)
+def isolate_litellm_state():
+    """
+    Per-function isolation fixture.
+
+    Resets litellm state to the true defaults captured at conftest import time,
+    then restores after the test. This prevents module-level mutations (e.g.
+    `litellm.num_retries = 3` at the top of test_langfuse_e2e_test.py) from
+    leaking across tests within the same xdist worker.
+    """
+    from litellm.litellm_core_utils import litellm_logging as ll_logging
+    from litellm.proxy.management_helpers import audit_logs as ll_audit_logs
+
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
+    yield
+    if hasattr(litellm, "in_memory_llm_clients_cache"):
+        litellm.in_memory_llm_clients_cache.flush_cache()
+    ll_logging._in_memory_loggers.clear()
+    ll_audit_logs._audit_log_callback_cache.clear()
+    for attr in _LIST_ATTRS:
+        if attr in _DEFAULTS:
+            default = _DEFAULTS[attr]
+            setattr(litellm, attr, default.copy() if isinstance(default, list) else default)
+    for attr in _SCALAR_ATTRS:
+        if attr in _DEFAULTS:
+            setattr(litellm, attr, _DEFAULTS[attr])
+
+_LIST_ATTRS = (
+    "callbacks",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+    "service_callback",
+    "pre_call_rules",
+    "post_call_rules",
+)
+
+_SCALAR_ATTRS = (
+    "set_verbose",
+    "cache",
+    "num_retries",
+    "num_retries_per_request",
+    "turn_off_message_logging",
+    "redact_messages_in_exceptions",
+    "redact_user_api_key_info",
+    "s3_callback_params",
+    "s3_audit_callback_params",
+    "datadog_params",
+    "vector_store_registry",
+)
+
+_DEFAULTS: Final = {
+    attr: getattr(litellm, attr).copy() if isinstance(getattr(litellm, attr), list) else getattr(litellm, attr)
+    for attr in (*_LIST_ATTRS, *_SCALAR_ATTRS)
+    if hasattr(litellm, attr)
+}
+
+@pytest.fixture(scope="module")
+def setup_and_teardown():
+    """
+    Module-scoped setup. Reloads litellm only in single-process mode
+    (skipped under xdist to avoid cross-worker interference).
+    """
+    import litellm
+
+    worker_id = os.environ.get("PYTEST_XDIST_WORKER", None)
+    if worker_id is None:
+        importlib.reload(litellm)
+        try:
+            if hasattr(litellm, "proxy") and hasattr(litellm.proxy, "proxy_server"):
+                import litellm.proxy.proxy_server
+
+                importlib.reload(litellm.proxy.proxy_server)
+        except Exception:
+            pass
+        if hasattr(litellm, "in_memory_llm_clients_cache"):
+            litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+
+@pytest.fixture
+def amazing_s3_retries(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "num_retries", 3)
+
+class _FakeS3Paginator:
+    def __init__(self, objects):
+        self.objects = objects
+
+    def paginate(self, Bucket):
+        keys = sorted(self.objects[Bucket])
+        if not keys:
+            return [{}]
+        return [{"Contents": [{"Key": key} for key in keys]}]
+
+class _FakeS3Client:
+    def __init__(self):
+        self.objects = defaultdict(dict)
+
+    def clear(self):
+        self.objects.clear()
+
+    def put_object(self, Bucket, Key, Body, **_kwargs):
+        self.objects[Bucket][Key] = Body
+        return {"ResponseMetadata": {"HTTPStatusCode": 200}}
+
+    def delete_object(self, Bucket, Key):
+        self.objects[Bucket].pop(Key, None)
+        return {"ResponseMetadata": {"HTTPStatusCode": 204}}
+
+    def get_paginator(self, name):
+        assert name == "list_objects_v2"
+        return _FakeS3Paginator(self.objects)
+
+    def list_objects(self, Bucket):
+        keys = sorted(self.objects[Bucket])
+        return {"Contents": [{"Key": key, "LastModified": 0} for key in keys]}
+
+_FAKE_S3_CLIENT = _FakeS3Client()
+
+@pytest.fixture
+def fake_s3_client(monkeypatch):
+    _FAKE_S3_CLIENT.clear()
+
+    def fake_boto3_client(service_name, *args, **kwargs):
+        assert service_name == "s3"
+        return _FAKE_S3_CLIENT
+
+    monkeypatch.setattr(boto3, "client", fake_boto3_client)
+    litellm.success_callback = []
+    litellm.callbacks = []
+    yield _FAKE_S3_CLIENT
+    litellm.success_callback = []
+    litellm.callbacks = []
+
+@pytest.mark.usefixtures(
+    "cancel_s3_periodic_flush_tasks",
+    "fake_s3_client",
+    "_vcr_outcome_gate",
+    "drain_logging_worker",
+    "isolate_litellm_state",
+    "setup_and_teardown",
+    "amazing_s3_retries",
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode,streaming", [(True, True), (True, False), (False, True), (False, False)])
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_basic_s3_logging(sync_mode, streaming):
+    verbose_logger.setLevel(level=logging.DEBUG)
+    litellm.success_callback = ["s3"]
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "load-testing-oct",
+        "s3_aws_secret_access_key": "os.environ/AWS_SECRET_ACCESS_KEY",
+        "s3_aws_access_key_id": "os.environ/AWS_ACCESS_KEY_ID",
+        "s3_region_name": "us-west-2",
+    }
+    litellm.set_verbose = True
+    response_id = None
+    if sync_mode is True:
+        response = litellm.completion(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "This is a test"}],
+            mock_response="It's simple to use and easy to get started",
+            stream=streaming,
+        )
+        if streaming:
+            for chunk in response:
+                response_id = chunk.id
+        else:
+            response_id = response.id
+        time.sleep(2)
+    else:
+        response = await litellm.acompletion(
+            model="gpt-5-mini",
+            messages=[{"role": "user", "content": "This is a test"}],
+            mock_response="It's simple to use and easy to get started",
+            stream=streaming,
+        )
+        if streaming:
+            async for chunk in response:
+                response_id = chunk.id
+        else:
+            response_id = response.id
+        await asyncio.sleep(2)
+
+    total_objects, all_s3_keys = list_all_s3_objects("load-testing-oct")
+
+    assert any(response_id in key for key in all_s3_keys)
+    s3 = boto3.client("s3")
+    for key in all_s3_keys:
+        s3.delete_object(Bucket="load-testing-oct", Key=key)
+
+@pytest.mark.usefixtures(
+    "cancel_s3_periodic_flush_tasks",
+    "fake_s3_client",
+    "_vcr_outcome_gate",
+    "drain_logging_worker",
+    "isolate_litellm_state",
+    "setup_and_teardown",
+    "amazing_s3_retries",
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [True])
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_basic_s3_v2_logging(streaming):
+    from litellm.integrations.s3_v2 import S3Logger
+
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "load-testing-oct",
+        "s3_aws_secret_access_key": "test-secret",
+        "s3_aws_access_key_id": "test-key",
+        "s3_region_name": "us-west-2",
+    }
+
+    s3_v2_logger = S3Logger(s3_flush_interval=1)
+    litellm.callbacks = [s3_v2_logger]
+
+    uploaded_keys: list = []
+
+    async def mock_upload(batch_logging_element):
+        uploaded_keys.append(batch_logging_element.s3_object_key)
+
+    s3_v2_logger.async_upload_data_to_s3 = mock_upload
+
+    litellm.set_verbose = True
+    response_id = None
+    response = await litellm.acompletion(
+        model="gpt-5-mini",
+        messages=[{"role": "user", "content": "This is a test"}],
+        mock_response="It's simple to use and easy to get started",
+        stream=streaming,
+    )
+    if streaming:
+        async for chunk in response:
+            response_id = chunk.id
+    else:
+        response_id = response.id
+
+    await asyncio.sleep(5)
+
+    assert len(uploaded_keys) > 0, "S3 upload was never called"
+    assert any(response_id in key for key in uploaded_keys), (
+        f"Expected response_id={response_id} in one of the uploaded S3 keys: {uploaded_keys}"
+    )
+
+@pytest.mark.usefixtures(
+    "cancel_s3_periodic_flush_tasks",
+    "fake_s3_client",
+    "_vcr_outcome_gate",
+    "drain_logging_worker",
+    "isolate_litellm_state",
+    "setup_and_teardown",
+    "amazing_s3_retries",
+)
+@pytest.mark.asyncio
+@pytest.mark.flaky(retries=3, delay=1)
+async def test_basic_s3_v2_logging_failure():
+    """Test that S3 v2 logger makes httpx PUT request when logging failures"""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.integrations.s3_v2 import S3Logger
+
+    s3_v2_logger = S3Logger(s3_flush_interval=1)
+
+    mock_response = MagicMock()
+    mock_response.status_code = 200
+    mock_response.raise_for_status = MagicMock()
+
+    s3_v2_logger.async_httpx_client = AsyncMock()
+    s3_v2_logger.async_httpx_client.put.return_value = mock_response
+
+    upload_called = False
+
+    async def mock_upload(batch_logging_element):
+        nonlocal upload_called
+        upload_called = True
+        url = f"https://test-bucket.s3.us-west-2.amazonaws.com/{batch_logging_element.s3_object_key}"
+        headers = {"Content-Type": "application/json"}
+        data = '{"model": "gpt-5-mini"}'
+
+        await s3_v2_logger.async_httpx_client.put(url=url, headers=headers, data=data)
+
+    s3_v2_logger.async_upload_data_to_s3 = mock_upload
+
+    litellm.callbacks = [s3_v2_logger]
+    litellm.s3_callback_params = {
+        "s3_bucket_name": "test-bucket",
+        "s3_aws_secret_access_key": "test-secret",
+        "s3_aws_access_key_id": "test-key",
+        "s3_region_name": "us-west-2",
+    }
+    litellm.set_verbose = True
+
+    try:
+        await litellm.acompletion(
+            model="gpt-5-mini",
+            api_key="invalid-api-key",
+            messages=[{"role": "user", "content": "This is a test"}],
+            mock_response=Exception("forced failure for S3 logging test"),
+        )
+    except Exception:
+        pass
+
+    await asyncio.sleep(5)
+
+    assert upload_called, "S3 upload method was not called"
+
+    s3_v2_logger.async_httpx_client.put.assert_called()
+
+    call_args = s3_v2_logger.async_httpx_client.put.call_args
+    assert call_args is not None
+    url = call_args[1]["url"] if "url" in call_args[1] else call_args[0][0]
+
+    assert "test-bucket.s3.us-west-2.amazonaws.com" in url
+
+    headers = call_args[1]["headers"]
+    assert headers["Content-Type"] == "application/json"
+
+    data = call_args[1]["data"]
+    assert data is not None
+    assert '"model": "gpt-5-mini"' in data
+
+def list_all_s3_objects(bucket_name):
+    s3 = boto3.client("s3")
+
+    all_s3_keys = []
+
+    paginator = s3.get_paginator("list_objects_v2")
+    total_objects = 0
+
+    for page in paginator.paginate(Bucket=bucket_name):
+        if "Contents" in page:
+            total_objects += len(page["Contents"])
+            all_s3_keys.extend([obj["Key"] for obj in page["Contents"]])
+
+    return total_objects, all_s3_keys
+
+class TestS3Logger(S3Logger):
+    def __init__(self, *args, **kwargs):
+        self.recorded_requests = {}
+        self.logged_standard_logging_payload = None
+        super().__init__(*args, **kwargs)
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.recorded_requests[response_obj["id"]] = start_time
+        self.logged_standard_logging_payload = kwargs["standard_logging_object"]
+        return await super().async_log_success_event(kwargs, response_obj, start_time, end_time)

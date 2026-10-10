@@ -34,19 +34,24 @@ from litellm.proxy.common_utils.callback_config_validation import (
     conflicting_span_scope_error,
     cross_entry_family_error,
 )
-from litellm.proxy.common_utils.callback_utils import (
-    _CALLBACK_VAR_ENCRYPTED_PREFIX,
+from litellm.proxy.common_utils.callback_utils import (  # noqa: F401  # legacy module exports
+    _CALLBACK_VAR_ENCRYPTED_PREFIX,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    CALLBACK_VAR_ENCRYPTED_PREFIX,
     decrypt_callback_vars,
     encrypt_callback_vars,
     is_sensitive_callback_key,
 )
-from litellm.proxy.litellm_pre_call_utils import (
-    _get_validated_callback_metadata,
+from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy module exports
+    _get_validated_callback_metadata,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     convert_key_logging_metadata_to_callback,
+    get_validated_callback_metadata,
 )
-from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN, team_access_denied
+from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, team_access_denied
 from litellm.proxy.management.teams.dependencies import get_team_access
-from litellm.proxy.management_endpoints.team_endpoints import _refresh_cached_team
+from litellm.proxy.management_endpoints.team_endpoints import (  # noqa: F401  # legacy module exports
+    _refresh_cached_team,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    refresh_cached_team,
+)
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
 
@@ -57,11 +62,11 @@ _CALLBACK_VARS_REDACTED: Final = "***REDACTED***"
 
 
 def _callback_config_error(message: str) -> HTTPException:
-    return HTTPException(status_code=400, detail={"error": message})  # mutable-ok: FastAPI detail contract
+    return HTTPException(status_code=400, detail={"error": message})
 
 
 def _validate_team_callback(data: "AddTeamCallback") -> None:
-    error: Final = callback_config_error(data.callback_name, data.callback_vars)
+    error: Final = callback_config_error(data.callback_name, data.callback_vars, data.callback_type)
     if error is not None:
         raise _callback_config_error(error)
 
@@ -106,16 +111,15 @@ def _mask_sensitive_callback_vars(callbacks: TeamCallbackMetadata) -> None:
     classified as sensitive would give the caller something it cannot use and
     cannot tell apart from a real value.
 
-    Masking in place rather than rebuilding the mapping keeps this under the
-    LIT002 mutable-collection-construction budget. It is safe because the only
-    caller passes an object it just built from a decrypted deep copy of the
-    row, so nothing here is reachable from the team's stored metadata.
+    Masking in place is safe because the only caller passes an object it just
+    built from a decrypted deep copy of the row, so nothing here is reachable
+    from the team's stored metadata.
     """
     if not callbacks.callback_vars:
         return
     for key in tuple(callbacks.callback_vars):
         value = callbacks.callback_vars[key]
-        if is_sensitive_callback_key(key) or str(value).startswith(_CALLBACK_VAR_ENCRYPTED_PREFIX):
+        if is_sensitive_callback_key(key) or str(value).startswith(CALLBACK_VAR_ENCRYPTED_PREFIX):
             callbacks.callback_vars[key] = _CALLBACK_VARS_REDACTED
 
 
@@ -148,7 +152,7 @@ def _resolve_team_callbacks(team_metadata: object) -> TeamCallbackMetadata:
         for entry in logging_entries if isinstance(logging_entries, list) else ():
             if not isinstance(entry, dict):
                 continue
-            callback = _get_validated_callback_metadata(item=entry, source="team-level read")
+            callback = get_validated_callback_metadata(item=entry, source="team-level read")
             if callback is None:
                 continue
             resolved = convert_key_logging_metadata_to_callback(data=callback, team_callback_settings_obj=resolved)
@@ -230,7 +234,7 @@ def _callback_error(status_code: int, message: str) -> HTTPException:
     """Build the ``{"error": ...}`` failure body the team callback endpoints return."""
     return HTTPException(
         status_code=status_code,
-        detail={"error": message},  # mutable-ok: the error response body is a JSON object
+        detail={"error": message},
     )
 
 
@@ -296,7 +300,7 @@ async def add_team_callbacks(
     ```
     curl -X POST 'http:/localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback' \
         -H 'Content-Type: application/json' \
-        -H 'Authorization: Bearer sk-1234' \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -d '{
         "callback_name": "langfuse",
         "callback_type": "success",
@@ -348,9 +352,7 @@ async def add_team_callbacks(
         # the stored ones and the credentials are encrypted at rest.
         decrypted_logging: Final = decrypt_callback_vars(team_metadata).get("logging")
         stored_entries: Final = decrypted_logging if isinstance(decrypted_logging, list) else ()
-        stored_entry_vars: Final = [  # mutable-ok: read-only input to the checks, never stored
-            entry.get("callback_vars") or {} for entry in stored_entries
-        ]
+        stored_entry_vars: Final = [entry.get("callback_vars") or {} for entry in stored_entries]
         scope_error: Final = conflicting_span_scope_error(data.callback_vars, stored_entry_vars)
         if scope_error is not None:
             raise _callback_config_error(scope_error)
@@ -395,14 +397,14 @@ async def add_team_callbacks(
             # `object_permission` is included so `_refresh_cached_team` doesn't
             # write a cached team with the relation nulled out — see
             # team_model_add for the full rationale.
-            include={"object_permission": True},  # mutable-ok: prisma include takes a dict literal
+            include={"object_permission": True},
         )
 
         if new_team_row is None:
             raise _callback_error(400, f"Team id = {team_id} does not exist. Please use a different team id.")
 
         # Without this a newly registered callback stays dormant for existing keys.
-        await _refresh_cached_team(
+        await refresh_cached_team(
             team_row=new_team_row,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
@@ -437,8 +439,8 @@ async def add_team_callbacks(
 
 @router.delete(
     "/team/{team_id:path}/callback/{callback_name}",
-    tags=["team management"],  # mutable-ok: FastAPI's route decorator takes a list of tags
-    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI's route decorator takes a list of dependencies
+    tags=["team management"],
+    dependencies=[Depends(user_api_key_auth)],
     response_model=TeamCallbackDeleteResponse,
 )
 @management_endpoint_wrapper
@@ -471,7 +473,7 @@ async def delete_team_callback(
     Example curl:
     ```
     curl -X DELETE 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback/langsmith' \
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     Covers callbacks registered through POST /team/{team_id}/callback and the Admin UI. Teams still
@@ -509,22 +511,22 @@ async def delete_team_callback(
         registered_callbacks: Final = team_metadata.get("logging")
         entries: Final = registered_callbacks if isinstance(registered_callbacks, list) else ()
 
-        remaining_callbacks: Final = [  # mutable-ok: metadata["logging"] is isinstance-checked for list downstream
+        remaining_callbacks: Final = [
             entry for entry in entries if not (isinstance(entry, dict) and entry.get("callback_name") == callback_name)
         ]
         if len(remaining_callbacks) == len(entries):
             raise _callback_error(404, f"callback_name = {callback_name} is not registered for team_id = {team_id}.")
 
-        updated_metadata: Final = {**team_metadata, "logging": remaining_callbacks}  # mutable-ok: persisted as JSON
+        updated_metadata: Final = {**team_metadata, "logging": remaining_callbacks}
         encrypted_metadata: Final[object] = encrypt_callback_vars(updated_metadata)
         team_metadata_json: Final = json.dumps(encrypted_metadata)
 
         updated_team: Final = await TeamRepository(prisma_client).table.update(
-            where={"team_id": team_id},  # mutable-ok: prisma where takes a dict literal
-            data={"metadata": team_metadata_json},  # mutable-ok: prisma data takes a dict literal
+            where={"team_id": team_id},
+            data={"metadata": team_metadata_json},
             # `object_permission` is included so `_refresh_cached_team` doesn't write a
             # cached team with the relation nulled out, see team_model_add for the rationale.
-            include={"object_permission": True},  # mutable-ok: prisma include takes a dict literal
+            include={"object_permission": True},
         )
 
         if updated_team is None:
@@ -532,7 +534,7 @@ async def delete_team_callback(
 
         # Request-time callback resolution reads the cached team, so without this
         # the removed callback keeps firing for live keys until the cache expires.
-        await _refresh_cached_team(
+        await refresh_cached_team(
             team_row=updated_team,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
@@ -607,7 +609,7 @@ async def disable_team_logging(
     Example curl:
     ```
     curl -X POST 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/disable_logging' \
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
 
@@ -652,7 +654,7 @@ async def disable_team_logging(
         team_metadata["callback_settings"] = team_callback_settings_obj.model_dump()
         # _get_dynamic_logging_metadata stops at metadata["logging"], where the API
         # and Admin UI register callbacks, without ever reading callback_settings.
-        team_metadata["logging"] = []  # mutable-ok: the disabled state is persisted as an empty JSON array
+        team_metadata["logging"] = []
         encrypted_metadata: Final[object] = encrypt_callback_vars(team_metadata)
         team_metadata_json: Final = json.dumps(encrypted_metadata)
 
@@ -663,7 +665,7 @@ async def disable_team_logging(
             # `object_permission` is included so `_refresh_cached_team` doesn't
             # write a cached team with the relation nulled out — see
             # team_model_add for the full rationale.
-            include={"object_permission": True},  # mutable-ok: prisma include takes a dict literal
+            include={"object_permission": True},
         )
 
         if updated_team is None:
@@ -674,7 +676,7 @@ async def disable_team_logging(
 
         # Request-time callback resolution reads the cached team, so without this
         # the DB says logging is off while live keys keep sending until it expires.
-        await _refresh_cached_team(
+        await refresh_cached_team(
             team_row=updated_team,
             user_api_key_cache=user_api_key_cache,
             proxy_logging_obj=proxy_logging_obj,
@@ -739,7 +741,7 @@ async def get_team_callbacks(
     Example curl:
     ```
     curl -X GET 'http://localhost:4000/team/dbe2f686-a686-4896-864a-4c3924458709/callback' \
-        -H 'Authorization: Bearer sk-1234'
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY"
     ```
 
     This will return the callback settings for the team with id dbe2f686-a686-4896-864a-4c3924458709

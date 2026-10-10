@@ -1,6 +1,7 @@
 import aimSecurityLogo from "../../../../../public/assets/logos/aim_security.jpeg";
 import aktoLogo from "../../../../../public/assets/logos/akto.svg";
 import aliceLogo from "../../../../../public/assets/logos/alice.svg";
+import llmShieldProxyLogo from "../../../../../public/assets/logos/llm_shield_proxy.svg";
 import conductLogo from "../../../../../public/assets/logos/conduct.png";
 import aporiaLogo from "../../../../../public/assets/logos/aporia.png";
 import bedrockLogo from "../../../../../public/assets/logos/bedrock.svg";
@@ -86,6 +87,7 @@ export const guardrail_provider_map: Record<string, string> = {
   QostodianNexus: "qostodian_nexus",
   Repelloai: "repelloai",
   Alice: "alice",
+  "LLM Shield Proxy": "llm_shield_proxy",
   Conduct: "conduct",
 };
 
@@ -112,6 +114,74 @@ export const toModeArray = (raw: unknown): string[] => {
   if (Array.isArray(raw)) return raw.filter((m): m is string => typeof m === "string");
   if (typeof raw === "string") return [raw];
   return [];
+};
+
+export type LoggingOnlyScope = "input" | "output" | "both";
+export type LoggingOnlyScopeChoice = "default" | LoggingOnlyScope;
+export type LoggingOnlyScopeOption = { label: string; value: LoggingOnlyScopeChoice };
+
+export const normalizeLoggingOnlyScopeChoice = (
+  choice: LoggingOnlyScopeChoice,
+  directionalScopeSupported: boolean,
+): LoggingOnlyScopeChoice =>
+  directionalScopeSupported || choice === "default" || choice === "both" ? choice : "default";
+
+const LOGGING_ONLY_SCOPE_OPTIONS: LoggingOnlyScopeOption[] = [
+  { label: "Default (request and response)", value: "default" },
+  { label: "Input only (request)", value: "input" },
+  { label: "Output only (response)", value: "output" },
+  { label: "Both (request and response)", value: "both" },
+];
+
+export const loggingOnlyScopeToChoice = (v: string | null | undefined): LoggingOnlyScopeChoice =>
+  v === "input" || v === "output" || v === "both" ? v : "default";
+
+export const choiceToLoggingOnlyScope = (choice: LoggingOnlyScopeChoice | undefined): LoggingOnlyScope | null =>
+  choice === "input" || choice === "output" || choice === "both" ? choice : null;
+
+export const getLoggingOnlyScopeUpdate = (
+  litellmParams: { logging_only_scope?: string | null } | null | undefined,
+  choice: LoggingOnlyScopeChoice | undefined,
+): { logging_only_scope?: LoggingOnlyScope | null } => {
+  if (choice === undefined || choice === loggingOnlyScopeToChoice(litellmParams?.logging_only_scope)) return {};
+  return { logging_only_scope: choiceToLoggingOnlyScope(choice) };
+};
+
+export const formatLoggingOnlyScope = (v: string | null | undefined): string => {
+  if (v === "input") return "Input only (request)";
+  if (v === "output") return "Output only (response)";
+  if (v === "both") return "Both (request and response)";
+  return "Default (request and response)";
+};
+
+export const modeIncludesLoggingOnly = (raw: unknown): boolean => {
+  if (toModeArray(raw).includes("logging_only")) return true;
+  if (raw === null || typeof raw !== "object") return false;
+
+  const { tags, default: fallback } = raw as { tags?: Record<string, unknown>; default?: unknown };
+  const taggedModes =
+    tags && typeof tags === "object"
+      ? Object.values(tags).some((mode) => toModeArray(mode).includes("logging_only"))
+      : false;
+  return toModeArray(fallback).includes("logging_only") || taggedModes;
+};
+
+export const getLoggingOnlyScopeOptions = (directionalScopeSupported: boolean): LoggingOnlyScopeOption[] =>
+  directionalScopeSupported
+    ? LOGGING_ONLY_SCOPE_OPTIONS
+    : LOGGING_ONLY_SCOPE_OPTIONS.filter((option) => option.value === "default" || option.value === "both");
+
+export const supportsDirectionalLoggingOnlyScope = (
+  settings: { providers_without_directional_logging_only_scope?: string[] } | null,
+  selectedProvider: string | null,
+): boolean => {
+  const providerKey = selectedProvider
+    ? (
+        guardrail_provider_map[selectedProvider] ??
+        Object.values(guardrail_provider_map).find((value) => value.toLowerCase() === selectedProvider.toLowerCase())
+      )?.toLowerCase()
+    : null;
+  return !providerKey || !settings?.providers_without_directional_logging_only_scope?.includes(providerKey);
 };
 
 export const formatGuardrailMode = (raw: unknown): string => {
@@ -211,6 +281,7 @@ export const guardrailLogoMap = {
   Straiker: straikerLogo.src,
   Alice: aliceLogo.src,
   "Microsoft Agent 365": microsoftAzureLogo.src,
+  "LLM Shield Proxy": llmShieldProxyLogo.src,
   "Conduct Guard": conductLogo.src,
 } satisfies Record<string, string>;
 
@@ -272,3 +343,86 @@ export function choiceToSkipToolForCreate(choice: SkipToolMessageChoice | undefi
   if (choice === "no") return false;
   return undefined;
 }
+
+export const GUARDRAIL_STREAM_SCOPES = ["both", "streaming", "non_streaming"] as const;
+export type GuardrailStreamScope = (typeof GUARDRAIL_STREAM_SCOPES)[number];
+
+export const STREAM_SCOPE_OPTIONS: { value: GuardrailStreamScope; label: string }[] = [
+  { value: "both", label: "Streaming and non-streaming" },
+  { value: "streaming", label: "Streaming only" },
+  { value: "non_streaming", label: "Non-streaming only" },
+];
+
+export const isGuardrailStreamScope = (value: unknown): value is GuardrailStreamScope =>
+  value === "both" || value === "streaming" || value === "non_streaming";
+
+export const streamScopeForMode = (raw: unknown, mode: string): GuardrailStreamScope => {
+  if (isGuardrailStreamScope(raw)) return raw;
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    const value = (raw as Record<string, unknown>)[mode];
+    if (isGuardrailStreamScope(value)) return value;
+  }
+  return "both";
+};
+
+export const streamScopeByModeFromConfig = (raw: unknown, modes: string[]): Record<string, GuardrailStreamScope> =>
+  Object.fromEntries(modes.map((mode) => [mode, streamScopeForMode(raw, mode)]));
+
+export const streamScopePayload = (
+  modes: string[],
+  scopes: Record<string, GuardrailStreamScope>,
+): GuardrailStreamScope | Record<string, GuardrailStreamScope> | undefined => {
+  const perMode: Record<string, GuardrailStreamScope> = Object.fromEntries(
+    modes.map((mode) => [mode, scopes[mode] ?? "both"]),
+  );
+  const values = Object.values(perMode);
+  if (values.length === 0 || values.every((scope) => scope === "both")) return undefined;
+  const unique = new Set(values);
+  if (unique.size === 1) return values[0];
+  return Object.fromEntries(Object.entries(perMode).filter((entry) => entry[1] !== "both"));
+};
+
+export const formatGuardrailStreamScope = (raw: unknown): string => {
+  if (isGuardrailStreamScope(raw)) {
+    return STREAM_SCOPE_OPTIONS.find((option) => option.value === raw)?.label ?? raw;
+  }
+  if (raw !== null && typeof raw === "object" && !Array.isArray(raw)) {
+    const entries = Object.entries(raw as Record<string, unknown>).filter(
+      (entry): entry is [string, GuardrailStreamScope] => isGuardrailStreamScope(entry[1]),
+    );
+    if (entries.length === 0) return "";
+    return entries.map(([mode, scope]) => `${mode}: ${formatGuardrailStreamScope(scope)}`).join(", ");
+  }
+  return "";
+};
+
+export const streamScopeForUpdate = (
+  modes: string[],
+  nextByMode: Record<string, GuardrailStreamScope>,
+  previousRaw: unknown,
+  previousModes: string[] = modes,
+): GuardrailStreamScope | Record<string, GuardrailStreamScope> | undefined => {
+  const previousMap: Record<string, unknown> =
+    previousRaw !== null && typeof previousRaw === "object" && !Array.isArray(previousRaw)
+      ? (previousRaw as Record<string, unknown>)
+      : {};
+  const preserved: Record<string, GuardrailStreamScope> = Object.fromEntries(
+    Object.entries(previousMap).filter(
+      (entry): entry is [string, GuardrailStreamScope] => !modes.includes(entry[0]) && isGuardrailStreamScope(entry[1]),
+    ),
+  );
+  const nextModes = [...modes, ...Object.keys(preserved)];
+  const nextStreamScope = streamScopePayload(nextModes, {
+    ...preserved,
+    ...Object.fromEntries(modes.map((mode) => [mode, nextByMode[mode] ?? "both"])),
+  });
+  const previousCompareModes = Object.keys(previousMap).length > 0 ? Object.keys(previousMap) : previousModes;
+  const previousStreamScope = streamScopePayload(
+    previousCompareModes,
+    streamScopeByModeFromConfig(previousRaw, previousCompareModes),
+  );
+  if (JSON.stringify(nextStreamScope ?? "both") === JSON.stringify(previousStreamScope ?? "both")) {
+    return undefined;
+  }
+  return nextStreamScope ?? "both";
+};

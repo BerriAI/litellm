@@ -156,6 +156,16 @@ spec:
                 port:
                   number: {{ $gatewayPort }}
           {{- end }}
+          {{- if or (eq (include "litellm.lens.mode" .) "bundled") (and (eq (include "litellm.lens.mode" .) "external") .Values.lensWorker.externalServiceName) }}
+          {{- $builtinPathKeys = append $builtinPathKeys "/lens-ingest|Prefix" }}
+          - path: /lens-ingest
+            pathType: Prefix
+            backend:
+              service:
+                name: {{ .Values.lensWorker.externalServiceName | default (printf "%s-lens-worker" (include "litellm.fullname" .)) }}
+                port:
+                  number: {{ .Values.lensWorker.service.port }}
+          {{- end }}
           {{- /*
             --- Operator-supplied extra paths (ingress.extraPaths) ---
             Rendered after every built-in path so an entry can never take
