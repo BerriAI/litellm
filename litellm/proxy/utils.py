@@ -27,6 +27,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
+from enum import Enum
 from functools import partial
 from itertools import takewhile
 from types import MappingProxyType
@@ -4651,6 +4652,12 @@ class _StaleReadEngine:
         return self.wrapper is current and self.generation == current.engine_generation
 
 
+class EngineLiveness(Enum):
+    ALIVE = "alive"
+    DEAD = "dead"
+    UNOBSERVABLE = "unobservable"
+
+
 class PrismaClient:
     spend_log_transactions: list = []
     _spend_log_transactions_lock = asyncio.Lock()
@@ -6057,8 +6064,8 @@ class PrismaClient:
             )
             raise e
 
-    def _get_engine_pid(self) -> int:
-        """Get the PID of the writer's engine subprocess, or 0 if unavailable.
+    def _get_engine_process(self) -> object:
+        """Get the writer's engine subprocess, or None if unavailable.
 
         Must never raise: prisma's ``_engine`` property raises
         ``ClientNotConnectedError`` on a disconnected client, and an exception
@@ -6067,27 +6074,38 @@ class PrismaClient:
         try:
             prisma_obj: Final = self.writer_db._original_prisma
             if prisma_obj.is_connected() is not True:
-                return 0
+                return None
             engine: Final = prisma_obj._engine  # pyright: ignore[reportPrivateUsage]  # Prisma engine internals
-            process: Final = getattr(engine, "process", None) if engine is not None else None
-            if process is not None:
-                pid: Final[object] = process.pid
-                if isinstance(pid, int):
-                    return pid
+            process: Final[object] = getattr(engine, "process", None)
         except (AttributeError, TypeError):
-            pass
-        return 0
+            return None
+        return process
+
+    def _get_engine_pid(self) -> int:
+        pid: Final[object] = getattr(self._get_engine_process(), "pid", None)
+        return pid if isinstance(pid, int) else 0
 
     def _is_engine_alive(self) -> bool:
-        if self._engine_pid <= 0:
-            return True
+        return self._engine_pid <= 0 or self._probe_engine() is not EngineLiveness.DEAD
+
+    def _probe_engine(self) -> EngineLiveness:
+        if sys.platform == "win32":
+            return EngineLiveness.ALIVE if self._is_engine_alive_windows() else EngineLiveness.DEAD
         try:
             os.kill(self._engine_pid, 0)
-            return True
+            return EngineLiveness.ALIVE
         except ProcessLookupError:
-            return False
+            return EngineLiveness.DEAD
         except (PermissionError, OSError):
+            return EngineLiveness.UNOBSERVABLE
+
+    def _is_engine_alive_windows(self) -> bool:
+        # os.kill(pid, 0) on Windows calls TerminateProcess, so liveness must come from Popen.poll()
+        process: Final = self._get_engine_process()
+        poll: Final[object] = getattr(process, "poll", None)
+        if getattr(process, "pid", None) != self._engine_pid or not callable(poll):
             return True
+        return poll() is None
 
     @staticmethod
     def _reap_all_zombies() -> set:
@@ -6301,43 +6319,43 @@ class PrismaClient:
         )
 
     async def _poll_engine_proc(self) -> None:
-        """poll via os.kill(pid, 0) every 1s.
+        """Poll engine process liveness every 1s via _probe_engine().
         Only used when BOTH waitpid thread and pidfd are unavailable
-        (e.g., PID is not our child process and pidfd_open fails)
+        (e.g., on Windows, or when PID is not our child process).
         """
         while self._watching_engine and self._engine_pid > 0:
-            try:
-                os.kill(self._engine_pid, 0)
-            except ProcessLookupError:
-                dead_pid = self._engine_pid
-                if self._consume_expected_death(dead_pid):
-                    verbose_proxy_logger.info(
-                        "prisma-query-engine PID %s gone as part of a planned "
-                        "restart; not reconnecting (engine already replaced).",
-                        dead_pid,
-                    )
+            match self._probe_engine():
+                case EngineLiveness.ALIVE:
+                    await asyncio.sleep(1)
+                case EngineLiveness.UNOBSERVABLE:
+                    verbose_proxy_logger.debug("Cannot signal PID %s; stopping engine poll.", self._engine_pid)
                     self._cleanup_engine_watcher()
                     return
-                verbose_proxy_logger.error(
-                    "prisma-query-engine PID %s gone; triggering reconnect.",
-                    dead_pid,
-                )
-                self._engine_confirmed_dead = True
-                self._reap_all_zombies()
-                self._cleanup_engine_watcher()
-                await self.attempt_db_reconnect(
-                    reason="engine_process_death",
-                    force=True,
-                )
-                return
-            except (PermissionError, OSError):
-                verbose_proxy_logger.debug(
-                    "Cannot signal PID %s; stopping engine poll.",
-                    self._engine_pid,
-                )
-                self._cleanup_engine_watcher()
-                return
-            await asyncio.sleep(1)
+                case EngineLiveness.DEAD:
+                    await self._handle_polled_engine_death()
+                    return
+
+    async def _handle_polled_engine_death(self) -> None:
+        dead_pid: Final = self._engine_pid
+        if self._consume_expected_death(dead_pid):
+            verbose_proxy_logger.info(
+                "prisma-query-engine PID %s gone as part of a planned "
+                "restart; not reconnecting (engine already replaced).",
+                dead_pid,
+            )
+            self._cleanup_engine_watcher()
+            return
+        verbose_proxy_logger.error(
+            "prisma-query-engine PID %s gone; triggering reconnect.",
+            dead_pid,
+        )
+        self._engine_confirmed_dead = True
+        self._reap_all_zombies()
+        self._cleanup_engine_watcher()
+        await self.attempt_db_reconnect(
+            reason="engine_process_death",
+            force=True,
+        )
 
     def _cleanup_engine_watcher(self) -> None:
         """Clean up pidfd reader, waitpid thread ref, or stop polling and reset state."""
