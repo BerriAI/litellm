@@ -48,7 +48,10 @@ describe("decisionProvidersForGroups", () => {
   });
 
   it("excludes groups with a null or missing mode", () => {
-    const noMode = [{ model_group: "legacy-eval", providers: ["typesafe"] }, { model_group: "unset-eval", providers: ["typesafe"], mode: null }];
+    const noMode = [
+      { model_group: "legacy-eval", providers: ["typesafe"] },
+      { model_group: "unset-eval", providers: ["typesafe"], mode: null },
+    ];
 
     expect(decisionProvidersForGroups(["typesafe"], noMode)).toEqual([]);
     expect(decisionModelsForProvider(noMode, "typesafe")).toEqual([]);
