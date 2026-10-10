@@ -211,6 +211,15 @@ def _with_measured_size(file_object: OpenAIFileObject, size_bytes: int | None) -
     return file_object.model_copy(update={"bytes": size_bytes})
 
 
+def _over_stored_object(file_object: OpenAIFileObject, stored_object: OpenAIFileObject | None) -> OpenAIFileObject:
+    """Refreshed details for a stored row, keeping its size when none is reported and the earlier created_at."""
+    if stored_object is None:
+        return file_object
+    return _with_measured_size(file_object, stored_object.bytes).model_copy(
+        update={"created_at": min(file_object.created_at, stored_object.created_at)}
+    )
+
+
 def _proxy_llm_router() -> Router | None:
     import litellm.proxy.proxy_server as proxy_server_module
 
@@ -855,9 +864,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
     ) -> OpenAIFileObject | None:
         """Save refreshed details, keeping a known size, only over the row as read; drop the cached copy if a newer write won."""
         stored_object: Final = _parse_managed_file_object(stored.file_object, stored.unified_file_id)
-        sized_file_object: Final = _with_measured_size(
-            file_object, stored_object.bytes if stored_object is not None else None
-        )
+        sized_file_object: Final = _over_stored_object(file_object, stored_object)
         if not await ManagedFileRepository(self.prisma_client).update_file_object(
             stored.unified_file_id,
             sized_file_object,
@@ -2003,7 +2010,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                         stored_file_object, refreshed_file_object
                     )
                     return _public_file_object(
-                        saved_file_object or _with_measured_size(refreshed_file_object, file_object.bytes), file_id
+                        saved_file_object or _over_stored_object(refreshed_file_object, file_object), file_id
                     )
                 except Exception as error:
                     verbose_logger.warning(
