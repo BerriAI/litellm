@@ -48,6 +48,13 @@ use super::*;
     ("authorization", "Bearer caller"),
     &["x-api-key"]
 )]
+#[case::openrouter_key_becomes_bearer(
+    "openrouter",
+    Some("sk-or"),
+    &[],
+    ("authorization", "Bearer sk-or"),
+    &["x-api-key"]
+)]
 #[case::anthropic_oauth_key_becomes_bearer(
     "anthropic",
     Some("sk-ant-oat01-token"),
@@ -88,6 +95,8 @@ async fn credentials_become_exactly_one_auth_header(
 #[case::anthropic("anthropic")]
 #[case::azure_ai("azure_ai")]
 #[case::deepseek("deepseek")]
+#[case::edenai("edenai")]
+#[case::openrouter("openrouter")]
 #[tokio::test]
 async fn a_call_without_credentials_fails_before_sending(
     call: MessagesCall,
@@ -126,6 +135,8 @@ async fn a_call_without_credentials_fails_before_sending(
 #[case::azure_ai(MODEL, Some("azure_ai"), "", "/anthropic/v1/messages")]
 #[case::deepseek(MODEL, Some("deepseek"), "", "/anthropic/v1/messages")]
 #[case::deepseek_openai_compatible_base(MODEL, Some("deepseek"), "/beta", "/anthropic/v1/messages")]
+#[case::edenai(MODEL, Some("edenai"), "/v3", "/v3/v1/messages")]
+#[case::openrouter(MODEL, Some("openrouter"), "/api/v1", "/api/v1/messages")]
 #[case::provider_from_model_prefix("anthropic/claude-sonnet-4-5", None, "", "/v1/messages")]
 #[tokio::test]
 async fn each_provider_posts_to_its_messages_endpoint(

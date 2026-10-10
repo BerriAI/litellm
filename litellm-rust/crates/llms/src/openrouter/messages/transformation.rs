@@ -1,10 +1,8 @@
 use litellm_llms_types::{
     billing::BilledAmount,
     formats::messages::{MessagesRequest, MessagesResponse},
-    providers::edenai::EdenAIResponseExtension,
 };
 use litellm_router_types::LitellmParams;
-use serde_json::Value;
 
 use crate::{
     Error,
@@ -14,21 +12,22 @@ use crate::{
         transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
     },
     openai_like::messages::transformation::{
-        compatible_host_environment, compatible_host_url, portable_cache_control,
-        without_billing_blocks,
+        compatible_host_environment, compatible_host_url, without_billing_blocks,
     },
 };
 
-const API_KEY_ENV: &str = "EDENAI_API_KEY";
-const API_BASE_ENV: &str = "EDENAI_API_BASE";
-const DEFAULT_BASE: &str = "https://api.edenai.run/v3";
+const API_KEY_ENV: &str = "OPENROUTER_API_KEY";
+const API_BASE_ENV: &str = "OPENROUTER_API_BASE";
+const DEFAULT_BASE: &str = "https://openrouter.ai/api/v1";
 
-/// Eden AI resells Claude behind its own bearer key, accepts only portable cache hints, and
-/// reports the amount it billed as a top-level `cost` on the response.
-pub struct EdenAIAnthropicMessagesConfig;
-pub const EDENAI_MESSAGES_CONFIG: EdenAIAnthropicMessagesConfig = EdenAIAnthropicMessagesConfig;
+/// OpenRouter serves the Anthropic Messages API at `/api/v1/messages` behind its own bearer
+/// key, passes extended cache hints through, and reports the amount it billed as `usage.cost`
+/// on the response and on the final stream usage.
+pub struct OpenRouterAnthropicMessagesConfig;
+pub const OPENROUTER_MESSAGES_CONFIG: OpenRouterAnthropicMessagesConfig =
+    OpenRouterAnthropicMessagesConfig;
 
-impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
+impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
     fn validate_environment(
         &self,
         headers: Headers,
@@ -37,7 +36,7 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
         _params: &LitellmParams,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
-        compatible_host_environment(headers, api_key, "Eden AI", API_KEY_ENV, env)
+        compatible_host_environment(headers, api_key, "OpenRouter", API_KEY_ENV, env)
     }
 
     fn get_complete_url(
@@ -76,13 +75,10 @@ impl BaseMessagesConfig for EdenAIAnthropicMessagesConfig {
         update_headers_with_anthropic_beta(headers, request)
     }
 
-    fn wire_body(&self, body: Value) -> Value {
-        portable_cache_control(body)
-    }
-
     fn reported_cost(&self, response: &MessagesResponse) -> Option<serde_json::Number> {
-        let extension: EdenAIResponseExtension =
-            serde_json::from_value(Value::Object(response.extra.clone())).ok()?;
-        extension.cost.map(BilledAmount::into_number)
+        let cost = response.usage.as_ref()?.get("cost")?.clone();
+        serde_json::from_value::<BilledAmount>(cost)
+            .ok()
+            .map(BilledAmount::into_number)
     }
 }

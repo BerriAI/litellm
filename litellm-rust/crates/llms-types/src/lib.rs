@@ -4,6 +4,10 @@ macro_rules_attribute::attribute_alias! {
         #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))];
 }
 
+mod error;
+pub use error::InvalidBilledAmount;
+
+pub mod billing;
 pub mod formats;
 pub mod headers;
 pub mod json_schema;

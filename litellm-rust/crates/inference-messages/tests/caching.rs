@@ -242,6 +242,17 @@ async fn messages_cache_identity_follows_resolved_configuration_and_request_call
     second.verify().await;
 }
 
+fn priced_response(provider: &str, cost: &Value) -> Value {
+    let (top_level, usage_cost) = match provider {
+        "edenai" => (cost.clone(), Value::Null),
+        "openrouter" => (Value::Null, cost.clone()),
+        other => panic!("no reported-cost placement for {other}"),
+    };
+    json!({"id": "msg_cost", "type": "message", "role": "assistant", "model": "native-test",
+        "content": [{"type": "text", "text": "answer"}], "stop_reason": "end_turn", "stop_sequence": null,
+        "usage": {"input_tokens": 3, "output_tokens": 2, "cost": usage_cost}, "cost": top_level})
+}
+
 #[rstest]
 #[case::reported(json!(0.37), Some(0.37))]
 #[case::free(json!(0), Some(0.0))]
@@ -252,19 +263,18 @@ async fn provider_reported_cost_is_delivered_once_and_never_charged_for_a_cache_
     cache: Arc<dyn ResponseCacheService>,
     #[case] cost: Value,
     #[case] expected: Option<f64>,
+    #[values("edenai", "openrouter")] provider: &str,
 ) {
     use litellm_inference_messages::{MessagesCall, MessagesCallResponse};
-    let response = json!({"id": "msg_cost", "type": "message", "role": "assistant", "model": "native-test",
-        "content": [{"type": "text", "text": "answer"}], "stop_reason": "end_turn", "stop_sequence": null,
-        "usage": {"input_tokens": 3, "output_tokens": 2}, "cost": cost});
-    let upstream = support::upstream([support::json_response(response)]).await;
+    let response = priced_response(provider, &cost);
+    let upstream = support::upstream([support::json_response(response.clone())]).await;
     let hooks = ChangingHooks::default();
     let route = support::messages_route(litellm_inference_testing::no_secrets())
         .with_cache(ScopedCache::new(cache, CacheScope::Shared));
     let request = || {
         MessagesCall {
         body: serde_json::from_value(json!({"model": "native-test", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16})).unwrap(),
-        api_key: Some("eden-key".into()), api_base: Some(upstream.uri()), custom_llm_provider: Some("edenai".into()),
+        api_key: Some("host-key".into()), api_base: Some(upstream.uri()), custom_llm_provider: Some(provider.into()),
         litellm_params: Default::default(), extra_headers: None, provider_specific_header: None,
         timeout: None, shaping: Default::default(),
     }
@@ -277,7 +287,9 @@ async fn provider_reported_cost_is_delivered_once_and_never_charged_for_a_cache_
         panic!("expected Messages responses");
     };
     assert_eq!(first, second);
-    assert_eq!(first.extra.get("cost"), Some(&cost));
+    let public = serde_json::to_value(&first).unwrap();
+    assert_eq!(public["cost"], response["cost"]);
+    assert_eq!(public["usage"]["cost"], response["usage"]["cost"]);
     assert_eq!(support::received(&upstream).await.len(), 1);
     let facts = hooks.facts.lock().unwrap();
     let [provider, cached] = facts.as_slice() else {

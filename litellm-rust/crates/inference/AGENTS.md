@@ -71,7 +71,9 @@
 - `cache-response` owns cache policy, namespacing, scope encoding, versioned envelopes, and freshness
 - The SDK explicitly chooses shared scope. The gateway derives isolated scope from authenticated identity before attaching its service
 - `ExecutionFacts` are delivered through the awaited `ResultReady` host operation for both provider and cached results, before public response processing or stream opening
-  - facts carry resolved model/provider and result source, including the hit key
+  - facts carry resolved model/provider, result source including the hit key, and the settled `Cost`
+  - `Cost` is decided once, by `Cost::settle(&source, reported)` in the route: a cache hit is `CacheHit`, a provider figure from the config's `reported_cost` is `Reported`, anything else is `Deferred` and the host estimates. Streams settle as `Deferred` until a stream-end handoff exists
+  - no other layer re-derives cost. A provider contributes only `reported_cost`, a host only records what it is handed
   - usage remains in the typed response or delivered stream, where completion and cancellation determine what was actually reported
   - passive observation is not an accounting delivery mechanism
 - Inference does not calculate prices, charge budgets, or update rate-limit counters

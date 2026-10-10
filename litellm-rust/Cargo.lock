@@ -4202,6 +4202,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "strum",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

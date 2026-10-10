@@ -17,6 +17,7 @@ The same ownership rule applies to Messages, Responses, Chat Completions, OCR, a
   - Provider capability checks, defaults, authentication, header selection, and transformations remain in `llms`
 
 - Keep format-independent data helpers such as `headers`, `recognized`, and `serde_compat` at the crate root
+  - `billing::BilledAmount` is the one representation of an amount a provider reports having billed: a JSON number or numeric string, finite and non-negative, or a deserialization error. Provider extensions that carry a billed figure (`providers::openrouter::OpenRouterUsage`, `providers::edenai::EdenAIResponseExtension`) use it instead of a raw number
 
 - Shared request/response bodies, message and content-block enums, usage records, tool-call chunks, stream-event payloads, and protocol error bodies belong here
   - This includes LiteLLM's normalized response contracts and extensions, not just exact upstream schemas
