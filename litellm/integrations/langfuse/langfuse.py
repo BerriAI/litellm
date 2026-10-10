@@ -15,6 +15,11 @@ from packaging.version import Version
 import litellm
 from litellm._logging import verbose_logger
 from litellm.constants import MAX_LANGFUSE_INITIALIZED_CLIENTS
+from litellm.integrations.langfuse.field_cap import (
+    MAX_FIELD_BYTES_METADATA_KEY,
+    cap_payload,
+    resolve_max_field_bytes,
+)
 from litellm.integrations.langfuse.langfuse_mock_client import (
     create_mock_langfuse_client,
     should_use_langfuse_mock,
@@ -658,6 +663,8 @@ class LangFuseLogger:
             # Add default langfuse tags
             tags = self.add_default_langfuse_tags(tags=tags, kwargs=kwargs, metadata=metadata)
 
+            max_field_bytes: Final = resolve_max_field_bytes(clean_metadata.pop(MAX_FIELD_BYTES_METADATA_KEY, None))
+
             session_id: Final = clean_metadata.pop("session_id", None)
             trace_name = cast(str | None, clean_metadata.pop("trace_name", None))
             trace_id = clean_metadata.pop("trace_id", None)
@@ -699,15 +706,23 @@ class LangFuseLogger:
             )
 
             # Apply custom masking function if provided
-            masked_input: Final[object] = (
-                self._apply_masking_function(input, masking_function)
-                if masking_function is not None and callable(masking_function)
-                else input
+            masked_input: Final[object] = cap_payload(
+                cast(  # cast-ok: unknown-typed logging payload; passes through cap_payload unchanged
+                    "object",
+                    self._apply_masking_function(input, masking_function)
+                    if masking_function is not None and callable(masking_function)
+                    else input,
+                ),
+                max_field_bytes,
             )
-            masked_output: Final[object] = (
-                self._apply_masking_function(output, masking_function)
-                if masking_function is not None and callable(masking_function)
-                else output
+            masked_output: Final[object] = cap_payload(
+                cast(  # cast-ok: unknown-typed logging payload; passes through cap_payload unchanged
+                    "object",
+                    self._apply_masking_function(output, masking_function)
+                    if masking_function is not None and callable(masking_function)
+                    else output,
+                ),
+                max_field_bytes,
             )
 
             clean_metadata = redact_user_api_key_info(metadata=clean_metadata)
@@ -869,11 +884,17 @@ class LangFuseLogger:
                 "input": masked_input if not mask_input else "redacted-by-litellm",
                 "output": masked_output if not mask_output else "redacted-by-litellm",
                 "cost_details": {"total": cost} if usage is not None and isinstance(cost, (int, float)) else None,
-                "metadata": {
-                    **log_requester_metadata(redact_user_api_key_info(metadata=allowlisted_metadata)),  # pyright: ignore[reportArgumentType]  # TypedDict in, plain metadata dict out
-                    **enrichments,
-                    **_lookup_ids(litellm_call_id, response_obj),
-                },
+                "metadata": cap_payload(
+                    cast(  # cast-ok: unknown-typed logging payload; passes through cap_payload unchanged
+                        "object",
+                        {
+                            **log_requester_metadata(redact_user_api_key_info(metadata=allowlisted_metadata)),  # pyright: ignore[reportArgumentType]  # TypedDict in, plain metadata dict out
+                            **enrichments,
+                            **_lookup_ids(litellm_call_id, response_obj),
+                        },
+                    ),
+                    max_field_bytes,
+                ),
                 "version": _optional_str(clean_metadata.pop("version", None)),
             }
 
@@ -906,15 +927,47 @@ class LangFuseLogger:
                 name=trace_params.get("name"),
                 user_id=trace_params.get("user_id"),
                 session_id=trace_params.get("session_id"),
-                version=trace_params.get("version"),
+                version=cap_payload(
+                    cast(  # cast-ok: unknown-typed payload
+                        "object",
+                        trace_params.get("version"),
+                    ),
+                    max_field_bytes,
+                ),
                 release=trace_params.get("release"),
-                tags=trace_params.get("tags"),
-                metadata=trace_params.get("metadata"),
+                tags=cap_payload(
+                    cast(  # cast-ok: unknown-typed payload
+                        "object",
+                        trace_params.get("tags"),
+                    ),
+                    max_field_bytes,
+                ),
+                metadata=cap_payload(
+                    cast(  # cast-ok: unknown-typed payload
+                        "object",
+                        trace_params.get("metadata"),
+                    ),
+                    max_field_bytes,
+                ),
                 public=trace_public,
-                input=None if generation_is_trace_root and trace_input == generation_params["input"] else trace_input,
+                input=None
+                if generation_is_trace_root and trace_input == generation_params["input"]
+                else cap_payload(
+                    cast(  # cast-ok: unknown-typed payload
+                        "object",
+                        trace_input,
+                    ),
+                    max_field_bytes,
+                ),
                 output=None
                 if generation_is_trace_root and trace_output == generation_params["output"]
-                else trace_output,
+                else cap_payload(
+                    cast(  # cast-ok: unknown-typed payload
+                        "object",
+                        trace_output,
+                    ),
+                    max_field_bytes,
+                ),
             )
             generation_attributes: Final = observation_attributes(
                 observation_type="generation",
@@ -925,7 +978,13 @@ class LangFuseLogger:
                 status_message=generation_params.get("status_message"),
                 version=generation_params["version"],
                 model=model_name,
-                model_parameters=optional_params,
+                model_parameters=cap_payload(
+                    cast(  # cast-ok: unknown-typed payload
+                        "object",
+                        optional_params,
+                    ),
+                    max_field_bytes,
+                ),
                 usage_details=usage_details,
                 cost_details=generation_params["cost_details"],
                 completion_start_time=kwargs.get("completion_start_time", None),
@@ -944,10 +1003,24 @@ class LangFuseLogger:
             )
             try:
                 log_provider_specific_information_as_span(
-                    tracing=self.tracing, parent=generation, enrichments=enrichments
+                    tracing=self.tracing,
+                    parent=generation,
+                    enrichments=cast(  # cast-ok: cap_payload returns object; parameter wants Mapping
+                        "Mapping[str, Any]",
+                        cap_payload(
+                            cast(  # cast-ok: unknown-typed payload
+                                "object",
+                                enrichments,
+                            ),
+                            max_field_bytes,
+                        ),
+                    ),
                 )
                 self._log_guardrail_information_as_span(
-                    tracing=self.tracing, parent=generation, standard_logging_object=standard_logging_object
+                    tracing=self.tracing,
+                    parent=generation,
+                    standard_logging_object=standard_logging_object,
+                    max_field_bytes=max_field_bytes,
                 )
             finally:
                 generation.end(end_time)
@@ -1095,6 +1168,7 @@ class LangFuseLogger:
         tracing: "LangfuseTracing",
         parent: "LangfuseObservation",
         standard_logging_object: StandardLoggingPayload | None,
+        max_field_bytes: int,
     ):
         """
         Log guardrail information as a span
@@ -1132,8 +1206,20 @@ class LangFuseLogger:
                 start_time=guardrail_entry.get("start_time", None),
                 attributes=observation_attributes(
                     observation_type="span",
-                    input=guardrail_entry.get("guardrail_request", None),
-                    output=guardrail_entry.get("guardrail_response", None),
+                    input=cap_payload(
+                        cast(  # cast-ok: unknown-typed payload
+                            "object",
+                            guardrail_entry.get("guardrail_request", None),
+                        ),
+                        max_field_bytes,
+                    ),
+                    output=cap_payload(
+                        cast(  # cast-ok: unknown-typed payload
+                            "object",
+                            guardrail_entry.get("guardrail_response", None),
+                        ),
+                        max_field_bytes,
+                    ),
                     metadata=MappingProxyType(
                         {
                             "guardrail_name": guardrail_entry.get("guardrail_name", None),
