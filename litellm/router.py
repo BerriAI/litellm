@@ -892,6 +892,29 @@ def as_output_cap(value: object) -> int | None:
     return cap if cap >= 0 else None
 
 
+def stamped_client_ceiling(request_kwargs: Mapping[str, object]) -> Mapping[str, int] | None:
+    """The output ceiling carriers the caller sent, as stamped by the first auto-router pass that
+    pinned a tier ceiling, or None when no pass has stamped this request. The stamp sits in a
+    metadata bucket a caller can also write, so only the three carriers survive, as integers."""
+    stamped: Final = next(
+        (
+            bucket.get(CLIENT_OUTPUT_CEILING_METADATA_KEY)
+            for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata"))
+            if isinstance(bucket, dict) and CLIENT_OUTPUT_CEILING_METADATA_KEY in bucket
+        ),
+        None,
+    )
+    if not isinstance(stamped, dict):
+        return None
+    return MappingProxyType(
+        {
+            carrier: cap
+            for carrier, value in stamped.items()
+            if carrier in OUTPUT_TOKEN_CEILING_PARAMS and (cap := as_output_cap(value)) is not None
+        }
+    )
+
+
 class Router:
     @property
     def _routing_groups(self) -> dict[str, RoutingGroup]:
@@ -13708,26 +13731,12 @@ class Router:
         """A model-group fallback re-enters routing with the kwargs an earlier auto-router pass
         already rewrote, so a ceiling sized for that pass's tier would ride onto a group no tier
         chose. When this pass pins none, hand the request back exactly the carriers the caller
-        sent, which the first pinning pass stamped. The stamp lives in a metadata bucket a
-        caller can also write, so the proxy strips the key at ingestion and this read takes
-        nothing but the three ceiling carriers as integers: no other key ever reaches kwargs."""
-        stamped: Final = next(
-            (
-                bucket.get(CLIENT_OUTPUT_CEILING_METADATA_KEY)
-                for bucket in (request_kwargs.get("metadata"), request_kwargs.get("litellm_metadata"))
-                if isinstance(bucket, dict) and CLIENT_OUTPUT_CEILING_METADATA_KEY in bucket
-            ),
-            None,
-        )
-        if not isinstance(stamped, dict):
+        sent, which the first pinning pass stamped. The proxy strips the stamp key at ingestion,
+        and the read takes nothing but the three ceiling carriers as integers: no other key ever
+        reaches kwargs."""
+        callers_ceiling: Final = stamped_client_ceiling(request_kwargs)
+        if callers_ceiling is None:
             return
-        callers_ceiling: Final = MappingProxyType(
-            {
-                carrier: cap
-                for carrier, value in stamped.items()
-                if carrier in OUTPUT_TOKEN_CEILING_PARAMS and (cap := as_output_cap(value)) is not None
-            }
-        )
         for carrier in OUTPUT_TOKEN_CEILING_PARAMS:
             request_kwargs.pop(carrier, None)
         request_kwargs.update(callers_ceiling)

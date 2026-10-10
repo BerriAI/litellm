@@ -23,6 +23,7 @@ import random
 import re
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
+from functools import partial
 from itertools import accumulate, chain, islice, takewhile
 from threading import Lock
 from types import MappingProxyType
@@ -157,6 +158,17 @@ class _LabeledTierClassification(LiteLLMBaseModel):
 def _tier_name(tier: ComplexityTier | str) -> str:
     """The plain tier name, whether the pipeline carries a built-in tier or a defined name."""
     return tier.value if isinstance(tier, ComplexityTier) else tier
+
+
+def _callers_output_cap(request_kwargs: Mapping[str, object]) -> int | None:
+    """The smallest positive output ceiling the caller sent under any of its three names, read
+    from the stamp when an earlier routing pass already rewrote the kwargs."""
+    from litellm.router import as_output_cap, stamped_client_ceiling
+
+    stamped: Final = stamped_client_ceiling(request_kwargs)
+    carriers: Final = request_kwargs if stamped is None else stamped
+    caps: Final = tuple(as_output_cap(carriers.get(carrier)) for carrier in OUTPUT_TOKEN_CEILING_PARAMS)
+    return min((cap for cap in caps if cap is not None and cap > 0), default=None)
 
 
 def _built_in_tier_or_none(tier_name: str) -> ComplexityTier | None:
@@ -2956,7 +2968,9 @@ class ComplexityRouter(CustomLogger):
 
         raise ValueError(f"No model configured for tier {tier_key} and no default_model set")
 
-    def _litellm_params_for_model(self, tier: ComplexityTier | str | None, model: str) -> Mapping[str, object]:
+    def _litellm_params_for_model(
+        self, tier: ComplexityTier | str | None, model: str, request_kwargs: Mapping[str, object]
+    ) -> Mapping[str, object]:
         entries: Final = self.config.tier_model_configs.get(_tier_name(tier), ()) if tier is not None else ()
         entry: Final = next((candidate for candidate in entries if candidate.model_name == model), None)
         explicit: Final = entry.litellm_params if entry is not None else MappingProxyType({})
@@ -2965,7 +2979,12 @@ class ComplexityRouter(CustomLogger):
         ceiling: Final = self._group_output_ceiling(model)
         if ceiling is None:
             return explicit
-        return MappingProxyType({**explicit, "max_tokens": ceiling})
+        callers_cap: Final = (
+            _callers_output_cap(request_kwargs) if self.config.max_tokens_from_tier_model == "clamp" else None
+        )
+        return MappingProxyType(
+            {**explicit, "max_tokens": ceiling if callers_cap is None else min(callers_cap, ceiling)}
+        )
 
     @staticmethod
     def _pick_from_tier_value(model: str | Sequence[str], tier_key: str) -> str:
@@ -3701,7 +3720,7 @@ class ComplexityRouter(CustomLogger):
         response: PreRoutingHookResponse,
         messages: list[dict[str, object]] | None,  # mutable-ok: forwarded verbatim to the list-typed re-pick
         resolved_messages: Sequence[Mapping[str, object]] | None,
-        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+        request_kwargs: dict[str, object],  # mutable-ok: same shape the hook receives
         context_fit: _RequestContextFit | None = None,
         retained_pin: _SessionAffinityPin | None = None,
     ) -> PreRoutingHookResponse:
@@ -3798,7 +3817,7 @@ class ComplexityRouter(CustomLogger):
             conversation_continuing=bool(decision.get("conversation_continuing", True))
             if decision is not None
             else True,
-            tier_litellm_params=self._litellm_params_for_model(new_tier, new_model),
+            tier_litellm_params=self._litellm_params_for_model(new_tier, new_model, request_kwargs),
             context_escalation_original_tier=(
                 decision.get("context_escalation_original_tier") if decision is not None else None
             ),
@@ -3809,7 +3828,7 @@ class ComplexityRouter(CustomLogger):
         return HookResponse(
             model=new_model,
             messages=response.messages,
-            litellm_params=self._litellm_params_for_model(new_tier, new_model),
+            litellm_params=self._litellm_params_for_model(new_tier, new_model, request_kwargs),
             routing_decision=new_decision,
         )
 
@@ -3837,7 +3856,7 @@ class ComplexityRouter(CustomLogger):
         model_name: str,
         messages: list[dict[str, Any]] | None,  # mutable-ok: forwarded verbatim to the router's own probe
         input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
-        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+        request_kwargs: dict[str, object],  # mutable-ok: same shape the hook receives
     ) -> bool:
         """Whether the router would find a deployment for this group ON THIS REQUEST.
 
@@ -3895,7 +3914,7 @@ class ComplexityRouter(CustomLogger):
         messages: list[dict[str, object]] | None,  # mutable-ok: forwarded verbatim to the list-typed re-pick
         input: str | list | None,  # mutable-ok: mirrors the owner's own input parameter, which this forwards verbatim
         resolved_messages: Sequence[Mapping[str, object]] | None,
-        request_kwargs: dict,  # mutable-ok: same shape the hook receives
+        request_kwargs: dict[str, object],  # mutable-ok: same shape the hook receives
         context_fit: _RequestContextFit | None = None,
         retained_pin: _SessionAffinityPin | None = None,
     ) -> PreRoutingHookResponse:
@@ -3978,14 +3997,14 @@ class ComplexityRouter(CustomLogger):
                         classifier_model=decision.get("classifier_model"),
                         classifier_cost=decision.get("classifier_cost"),
                         conversation_continuing=bool(decision.get("conversation_continuing", True)),
-                        tier_litellm_params=self._litellm_params_for_model(candidate_tier, new_model),
+                        tier_litellm_params=self._litellm_params_for_model(candidate_tier, new_model, request_kwargs),
                         context_escalation_original_tier=decision.get("context_escalation_original_tier"),
                         previous_decision=decision,
                     )
                     return response.model_copy(
                         update={
                             "model": new_model,
-                            "litellm_params": self._litellm_params_for_model(candidate_tier, new_model),
+                            "litellm_params": self._litellm_params_for_model(candidate_tier, new_model, request_kwargs),
                             "routing_decision": new_decision,
                         }
                     )
@@ -4023,14 +4042,14 @@ class ComplexityRouter(CustomLogger):
             classifier_model=decision.get("classifier_model"),
             classifier_cost=decision.get("classifier_cost"),
             conversation_continuing=bool(decision.get("conversation_continuing", True)),
-            tier_litellm_params=self._litellm_params_for_model(None, default_model),
+            tier_litellm_params=self._litellm_params_for_model(None, default_model, request_kwargs),
             context_escalation_original_tier=decision.get("context_escalation_original_tier"),
             previous_decision=decision,
         )
         return response.model_copy(
             update={
                 "model": default_model,
-                "litellm_params": self._litellm_params_for_model(None, default_model),
+                "litellm_params": self._litellm_params_for_model(None, default_model, request_kwargs),
                 "routing_decision": default_decision,
             }
         )
@@ -4489,7 +4508,9 @@ class ComplexityRouter(CustomLogger):
                         if pin_placement is not None and pin_context_original_tier is not None
                         else pin_source_tier
                     )
-                    session_tier_litellm_params: Final = self._litellm_params_for_model(routed_pin_tier, routed_model)
+                    session_tier_litellm_params: Final = self._litellm_params_for_model(
+                        routed_pin_tier, routed_model, request_kwargs
+                    )
                     has_original_messages: Final = messages is not None and len(messages) > 0
                     return self._with_session_deployment_affinity(
                         await self._gate_response_health(
@@ -4587,14 +4608,14 @@ class ComplexityRouter(CustomLogger):
         choice: Final = await choose_cached_model(
             router=self.litellm_router_instance,
             config=self.config,
-            params_for_model=self._litellm_params_for_model,
+            params_for_model=partial(self._litellm_params_for_model, request_kwargs=request_kwargs),
             response=response,
             request_kwargs=request_kwargs,
             messages=messages,
         )
         if choice is None or not context_fit.accepts(choice.model):
             return response
-        params: Final = self._litellm_params_for_model(choice.tier, choice.model)
+        params: Final = self._litellm_params_for_model(choice.tier, choice.model, request_kwargs)
         decision: Final[StandardLoggingRoutingDecision] = {
             **response.routing_decision,
             "routed_model": choice.model,
@@ -4623,7 +4644,7 @@ class ComplexityRouter(CustomLogger):
     async def _classify_and_route(
         self,
         model: str,
-        request_kwargs: dict,
+        request_kwargs: dict[str, object],
         messages: list[dict[str, object]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
@@ -4681,7 +4702,7 @@ class ComplexityRouter(CustomLogger):
                     ComplexityTier.MEDIUM, messages, resolved_messages, request_kwargs
                 )
             fallback_tier: Final = None if default_model_first else ComplexityTier.MEDIUM
-            default_tier_params: Final = self._litellm_params_for_model(fallback_tier, routed_model)
+            default_tier_params: Final = self._litellm_params_for_model(fallback_tier, routed_model, request_kwargs)
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
@@ -4719,7 +4740,7 @@ class ComplexityRouter(CustomLogger):
                 _tier_name(plan_floor),
                 routed_model,
             )
-            plan_tier_params: Final = self._litellm_params_for_model(plan_floor, routed_model)
+            plan_tier_params: Final = self._litellm_params_for_model(plan_floor, routed_model, request_kwargs)
             return PreRoutingHookResponse(
                 model=routed_model,
                 messages=messages if has_original_messages else None,
@@ -4748,7 +4769,9 @@ class ComplexityRouter(CustomLogger):
             )
             keyword_plan_floored: Final = routed_tier != escalated_tier
             routed_model = await self._pick_model_for_tier(routed_tier, messages, resolved_messages, request_kwargs)
-            keyword_tier_litellm_params: Final = self._litellm_params_for_model(routed_tier, routed_model)
+            keyword_tier_litellm_params: Final = self._litellm_params_for_model(
+                routed_tier, routed_model, request_kwargs
+            )
             keyword_cause: Final[RoutingDecisionCause] = (
                 "plan_mode"
                 if keyword_plan_floored
@@ -4828,7 +4851,7 @@ class ComplexityRouter(CustomLogger):
                 outcome.signals,
                 fallback_model,
             )
-            fallback_tier_params: Final = self._litellm_params_for_model(None, fallback_model)
+            fallback_tier_params: Final = self._litellm_params_for_model(None, fallback_model, request_kwargs)
             return PreRoutingHookResponse(
                 model=fallback_model,
                 messages=messages if has_original_messages else None,
@@ -4910,7 +4933,7 @@ class ComplexityRouter(CustomLogger):
                 routed_model,
             )
 
-        tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model)
+        tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model, request_kwargs)
         classifier_model: Final = (
             f"{outcome.jev_verdict.provider}/{outcome.jev_verdict.model}"
             if outcome.cause == "jev_classifier" and outcome.jev_verdict is not None

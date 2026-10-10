@@ -1444,7 +1444,7 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "wording the built-ins don't cover, or after a client release changes its strings."
         ),
     )
-    max_tokens_from_tier_model: bool = Field(
+    max_tokens_from_tier_model: bool | Literal["clamp"] = Field(
         default=True,
         description=(
             "Set max_tokens on every routed request to the output ceiling of the tier model it "
@@ -1455,7 +1455,8 @@ class ComplexityRouterConfig(LiteLLMBaseModel):
             "from each deployment's model_info and then the model cost map; a tier model with a "
             "deployment whose ceiling is unknown keeps the caller's value. A max_tokens, "
             "max_completion_tokens or max_output_tokens in the tier's own litellm_params still "
-            "wins. Set false to forward the caller's value unchanged."
+            'wins. Set "clamp" to keep a smaller positive caller value and cap a larger one at '
+            "the ceiling. Set false to forward the caller's value unchanged."
         ),
     )
     route_housekeeping_to_cheapest_tier: bool = Field(
