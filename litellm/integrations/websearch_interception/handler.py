@@ -105,14 +105,14 @@ _ResponseT: Final = TypeVar("_ResponseT")
 
 
 def _web_search_domain_strings(tool: Mapping[str, object], key: str) -> tuple[str, ...]:
-    value = tool.get(key)
+    value: Final = tool.get(key)
     if not isinstance(value, list):
         return ()
     return tuple(item for item in value if isinstance(item, str) and item)
 
 
 def _extract_web_search_domain_filters(
-    tools: Sequence[dict[str, object]],
+    tools: Sequence[Mapping[str, object]],
 ) -> Mapping[str, tuple[str, ...]] | None:
     """Collect ``allowed_domains`` / ``blocked_domains`` from web search tools.
 
@@ -187,7 +187,7 @@ class _AcreateNamedParams(TypedDict, total=False):
 
 class _AsearchNamedParams(TypedDict, total=False):
     max_results: ReadOnly[int | None]
-    search_domain_filter: ReadOnly[list[str] | None]
+    search_domain_filter: ReadOnly[list[str] | None]  # mutable-ok: mirrors litellm.asearch's search_domain_filter parameter
     max_tokens_per_page: ReadOnly[int | None]
     country: ReadOnly[str | None]
     api_key: ReadOnly[str | None]
@@ -426,7 +426,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # tool before the search executes.
         domain_filters: Final = _extract_web_search_domain_filters(tools)
         if domain_filters is not None and isinstance(kwargs, dict):
-            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters
+            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters  # rebind-ok: this hook stashes the collected domain limits on the kwargs it returns
 
         outcome: Final = await self._short_circuit_search_outcome(query, kwargs=kwargs)
         search_result_text: Final = WebSearchTransformation.search_outcome_text(outcome)
@@ -523,7 +523,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # replaced, so the downstream search can apply them.
         domain_filters: Final = _extract_web_search_domain_filters(tools)
         if domain_filters is not None:
-            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters
+            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters  # rebind-ok: this hook stashes the collected domain limits on the kwargs it returns
 
         # Convert native/custom web_search tools to LiteLLM standard
         converted_tools: Final = []
@@ -704,7 +704,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         # replaced, so the downstream search can apply them.
         domain_filters: Final = _extract_web_search_domain_filters(tools)
         if domain_filters is not None:
-            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters
+            kwargs[WEBSEARCH_DOMAIN_FILTER_KEY] = domain_filters  # rebind-ok: this hook stashes the collected domain limits on the kwargs it returns
 
         # Convert native web search tools to LiteLLM standard
         converted_tools: Final[list[dict[str, object]]] = []
@@ -1673,7 +1673,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             blocked: Final = tuple(
                 f"-{item}" for item in domain_view.get("blocked_domains", ()) if isinstance(item, str) and item
             )
-            search_domain_filter: Final = [*allowed, *blocked] or None  # mutable-ok: JSON request array, not mutated
+            search_domain_filter: Final = [*allowed, *blocked] or None
             if search_domain_filter is not None:
                 verbose_logger.debug("WebSearchInterception: Applying domain filter %s", search_domain_filter)
             search_kwargs: Final = MappingProxyType(
