@@ -91,7 +91,7 @@ async def test_decisions_with_state_still_sends_the_systemone_format_and_warns(
         {"model": "typesafe/jev-1.13", "state": _STATE, "questions": _SYSTEMONE_QUESTIONS, "api_key": "caller-key"}
     )
 
-    with pytest.warns(DeprecationWarning, match=r"litellm\.systemone"):
+    with pytest.warns(UserWarning, match=r"litellm\.systemone"):
         response: Final = await litellm.adecisions(**kwargs) if use_async else litellm.decisions(**kwargs)
 
     assert route.called

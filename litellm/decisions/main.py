@@ -37,8 +37,8 @@ def _request_fields(
         )
     warnings.warn(
         "litellm.decisions(state=...) is deprecated, call litellm.systemone for the System One request format",
-        DeprecationWarning,
-        stacklevel=4,
+        UserWarning,
+        stacklevel=5,
     )
     return SystemOneRequestFields(
         state=_STATE_ADAPTER.validate_python(kwargs["state"]),
