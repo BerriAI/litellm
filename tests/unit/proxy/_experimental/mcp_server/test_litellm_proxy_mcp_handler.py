@@ -24,8 +24,8 @@ from litellm.proxy._experimental.mcp_server.mcp_server_manager import ListedTool
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.responses import main as responses_main
-from litellm.responses.mcp import litellm_proxy_mcp_handler as mcp_handler_module
-from litellm.responses.mcp.litellm_proxy_mcp_handler import (
+from litellm.proxy._experimental.mcp_server import litellm_proxy_mcp_handler as mcp_handler_module
+from litellm.proxy._experimental.mcp_server.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.types.guardrails import GuardrailEventHooks
@@ -439,7 +439,7 @@ async def test_execute_tool_calls_passes_litellm_call_id_and_trace_id_to_functio
     # NOTE: Don't patch via dotted string path here because `litellm.responses`
     # is a function attribute on the `litellm` package (shadowing the submodule),
     # which breaks monkeypatch's importpath resolution.
-    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    handler_module = importlib.import_module("litellm.proxy._experimental.mcp_server.litellm_proxy_mcp_handler")
     monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
 
     tool_name = "deepwiki-read_wiki_structure"
@@ -475,7 +475,7 @@ async def test_execute_tool_calls_threads_logging_obj_into_call_tool(monkeypatch
     sentinel_logging_obj.async_post_mcp_tool_call_hook = AsyncMock()
     sentinel_logging_obj.async_success_handler = AsyncMock()
 
-    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    handler_module = importlib.import_module("litellm.proxy._experimental.mcp_server.litellm_proxy_mcp_handler")
     monkeypatch.setattr(
         handler_module,
         "function_setup",
@@ -524,7 +524,7 @@ async def test_execute_tool_calls_applies_post_call_hook_content(monkeypatch):
         return_value=CallToolResult(content=[TextContent(type="text", text="[REDACTED]")], is_error=True)
     )
     logging_obj.async_success_handler = AsyncMock()
-    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    handler_module = importlib.import_module("litellm.proxy._experimental.mcp_server.litellm_proxy_mcp_handler")
     monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (logging_obj, None))
 
     tool_name = "deepwiki-read_wiki_structure"
@@ -559,7 +559,7 @@ async def test_execute_tool_calls_returns_proxy_result_without_logging(monkeypat
         "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
         fake_manager,
     )
-    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    handler_module = importlib.import_module("litellm.proxy._experimental.mcp_server.litellm_proxy_mcp_handler")
     monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (None, None))
 
     tool_name = "deepwiki-read_wiki_structure"
@@ -597,7 +597,7 @@ async def test_execute_tool_calls_passes_logging_details_to_proxy_hook(monkeypat
     logging_obj.model_call_details = {"request_id": "request-1"}
     logging_obj.async_post_mcp_tool_call_hook = AsyncMock(return_value=result)
     logging_obj.async_success_handler = AsyncMock()
-    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    handler_module = importlib.import_module("litellm.proxy._experimental.mcp_server.litellm_proxy_mcp_handler")
     monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (logging_obj, None))
 
     tool_name = "deepwiki-read_wiki_structure"
@@ -640,7 +640,7 @@ async def test_execute_tool_calls_continues_when_post_call_logging_fails(monkeyp
     logging_obj.async_success_handler = AsyncMock(
         side_effect=RuntimeError("success logging failed") if failure_stage == "success_handler" else None
     )
-    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    handler_module = importlib.import_module("litellm.proxy._experimental.mcp_server.litellm_proxy_mcp_handler")
     monkeypatch.setattr(handler_module, "function_setup", lambda *_args, **_kwargs: (logging_obj, None))
 
     tool_name = "deepwiki-read_wiki_structure"
@@ -766,7 +766,7 @@ async def test_execute_tool_calls_exposes_sanitized_client_headers_to_logging(mo
         captured.update(kwargs)
         return None, None
 
-    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    handler_module = importlib.import_module("litellm.proxy._experimental.mcp_server.litellm_proxy_mcp_handler")
     monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
 
     tool_name = "deepwiki-read_wiki_structure"
@@ -792,7 +792,7 @@ async def test_execute_tool_calls_propagates_request_tags_to_function_setup(monk
         captured.update(kwargs)
         return None, None
 
-    handler_module = importlib.import_module("litellm.responses.mcp.litellm_proxy_mcp_handler")
+    handler_module = importlib.import_module("litellm.proxy._experimental.mcp_server.litellm_proxy_mcp_handler")
     monkeypatch.setattr(handler_module, "function_setup", fake_function_setup)
 
     tool_name = "deepwiki-read_wiki_structure"
@@ -930,7 +930,7 @@ FUNCTION_TOOL = {"type": "function", "name": "get_weather", "parameters": {}}
 
 @pytest.mark.asyncio
 async def test_gateway_served_names_matches_alias_server_name_name_access_group_and_toolset():
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import _gateway_served_names
+    from litellm.proxy._experimental.mcp_server.litellm_proxy_mcp_handler import _gateway_served_names
 
     servers = (
         _registered("id-1", "github-name", alias="github", server_name="github-server", access_groups=["prod-group"]),
@@ -952,7 +952,7 @@ async def test_gateway_served_names_matches_alias_server_name_name_access_group_
 @pytest.mark.asyncio
 async def test_gateway_served_names_matches_server_id_short_prefix_and_alias_case_like_the_gateway():
     from litellm.proxy._experimental.mcp_server.utils import compute_short_server_prefix
-    from litellm.responses.mcp.litellm_proxy_mcp_handler import _gateway_served_names
+    from litellm.proxy._experimental.mcp_server.litellm_proxy_mcp_handler import _gateway_served_names
 
     server_id = "0b9ae4ca-1bd2-4faa-b183-7dd812597e3b"
     short_prefix = compute_short_server_prefix(server_id)
