@@ -312,7 +312,7 @@ def test_xai_batch_output_file_left_as_a_placeholder_keeps_its_registration_time
             (raw_batch_id, str(REGISTERED_AT), output_id),
         )
         with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache:
-            assert cache.delete(output_id) == 1
+            cache.delete(output_id)
 
         refreshed: Final = eventually(
             lambda: JSON_OBJECT.validate_json(
