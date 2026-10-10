@@ -1,8 +1,6 @@
 import asyncio
 import importlib
 import os
-import subprocess
-import sys
 from collections.abc import AsyncIterator
 from datetime import datetime
 from typing import Final, Literal
@@ -18,6 +16,7 @@ from litellm.litellm_core_utils.custom_logger_registry import (
     CustomLoggerRegistry,
 )
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 # clear prometheus collectors / registry
@@ -428,19 +427,14 @@ def test_lazy_proxy_callback_classes_resolve_in_registry_lookups(
 
 
 def test_registry_import_leaves_proxy_rate_limiter_modules_unloaded() -> None:
-    loaded: Final = subprocess.run(
-        [
-            sys.executable,
-            "-c",
-            "import sys, litellm.litellm_core_utils.custom_logger_registry; "
-            "print(sorted(m for m in sys.modules if m.startswith('litellm.proxy.hooks.dynamic_rate_limiter')))",
-        ],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout.strip()
+    result: Final = run_child_interpreter(
+        "import sys, litellm.litellm_core_utils.custom_logger_registry\n"
+        "print(sorted(m for m in sys.modules if m.startswith('litellm.proxy.hooks.dynamic_rate_limiter')))",
+        timeout=120,
+    )
 
-    assert loaded == "[]"
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "[]"
 
 
 @pytest.mark.parametrize(
