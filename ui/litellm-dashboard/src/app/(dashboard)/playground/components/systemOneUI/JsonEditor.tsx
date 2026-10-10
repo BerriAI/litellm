@@ -15,8 +15,20 @@ const EDITOR_TEXT = "m-0 whitespace-pre-wrap wrap-anywhere py-3 font-mono text-x
 const GUTTER_WIDTH = "w-11";
 type LineRendererProps = Parameters<NonNullable<SyntaxHighlighterProps["renderer"]>>[0];
 const CONTENT_INSET = "pl-14 pr-3";
+type SyntaxTheme = NonNullable<SyntaxHighlighterProps["style"]>;
+const THEME_BLOCKS = ['pre[class*="language-"]', 'code[class*="language-"]'] as const;
+
+function withoutBlockBackground(theme: SyntaxTheme): SyntaxTheme {
+  const stripped = THEME_BLOCKS.map((block) => {
+    const { background: _background, backgroundColor: _backgroundColor, ...rest } = theme[block] ?? {};
+    return [block, rest] as const;
+  });
+  return { ...theme, ...Object.fromEntries(stripped) };
+}
+
+const VS_CODE_DARK_PLUS = withoutBlockBackground(vscDarkPlus);
 const VS_CODE_LIGHT_PLUS = {
-  ...vs,
+  ...withoutBlockBackground(vs),
   property: { color: "#0451a5" },
   string: { color: "#a31515" },
   number: { color: "#098658" },
@@ -103,7 +115,7 @@ function LineRows({ rows, stylesheet, useInlineStyles }: LineRendererProps) {
 export default function JsonEditor({ value, onChange, validation }: JsonEditorProps) {
   const issuesId = useId();
   const highlightRef = useRef<HTMLDivElement>(null);
-  const syntaxTheme = useTheme().resolvedTheme === "dark" ? vscDarkPlus : VS_CODE_LIGHT_PLUS;
+  const syntaxTheme = useTheme().resolvedTheme === "dark" ? VS_CODE_DARK_PLUS : VS_CODE_LIGHT_PLUS;
   const lineCount = value.split("\n").length;
   const hasErrors = !validation.isValid;
 
