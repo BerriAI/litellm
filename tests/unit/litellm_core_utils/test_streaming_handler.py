@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from typing import Final, NoReturn, Optional
+from typing import Final, Literal, NoReturn, Optional
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -2296,6 +2296,97 @@ def test_raise_on_model_repetition_tolerates_empty_choices(
     for chunk in chunks:
         wrapper.chunks.append(chunk)
         wrapper.raise_on_model_repetition()
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.parametrize("finish", ["separate", "content", "absent"])
+@pytest.mark.parametrize("reported_tokens", [None, 0, 17])
+@pytest.mark.parametrize("late_usage", [False, True])
+@pytest.mark.asyncio
+async def test_stream_hidden_usage_preserves_reported_counts_or_estimates(
+    logging_obj: Logging,
+    sync_mode: bool,
+    finish: Literal["separate", "content", "absent"],
+    reported_tokens: int | None,
+    late_usage: bool,
+) -> None:
+    model: Final = "gpt-6.1-sol"
+    reported_usage: Final = (
+        None
+        if reported_tokens is None
+        else Usage(
+            prompt_tokens=reported_tokens,
+            completion_tokens=reported_tokens,
+            total_tokens=2 * reported_tokens,
+        )
+    )
+    content_chunk: Final = ModelResponseStream(
+        id="chatcmpl-usage-regression",
+        created=1,
+        model=model,
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(role="assistant", content="Hello from the streaming response"),
+                finish_reason="stop" if finish == "content" else None,
+            )
+        ],
+        usage=None if late_usage else reported_usage,
+    )
+    finish_chunks: Final = (
+        (
+            ModelResponseStream(
+                id=content_chunk.id,
+                created=content_chunk.created,
+                model=model,
+                choices=[StreamingChoices(index=0, delta=Delta(content=""), finish_reason="stop")],
+            ),
+        )
+        if finish == "separate"
+        else ()
+    )
+    usage_chunks: Final = (
+        (
+            ModelResponseStream(
+                id=content_chunk.id,
+                created=content_chunk.created,
+                model=model,
+                choices=[],
+                usage=reported_usage,
+            ),
+        )
+        if late_usage and reported_usage is not None
+        else ()
+    )
+    source_chunks: Final = (content_chunk, *finish_chunks, *usage_chunks)
+    expected: Final = litellm.stream_chunk_builder(
+        chunks=[chunk.model_copy(deep=True) for chunk in source_chunks],
+        messages=logging_obj.messages,
+    )
+    assert expected is not None
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=source_chunks),
+        model=model,
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+        stream_options=None,
+    )
+    received: Final = tuple(wrapper) if sync_mode else tuple([chunk async for chunk in wrapper])
+    hidden_usage: Final = received[-1].hidden_params.get("usage")
+    assert isinstance(hidden_usage, Usage)
+    assembled: Final = litellm.stream_chunk_builder(chunks=wrapper.chunks, messages=logging_obj.messages)
+    assert assembled is not None
+    assert assembled.choices[0].message.content == expected.choices[0].message.content
+    for usage in (hidden_usage, assembled.usage):
+        assert usage.prompt_tokens == expected.usage.prompt_tokens
+        assert usage.completion_tokens == expected.usage.completion_tokens
+        assert usage.total_tokens == expected.usage.total_tokens
+        if reported_usage is None:
+            assert usage.prompt_tokens > 0
+            assert usage.completion_tokens > 0
+        else:
+            assert usage.prompt_tokens == reported_usage.prompt_tokens
+            assert usage.completion_tokens == reported_usage.completion_tokens
 
 
 def test_usage_chunk_after_finish_reason_updates_hidden_params(logging_obj):
