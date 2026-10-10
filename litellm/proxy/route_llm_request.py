@@ -403,13 +403,13 @@ def _wildcard_forwards_missing_model(llm_router: LitellmRouter, data: Mapping[st
     empty model and every such deployment copies the requested name into its target
     (`openai/*`), so the provider would get a made-up or empty model instead of a fixed one
     like `openai/gpt-4o`. An empty one must not reach a provider: key and team model checks
-    skip it, and some servers (vLLM) answer it with their default model. A null model with a
-    `prompt_id` is left to a registered prompt manager, which may pick the model."""
+    skip it, and some servers (vLLM) answer it with their default model. A null model is left
+    to a registered prompt manager when the request has a `prompt_id`, and to the session's
+    routing strategy on a Claude Code subagent turn; either may pick the model."""
     model: Final = data.get("model")
-    if (
-        model is None
-        and data.get("prompt_id")
-        and litellm.logging_callback_manager.callback_is_active(CustomPromptManagement)
+    if model is None and (
+        (data.get("prompt_id") and litellm.logging_callback_manager.callback_is_active(CustomPromptManagement))
+        or _router_may_resume_claude_code_session(llm_router, data)
     ):
         return False
     matched: Final = _MATCHED_DEPLOYMENTS_ADAPTER.validate_python(

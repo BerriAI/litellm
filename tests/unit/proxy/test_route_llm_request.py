@@ -2266,6 +2266,72 @@ def test_router_default_ignored_for_a_claude_code_subagent_turn_without_a_sessio
     assert exc_info.value.param == "max_tokens"
 
 
+def _router_with_a_complexity_router_and_a_forwarding_wildcard():
+    import litellm
+
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "cheap-model",
+                "litellm_params": {
+                    "model": "anthropic/claude-haiku-4-5",
+                    "api_key": "k",
+                    "mock_response": "from the session's router",
+                },
+            },
+            {
+                "model_name": "smart-router",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {"tiers": {"SIMPLE": "cheap-model"}},
+                    "complexity_router_default_model": "cheap-model",
+                },
+            },
+            {"model_name": "*", "litellm_params": {"model": "openai/*", "api_key": "test-key"}},
+        ]
+    )
+
+
+async def _claude_code_subagent_turn_after_a_main_turn(subagent_model: str | None) -> object:
+    llm_router: Final = _router_with_a_complexity_router_and_a_forwarding_wildcard()
+    main_turn: Final = _claude_code_messages_request({})
+    await (
+        await route_request(
+            {**main_turn, "model": "smart-router", "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]},
+            llm_router,
+            None,
+            "anthropic_messages",
+        )
+    )
+    subagent_turn: Final = _claude_code_messages_request({"x-claude-code-agent-id": "agent-1"})
+    return await (
+        await route_request(
+            {
+                **subagent_turn,
+                "model": subagent_model,
+                "max_tokens": 16,
+                "messages": [{"role": "user", "content": "hi"}],
+            },
+            llm_router,
+            None,
+            "anthropic_messages",
+        )
+    )
+
+
+@pytest.mark.asyncio
+async def test_null_model_on_a_claude_code_subagent_turn_is_left_to_the_session_router() -> None:
+    response: Final = await _claude_code_subagent_turn_after_a_main_turn(None)
+
+    assert response["content"][0]["text"] == "from the session's router"  # pyright: ignore[reportIndexIssue, reportUnknownVariableType]  # aanthropic_messages returns an untyped dict
+
+
+@pytest.mark.asyncio
+async def test_empty_model_on_a_claude_code_subagent_turn_is_still_not_routed_to_a_forwarding_wildcard() -> None:
+    with pytest.raises(ProxyModelNotFoundError):
+        await _claude_code_subagent_turn_after_a_main_turn("")
+
+
 @pytest.mark.asyncio
 async def test_model_optional_route_still_reaches_a_wildcard_deployment_without_a_model() -> None:
     llm_router: Final = MagicMock()

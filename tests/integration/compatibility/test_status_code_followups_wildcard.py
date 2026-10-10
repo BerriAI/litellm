@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Final
 
 import anthropic
+import httpx
 import openai
 import pytest
 from integration._support.client import Gateway, gateway_from_environment
@@ -544,36 +545,61 @@ def test_empty_model_with_a_prompt_id_is_still_rejected_by_a_forwarding_wildcard
     assert_no_provider_call(prompt_gateway.gateway, prompt_gateway.identity)
 
 
+def _session_router_deployments(identity: str, api_base: str) -> list[JsonValue]:
+    return [
+        {
+            "model_name": "audit-cheap",
+            "litellm_params": {"model": "openai/gpt-4o-mini", "api_base": api_base, "api_key": identity},
+        },
+        {
+            "model_name": "audit-smart-router",
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "tiers": dict.fromkeys(("SIMPLE", "MEDIUM", "COMPLEX", "REASONING"), "audit-cheap")
+                },
+                "complexity_router_default_model": "audit-cheap",
+            },
+        },
+    ]
+
+
 @pytest.fixture(scope="module")
 def session_router_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Wildcard]:
     """A complexity router whose tiers all answer with one deployment, with router defaults it inherits."""
     with gateway_from_environment() as gateway, gateway.scenario() as scenario:
         identity, handle = register(scenario, "audit-session-router", _scripted("fixed"))
         config: Final[dict[str, JsonValue]] = {
-            "model_list": [
-                {
-                    "model_name": "audit-cheap",
-                    "litellm_params": {
-                        "model": "openai/gpt-4o-mini",
-                        "api_base": handle.api_base(),
-                        "api_key": identity,
-                    },
-                },
-                {
-                    "model_name": "audit-smart-router",
-                    "litellm_params": {
-                        "model": "auto_router/complexity_router",
-                        "complexity_router_config": {
-                            "tiers": dict.fromkeys(("SIMPLE", "MEDIUM", "COMPLEX", "REASONING"), "audit-cheap")
-                        },
-                        "complexity_router_default_model": "audit-cheap",
-                    },
-                },
-            ],
+            "model_list": _session_router_deployments(identity, handle.api_base()),
             "router_settings": {"num_retries": 0, "default_litellm_params": ROUTER_DEFAULTS},
         }
         with owned_gateway(tmp_path_factory.mktemp("audit-session-router"), config) as owned:
             yield _Wildcard(owned, identity)
+
+
+def _claude_code_session_turns(
+    gateway: _Wildcard, subagent_body: dict[str, JsonValue], **key_fields: JsonValue
+) -> tuple[httpx.Response, httpx.Response]:
+    """A Claude Code main turn that binds the complexity router to a fresh session, then a subagent turn on it."""
+    session: Final = {"x-claude-code-session-id": f"audit-session-{uuid.uuid4().hex}"}
+    with gateway.gateway.scenario() as scenario:
+        key: Final = scenario.key(**key_fields)
+        main_turn: Final = post(
+            gateway.gateway,
+            "/v1/messages",
+            {"model": "audit-smart-router", "max_tokens": 64, "messages": USER_MESSAGES},
+            key=key,
+            headers=session,
+        )
+        drain_rig_upstream()
+        subagent_turn: Final = post(
+            gateway.gateway,
+            "/v1/messages",
+            subagent_body,
+            key=key,
+            headers={**session, "x-claude-code-agent-id": "audit-agent"},
+        )
+        return main_turn, subagent_turn
 
 
 def test_claude_code_subagent_turn_without_max_tokens_is_served_by_the_session_router(
@@ -581,25 +607,55 @@ def test_claude_code_subagent_turn_without_max_tokens_is_served_by_the_session_r
 ) -> None:
     """The session's main turn binds the complexity router; the subagent then names a model the proxy does not list
     and leaves out `max_tokens`, which the router default supplies, so the session's router answers it."""
-    session: Final = {"x-claude-code-session-id": f"audit-session-{uuid.uuid4().hex}"}
-    with session_router_gateway.gateway.scenario() as scenario:
-        key: Final = scenario.key(router_settings={"num_retries": 0})
-        main_turn: Final = post(
-            session_router_gateway.gateway,
-            "/v1/messages",
-            {"model": "audit-smart-router", "max_tokens": 64, "messages": USER_MESSAGES},
-            key=key,
-            headers=session,
-        )
-        assert main_turn.status_code == 200, main_turn.text
-        drain_rig_upstream()
-        subagent_turn: Final = post(
-            session_router_gateway.gateway,
-            "/v1/messages",
-            {"model": "audit-unlisted-subagent-model", "messages": USER_MESSAGES},
-            key=key,
-            headers={**session, "x-claude-code-agent-id": "audit-agent"},
-        )
-        assert subagent_turn.status_code == 200, subagent_turn.text
-        outbound: Final = one_outbound(session_router_gateway.gateway, session_router_gateway.identity)
-        assert outbound.get("model") == "gpt-4o-mini", outbound
+    main_turn, subagent_turn = _claude_code_session_turns(
+        session_router_gateway,
+        {"model": "audit-unlisted-subagent-model", "messages": USER_MESSAGES},
+        router_settings={"num_retries": 0},
+    )
+    assert main_turn.status_code == 200, main_turn.text
+    assert subagent_turn.status_code == 200, subagent_turn.text
+    outbound: Final = one_outbound(session_router_gateway.gateway, session_router_gateway.identity)
+    assert outbound.get("model") == "gpt-4o-mini", outbound
+
+
+@pytest.fixture(scope="module")
+def session_router_wildcard_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Wildcard]:
+    """The same complexity router next to a wildcard that forwards the requested name."""
+    with gateway_from_environment() as gateway, gateway.scenario() as scenario:
+        identity, handle = register(scenario, "audit-session-wildcard", _scripted("fixed"))
+        config: Final[dict[str, JsonValue]] = {
+            "model_list": [
+                *_session_router_deployments(identity, handle.api_base()),
+                {
+                    "model_name": "*",
+                    "litellm_params": {"model": "openai/*", "api_base": handle.api_base(), "api_key": identity},
+                },
+            ],
+            "router_settings": {"num_retries": 0},
+        }
+        with owned_gateway(tmp_path_factory.mktemp("audit-session-wildcard"), config) as owned:
+            yield _Wildcard(owned, identity)
+
+
+@pytest.mark.parametrize("shape", ("missing", "null"))
+def test_claude_code_subagent_turn_without_a_model_is_served_by_the_session_router_next_to_a_forwarding_wildcard(
+    session_router_wildcard_gateway: _Wildcard, shape: str
+) -> None:
+    main_turn, subagent_turn = _claude_code_session_turns(
+        session_router_wildcard_gateway, _body("messages", shape, stream=False)
+    )
+    assert main_turn.status_code == 200, main_turn.text
+    assert subagent_turn.status_code == 200, subagent_turn.text
+    outbound: Final = one_outbound(session_router_wildcard_gateway.gateway, session_router_wildcard_gateway.identity)
+    assert outbound.get("model") == "gpt-4o-mini", outbound
+
+
+def test_claude_code_subagent_turn_with_an_empty_model_is_still_rejected_by_a_forwarding_wildcard(
+    session_router_wildcard_gateway: _Wildcard,
+) -> None:
+    main_turn, subagent_turn = _claude_code_session_turns(
+        session_router_wildcard_gateway, _body("messages", "empty", stream=False)
+    )
+    assert main_turn.status_code == 200, main_turn.text
+    invalid_request(subagent_turn)
+    assert_no_provider_call(session_router_wildcard_gateway.gateway, session_router_wildcard_gateway.identity)
