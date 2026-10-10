@@ -133,8 +133,8 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   const orgMemberById = new Map((orgData.members || []).map((m) => [m.user_id, m]));
   const createdByMember = orgData.created_by ? orgMemberById.get(orgData.created_by) : undefined;
   const createdByName =
-    createdByMember?.user?.user_alias ??
-    createdByMember?.user?.user_email ??
+    createdByMember?.user?.user_alias ||
+    createdByMember?.user?.user_email ||
     (orgData.created_by ? displayNames?.[orgData.created_by] : undefined);
   const orgMemberFor = (record: Member) => (record.user_id != null ? orgMemberById.get(record.user_id) : undefined);
 

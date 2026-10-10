@@ -69,7 +69,10 @@ export const useUserDisplayNames = (userIds: readonly string[]) => {
         chunks.push(distinctIds.slice(i, i + USER_LIST_MAX_PAGE_SIZE));
       }
       const responses = await Promise.all(
-        chunks.map((ids) => userListCall(accessToken!, ids, 1, USER_LIST_MAX_PAGE_SIZE)),
+        chunks.map((ids) =>
+          // a single user_ids value is a substring search on /user/list
+          userListCall(accessToken!, ids.length === 1 ? [ids[0], ids[0]] : ids, 1, USER_LIST_MAX_PAGE_SIZE),
+        ),
       );
       return Object.fromEntries(
         responses.flatMap((response, chunkIndex) => {

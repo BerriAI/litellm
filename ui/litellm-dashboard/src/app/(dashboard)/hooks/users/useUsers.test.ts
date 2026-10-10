@@ -458,7 +458,7 @@ describe("useUserDisplayNames", () => {
   });
 
   it("pages through ids in chunks of the max page size and merges the names", async () => {
-    const ids = Array.from({ length: 150 }, (_, i) => `u${String(i).padStart(3, "0")}`);
+    const ids = Array.from({ length: 101 }, (_, i) => `u${String(i).padStart(3, "0")}`);
     const response = buildUserListResponse(1, 1, 0);
     vi.mocked(userListCall).mockImplementation(async (_token, userIDs) => ({
       ...response,
@@ -476,7 +476,7 @@ describe("useUserDisplayNames", () => {
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
     expect(userListCall).toHaveBeenCalledTimes(2);
     expect(vi.mocked(userListCall).mock.calls[0][1]).toHaveLength(100);
-    expect(vi.mocked(userListCall).mock.calls[1][1]).toHaveLength(50);
+    expect(vi.mocked(userListCall).mock.calls[1][1]).toEqual(["u100", "u100"]);
     expect(result.current.data).toEqual({ u000: "Alias u000", u100: "Alias u100" });
   });
 
@@ -493,7 +493,33 @@ describe("useUserDisplayNames", () => {
     const { result } = renderHook(() => useUserDisplayNames(["ada"]), { wrapper });
 
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
-    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["ada"], 1, 100);
+    expect(userListCall).toHaveBeenCalledWith("test-access-token", ["ada", "ada"], 1, 100);
     expect(result.current.data).toEqual({ ada: "Ada" });
+  });
+
+  it("resolves a single id even when substring matches would fill the page", async () => {
+    const allUsers = [
+      ...Array.from({ length: 100 }, (_, i) => ({
+        user_id: `ada-${i + 1}`,
+        user_alias: `Ada ${i + 1}`,
+        user_email: null,
+      })),
+      { user_id: "ada", user_alias: "Ada Exact", user_email: null },
+    ];
+    const response = buildUserListResponse(1, 1, 0);
+    vi.mocked(userListCall).mockImplementation(async (_token, userIDs, _page, pageSize) => ({
+      ...response,
+      users:
+        userIDs!.length === 1
+          ? (allUsers
+              .filter((user) => user.user_id.includes(userIDs![0]))
+              .slice(0, pageSize) as UserListResponse["users"])
+          : (allUsers.filter((user) => userIDs!.includes(user.user_id)) as UserListResponse["users"]),
+    }));
+
+    const { result } = renderHook(() => useUserDisplayNames(["ada"]), { wrapper });
+
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual({ ada: "Ada Exact" });
   });
 });
