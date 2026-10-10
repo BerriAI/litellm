@@ -644,7 +644,6 @@ def test_owned_leaf_literals_reject_unknown_values(leaf: type, sample: Mapping[s
         "latency-based-routing",
         "cost-based-routing",
         "usage-based-routing-v2",
-        "lar1",
     ],
 )
 def test_routing_options_accept_every_strategy_the_router_accepts(strategy: str) -> None:

@@ -49,7 +49,6 @@ RoutingStrategyName: TypeAlias = Literal[
     "latency-based-routing",
     "cost-based-routing",
     "usage-based-routing-v2",
-    "lar1",
 ]
 
 TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"

@@ -1288,15 +1288,10 @@ class Router:
         """
 
         ### ROUTING SETUP ###
-        if self._normalize_strategy(routing_strategy) == "lar1":
-            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
-
-            apply_lar1_routing_strategy(self, routing_strategy_args)
-        else:
-            self.routing_strategy_init(
-                routing_strategy=routing_strategy,
-                routing_strategy_args=routing_strategy_args,
-            )
+        self.routing_strategy_init(
+            routing_strategy=routing_strategy,
+            routing_strategy_args=routing_strategy_args,
+        )
         self._init_routing_groups(self._routing_groups_input)
         self._override_selectors: dict[str, RouterStrategySelector | None] = {}
         self._override_selectors_lock = threading.Lock()
@@ -1558,12 +1553,6 @@ class Router:
         cache, not on the selector.
         """
         strategy: Final = self._normalize_strategy(self.routing_strategy)
-        if strategy == "lar1":
-            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
-
-            apply_lar1_routing_strategy(self, self.routing_strategy_args)
-            return
-
         attr: Final = self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.get(strategy or "")
         current: Final = getattr(self, attr, None) if attr is not None else None
         if attr is None or current is None:
@@ -1789,7 +1778,7 @@ class Router:
         from key/team `router_settings`) out of the request kwargs.
 
         Only strategies with a per-request-capable selector are honored;
-        anything else (unknown strings, `lar1`, `provider-budget-routing`) is
+        anything else (unknown strings, `provider-budget-routing`) is
         ignored with a warning so a bad value stored on a key or team can
         never take down that caller's traffic.
         """
@@ -12707,16 +12696,6 @@ class Router:
         ]
         return _settings_to_return
 
-    def _switch_routing_strategy(self, routing_strategy: str | None, kwargs: Mapping[str, object]) -> None:
-        if routing_strategy == "lar1":
-            from litellm.router_strategy.lar1_routing import apply_lar1_routing_strategy
-
-            apply_lar1_routing_strategy(self, kwargs.get("routing_strategy_args"))
-            return
-        self.routing_strategy_init(
-            routing_strategy=routing_strategy, routing_strategy_args=kwargs.get("routing_strategy_args", {})
-        )
-
     def update_settings(self, **kwargs):
         """
         Update the router settings.
@@ -12754,7 +12733,10 @@ class Router:
                     if var == "routing_strategy":
                         value = self._normalize_strategy(value)
                         if _existing_router_settings["routing_strategy"] != value:
-                            self._switch_routing_strategy(value, kwargs)
+                            self.routing_strategy_init(
+                                routing_strategy=value,
+                                routing_strategy_args=kwargs.get("routing_strategy_args", {}),
+                            )
                             rebuild_routing_groups = True
                     elif var == "routing_strategy_args":
                         routing_args_updated = value != self.routing_strategy_args

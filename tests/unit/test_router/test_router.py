@@ -2472,23 +2472,12 @@ def test_get_model_list_of_routed_group_falls_back_to_the_wildcard_route_serving
     assert _served_models(router.get_model_list(model_name="openai/gpt-4o")) == ["ollama/qwen3:0.6b"]
 
 
-def test_switch_routing_strategy_installs_lar1_then_restores_the_default_selector():
+def test_switch_routing_strategy_installs_usage_based_v2_selector():
     router = _alias_cost_router()
 
-    router._switch_routing_strategy(
-        "lar1",
-        {
-            "routing_strategy_args": {
-                "confidence_threshold_low": 0.1,
-                "confidence_threshold_medium": 0.3,
-                "confidence_threshold_high": 0.9,
-            }
-        },
-    )
-    assert router.routing_strategy == "lar1"
-    assert "async_get_available_deployment" in router.__dict__
+    router.update_settings(routing_strategy="usage-based-routing-v2")
 
-    router._switch_routing_strategy("usage-based-routing-v2", {})
+    assert router.routing_strategy == "usage-based-routing-v2"
     assert router.lowesttpm_logger_v2 is not None
     assert "async_get_available_deployment" not in router.__dict__
 
