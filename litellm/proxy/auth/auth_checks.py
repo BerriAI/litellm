@@ -5605,6 +5605,7 @@ def can_project_access_model(
         model=model,
         llm_router=llm_router,
         models=project_object.models if project_object else [],
+        team_id=project_object.team_id if project_object else None,
         key_model_aliases=key_model_aliases,
         object_type="project",
     )
