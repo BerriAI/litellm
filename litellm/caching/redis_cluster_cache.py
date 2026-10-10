@@ -11,7 +11,7 @@ from litellm.caching.redis_cache import RedisCache
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
-    from redis.asyncio import Redis, RedisCluster
+    from redis.asyncio import Redis
     from redis.asyncio.client import Pipeline
 
     pipeline = Pipeline
@@ -26,22 +26,6 @@ else:
 class RedisClusterCache(RedisCache):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        self.redis_async_redis_cluster_client: RedisCluster | None = None
-        self.redis_sync_redis_cluster_client: RedisCluster | None = None
-
-    def init_async_client(self):
-        from redis.asyncio import RedisCluster
-
-        from .._redis import get_redis_async_client
-
-        if self.redis_async_redis_cluster_client:
-            return self.redis_async_redis_cluster_client
-
-        _redis_client: Final = get_redis_async_client(connection_pool=self.async_redis_conn_pool, **self.redis_kwargs)
-        if isinstance(_redis_client, RedisCluster):
-            self.redis_async_redis_cluster_client = _redis_client
-
-        return _redis_client
 
     def _run_redis_mget_operation(self, keys: list[str]) -> list[Any]:
         """
