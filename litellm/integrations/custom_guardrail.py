@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, cast, get_args
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
@@ -69,6 +70,7 @@ GUARDRAIL_SESSIONS_TARGET: Final = "guardrail_sessions"
 # field to suppress a guardrail on the direct-SDK path that never reaches the
 # proxy's metadata sanitizer.
 _PRE_CALL_EXECUTED_TOKEN: Final = secrets.token_hex(16)
+_EMBEDDING_INPUT_ADAPTER: Final = TypeAdapter[list[str]](list[str])
 
 _GUARDRAIL_BLOCK_STATUS_CODES: Final = frozenset({400, 403, 422})
 
@@ -1605,20 +1607,40 @@ class CustomGuardrail(CustomLogger):
         ):
             return data.get("messages")
 
-        #########################################################
-        # /responses
-        # User/System messages are stored in the "input" key, use litellm transformation to get the messages
-        #########################################################
-        if call_type == CallTypes.responses.value or call_type == CallTypes.aresponses.value:
+        if call_type in (
+            CallTypes.embedding.value,
+            CallTypes.aembedding.value,
+            CallTypes.responses.value,
+            CallTypes.aresponses.value,
+        ):
+            input_data: Final = data.get("input")
+
+            if call_type in (CallTypes.embedding.value, CallTypes.aembedding.value):
+                if isinstance(input_data, str):
+                    return [{"role": "user", "content": input_data}]
+                if isinstance(input_data, list):
+                    try:
+                        embedding_input: Final = _EMBEDDING_INPUT_ADAPTER.validate_python(
+                            input_data,  # pyright: ignore[reportUnknownArgumentType]  # 请求体字段由上游动态传入
+                            strict=True,
+                        )
+                    except ValidationError:
+                        return None
+                    return [{"role": "user", "content": item} for item in embedding_input]
+                return None
+
+            if input_data is None:
+                return None
+
+            #########################################################
+            # /responses
+            # User/System messages are stored in the "input" key, use litellm transformation to get the messages
+            #########################################################
             from typing import cast
 
             from litellm.responses.litellm_completion_transformation.transformation import (
                 LiteLLMCompletionResponsesConfig,
             )
-
-            input_data: Final = data.get("input")
-            if input_data is None:
-                return None
 
             messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
                 input=input_data,

@@ -32,6 +32,68 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 
+class TestGetGuardrailsMessagesForCallType:
+    @pytest.mark.parametrize("call_type", [CallTypes.embedding, CallTypes.aembedding])
+    @pytest.mark.parametrize(
+        ("embedding_input", "expected_messages"),
+        [
+            ("hello", [{"role": "user", "content": "hello"}]),
+            (
+                ["first", "second"],
+                [
+                    {"role": "user", "content": "first"},
+                    {"role": "user", "content": "second"},
+                ],
+            ),
+        ],
+        ids=["single-text", "batch-text"],
+    )
+    def test_embedding_text_input_is_extracted_as_user_messages(
+        self,
+        call_type: CallTypes,
+        embedding_input: str | list[str],
+        expected_messages: list[dict[str, str]],
+    ) -> None:
+        guardrail: Final = CustomGuardrail(guardrail_name="embedding-extractor")
+        data: Final = {"input": embedding_input}
+
+        messages: Final = guardrail.get_guardrails_messages_for_call_type(call_type=call_type, data=data)
+
+        assert messages == expected_messages
+        assert data == {"input": embedding_input}
+
+    @pytest.mark.parametrize("call_type", [CallTypes.embedding, CallTypes.aembedding])
+    def test_embedding_batch_with_non_text_values_is_not_extracted(self, call_type: CallTypes) -> None:
+        guardrail: Final = CustomGuardrail(guardrail_name="embedding-extractor")
+        data: Final = {"input": [1, 2]}
+
+        messages: Final = guardrail.get_guardrails_messages_for_call_type(call_type=call_type, data=data)
+
+        assert messages is None
+        assert data == {"input": [1, 2]}
+
+    @pytest.mark.parametrize("call_type", [CallTypes.embedding, CallTypes.aembedding])
+    @pytest.mark.parametrize("embedding_input", [None, 123, {"text": "hello"}], ids=["none", "number", "object"])
+    def test_embedding_unsupported_input_is_not_extracted(self, call_type: CallTypes, embedding_input: object) -> None:
+        guardrail: Final = CustomGuardrail(guardrail_name="embedding-extractor")
+        data: Final = {"input": embedding_input}
+
+        messages: Final = guardrail.get_guardrails_messages_for_call_type(call_type=call_type, data=data)
+
+        assert messages is None
+        assert data == {"input": embedding_input}
+
+    @pytest.mark.parametrize("call_type", [CallTypes.responses, CallTypes.aresponses])
+    def test_responses_missing_input_is_not_extracted(self, call_type: CallTypes) -> None:
+        guardrail: Final = CustomGuardrail(guardrail_name="responses-extractor")
+        data: Final = {"input": None}
+
+        messages: Final = guardrail.get_guardrails_messages_for_call_type(call_type=call_type, data=data)
+
+        assert messages is None
+        assert data == {"input": None}
+
+
 class TestCustomGuardrailDeploymentHook:
     @pytest.mark.asyncio
     async def test_async_pre_call_deployment_hook_no_guardrails(self):
