@@ -199,11 +199,7 @@ class UserAPIKeyAuthExceptionHandler:
                 logging.DEBUG if is_expected_challenge else logging.WARNING if is_quiet_log else logging.ERROR
             )
             logger: Final = (
-                verbose_proxy_logger
-                if is_expected_challenge
-                else verbose_proxy_stdout_logger
-                if is_quiet_log
-                else verbose_proxy_logger
+                verbose_proxy_stdout_logger if is_quiet_log and not is_expected_challenge else verbose_proxy_logger
             )
             exc_info: Final = (
                 None

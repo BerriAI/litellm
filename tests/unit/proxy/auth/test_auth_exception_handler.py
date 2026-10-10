@@ -1178,6 +1178,7 @@ async def _capture_authentication_exception(
 async def test_expected_missing_credential_logs_debug_without_traceback_and_preserves_response(
     tracebacks_enabled: bool,
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy.auth.auth_utils import MissingCredentialError, mark_expected_credential_challenge
 
@@ -1185,65 +1186,39 @@ async def test_expected_missing_credential_logs_debug_without_traceback_and_pres
     mark_expected_credential_challenge(flagged_request)
     unflagged_request: Final = Request({"type": "http", "method": "POST", "path": "/mcp", "headers": []})
     message: Final = "Malformed API Key passed in. Ensure Key has `Bearer ` prefix."
-    previous_propagate: Final = verbose_proxy_logger.propagate
-    verbose_proxy_logger.propagate = True
-    try:
-        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
-            flagged_response: Final = await _capture_authentication_exception(
-                MissingCredentialError(message),
-                flagged_request,
-                tracebacks_enabled,
-            )
-        flagged_records: Final = tuple(
-            record for record in caplog.records if "user_api_key_auth(): Exception occured" in record.getMessage()
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
+        flagged_response: Final = await _capture_authentication_exception(
+            MissingCredentialError(message),
+            flagged_request,
+            tracebacks_enabled,
         )
-        assert tuple(record.levelname for record in flagged_records) == ("DEBUG",)
-        assert flagged_records[0].exc_info is None
-
-        caplog.clear()
-        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
-            unflagged_response: Final = await _capture_authentication_exception(
-                MissingCredentialError(message),
-                unflagged_request,
-                tracebacks_enabled,
-            )
-        unflagged_records: Final = tuple(
-            record for record in caplog.records if "user_api_key_auth(): Exception occured" in record.getMessage()
-        )
-        assert tuple(record.levelname for record in unflagged_records) == ("ERROR",)
-        assert unflagged_records[0].exc_info is not None
-        assert vars(flagged_response) == vars(unflagged_response)
-        assert flagged_response.to_dict() == unflagged_response.to_dict()
-    finally:
-        verbose_proxy_logger.propagate = previous_propagate
-
-
-@pytest.mark.asyncio
-async def test_unflagged_missing_credential_keeps_error_traceback(caplog: pytest.LogCaptureFixture) -> None:
-    from litellm.proxy.auth.auth_utils import MissingCredentialError
-
-    previous_propagate: Final = verbose_proxy_logger.propagate
-    verbose_proxy_logger.propagate = True
-    try:
-        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
-            await _capture_authentication_exception(
-                MissingCredentialError("Malformed API Key passed in. Ensure Key has `Bearer ` prefix."),
-                Request({"type": "http", "method": "POST", "path": "/mcp", "headers": []}),
-                False,
-            )
-    finally:
-        verbose_proxy_logger.propagate = previous_propagate
-
-    records: Final = tuple(
+    flagged_records: Final = tuple(
         record for record in caplog.records if "user_api_key_auth(): Exception occured" in record.getMessage()
     )
-    assert tuple(record.levelname for record in records) == ("ERROR",)
-    assert records[0].exc_info is not None
+    assert tuple(record.levelname for record in flagged_records) == ("DEBUG",)
+    assert flagged_records[0].exc_info is None
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
+        unflagged_response: Final = await _capture_authentication_exception(
+            MissingCredentialError(message),
+            unflagged_request,
+            tracebacks_enabled,
+        )
+    unflagged_records: Final = tuple(
+        record for record in caplog.records if "user_api_key_auth(): Exception occured" in record.getMessage()
+    )
+    assert tuple(record.levelname for record in unflagged_records) == ("ERROR",)
+    assert unflagged_records[0].exc_info is not None
+    assert vars(flagged_response) == vars(unflagged_response)
+    assert flagged_response.to_dict() == unflagged_response.to_dict()
 
 
 @pytest.mark.asyncio
 async def test_expected_missing_credential_callback_403_is_escalated_and_unchanged(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy.auth.auth_utils import MissingCredentialError, mark_expected_credential_challenge
 
@@ -1252,55 +1227,48 @@ async def test_expected_missing_credential_callback_403_is_escalated_and_unchang
     unflagged_request: Final = Request({"type": "http", "method": "POST", "path": "/mcp", "headers": []})
     callback_exception: Final = HTTPException(status_code=403, detail="Forbidden")
     message: Final = "Malformed API Key passed in. Ensure Key has `Bearer ` prefix."
-    previous_propagate: Final = verbose_proxy_logger.propagate
-    verbose_proxy_logger.propagate = True
-    try:
-        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
-            flagged_response: Final = await _capture_authentication_exception(
-                MissingCredentialError(message),
-                flagged_request,
-                False,
-                callback_exception,
-            )
-        flagged_records: Final = tuple(
-            record for record in caplog.records if "user_api_key_auth(): Exception occured" in record.getMessage()
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
+        flagged_response: Final = await _capture_authentication_exception(
+            MissingCredentialError(message),
+            flagged_request,
+            False,
+            callback_exception,
         )
-        assert tuple(record.levelname for record in flagged_records) == ("DEBUG", "ERROR")
-        assert flagged_response.code == str(status.HTTP_403_FORBIDDEN)
+    flagged_records: Final = tuple(
+        record for record in caplog.records if "user_api_key_auth(): Exception occured" in record.getMessage()
+    )
+    assert tuple(record.levelname for record in flagged_records) == ("DEBUG", "ERROR")
+    assert flagged_response.code == str(status.HTTP_403_FORBIDDEN)
 
-        caplog.clear()
-        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
-            unflagged_response: Final = await _capture_authentication_exception(
-                MissingCredentialError(message),
-                unflagged_request,
-                False,
-                callback_exception,
-            )
-        assert vars(flagged_response) == vars(unflagged_response)
-        assert flagged_response.to_dict() == unflagged_response.to_dict()
-    finally:
-        verbose_proxy_logger.propagate = previous_propagate
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
+        unflagged_response: Final = await _capture_authentication_exception(
+            MissingCredentialError(message),
+            unflagged_request,
+            False,
+            callback_exception,
+        )
+    assert vars(flagged_response) == vars(unflagged_response)
+    assert flagged_response.to_dict() == unflagged_response.to_dict()
 
 
 @pytest.mark.asyncio
 async def test_expected_credential_marker_does_not_quiet_policy_rejection(
     caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from litellm.proxy.auth.auth_utils import mark_expected_credential_challenge
 
     request: Final = Request({"type": "http", "method": "POST", "path": "/mcp", "headers": []})
     mark_expected_credential_challenge(request)
-    previous_propagate: Final = verbose_proxy_logger.propagate
-    verbose_proxy_logger.propagate = True
-    try:
-        with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
-            response: Final = await _capture_authentication_exception(
-                HTTPException(status_code=403, detail="Policy rejected request"),
-                request,
-                False,
-            )
-    finally:
-        verbose_proxy_logger.propagate = previous_propagate
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    with caplog.at_level(logging.DEBUG, logger=verbose_proxy_logger.name):
+        response: Final = await _capture_authentication_exception(
+            HTTPException(status_code=403, detail="Policy rejected request"),
+            request,
+            False,
+        )
 
     records: Final = tuple(
         record for record in caplog.records if "user_api_key_auth(): Exception occured" in record.getMessage()

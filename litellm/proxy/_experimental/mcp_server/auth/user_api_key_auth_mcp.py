@@ -87,7 +87,6 @@ if TYPE_CHECKING:
 
 
 _EMPTY_TOOLSET_GRANTS: Final[Mapping[str, Sequence[str]]] = MappingProxyType({})
-_GENERAL_SETTINGS_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 
 
@@ -382,13 +381,17 @@ def _admission_failure_fallback(
 
 
 def _has_litellm_credential_header(headers: Headers) -> bool:
-    if "x-litellm-api-key" in headers or "Authorization" in headers:
+    if (
+        MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_PRIMARY in headers
+        or MCPRequestHandler.LITELLM_API_KEY_HEADER_NAME_SECONDARY in headers
+    ):
         return True
 
     from litellm.proxy.proxy_server import general_settings  # pyright: ignore[reportUnknownVariableType]  # legacy map
 
-    settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(general_settings)
-    custom_header_name: Final = OPTIONAL_STRING_ADAPTER.validate_python(settings.get("litellm_key_header_name"))
+    custom_header_name: Final = OPTIONAL_STRING_ADAPTER.validate_python(
+        general_settings.get("litellm_key_header_name")  # pyright: ignore[reportUnknownMemberType]  # legacy settings
+    )
     return custom_header_name is not None and custom_header_name in headers
 
 
