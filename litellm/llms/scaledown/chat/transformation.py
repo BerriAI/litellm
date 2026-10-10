@@ -361,7 +361,7 @@ def _deref(
             return current, followed, False
         if not isinstance(ref, str) or not ref.startswith("#"):
             _reject("ScaleDown extraction supports only local JSON Pointer $refs.")
-        pointer: str = unquote(ref[1:])  # rebind-ok: decode each reference in the bounded walk
+        pointer: str = unquote(ref[1:])
         if not pointer.startswith("/"):
             _reject("ScaleDown extraction supports only local JSON Pointer $refs beginning with #/.")
         if any(key in current for key in ("properties", "items", "type")):
