@@ -2,7 +2,7 @@
 #
 # Wires OCR tests into the Redis-backed VCR cache so live provider
 # calls (Mistral OCR, Azure AI OCR, Azure Document Intelligence,
-# Vertex AI OCR) are replayed for 24h. See tests/llm_translation/Readme.md
+# Vertex AI OCR) are replayed for 24h. See tests/VCR_TESTING.md
 # for the design overview.
 
 import pytest

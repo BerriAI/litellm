@@ -1,4 +1,4 @@
-Unit tests for individual LLM providers.
+Shared VCR documentation for provider tests.
 
 Name of the test file is the name of the LLM provider - e.g. `test_openai.py` is for OpenAI.
 
@@ -25,7 +25,6 @@ The same VCR cache is used by other test directories that exercise live
 provider APIs. The reusable conftest plumbing lives in
 `tests/_vcr_conftest_common.py` and is wired into:
 
-- `tests/llm_translation/`
 - `tests/audio_tests/`
 - `tests/batches_tests/`
 - `tests/guardrails_tests/`
@@ -67,5 +66,5 @@ make test-llm-translation-flush-vcr-cache
 Skip the cache entirely (every call goes live, no recording):
 
 ```bash
-LITELLM_VCR_DISABLE=1 uv run pytest tests/llm_translation/test_<file>.py
+LITELLM_VCR_DISABLE=1 uv run pytest tests/audio_tests/test_<file>.py
 ```
