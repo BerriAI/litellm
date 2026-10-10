@@ -7,7 +7,7 @@ with guardrail transformations, including tool calls.
 
 import json
 from collections.abc import Mapping
-from typing import Any, Literal, Optional
+from typing import Any, Final, Literal, Optional
 
 import pytest
 
@@ -1395,29 +1395,65 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         )
 
         assert [
-            (tool_call["id"], tool_call["function"]["arguments"])
-            for tool_call in guardrail.seen_inputs[-1]["tool_calls"]
-        ] == [("call_1", '{"fruit": "persimmon"}'), ("call_2", '{"fruit": "durian"}')]
+            [(tool_call["id"], tool_call["function"]["arguments"]) for tool_call in inputs["tool_calls"]]
+            for inputs in guardrail.seen_inputs
+        ] == [[("call_1", '{"fruit": "persimmon"}')], [("call_2", '{"fruit": "durian"}')]]
 
     @pytest.mark.asyncio
-    async def test_deliver_ended_stream_tool_call_rewrite_on_multi_choice_stream_fails_closed(self):
-        from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+    @pytest.mark.parametrize("transform", [False, True])
+    async def test_each_choice_refreshes_shared_guardrail_response_context(self, transform: bool) -> None:
+        from fastapi import HTTPException
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
 
-        handler = OpenAIChatCompletionsHandler()
-        chunks = self._two_choice_tool_call_stream_chunks()
+        class ContextGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                response: Final = request_data["response"]
+                assert isinstance(response, ModelResponse)
+                request_data["visited_choices"] = (*request_data.get("visited_choices", ()), response.choices[0].index)
+                if response.choices[0].message.content == "forbidden":
+                    raise HTTPException(status_code=400, detail="later choice blocked")
+                return inputs
 
-        with pytest.raises(UndeliverableStreamRewrite, match="the stream carries 2 choices") as raised:
-            await handler.process_output_streaming_response(
-                responses_so_far=chunks,
-                guardrail_to_apply=MockGuardrail(guardrail_name="test"),
-                litellm_logging_obj=None,
-                deliver_ended_stream_rewrites=True,
+        chunks: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=index, delta=Delta(content=text, tool_calls=[{
+                "index": 0, "id": f"call_{index}", "type": "function",
+                "function": {"name": "contact", "arguments": "{}"},
+            }]), finish_reason="tool_calls",
+        ) for index, text in enumerate(("allowed", "forbidden"))])]
+        request_data: Final = {"metadata": {"trace": "retained"}}
+        with pytest.raises(HTTPException, match="later choice blocked"):
+            await OpenAIChatCompletionsHandler().process_output_streaming_response(
+                responses_so_far=chunks, guardrail_to_apply=ContextGuardrail(guardrail_name="context"),
+                request_data=request_data, deliver_ended_stream_rewrites=True,
+                stream_transform_sink=StreamTransformSink() if transform else None,
             )
+        assert request_data["visited_choices"] == (0, 1)
+        assert request_data["metadata"]["trace"] == "retained"
+        assert request_data["responses"] is chunks
+        restored: Final = request_data["response"]
+        assert isinstance(restored, ModelResponse)
+        assert tuple(choice.index for choice in restored.choices) == (0, 1)
 
-        assert raised.value.guardrail_name == "test"
-        assert raised.value.reason == (
-            "the stream carries 2 choices and tool-call rewrites are only written back on single-choice streams"
+    @pytest.mark.asyncio
+    async def test_deliver_ended_stream_tool_rewrites_keep_choice_indices(self) -> None:
+        handler: Final = OpenAIChatCompletionsHandler()
+        chunks: Final = self._two_choice_tool_call_stream_chunks()
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=MockGuardrail(guardrail_name="test"),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
         )
+        arguments: Final = tuple(
+            "".join(call.function.arguments for chunk in chunks for choice in chunk.choices
+                    if choice.index == index for call in choice.delta.tool_calls or ())
+            for index in range(2)
+        )
+        assert arguments == ('{"fruit": "PERSIMMON"}', '{"fruit": "DURIAN"}')
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_clean_multi_choice_stream_released_untouched(self):
