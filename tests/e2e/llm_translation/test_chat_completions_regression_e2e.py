@@ -711,6 +711,11 @@ class TestAzureOpenAIChatCompletions:
         )
         assert len(response.choices) == 1, f"bridged reply returned {len(response.choices)} choices: {response}"
         assert response.choices[0].finish_reason == "tool_calls", f"expected finish_reason tool_calls: {response}"
+        message = response.choices[0].message
+        assert message.tool_calls, f"expected tool calls in the bridged reply: {response}"
+        assert "commentary" not in (
+            message.provider_specific_fields.model_dump() if message.provider_specific_fields else {}
+        ), f"tool-call turns must keep the preamble in content, not provider_specific_fields: {response}"
         _assert_weather_tool_call(response)
 
 

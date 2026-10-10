@@ -5,6 +5,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass, field
 from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
@@ -1052,12 +1053,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         merged_role: Final = cast(  # cast-ok: provider role passthrough, "assistant" when absent
             'Literal["assistant", "user", "system", "tool", "function"]', first_message_role or "assistant"
         )
+        answer_text: Final = "".join(content_parts)
+        commentary_text: Final = "".join(commentary_parts)
         merged_message: Final = Message(
             role=merged_role,
-            content="".join(content_parts)
-            if content_parts
-            else ("" if commentary_parts and not accumulated_tool_calls else None),
-            provider_specific_fields={"commentary": "".join(commentary_parts)} if commentary_parts else None,
+            content=answer_text if answer_text else (commentary_text if commentary_text else None),
+            provider_specific_fields={"commentary": commentary_text} if commentary_text and answer_text else None,
             tool_calls=accumulated_tool_calls or None,
             annotations=folded_annotations or None,
             reasoning_content=" ".join(reasoning_summary_texts) or None,
@@ -1622,6 +1623,13 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return status_mapping.get(status, "stop")
 
 
+@dataclass(slots=True)
+class _CommentaryStreamState:
+    item_ids: set[str] = field(default_factory=set)
+    pending: list[str] = field(default_factory=list)
+    answer_started: bool = False
+
+
 class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def __init__(
         self,
@@ -1633,7 +1641,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._chat_completion_id: str | None = None
         self._served_service_tier: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
-        self._commentary_item_ids: set[str] = set()  # mutable-ok: per-stream accumulator state
+        self._commentary_state: Final = _CommentaryStreamState()
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1674,7 +1682,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def translate_responses_chunk_to_openai_stream(
         parsed_chunk: dict | BaseModel,
         tool_call_index_map: dict[int, int] | None = None,  # mutable-ok: per-stream state, remapped in place
-        commentary_item_ids: set[str] | None = None,  # mutable-ok: per-stream state, extended in place
+        commentary_state: "_CommentaryStreamState | None" = None,
     ) -> "ModelResponseStream":
         """
         Translate a Responses API streaming chunk to OpenAI chat completion streaming format.
@@ -1682,7 +1690,8 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         Args:
             parsed_chunk: Dict containing the Responses API event chunk
             tool_call_index_map: Per-stream output_index -> sequential tool_call index map
-            commentary_item_ids: Per-stream set of commentary-phase message item ids
+            commentary_state: Per-stream commentary tracker; commentary stays in
+                content until a final-answer delta has started
 
         Returns:
             ModelResponseStream: OpenAI-formatted streaming chunk
@@ -1739,13 +1748,13 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 "Mapping[str, object]", output_item
             )
             if (
-                commentary_item_ids is not None
+                commentary_state is not None
                 and output_item_map.get("type") == "message"
                 and output_item_map.get("phase") == "commentary"
             ):
                 commentary_item_id: Final = output_item_map.get("id")
                 if isinstance(commentary_item_id, str):
-                    commentary_item_ids.add(commentary_item_id)
+                    commentary_state.item_ids.add(commentary_item_id)
             if output_item.get("type") in ("function_call", "custom_tool_call"):
                 converted: Final = tool_call_dict_from_output_item(output_item, parsed_chunk.get("output_index", 0))
                 provider_specific_fields: Final = converted.get("provider_specific_fields")
@@ -1860,21 +1869,50 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
 
         elif event_type == "response.output_text.delta":
             # Content part added to output
-            content_part = parsed_chunk.get("delta", None)
+            content_part = cast(
+                "str | None", parsed_chunk.get("delta", None)
+            )  # cast-ok: output_text.delta deltas are strings
             if content_part is not None:
                 delta_item_id: Final = cast(  # cast-ok: delta events are string-keyed json objects
                     "Mapping[str, object]", parsed_chunk
                 ).get("item_id")
-                if commentary_item_ids is not None and delta_item_id in commentary_item_ids:
+                if commentary_state is not None and delta_item_id in commentary_state.item_ids:
+                    if commentary_state.answer_started:
+                        return ModelResponseStream(
+                            choices=[
+                                StreamingChoices(
+                                    index=0,
+                                    delta=Delta(content=None, provider_specific_fields={"commentary": content_part}),
+                                    finish_reason=None,
+                                )
+                            ]
+                        )
+                    commentary_state.pending.append(content_part)
                     return ModelResponseStream(
                         choices=[
                             StreamingChoices(
                                 index=0,
-                                delta=Delta(content=None, provider_specific_fields={"commentary": content_part}),
+                                delta=Delta(content=""),
                                 finish_reason=None,
                             )
                         ]
                     )
+                if commentary_state is not None and content_part and not commentary_state.answer_started:
+                    commentary_state.answer_started = True  # rebind-ok: per-stream accumulator state, mutated in place
+                    if commentary_state.pending:
+                        commentary_text: Final = "".join(commentary_state.pending)
+                        commentary_state.pending.clear()
+                        return ModelResponseStream(
+                            choices=[
+                                StreamingChoices(
+                                    index=0,
+                                    delta=Delta(
+                                        content=content_part, provider_specific_fields={"commentary": commentary_text}
+                                    ),
+                                    finish_reason=None,
+                                )
+                            ]
+                        )
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
@@ -1924,12 +1962,19 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response_data.get("usage"))
             provider_metadata: Final = _provider_metadata(response_data)
             served_service_tier: Final = response_data.get("service_tier")
+            pending_commentary: Final = (
+                "".join(commentary_state.pending)
+                if commentary_state is not None and commentary_state.pending and not commentary_state.answer_started
+                else ""
+            )
+            if commentary_state is not None:
+                commentary_state.pending.clear()
             return ModelResponseStream(
                 choices=[
                     StreamingChoices(
                         index=0,
                         delta=Delta(
-                            content="",
+                            content=pending_commentary,
                             reasoning_items=terminal_reasoning_items_typed,
                         ),
                         finish_reason=finish_reason,
@@ -1976,7 +2021,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
                 OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
                     chunk,
                     tool_call_index_map=self._tool_call_index_map,
-                    commentary_item_ids=self._commentary_item_ids,
+                    commentary_state=self._commentary_state,
                 )
             )
         )

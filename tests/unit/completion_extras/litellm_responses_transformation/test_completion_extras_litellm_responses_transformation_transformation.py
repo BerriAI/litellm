@@ -3496,7 +3496,7 @@ def test_convert_response_output_routes_commentary_phase_to_provider_specific_fi
     assert choices[0].finish_reason == "stop"
 
 
-def test_convert_response_output_commentary_only_with_tool_call_keeps_content_none() -> None:
+def test_convert_response_output_commentary_only_with_tool_call_keeps_note_in_content() -> None:
     choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
         (
             _bridge_message("msg_1", "Let me check.", phase="commentary"),
@@ -3513,11 +3513,36 @@ def test_convert_response_output_commentary_only_with_tool_call_keeps_content_no
     )
 
     assert len(choices) == 1
-    assert choices[0].message.content is None
-    assert choices[0].message.provider_specific_fields == {"commentary": "Let me check. Looking up Paris."}
+    assert choices[0].message.content == "Let me check. Looking up Paris."
+    assert choices[0].message.provider_specific_fields is None
     assert choices[0].finish_reason == "tool_calls"
     assert len(choices[0].message.tool_calls) == 1
     assert choices[0].message.tool_calls[0]["function"]["name"] == "get_weather"
+
+
+def test_convert_response_output_commentary_only_message_keeps_note_in_content() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (_bridge_message("msg_1", "Let me check.", phase="commentary"),)
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "Let me check."
+    assert choices[0].message.provider_specific_fields is None
+    assert choices[0].finish_reason == "stop"
+
+
+def test_convert_response_output_commentary_after_final_answer_still_routes_to_commentary() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (
+            _bridge_message("msg_1", '{"city": "Paris"}', phase="final_answer"),
+            _bridge_message("msg_2", "trailing note", phase="commentary"),
+        )
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == '{"city": "Paris"}'
+    assert choices[0].message.provider_specific_fields == {"commentary": "trailing note"}
+    assert choices[0].finish_reason == "stop"
 
 
 def test_convert_response_output_raw_dict_commentary_phase_routes_to_commentary() -> None:
@@ -3545,7 +3570,11 @@ def test_convert_response_output_raw_dict_commentary_phase_routes_to_commentary(
     assert choices[0].finish_reason == "stop"
 
 
-def test_chunk_parser_streams_commentary_deltas_to_provider_specific_fields() -> None:
+def _stream_events(iterator: object, chunks: Sequence[dict[str, object]]) -> list:
+    return [iterator.chunk_parser(chunk) for chunk in chunks]  # pyright: ignore[reportAttributeAccessIssue]  # iterator is the bridge iterator under test
+
+
+def test_chunk_parser_commentary_before_answer_joins_into_first_answer_delta() -> None:
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         OpenAiResponsesToChatCompletionStreamIterator,
     )
@@ -3562,7 +3591,14 @@ def test_chunk_parser_streams_commentary_deltas_to_provider_specific_fields() ->
             "item_id": "msg_1",
             "output_index": 0,
             "content_index": 0,
-            "delta": "Let me answer that.",
+            "delta": "Let me answer ",
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "that.",
         },
         {
             "type": "response.output_item.added",
@@ -3578,14 +3614,146 @@ def test_chunk_parser_streams_commentary_deltas_to_provider_specific_fields() ->
         },
     )
 
-    results: Final = [iterator.chunk_parser(chunk) for chunk in chunks]
+    results: Final = _stream_events(iterator, chunks)
 
-    joined_content: Final = "".join(r.choices[0].delta.content or "" for r in results if r.choices)
-    joined_commentary: Final = "".join(
-        (r.choices[0].delta.provider_specific_fields or {}).get("commentary", "") for r in results if r.choices
+    deltas: Final = [r.choices[0].delta for r in results if r.choices]
+    assert [delta.content for delta in deltas] == ["", "", "", "", '{"city": "Paris"}']
+    assert [delta.provider_specific_fields for delta in deltas] == [
+        None,
+        None,
+        None,
+        None,
+        {"commentary": "Let me answer that."},
+    ]
+
+
+def test_chunk_parser_commentary_only_stream_puts_note_in_terminal_content() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
     )
-    assert joined_content == '{"city": "Paris"}'
-    assert joined_commentary == "Let me answer that."
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    chunks: Final = (
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "message", "id": "msg_1", "phase": "commentary", "role": "assistant"},
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Let me check.",
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": " Looking up Paris.",
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "id": "fc_1",
+                "call_id": "call_1",
+                "name": "get_weather",
+                "arguments": '{"city":"Paris"}',
+                "status": "completed",
+            },
+        },
+        {
+            "type": "response.completed",
+            "response": {
+                "id": "resp_1",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "gpt-6-sol",
+                "output": [
+                    {
+                        "type": "function_call",
+                        "id": "fc_1",
+                        "call_id": "call_1",
+                        "name": "get_weather",
+                        "arguments": '{"city":"Paris"}',
+                        "status": "completed",
+                    }
+                ],
+            },
+        },
+    )
+
+    results: Final = _stream_events(iterator, chunks)
+
+    deltas: Final = [r.choices[0].delta for r in results if r.choices]
+    assert all(delta.provider_specific_fields is None for delta in deltas)
+    assert deltas[-1].content == "Let me check. Looking up Paris."
+    assert results[-1].choices[0].finish_reason == "tool_calls"
+
+
+def test_chunk_parser_commentary_after_answer_streams_as_provider_specific_fields() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    chunks: Final = (
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "message", "id": "msg_1", "role": "assistant"},
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": '{"city": "Paris"}',
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {"type": "message", "id": "msg_2", "phase": "commentary", "role": "assistant"},
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_2",
+            "output_index": 1,
+            "content_index": 0,
+            "delta": "trailing note",
+        },
+    )
+
+    results: Final = _stream_events(iterator, chunks)
+
+    deltas: Final = [r.choices[0].delta for r in results if r.choices]
+    assert [delta.content for delta in deltas] == ["", '{"city": "Paris"}', "", None]
+    assert deltas[-1].provider_specific_fields == {"commentary": "trailing note"}
+
+
+def test_chunk_parser_stateless_call_streams_commentary_as_plain_content() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    results: Final = [
+        OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+            {
+                "type": "response.output_text.delta",
+                "item_id": "msg_1",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": "note",
+            }
+        )
+    ]
+
+    assert [r.choices[0].delta.content for r in results] == ["note"]
+    assert results[0].choices[0].delta.provider_specific_fields is None
 
 
 def test_convert_response_output_raw_message_with_malformed_content_returns_no_choices() -> None:
