@@ -20577,6 +20577,27 @@ def test_a_shared_ptu_deployment_whose_shares_do_not_add_up_is_refused_at_regist
         Router(model_list=model_list)
 
 
+def test_a_shared_ptu_deployment_with_a_fractional_count_is_refused_at_registration(monkeypatch):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True")
+    model_list = _shared_ptu_model_list()[:1]
+    model_list[0]["model_info"]["ptu_count"] = 50.5
+    with pytest.raises(ValueError, match="ptu_count"):
+        Router(model_list=model_list)
+
+
+@pytest.mark.parametrize(("flag", "warned"), [("True", True), ("", False)])
+def test_an_unsized_shared_ptu_deployment_is_warned_about_at_registration_only_with_the_feature_on(
+    monkeypatch, caplog, flag, warned
+):
+    monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", flag)
+    model_list = _shared_ptu_model_list()[:1]
+    model_list[0]["litellm_params"]["model"] = "azure/my-ptu-deployment"
+    del model_list[0]["model_info"]["base_model"]
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Router"):
+        Router(model_list=model_list)
+    assert ("'gpt-4.1-ptu'" in caplog.text and "base_model" in caplog.text) is warned
+
+
 def test_a_config_entry_declaring_shares_without_terms_is_refused_even_while_the_feature_is_off(monkeypatch):
     """The split is enforced with the flag off, so its shape is checked with the flag off too: a
     malformed one is refused at boot instead of being honoured or ignored without a word."""

@@ -153,19 +153,25 @@ def _is_mapping(
     return isinstance(value, Mapping)
 
 
-def parsed_ptu_shares(raw: object) -> Mapping[str, int] | None:
-    """``ptu_shares`` as team id -> whole PTUs, else None when empty or any entry is unusable.
+def _whole_ptus(share: object) -> int | None:
+    """``share`` as a positive whole number of PTUs, with ``2.0`` read as 2, else None.
 
-    A share is a count of reserved units, so it has to be a positive integer; ``bool`` is
-    excluded because it is an ``int`` subclass and ``True`` would read as one PTU.
+    ``bool`` is excluded because it is an ``int`` subclass and ``True`` would read as one PTU.
     """
+    if isinstance(share, bool):
+        return None
+    whole: Final = int(share) if isinstance(share, float) and share.is_integer() else share
+    return whole if isinstance(whole, int) and whole > 0 else None
+
+
+def parsed_ptu_shares(raw: object) -> Mapping[str, int] | None:
+    """``ptu_shares`` as team id -> whole PTUs, else None when empty or any entry is unusable."""
     if not _is_mapping(raw) or not raw:
         return None
-    entries: Final = tuple(
-        (team_id, share)
-        for team_id, share in raw.items()
-        if isinstance(team_id, str) and team_id and isinstance(share, int) and not isinstance(share, bool) and share > 0
+    candidates: Final = tuple(
+        (team_id, _whole_ptus(share)) for team_id, share in raw.items() if isinstance(team_id, str) and team_id
     )
+    entries: Final = tuple((team_id, share) for team_id, share in candidates if share is not None)
     if len(entries) != len(raw):
         return None
     return MappingProxyType(dict(entries))

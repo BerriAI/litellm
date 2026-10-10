@@ -399,6 +399,14 @@ def test_a_single_team_reservation_holds_the_whole_count_under_that_team():
             {"ptu_shares": {"team-a": True}},
             "ptu_shares must map at least one team_id to a positive whole number of PTUs",
         ),
+        (
+            {"ptu_shares": {"team-a": "60", "team-b": 40}},
+            "ptu_shares must map at least one team_id to a positive whole number of PTUs",
+        ),
+        (
+            {"ptu_shares": {"team-a": float("inf"), "team-b": 40}},
+            "ptu_shares must map at least one team_id to a positive whole number of PTUs",
+        ),
         ({"ptu_shares": {"": 100}}, "ptu_shares must map at least one team_id to a positive whole number of PTUs"),
         ({"ptu_shares": {None: 100}}, "ptu_shares must map at least one team_id to a positive whole number of PTUs"),
         ({"ptu_shares": {1: 100}}, "ptu_shares must map at least one team_id to a positive whole number of PTUs"),
@@ -412,6 +420,8 @@ def test_a_single_team_reservation_holds_the_whole_count_under_that_team():
         "zero share",
         "fractional share",
         "boolean share",
+        "string share",
+        "infinite share",
         "blank team",
         "null team",
         "numeric team",
@@ -432,6 +442,21 @@ def test_a_whole_count_written_as_a_float_is_checked_against_the_shares_all_the_
     terms = ptu_terms({**_SHARED, "ptu_count": 100.0})
     assert terms is not None
     assert terms.ptu_count == 100
+
+
+def test_whole_shares_written_as_floats_split_the_reservation_like_integers():
+    written_as_floats = {**_SHARED, "ptu_count": 100.0, "ptu_shares": {"team-a": 60.0, "team-b": 40.0}}
+
+    terms = ptu_terms(written_as_floats)
+
+    assert ptu_config_error(written_as_floats) is None
+    assert terms is not None
+    assert terms.shares == {"team-a": 60, "team-b": 40}
+    assert {type(share) for share in terms.shares.values()} == {int}
+
+
+def test_a_rate_that_is_not_a_number_reserves_nothing():
+    assert ptu_terms({**_VALID, "cost_per_ptu_per_hour": "two cents"}) is None
 
 
 def test_a_fractional_count_reserves_nothing():

@@ -9,6 +9,7 @@ from litellm.llms.azure.ptu_capacity import (
     PTUCapacity,
     azure_ptu_capacity,
     deployment_ptu_capacity,
+    is_azure_deployment,
     normalized_tokens,
     ptu_hours,
 )
@@ -87,3 +88,19 @@ def test_one_ptu_hour_is_one_ptus_input_tpm_served_for_sixty_minutes():
     assert ptu_hours(_ROW, _ROW.input_tpm_per_ptu * 60) == pytest.approx(1.0)
     assert ptu_hours(_ROW, _ROW.input_tpm_per_ptu * 30) == pytest.approx(0.5)
     assert ptu_hours(_ROW, 0.0) == 0.0
+
+
+@pytest.mark.parametrize(
+    ("deployment", "expected"),
+    [
+        ({"litellm_params": {"model": "azure/gpt-4.1"}}, True),
+        ({"litellm_params": {"model": "azure_ai/gpt-4.1"}}, True),
+        ({"litellm_params": {"model": "my-ptu-deployment", "custom_llm_provider": "azure"}}, True),
+        ({"litellm_params": {"model": "azure/gpt-4.1", "custom_llm_provider": "openai"}}, False),
+        ({"litellm_params": {"model": "gpt-4.1"}}, False),
+        ({"model_info": {"base_model": "azure/gpt-4.1"}}, False),
+    ],
+    ids=["azure prefix", "azure_ai prefix", "azure provider", "provider over prefix", "no prefix", "no litellm_params"],
+)
+def test_a_deployment_is_azure_by_its_provider_first_and_its_model_prefix_otherwise(deployment, expected):
+    assert is_azure_deployment(deployment) is expected

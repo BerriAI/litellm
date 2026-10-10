@@ -121,7 +121,7 @@ def test_model_info_allows_partial_delta_for_patch():
     assert info.cost_per_ptu_per_hour is None
 
 
-@pytest.mark.parametrize("share", [True, "2", 2.0])
+@pytest.mark.parametrize("share", [True, "2", 2.5, float("inf")])
 def test_model_info_rejects_a_share_that_is_not_a_whole_number(share):
     with pytest.raises(ValueError, match="ptu_shares"):
         ModelInfo(id="x", ptu_shares={"team-a": share})
@@ -129,6 +129,9 @@ def test_model_info_rejects_a_share_that_is_not_a_whole_number(share):
 
 def test_model_info_keeps_whole_number_shares_and_refuses_a_fractional_count():
     assert ModelInfo(id="x", ptu_shares={"team-a": 2}).ptu_shares == {"team-a": 2}
+    written_as_float = ModelInfo(id="x", ptu_shares={"team-a": 2.0}).ptu_shares
+    assert written_as_float == {"team-a": 2}
+    assert written_as_float is not None and type(written_as_float["team-a"]) is int
     with pytest.raises(ValueError, match="ptu_count"):
         ModelInfo(id="x", ptu_count=100.5)
 
