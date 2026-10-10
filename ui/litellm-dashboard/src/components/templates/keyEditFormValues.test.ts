@@ -25,6 +25,22 @@ describe("tpd_limit round trip", () => {
   });
 });
 
+describe("duration in the submitted payload", () => {
+  const submit = (duration: string | null) =>
+    toSubmittedValues(
+      { ...toKeyEditFormValues({ token: "tok", models: [] } as unknown as KeyResponse), duration },
+      { canViewPolicies: true, canViewPrompts: true },
+    );
+
+  it("omits a blank duration so the proxy leaves the expiry unchanged", () => {
+    expect(submit("")).not.toHaveProperty("duration");
+  });
+
+  it.each([["30d"], [null]])("keeps duration %s", (duration) => {
+    expect(submit(duration)).toHaveProperty("duration", duration);
+  });
+});
+
 describe("keyEditFormSchema", () => {
   it("accepts an empty form", () => {
     expect(parse({}).success).toBe(true);

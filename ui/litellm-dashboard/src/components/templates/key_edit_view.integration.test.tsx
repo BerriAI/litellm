@@ -2220,6 +2220,20 @@ describe("KeyEditView", () => {
       expect(onSubmitMock.mock.calls[0][0]).toHaveProperty("duration", null);
     });
 
+    it("untouched expiry sends no duration key", async () => {
+      const { duration: _storedDuration, ...keyWithoutDuration } = MOCK_KEY_DATA;
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock, { ...keyWithoutDuration, expires: "2030-01-01T00:00:00Z" } as KeyResponse);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).not.toHaveProperty("duration");
+    });
+
     it("carries a typed value from every free-text and numeric control into the payload", async () => {
       const onSubmitMock = vi.fn().mockResolvedValue(undefined);
       renderForPayload(onSubmitMock);
