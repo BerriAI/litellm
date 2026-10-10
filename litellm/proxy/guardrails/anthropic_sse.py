@@ -7,115 +7,17 @@ hook scan such a stream, and re-emit it when the guardrail rewrote the response.
 
 from __future__ import annotations
 
-import codecs
 import json
-from collections.abc import Mapping, Sequence
 from typing import Final
 
-from litellm.types.utils import Choices, ModelResponse
-
-_ANTHROPIC_EVENT_TYPES: Final = frozenset(
-    {
-        "message_start",
-        "message_delta",
-        "message_stop",
-        "content_block_start",
-        "content_block_delta",
-        "content_block_stop",
-        "ping",
-        "error",
-    }
+from litellm.llms.anthropic.pass_through.stream_assembly import (
+    assemble_anthropic_sse_stream as assemble_anthropic_sse_stream,
 )
-
-
-def is_raw_sse_stream(all_chunks: Sequence[object]) -> bool:
-    return any(isinstance(chunk, (str, bytes)) for chunk in all_chunks)
-
-
-def _joined_sse_stream(all_chunks: Sequence[object]) -> str | None:
-    raw: Final = b"".join(
-        chunk if isinstance(chunk, bytes) else chunk.encode("utf-8")
-        for chunk in all_chunks
-        if isinstance(chunk, (str, bytes))
-    )
-    try:
-        return codecs.getincrementaldecoder("utf-8")().decode(raw, final=False)
-    except UnicodeDecodeError:
-        return None
-
-
-def _parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
-    from litellm.llms.anthropic.pass_through.stream_assembly import extract_sse_data, split_sse_chunk_into_events
-
-    return tuple(
-        event_data
-        for event in split_sse_chunk_into_events(sse_stream)
-        if (event_data := extract_sse_data(event)) is not None
-    )
-
-
-def _anthropic_message_start(sse_stream: str) -> Mapping[str, object] | None:
-    return next(
-        (
-            message
-            for event_data in _parsed_sse_events(sse_stream)
-            if event_data.get("type") == "message_start" and isinstance(message := event_data.get("message"), dict)
-        ),
-        None,
-    )
-
-
-def is_anthropic_sse_stream(all_chunks: Sequence[object]) -> bool:
-    """Whether raw SSE frames are Anthropic Messages events.
-
-    ``is_raw_sse_stream`` only says the chunks are unparsed bytes, and ``/v1/messages`` is not the
-    only endpoint that streams those: the Google ``:streamGenerateContent`` route marks its own
-    stream raw too. Reading its frames as Anthropic ones would refuse the response in a wire format
-    its client cannot parse, so the surface is decided on the event types actually present.
-    """
-    sse_stream: Final = _joined_sse_stream(all_chunks)
-    if sse_stream is None:
-        return False
-    return any(event.get("type") in _ANTHROPIC_EVENT_TYPES for event in _parsed_sse_events(sse_stream))
-
-
-def assemble_anthropic_sse_stream(
-    all_chunks: Sequence[object], *, restore_identity: bool = False
-) -> ModelResponse | None:
-    """Assemble raw Anthropic SSE frames into a ModelResponse.
-
-    ``restore_identity`` stamps the upstream message id and model onto the result, which the
-    assembler does not carry through. It is off by default so callers that re-emit the assembled
-    response keep the wire shape they had before this helper was shared. The writes land on a
-    freshly built object that is unreachable from caller state until returned.
-    """
-    from litellm.llms.anthropic.pass_through.stream_assembly import build_complete_streaming_response
-
-    sse_stream: Final = _joined_sse_stream(all_chunks)
-    if sse_stream is None:
-        return None
-    message_start: Final = _anthropic_message_start(sse_stream)
-    if message_start is None:
-        return None
-    model: Final = message_start.get("model") if restore_identity else None
-    try:
-        assembled: Final = build_complete_streaming_response(
-            all_chunks=(sse_stream,),
-            litellm_logging_obj=None,  # pyright: ignore[reportArgumentType]  # only forwarded to stream_chunk_builder, which accepts None
-            model=model if isinstance(model, str) else "",
-        )
-    except Exception:  # noqa: BLE001  # stream_chunk_builder re-raises every assembly failure as litellm.APIError
-        return None
-    if not isinstance(assembled, ModelResponse):
-        return None
-    if not restore_identity:
-        return assembled
-    message_id: Final = message_start.get("id")
-    if isinstance(message_id, str):
-        assembled.id = message_id
-    if isinstance(model, str) and model:
-        assembled.model = model
-    return assembled
+from litellm.llms.anthropic.pass_through.stream_assembly import (
+    is_anthropic_sse_stream as is_anthropic_sse_stream,
+)
+from litellm.llms.anthropic.pass_through.stream_assembly import is_raw_sse_stream as is_raw_sse_stream
+from litellm.types.utils import Choices, ModelResponse
 
 
 def model_response_text(response: ModelResponse) -> str:
@@ -141,25 +43,7 @@ def anthropic_sse_error_frames(message: str) -> tuple[bytes, ...]:
     )
 
 
-def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
-    """Whether the buffered stream carries nothing but error frames.
-
-    post_call guardrails run in a chain, so a hook can be handed the terminal error frames an
-    earlier guardrail emitted when it blocked. Those carry no message to assemble, and replacing
-    them would hide the refusal the client is owed. Covers both wire forms a guardrail emits: the
-    Anthropic ``error`` event and the chat-completions ``{"error": ...}`` payload.
-    """
-    if not all(isinstance(chunk, (str, bytes)) for chunk in all_chunks):
-        # A stream mixing typed chunks with an error frame still carries content to scan, and the
-        # frames-only join below would drop exactly the part that has to be scanned
-        return False
-    sse_stream: Final = _joined_sse_stream(all_chunks)
-    if sse_stream is None:
-        return False
-    events: Final = _parsed_sse_events(sse_stream)
-    return len(events) > 0 and all(
-        event.get("type") == "error" or isinstance(event.get("error"), Mapping) for event in events
-    )
+from litellm.llms.anthropic.pass_through.stream_assembly import is_sse_error_stream as is_sse_error_stream  # noqa: E402
 
 
 def anthropic_sse_chunks_from_response(assembled: ModelResponse) -> tuple[bytes, ...]:
