@@ -105,7 +105,7 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
   if (error) {
     return (
       <Alert variant="destructive">
-        <AlertTitle>System One request failed</AlertTitle>
+        <AlertTitle>Decisions request failed</AlertTitle>
         <AlertDescription>{error}</AlertDescription>
       </Alert>
     );
