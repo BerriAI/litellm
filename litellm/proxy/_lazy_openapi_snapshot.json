@@ -9494,17 +9494,878 @@
   },
   "decisions": {
     "components": {
-      "schemas": {}
+      "schemas": {
+        "ChoiceAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "choice": {
+              "title": "Choice",
+              "type": "string"
+            },
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "probabilities": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Probabilities",
+              "type": "object"
+            },
+            "type": {
+              "const": "choice",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "choice",
+            "confidence",
+            "probabilities"
+          ],
+          "title": "ChoiceAnswer",
+          "type": "object"
+        },
+        "DecisionsResponse": {
+          "additionalProperties": true,
+          "properties": {
+            "answers": {
+              "additionalProperties": {
+                "discriminator": {
+                  "mapping": {
+                    "choice": "#/components/schemas/ChoiceAnswer",
+                    "noul": "#/components/schemas/NoulAnswer",
+                    "score": "#/components/schemas/ScoreAnswer"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/NoulAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ChoiceAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/ScoreAnswer"
+                  }
+                ]
+              },
+              "title": "Answers",
+              "type": "object"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            },
+            "usage": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/DecisionsUsage"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            }
+          },
+          "required": [
+            "answers"
+          ],
+          "title": "DecisionsResponse",
+          "type": "object"
+        },
+        "DecisionsUsage": {
+          "additionalProperties": true,
+          "properties": {
+            "input_tokens": {
+              "default": 0,
+              "title": "Input Tokens",
+              "type": "integer"
+            },
+            "output_tokens": {
+              "default": 0,
+              "title": "Output Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "DecisionsUsage",
+          "type": "object"
+        },
+        "NoulAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "noul": {
+              "title": "Noul",
+              "type": "number"
+            },
+            "type": {
+              "const": "noul",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "noul"
+          ],
+          "title": "NoulAnswer",
+          "type": "object"
+        },
+        "OpenAIChoiceAnswer": {
+          "properties": {
+            "choice": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "title": "Choice"
+            },
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "probabilities": {
+              "items": {
+                "$ref": "#/components/schemas/OpenAIChoiceProbability"
+              },
+              "title": "Probabilities",
+              "type": "array"
+            },
+            "type": {
+              "const": "choice",
+              "default": "choice",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "choice",
+            "probabilities",
+            "confidence"
+          ],
+          "title": "OpenAIChoiceAnswer",
+          "type": "object"
+        },
+        "OpenAIChoiceProbability": {
+          "properties": {
+            "probability": {
+              "title": "Probability",
+              "type": "number"
+            },
+            "value": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "boolean"
+                }
+              ],
+              "title": "Value"
+            }
+          },
+          "required": [
+            "value",
+            "probability"
+          ],
+          "title": "OpenAIChoiceProbability",
+          "type": "object"
+        },
+        "OpenAIDecisionInputTokensDetails": {
+          "properties": {
+            "cache_write_tokens": {
+              "default": 0,
+              "title": "Cache Write Tokens",
+              "type": "integer"
+            },
+            "cached_tokens": {
+              "default": 0,
+              "title": "Cached Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "OpenAIDecisionInputTokensDetails",
+          "type": "object"
+        },
+        "OpenAIDecisionOutputTokensDetails": {
+          "properties": {
+            "reasoning_tokens": {
+              "default": 0,
+              "title": "Reasoning Tokens",
+              "type": "integer"
+            }
+          },
+          "title": "OpenAIDecisionOutputTokensDetails",
+          "type": "object"
+        },
+        "OpenAIDecisionResponse": {
+          "additionalProperties": true,
+          "properties": {
+            "answers": {
+              "items": {
+                "discriminator": {
+                  "mapping": {
+                    "choice": "#/components/schemas/OpenAIChoiceAnswer",
+                    "predicate": "#/components/schemas/OpenAIPredicateAnswer",
+                    "refusal": "#/components/schemas/OpenAIRefusalAnswer",
+                    "score": "#/components/schemas/OpenAIScoreAnswer"
+                  },
+                  "propertyName": "type"
+                },
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/OpenAIPredicateAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OpenAIChoiceAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OpenAIScoreAnswer"
+                  },
+                  {
+                    "$ref": "#/components/schemas/OpenAIRefusalAnswer"
+                  }
+                ]
+              },
+              "title": "Answers",
+              "type": "array"
+            },
+            "model": {
+              "title": "Model",
+              "type": "string"
+            },
+            "usage": {
+              "$ref": "#/components/schemas/OpenAIDecisionUsage"
+            }
+          },
+          "required": [
+            "model",
+            "answers",
+            "usage"
+          ],
+          "title": "OpenAIDecisionResponse",
+          "type": "object"
+        },
+        "OpenAIDecisionUsage": {
+          "properties": {
+            "input_tokens": {
+              "title": "Input Tokens",
+              "type": "integer"
+            },
+            "input_tokens_details": {
+              "$ref": "#/components/schemas/OpenAIDecisionInputTokensDetails",
+              "default": {
+                "cache_write_tokens": 0,
+                "cached_tokens": 0
+              }
+            },
+            "output_tokens": {
+              "title": "Output Tokens",
+              "type": "integer"
+            },
+            "output_tokens_details": {
+              "$ref": "#/components/schemas/OpenAIDecisionOutputTokensDetails",
+              "default": {
+                "reasoning_tokens": 0
+              }
+            },
+            "total_tokens": {
+              "title": "Total Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "input_tokens",
+            "output_tokens",
+            "total_tokens"
+          ],
+          "title": "OpenAIDecisionUsage",
+          "type": "object"
+        },
+        "OpenAIPredicateAnswer": {
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "probability": {
+              "title": "Probability",
+              "type": "number"
+            },
+            "type": {
+              "const": "predicate",
+              "default": "predicate",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "probability"
+          ],
+          "title": "OpenAIPredicateAnswer",
+          "type": "object"
+        },
+        "OpenAIRefusalAnswer": {
+          "properties": {
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "type": {
+              "const": "refusal",
+              "default": "refusal",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name"
+          ],
+          "title": "OpenAIRefusalAnswer",
+          "type": "object"
+        },
+        "OpenAIScoreAnswer": {
+          "properties": {
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "name": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Name"
+            },
+            "probabilities": {
+              "items": {
+                "$ref": "#/components/schemas/OpenAIScoreProbability"
+              },
+              "title": "Probabilities",
+              "type": "array"
+            },
+            "score": {
+              "title": "Score",
+              "type": "number"
+            },
+            "type": {
+              "const": "score",
+              "default": "score",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "name",
+            "score",
+            "probabilities",
+            "confidence"
+          ],
+          "title": "OpenAIScoreAnswer",
+          "type": "object"
+        },
+        "OpenAIScoreProbability": {
+          "properties": {
+            "label": {
+              "title": "Label",
+              "type": "string"
+            },
+            "probability": {
+              "title": "Probability",
+              "type": "number"
+            },
+            "value": {
+              "title": "Value",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "value",
+            "label",
+            "probability"
+          ],
+          "title": "OpenAIScoreProbability",
+          "type": "object"
+        },
+        "ScoreAnswer": {
+          "additionalProperties": true,
+          "properties": {
+            "confidence": {
+              "title": "Confidence",
+              "type": "number"
+            },
+            "legend": {
+              "additionalProperties": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "items": {},
+                    "type": "array"
+                  }
+                ]
+              },
+              "title": "Legend",
+              "type": "object"
+            },
+            "probabilities": {
+              "additionalProperties": {
+                "type": "number"
+              },
+              "title": "Probabilities",
+              "type": "object"
+            },
+            "score": {
+              "title": "Score",
+              "type": "number"
+            },
+            "type": {
+              "const": "score",
+              "title": "Type",
+              "type": "string"
+            }
+          },
+          "required": [
+            "type",
+            "score",
+            "confidence",
+            "legend",
+            "probabilities"
+          ],
+          "title": "ScoreAnswer",
+          "type": "object"
+        }
+      }
     },
     "paths": {
       "/decisions": {
         "post": {
+          "description": "Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`) and `score` (an index into `levels`, with `probabilities`). Requests that break these\nrules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy\nmodel list. System One decision models accept this format too, LiteLLM translates the request and the\nanswers. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "decisions_decisions_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "input": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today.",
+                  "model": "luna",
+                  "questions": [
+                    {
+                      "instructions": "Is the customer asking for a refund?",
+                      "name": "is_refund_request",
+                      "type": "predicate"
+                    },
+                    {
+                      "choices": [
+                        {
+                          "description": "can wait a week",
+                          "value": "low"
+                        },
+                        {
+                          "description": "needs action today",
+                          "value": "high"
+                        }
+                      ],
+                      "instructions": "How urgent is this?",
+                      "name": "urgency",
+                      "type": "choice"
+                    },
+                    {
+                      "instructions": "How frustrated is the customer?",
+                      "levels": [
+                        {
+                          "label": "calm"
+                        },
+                        {
+                          "label": "mildly annoyed"
+                        },
+                        {
+                          "label": "angry"
+                        }
+                      ],
+                      "name": "frustration",
+                      "type": "score"
+                    }
+                  ]
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "input": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "items": {
+                                      "discriminator": {
+                                        "propertyName": "type"
+                                      },
+                                      "oneOf": [
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "text": {
+                                              "title": "Text",
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "const": "input_text",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "text"
+                                          ],
+                                          "title": "OpenAIDecisionInputText",
+                                          "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "detail": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Detail"
+                                            },
+                                            "image_url": {
+                                              "title": "Image Url",
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "const": "input_image",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "image_url"
+                                          ],
+                                          "title": "OpenAIDecisionInputImage",
+                                          "type": "object"
+                                        }
+                                      ]
+                                    },
+                                    "type": "array"
+                                  }
+                                ],
+                                "title": "Content"
+                              },
+                              "role": {
+                                "const": "user",
+                                "default": "user",
+                                "title": "Role",
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "message",
+                                "default": "message",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content"
+                            ],
+                            "title": "OpenAIDecisionInputMessage",
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The text being judged, or user messages whose content mixes input_text and input_image parts",
+                      "title": "Input"
+                    },
+                    "model": {
+                      "description": "A decision model from the proxy model_list",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "description": "Predicate, choice and score questions. Answers come back in the same order",
+                      "items": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "instructions": {
+                                "description": "The yes/no question to ask about the input",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "predicate",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "OpenAIPredicateQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "choices": {
+                                "description": "The options the model picks from. Values must be unique",
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "description": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ],
+                                      "title": "Description"
+                                    },
+                                    "value": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        }
+                                      ],
+                                      "title": "Value"
+                                    }
+                                  },
+                                  "required": [
+                                    "value"
+                                  ],
+                                  "title": "OpenAIChoiceOption",
+                                  "type": "object"
+                                },
+                                "maxItems": 255,
+                                "minItems": 2,
+                                "title": "Choices",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "description": "The question to ask about the input",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "choices"
+                            ],
+                            "title": "OpenAIChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "instructions": {
+                                "description": "The question to ask about the input",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "levels": {
+                                "description": "Scale levels from lowest to highest. The score is a level index",
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "description": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ],
+                                      "title": "Description"
+                                    },
+                                    "label": {
+                                      "title": "Label",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "label"
+                                  ],
+                                  "title": "OpenAIScoreLevel",
+                                  "type": "object"
+                                },
+                                "maxItems": 10,
+                                "minItems": 2,
+                                "title": "Levels",
+                                "type": "array"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "levels"
+                            ],
+                            "title": "OpenAIScoreQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 128,
+                      "minItems": 1,
+                      "title": "Questions",
+                      "type": "array"
+                    },
+                    "safety_identifier": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "A stable id for your end user. Sent to OpenAI and dropped for other providers",
+                      "title": "Safety Identifier"
+                    }
+                  },
+                  "required": [
+                    "input",
+                    "questions",
+                    "model"
+                  ],
+                  "title": "OpenAIDecisionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/OpenAIDecisionResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -9515,7 +10376,7 @@
               "APIKeyHeader": []
             }
           ],
-          "summary": "Decisions",
+          "summary": "Ask questions about an input (OpenAI Decisions format)",
           "tags": [
             "decisions"
           ]
@@ -9523,12 +10384,290 @@
       },
       "/systemone": {
         "post": {
+          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider\nis called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "systemone_systemone_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "jev",
+                  "questions": {
+                    "frustration": {
+                      "criteria": [
+                        "calm",
+                        "mildly annoyed",
+                        "angry"
+                      ],
+                      "instructions": "How frustrated is the customer?",
+                      "type": "score"
+                    },
+                    "is_refund_request": {
+                      "instructions": "Is the customer asking for a refund?",
+                      "type": "noul"
+                    },
+                    "urgency": {
+                      "criteria": {
+                        "high": "needs action today",
+                        "low": "can wait a week"
+                      },
+                      "instructions": "How urgent is this?",
+                      "type": "choice"
+                    }
+                  },
+                  "state": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today."
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "model": {
+                      "description": "A decision model from the proxy model_list",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "additionalProperties": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "criteria": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "additionalProperties": true,
+                                          "type": "object"
+                                        },
+                                        {
+                                          "items": {},
+                                          "type": "array"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "enum": [
+                                        "true",
+                                        "false"
+                                      ]
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Optional descriptions of what makes the answer true and what makes it false",
+                                "title": "Criteria"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The yes/no question to ask about the state",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "noul",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ],
+                            "title": "NoulQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "criteria": {
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "description": "Candidate labels mapped to an optional description of each",
+                                "maxProperties": 255,
+                                "minProperties": 1,
+                                "title": "Criteria",
+                                "type": "object"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The question to ask about the state",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "criteria"
+                            ],
+                            "title": "ChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "criteria": {
+                                "description": "Scale levels from lowest to highest. The score is a level index",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    }
+                                  ]
+                                },
+                                "maxItems": 10,
+                                "minItems": 1,
+                                "title": "Criteria",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The question to ask about the state",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "criteria"
+                            ],
+                            "title": "ScoreQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "description": "Named noul, choice and score questions. Each key becomes a key in the answers",
+                      "maxProperties": 128,
+                      "minProperties": 1,
+                      "propertyNames": {
+                        "minLength": 1
+                      },
+                      "title": "Questions",
+                      "type": "object"
+                    },
+                    "state": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        {
+                          "items": {},
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The thing being judged, such as a support ticket, a document or a chat transcript",
+                      "title": "State"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "questions",
+                    "model"
+                  ],
+                  "title": "DecisionsRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/DecisionsResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -9539,7 +10678,7 @@
               "APIKeyHeader": []
             }
           ],
-          "summary": "Systemone",
+          "summary": "Ask named questions about a state (System One format)",
           "tags": [
             "decisions"
           ]
@@ -9547,12 +10686,382 @@
       },
       "/v1/decisions": {
         "post": {
+          "description": "Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.\n\nQuestion types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with\n`probabilities`) and `score` (an index into `levels`, with `probabilities`). Requests that break these\nrules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy\nmodel list. System One decision models accept this format too, LiteLLM translates the request and the\nanswers. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "decisions_v1_decisions_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "input": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today.",
+                  "model": "luna",
+                  "questions": [
+                    {
+                      "instructions": "Is the customer asking for a refund?",
+                      "name": "is_refund_request",
+                      "type": "predicate"
+                    },
+                    {
+                      "choices": [
+                        {
+                          "description": "can wait a week",
+                          "value": "low"
+                        },
+                        {
+                          "description": "needs action today",
+                          "value": "high"
+                        }
+                      ],
+                      "instructions": "How urgent is this?",
+                      "name": "urgency",
+                      "type": "choice"
+                    },
+                    {
+                      "instructions": "How frustrated is the customer?",
+                      "levels": [
+                        {
+                          "label": "calm"
+                        },
+                        {
+                          "label": "mildly annoyed"
+                        },
+                        {
+                          "label": "angry"
+                        }
+                      ],
+                      "name": "frustration",
+                      "type": "score"
+                    }
+                  ]
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "input": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "content": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "items": {
+                                      "discriminator": {
+                                        "propertyName": "type"
+                                      },
+                                      "oneOf": [
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "text": {
+                                              "title": "Text",
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "const": "input_text",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "text"
+                                          ],
+                                          "title": "OpenAIDecisionInputText",
+                                          "type": "object"
+                                        },
+                                        {
+                                          "additionalProperties": false,
+                                          "properties": {
+                                            "detail": {
+                                              "anyOf": [
+                                                {
+                                                  "type": "string"
+                                                },
+                                                {
+                                                  "type": "null"
+                                                }
+                                              ],
+                                              "title": "Detail"
+                                            },
+                                            "image_url": {
+                                              "title": "Image Url",
+                                              "type": "string"
+                                            },
+                                            "type": {
+                                              "const": "input_image",
+                                              "title": "Type",
+                                              "type": "string"
+                                            }
+                                          },
+                                          "required": [
+                                            "type",
+                                            "image_url"
+                                          ],
+                                          "title": "OpenAIDecisionInputImage",
+                                          "type": "object"
+                                        }
+                                      ]
+                                    },
+                                    "type": "array"
+                                  }
+                                ],
+                                "title": "Content"
+                              },
+                              "role": {
+                                "const": "user",
+                                "default": "user",
+                                "title": "Role",
+                                "type": "string"
+                              },
+                              "type": {
+                                "const": "message",
+                                "default": "message",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content"
+                            ],
+                            "title": "OpenAIDecisionInputMessage",
+                            "type": "object"
+                          },
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The text being judged, or user messages whose content mixes input_text and input_image parts",
+                      "title": "Input"
+                    },
+                    "model": {
+                      "description": "A decision model from the proxy model_list",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "description": "Predicate, choice and score questions. Answers come back in the same order",
+                      "items": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "instructions": {
+                                "description": "The yes/no question to ask about the input",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "predicate",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions"
+                            ],
+                            "title": "OpenAIPredicateQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "choices": {
+                                "description": "The options the model picks from. Values must be unique",
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "description": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ],
+                                      "title": "Description"
+                                    },
+                                    "value": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "boolean"
+                                        }
+                                      ],
+                                      "title": "Value"
+                                    }
+                                  },
+                                  "required": [
+                                    "value"
+                                  ],
+                                  "title": "OpenAIChoiceOption",
+                                  "type": "object"
+                                },
+                                "maxItems": 255,
+                                "minItems": 2,
+                                "title": "Choices",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "description": "The question to ask about the input",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "choices"
+                            ],
+                            "title": "OpenAIChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "instructions": {
+                                "description": "The question to ask about the input",
+                                "title": "Instructions",
+                                "type": "string"
+                              },
+                              "levels": {
+                                "description": "Scale levels from lowest to highest. The score is a level index",
+                                "items": {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "description": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ],
+                                      "title": "Description"
+                                    },
+                                    "label": {
+                                      "title": "Label",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": [
+                                    "label"
+                                  ],
+                                  "title": "OpenAIScoreLevel",
+                                  "type": "object"
+                                },
+                                "maxItems": 10,
+                                "minItems": 2,
+                                "title": "Levels",
+                                "type": "array"
+                              },
+                              "name": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Echoed in the matching answer",
+                                "title": "Name"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "instructions",
+                              "levels"
+                            ],
+                            "title": "OpenAIScoreQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 128,
+                      "minItems": 1,
+                      "title": "Questions",
+                      "type": "array"
+                    },
+                    "safety_identifier": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "A stable id for your end user. Sent to OpenAI and dropped for other providers",
+                      "title": "Safety Identifier"
+                    }
+                  },
+                  "required": [
+                    "input",
+                    "questions",
+                    "model"
+                  ],
+                  "title": "OpenAIDecisionRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/OpenAIDecisionResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -9563,7 +11072,7 @@
               "APIKeyHeader": []
             }
           ],
-          "summary": "Decisions",
+          "summary": "Ask questions about an input (OpenAI Decisions format)",
           "tags": [
             "decisions"
           ]
@@ -9571,12 +11080,290 @@
       },
       "/v1/systemone": {
         "post": {
+          "description": "Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.\n\nQuestion types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with\n`confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,\n`legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider\nis called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format\ntoo, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.\n\n[Docs](https://docs.litellm.ai/docs/decisions)",
           "operationId": "systemone_v1_systemone_post",
+          "requestBody": {
+            "content": {
+              "application/json": {
+                "example": {
+                  "model": "jev",
+                  "questions": {
+                    "frustration": {
+                      "criteria": [
+                        "calm",
+                        "mildly annoyed",
+                        "angry"
+                      ],
+                      "instructions": "How frustrated is the customer?",
+                      "type": "score"
+                    },
+                    "is_refund_request": {
+                      "instructions": "Is the customer asking for a refund?",
+                      "type": "noul"
+                    },
+                    "urgency": {
+                      "criteria": {
+                        "high": "needs action today",
+                        "low": "can wait a week"
+                      },
+                      "instructions": "How urgent is this?",
+                      "type": "choice"
+                    }
+                  },
+                  "state": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today."
+                },
+                "schema": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "model": {
+                      "description": "A decision model from the proxy model_list",
+                      "title": "Model",
+                      "type": "string"
+                    },
+                    "questions": {
+                      "additionalProperties": {
+                        "discriminator": {
+                          "propertyName": "type"
+                        },
+                        "oneOf": [
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "criteria": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "additionalProperties": true,
+                                          "type": "object"
+                                        },
+                                        {
+                                          "items": {},
+                                          "type": "array"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "propertyNames": {
+                                      "enum": [
+                                        "true",
+                                        "false"
+                                      ]
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "Optional descriptions of what makes the answer true and what makes it false",
+                                "title": "Criteria"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The yes/no question to ask about the state",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "noul",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type"
+                            ],
+                            "title": "NoulQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "criteria": {
+                                "additionalProperties": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    },
+                                    {
+                                      "type": "null"
+                                    }
+                                  ]
+                                },
+                                "description": "Candidate labels mapped to an optional description of each",
+                                "maxProperties": 255,
+                                "minProperties": 1,
+                                "title": "Criteria",
+                                "type": "object"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The question to ask about the state",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "choice",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "criteria"
+                            ],
+                            "title": "ChoiceQuestion",
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": true,
+                            "properties": {
+                              "criteria": {
+                                "description": "Scale levels from lowest to highest. The score is a level index",
+                                "items": {
+                                  "anyOf": [
+                                    {
+                                      "type": "string"
+                                    },
+                                    {
+                                      "additionalProperties": true,
+                                      "type": "object"
+                                    },
+                                    {
+                                      "items": {},
+                                      "type": "array"
+                                    }
+                                  ]
+                                },
+                                "maxItems": 10,
+                                "minItems": 1,
+                                "title": "Criteria",
+                                "type": "array"
+                              },
+                              "instructions": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "additionalProperties": true,
+                                    "type": "object"
+                                  },
+                                  {
+                                    "items": {},
+                                    "type": "array"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ],
+                                "description": "The question to ask about the state",
+                                "title": "Instructions"
+                              },
+                              "type": {
+                                "const": "score",
+                                "title": "Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "type",
+                              "criteria"
+                            ],
+                            "title": "ScoreQuestion",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "description": "Named noul, choice and score questions. Each key becomes a key in the answers",
+                      "maxProperties": 128,
+                      "minProperties": 1,
+                      "propertyNames": {
+                        "minLength": 1
+                      },
+                      "title": "Questions",
+                      "type": "object"
+                    },
+                    "state": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        {
+                          "items": {},
+                          "type": "array"
+                        }
+                      ],
+                      "description": "The thing being judged, such as a support ticket, a document or a chat transcript",
+                      "title": "State"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "questions",
+                    "model"
+                  ],
+                  "title": "DecisionsRequest",
+                  "type": "object"
+                }
+              }
+            },
+            "required": true
+          },
           "responses": {
             "200": {
               "content": {
                 "application/json": {
-                  "schema": {}
+                  "schema": {
+                    "$ref": "#/components/schemas/DecisionsResponse"
+                  }
                 }
               },
               "description": "Successful Response"
@@ -9587,7 +11374,7 @@
               "APIKeyHeader": []
             }
           ],
-          "summary": "Systemone",
+          "summary": "Ask named questions about a state (System One format)",
           "tags": [
             "decisions"
           ]
