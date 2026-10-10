@@ -335,6 +335,21 @@ class ServiceLogging(CustomLogger):
         elif isinstance(error, str):
             error_message = error
 
+        if service == ServiceTypes.REDIS:
+            # redis-py annotates a failed pipeline command with the command it
+            # sent, key and value included, so the raw message carries cached
+            # prompt/response text into Datadog and OTel. Redacted here rather
+            # than at each call site: `redis_cache` hands this hook an exception
+            # from ~16 places and a new one must not be able to leak by being
+            # written without the redaction.
+            from litellm.caching.redis_cache import (
+                redact_redis_error,  # noqa: PLC0415  # redis_cache imports this module; a module-scope import would be circular
+            )
+
+            error_message = (  # rebind-ok: narrows the message derived above, like the three assignments that produced it
+                redact_redis_error(error) if isinstance(error, Exception) else error_message
+            )
+
         payload: Final = ServiceLoggerPayload(
             is_error=True,
             error=error_message,
@@ -369,8 +384,11 @@ class ServiceLogging(CustomLogger):
             else:
                 _otel_logger_to_use = self._resolve_otel_service_logger(callback)
 
-                if not isinstance(error, str):
-                    error = str(error)
+                # `error_message`, not `str(error)`: re-deriving it here would
+                # undo the redaction above. Prometheus still gets the raw
+                # exception, which it labels by class and never reads the
+                # message of.
+                error = error_message
 
                 # See the success hook: no parent gate, so background failures
                 # are traced too. V1 no-ops without a parent; V2 emits a root.

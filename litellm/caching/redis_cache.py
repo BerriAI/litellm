@@ -16,6 +16,7 @@ import inspect
 import itertools
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Awaitable, Callable, Iterator, Sequence
@@ -528,28 +529,70 @@ class _RedisTimeoutLogThrottle:
 _redis_timeout_log_throttle: Final = _RedisTimeoutLogThrottle(REDIS_TIMEOUT_LOG_INTERVAL)
 
 
+# redis-py annotates every failed pipeline command with the command it sent,
+# arguments included: ``Command # 1 (SET <key> <value> EX 60) of pipeline caused
+# error: <server error>`` (``Pipeline.annotate_exception`` in redis/client.py,
+# redis/asyncio/client.py and redis/cluster.py). ``uv.lock`` pins a redis-py
+# whose ``annotate_exception`` does not truncate that text at all, so
+# ``str(exc)`` carries the whole cache key and the serialized prompt/response
+# into every sink this exception reaches.
+#
+# ``command`` is matched greedily so the split happens at the LAST
+# " of pipeline caused error: ", which is the one redis-py wrote. A cache value
+# containing that literal text therefore cannot shift the boundary and smuggle
+# itself into the part that is kept.
+_PIPELINE_COMMAND_ANNOTATION: Final = re.compile(
+    r"^Command # (?P<index>\d+) \((?P<command>.*)\) of pipeline caused error: (?P<detail>.*)$",
+    re.DOTALL,
+)
+
+_REDACTED: Final = "<redacted>"
+
+
+def redact_redis_error(exc: BaseException) -> str:
+    """``str(exc)`` with any redis-py pipeline command arguments removed.
+
+    Only the command name is kept (``SET``, ``INCRBY``, ...) because that is the
+    part with diagnostic value; the key and value that follow it are not. The
+    trailing detail is the server's own error string ("WRONGTYPE ...", "OOM
+    ..."), which redis never echoes argument data into, so it is preserved.
+
+    Messages that are not pipeline annotations are returned unchanged: redis-py
+    builds those from the server reply alone.
+    """
+    message: Final = str(exc)
+    match: Final = _PIPELINE_COMMAND_ANNOTATION.match(message)
+    if match is None:
+        return message
+    command_name: Final = match["command"].split(" ", 1)[0].strip() or _REDACTED
+    return f"Command # {match['index']} ({command_name} {_REDACTED}) of pipeline caused error: {match['detail']}"
+
+
 def log_redis_failure(
     logger: logging.Logger, level: int, message: str, exc: BaseException, with_traceback: bool = False
 ) -> None:
+    # Every Redis failure line in this module goes through here, so redacting
+    # once covers all of them -- and any call site added later.
+    reason: Final = redact_redis_error(exc)
     if isinstance(exc, RedisCircuitBreakerOpenError):
-        logger.debug("%s: %s", message, exc, stacklevel=2)
+        logger.debug("%s: %s", message, reason, stacklevel=2)
         return
     exc_info: Final = exc if with_traceback else None
     if not is_redis_timeout_failure(exc):
-        logger.log(level, "%s: %s", message, exc, exc_info=exc_info, stacklevel=2)
+        logger.log(level, "%s: %s", message, reason, exc_info=exc_info, stacklevel=2)
         return
     suppressed: Final = _redis_timeout_log_throttle.admit()
     if suppressed is None:
-        logger.debug("%s: %s", message, exc, stacklevel=2)
+        logger.debug("%s: %s", message, reason, stacklevel=2)
         return
     if suppressed == 0:
-        logger.log(level, "%s: %s", message, exc, exc_info=exc_info, stacklevel=2)
+        logger.log(level, "%s: %s", message, reason, exc_info=exc_info, stacklevel=2)
         return
     logger.log(
         level,
         "%s: %s (%d more Redis timeouts since the previous Redis timeout line were logged at DEBUG)",
         message,
-        exc,
+        reason,
         suppressed,
         exc_info=exc_info,
         stacklevel=2,

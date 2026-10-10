@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 import litellm
+from litellm._logging import verbose_logger
 from litellm._service_logger import ServiceLogging
 from litellm.caching.redis_cache import RedisCache, RedisCircuitBreakerOpenError
 
@@ -1611,6 +1612,114 @@ def test_call_stack_info_skips_native_lifecycle_frames():
         return native_drive()
 
     assert anthropic_messages() == "anthropic_messages <- test_call_stack_info_skips_native_lifecycle_frames"
+
+
+SENSITIVE_CACHE_KEY = "litellm:cache:customer-secret-cache-key"
+SENSITIVE_CACHE_VALUE = '{"messages":[{"role":"user","content":"private customer message"}]}'
+
+
+def _annotated_pipeline_error(key=SENSITIVE_CACHE_KEY, value=SENSITIVE_CACHE_VALUE):
+    """The exception redis-py raises for a failed pipeline command.
+
+    Built with redis-py's own ``annotate_exception`` rather than a hand-written
+    string, so this stays honest about the message shape the library produces.
+    """
+    import redis.asyncio as async_redis
+    from redis.exceptions import ResponseError
+
+    pipeline = async_redis.Redis().pipeline(transaction=False)
+    error = ResponseError("WRONGTYPE Operation against a key holding the wrong kind of value")
+    pipeline.annotate_exception(error, 1, ("SET", key, value, "EX", "60"))
+    return error
+
+
+def test_the_annotation_really_does_carry_the_key_and_value():
+    """Precondition: on the pinned redis-py there is something to leak.
+
+    How much `annotate_exception` includes is a redis-py detail: the version
+    `uv.lock` pins does not truncate the command at all, while later releases
+    cap it. The redaction is worth having either way, so this asserts the
+    premise only on a redis-py that actually exposes the value, and says so
+    rather than silently passing on one that does not.
+    """
+    raw = str(_annotated_pipeline_error())
+    if SENSITIVE_CACHE_KEY not in raw:
+        import redis as _redis
+
+        pytest.skip(f"redis-py {_redis.__version__} truncates the pipeline annotation")
+    assert "private customer message" in raw
+
+
+def test_redact_redis_error_drops_the_command_arguments():
+    from litellm.caching.redis_cache import redact_redis_error
+
+    redacted = redact_redis_error(_annotated_pipeline_error())
+
+    assert SENSITIVE_CACHE_KEY not in redacted
+    assert "private customer message" not in redacted
+    # The parts worth keeping survive: which command, and the server's reason.
+    assert "SET" in redacted
+    assert "WRONGTYPE" in redacted
+
+
+def test_redact_redis_error_leaves_a_plain_message_alone():
+    from litellm.caching.redis_cache import redact_redis_error
+
+    assert redact_redis_error(ValueError("OOM command not allowed")) == "OOM command not allowed"
+
+
+def test_a_value_containing_the_annotation_text_cannot_shift_the_boundary():
+    """The split is on the LAST separator, the one redis-py wrote."""
+    from litellm.caching.redis_cache import redact_redis_error
+
+    hostile = "x of pipeline caused error: " + SENSITIVE_CACHE_VALUE
+    redacted = redact_redis_error(_annotated_pipeline_error(value=hostile))
+
+    assert "private customer message" not in redacted
+
+
+def test_log_redis_failure_redacts_the_line_it_writes(caplog):
+    import logging as _logging
+
+    from litellm.caching.redis_cache import log_redis_failure
+
+    with caplog.at_level(_logging.ERROR, logger="LiteLLM"):
+        log_redis_failure(
+            verbose_logger,
+            _logging.ERROR,
+            "LiteLLM Redis Caching: async set_cache_pipeline() - Got exception from REDIS",
+            _annotated_pipeline_error(),
+        )
+
+    assert SENSITIVE_CACHE_KEY not in caplog.text
+    assert "private customer message" not in caplog.text
+    assert "WRONGTYPE" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_service_failure_hook_redacts_before_telemetry():
+    """Datadog/OTel must not receive the annotated command either."""
+    from litellm._service_logger import ServiceLogging
+    from litellm.types.services import ServiceTypes
+
+    dd_logger = MagicMock()
+    dd_logger.async_service_failure_hook = AsyncMock()
+    service_logging = ServiceLogging()
+    service_logging.dd_logger = dd_logger
+
+    with patch.object(litellm, "service_callback", ["datadog"]):
+        await service_logging.async_service_failure_hook(
+            service=ServiceTypes.REDIS,
+            duration=0.1,
+            error=_annotated_pipeline_error(),
+            call_type="async_set_cache_pipeline",
+        )
+
+    kwargs = dd_logger.async_service_failure_hook.call_args.kwargs
+    assert SENSITIVE_CACHE_KEY not in kwargs["error"]
+    assert "private customer message" not in kwargs["error"]
+    assert SENSITIVE_CACHE_KEY not in kwargs["payload"].error
+    assert "private customer message" not in kwargs["payload"].error
 
 
 class _FormatCountingStr(str):
