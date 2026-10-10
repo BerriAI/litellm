@@ -3065,32 +3065,29 @@ async def get_user_daily_activity_aggregated(
 
     typed_prisma_client: Final[PrismaClient] = prisma_client
 
-    try:
-        resolved_entity_ids: Final = resolve_user_daily_activity_entity_ids(
-            user_id=user_id,
-            user_api_key_dict=user_api_key_dict,
-        )
-        if isinstance(resolved_entity_ids, ScopeDenied):
-            raise_public(resolved_entity_ids)
-        requested_user_id: Final[str | None] = resolved_entity_ids[0] if resolved_entity_ids is not None else None
-        api_key_filter: Final = (
-            api_key
-            if requested_user_id is None
-            else await get_user_api_key_filter(typed_prisma_client, requested_user_id, api_key)
-        )
-        repository = daily_activity_repository(typed_prisma_client)
-        scope = daily_activity_scope(
-            table="litellm_dailyuserspend",
-            entity_id_field="user_id",
-            entity_id=None,
-            exclude_entity_ids=None,
-            api_key=api_key_filter,
-            start_date=start_date,
-            end_date=end_date,
-            model=model,
-            timezone_offset_minutes=timezone,
-            include_current_utc_day=include_current_utc_day,
-        )
-        return await get_daily_activity_aggregated(repository, scope)
-    except HTTPException:
-        raise
+    resolved_entity_ids: Final = resolve_user_daily_activity_entity_ids(
+        user_id=user_id,
+        user_api_key_dict=user_api_key_dict,
+    )
+    if isinstance(resolved_entity_ids, ScopeDenied):
+        raise_public(resolved_entity_ids)
+    requested_user_id: Final[str | None] = resolved_entity_ids[0] if resolved_entity_ids is not None else None
+    api_key_filter: Final = (
+        api_key
+        if requested_user_id is None
+        else await get_user_api_key_filter(typed_prisma_client, requested_user_id, api_key)
+    )
+    repository = daily_activity_repository(typed_prisma_client)
+    scope = daily_activity_scope(
+        table="litellm_dailyuserspend",
+        entity_id_field="user_id",
+        entity_id=None,
+        exclude_entity_ids=None,
+        api_key=api_key_filter,
+        start_date=start_date,
+        end_date=end_date,
+        model=model,
+        timezone_offset_minutes=timezone,
+        include_current_utc_day=include_current_utc_day,
+    )
+    return await get_daily_activity_aggregated(repository, scope)
