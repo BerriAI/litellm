@@ -14,7 +14,7 @@
   - Before `pre_call`, re-alias every body key whose value equals the caller's argument to the caller's own object, resolved through `litellm_host_python::lookup`
   - Retain body/header roots from `pre_call` to `post_call`. In-place mutation reaches the wire, envelope field replacement is visible to later callbacks only
 - `result_ready` projects `ExecutionFacts` onto the `Logging` record and decides nothing itself
-  - `Cost::Reported` becomes `model_call_details["provider_reported_cost"]`, which `_response_cost_calculator` returns ahead of its estimate. `CacheHit` and `Deferred` write no cost key, the calculator's existing cache-hit and estimation paths cover them
+  - `Cost::Reported` becomes the dedicated `Logging._provider_reported_cost` attribute, cleared for `CacheHit` and `Deferred`. The calculator applies existing caller pricing overrides and additional charges. Flattened request fields are never a trusted billing source
   - Never write `response_cost` here. The calculator owns that key and later Python paths overwrite it
 - Success and failure handlers receive the exact selected public response or exception
   - A failure-handler error cannot suppress the other eligible family or replace the mapped provider error. A cancellation ends the call with no further dispatch

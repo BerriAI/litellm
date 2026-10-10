@@ -32,6 +32,8 @@ fn response(usage: Value, extra: Value) -> MessagesResponse {
 
 #[rstest]
 #[case::usage_cost(json!({"input_tokens": 10, "output_tokens": 12, "cost": 0.00021}), json!({}), Some(0.00021))]
+#[case::malformed_optional_details(json!({"cost": "0.00021", "cost_details": {"upstream_inference_cost": "unknown"}}), json!({}), Some(0.00021))]
+#[case::invalid_cost(json!({"cost": "invalid", "cost_details": {}}), json!({}), None)]
 #[case::free(json!({"input_tokens": 10, "output_tokens": 12, "cost": 0}), json!({}), Some(0.0))]
 #[case::no_cost(json!({"input_tokens": 10, "output_tokens": 12}), json!({}), None)]
 #[case::no_usage(Value::Null, json!({}), None)]

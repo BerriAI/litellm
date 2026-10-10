@@ -1,4 +1,4 @@
-use std::fmt;
+use crate::InvalidBilledAmount;
 
 use serde_json::{Number, Value};
 
@@ -17,17 +17,6 @@ impl BilledAmount {
         self.0
     }
 }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct InvalidBilledAmount(Value);
-
-impl fmt::Display for InvalidBilledAmount {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} is not a finite, non-negative billed amount", self.0)
-    }
-}
-
-impl std::error::Error for InvalidBilledAmount {}
 
 impl TryFrom<Value> for BilledAmount {
     type Error = InvalidBilledAmount;

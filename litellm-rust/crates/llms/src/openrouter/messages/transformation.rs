@@ -1,7 +1,6 @@
 use litellm_llms_types::{
     billing::BilledAmount,
     formats::messages::{MessagesRequest, MessagesResponse},
-    providers::openrouter::OpenRouterUsage,
 };
 use litellm_router_types::LitellmParams;
 
@@ -29,6 +28,17 @@ pub const OPENROUTER_MESSAGES_CONFIG: OpenRouterAnthropicMessagesConfig =
     OpenRouterAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
+    fn validate_environment(
+        &self,
+        headers: Headers,
+        api_key: Option<&str>,
+        _model: &str,
+        _params: &LitellmParams,
+        env: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<ValidatedEnvironment, Error> {
+        compatible_host_environment(headers, api_key, "OpenRouter", API_KEY_ENV, env)
+    }
+
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
@@ -57,17 +67,6 @@ impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
         &[API_KEY_ENV, API_BASE_ENV]
     }
 
-    fn validate_environment(
-        &self,
-        headers: Headers,
-        api_key: Option<&str>,
-        _model: &str,
-        _params: &LitellmParams,
-        env: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<ValidatedEnvironment, Error> {
-        compatible_host_environment(headers, api_key, "OpenRouter", API_KEY_ENV, env)
-    }
-
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
         DEFAULT_HEADERS
     }
@@ -77,7 +76,9 @@ impl BaseMessagesConfig for OpenRouterAnthropicMessagesConfig {
     }
 
     fn reported_cost(&self, response: &MessagesResponse) -> Option<serde_json::Number> {
-        let usage: OpenRouterUsage = serde_json::from_value(response.usage.clone()?).ok()?;
-        usage.cost.map(BilledAmount::into_number)
+        let cost = response.usage.as_ref()?.get("cost")?.clone();
+        serde_json::from_value::<BilledAmount>(cost)
+            .ok()
+            .map(BilledAmount::into_number)
     }
 }
