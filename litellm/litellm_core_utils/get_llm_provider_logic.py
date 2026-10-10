@@ -10,6 +10,10 @@ from litellm.constants import (
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
 )
+from litellm.litellm_core_utils.get_model_cost_map import (
+    import_model_cost_map_generation,
+    wait_for_import_model_cost_map,
+)
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.secret_managers.main import get_secret, get_secret_str
 
@@ -174,6 +178,38 @@ def get_llm_provider(
 
     Return model, custom_llm_provider, dynamic_api_key, api_base
     """
+    generation: Final = import_model_cost_map_generation()
+    resolved: Final = _resolve_llm_provider(model, custom_llm_provider, api_base, api_key, litellm_params)
+    if resolved is not None:
+        return resolved
+    retried: Final = (
+        _resolve_llm_provider(model, custom_llm_provider, api_base, api_key, litellm_params)
+        if wait_for_import_model_cost_map(since=generation)
+        else None
+    )
+    if retried is not None:
+        return retried
+    if litellm.suppress_debug_info is False:
+        print()  # noqa: T201
+        print(  # noqa: T201
+            "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"
+        )
+        print()  # noqa: T201
+    raise litellm.exceptions.BadRequestError(
+        message=f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model={model}\n Pass model as E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/starcoder',..)` Learn more: https://docs.litellm.ai/docs/providers",
+        model=model,
+        response=None,
+        llm_provider="",
+    )
+
+
+def _resolve_llm_provider(
+    model: str,
+    custom_llm_provider: str | None,
+    api_base: str | None,
+    api_key: str | None,
+    litellm_params: GenericLiteLLMParams | None,
+) -> tuple[str, str, str | None, str | None] | None:
     try:
         # Early validation - model is required
         if model is None:
@@ -533,20 +569,7 @@ def get_llm_provider(
             custom_llm_provider = match_routing_generalization(model)
 
         if not custom_llm_provider:
-            if litellm.suppress_debug_info is False:
-                print()  # noqa: T201
-                print(  # noqa: T201
-                    "\033[1;31mProvider List: https://docs.litellm.ai/docs/providers\033[0m"
-                )
-                print()  # noqa: T201
-            error_str = f"LLM Provider NOT provided. Pass in the LLM provider you are trying to call. You passed model={model}\n Pass model as E.g. For 'Huggingface' inference endpoints pass in `completion(model='huggingface/starcoder',..)` Learn more: https://docs.litellm.ai/docs/providers"
-            # maps to openai.NotFoundError, this is raised when openai does not recognize the llm
-            raise litellm.exceptions.BadRequestError(
-                message=error_str,
-                model=model,
-                response=None,
-                llm_provider="",
-            )
+            return None
         if api_base is not None and not isinstance(api_base, str):
             raise Exception(f"api base needs to be a string. api_base={api_base}")
         if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
@@ -556,7 +579,6 @@ def get_llm_provider(
         if isinstance(e, litellm.exceptions.BadRequestError):
             raise e
         else:
-            error_str = f"GetLLMProvider Exception - {e}\n\noriginal model: {model}"
             raise litellm.exceptions.BadRequestError(
                 message=f"GetLLMProvider Exception - {e}\n\noriginal model: {model}",
                 model=model,

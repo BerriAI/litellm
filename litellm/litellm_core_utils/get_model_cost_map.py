@@ -18,7 +18,7 @@ import sys
 import threading
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from importlib.resources import files
 from pathlib import Path
@@ -42,6 +42,7 @@ FALLBACK_GENERALIZATIONS_KEY: Final = "fallback_generalizations"
 _CATALOG_ADAPTER: Final = TypeAdapter(dict[str, dict[str, object]])
 _BUNDLED_CATALOG_ADAPTER: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 _CLI_ENTRYPOINT_NAMES: Final = frozenset({"lite", "litellm-proxy"})
+_NO_EDITS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 def _is_cli_process() -> bool:
@@ -53,7 +54,7 @@ def _is_cli_process() -> bool:
 RESERVED_TOP_LEVEL_KEYS: Final = frozenset({"sample_spec", FALLBACK_GENERALIZATIONS_KEY})
 
 
-def _count_model_entries(model_cost: dict) -> int:
+def _count_model_entries(model_cost: Mapping[str, object]) -> int:
     """Count actual model entries, excluding reserved meta keys."""
     return sum(1 for key in model_cost if key not in RESERVED_TOP_LEVEL_KEYS)
 
@@ -108,7 +109,7 @@ class GetModelCostMap:
     def get_backup_model_count(cls) -> int:
         """Return the number of models in the local backup (cached int)."""
         if cls._backup_model_count < 0:
-            backup: Final = cls.load_local_model_cost_map()
+            backup: Final = cls.load_local_model_cost_map_with_revision().model_cost_map
             cls._backup_model_count = _count_model_entries(backup)
         return cls._backup_model_count
 
@@ -135,7 +136,7 @@ class GetModelCostMap:
     @classmethod
     def _check_model_count_not_reduced(
         cls,
-        fetched_map: dict,
+        fetched_map: dict[str, object],
         backup_model_count: int,
         min_model_count: int = MODEL_COST_MAP_MIN_MODEL_COUNT,
         max_shrink_ratio: float = MODEL_COST_MAP_MAX_SHRINK_RATIO,
@@ -170,7 +171,7 @@ class GetModelCostMap:
     @classmethod
     def validate_model_cost_map(
         cls,
-        fetched_map: dict,
+        fetched_map: dict[str, object],
         backup_model_count: int,
         min_model_count: int = MODEL_COST_MAP_MIN_MODEL_COUNT,
         max_shrink_ratio: float = MODEL_COST_MAP_MAX_SHRINK_RATIO,
@@ -213,7 +214,7 @@ def mark_litellm_import_complete() -> None:
 
 @dataclass(frozen=True, slots=True)
 class ModelCostMapReloaded:
-    model_cost_map: dict  # mutable-ok: adopted as litellm.model_cost, whose consumer contract is a plain mutable dict
+    model_cost_map: dict[str, object]  # mutable-ok: becomes litellm.model_cost, a plain mutable dict by contract
     revision: str | None = None
     etag: str | None = None
 
@@ -305,7 +306,9 @@ def _classify_fetch_response(response: httpx.Response, url: str) -> _FetchAttemp
     if not isinstance(parsed, dict):
         return ModelCostMapReloadUnavailable(reason=f"expected a JSON object from {url}, got {type(parsed).__name__}")
     return ModelCostMapReloaded(
-        model_cost_map=parsed, revision=git_blob_id(response.content), etag=response.headers.get("etag")
+        model_cost_map=_BUNDLED_CATALOG_ADAPTER.validate_python(parsed),
+        revision=git_blob_id(response.content),
+        etag=response.headers.get("etag"),
     )
 
 
@@ -570,6 +573,113 @@ def adopt_model_cost_map(
     return fetched_model_count
 
 
+@dataclass(frozen=True, slots=True)
+class _ImportFetch:
+    url: str
+    timeout: int
+    max_attempts: int
+    sleep: Callable[[float], None]
+    rng: random.Random
+    client: _SyncGetClient
+    bundled: Mapping[str, object]
+    bundled_as_loaded: Mapping[str, Mapping[str, object]]
+    first_attempt_settled: threading.Event = field(default_factory=threading.Event)
+
+
+class _PendingImportFetch:
+    fetch: _ImportFetch | None = None
+    thread: threading.Thread | None = None
+    adoptions: int = 0
+
+
+def _litellm_model_cost_is(expected: Mapping[str, object]) -> bool:
+    import litellm
+
+    return litellm.model_cost is expected
+
+
+def _model_cost_replaced_since_import(fetch: _ImportFetch | None) -> bool:
+    return fetch is not None and not _litellm_model_cost_is(fetch.bundled)
+
+
+def _entries_changed_since_import(fetch: _ImportFetch) -> Mapping[str, object]:
+    current: Final = tuple(fetch.bundled.items())
+    return MappingProxyType({key: value for key, value in current if fetch.bundled_as_loaded.get(key) != value})
+
+
+def _carry_edits_made_during_adoption(
+    fetch: _ImportFetch,
+    adopted: dict[str, object],  # mutable-ok: the dict just adopted as litellm.model_cost, updated in place
+    carried: Mapping[str, object],
+    finalized: Mapping[str, object],
+) -> None:
+    changed: Final = tuple(_entries_changed_since_import(fetch).items())
+    late: Final = {
+        key: value
+        for key, value in changed
+        if value is not carried.get(key) and adopted.get(key) is carried.get(key, finalized.get(key))
+    }
+    if not late or not _litellm_model_cost_is(adopted):
+        return
+    from litellm import utils
+
+    adopted.update(late)
+    utils._invalidate_model_cost_lowercase_map()  # pyright: ignore[reportPrivateUsage]  # required cache invalidation
+
+
+def _adopt_remote_model_cost_map(
+    url: str,
+    timeout: int,
+    attempts: range,
+    sleep: Callable[[float], None],
+    rng: random.Random,
+    client: _SyncGetClient,
+    import_fetch: _ImportFetch | None,
+) -> None:
+    result: Final = _fetch_remote_model_cost_map_with_retry_sync(
+        url=url,
+        timeout=timeout,
+        attempts=attempts,
+        sleep=sleep,
+        rng=rng,
+        client=client,
+    )
+    if isinstance(result, ModelCostMapReloadUnavailable):
+        verbose_logger.warning(
+            "LiteLLM: Failed to fetch remote model cost map from %s (%s); keeping local backup",
+            url,
+            result.reason,
+        )
+        if not _model_cost_replaced_since_import(import_fetch):
+            _cost_map_source_info.fallback_reason = f"Remote fetch failed: {result.reason}"
+        return
+    _litellm_import_complete.wait()
+    if not GetModelCostMap.validate_model_cost_map(
+        fetched_map=result.model_cost_map,
+        backup_model_count=GetModelCostMap.get_backup_model_count(),
+    ):
+        verbose_logger.warning(
+            "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",
+            url,
+        )
+        if not _model_cost_replaced_since_import(import_fetch):
+            _cost_map_source_info.fallback_reason = "Remote data failed integrity validation"
+        return
+    if _model_cost_replaced_since_import(import_fetch):
+        verbose_logger.debug("LiteLLM: litellm.model_cost was replaced after import; not adopting the remote map")
+        return
+    finalized: Final = _finalize_loaded_model_cost_map(result).model_cost_map
+    edits: Final = _entries_changed_since_import(import_fetch) if import_fetch is not None else _NO_EDITS
+    adopted: Final = {**finalized, **edits}
+    _cost_map_source_info.source = "remote"
+    _cost_map_source_info.fallback_reason = None
+    _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
+    adopt_model_cost_map(adopted)
+    if import_fetch is not None:
+        _carry_edits_made_during_adoption(import_fetch, adopted=adopted, carried=edits, finalized=finalized)
+        _PendingImportFetch.adoptions += 1
+
+
 def _retry_remote_fetch_in_background(
     url: str,
     timeout: int,
@@ -584,38 +694,132 @@ def _retry_remote_fetch_in_background(
         if isinstance(first_wait, ModelCostMapReloadUnavailable):
             return
         sleep(first_wait)
-        result: Final = _fetch_remote_model_cost_map_with_retry_sync(
+        _adopt_remote_model_cost_map(
             url=url,
             timeout=timeout,
             attempts=range(2, max_attempts + 1),
             sleep=sleep,
             rng=rng,
             client=client,
+            import_fetch=None,
         )
-        if isinstance(result, ModelCostMapReloadUnavailable):
-            verbose_logger.warning(
-                "LiteLLM: Failed to fetch remote model cost map from %s after %d attempts; keeping local backup",
-                url,
-                max_attempts,
-            )
-            return
-        _litellm_import_complete.wait()
-        if not GetModelCostMap.validate_model_cost_map(
-            fetched_map=result.model_cost_map,
-            backup_model_count=GetModelCostMap.get_backup_model_count(),
-        ):
-            verbose_logger.warning(
-                "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",
-                url,
-            )
-            return
-        finalized: Final = _finalize_loaded_model_cost_map(result).model_cost_map
-        _cost_map_source_info.source = "remote"
-        _cost_map_source_info.fallback_reason = None
-        _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
-        adopt_model_cost_map(finalized)
     except Exception as e:  # noqa: BLE001  # a failed background retry must not kill the task; the backup stays
         verbose_logger.warning("LiteLLM: Background model cost map retry failed: %s", e)
+
+
+def _run_import_fetch(fetch: _ImportFetch) -> None:
+    def settle_then_sleep(seconds: float) -> None:
+        fetch.first_attempt_settled.set()
+        fetch.sleep(seconds)
+
+    try:
+        _adopt_remote_model_cost_map(
+            url=fetch.url,
+            timeout=fetch.timeout,
+            attempts=range(1, fetch.max_attempts + 1),
+            sleep=settle_then_sleep,
+            rng=fetch.rng,
+            client=fetch.client,
+            import_fetch=fetch,
+        )
+    except Exception as e:  # noqa: BLE001  # a failed background fetch must not kill the thread; the backup stays
+        verbose_logger.warning("LiteLLM: Background model cost map fetch failed: %s", e)
+    finally:
+        fetch.first_attempt_settled.set()
+        if _PendingImportFetch.fetch is fetch:
+            _PendingImportFetch.fetch = None
+
+
+def _start_import_fetch(fetch: _ImportFetch) -> None:
+    thread: Final = threading.Thread(
+        target=_run_import_fetch, args=(fetch,), name="litellm-model-cost-map-fetch", daemon=True
+    )
+    _PendingImportFetch.fetch = fetch
+    _PendingImportFetch.thread = thread
+    thread.start()
+
+
+def _resume_import_fetch_after_fork() -> None:
+    pending: Final = _PendingImportFetch.fetch
+    if pending is not None:
+        _start_import_fetch(replace(pending, first_attempt_settled=threading.Event()))
+
+
+def import_model_cost_map_generation() -> int:
+    """How many times the remote map fetched at import was adopted; read it before a lookup that may miss."""
+    return _PendingImportFetch.adoptions
+
+
+def wait_for_import_model_cost_map(since: int) -> bool:
+    """
+    Called by a lookup that missed the cost map, with the generation it read before looking up.
+    While the remote map fetched at import is still in flight, blocks until that fetch's first
+    attempt settles, at most one fetch timeout, so a model the bundled map lacks resolves the way
+    it did when import waited for the fetch. True means the remote map was adopted since
+    ``since`` and the lookup should be tried once more.
+    """
+    _wait_for_pending_import_fetch()
+    return _PendingImportFetch.adoptions != since
+
+
+def _wait_for_pending_import_fetch() -> None:
+    pending: Final = _PendingImportFetch.fetch
+    if (
+        pending is None
+        or not _litellm_import_complete.is_set()
+        or threading.current_thread() is _PendingImportFetch.thread
+    ):
+        return
+    if not pending.first_attempt_settled.is_set():
+        verbose_logger.debug(
+            "LiteLLM: lookup missed the bundled cost map; waiting for the remote map fetched at import"
+        )
+    pending.first_attempt_settled.wait(timeout=pending.timeout)
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_resume_import_fetch_after_fork)
+
+
+def load_model_cost_map_at_import(
+    url: str,
+    timeout: int = 5,
+    max_attempts: int = MODEL_COST_MAP_FETCH_MAX_ATTEMPTS,
+    sleep: Callable[[float], None] = time.sleep,
+    rng: random.Random | None = None,
+    client: "_SyncGetClient | None" = None,
+) -> dict:  # mutable-ok: becomes litellm.model_cost, a plain mutable dict by contract
+    """
+    Return the bundled map right away and fetch the remote one in a background thread,
+    so ``import litellm`` never waits on the network. The remote map replaces
+    ``litellm.model_cost`` once it passes the integrity check, keeping every entry
+    written since import, unless the caller has replaced ``litellm.model_cost`` outright.
+    A lookup that misses the bundled map while the fetch is in flight waits for it, see
+    ``wait_for_import_model_cost_map``. A process forked before the fetch finishes starts its own fetch.
+    """
+    if os.getenv("LITELLM_LOCAL_MODEL_COST_MAP", "").lower() == "true" or _is_cli_process():
+        return get_model_cost_map(url=url, timeout=timeout)
+    _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
+    _cost_map_source_info.source = "local"
+    _cost_map_source_info.url = url
+    _cost_map_source_info.is_env_forced = False
+    _cost_map_source_info.fallback_reason = "Remote fetch in progress"
+    bundled: Final = _finalize_loaded_model_cost_map(
+        GetModelCostMap.load_local_model_cost_map_with_revision()
+    ).model_cost_map
+    _start_import_fetch(
+        _ImportFetch(
+            url=url,
+            timeout=timeout,
+            max_attempts=max_attempts,
+            sleep=sleep,
+            rng=rng if rng is not None else random.Random(),
+            client=client if client is not None else httpx,
+            bundled=bundled,
+            bundled_as_loaded=GetModelCostMap.loaded_model_cost_map(),
+        )
+    )
+    return bundled
 
 
 def get_model_cost_map(
