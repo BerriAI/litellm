@@ -530,7 +530,7 @@ def _iter_fallback_field_values(request_body: Mapping[str, object]) -> Iterator[
                 yield source.get(field)
 
 
-def _iter_fallback_targets(value: object, depth: int) -> Iterator[str | Mapping[str, object]]:
+def _iter_fallback_targets(value: object, depth: int, *, rule_level: bool) -> Iterator[str | Mapping[str, object]]:
     if depth > 2 * litellm.ROUTER_MAX_FALLBACKS:
         raise ValueError("Rejected Request: fallback nesting exceeds the allowed validation depth.")
     if not isinstance(value, list):
@@ -544,15 +544,17 @@ def _iter_fallback_targets(value: object, depth: int) -> Iterator[str | Mapping[
                 yield item
             if isinstance(item.get("model"), str):
                 for field in _FALLBACK_FIELDS:
-                    yield from _iter_fallback_targets(item.get(field), depth + 1)
+                    yield from _iter_fallback_targets(item.get(field), depth + 1, rule_level=True)
             else:
-                for target_list in values:
-                    yield from _iter_fallback_targets(target_list, depth + 1)
+                for chain in values:
+                    yield from _iter_fallback_targets(
+                        [chain] if rule_level and isinstance(chain, str) else chain, depth + 1, rule_level=False
+                    )
 
 
 def iter_request_fallback_targets(request_body: Mapping[str, object]) -> Iterator[str | Mapping[str, object]]:
     for value in _iter_fallback_field_values(request_body):
-        yield from _iter_fallback_targets(value, 0)
+        yield from _iter_fallback_targets(value, 0, rule_level=True)
 
 
 def fallback_target_model_name(target: object) -> str | None:

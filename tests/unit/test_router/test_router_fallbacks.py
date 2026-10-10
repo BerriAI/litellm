@@ -426,6 +426,40 @@ def test_router_fallbacks_with_wildcard_model_name():
     assert response["choices"][0]["message"]["content"] == "Hi this is claude!"
 
 
+@pytest.mark.parametrize(
+    ("fallback_kind", "mock_trigger"),
+    [
+        ("fallbacks", "mock_testing_fallbacks"),
+        ("context_window_fallbacks", "mock_testing_context_fallbacks"),
+        ("content_policy_fallbacks", "mock_testing_content_policy_fallbacks"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_a_string_valued_rule_falls_over_to_that_one_model(fallback_kind: str, mock_trigger: str):
+    """Router.__init__ documents fallbacks=[{"primary": "backup"}]; the request must land on backup, never on
+    the characters of its name."""
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "gpt-5.4-mini", "api_key": "fake", "mock_response": "primary answered"},
+            },
+            {
+                "model_name": "backup",
+                "litellm_params": {"model": "gpt-5.4-nano", "api_key": "fake", "mock_response": "backup answered"},
+            },
+        ],
+        num_retries=0,
+        **{fallback_kind: [{"primary": "backup"}]},
+    )
+
+    response: Final = await router.acompletion(
+        model="primary", messages=[{"role": "user", "content": "hi"}], **{mock_trigger: True}
+    )
+
+    assert response.choices[0].message.content == "backup answered"
+
+
 def test_get_fallback_model_group():
     from litellm.router_utils.fallback_event_handlers import get_fallback_model_group
 

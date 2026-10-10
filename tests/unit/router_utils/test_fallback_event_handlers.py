@@ -1401,6 +1401,24 @@ class TestOrderedFallbackLookupGroups:
         assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "no-such")) == (["backup-c"], 2)
         assert get_fallback_model_group_for_lookup_groups([{"tier1": ["backup-a"]}], ("no", "nope")) == (None, None)
 
+    def test_a_string_valued_generic_rule_never_shadows_a_later_groups_own_chain(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            get_fallback_model_group_for_lookup_groups,
+        )
+
+        fallbacks: Final = [{"smart-router": "backup-b"}, {"*": "backup-c"}]
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "smart-router")) == (["backup-b"], None)
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("tier9", "no-such")) == (["backup-c"], 1)
+
+    def test_two_catch_all_rules_never_shadow_a_later_groups_own_chain(self):
+        from litellm.router_utils.fallback_event_handlers import (
+            get_fallback_model_group_for_lookup_groups,
+        )
+
+        fallbacks: Final = [{"*": ["backup-a"]}, {"*": ["backup-b"]}, {"primary": ["backup-c"]}]
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("missing", "primary")) == (["backup-c"], 1)
+        assert get_fallback_model_group_for_lookup_groups(fallbacks, ("missing", "no-such")) == (["backup-b"], 1)
+
 
 class TestHasUnattemptedFallbackTarget:
     def test_exhausted_chain_is_not_recoverable_but_a_fresh_entry_is(self):
@@ -1439,6 +1457,23 @@ def test_get_fallback_model_group_exact_match_beats_prefixed_match():
     fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="gpt-4o")
 
     assert fallback_model_group == ["gemini-1.5-flash"]
+
+
+@pytest.mark.parametrize("rule_key", ["gpt-5.4-mini", "openai/gpt-5.4-mini", "*"])
+def test_get_fallback_model_group_resolves_a_bare_string_rule_value_as_a_one_item_chain(rule_key: str):
+    """Router.__init__ documents fallbacks=[{"primary": "backup"}]; the value is the chain to try, so a
+    bare string is a chain of one and never iterated character by character."""
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=[{rule_key: "gpt-5.4-nano"}], model_group="gpt-5.4-mini")
+
+    assert fallback_model_group == ["gpt-5.4-nano"]
+
+
+def test_get_fallback_model_group_keeps_a_list_rule_value_as_is():
+    fallbacks: Final = [{"gpt-5.4-mini": ["gpt-5.4-nano", "gpt-5.4"]}]
+
+    fallback_model_group, _ = get_fallback_model_group(fallbacks=fallbacks, model_group="gpt-5.4-mini")
+
+    assert fallback_model_group is fallbacks[0]["gpt-5.4-mini"]
 
 
 def test_get_fallback_model_group_prefixed_match_ignores_unknown_models():

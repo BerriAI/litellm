@@ -670,6 +670,17 @@ class TestGetFallback:
         assert exc_info.value.status_code == 404
         assert "No general fallbacks configured" in str(exc_info.value.detail)
 
+    async def test_a_string_valued_rule_reads_back_as_a_one_item_list(self, mock_user_api_key_dict):
+        router: Final = MagicMock()
+        router.fallbacks = [MALFORMED_GATEWAY_RULE]
+        router.context_window_fallbacks = []
+        router.content_policy_fallbacks = []
+
+        with patch("litellm.proxy.proxy_server.llm_router", router):
+            response: Final = await get_fallback("gpt-5.4-mini", "general", mock_user_api_key_dict)
+
+        assert response.fallback_models == ["team-fallback"]
+
     async def test_get_fallback_router_not_initialized(self, mock_user_api_key_dict):
         """Test error when router is not initialized"""
         with (
