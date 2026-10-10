@@ -1195,7 +1195,10 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
 
     await drain_post_call_redis_batches()
     if litellm.cache is not None:
-        await litellm.cache.disconnect()
+        try:
+            await litellm.cache.disconnect()
+        except Exception as e:  # noqa: BLE001  # cache teardown must not abort remaining shutdown steps
+            verbose_proxy_logger.warning("Error disconnecting litellm.cache: %s", e)
 
     await jwt_handler.close()
 
