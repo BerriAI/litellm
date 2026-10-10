@@ -268,8 +268,22 @@ class MistralConfig(OpenAIGPTConfig):
                         messages = self._transform_messages_sync(messages, model)
                         return messages
 
-        ## 2. If content is list, then convert to string
-        messages = handle_messages_with_content_list_to_str_conversion(messages)
+        ## 2. If content is list, then convert to string.
+        ## Keep assistant messages whose content list carries a Mistral
+        ## ``{"type": "thinking", ...}`` chunk intact: flattening keeps only
+        ## text chunks and silently drops replayed reasoning (see #45546).
+        converted_messages: list[AllMessageValues] = []
+        for m in messages:
+            _content = m.get("content")
+            if (
+                m.get("role") == "assistant"
+                and isinstance(_content, list)
+                and any(isinstance(c, dict) and c.get("type") == "thinking" for c in _content)
+            ):
+                converted_messages.append(m)
+            else:
+                converted_messages.extend(handle_messages_with_content_list_to_str_conversion([m]))
+        messages = converted_messages
 
         ## 3. Handle name in message
         new_messages: Final[list[AllMessageValues]] = []
@@ -424,16 +438,56 @@ class MistralConfig(OpenAIGPTConfig):
     @classmethod
     def _strip_output_only_fields(cls, message: AllMessageValues) -> AllMessageValues:
         """
-        ``reasoning_content`` and ``thinking_blocks`` are output-only fields that
-        LiteLLM attaches to assistant responses. Mistral's input schema forbids
-        unknown fields, so replaying them verbatim in a follow-up turn triggers a
-        422 ``extra_forbidden``. Drop them before the request is sent.
+        Translate output-only reasoning into Mistral's native ThinkChunk instead
+        of stripping it.
+
+        ``reasoning_content`` / ``thinking_blocks`` are output-only fields LiteLLM
+        attaches to assistant responses, and Mistral's input schema forbids the
+        unknown top-level fields (a 422 ``extra_forbidden`` on replay). But
+        dropping the reasoning entirely breaks multi-turn conversations with
+        reasoning-capable Mistral models, which are documented to require
+        replaying the full assistant message including the ThinkChunk. So the
+        reasoning is moved into ``content`` as a Mistral ``{"type": "thinking",
+        "thinking": [{"type": "text", "text": ...}]}`` chunk, with the existing
+        text/tool content kept after it.
         """
         if message["role"] != "assistant":
             return message
+        reasoning = message.get("reasoning_content")
+        thinking_blocks = message.get("thinking_blocks")
+        thinking_text = ""
+        if reasoning:
+            thinking_text = reasoning
+        elif thinking_blocks:
+            thinking_text = cls._convert_thinking_block_to_reasoning_content(thinking_blocks)
+        if not thinking_text:
+            return cast(
+                AllMessageValues,
+                {k: v for k, v in message.items() if k not in ("reasoning_content", "thinking_blocks")},
+            )
+        content = message.get("content")
+        if isinstance(content, list) and any(
+            isinstance(c, dict) and c.get("type") == "thinking" for c in content
+        ):
+            # already carries a ThinkChunk; keep it as-is and drop the top-level keys
+            return cast(
+                AllMessageValues,
+                {k: v for k, v in message.items() if k not in ("reasoning_content", "thinking_blocks")},
+            )
+        if isinstance(content, str) and content:
+            chunks: list[dict] = [{"type": "text", "text": content}]
+        elif isinstance(content, list):
+            chunks = list(content)
+        else:
+            chunks = []
+        new_message = dict(message)
+        new_message["content"] = [
+            {"type": "thinking", "thinking": [{"type": "text", "text": thinking_text}]},
+            *chunks,
+        ]
         return cast(
             AllMessageValues,
-            {k: v for k, v in message.items() if k not in ("reasoning_content", "thinking_blocks")},
+            {k: v for k, v in new_message.items() if k not in ("reasoning_content", "thinking_blocks")},
         )
 
     @classmethod
