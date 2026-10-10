@@ -3554,6 +3554,8 @@ class ProxyLogging:
             original_exception
         )
         traceback_str: Final = traceback.format_exc() if include_traceback else ""
+        for follow_up in litellm_logging_obj.deferred_follow_ups:
+            await ProxyLogging._dispatch_proxy_only_failure_handlers(follow_up, original_exception)
         await litellm_logging_obj.async_failure_handler(
             exception=original_exception,
             traceback_exception=traceback_str,

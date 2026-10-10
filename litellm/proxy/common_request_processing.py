@@ -74,6 +74,7 @@ from litellm.litellm_core_utils.llm_response_utils.get_headers import (
 )
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.litellm_core_utils.served_output_texts import (
+    SERVED_OUTPUT_TEXTS_KEY,
     record_served_output_texts,
     served_output_texts,
 )
@@ -3478,6 +3479,10 @@ class ProxyBaseLLMRequestProcessing:
             if pending is not None:
                 logging_obj._native_pending_logging = None  # rebind-ok: consume the native OCR release signal once
                 pending.release(not exception_raised)
+        for follow_up in getattr(logging_obj, "deferred_follow_ups", ()):
+            if (served := logging_obj.model_call_details.get(SERVED_OUTPUT_TEXTS_KEY)) is not None:
+                follow_up.model_call_details[SERVED_OUTPUT_TEXTS_KEY] = served
+            ProxyBaseLLMRequestProcessing._flush_deferred_async_logging(follow_up, exception_raised)
         _enqueue_fn: Final = getattr(logging_obj, "enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return

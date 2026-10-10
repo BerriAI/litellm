@@ -84,7 +84,8 @@ class MCPRequestContext:
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             request_tags=LiteLLM_Proxy_MCP_Handler.get_parent_request_tags(dict(kwargs)),
-            litellm_trace_id=kwargs.get("litellm_trace_id"),
+            litellm_trace_id=kwargs.get("litellm_trace_id")
+            or getattr(kwargs.get("litellm_logging_obj"), "litellm_trace_id", None),
             litellm_call_id=kwargs.get("litellm_call_id"),
             guardrail_context=cls.resolve_guardrail_context(kwargs),
         )

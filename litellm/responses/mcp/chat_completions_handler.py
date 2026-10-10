@@ -1,21 +1,73 @@
 """Helpers for handling MCP-aware `/chat/completions` requests."""
 
+import datetime
 import logging
+import uuid
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, cast
 
 from typing_extensions import TypedDict, Unpack
 
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
+from litellm.litellm_core_utils.internal_call_metadata import forwarded_internal_call_metadata
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.responses.mcp.litellm_proxy_mcp_handler import (
     LiteLLM_Proxy_MCP_Handler,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.types.utils import Message, ModelResponse
-from litellm.utils import CustomStreamWrapper
+from litellm.utils import CustomStreamWrapper, Rules, function_setup
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
+
+
+def _follow_up_call_args(
+    base_call_args: dict[str, object],  # mutable-ok: the request's acompletion kwargs, read only
+    messages: object,
+) -> dict[str, object]:  # mutable-ok: acompletion kwargs the caller still extends
+    """Kwargs for the call that sends the MCP tool results back to the model (#37358).
+
+    Success callbacks fire once per logging object, so a follow-up sharing the first call's object
+    is never logged or billed. It gets its own: a new call id in the same trace, with the request's
+    team/key callbacks. The first call settles the budget reservation and the pre-call guardrail
+    cost. When the proxy defers logging for post-call guardrails, a non-streaming follow-up is
+    logged with the request, as a success once they pass or a failure when they block. A deferred
+    stream keeps the shared object, so its guardrails still run before the follow-up is logged.
+    """
+    parent: Final = base_call_args.get("litellm_logging_obj")
+    if not isinstance(parent, LiteLLMLoggingObj) or getattr(parent, "_on_deferred_stream_complete", None):
+        return {**base_call_args, "messages": messages}
+    # function_setup rejects explicit Nones (e.g. WebSearchOptions(**None))
+    args: Final = {k: v for k, v in base_call_args.items() if v is not None and k != "litellm_logging_obj"}
+    args["messages"] = messages
+    args["litellm_call_id"] = str(uuid.uuid4())
+    args["litellm_trace_id"] = args.get("litellm_trace_id") or parent.litellm_trace_id
+    # popped off the metadata by the first call's Logging; Langfuse reads it from litellm_params
+    masking_function: Final[object] = parent.model_call_details["litellm_params"].get("_langfuse_masking_function")
+    for key in ("metadata", "litellm_metadata"):
+        if isinstance(metadata := args.get(key), dict):
+            args[key] = {
+                k: v
+                for k, v in forwarded_internal_call_metadata(metadata, "mcp_auto_execute").items()
+                if k != "standard_logging_guardrail_information"
+            }
+    start_time: Final = datetime.datetime.now()  # noqa: DTZ005  # logging pipeline uses naive datetimes
+    child, follow_up_args = function_setup("acompletion", Rules(), start_time, is_async_call=True, **args)
+    for attr in (
+        "dynamic_success_callbacks",
+        "dynamic_async_success_callbacks",
+        "dynamic_failure_callbacks",
+        "dynamic_async_failure_callbacks",
+        "defer_async_logging",
+    ):
+        setattr(child, attr, getattr(parent, attr))
+    if masking_function is not None:
+        child.model_call_details["litellm_params"]["_langfuse_masking_function"] = masking_function
+    if parent.defer_async_logging:
+        parent.deferred_follow_ups = (*parent.deferred_follow_ups, child)
+    follow_up_args["litellm_logging_obj"] = child
+    return follow_up_args
 
 
 class _MCPCompletionKwargs(TypedDict, total=False, extra_items=object):
@@ -468,8 +520,7 @@ async def acompletion_with_mcp(
                 )
 
                 # Make follow-up call with streaming
-                follow_up_call_args: Final = dict(self.base_call_args)
-                follow_up_call_args["messages"] = follow_up_messages
+                follow_up_call_args: Final = _follow_up_call_args(self.base_call_args, follow_up_messages)
                 follow_up_call_args["stream"] = True
                 # Ensure follow-up call doesn't trigger MCP handler again
                 follow_up_call_args["_skip_mcp_handler"] = True
@@ -642,8 +693,7 @@ async def acompletion_with_mcp(
     )
 
     # Make follow-up call with original stream setting
-    follow_up_call_args: Final = dict(base_call_args)
-    follow_up_call_args["messages"] = follow_up_messages
+    follow_up_call_args: Final = _follow_up_call_args(base_call_args, follow_up_messages)
     follow_up_call_args["stream"] = stream
 
     response = await litellm_acompletion(**follow_up_call_args)
