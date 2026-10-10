@@ -47,7 +47,7 @@ class InMemoryCache(BaseCache):
         self.max_size_per_item = max_size_per_item or MAX_SIZE_PER_ITEM_IN_MEMORY_CACHE_IN_KB  # 1MB = 1024KB
 
         # in-memory cache
-        self.cache_dict: dict[str, Any] = {}
+        self.cache_dict: dict[object, Any] = {}
         self.ttl_dict: dict = {}
         self.expiration_heap: list[tuple[float, str]] = []
         self._increment_lock = threading.Lock()
