@@ -129,8 +129,12 @@ class VertexPassthroughLoggingHandler:
         ``.../models/gemini-2.0-flash:predict``) and its bare trailing path-segment
         form (e.g. ``/v1/generateContent``), while rejecting plain substring hits
         such as ``http://example.com/api/predict/laya`` that caused #45787.
+
+        The query string is stripped first so a route such as
+        ``.../gemini-3.8-flash:streamGenerateContent?alt=sse`` still matches.
         """
-        return url_route.endswith(method) or url_route.endswith(":" + method)
+        path = urlparse(url_route).path
+        return path.endswith(method) or path.endswith(":" + method)
 
     @staticmethod
     def vertex_passthrough_handler(
