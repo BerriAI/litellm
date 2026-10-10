@@ -2,7 +2,7 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
-use litellm_host_python::{InvokeError, PythonBinding, from_py, present, to_py};
+use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
@@ -23,6 +23,7 @@ use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
     python_settings::missing_module,
+    routes::RequestView,
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
@@ -118,14 +119,14 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
 /// The Python side of the Messages route: projects the prepared arguments and builds the
 /// public response, chunks and exceptions.
 pub(super) struct MessagesPythonHost {
-    request: Py<PyDict>,
+    view: RequestView,
     cache: PythonCache,
 }
 
 impl MessagesPythonHost {
-    pub(super) fn new(request: Py<PyDict>, asynchronous: bool) -> Self {
+    pub(super) fn new(view: RequestView, asynchronous: bool) -> Self {
         Self {
-            request,
+            view,
             cache: PythonCache::new(asynchronous),
         }
     }
@@ -135,8 +136,7 @@ impl MessagesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Result<MessagesCall, Error>> {
-        let request = self.request.bind(py);
-        let argument = |name: &str| present(arguments, request, name);
+        let argument = |name: &str| self.view.argument(py, arguments, name);
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
         };
@@ -182,9 +182,9 @@ impl MessagesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Option<Map<String, Value>>> {
-        let request = self.request.bind(py);
         let mapping = |name: &str| -> PyResult<Option<Map<String, Value>>> {
-            present(arguments, request, name)?
+            self.view
+                .argument(py, arguments, name)?
                 .map(|value| from_py(&value))
                 .transpose()
         };
@@ -199,7 +199,8 @@ impl MessagesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Option<ProviderSpecificHeaders>> {
-        present(arguments, self.request.bind(py), "provider_specific_header")?
+        self.view
+            .argument(py, arguments, "provider_specific_header")?
             .map(|value| from_py(&value))
             .transpose()
     }
@@ -226,9 +227,9 @@ impl MessagesPythonHost {
     }
 
     fn provider(&self, py: Python<'_>) -> String {
-        self.request
-            .bind(py)
-            .get_item("custom_llm_provider")
+        self.view
+            .request(py)
+            .and_then(|request| request.get_item("custom_llm_provider"))
             .ok()
             .flatten()
             .and_then(|value| value.extract::<Option<String>>().ok().flatten())
@@ -242,7 +243,7 @@ impl MessagesPythonHost {
         let mapped = py
             .import(ROUTE_HOST_MODULE)
             .and_then(|module| module.getattr("map_failure"))
-            .and_then(|map| map.call1((error.value(py), self.request.bind(py), self.provider(py))))
+            .and_then(|map| map.call1((error.value(py), self.view.request(py)?, self.provider(py))))
             .and_then(|mapped| {
                 mapped
                     .extract::<Py<pyo3::exceptions::PyBaseException>>()
@@ -264,6 +265,9 @@ impl PythonBinding for MessagesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<(MessagesCall, Selection), InvokeError<Error>> {
+        self.view
+            .resolve(py, arguments)
+            .map_err(InvokeError::Python)?;
         let selection =
             crate::cache::configure(&mut self.cache, py, arguments, "anthropic_messages")
                 .map_err(InvokeError::Python)?;
@@ -341,16 +345,18 @@ impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
 
 impl PythonOwned for MessagesPythonHost {
     fn close(&mut self, _: Python<'_>) {
+        self.view.close();
         self.cache.close();
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.request)?;
+        self.view.traverse(visit)?;
         self.cache.traverse(visit)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use litellm_host_python::present;
     use rstest::rstest;
     use serde_json::json;
 
