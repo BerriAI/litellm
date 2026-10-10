@@ -3329,6 +3329,353 @@ def test_convert_response_output_merges_raw_dict_message_and_function_call() -> 
     assert len(choices[0].message.tool_calls) == 1
 
 
+def _bridge_message(
+    item_id: str,
+    text: str,
+    annotations: Optional[list] = None,
+    phase: Optional[str] = None,
+) -> "ResponseOutputMessage":
+    return ResponseOutputMessage(
+        id=item_id,
+        content=[ResponseOutputText(annotations=annotations or [], text=text, type="output_text", logprobs=[])],
+        role="assistant",
+        status="completed",
+        type="message",
+        phase=phase,
+    )
+
+
+def test_convert_response_output_folds_two_messages_and_function_call_into_one_choice() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (
+            _bridge_message("msg_1", "Let me check."),
+            _bridge_message("msg_2", " Looking up Paris."),
+            ResponseFunctionToolCall(
+                id="fc_1",
+                type="function_call",
+                status="completed",
+                arguments='{"city":"Paris"}',
+                call_id="call_1",
+                name="get_weather",
+            ),
+        )
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "tool_calls"
+    assert choices[0].message.content == "Let me check. Looking up Paris."
+    tool_calls: Final = choices[0].message.tool_calls
+    assert tool_calls is not None
+    assert len(tool_calls) == 1
+    assert tool_calls[0].function.name == "get_weather"
+    assert tool_calls[0].function.arguments == '{"city":"Paris"}'
+
+
+def test_convert_response_output_folds_two_messages_without_tool_call() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (_bridge_message("msg_1", "First part."), _bridge_message("msg_2", "Second part."))
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "stop"
+    assert choices[0].message.content == "First part.Second part."
+    assert choices[0].message.tool_calls is None
+
+
+def test_convert_response_output_folds_reasoning_items_around_messages() -> None:
+    reasoning_1: Final = ResponseReasoningItem(
+        id="rs_1",
+        summary=[Summary(type="summary_text", text="s1")],
+        type="reasoning",
+        content=None,
+        encrypted_content=None,
+        status=None,
+    )
+    reasoning_2: Final = ResponseReasoningItem(
+        id="rs_2",
+        summary=[Summary(type="summary_text", text="s2")],
+        type="reasoning",
+        content=None,
+        encrypted_content=None,
+        status=None,
+    )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (reasoning_1, _bridge_message("msg_1", "A"), reasoning_2, _bridge_message("msg_2", "B"))
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "AB"
+    reasoning_items: Final = choices[0].message.reasoning_items
+    assert reasoning_items is not None
+    assert [item["id"] for item in reasoning_items] == ["rs_1", "rs_2"]
+    assert choices[0].message.reasoning_content == "s1 s2"
+
+
+def test_convert_response_output_shifts_url_citation_indices_into_merged_content() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (
+            _bridge_message("msg_1", "abc"),
+            _bridge_message(
+                "msg_2",
+                "Paris",
+                annotations=[
+                    {
+                        "type": "url_citation",
+                        "start_index": 0,
+                        "end_index": 5,
+                        "title": "Weather",
+                        "url": "https://example.com/weather",
+                    }
+                ],
+            ),
+        )
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "abcParis"
+    assert choices[0].message.annotations == [
+        {
+            "type": "url_citation",
+            "start_index": 3,
+            "end_index": 8,
+            "title": "Weather",
+            "url": "https://example.com/weather",
+        }
+    ]
+
+
+def test_convert_response_output_folds_two_output_text_parts_in_one_message() -> None:
+    message: Final = ResponseOutputMessage(
+        id="msg_parts",
+        content=[
+            ResponseOutputText(annotations=[], text="Hello ", type="output_text", logprobs=[]),
+            ResponseOutputText(annotations=[], text="world.", type="output_text", logprobs=[]),
+        ],
+        role="assistant",
+        status="completed",
+        type="message",
+    )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices((message,))
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].message.content == "Hello world."
+    assert choices[0].finish_reason == "stop"
+
+
+def test_transform_response_incomplete_two_messages_still_one_length_choice() -> None:
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    raw_response: Final = _make_incomplete_responses_api_response(
+        "max_output_tokens",
+        [_bridge_message("msg_1", "partial one. "), _bridge_message("msg_2", "partial two.")],
+    )
+
+    result: Final = _call_transform_response(handler, raw_response)
+
+    assert len(result.choices) == 1
+    assert result.choices[0].finish_reason == "length"
+    assert result.choices[0].message.content == "partial one. partial two."
+
+
+def test_convert_response_output_routes_commentary_phase_to_provider_specific_fields() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (
+            _bridge_message("msg_1", "Let me answer that.", phase="commentary"),
+            _bridge_message("msg_2", '{"city": "Paris"}', phase="final_answer"),
+        )
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].message.content == '{"city": "Paris"}'
+    assert choices[0].message.provider_specific_fields == {"commentary": "Let me answer that."}
+    assert choices[0].finish_reason == "stop"
+
+
+def test_convert_response_output_commentary_only_with_tool_call_keeps_content_none() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (
+            _bridge_message("msg_1", "Let me check.", phase="commentary"),
+            _bridge_message("msg_2", " Looking up Paris.", phase="commentary"),
+            ResponseFunctionToolCall(
+                id="fc_1",
+                type="function_call",
+                status="completed",
+                arguments='{"city":"Paris"}',
+                call_id="call_1",
+                name="get_weather",
+            ),
+        )
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content is None
+    assert choices[0].message.provider_specific_fields == {"commentary": "Let me check. Looking up Paris."}
+    assert choices[0].finish_reason == "tool_calls"
+    assert len(choices[0].message.tool_calls) == 1
+    assert choices[0].message.tool_calls[0]["function"]["name"] == "get_weather"
+
+
+def test_convert_response_output_raw_dict_commentary_phase_routes_to_commentary() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "phase": "commentary",
+                "content": [{"type": "output_text", "text": "note", "annotations": []}],
+            },
+            {
+                "type": "message",
+                "id": "msg_2",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "answer", "annotations": []}],
+            },
+        )
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "answer"
+    assert choices[0].message.provider_specific_fields == {"commentary": "note"}
+    assert choices[0].finish_reason == "stop"
+
+
+def test_chunk_parser_streams_commentary_deltas_to_provider_specific_fields() -> None:
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        OpenAiResponsesToChatCompletionStreamIterator,
+    )
+
+    iterator: Final = OpenAiResponsesToChatCompletionStreamIterator(streaming_response=None, sync_stream=True)
+    chunks: Final = (
+        {
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {"type": "message", "id": "msg_1", "phase": "commentary", "role": "assistant"},
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_1",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Let me answer that.",
+        },
+        {
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {"type": "message", "id": "msg_2", "phase": "final_answer", "role": "assistant"},
+        },
+        {
+            "type": "response.output_text.delta",
+            "item_id": "msg_2",
+            "output_index": 1,
+            "content_index": 0,
+            "delta": '{"city": "Paris"}',
+        },
+    )
+
+    results: Final = [iterator.chunk_parser(chunk) for chunk in chunks]
+
+    joined_content: Final = "".join(r.choices[0].delta.content or "" for r in results if r.choices)
+    joined_commentary: Final = "".join(
+        (r.choices[0].delta.provider_specific_fields or {}).get("commentary", "") for r in results if r.choices
+    )
+    assert joined_content == '{"city": "Paris"}'
+    assert joined_commentary == "Let me answer that."
+
+
+def test_convert_response_output_raw_message_with_malformed_content_returns_no_choices() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        ({"type": "message", "role": "assistant", "content": "not-a-part-list"},)
+    )
+
+    assert choices == []
+
+
+def test_convert_response_output_raw_message_without_output_text_falls_back_to_callback() -> None:
+    from litellm.types.utils import Choices, Message
+
+    raw_message: Final = {
+        "type": "message",
+        "role": "assistant",
+        "content": [{"type": "refusal", "refusal": "no"}],
+    }
+
+    def callback(item, index):
+        return (
+            Choices(message=Message(role="assistant", content="from callback"), finish_reason="stop", index=index),
+            index + 1,
+        )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (raw_message,), handle_raw_dict_callback=callback
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "from callback"
+
+    empty_choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (raw_message,), handle_raw_dict_callback=lambda item, index: (None, index)
+    )
+    assert empty_choices == []
+
+
+def test_convert_response_output_keeps_url_citation_without_numeric_indices_unshifted() -> None:
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        (
+            {
+                "type": "message",
+                "id": "msg_1",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "abc", "annotations": []}],
+            },
+            {
+                "type": "message",
+                "id": "msg_2",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "Paris",
+                        "annotations": [
+                            {"type": "url_citation", "title": "Weather", "url": "https://example.com/weather"}
+                        ],
+                    }
+                ],
+            },
+        )
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "abcParis"
+    assert choices[0].message.annotations == [
+        {"type": "url_citation", "title": "Weather", "url": "https://example.com/weather"}
+    ]
+
+
+def test_convert_response_output_folds_callback_choice_for_unknown_raw_item() -> None:
+    from litellm.types.utils import Choices, Message
+
+    def callback(item, index):
+        return (
+            Choices(message=Message(role="assistant", content="cb text "), finish_reason="stop", index=index),
+            index + 1,
+        )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        ({"type": "unknown_future_item", "id": "u_1"}, _bridge_message("msg_1", "tail")),
+        handle_raw_dict_callback=callback,
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "cb text tail"
+    assert choices[0].finish_reason == "stop"
+
+
 def test_convert_tools_to_responses_format_flattens_nested_custom_tool():
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,

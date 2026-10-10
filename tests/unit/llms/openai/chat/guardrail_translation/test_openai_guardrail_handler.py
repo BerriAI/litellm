@@ -2365,3 +2365,180 @@ class TestStreamingScanKey:
         for released in (text_only, finished_tool_call):
             ended = handler.released_stream_as_ended(released)
             assert len(ended) == len(released) and all(a is b for a, b in zip(ended, released, strict=True))
+
+
+class EmailMaskingGuardrail(CustomGuardrail):
+    """Masks email addresses in every text it is handed."""
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        import re
+
+        return GenericGuardrailAPIInputs(
+            texts=[re.sub(r"[\w.]+@[\w.]+", "[EMAIL]", text) for text in inputs.get("texts", [])]
+        )
+
+
+class TestCommentaryGuardrailCoverage:
+    """Commentary in provider_specific_fields must go through output masking like content."""
+
+    @pytest.mark.asyncio
+    async def test_commentary_is_masked_and_content_untouched(self):
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        handler = OpenAIChatCompletionsHandler()
+        response = ModelResponse(
+            id="chatcmpl-1",
+            created=1,
+            model="gpt-5.4-mini",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content='{"city": "Paris"}',
+                        role="assistant",
+                        provider_specific_fields={"commentary": "Ping me at a@b.com"},
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, EmailMaskingGuardrail())
+
+        assert response.choices[0].message.content == '{"city": "Paris"}'
+        assert response.choices[0].message.provider_specific_fields == {"commentary": "Ping me at [EMAIL]"}
+
+    @pytest.mark.asyncio
+    async def test_commentary_only_response_is_still_processed(self):
+        from litellm.types.utils import Choices, Message, ModelResponse
+
+        handler = OpenAIChatCompletionsHandler()
+        response = ModelResponse(
+            id="chatcmpl-2",
+            created=1,
+            model="gpt-5.4-mini",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(
+                        content=None,
+                        role="assistant",
+                        provider_specific_fields={"commentary": "Reach a@b.com"},
+                    ),
+                )
+            ],
+        )
+
+        await handler.process_output_response(response, EmailMaskingGuardrail())
+
+        assert response.choices[0].message.provider_specific_fields == {"commentary": "Reach [EMAIL]"}
+
+    @pytest.mark.asyncio
+    async def test_streaming_commentary_is_masked_across_chunks(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        handler = OpenAIChatCompletionsHandler()
+        chunks = [
+            ModelResponseStream(
+                id="chatcmpl-3",
+                created=1,
+                model="gpt-5.4-mini",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(provider_specific_fields={"commentary": "Ping me at "}),
+                        finish_reason=None,
+                    )
+                ],
+            ),
+            ModelResponseStream(
+                id="chatcmpl-3",
+                created=1,
+                model="gpt-5.4-mini",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(provider_specific_fields={"commentary": "a@b.com"}),
+                        finish_reason=None,
+                    )
+                ],
+            ),
+        ]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=EmailMaskingGuardrail(),
+            litellm_logging_obj=None,
+        )
+
+        assert chunks[0].choices[0].delta.provider_specific_fields["commentary"] == "Ping me at [EMAIL]"
+        assert chunks[1].choices[0].delta.provider_specific_fields["commentary"] == ""
+
+    @pytest.mark.asyncio
+    async def test_ended_stream_commentary_blank_rewrite_removes_original_fragments(self):
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class CommentaryBlankingGuardrail(CustomGuardrail):
+            def __init__(self) -> None:
+                super().__init__(guardrail_name="commentary-blanker")
+                self.streaming_end_of_stream_only = True
+
+            async def apply_guardrail(
+                self,
+                inputs: GenericGuardrailAPIInputs,
+                request_data: dict,
+                input_type: Literal["request", "response"],
+                logging_obj: Optional[Any] = None,
+            ) -> GenericGuardrailAPIInputs:
+                return GenericGuardrailAPIInputs(texts=["" for _text in inputs.get("texts", [])])
+
+        handler = OpenAIChatCompletionsHandler()
+        chunks = [
+            ModelResponseStream(
+                id="chatcmpl-4",
+                created=1,
+                model="gpt-5.4-mini",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(provider_specific_fields={"commentary": "Ping me at "}),
+                        finish_reason=None,
+                    )
+                ],
+            ),
+            ModelResponseStream(
+                id="chatcmpl-4",
+                created=1,
+                model="gpt-5.4-mini",
+                object="chat.completion.chunk",
+                choices=[
+                    StreamingChoices(
+                        index=0,
+                        delta=Delta(provider_specific_fields={"commentary": "a@b.com"}),
+                        finish_reason="stop",
+                    )
+                ],
+            ),
+        ]
+
+        await handler.process_output_streaming_response(
+            responses_so_far=chunks,
+            guardrail_to_apply=CommentaryBlankingGuardrail(),
+            litellm_logging_obj=None,
+            deliver_ended_stream_rewrites=True,
+        )
+
+        for chunk in chunks:
+            assert (chunk.choices[0].delta.provider_specific_fields or {}).get("commentary") in (None, ""), chunk

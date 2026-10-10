@@ -102,3 +102,18 @@ def test_stream_chunk_builder_keeps_block_list_citation_deltas_unnested():
     assert fields is not None
     assert fields["citations"] == [block_one, block_two]
     assert "citation" not in fields
+
+
+def test_stream_chunk_builder_joins_every_commentary_fragment():
+    chunks: Final = [
+        _chunk(Delta(content="", provider_specific_fields={"commentary": "Let me "})),
+        _chunk(Delta(content="", provider_specific_fields={"commentary": "check."})),
+        _chunk(Delta(content='{"city": "Paris"}', role="assistant")),
+        _chunk(Delta(content=""), finish_reason="stop"),
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].message.provider_specific_fields == {"commentary": "Let me check."}
+    assert response.choices[0].message.content == '{"city": "Paris"}'

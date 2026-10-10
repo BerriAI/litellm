@@ -10,7 +10,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
 
 from openai.types.chat import ChatCompletion
-from openai.types.responses import Response
+from openai.types.responses import Response, ResponseFunctionToolCall, ResponseOutputMessage
 from openai.types.responses.custom_tool_param import CustomToolParam
 from openai.types.responses.response_input_param import (
     FunctionCallOutput,
@@ -21,6 +21,13 @@ from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomPara
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
 from pydantic import BaseModel, TypeAdapter, ValidationError
+
+try:
+    from openai.types.responses.response_output_item import (
+        ResponseApplyPatchToolCall,
+    )
+except ImportError:
+    ResponseApplyPatchToolCall = None
 
 import litellm
 from litellm import ModelResponse
@@ -310,6 +317,53 @@ def _as_chat_reasoning_items(
     if not reasoning_items:
         return None
     return cast(list[ChatCompletionReasoningItem], list(reasoning_items))
+
+
+def _typed_tool_call_dict(item: object, index: int) -> Mapping[str, object] | None:
+    from litellm.responses.litellm_completion_transformation.transformation import (
+        LiteLLMCompletionResponsesConfig,
+    )
+
+    if isinstance(item, ResponseFunctionToolCall):
+        return LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
+            tool_call_item=item,
+            index=index,
+        )
+    if ResponseApplyPatchToolCall is not None and isinstance(item, ResponseApplyPatchToolCall):
+        return LiteLLMCompletionResponsesConfig.convert_apply_patch_tool_call_to_chat_completion_tool_call(
+            tool_call_item=item,
+            index=index,
+        )
+    return None
+
+
+_RAW_MESSAGE_CONTENT_PARTS: Final = TypeAdapter(list[dict[str, object]])
+
+
+def _raw_output_text_parts(raw_content: object) -> tuple[Mapping[str, object], ...]:
+    try:
+        content_list: Final = _RAW_MESSAGE_CONTENT_PARTS.validate_python(raw_content)
+    except ValidationError:
+        return ()
+    return tuple(part for part in content_list if part.get("type") == "output_text")
+
+
+def _raw_message_text_parts(
+    raw_item: Mapping[str, object],
+    handle_raw_dict_callback: Callable[..., tuple["Choices | None", int]] | None,
+) -> tuple[tuple[object, object], ...]:
+    """Every (text, annotations) pair of a raw message output item. The callback only
+    reports the first output_text part, so the parts are read directly; the callback
+    stays the fallback for messages that carry no output_text part at all."""
+    output_text_parts: Final = _raw_output_text_parts(raw_item.get("content"))
+    if output_text_parts:
+        return tuple((part.get("text", ""), part.get("annotations")) for part in output_text_parts)
+    if handle_raw_dict_callback is None:
+        return ()
+    choice, _ = handle_raw_dict_callback(item=raw_item, index=0)
+    if choice is None or not isinstance(choice.message.content, str):
+        return ()
+    return ((choice.message.content, None),)
 
 
 _ToolChoiceT = TypeVar("_ToolChoiceT")
@@ -833,6 +887,70 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return request_data
 
     @staticmethod
+    def _shifted_url_citation(annotation: ChatCompletionAnnotation, offset: int) -> ChatCompletionAnnotation:
+        annotation_dict: Final[dict[str, object]] = dict(  # mutable-ok: working copy shifted into a new annotation
+            annotation
+        )
+        start_index: Final[object] = annotation_dict.get("start_index")
+        end_index: Final[object] = annotation_dict.get("end_index")
+        if not isinstance(start_index, int) or not isinstance(end_index, int):
+            return annotation
+        return cast(  # cast-ok: the converter emits flat url_citation dicts carrying start_index/end_index
+            ChatCompletionAnnotation,
+            {**annotation_dict, "start_index": start_index + offset, "end_index": end_index + offset},
+        )
+
+    @staticmethod
+    def _fold_output_text_part(
+        part_text: object,
+        raw_annotations: object,
+        offset: int,
+    ) -> tuple[str, list[ChatCompletionAnnotation]]:  # mutable-ok: returns fresh per-part annotation list
+        """One output_text part folded into the merged chat message: its text plus its
+        annotations with url_citation indices shifted into the merged content."""
+        text: Final = part_text if isinstance(part_text, str) else ""
+        annotations_input: Final[list[object] | None] = (  # mutable-ok: provider annotations list or nothing
+            cast(  # cast-ok: provider annotations arrive as a json list or nothing
+                "list[object] | None", raw_annotations if isinstance(raw_annotations, list) else None
+            )
+        )
+        converted: Final = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(annotations_input)
+        return text, [
+            LiteLLMResponsesTransformationHandler._shifted_url_citation(annotation, offset)
+            if annotation.get("type") == "url_citation"
+            else annotation
+            for annotation in converted or ()
+        ]
+
+    @staticmethod
+    def _fold_message_text_parts(
+        parts: Iterable[tuple[object, object]],
+        is_commentary: bool,
+        content_length: int,
+    ) -> tuple[tuple[str, ...], tuple[ChatCompletionAnnotation, ...], tuple[str, ...]]:
+        """Fold (text, annotations) pairs into content or commentary and return
+        (content_texts, annotations, commentary_texts). Commentary text never
+        enters content and its annotations are dropped."""
+        part_list: Final = tuple(parts)
+        offsets: Final = accumulate(
+            (len(part_text) if isinstance(part_text, str) else 0 for part_text, _ in part_list),
+            initial=content_length,
+        )
+        folded: Final = tuple(
+            LiteLLMResponsesTransformationHandler._fold_output_text_part(
+                part_text, None if is_commentary else raw_annotations, offset
+            )
+            for (part_text, raw_annotations), offset in zip(part_list, offsets)
+        )
+        if is_commentary:
+            return (), (), tuple(text for text, _ in folded)
+        return (
+            tuple(text for text, _ in folded),
+            tuple(chain.from_iterable(annotations for _, annotations in folded)),
+            (),
+        )
+
+    @staticmethod
     def _convert_response_output_to_choices(
         output_items: Sequence[object],
         handle_raw_dict_callback: Callable[..., tuple["Choices | None", int]] | None = None,
@@ -847,158 +965,111 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         Returns:
             List of Choices objects
         """
-        from openai.types.responses import (
-            ResponseFunctionToolCall,
-            ResponseOutputMessage,
-            ResponseReasoningItem,
-        )
-
-        try:
-            from openai.types.responses.response_output_item import (
-                ResponseApplyPatchToolCall,
-            )
-        except ImportError:
-            ResponseApplyPatchToolCall = None
-
         from litellm.types.utils import Choices, Message
 
-        choices: Final[list[Choices]] = []
-        index = 0
-        reasoning_content: str | None = None
-        pending_reasoning_item: _BuiltReasoningItem | None = None
-
-        # Collect all tool calls to put them in a single choice
-        # (Chat Completions API expects all tool calls in one message)
-        accumulated_tool_calls: Final[list[Mapping[str, object]]] = []
+        # The bridge never requests n>1, so the whole output folds into one choice at
+        # index 0; commentary-phase text goes to provider_specific_fields, not content
+        content_parts: Final[list[str]] = []  # mutable-ok: ordered fold accumulator
+        commentary_parts: Final[list[str]] = []  # mutable-ok: ordered fold accumulator
+        folded_annotations: Final[list[ChatCompletionAnnotation]] = []  # mutable-ok: ordered fold accumulator
+        reasoning_items: Final[list[_BuiltReasoningItem]] = []  # mutable-ok: ordered fold accumulator
+        accumulated_tool_calls: Final[list[Mapping[str, object]]] = []  # mutable-ok: ordered fold accumulator
+        first_message_role: str | None = None
+        content_length = 0
         tool_call_index = 0
 
         for item in output_items:
-            if isinstance(item, ResponseReasoningItem):
-                pending_reasoning_item = _build_reasoning_item(
-                    item_id=item.id,
-                    encrypted_content=getattr(item, "encrypted_content", None),
-                    summary_raw=item.summary,
-                )
-                reasoning_content = " ".join(s["text"] for s in pending_reasoning_item["summary"] if s.get("text"))
-
+            reasoning_item = _reasoning_item_from_output_item(item)
+            if reasoning_item is not None:
+                reasoning_items.append(reasoning_item)
             elif isinstance(item, ResponseOutputMessage):
-                for content in item.content:
-                    response_text = getattr(content, "text", "")
-                    # Extract annotations from content if present
-                    raw_annotations = getattr(content, "annotations", None)
-                    annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
-                        raw_annotations
-                    )
-                    msg = Message(
-                        role=item.role,
-                        content=response_text if response_text else "",
-                        reasoning_content=reasoning_content,
-                        annotations=annotations,
-                        reasoning_items=cast(
-                            list[ChatCompletionReasoningItem] | None,
-                            ([pending_reasoning_item] if pending_reasoning_item is not None else None),
+                first_message_role = first_message_role or item.role
+                message_content, message_annotations, message_commentary = (
+                    LiteLLMResponsesTransformationHandler._fold_message_text_parts(
+                        (
+                            (getattr(content, "text", ""), getattr(content, "annotations", None))
+                            for content in item.content
                         ),
-                    )
-
-                    choices.append(
-                        Choices(
-                            message=msg,
-                            finish_reason="stop",
-                            index=index,
-                        )
-                    )
-
-                    reasoning_content = None  # flush
-                    pending_reasoning_item = None  # flush
-                    index += 1
-
-            elif isinstance(item, ResponseFunctionToolCall):
-                from litellm.responses.litellm_completion_transformation.transformation import (
-                    LiteLLMCompletionResponsesConfig,
-                )
-
-                tool_call_dict = (
-                    LiteLLMCompletionResponsesConfig.convert_response_function_tool_call_to_chat_completion_tool_call(
-                        tool_call_item=item,
-                        index=tool_call_index,
+                        item.phase == "commentary",
+                        content_length,
                     )
                 )
+                content_parts.extend(message_content)
+                folded_annotations.extend(message_annotations)
+                commentary_parts.extend(message_commentary)
+                content_length += sum(map(len, message_content))
+            elif (tool_call_dict := _typed_tool_call_dict(item, tool_call_index)) is not None:
                 accumulated_tool_calls.append(tool_call_dict)
                 tool_call_index += 1
-
-            elif ResponseApplyPatchToolCall is not None and isinstance(item, ResponseApplyPatchToolCall):
-                from litellm.responses.litellm_completion_transformation.transformation import (
-                    LiteLLMCompletionResponsesConfig,
-                )
-
-                tool_call_dict = (
-                    LiteLLMCompletionResponsesConfig.convert_apply_patch_tool_call_to_chat_completion_tool_call(
-                        tool_call_item=item,
-                        index=tool_call_index,
-                    )
-                )
-                accumulated_tool_calls.append(tool_call_dict)
-                tool_call_index += 1
-
             elif isinstance(item, (dict, BaseModel)):
                 # Raw dict items (e.g., from GPT-5 Codex) and pydantic items matching no
                 # openai SDK class above: typed ResponseCustomToolCall and litellm's own
                 # GenericResponseOutputItem from the completion bridge both land here
-                raw_item = item if isinstance(item, dict) else item.model_dump()
-                if raw_item.get("type") in ("function_call", "custom_tool_call"):
-                    # Tool calls accumulate into the single trailing tool_calls choice
-                    # like the typed branches above; a choice per call would hide every
-                    # call after choices[0] from chat clients
+                raw_item = cast(  # cast-ok: dict and pydantic output items are string-keyed mappings
+                    "Mapping[str, object]", item if isinstance(item, dict) else item.model_dump()
+                )
+                raw_item_type = raw_item.get("type")
+                if raw_item_type in ("function_call", "custom_tool_call"):
                     accumulated_tool_calls.append(tool_call_dict_from_output_item(raw_item, tool_call_index))
                     tool_call_index += 1
+                elif raw_item_type == "message":
+                    raw_parts = _raw_message_text_parts(raw_item, handle_raw_dict_callback)
+                    if raw_parts:
+                        if first_message_role is None:
+                            raw_role = raw_item.get("role")
+                            first_message_role = raw_role if isinstance(raw_role, str) else "assistant"
+                        raw_content, raw_annotations_out, raw_commentary = (
+                            LiteLLMResponsesTransformationHandler._fold_message_text_parts(
+                                raw_parts,
+                                raw_item.get("phase") == "commentary",
+                                content_length,
+                            )
+                        )
+                        content_parts.extend(raw_content)
+                        folded_annotations.extend(raw_annotations_out)
+                        commentary_parts.extend(raw_commentary)
+                        content_length += sum(map(len, raw_content))
                 elif handle_raw_dict_callback is not None:
-                    choice, index = handle_raw_dict_callback(item=raw_item, index=index)
-                    if choice is not None:
-                        choices.append(choice)
+                    callback_choice, _ = handle_raw_dict_callback(item=raw_item, index=0)
+                    if callback_choice is not None and isinstance(callback_choice.message.content, str):
+                        part_text, part_annotations = LiteLLMResponsesTransformationHandler._fold_output_text_part(
+                            callback_choice.message.content, None, content_length
+                        )
+                        content_parts.append(part_text)
+                        folded_annotations.extend(part_annotations)
+                        content_length += len(part_text)
             else:
                 pass  # don't fail request if item in list is not supported
 
-        if accumulated_tool_calls and choices:
-            last_choice: Final = choices[-1]
-            last_reasoning_content: Final = getattr(last_choice.message, "reasoning_content", None)
-            last_reasoning_items: Final = getattr(last_choice.message, "reasoning_items", None)
-            merged_reasoning_content: Final = (
-                " ".join(value for value in (last_reasoning_content, reasoning_content) if value) or None
-            )
-            merged_reasoning_items: Final = _as_chat_reasoning_items(
-                (
-                    *(last_reasoning_items or ()),
-                    *(() if pending_reasoning_item is None else (pending_reasoning_item,)),
-                )
-            )
-            merged_message: Final = Message(
-                role=last_choice.message.role,
-                content=last_choice.message.content,
-                annotations=getattr(last_choice.message, "annotations", None),
-                tool_calls=accumulated_tool_calls,
-                reasoning_content=merged_reasoning_content,
-                reasoning_items=merged_reasoning_items,
-            )
-            return [
-                *choices[:-1],
-                Choices(message=merged_message, finish_reason="tool_calls", index=last_choice.index),
-            ]
+        if not content_parts and not commentary_parts and not accumulated_tool_calls:
+            return []
 
-        if accumulated_tool_calls:
-            msg = Message(
-                content=None,
-                tool_calls=accumulated_tool_calls,
-                reasoning_content=reasoning_content,
-                reasoning_items=cast(
-                    list[ChatCompletionReasoningItem] | None,
-                    ([pending_reasoning_item] if pending_reasoning_item is not None else None),
-                ),
+        reasoning_summary_texts: Final = tuple(
+            block["text"]
+            for block in chain.from_iterable(item["summary"] for item in reasoning_items)
+            if block.get("text")
+        )
+        merged_role: Final = cast(  # cast-ok: provider role passthrough, "assistant" when absent
+            'Literal["assistant", "user", "system", "tool", "function"]', first_message_role or "assistant"
+        )
+        merged_message: Final = Message(
+            role=merged_role,
+            content="".join(content_parts)
+            if content_parts
+            else ("" if commentary_parts and not accumulated_tool_calls else None),
+            provider_specific_fields={"commentary": "".join(commentary_parts)} if commentary_parts else None,
+            tool_calls=accumulated_tool_calls or None,
+            annotations=folded_annotations or None,
+            reasoning_content=" ".join(reasoning_summary_texts) or None,
+            reasoning_items=_as_chat_reasoning_items(reasoning_items),
+        )
+        return [
+            Choices(
+                message=merged_message,
+                finish_reason="tool_calls" if accumulated_tool_calls else "stop",
+                index=0,
             )
-            choices.append(Choices(message=msg, finish_reason="tool_calls", index=index))
-            reasoning_content = None
-            pending_reasoning_item = None
-
-        return choices
+        ]
 
     @staticmethod
     def _build_empty_incomplete_choice(
@@ -1562,6 +1633,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         self._chat_completion_id: str | None = None
         self._served_service_tier: str | None = None
         self._tool_call_index_map: dict[int, int] = {}  # mutable-ok: per-stream accumulator state
+        self._commentary_item_ids: set[str] = set()  # mutable-ok: per-stream accumulator state
 
     def _handle_string_chunk(
         self, str_line: Union[str, "BaseModel"]
@@ -1602,6 +1674,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
     def translate_responses_chunk_to_openai_stream(
         parsed_chunk: dict | BaseModel,
         tool_call_index_map: dict[int, int] | None = None,  # mutable-ok: per-stream state, remapped in place
+        commentary_item_ids: set[str] | None = None,  # mutable-ok: per-stream state, extended in place
     ) -> "ModelResponseStream":
         """
         Translate a Responses API streaming chunk to OpenAI chat completion streaming format.
@@ -1609,6 +1682,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         Args:
             parsed_chunk: Dict containing the Responses API event chunk
             tool_call_index_map: Per-stream output_index -> sequential tool_call index map
+            commentary_item_ids: Per-stream set of commentary-phase message item ids
 
         Returns:
             ModelResponseStream: OpenAI-formatted streaming chunk
@@ -1661,6 +1735,17 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         elif event_type == "response.output_item.added":
             # New output item added
             output_item = parsed_chunk.get("item", {})
+            output_item_map: Final = cast(  # cast-ok: output_item.added items are string-keyed json objects
+                "Mapping[str, object]", output_item
+            )
+            if (
+                commentary_item_ids is not None
+                and output_item_map.get("type") == "message"
+                and output_item_map.get("phase") == "commentary"
+            ):
+                commentary_item_id: Final = output_item_map.get("id")
+                if isinstance(commentary_item_id, str):
+                    commentary_item_ids.add(commentary_item_id)
             if output_item.get("type") in ("function_call", "custom_tool_call"):
                 converted: Final = tool_call_dict_from_output_item(output_item, parsed_chunk.get("output_index", 0))
                 provider_specific_fields: Final = converted.get("provider_specific_fields")
@@ -1777,6 +1862,19 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
             # Content part added to output
             content_part = parsed_chunk.get("delta", None)
             if content_part is not None:
+                delta_item_id: Final = cast(  # cast-ok: delta events are string-keyed json objects
+                    "Mapping[str, object]", parsed_chunk
+                ).get("item_id")
+                if commentary_item_ids is not None and delta_item_id in commentary_item_ids:
+                    return ModelResponseStream(
+                        choices=[
+                            StreamingChoices(
+                                index=0,
+                                delta=Delta(content=None, provider_specific_fields={"commentary": content_part}),
+                                finish_reason=None,
+                            )
+                        ]
+                    )
                 return ModelResponseStream(
                     choices=[
                         StreamingChoices(
@@ -1876,7 +1974,9 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         return self._with_served_service_tier(
             self._with_stream_scoped_id(
                 OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
-                    chunk, tool_call_index_map=self._tool_call_index_map
+                    chunk,
+                    tool_call_index_map=self._tool_call_index_map,
+                    commentary_item_ids=self._commentary_item_ids,
                 )
             )
         )

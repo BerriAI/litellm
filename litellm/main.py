@@ -9330,13 +9330,20 @@ def stream_chunk_builder(
             citation_fields: Final = (
                 {"citations": _joined_streamed_citations(streamed_citations)} if streamed_citations else {}
             )
+            streamed_commentary: Final = "".join(
+                fields["commentary"] for fields in provider_field_dicts if isinstance(fields.get("commentary"), str)
+            )
+            commentary_fields: Final = {"commentary": streamed_commentary} if streamed_commentary else {}
             combined_provider_fields: Final = {
-                key: value
-                for fields in (citation_fields, *provider_field_dicts)
-                for key, value in fields.items()
-                if key != "citation"
+                **{
+                    key: value
+                    for fields in provider_field_dicts
+                    for key, value in fields.items()
+                    if key not in ("citation", "commentary")
+                },
+                **citation_fields,
+                **commentary_fields,
             }
-
             if combined_provider_fields:
                 _choice = response.choices[0]
                 _choice.message.provider_specific_fields = combined_provider_fields
