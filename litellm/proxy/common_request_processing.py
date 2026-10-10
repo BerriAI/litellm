@@ -3669,14 +3669,12 @@ class ProxyBaseLLMRequestProcessing:
                 # callbacks fire regardless of the call-type heuristic in
                 # _is_sync_litellm_request (which only recognizes a subset of
                 # async markers stored in litellm_params).
-                asyncio.create_task(
-                    _as_success_dispatcher(captured_logging_obj).dispatch_success_handlers(
-                        _response,
-                        cache_hit=cache_hit,
-                        start_time=None,
-                        end_time=None,
-                        prefer_async_handlers=True,
-                    )
+                await _as_success_dispatcher(captured_logging_obj).dispatch_success_handlers(
+                    _response,
+                    cache_hit=cache_hit,
+                    start_time=None,
+                    end_time=None,
+                    prefer_async_handlers=True,
                 )
             except Exception as e:
                 verbose_proxy_logger.exception(

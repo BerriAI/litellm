@@ -36,6 +36,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
 from litellm.proxy.utils import ProxyLogging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.guardrails import GuardrailEventHooks
 
 # ---------------------------------------------------------------------------
@@ -735,10 +736,9 @@ class TestDeferredStreamingClosure:
 
             # CSW stored args; now simulate what ProxyLogging does
             request_data = {"litellm_logging_obj": mock_logging_obj}
-            ProxyLogging._fire_deferred_stream_logging(request_data)
-
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
+            deferred_task = ProxyLogging._fire_deferred_stream_logging(request_data)
+            assert deferred_task is not None
+            await deferred_task
 
         assert guardrail_called is True, "Guardrail hook should be called"
         assert (
@@ -947,10 +947,9 @@ class TestDeferredStreamingClosure:
 
             # CSW stored args; now simulate what ProxyLogging does
             request_data = {"litellm_logging_obj": mock_logging_obj}
-            ProxyLogging._fire_deferred_stream_logging(request_data)
-
-            await asyncio.sleep(0)
-            await asyncio.sleep(0)
+            deferred_task = ProxyLogging._fire_deferred_stream_logging(request_data)
+            assert deferred_task is not None
+            await deferred_task
 
         assert hook_called is True, "Production closure must call guardrail hook"
         assert (
@@ -1319,16 +1318,65 @@ class TestFireDeferredStreamLogging:
         mock_logging_obj._deferred_stream_complete_args = ("test_response", True)
 
         request_data = {"litellm_logging_obj": mock_logging_obj}
-        ProxyLogging._fire_deferred_stream_logging(request_data)
+        with patch.object(GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue") as enqueue:
+            deferred_task = ProxyLogging._fire_deferred_stream_logging(request_data)
+            assert deferred_task is not None
+            await deferred_task
 
-        await asyncio.sleep(0)
-
+        enqueue.assert_not_called()
         assert callback_called is True
         assert callback_args["response"] == "test_response"
         assert callback_args["cache_hit"] is True
         # Attributes should be cleared
         assert mock_logging_obj._on_deferred_stream_complete is None
         assert mock_logging_obj._deferred_stream_complete_args is None
+
+    @pytest.mark.asyncio
+    async def test_callback_failure_is_logged_without_escaping(self):
+        """A failed background callback must not surface as an unhandled task error."""
+        callback_error = RuntimeError("deferred callback failed")
+
+        async def failing_callback():
+            raise callback_error
+
+        mock_logging_obj = MagicMock()
+        mock_logging_obj._on_deferred_stream_complete = failing_callback
+        mock_logging_obj._deferred_stream_complete_args = ()
+
+        with patch("litellm.proxy.utils.verbose_proxy_logger.exception") as log_exception:
+            deferred_task = ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": mock_logging_obj})
+            assert deferred_task is not None
+            await deferred_task
+
+        log_exception.assert_called_once_with("Error in deferred stream callback: %s", callback_error)
+
+    @pytest.mark.asyncio
+    async def test_deferred_guardrails_wait_for_success_logging(self):
+        logging_started = asyncio.Event()
+        release_logging = asyncio.Event()
+        mock_logging_obj = MagicMock()
+        mock_logging_obj.model_call_details = {"metadata": {}}
+
+        async def track_async_success(*args, **kwargs):
+            logging_started.set()
+            await release_logging.wait()
+
+        _attach_mock_success_dispatch(mock_logging_obj, track_async_success)
+
+        with patch("litellm.callbacks", []):
+            deferred_task = asyncio.create_task(
+                ProxyBaseLLMRequestProcessing._run_deferred_stream_guardrails(
+                    captured_data={"model": "gpt-4", "metadata": {}},
+                    captured_user_api_key_dict=UserAPIKeyAuth(api_key="test"),
+                    captured_logging_obj=mock_logging_obj,
+                    assembled_response=MagicMock(),
+                    cache_hit=False,
+                )
+            )
+            await logging_started.wait()
+            assert deferred_task.done() is False
+            release_logging.set()
+            await deferred_task
 
     @pytest.mark.asyncio
     async def test_noop_when_no_deferred_args(self):
@@ -1520,8 +1568,9 @@ class TestArmDeferredStreamDispatch:
 
         assembled = object()
         logging_obj._deferred_stream_complete_args = (assembled, False)
-        ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
-        await asyncio.sleep(0)
+        deferred_task = ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+        assert deferred_task is not None
+        await deferred_task
 
         assert recorded["result"] is assembled
         assert recorded["cache_hit"] is False
@@ -1554,8 +1603,9 @@ class TestArmDeferredStreamDispatch:
 
         assembled = object()
         logging_obj._deferred_stream_complete_args = (assembled, False)
-        ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
-        await asyncio.sleep(0)
+        deferred_task = ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+        assert deferred_task is not None
+        await deferred_task
 
         assert recorded["result"] is assembled
         assert recorded["cache_hit"] is False
@@ -1563,8 +1613,6 @@ class TestArmDeferredStreamDispatch:
 
     @pytest.mark.asyncio
     async def test_native_stream_closure_enqueues_single_coroutine(self):
-        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
         logging_obj, recorded = self._dispatch_recording_logging_obj()
 
         async def _agen():
@@ -1583,11 +1631,14 @@ class TestArmDeferredStreamDispatch:
 
         coro = _logging_coroutine()
         logging_obj._deferred_stream_complete_args = (coro,)
-        with patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
-            GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
-        ) as mock_enqueue:
-            ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
-            await asyncio.sleep(0)
+        with (
+            patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
+                GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
+            ) as mock_enqueue
+        ):
+            deferred_task = ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+            assert deferred_task is not None
+            await deferred_task
         mock_enqueue.assert_called_once_with(async_coroutine=coro)
         assert recorded == {}
         coro.close()
@@ -1600,8 +1651,6 @@ class TestArmDeferredStreamDispatch:
         so stores (assembled_response, cache_hit). The closure armed for a raw
         generator must accept that shape too, or _fire_deferred_stream_logging
         raises TypeError and the request loses its spend log and callbacks."""
-        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
         logging_obj, recorded = self._dispatch_recording_logging_obj()
 
         async def _agen():
@@ -1616,11 +1665,14 @@ class TestArmDeferredStreamDispatch:
 
         assembled = object()
         logging_obj._deferred_stream_complete_args = (assembled, True)
-        with patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
-            GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
-        ) as mock_enqueue:
-            ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
-            await asyncio.sleep(0)
+        with (
+            patch.object(  # test-quality-ok: GLOBAL_LOGGING_WORKER is a process-global singleton with no injection seam
+                GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue"
+            ) as mock_enqueue
+        ):
+            deferred_task = ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+            assert deferred_task is not None
+            await deferred_task
 
         mock_enqueue.assert_not_called()
         assert recorded["result"] is assembled
@@ -1630,8 +1682,6 @@ class TestArmDeferredStreamDispatch:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("stored_args", [(object(),), (object(), object(), object())])
     async def test_raw_generator_stream_with_unknown_arg_shape_logs_and_drops(self, stored_args, caplog):
-        from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-
         logging_obj, recorded = self._dispatch_recording_logging_obj()
 
         async def _agen():
@@ -1651,8 +1701,9 @@ class TestArmDeferredStreamDispatch:
             ) as mock_enqueue,
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
         ):
-            ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
-            await asyncio.sleep(0)
+            deferred_task = ProxyLogging._fire_deferred_stream_logging({"litellm_logging_obj": logging_obj})
+            assert deferred_task is not None
+            await deferred_task
 
         mock_enqueue.assert_not_called()
         assert recorded == {}
