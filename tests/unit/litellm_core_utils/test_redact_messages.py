@@ -203,6 +203,7 @@ class TestPerformRedaction:
             "standard_logging_object": {
                 "messages": [{"role": "user", "content": "sensitive input"}],
                 "response": {
+                    "instructions": "sensitive instructions",
                     "output": [
                         {"text": "top-level text"},
                         {"content": [{"text": "nested text"}]},
@@ -213,6 +214,7 @@ class TestPerformRedaction:
             },
         }
         result = {
+            "instructions": "sensitive result instructions",
             "output": [
                 {"text": "top-level result"},
                 {"content": [{"text": "nested result"}]},
@@ -228,16 +230,19 @@ class TestPerformRedaction:
         assert details["input"] == ""
 
         logged_response = details["standard_logging_object"]["response"]
+        assert logged_response["instructions"] == "redacted-by-litellm"
         assert logged_response["usage"] == {"total_tokens": 1}
         assert logged_response["output"][0]["text"] == "redacted-by-litellm"
         assert logged_response["output"][1]["content"][0]["text"] == ("redacted-by-litellm")
         assert logged_response["output"][2]["summary"][0]["text"] == ("redacted-by-litellm")
 
         assert redacted["usage"] == {"total_tokens": 1}
+        assert redacted["instructions"] == "redacted-by-litellm"
         assert redacted["output"][0]["text"] == "redacted-by-litellm"
         assert redacted["output"][1]["content"][0]["text"] == "redacted-by-litellm"
         assert redacted["output"][2]["summary"][0]["text"] == "redacted-by-litellm"
         assert result["output"][0]["text"] == "top-level result"
+        assert result["instructions"] == "sensitive result instructions"
 
     def test_redacts_model_response_dict_choices(self):
         result = {
@@ -692,12 +697,21 @@ class TestPerformRedaction:
         assert redacted["output"][1]["content"][0]["text"] == "redacted-by-litellm"
 
     def test_redacts_responses_api_response_object(self):
-        response = mock_responses_api_response("sensitive output")
+        response = mock_responses_api_response("sensitive output").model_copy(
+            update={"instructions": "sensitive instructions"}
+        )
 
         redacted = perform_redaction({}, response)
 
         assert redacted.output[0].content[0].text == "redacted-by-litellm"
+        assert redacted.instructions == "redacted-by-litellm"
         assert response.output[0].content[0].text == "sensitive output"
+        assert response.instructions == "sensitive instructions"
+
+        streamed: Final = response.model_copy(deep=True)
+        perform_redaction({"stream": True, "complete_streaming_response": streamed}, result=None)
+        assert streamed.instructions == "redacted-by-litellm"
+        assert response.instructions == "sensitive instructions"
 
     def test_redacts_vertex_provider_metadata_in_standard_logging_response(self):
         details = {

@@ -104,6 +104,34 @@ def test_get_callback_env_vars():
     assert none_env_vars == []
 
 
+def test_responses_redaction_covers_instructions_reasoning_and_tool_arguments() -> None:
+    response: Final = {
+        "instructions": "INSTRUCTION_CANARY",
+        "output": [
+            {"type": "message", "content": [{"type": "output_text", "text": "ANSWER_CANARY"}]},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "REASONING_CANARY"}]},
+            {"type": "function_call", "name": "example_tool", "arguments": '{"value":"ARGUMENT_CANARY"}'},
+        ],
+    }
+    details: Final = {"standard_logging_object": {"response": response}}
+    logger: Final = CustomLogger(turn_off_message_logging=True)
+
+    stored: Final = logger.redact_standard_logging_payload_from_model_call_details(details)["standard_logging_object"]
+
+    assert stored["response"] == {
+        "instructions": "redacted-by-litellm",
+        "output": [
+            {"type": "message", "content": [{"type": "output_text", "text": "redacted-by-litellm"}]},
+            {"type": "reasoning", "summary": [{"type": "summary_text", "text": "redacted-by-litellm"}]},
+            {"type": "function_call", "name": "example_tool", "arguments": "redacted-by-litellm"},
+        ],
+    }
+    assert details["standard_logging_object"]["response"] is response
+    assert response["instructions"] == "INSTRUCTION_CANARY"
+    assert response["output"][1]["summary"][0]["text"] == "REASONING_CANARY"
+    assert response["output"][2]["arguments"] == '{"value":"ARGUMENT_CANARY"}'
+
+
 class TestStandardLoggingPayloadExcludedFields:
     """Test suite for standard_logging_payload_excluded_fields feature."""
 
