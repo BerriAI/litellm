@@ -2,7 +2,8 @@ import React, { useContext, useId } from "react";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ChevronDownIcon } from "lucide-react";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { ChevronDownIcon, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -125,9 +126,15 @@ interface AutoRouterClassifierTabsProps {
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
   children: React.ReactNode;
+  judgeModel?: React.ReactNode;
 }
 
-const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ value, onChange, children }) => {
+const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
+  value,
+  onChange,
+  children,
+  judgeModel,
+}) => {
   const id = useId();
   const availability = useContext(AutoRouterAvailabilityContext);
   const classifierType = effectiveClassifierType(value);
@@ -171,7 +178,14 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
     <div className="flex flex-col gap-6">
       <fieldset>
         <legend className="mb-4 flex w-full items-center justify-between gap-3">
-          <h4 className="m-0 text-xl font-semibold text-foreground">Choose your classifier</h4>
+          <div className="flex items-center gap-2">
+            <h4 className="m-0 text-xl font-semibold text-foreground">Choose your classifier</h4>
+            <SimpleTooltip content="Choose how requests are evaluated and routed to your tiers">
+              <button type="button" aria-label="About classifiers" className="text-muted-foreground">
+                <Info className="size-4" />
+              </button>
+            </SimpleTooltip>
+          </div>
           <AutoRouterLimits />
         </legend>
         <RadioGroup value={family} onValueChange={changeFamily} className="grid gap-3 sm:grid-cols-3">
@@ -267,6 +281,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
           </p>
         </div>
       )}
+      {family === "llm" && judgeModel}
       {family === "llm" && (
         <div className="space-y-2">
           <Label htmlFor={`${id}-approach`}>Routing approach</Label>

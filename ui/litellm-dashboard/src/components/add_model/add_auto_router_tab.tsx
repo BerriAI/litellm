@@ -1,4 +1,5 @@
 import { AutoRouterAvailabilityContext, useAutoRouterAvailability } from "./AutoRouterAvailability";
+import ClassifierPrimarySettings from "./ClassifierPrimarySettings";
 import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
 import { getForecastConfigError, isForecastClassifier } from "../add_model/forecast_classifier_config";
 import React, { useEffect, useState } from "react";
@@ -534,16 +535,15 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const tierSetup = (
-    <div className="mb-4 space-y-2">
+    <div className="w-full space-y-2 sm:w-64">
       <div className="space-y-2">
-        <label className="block text-sm font-medium text-foreground mb-2">Template</label>
         <Select
           items={templateItems}
           value={selectedPreset ?? null}
           onValueChange={(presetKey: string | null) => handlePresetChange(presetKey ?? undefined)}
         >
-          <SelectTrigger data-testid="template-selector" className="w-full">
-            <SelectValue placeholder="Choose a template or select Custom to define your own" />
+          <SelectTrigger aria-label="Use a template" data-testid="template-selector" className="w-full">
+            <SelectValue placeholder="Use a template" />
           </SelectTrigger>
           <SelectContent>
             {sortedPresetOptions.map(({ preset, availability: presetState }) => {
@@ -578,6 +578,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
             </SelectItem>
           </SelectContent>
         </Select>
+        <p className="text-xs text-muted-foreground">Replaces classifier and model choices</p>
         {presetsPending && <div className="text-xs mt-1 text-muted-foreground">Loading templates...</div>}
         {presetsUnavailable && (
           <div className="text-xs mt-1 text-destructive">
@@ -625,7 +626,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         <Card>
           <CardContent>
             <form onSubmit={form.handleSubmit(() => handleAutoRouterSubmit())} noValidate>
-              <div className="mb-6">
+              <div className="mb-6 border-b pb-6">
                 <FormField
                   control={form.control}
                   name="auto_router_name"
@@ -656,7 +657,21 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 </FormField>
               )}
 
-              <AutoRouterClassifierTabs value={complexityRouterConfig} onChange={handleClassifierChange}>
+              <AutoRouterClassifierTabs
+                value={complexityRouterConfig}
+                onChange={handleClassifierChange}
+                judgeModel={
+                  <ClassifierPrimarySettings
+                    section="judge"
+                    value={complexityRouterConfig}
+                    onChange={setComplexityRouterConfig}
+                    modelOptions={modelInfo
+                      .filter((model) => model.mode !== "embedding")
+                      .map((model) => ({ value: model.model_group, label: model.model_group }))}
+                    showValidationErrors={showValidationErrors}
+                  />
+                }
+              >
                 <FieldGroup>
                   {modelsUnverifiable && (
                     <p className="text-sm text-destructive">

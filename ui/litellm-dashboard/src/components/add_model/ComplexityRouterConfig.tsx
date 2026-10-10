@@ -578,6 +578,7 @@ const CreationClassifierSettings = ({
         </div>
       )}
       <ClassifierPrimarySettings
+        section={creationFlow ? "frequency" : "all"}
         value={value}
         onChange={onChange}
         modelOptions={modelOptions}
@@ -690,15 +691,17 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         defaultModel={defaultModel}
         showValidationErrors={showValidationErrors}
       />
-      <div className="inline-flex items-center gap-2 mb-4">
-        <h4 className="m-0 text-xl font-semibold text-foreground">{forecast ? "Solver models" : tierHeading}</h4>
-        {!forecast && (
-          <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
-            <Info className="size-4 text-muted-foreground" />
-          </SimpleTooltip>
-        )}
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
+        <div className="inline-flex items-center gap-2">
+          <h4 className="m-0 text-xl font-semibold text-foreground">{forecast ? "Solver models" : tierHeading}</h4>
+          {!forecast && (
+            <SimpleTooltip content="Map each complexity tier to one or more models. Simple queries use cheaper/faster models, complex queries use more capable models.">
+              <Info className="size-4 text-muted-foreground" />
+            </SimpleTooltip>
+          )}
+        </div>
+        {!forecast && tierSetup}
       </div>
-      {!forecast && tierSetup}
 
       <InactiveHeuristicV2Threshold value={value} onChange={onChange} />
 

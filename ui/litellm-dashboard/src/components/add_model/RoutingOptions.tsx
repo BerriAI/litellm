@@ -22,7 +22,7 @@ const RoutingOptions = ({
     if (showValidationErrors) setOpen(true);
   }
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="rounded-lg border">
+    <Collapsible open={open} onOpenChange={setOpen} className="rounded-lg border bg-muted/40">
       <CollapsibleTrigger className="group flex w-full flex-wrap items-center gap-2 px-4 py-3 text-left font-medium">
         <ChevronRight className="size-4 transition-transform group-data-panel-open:rotate-90" />
         {label}
