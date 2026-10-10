@@ -133,8 +133,17 @@ async def _burst(base_url: str, key: str, model: str, count: int) -> tuple[httpx
         )
 
 
-def _rows(router: str, *, want: int) -> tuple[dict[str, JsonValue], ...]:
-    return tuple(eventually(lambda: read_rows(_ROWS_QUERY, (router,)), lambda found: len(found) >= want, seconds=70))
+def _rows(router: str, *, want: frozenset[str]) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(
+        eventually(
+            lambda: read_rows(_ROWS_QUERY, (router,)),
+            lambda found: want
+            <= frozenset(
+                string_value(row["request_id"]) for row in found if row["origin"] != "autorouter_classifier"
+            ),
+            seconds=70,
+        )
+    )
 
 
 def test_validate_accepts_a_databricks_classifier_with_a_bare_endpoint_name_of_any_length(gateway: Gateway) -> None:
@@ -350,7 +359,7 @@ async def test_renaming_the_endpoint_under_a_burst_moves_the_classifier_and_logs
             *tuple(convergence_calls.get_nowait() for _ in range(convergence_calls.qsize())),
         )
         assert len(set(identities)) == len(identities), identities
-        rows: Final = _rows(name, want=len(identities))
+        rows: Final = _rows(name, want=frozenset(identities))
         request_rows: Final = [row for row in rows if row["origin"] != "autorouter_classifier"]
         assert sorted(string_value(row["request_id"]) for row in request_rows) == sorted(identities), request_rows
         assert all(row["status"] == "success" for row in rows), rows
