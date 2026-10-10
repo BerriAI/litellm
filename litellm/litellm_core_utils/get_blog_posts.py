@@ -8,37 +8,21 @@ Disable remote fetching entirely:
     export LITELLM_LOCAL_BLOG_POSTS=True
 """
 
+import json
 import os
 import time
 import xml.etree.ElementTree as ET
 from email.utils import parsedate_to_datetime
 from importlib.resources import files
-from typing import Final, TypedDict
+from typing import Final
 
 import httpx
-from pydantic import TypeAdapter
-from typing_extensions import NotRequired, ReadOnly
 
 from litellm import verbose_logger
 from litellm.types.llms.base import LiteLLMBaseModel
 
 BLOG_POSTS_TTL_SECONDS: Final[int] = 3600  # 1 hour
-BLOG_POSTS_MAX: Final[int] = 30
-
-
-class BlogPostDict(TypedDict):
-    title: ReadOnly[str]
-    description: ReadOnly[str]
-    date: ReadOnly[str]
-    url: ReadOnly[str]
-    tags: ReadOnly[NotRequired[list[str]]]
-
-
-class _BlogPostsFile(TypedDict):
-    posts: ReadOnly[list[BlogPostDict]]
-
-
-_BLOG_POSTS_FILE_ADAPTER: Final = TypeAdapter(_BlogPostsFile)
+BLOG_POSTS_MAX: Final[int] = 6
 
 
 class BlogPost(LiteLLMBaseModel):
@@ -46,7 +30,6 @@ class BlogPost(LiteLLMBaseModel):
     description: str
     date: str
     url: str
-    tags: tuple[str, ...] = ()
 
 
 class BlogPostsResponse(LiteLLMBaseModel):
@@ -63,14 +46,14 @@ class GetBlogPosts:
     - Falls back to the bundled local backup on any failure
     """
 
-    _cached_posts: list[BlogPostDict] | None = None
+    _cached_posts: list[dict[str, str]] | None = None
     _last_fetch_time: float = 0.0
 
     @staticmethod
-    def load_local_blog_posts() -> list[BlogPostDict]:
+    def load_local_blog_posts() -> list[dict[str, str]]:
         """Load the bundled local backup blog posts."""
-        content: Final = files("litellm").joinpath("blog_posts.json").read_text(encoding="utf-8")
-        return _BLOG_POSTS_FILE_ADAPTER.validate_json(content)["posts"]
+        content: Final = json.loads(files("litellm").joinpath("blog_posts.json").read_text(encoding="utf-8"))
+        return content.get("posts", [])
 
     @staticmethod
     def fetch_rss_feed(url: str, timeout: int = 5) -> str:
@@ -84,18 +67,18 @@ class GetBlogPosts:
         return response.text
 
     @staticmethod
-    def parse_rss_to_posts(xml_text: str, max_posts: int = BLOG_POSTS_MAX) -> list[BlogPostDict]:
+    def parse_rss_to_posts(xml_text: str, max_posts: int = BLOG_POSTS_MAX) -> list[dict[str, str]]:
         """
         Parse RSS XML and return a list of blog post dicts.
 
-        Extracts title, description, date (YYYY-MM-DD), url and tags (<category>) from each <item>.
+        Extracts title, description, date (YYYY-MM-DD), and url from each <item>.
         """
         root: Final = ET.fromstring(xml_text)
         channel: Final = root.find("channel")
         if channel is None:
             raise ValueError("RSS feed missing <channel> element")
 
-        posts: Final[list[BlogPostDict]] = []
+        posts: Final[list[dict[str, str]]] = []
         for item in channel.findall("item"):
             if len(posts) >= max_posts:
                 break
@@ -118,21 +101,20 @@ class GetBlogPosts:
                     date_str = pub_date_el.text
 
             posts.append(
-                BlogPostDict(
-                    title=title_el.text or "",
-                    description=desc_el.text or "" if desc_el is not None else "",
-                    date=date_str,
-                    url=link_el.text or "",
-                    tags=[c.text for c in item.findall("category") if c.text],
-                )
+                {
+                    "title": title_el.text or "",
+                    "description": desc_el.text or "" if desc_el is not None else "",
+                    "date": date_str,
+                    "url": link_el.text or "",
+                }
             )
 
         return posts
 
     @staticmethod
-    def validate_blog_posts(posts: list[BlogPostDict]) -> bool:
+    def validate_blog_posts(posts: list[dict[str, str]]) -> bool:
         """Return True if posts is a non-empty list."""
-        if len(posts) == 0:
+        if not isinstance(posts, list) or len(posts) == 0:
             verbose_logger.warning(
                 "LiteLLM: Parsed RSS feed has no valid posts. Falling back to local backup.",
             )
@@ -140,7 +122,7 @@ class GetBlogPosts:
         return True
 
     @classmethod
-    def get_blog_posts(cls, url: str) -> list[BlogPostDict]:
+    def get_blog_posts(cls, url: str) -> list[dict[str, str]]:
         """
         Return the blog posts list.
 
@@ -174,6 +156,6 @@ class GetBlogPosts:
         return posts
 
 
-def get_blog_posts(url: str) -> list[BlogPostDict]:
+def get_blog_posts(url: str) -> list[dict[str, str]]:
     """Public entry point — returns the blog posts list."""
     return GetBlogPosts.get_blog_posts(url=url)

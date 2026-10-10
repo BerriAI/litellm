@@ -1,5 +1,4 @@
 import { render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DailyData } from "@/components/UsagePage/types";
@@ -37,13 +36,7 @@ vi.mock("./useHomeUsage", () => ({
 
 vi.mock("@/app/(dashboard)/hooks/blogPosts/useBlogPosts", () => ({
   useBlogPosts: () => ({
-    data: {
-      posts: [
-        { title: "Post one", description: "d", date: "2026-10-09", url: "https://x/1", tags: ["engineering"] },
-        { title: "Day 0: Model two", description: "d", date: "2026-10-08", url: "https://x/2", tags: ["new-model"] },
-        { title: "New endpoint three", description: "d", date: "2026-10-07", url: "https://x/3", tags: ["api-change"] },
-      ],
-    },
+    data: { posts: [{ title: "Post one", description: "d", date: "2026-10-09", url: "https://x/1" }] },
     isLoading: false,
     isError: false,
     refetch: vi.fn(),
@@ -144,23 +137,5 @@ describe("HomePage", () => {
     renderHome();
     const updates = screen.getByTestId("home-updates");
     expect(within(updates).getByRole("link", { name: /post one/i })).toHaveAttribute("href", "https://x/1");
-  });
-
-  it("filters Updates by the new-model and api-change category tags", async () => {
-    const user = userEvent.setup();
-    renderHome();
-    const updates = screen.getByTestId("home-updates");
-    expect(within(updates).getAllByRole("listitem")).toHaveLength(3);
-
-    await user.click(within(updates).getByRole("tab", { name: /new models/i }));
-    expect(within(updates).getAllByRole("listitem")).toHaveLength(1);
-    expect(within(updates).getByRole("link", { name: /model two/i })).toBeInTheDocument();
-
-    await user.click(within(updates).getByRole("tab", { name: /api changes/i }));
-    expect(within(updates).getAllByRole("listitem")).toHaveLength(1);
-    expect(within(updates).getByRole("link", { name: /endpoint three/i })).toBeInTheDocument();
-
-    await user.click(within(updates).getByRole("tab", { name: /^all$/i }));
-    expect(within(updates).getAllByRole("listitem")).toHaveLength(3);
   });
 });

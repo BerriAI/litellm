@@ -72,20 +72,6 @@ def test_parse_rss_to_posts_multiple():
     assert posts[1]["title"] == "Second Post"
 
 
-def test_parse_rss_to_posts_reads_category_tags():
-    xml = (
-        "<rss><channel><item><title>T</title><link>https://x/1</link><description>D</description>"
-        "<pubDate>Thu, 01 Jan 2026 00:00:00 GMT</pubDate><category>gemini</category>"
-        "<category>new-model</category></item>"
-        "<item><title>U</title><link>https://x/2</link></item></channel></rss>"
-    )
-    posts = GetBlogPosts.parse_rss_to_posts(xml)
-    assert posts[0]["tags"] == ["gemini", "new-model"]
-    assert posts[1]["tags"] == []
-    assert BlogPost(**posts[0]).tags == ("gemini", "new-model")
-    assert BlogPost(title="T", description="D", date="2026-01-01", url="https://x").tags == ()
-
-
 def test_parse_rss_to_posts_default_cap():
     items = "".join(
         f"<item><title>Post {i}</title><link>https://docs.litellm.ai/blog/{i}</link>"
@@ -115,6 +101,10 @@ def test_validate_blog_posts_valid():
 
 def test_validate_blog_posts_empty_list():
     assert GetBlogPosts.validate_blog_posts([]) is False
+
+
+def test_validate_blog_posts_not_list():
+    assert GetBlogPosts.validate_blog_posts("not a list") is False
 
 
 def test_get_blog_posts_success():
