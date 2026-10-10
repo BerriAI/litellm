@@ -9233,7 +9233,10 @@ def stream_chunk_builder(
         ]
 
         if len(content_chunks) > 0:
-            response["choices"][0]["message"]["content"] = processor.get_combined_content(content_chunks)
+            streamed_text: Final = processor.get_combined_content(content_chunks)
+            rebuilt_a_call: Final = len(tool_call_chunks) > 0 or len(function_call_chunks) > 0
+            if streamed_text or not rebuilt_a_call:
+                response["choices"][0]["message"]["content"] = streamed_text
 
         thinking_blocks: Final = [
             chunk

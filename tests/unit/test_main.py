@@ -2015,6 +2015,86 @@ def test_stream_chunk_builder_keeps_tool_calls_carried_only_by_a_later_choice_of
     ]
 
 
+def _tool_stream_chunk(delta: Delta, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-tool-stream",
+        created=1751934860,
+        model="gpt-5.6",
+        object="chat.completion.chunk",
+        choices=[StreamingChoices(index=0, delta=delta, finish_reason=finish_reason)],
+    )
+
+
+def _weather_call_deltas() -> tuple[Delta, Delta]:
+    from litellm.types.utils import ChatCompletionDeltaToolCall, Function
+
+    return (
+        Delta(
+            tool_calls=[
+                ChatCompletionDeltaToolCall(
+                    id="call_weather",
+                    index=0,
+                    type="function",
+                    function=Function(name="get_weather", arguments='{"city":'),
+                )
+            ]
+        ),
+        Delta(tool_calls=[ChatCompletionDeltaToolCall(index=0, function=Function(arguments='"Paris"}'))]),
+    )
+
+
+@pytest.mark.parametrize(
+    ("streamed_text", "expected_content"),
+    [((), None), (("Checking", " the weather"), "Checking the weather")],
+    ids=["tool_only_stream_matches_the_non_stream_null", "text_and_tool_stream_keeps_its_text"],
+)
+def test_stream_chunk_builder_tool_call_stream_content(streamed_text: tuple[str, ...], expected_content: str | None):
+    first_call_delta, last_call_delta = _weather_call_deltas()
+    chunks: Final = [
+        _tool_stream_chunk(Delta(role="assistant", content="")),
+        *(_tool_stream_chunk(Delta(content=text)) for text in streamed_text),
+        _tool_stream_chunk(first_call_delta),
+        _tool_stream_chunk(last_call_delta),
+        _tool_stream_chunk(Delta(content=""), finish_reason="tool_calls"),
+    ]
+
+    rebuilt: Final = litellm.stream_chunk_builder(chunks=chunks)
+
+    message: Final = rebuilt.choices[0].message
+    assert message.content == expected_content
+    assert [(call.function.name, call.function.arguments) for call in message.tool_calls] == [
+        ("get_weather", '{"city":"Paris"}')
+    ]
+
+
+def test_stream_chunk_builder_function_call_only_stream_matches_the_non_stream_null():
+    from litellm.types.utils import FunctionCall
+
+    rebuilt: Final = litellm.stream_chunk_builder(
+        chunks=[
+            _tool_stream_chunk(Delta(role="assistant", content="")),
+            _tool_stream_chunk(Delta(function_call=FunctionCall(name="get_weather", arguments='{"city":"Paris"}'))),
+            _tool_stream_chunk(Delta(content=""), finish_reason="function_call"),
+        ]
+    )
+
+    message: Final = rebuilt.choices[0].message
+    assert message.content is None
+    assert (message.function_call.name, message.function_call.arguments) == ("get_weather", '{"city":"Paris"}')
+
+
+def test_stream_chunk_builder_empty_text_answer_without_a_call_keeps_the_empty_string():
+    rebuilt: Final = litellm.stream_chunk_builder(
+        chunks=[
+            _tool_stream_chunk(Delta(role="assistant", content="")),
+            _tool_stream_chunk(Delta(content=""), finish_reason="stop"),
+        ]
+    )
+
+    assert rebuilt.choices[0].message.content == ""
+    assert rebuilt.choices[0].message.tool_calls is None
+
+
 def test_stream_chunk_builder_thinking_blocks():
     from litellm import stream_chunk_builder
     from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices

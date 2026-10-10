@@ -167,6 +167,10 @@ def _choice_with_text(choice: object, text: str | None) -> object:
     if choice_obj is None or text is None:
         return choice
     message: Final = _as_json_object(choice_obj.get("message"))
-    if message is None or message.get("content") == text:
+    if message is None or _served_text_matches(message.get("content"), text):
         return choice
     return {**choice_obj, "message": {**message, "content": text}}
+
+
+def _served_text_matches(logged_content: object, served_text: str) -> bool:
+    return logged_content == served_text or (logged_content is None and served_text == "")
