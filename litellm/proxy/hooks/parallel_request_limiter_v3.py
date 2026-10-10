@@ -3594,6 +3594,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     rate_limit_type=map_v3_rate_limit_type(status["rate_limit_type"]),
                     model=resolved_model,
                     llm_provider=llm_provider,
+                    descriptor_key=descriptor_key,
                 )
 
     @staticmethod
