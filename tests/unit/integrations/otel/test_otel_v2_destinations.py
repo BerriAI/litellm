@@ -4670,8 +4670,8 @@ class TestCaptureMessageContent:
     def test_a_published_presets_capture_mode_is_the_default_for_an_unowned_destination(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        """New Relic with record_content on puts content on every span it emits, and main forwarded those
-        spans to a key/team destination untouched, so an omitted setting must keep that content."""
+        """New Relic with record_content on is the proxy's own newrelic mode, so a newrelic destination with no setting
+        keeps the content."""
         monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
         tenant: Final = InMemorySpanExporter()
         monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, "otlp_http", lambda _spec: tenant)

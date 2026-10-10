@@ -297,7 +297,7 @@ nothing here imports outside it:
   `capture_span_content` gates whether prompt/response bodies may be written as
   span attributes; it defaults **off** (`no_content`). A team or key can override
   the global mode per OTel v2 destination with `capture_message_content`; omitted
-  values follow the global mode. The Baggage allowlists are
+  values follow the proxy's own callback for that backend, else the global mode. The Baggage allowlists are
   configurable, not hard-coded: set `LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS` /
   `LITELLM_OTEL_BAGGAGE_METADATA_KEYS` /
   `LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS` (comma-separated) as env vars, or
