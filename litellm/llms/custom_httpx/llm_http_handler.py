@@ -3,7 +3,7 @@ import json
 import ssl
 from collections.abc import AsyncGenerator, AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from functools import lru_cache
+from functools import lru_cache, partial
 from types import MappingProxyType, ModuleType
 from typing import (
     TYPE_CHECKING,
@@ -1415,6 +1415,7 @@ class BaseLLMHTTPHandler:
         api_key: str | None,
         headers: Mapping[str, str],
         timeout: float | httpx.Timeout | None,
+        litellm_params: Mapping[str, object],
         client: HTTPHandler | None = None,
     ) -> DecisionsIRResponse:
         url, outbound_headers, data = self._prepare_decisions_request(
@@ -1426,10 +1427,23 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             headers=headers,
         )
+        signed_headers, signed_body = provider_config.sign_request(
+            headers=outbound_headers,
+            url=url,
+            api_base=api_base,
+            body=data,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
         sync_httpx_client: Final = client if client is not None else _get_httpx_client()
         try:
             response: Final = sync_httpx_client.post(
-                url, json=data, headers=outbound_headers, timeout=timeout, logging_obj=logging_obj
+                url,
+                content=signed_body,
+                json=data if signed_body is None else None,
+                headers=dict(signed_headers),
+                timeout=timeout,
+                logging_obj=logging_obj,
             )
         except httpx.HTTPError as e:
             raise self._handle_error(e=e, provider_config=provider_config)
@@ -1449,6 +1463,7 @@ class BaseLLMHTTPHandler:
         api_key: str | None,
         headers: Mapping[str, str],
         timeout: float | httpx.Timeout | None,
+        litellm_params: Mapping[str, object],
         client: AsyncHTTPHandler | None = None,
     ) -> DecisionsIRResponse:
         url, outbound_headers, data = self._prepare_decisions_request(
@@ -1460,6 +1475,18 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             headers=headers,
         )
+        sign: Final = partial(
+            provider_config.sign_request,
+            headers=outbound_headers,
+            url=url,
+            api_base=api_base,
+            body=data,
+            api_key=api_key,
+            litellm_params=litellm_params,
+        )
+        signed_headers, signed_body = (
+            await run_aws_signing(sign) if provider_config.signs_with_aws(api_base) else sign()
+        )
         async_httpx_client: Final = (
             client
             if client is not None
@@ -1467,7 +1494,12 @@ class BaseLLMHTTPHandler:
         )
         try:
             response: Final = await async_httpx_client.post(
-                url, json=data, headers=outbound_headers, timeout=timeout, logging_obj=logging_obj
+                url,
+                content=signed_body,
+                json=data if signed_body is None else None,
+                headers=dict(signed_headers),
+                timeout=timeout,
+                logging_obj=logging_obj,
             )
         except httpx.HTTPError as e:
             raise self._handle_error(e=e, provider_config=provider_config)

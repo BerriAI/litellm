@@ -60,6 +60,7 @@ class _DecisionsCall:
     logging_obj: LiteLLMLoggingObj | None
     headers: Mapping[str, str]
     timeout: float | httpx.Timeout | None
+    litellm_params: Mapping[str, object] = field(repr=False)
 
 
 def _supported_providers() -> tuple[str, ...]:
@@ -253,6 +254,7 @@ def _prepare_call(
         logging_obj=logging_obj if isinstance(logging_obj, LiteLLMLoggingObj) else None,
         headers=extra_headers or {},
         timeout=timeout,
+        litellm_params=kwargs,
     )
 
 
@@ -336,6 +338,7 @@ async def adecisions(
             api_key=call.api_key,
             headers=call.headers,
             timeout=call.timeout,
+            litellm_params=call.litellm_params,
         )
     except Exception as error:
         raise _map_upstream_exception(error, call) from error
@@ -381,6 +384,7 @@ def decisions(
             api_key=call.api_key,
             headers=call.headers,
             timeout=call.timeout,
+            litellm_params=call.litellm_params,
         )
     except Exception as error:
         raise _map_upstream_exception(error, call) from error
