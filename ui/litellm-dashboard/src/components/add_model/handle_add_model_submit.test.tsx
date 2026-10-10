@@ -55,9 +55,6 @@ describe("prepareModelAddRequest", () => {
   });
 
   it("sends the backend's own slug for a provider whose key is spelled differently in provider_map", async () => {
-    // The Provider dropdown submits the backend's `provider` field verbatim, and
-    // "CURSOR" is not a provider_map key. The lowercase fallback has to carry it,
-    // or the deployment is created against a provider litellm cannot resolve.
     const formValues = {
       model_mappings: [{ public_name: "Composer", litellm_model: "cursor/composer-1" }],
       model_name: "cursor/composer-1",
