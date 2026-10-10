@@ -15,7 +15,7 @@ from litellm.types.utils import Message, ModelResponse
 from litellm.utils import CustomStreamWrapper
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class _MCPCompletionKwargs(TypedDict, total=False, extra_items=object):

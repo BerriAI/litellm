@@ -50,7 +50,7 @@ from litellm.utils import async_post_call_success_deployment_hook
 
 if TYPE_CHECKING:
     from litellm.caching.caching_handler import LLMCachingHandler
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.responses.streaming_websocket import (
         PresidioGuardrailCallback,
         ResponsesBackendWebSocket,

@@ -22,8 +22,8 @@ from litellm.llms.litellm_proxy.skills.constants import (
     MAX_SKILLS_PER_SEARCH,
 )
 from litellm.models.skills import LiteLLM_SkillsTable, NewSkillRequest
-from litellm.proxy._types import UserAPIKeyAuth
 from litellm.repositories.table_repositories import SkillsRepository
+from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 # Skills are looked up on every chat completion that has skills enabled
 # (`SkillsInjectionHook` calls ``fetch_skill_from_db``). 60s LRU/TTL cache

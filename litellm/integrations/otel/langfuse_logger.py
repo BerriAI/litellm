@@ -13,7 +13,7 @@ from litellm.integrations.otel.model.trace_controls import caller_trace_controls
 from litellm.integrations.otel.plumbing.context import request_root_span
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.utils import ModelResponseStream
 
 

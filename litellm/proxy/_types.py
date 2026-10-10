@@ -25,7 +25,6 @@ from typing_extensions import (
     ReadOnly,
     Required,
     TypedDict,
-    TypeIs,  # noqa: TID251  # narrows the before-validator input without copying it
 )
 
 from litellm._uuid import uuid

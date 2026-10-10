@@ -35,12 +35,12 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.anthropic_messages.transformation import (
         BaseAnthropicMessagesConfig,
     )
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.mcp import (
         MCPPostCallResponseObject,
         MCPPreCallRequestObject,
         MCPPreCallResponseObject,
     )
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.router import PreRoutingHookResponse
 
     Span = _Span
