@@ -15,16 +15,20 @@ from redis import Redis
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
+from tests.integration._support.ordering import case_shards, collected_case, fixture_groups
 from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
 from tests.integration.run import GITHUB_FILES
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
+INVENTORY: Final = pytest.StashKey[tuple[str, ...]]()
 REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--integration-order-seed", type=int, default=0)
+    parser.addoption("--integration-shard-count", type=int, default=1)
+    parser.addoption("--integration-shard-index", type=int, default=0)
 
 
 def pytest_configure(config: pytest.Config) -> None:
@@ -57,14 +61,15 @@ def _digest(seed: int, identity: str) -> bytes:
     return hashlib.sha256(f"{seed}:{identity}".encode()).digest()
 
 
-def _order_key(seed: int, nodeid: str) -> tuple[bytes, bytes]:
-    return _digest(seed, nodeid.split("::", 1)[0]), _digest(seed, nodeid)
+def _order_key(seed: int, nodeid: str, group: str = "") -> tuple[bytes, bytes, bytes]:
+    return _digest(seed, nodeid.split("::", 1)[0]), _digest(seed, group or nodeid), _digest(seed, nodeid)
 
 
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> None:
     order_seed: Final = config.getoption("integration_order_seed")
     if order_seed:
-        items.sort(key=lambda item: _order_key(order_seed, item.nodeid))
+        groups: Final = fixture_groups(tuple(collected_case(item) for item in items))
+        items.sort(key=lambda item: _order_key(order_seed, item.nodeid, groups[item.nodeid]))
     root: Final = Path(__file__).parent
     owned: Final = tuple(
         item
@@ -78,7 +83,18 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         raise pytest.UsageError("Integration contracts are owned by CircleCI")
     for item in owned:
         item.add_marker(pytest.mark.integration)
-    config.stash[COLLECTED] = tuple(item.nodeid for item in owned)
+    config.stash[INVENTORY] = tuple(item.nodeid for item in owned)
+    count: Final = config.getoption("integration_shard_count")
+    index: Final = config.getoption("integration_shard_index")
+    if count < 1 or not 0 <= index < count:
+        raise pytest.UsageError("Integration shard index must be within the positive shard count")
+    if count > 1:
+        shards: Final = case_shards(tuple(collected_case(item) for item in owned), count)
+        selected: Final = tuple(item for item in items if item not in owned or item.nodeid in shards[index])
+        deselected: Final = tuple(item for item in owned if item.nodeid not in shards[index])
+        config.hook.pytest_deselected(items=deselected)
+        items[:] = selected
+    config.stash[COLLECTED] = tuple(item.nodeid for item in items if item in owned)
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
@@ -103,6 +119,9 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         json.dumps(
             {
                 "collected": collected,
+                "inventory": session.config.stash.get(INVENTORY, collected),
+                "shard_count": session.config.getoption("integration_shard_count"),
+                "shard_index": session.config.getoption("integration_shard_index"),
                 "passed": passed,
                 "skipped": skipped,
                 "complete": complete,
@@ -138,7 +157,9 @@ def shared_provider_server() -> Iterator[SharedProvider]:
     with shared_provider() as server:
         yield server
         late: Final = server.received()
-        assert late == (), f"the shared fake provider got {[item.target for item in late]} after {server.last_test} finished"
+        assert late == (), (
+            f"the shared fake provider got {[item.target for item in late]} after {server.last_test} finished"
+        )
 
 
 @pytest.fixture

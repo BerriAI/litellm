@@ -22,7 +22,7 @@ import pytest
 from redis import Redis
 from integration._support.client import Gateway, eventually, string_value
 from integration.security._canary import DECODE_BUDGET_BYTES, MARKER, SLOTS, DecodeBudgetExceeded, canary, find_canary
-from integration.security._sinks import CONFIG_MODEL, GENERIC_SINK, Rig, canary_rig, settle, team_caller
+from integration.security._sinks import CONFIG_MODEL, GENERIC_SINK, Rig, canary_rig, chat_upstream, settle, team_caller
 from integration._support.wire import Reply, Request, wire_server
 from tests.integration._support.database import read_rows, write_rows
 from tests.integration._support.redis_process import owned_redis
@@ -84,6 +84,42 @@ def test_rig_with_an_overridden_master_key_resolves_the_config_deployment(tmp_pa
         assert overridden.proxy.key == master_key
         assert overridden.model_id
         assert overridden.proxy.request("GET", "/model/info").status_code == 200
+
+
+def _skills_upstream(request: Request) -> Reply:
+    skill: Final = {
+        "id": "owned-skill",
+        "display_title": "Owned skill",
+        "source": "custom",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    if request.target.startswith("/v1/skills/"):
+        return Reply(body=json.dumps(skill).encode())
+    if request.target.startswith("/v1/skills"):
+        return Reply(body=json.dumps({"data": [skill], "has_more": False}).encode())
+    return chat_upstream(request)
+
+
+def test_skills_reads_use_the_owned_provider_despite_ambient_credentials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_BASE", "https://ambient-provider.invalid")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://ambient-provider.invalid")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-provider-key")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "ambient-provider-token")
+    with canary_rig(tmp_path, upstream=_skills_upstream) as owned:
+        for path in ("/v1/skills", "/v1/skills/owned-skill"):
+            response: Final = owned.proxy.request("GET", path)
+            assert response.status_code == 200, response.text
+        requests: Final = owned.provider.requests()
+        assert tuple(request.target.split("?", 1)[0] for request in requests) == (
+            "/v1/skills",
+            "/v1/skills/owned-skill",
+        )
+        assert all(request.headers.get("x-api-key") == owned.canaries["B1"].value for request in requests)
+        assert all("authorization" not in request.headers for request in requests)
+        assert owned.egress() == ()
 
 
 def test_route_allowances_match_only_their_exact_route_and_caller() -> None:

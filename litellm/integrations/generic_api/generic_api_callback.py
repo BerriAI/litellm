@@ -355,8 +355,6 @@ class GenericAPILogger(CustomBatchLogger):
         await self.async_send_batch()
 
     async def async_send_batch(self) -> None:
-        if self.flush_lock is None:
-            return
         async with self.flush_lock:
             await self._send_batch()
 

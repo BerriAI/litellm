@@ -243,7 +243,7 @@ commands:
             mkdir -p "$HOME/.local/bin"
             mv /tmp/codecov "$HOME/.local/bin/codecov"
   start_openai_record_replay_proxy:
-    description: "Start the record/replay proxy (tests/_openai_record_replay_proxy.py) on host port 8090 and wait until healthy. Models whose api_base points here replay recorded provider responses, so the E2E run neither pays for nor depends on the live provider. The default upstream is OpenAI; a non-OpenAI model must point its api_base at /__recorder_upstream/<host>/ so the recorder forwards there instead of defaulting to OpenAI. Run after uv deps are synced."
+    description: "Start the record/replay proxy (tests/_openai_record_replay_proxy.py) on host port 8090 and wait until healthy. Models whose api_base points here replay Redis cache hits. Cache misses call the live provider and store its response, so these legacy E2E jobs still require provider availability and may incur provider charges. The default upstream is OpenAI; a non-OpenAI model must point its api_base at /__recorder_upstream/<host>/ so the recorder forwards there instead of defaulting to OpenAI. Run after uv deps are synced."
     steps:
       - run:
           name: Start record/replay proxy
@@ -3028,10 +3028,36 @@ jobs:
             docker logs redis-cache > test-results/services-<< parameters.suite >>-<< parameters.mode >>/redis.log 2>&1 || true
             docker rm -f postgres-db redis-cache
             test -z "$(docker ps -aq --filter name=postgres-db --filter name=redis-cache)"
+      - when:
+          condition:
+            equal: [extensions, << parameters.suite >>]
+          steps:
+            - run:
+                name: Prepare this shard's execution record
+                command: |
+                  mkdir -p "/tmp/integration-shards/extensions/$CIRCLE_NODE_INDEX"
+                  cp test-results/integration-extensions/execution.json "/tmp/integration-shards/extensions/$CIRCLE_NODE_INDEX/execution.json"
+            - persist_to_workspace:
+                root: /tmp/integration-shards
+                paths:
+                  - extensions
       - store_test_results:
           path: test-results
       - store_artifacts:
           path: test-results
+
+  integration_shard_coverage:
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: medium
+    working_directory: ~/project
+    steps:
+      - setup_litellm_test_deps
+      - attach_workspace:
+          at: /tmp/integration-shards
+      - run:
+          name: Verify every extensions case ran exactly once
+          command: .venv/bin/python -m tests.integration._support.sharding /tmp/integration-shards/extensions --shards 24
 
   routing_parity:
     parameters:
@@ -3323,7 +3349,23 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, sdk, cost, security, browser]
+              suite: [sdk, cost, security, browser]
+      - integration_contracts:
+          name: integration-management
+          suite: management
+          parallelism: 8
+      - integration_contracts:
+          name: integration-accounting
+          suite: accounting
+          parallelism: 8
+      - integration_contracts:
+          name: integration-providers
+          suite: providers
+          parallelism: 10
+      - integration_contracts:
+          name: integration-database
+          suite: database
+          parallelism: 2
       - integration_contracts:
           name: integration-mcp
           suite: mcp
@@ -3331,13 +3373,21 @@ workflows:
       - integration_contracts:
           name: integration-extensions
           suite: extensions
-          parallelism: 4
+          parallelism: 24
+      - integration_shard_coverage:
+          name: integration-extensions-coverage
+          requires:
+            - integration-extensions
       - integration_contracts:
-          name: integration-<< matrix.suite >>-replica
-          matrix:
-            parameters:
-              suite: [management, database]
-              mode: [replica]
+          name: integration-management-replica
+          suite: management
+          mode: replica
+          parallelism: 8
+      - integration_contracts:
+          name: integration-database-replica
+          suite: database
+          mode: replica
+          parallelism: 2
       - postgres_suite:
           name: proxy-behavior
           test_path: tests/proxy_behavior

@@ -9,7 +9,10 @@ from pathlib import Path
 from types import ModuleType
 from typing import Final
 
+import httpx
 import pytest
+
+from tests.integration._support.client import Gateway
 
 TESTS_DIR: Final = Path(__file__).resolve().parents[2]
 UNRELATED_CRASH: Final = "Traceback (most recent call last):\nModuleNotFoundError: No module named 'litellm'\n"
@@ -59,3 +62,35 @@ def test_lost_port_race_needs_the_process_to_have_exited(
     process_module: ModuleType, bind_error_line: str, tmp_path: Path
 ) -> None:
     assert not process_module._lost_port_race(None, _written_log(tmp_path, bind_error_line))
+
+
+@pytest.mark.parametrize(
+    ("writer", "explicit_reader", "expected_reader"),
+    (
+        ("postgresql://writer@127.0.0.1/shared", None, "postgresql://reader@127.0.0.1/shared"),
+        ("postgresql://writer@127.0.0.1/scratch", None, None),
+        (
+            "postgresql://writer@127.0.0.1/scratch",
+            "postgresql://reader@127.0.0.1/scratch",
+            "postgresql://reader@127.0.0.1/scratch",
+        ),
+    ),
+)
+def test_owned_writer_keeps_only_a_reader_paired_with_its_database(
+    process_module: ModuleType,
+    monkeypatch: pytest.MonkeyPatch,
+    writer: str,
+    explicit_reader: str | None,
+    expected_reader: str | None,
+) -> None:
+    monkeypatch.setenv("INTEGRATION_PROXY_READ_REPLICA_URL", "postgresql://reader@127.0.0.1/shared")
+    overrides: Final = {
+        "DATABASE_URL": writer,
+        **({"DATABASE_URL_READ_REPLICA": explicit_reader} if explicit_reader else {}),
+    }
+    with httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client:
+        environment: Final = process_module._proxy_environment(
+            Gateway(client, "owned-test-key", "http://127.0.0.1:1"), overrides, ()
+        )
+    assert environment["DATABASE_URL"] == writer
+    assert environment.get("DATABASE_URL_READ_REPLICA") == expected_reader

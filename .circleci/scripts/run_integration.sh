@@ -135,7 +135,7 @@ if [ "$suite" = cost ]; then
   export INTEGRATION_WORKERS=8
 fi
 if [ "$suite" = security ]; then
-  export INTEGRATION_WORKERS=2
+  export INTEGRATION_WORKERS=4
 fi
 if [ "$suite" = mcp ]; then
   export INTEGRATION_WORKERS=4 INTEGRATION_COVERAGE=1
@@ -217,7 +217,12 @@ if [ "$suite" = browser ]; then
 fi
 
 node_files=()
-if [ "${CIRCLE_NODE_TOTAL:-1}" -gt 1 ]; then
+case_shards=1
+case_shard_index=0
+if [ "$suite" = extensions ]; then
+  case_shards="${CIRCLE_NODE_TOTAL:-1}"
+  case_shard_index="${CIRCLE_NODE_INDEX:-0}"
+elif [ "${CIRCLE_NODE_TOTAL:-1}" -gt 1 ]; then
   split="$(.venv/bin/python tests/integration/run.py "$suite" --list \
     | circleci tests split --split-by=timings --timings-type=filename)"
   read -r -a node_files <<< "$(printf '%s' "$split" | tr '\n' ' ')"
@@ -235,6 +240,7 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   LITELLM_LICENSE="${LITELLM_LICENSE:-}" \
   INTEGRATION_SEED="$INTEGRATION_SEED" \
   INTEGRATION_ORDER_SEED="$INTEGRATION_ORDER_SEED" \
+  INTEGRATION_CASE_SHARDS="$case_shards" INTEGRATION_CASE_SHARD_INDEX="$case_shard_index" \
   LITELLM_LOCAL_MODEL_COST_MAP=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
   INTEGRATION_PROXY_DATABASE_URL="$INTEGRATION_PROXY_DATABASE_URL" \
   INTEGRATION_PROXY_READ_REPLICA_URL="$INTEGRATION_PROXY_READ_REPLICA_URL" \

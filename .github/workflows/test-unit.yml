@@ -927,6 +927,7 @@ jobs:
         timeout-minutes: 3
         with:
           persist-credentials: false
+          fetch-depth: ${{ matrix.shard == 'proxy-infra-root' && '0' || '1' }}
 
       - name: Detect relevant changes
         id: changes

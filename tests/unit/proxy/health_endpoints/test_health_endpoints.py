@@ -3,9 +3,9 @@ import copy
 import json
 import time
 from collections.abc import Awaitable, Iterator, Mapping, Sequence
-from importlib import import_module
 from contextlib import contextmanager
 from datetime import datetime, timedelta
+from importlib import import_module
 from types import MappingProxyType, SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -23,7 +23,6 @@ from litellm.litellm_core_utils.health_check_helpers import TEST_IMAGE_BASE64
 from litellm.models.credentials import CredentialItem
 from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.router import Router
 from litellm.proxy.health_endpoints._health_endpoints import (
     _db_health_readiness_check,
     _show_no_redis_warning,
@@ -34,12 +33,14 @@ from litellm.proxy.health_endpoints._health_endpoints import (
 from litellm.proxy.health_endpoints._health_endpoints import (
     test_model_connection as health_test_model_connection,
 )
+from litellm.router import Router
 from litellm.types.utils import oauth_token_exchange_litellm_params
 from litellm.types.workload_identity import (
     ANTHROPIC_WIF_KWARGS_KEYS,
     OPENAI_WIF_KWARGS_KEYS,
     WIF_SECRET_BEARING_KEYS,
 )
+from tests._master_key import MASTER_KEY
 
 # Import shared proxy test helpers from conftest
 from tests.unit.proxy.conftest import create_proxy_test_client
@@ -1634,8 +1635,6 @@ def test_health_liveness_endpoint(proxy_client):
     # Verify response is fast (should be < 100ms for a simple endpoint)
     assert duration_ms < 100, f"Health check took {duration_ms:.2f}ms, expected < 100ms for a simple endpoint"
 
-    # Log the duration for visibility (useful for CI/CD monitoring)
-    print(f"\n/health/liveness response time: {duration_ms:.2f}ms")
 
 
 def test_proxy_client_serves_full_proxy_routes_after_gateway_import(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1647,7 +1646,7 @@ def test_proxy_client_serves_full_proxy_routes_after_gateway_import(monkeypatch:
     with create_proxy_test_client(monkeypatch) as client:
         response: Final = client.post(
             "/utils/token_counter",
-            headers={"Authorization": "Bearer sk-1234"},
+            headers={"Authorization": f"Bearer {MASTER_KEY}"},
             json={"model": "gpt-4o", "prompt": "hello"},
         )
 
@@ -1696,7 +1695,6 @@ def test_health_readiness(proxy_client):
     assert set(response_data.keys()) == {"status", "db"}
     assert response_data["status"] == "healthy"
     assert response_data["db"] in {"connected", "disconnected", "Not connected"}
-    print(f"Response time: {duration_ms:.2f}ms")
 
 
 def test_health_readiness_details_returns_diagnostic_fields(monkeypatch):
@@ -2615,7 +2613,6 @@ async def test_health_endpoint_keeps_federation_identity_admin_only():
 def test_no_server_owned_identity_field_reaches_a_non_admin_health_entry(server_owned_field: str):
     """Every server-owned identity field is hidden from non-admin health entries."""
     from litellm.proxy.health_check import clean_endpoint_data
-
     from litellm.proxy.health_endpoints._health_endpoints import (
         _strip_admin_only_fields_from_health_result,
     )
