@@ -317,13 +317,14 @@ def _slices() -> tuple[Slice, ...]:
     if not CIRCLECI_CONFIG.exists():
         return ()
     jobs: Final = yaml.safe_load(CIRCLECI_CONFIG.read_text()).get("jobs", {})
+    test_files: Final = frozenset(_test_files())
     return tuple(
         Slice(job=job, globs=globs, named=named, required=required, excluded=excluded, understood=understood)
         for job, body in jobs.items()
         for text in ("\n".join(_strings(body)),)
         if "pytest" in text
         for globs in (tuple(GLOB_CALL_RE.findall(text)),)
-        for named in (frozenset(TEST_TOKEN_RE.findall(text)) & frozenset(_test_files()),)
+        for named in (frozenset(TEST_TOKEN_RE.findall(text)) & test_files,)
         for required, excluded, understood in (
             _keyword_terms(tuple(KEYWORD_RE.findall(text)), attributable=len(globs) < 2),
         )
@@ -362,6 +363,11 @@ def _workflow_named_tokens() -> frozenset[str]:
     )
 
 
+def _claimed_by_slice(path: str, slices: tuple[Slice, ...]) -> bool:
+    names: Final = _matchable_names(path)
+    return any(slice_.claims(path, names) for slice_ in slices)
+
+
 def _deselected_everywhere(allowlist: Allowlist) -> tuple[Finding, ...]:
     slices: Final = _slices()
     named_by_workflow: Final = _workflow_named_tokens()
@@ -376,7 +382,7 @@ def _deselected_everywhere(allowlist: Allowlist) -> tuple[Finding, ...]:
         for path in globbed
         if not allowlist.covers_test(path)
         and not any(_token_covers(token, path) for token in named_by_workflow)
-        and not any(slice_.claims(path, _matchable_names(path)) for slice_ in slices)
+        and not _claimed_by_slice(path, slices)
     )
 
 
