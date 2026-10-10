@@ -1003,12 +1003,11 @@ def test_construct_target_url_versionless_project_route_gets_api_version(request
 
 def test_fix_enum_types():
     """
-    Test _fix_enum_types function removes enum fields when type is not string.
+    Test _fix_enum_types keeps string enums, converts integer enums to the form
+    Gemini accepts, and removes enums on other non-string types.
 
-    This test verifies the fix for the issue where Gemini rejects cached content
-    with function parameter enums on non-string types, causing API failures.
-
-    Relevant issue: Gemini only allows enums for string-typed fields
+    Gemini rejects non-string enum values, causing API failures. Integer enums are
+    accepted as type INTEGER with format "enum" and string values.
     """
     from litellm.llms.vertex_ai.common_utils import _fix_enum_types
 
@@ -1022,7 +1021,7 @@ def test_fix_enum_types():
                 "description": "How to truncate content",
             },
             "maxLength": {
-                "enum": [100, 200, 500],  # This should be removed
+                "enum": [100, 200, 500],
                 "type": "integer",
                 "description": "Maximum length",
             },
@@ -1039,7 +1038,7 @@ def test_fix_enum_types():
                         "type": "string",
                     },
                     "innerNonStringEnum": {
-                        "enum": [1, 2, 3],  # This should be removed
+                        "enum": [1, 2, 3],
                         "type": "integer",
                     },
                 },
@@ -1050,13 +1049,13 @@ def test_fix_enum_types():
                         "type": "string",
                         "enum": ["option1", "option2"],
                     },  # This should be kept
-                    {"type": "integer", "enum": [1, 2, 3]},  # This should be removed
+                    {"type": "integer", "enum": [1, 2, 3]},
                 ]
             },
         },
     }
 
-    # Expected output: Non-string enums removed, string enums kept
+    # Expected output: string enums kept, integer enums converted, others removed
     expected_output = {
         "type": "object",
         "properties": {
@@ -1065,7 +1064,9 @@ def test_fix_enum_types():
                 "type": "string",
                 "description": "How to truncate content",
             },
-            "maxLength": {  # enum removed
+            "maxLength": {
+                "enum": ["100", "200", "500"],
+                "format": "enum",
                 "type": "integer",
                 "description": "Maximum length",
             },
@@ -1080,7 +1081,11 @@ def test_fix_enum_types():
                         "enum": ["a", "b", "c"],  # Kept - string type
                         "type": "string",
                     },
-                    "innerNonStringEnum": {"type": "integer"},  # enum removed
+                    "innerNonStringEnum": {
+                        "enum": ["1", "2", "3"],
+                        "format": "enum",
+                        "type": "integer",
+                    },
                 },
             },
             "anyOfField": {
@@ -1089,7 +1094,7 @@ def test_fix_enum_types():
                         "type": "string",
                         "enum": ["option1", "option2"],
                     },  # Kept - has string type
-                    {"type": "integer"},  # enum removed
+                    {"type": "integer", "format": "enum", "enum": ["1", "2", "3"]},
                 ]
             },
         },
@@ -1118,22 +1123,69 @@ def test_fix_enum_types():
         "c",
     ]
 
-    # 2. Non-string enums are removed
-    assert "enum" not in input_schema["properties"]["maxLength"]
+    # 2. Integer enums are converted, other non-string enums are removed
+    assert input_schema["properties"]["maxLength"]["enum"] == ["100", "200", "500"]
+    assert input_schema["properties"]["maxLength"]["format"] == "enum"
     assert "enum" not in input_schema["properties"]["enabled"]
-    assert (
-        "enum"
-        not in input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]
-    )
+    assert input_schema["properties"]["nested"]["properties"]["innerNonStringEnum"]["enum"] == ["1", "2", "3"]
 
-    # 3. anyOf with string type keeps enum, non-string removes it
+    # 3. anyOf keeps the string enum and converts the integer one
     assert "enum" in input_schema["properties"]["anyOfField"]["anyOf"][0]
-    assert "enum" not in input_schema["properties"]["anyOfField"]["anyOf"][1]
+    assert input_schema["properties"]["anyOfField"]["anyOf"][1]["enum"] == ["1", "2", "3"]
 
     # 4. Other properties preserved
     assert input_schema["properties"]["maxLength"]["type"] == "integer"
     assert input_schema["properties"]["enabled"]["type"] == "boolean"
 
+
+
+def test_build_vertex_schema_sends_integer_enum_as_format_enum():
+    """An integer enum tool parameter reaches Gemini as INTEGER with format "enum" and string values."""
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    parameters = {
+        "type": "object",
+        "properties": {
+            "level": {"type": "integer", "enum": [1, 2, 5]},
+            "flag": {"type": "boolean", "enum": [True]},
+        },
+        "required": ["level"],
+    }
+
+    result = _build_vertex_schema(parameters)
+
+    assert result["properties"]["level"]["format"] == "enum"
+    assert result["properties"]["level"]["enum"] == ["1", "2", "5"]
+    assert result["properties"]["level"]["type"].lower() == "integer"
+    assert "enum" not in result["properties"]["flag"]
+
+
+def test_map_function_keeps_integer_enum_when_tools_are_reused():
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "set_priority",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"level": {"type": "integer", "enum": [1, 2, 5]}},
+                    "required": ["level"],
+                },
+            },
+        }
+    ]
+    config = VertexGeminiConfig()
+
+    sent = [
+        config._map_function(tools, {})[0]["function_declarations"][0]["parameters"]["properties"]["level"]
+        for _ in range(2)
+    ]
+
+    assert sent[0]["enum"] == ["1", "2", "5"]
+    assert sent[1]["enum"] == ["1", "2", "5"]
+    assert sent[1]["format"] == "enum"
 
 def test_get_token_url():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
