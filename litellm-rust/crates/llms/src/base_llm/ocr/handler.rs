@@ -128,20 +128,12 @@ pub async fn ocr<C: BaseOcrConfig>(
         .await
         .map_err(transport_error)?;
     if !response.status().is_success() {
-        let headers = response
-            .headers()
-            .iter()
-            .filter_map(|(name, value)| {
-                value
-                    .to_str()
-                    .ok()
-                    .map(|value| (name.to_string(), value.to_string()))
-            })
-            .collect();
         return match read_response_bytes(response, request.connection.max_response_bytes).await {
-            Err(Error::Transport(transport::Error::Http { status, body })) => {
-                Err(config.get_error_class(body, status, headers))
-            }
+            Err(Error::Transport(transport::Error::Http {
+                status,
+                body,
+                headers,
+            })) => Err(config.get_error_class(body, status, headers)),
             Err(error) => Err(error),
             Ok(_) => unreachable!("non-success response produces an HTTP error"),
         };
@@ -173,6 +165,7 @@ pub async fn read_response_bytes(
     limit: usize,
 ) -> Result<Bytes, Error> {
     let status = response.status();
+    let headers = litellm_http::request::response_headers(response.headers());
     if status.is_success()
         && response
             .content_length()
@@ -195,6 +188,7 @@ pub async fn read_response_bytes(
         return Err(transport::Error::Http {
             status: status.as_u16(),
             body: String::from_utf8_lossy(&bytes).into_owned(),
+            headers,
         }
         .into());
     }
@@ -206,6 +200,7 @@ pub fn transport_error(error: reqwest::Error) -> Error {
         return Error::Transport(transport::Error::Http {
             status: 408,
             body: "OCR request timed out".into(),
+            headers: Vec::new(),
         });
     }
     transport::Error::from(error).into()

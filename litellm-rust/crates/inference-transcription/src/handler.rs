@@ -32,6 +32,7 @@ pub async fn execute_audio_transcription_provider_call(
             Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
         })?;
     let status = response.status();
+    let headers = litellm_http::request::response_headers(response.headers());
     let text = response.text().await.map_err(|error| {
         Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
     })?;
@@ -39,6 +40,7 @@ pub async fn execute_audio_transcription_provider_call(
         return Err(Error::Transport(litellm_http::transport::Error::Http {
             status: status.as_u16(),
             body: truncate_error_body(&text),
+            headers,
         }));
     }
     let response_json = serde_json::from_str(&text).map_err(|error| {

@@ -178,6 +178,7 @@ mod tests {
         Error::Route(RouteError::Transport(TransportError::Http {
             status,
             body: body.into(),
+            headers: Vec::new(),
         }))
     }
 

@@ -66,10 +66,12 @@ pub(super) async fn execute(
                 .map_err(network)?;
             let status = response.status().as_u16();
             if !response.status().is_success() {
+                let headers = litellm_http::request::response_headers(response.headers());
                 let body = response.text().await.map_err(network)?;
                 return Err(litellm_http::transport::Error::Http {
                     status,
                     body: litellm_http::request::truncate_error_body(&body),
+                    headers,
                 }
                 .into());
             }

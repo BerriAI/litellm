@@ -95,11 +95,13 @@ fn map_media_error(error: MediaError) -> Error {
         MediaError::Http(status) => TransportError::Http {
             status,
             body: "OCR document download failed".into(),
+            headers: Vec::new(),
         }
         .into(),
         MediaError::Timeout => TransportError::Http {
             status: 408,
             body: "OCR document download timed out".into(),
+            headers: Vec::new(),
         }
         .into(),
         MediaError::Transport(error) => error.into(),

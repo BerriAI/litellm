@@ -176,12 +176,14 @@ async fn send(
 
 async fn provider_error(response: reqwest::Response) -> Error {
     let status = response.status().as_u16();
+    let headers = litellm_http::request::response_headers(response.headers());
     match response.text().await {
         Ok(text) => {
             log_error_body(status, &text);
             Error::Transport(TransportError::Http {
                 status,
                 body: truncate_error_body(&text),
+                headers,
             })
         }
         Err(error) => network(error),

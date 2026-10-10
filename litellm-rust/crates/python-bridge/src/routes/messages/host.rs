@@ -94,13 +94,11 @@ fn project_litellm_params<'py>(
 
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
     match error {
-        Error::Transport(TransportError::Http { status, body }) => {
-            let error = RustUpstreamError::new_err((status, body));
-            error
-                .value(py)
-                .setattr("headers", Vec::<(String, String)>::new())?;
-            Ok(error)
-        }
+        Error::Transport(TransportError::Http {
+            status,
+            body,
+            headers,
+        }) => upstream_error(py, status, body, headers),
         Error::InvalidRequest(message) => {
             let error = PyValueError::new_err(message.to_string());
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
@@ -113,6 +111,17 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
         }
         other => Ok(route_error_to_pyerr(other)),
     }
+}
+
+fn upstream_error(
+    py: Python<'_>,
+    status: u16,
+    body: String,
+    headers: Vec<(String, String)>,
+) -> PyResult<PyErr> {
+    let error = RustUpstreamError::new_err((status, body));
+    error.value(py).setattr("headers", headers)?;
+    Ok(error)
 }
 
 /// The Python side of the Messages route: projects the prepared arguments and builds the
@@ -225,14 +234,27 @@ impl MessagesPythonHost {
         })
     }
 
-    fn provider(&self, py: Python<'_>) -> String {
-        self.request
-            .bind(py)
-            .get_item("custom_llm_provider")
-            .ok()
+    fn provider(&self, py: Python<'_>) -> PyResult<String> {
+        let request = self.request.bind(py);
+        let provider = request
+            .get_item("custom_llm_provider")?
+            .map(|value| value.extract::<Option<String>>())
+            .transpose()?
+            .flatten();
+        let model = request
+            .get_item("model")?
+            .map(|value| value.extract::<Option<String>>())
+            .transpose()?
             .flatten()
-            .and_then(|value| value.extract::<Option<String>>().ok().flatten())
-            .unwrap_or_else(|| "anthropic".into())
+            .unwrap_or_default();
+        Ok(
+            litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider(
+                &model,
+                provider.as_deref(),
+            )
+            .map(|resolved| resolved.custom_llm_provider.to_string())
+            .unwrap_or_else(|| "anthropic".into()),
+        )
     }
 
     fn map_failure(&self, py: Python<'_>, error: PyErr) -> PyErr {
@@ -242,7 +264,7 @@ impl MessagesPythonHost {
         let mapped = py
             .import(ROUTE_HOST_MODULE)
             .and_then(|module| module.getattr("map_failure"))
-            .and_then(|map| map.call1((error.value(py), self.request.bind(py), self.provider(py))))
+            .and_then(|map| map.call1((error.value(py), self.request.bind(py), self.provider(py)?)))
             .and_then(|mapped| {
                 mapped
                     .extract::<Py<pyo3::exceptions::PyBaseException>>()
@@ -489,7 +511,7 @@ mod tests {
     #[case::missing_field(Error::MissingField("max_tokens"), true)]
     #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
     #[case::upstream_failure(
-        Error::Transport(TransportError::Http { status: 400, body: "bad".into() }),
+        Error::Transport(TransportError::Http { status: 400, body: "bad".into(), headers: Vec::new() }),
         false,
     )]
     fn only_request_rejections_carry_the_request_error_marker(
@@ -505,6 +527,62 @@ mod tests {
                 .unwrap()
                 .map(|value| value.extract::<bool>().unwrap());
             assert_eq!(marker.unwrap_or(false), marked);
+        });
+    }
+
+    #[rstest]
+    fn upstream_headers_survive_the_messages_boundary() {
+        Python::initialize();
+        Python::attach(|py| {
+            let headers = vec![
+                ("Retry-After".into(), "17".into()),
+                ("x-provider-trace".into(), "first".into()),
+                ("x-provider-trace".into(), "second".into()),
+            ];
+            let failure = native_error(
+                py,
+                Error::Transport(TransportError::Http {
+                    status: 429,
+                    body: "rate limited".into(),
+                    headers: headers.clone(),
+                }),
+            )
+            .unwrap();
+            assert_eq!(
+                failure
+                    .value(py)
+                    .getattr("headers")
+                    .unwrap()
+                    .extract::<Vec<(String, String)>>()
+                    .unwrap(),
+                headers
+            );
+        });
+    }
+
+    #[rstest]
+    #[case::copilot_from_model(json!({"model": "github_copilot/claude-test"}), "github_copilot")]
+    #[case::explicit_none_provider(
+        json!({"model": "github_copilot/claude-test", "custom_llm_provider": null}), "github_copilot"
+    )]
+    #[case::explicit_provider(
+        json!({"model": "claude-test", "custom_llm_provider": "github_copilot"}), "github_copilot"
+    )]
+    #[case::bedrock_from_model(json!({"model": "bedrock/claude-test"}), "bedrock")]
+    #[case::edenai_from_model(json!({"model": "edenai/claude-test"}), "edenai")]
+    fn error_provider_follows_the_request_identity(
+        #[case] request: Value,
+        #[case] expected_provider: &str,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let request = to_py(py, &request)
+                .unwrap()
+                .into_bound(py)
+                .cast_into::<PyDict>()
+                .unwrap();
+            let host = MessagesPythonHost::new(request.unbind(), true);
+            assert_eq!(host.provider(py).unwrap(), expected_provider);
         });
     }
 }

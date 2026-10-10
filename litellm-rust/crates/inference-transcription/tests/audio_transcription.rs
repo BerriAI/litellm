@@ -210,8 +210,10 @@ async fn an_upstream_error_keeps_its_status_and_body(
     request: AudioTranscriptionRequest<'static>,
     #[case] status: u16,
 ) {
-    let upstream =
-        upstream([ResponseTemplate::new(status).set_body_string("upstream said no")]).await;
+    let upstream = upstream([ResponseTemplate::new(status)
+        .set_body_string("upstream said no")
+        .append_header("Retry-After", "17")])
+    .await;
     let base = upstream.uri();
 
     let error = transcribe(AudioTranscriptionRequest {
@@ -221,12 +223,19 @@ async fn an_upstream_error_keeps_its_status_and_body(
     .await
     .expect_err("upstream error propagates");
 
+    let Error::Transport(litellm_http::transport::Error::Http {
+        status: actual_status,
+        body,
+        headers,
+    }) = error
+    else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert_eq!(actual_status, status);
+    assert_eq!(body, "upstream said no");
     assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            status,
-            body: "upstream said no".into()
-        })
+        litellm_http::request::header_value(&headers, "retry-after"),
+        Some("17")
     );
 }
 

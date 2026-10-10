@@ -478,3 +478,41 @@ async fn websocket_operations_trace_outcomes_without_capturing_frames_or_credent
     );
     assert!(!format!("{:?}", traces.records()).contains("private-"));
 }
+
+#[rstest]
+#[case::unary(false)]
+#[case::streaming(true)]
+#[tokio::test]
+async fn upstream_errors_preserve_response_headers(call: ResponsesCall, #[case] stream: bool) {
+    let upstream = upstream([ResponseTemplate::new(429)
+        .set_body_string("rate limited")
+        .append_header("Retry-After", "17")])
+    .await;
+    let error = responses_route(no_secrets())
+        .execute(
+            ResponsesCall {
+                api_base: Some(upstream.uri()),
+                optional_params: serde_json::from_value(json!({"stream": stream})).unwrap(),
+                ..call
+            },
+            &(),
+            None,
+        )
+        .await
+        .err()
+        .expect("provider rejection");
+    let litellm_inference_responses::Error::Transport(litellm_http::transport::Error::Http {
+        status,
+        body,
+        headers,
+    }) = error
+    else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert_eq!(status, 429);
+    assert_eq!(body, "rate limited");
+    assert_eq!(
+        litellm_http::request::header_value(&headers, "retry-after"),
+        Some("17")
+    );
+}

@@ -21,9 +21,17 @@ pyo3::create_exception!(
 
 pub(crate) fn route_error_to_pyerr(error: RouteError) -> PyErr {
     match error {
-        RouteError::Transport(TransportError::Http { status, body }) => {
-            RustUpstreamError::new_err((status, body))
-        }
+        RouteError::Transport(TransportError::Http {
+            status,
+            body,
+            headers,
+        }) => Python::attach(|py| {
+            let error = RustUpstreamError::new_err((status, body));
+            match error.value(py).setattr("headers", headers) {
+                Ok(()) => error,
+                Err(mapping_error) => mapping_error,
+            }
+        }),
         other => by_fault(other.is_request(), other.to_string()),
     }
 }
@@ -59,13 +67,18 @@ mod tests {
     }
 
     #[rstest::rstest]
-    fn transport_status_survives_python_mapping() {
+    fn transport_status_body_and_headers_survive_python_mapping() {
         Python::initialize();
         Python::attach(|py| {
             let upstream = route_error_to_pyerr(
                 TransportError::Http {
                     status: 429,
                     body: "slow down".into(),
+                    headers: vec![
+                        ("Retry-After".into(), "17".into()),
+                        ("x-provider-trace".into(), "first".into()),
+                        ("x-provider-trace".into(), "second".into()),
+                    ],
                 }
                 .into(),
             );
@@ -78,6 +91,19 @@ mod tests {
                     .extract::<(u16, String)>()
                     .unwrap(),
                 (429, "slow down".into())
+            );
+            assert_eq!(
+                upstream
+                    .value(py)
+                    .getattr("headers")
+                    .unwrap()
+                    .extract::<Vec<(String, String)>>()
+                    .unwrap(),
+                vec![
+                    ("Retry-After".into(), "17".into()),
+                    ("x-provider-trace".into(), "first".into()),
+                    ("x-provider-trace".into(), "second".into())
+                ]
             );
         });
     }

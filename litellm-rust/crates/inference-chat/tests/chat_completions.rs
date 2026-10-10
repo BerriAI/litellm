@@ -191,7 +191,10 @@ async fn an_upstream_error_status_keeps_its_code_and_body(
     request: ChatCompletionsRequest<'static>,
     #[case] status: u16,
 ) {
-    let upstream = upstream([ResponseTemplate::new(status).set_body_string("slow down")]).await;
+    let upstream = upstream([ResponseTemplate::new(status)
+        .set_body_string("slow down")
+        .append_header("Retry-After", "17")])
+    .await;
     let base = upstream.uri();
 
     let error = complete(ChatCompletionsRequest {
@@ -201,12 +204,19 @@ async fn an_upstream_error_status_keeps_its_code_and_body(
     .await
     .expect_err("upstream rejects");
 
+    let Error::Transport(TransportError::Http {
+        status: actual_status,
+        body,
+        headers,
+    }) = error
+    else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert_eq!(actual_status, status);
+    assert_eq!(body, "slow down");
     assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status,
-            body: "slow down".into()
-        })
+        litellm_http::request::header_value(&headers, "retry-after"),
+        Some("17")
     );
 }
 

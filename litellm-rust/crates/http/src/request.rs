@@ -143,6 +143,13 @@ pub fn has_bearer_auth(headers: &[(String, String)]) -> bool {
     })
 }
 
+pub fn response_headers(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;

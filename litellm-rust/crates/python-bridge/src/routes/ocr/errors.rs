@@ -15,9 +15,11 @@ pub(super) fn to_pyerr(error: Error) -> PyErr {
                 body,
                 headers,
             } => upstream_error(py, status, body, headers)?,
-            Error::Transport(litellm_http::transport::Error::Http { status, body }) => {
-                upstream_error(py, status, body, Vec::new())?
-            }
+            Error::Transport(litellm_http::transport::Error::Http {
+                status,
+                body,
+                headers,
+            }) => upstream_error(py, status, body, headers)?,
             Error::RequestFormat => {
                 let error = by_fault(true, Error::RequestFormat.to_string());
                 error

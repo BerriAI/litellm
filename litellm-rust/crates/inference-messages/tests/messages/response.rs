@@ -166,7 +166,7 @@ async fn a_json_error_envelope_is_kept_verbatim(call: MessagesCall) {
     .await
     .expect_err("upstream error propagates");
 
-    let Error::Transport(TransportError::Http { status, body }) = error else {
+    let Error::Transport(TransportError::Http { status, body, .. }) = error else {
         panic!("{error:?}");
     };
     assert_eq!(status, 400);
@@ -187,13 +187,16 @@ async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall
     .await
     .expect_err("upstream error propagates");
 
-    assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status: 500,
-            body: format!("{}... (truncated)", &long[..256])
-        })
-    );
+    let Error::Transport(TransportError::Http {
+        status: actual_status,
+        body,
+        ..
+    }) = error
+    else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert_eq!(actual_status, 500);
+    assert_eq!(body, format!("{}... (truncated)", &long[..256]));
 }
 
 #[rstest]
@@ -203,9 +206,16 @@ async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall
 #[case::server_error(500)]
 #[case::overloaded(529)]
 #[tokio::test]
-async fn an_upstream_error_keeps_its_status_and_body(call: MessagesCall, #[case] status: u16) {
-    let upstream =
-        upstream([ResponseTemplate::new(status).set_body_string("upstream said no")]).await;
+async fn an_upstream_error_keeps_its_status_body_and_headers(
+    call: MessagesCall,
+    #[case] status: u16,
+) {
+    let upstream = upstream([ResponseTemplate::new(status)
+        .set_body_string("upstream said no")
+        .append_header("Retry-After", "17")
+        .append_header("X-Provider-Trace", "first")
+        .append_header("X-Provider-Trace", "second")])
+    .await;
 
     let error = run(MessagesCall {
         api_key: Some("sk".into()),
@@ -215,12 +225,23 @@ async fn an_upstream_error_keeps_its_status_and_body(call: MessagesCall, #[case]
     .await
     .expect_err("upstream error propagates");
 
+    let Error::Transport(TransportError::Http {
+        status: actual_status,
+        body,
+        headers,
+    }) = error
+    else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert_eq!(actual_status, status);
+    assert_eq!(body, "upstream said no");
     assert_eq!(
-        error,
-        Error::Transport(TransportError::Http {
-            status,
-            body: "upstream said no".into()
-        })
+        litellm_http::request::header_value(&headers, "Retry-After"),
+        Some("17")
+    );
+    assert_eq!(
+        litellm_http::request::header_values(&headers, "X-Provider-Trace").collect::<Vec<_>>(),
+        vec!["first", "second"]
     );
 }
 

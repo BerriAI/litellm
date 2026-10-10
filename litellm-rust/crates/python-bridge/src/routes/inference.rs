@@ -118,11 +118,13 @@ impl InferenceHost {
             return Ok(original);
         }
         let native = match error {
-            RouteError::Transport(TransportError::Http { status, body }) => {
+            RouteError::Transport(TransportError::Http {
+                status,
+                body,
+                headers,
+            }) => {
                 let error = RustUpstreamError::new_err((status, body));
-                error
-                    .value(py)
-                    .setattr("headers", Vec::<(String, String)>::new())?;
+                error.value(py).setattr("headers", headers)?;
                 error
             }
             other => route_error_to_pyerr(other),

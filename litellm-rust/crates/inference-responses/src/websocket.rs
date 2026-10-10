@@ -66,6 +66,7 @@ impl ResponsesWebSocketConnection {
                     Error::Transport(litellm_http::transport::Error::Http {
                         status: response.status().as_u16(),
                         body: String::new(),
+                        headers: litellm_http::request::response_headers(response.headers()),
                     })
                 }
                 other => {

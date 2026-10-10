@@ -248,13 +248,16 @@ async fn an_upstream_error_fails_the_call_without_opening_the_stream(
         .await
         .expect_err("upstream error propagates");
 
-    assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            status: 429,
-            body: body.into()
-        })
-    );
+    let Error::Transport(litellm_http::transport::Error::Http {
+        status: actual_status,
+        body: actual_body,
+        ..
+    }) = error
+    else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert_eq!(actual_status, 429);
+    assert_eq!(actual_body, body);
     assert!(host.seen.into_inner().unwrap().is_empty());
 }
 
@@ -376,13 +379,16 @@ async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall)
         .err()
         .expect("upstream failure is returned by messages()");
 
-    assert_eq!(
-        error,
-        Error::Transport(litellm_http::transport::Error::Http {
-            status: 429,
-            body: "slow down".into(),
-        })
-    );
+    let Error::Transport(litellm_http::transport::Error::Http {
+        status: actual_status,
+        body,
+        ..
+    }) = error
+    else {
+        panic!("unexpected error: {error:?}");
+    };
+    assert_eq!(actual_status, 429);
+    assert_eq!(body, "slow down");
 }
 
 #[rstest]
