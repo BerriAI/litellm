@@ -2180,3 +2180,87 @@ class TestVertexBase:
 
             assert token == "cached-token"
             assert not mock_get_lock.called, "Fast path should not acquire lock"
+
+    @pytest.mark.asyncio
+    async def test_invalidate_cached_credentials_forces_reload_on_next_call(self):
+        """After invalidation the next call must load credentials again instead of serving
+        the cached token. Covers a cached token that Google has started rejecting."""
+        credentials = {"type": "service_account", "project_id": "project-1"}
+        vertex_base = VertexBase()
+        tokens = ["old-token", "new-token"]
+
+        with patch(
+            "google.oauth2.service_account.Credentials.from_service_account_info",
+            side_effect=lambda *_, **__: _FakeReloadableCredentials(tokens),
+        ) as mock_loader:
+            token, _ = await vertex_base.ensure_access_token_async(
+                credentials=credentials, project_id=None, custom_llm_provider="vertex_ai"
+            )
+            assert token == "old-token"
+            assert (json.dumps(credentials), None) in vertex_base._credentials_project_mapping
+            assert (json.dumps(credentials), "project-1") in vertex_base._credentials_project_mapping
+
+            vertex_base.invalidate_cached_credentials(credentials=credentials, project_id=None, rejected_token="old-token")
+
+            assert not any(key[0] == json.dumps(credentials) for key in vertex_base._credentials_project_mapping)
+            token, _ = await vertex_base.ensure_access_token_async(
+                credentials=credentials, project_id=None, custom_llm_provider="vertex_ai"
+            )
+            assert token == "new-token"
+            assert mock_loader.call_count == 2
+
+
+    @pytest.mark.asyncio
+    async def test_invalidate_cached_credentials_keeps_credentials_already_replaced(self):
+        """A late 401 for a token that another request already replaced must not throw away
+        the fresh credentials, or a burst of rejections reloads them over and over."""
+        credentials = {"type": "service_account", "project_id": "project-1"}
+        vertex_base = VertexBase()
+
+        with patch(
+            "google.oauth2.service_account.Credentials.from_service_account_info",
+            side_effect=lambda *_, **__: _FakeReloadableCredentials(["fresh-token"]),
+        ) as mock_loader:
+            token, _ = await vertex_base.ensure_access_token_async(
+                credentials=credentials, project_id="project-1", custom_llm_provider="vertex_ai"
+            )
+            assert token == "fresh-token"
+
+            vertex_base.invalidate_cached_credentials(
+                credentials=credentials, project_id="project-1", rejected_token="token-google-rejected-earlier"
+            )
+
+            token, _ = await vertex_base.ensure_access_token_async(
+                credentials=credentials, project_id="project-1", custom_llm_provider="vertex_ai"
+            )
+            assert token == "fresh-token"
+            assert mock_loader.call_count == 1
+
+class _FakeReloadableCredentials:
+    """Google credentials whose refresh mints the next token of a shared sequence."""
+
+    def __init__(self, tokens: "list[str]"):
+        import datetime
+
+        from google.auth.credentials import TokenState
+
+        self._tokens = tokens
+        self.token: str | None = None
+        self.token_state = TokenState.INVALID
+        self.expiry = datetime.datetime(2099, 1, 1)
+        self.project_id = "project-1"
+        self.quota_project_id = "project-1"
+
+    def refresh(self, request) -> None:
+        from google.auth.credentials import TokenState
+
+        self.token = self._tokens.pop(0)
+        self.token_state = TokenState.FRESH
+
+    @property
+    def expired(self) -> bool:
+        return False
+
+    @property
+    def valid(self) -> bool:
+        return self.token is not None

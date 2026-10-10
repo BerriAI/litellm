@@ -2827,6 +2827,21 @@ class VertexLLM(VertexBase):
     def __init__(self) -> None:
         super().__init__()
 
+    def _retries_with_fresh_credentials(
+        self,
+        error: VertexAIError,
+        custom_llm_provider: str,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        rejected_token: str,
+    ) -> bool:
+        if error.status_code != 401 or custom_llm_provider == "gemini":
+            return False
+        self.invalidate_cached_credentials(
+            credentials=credentials, project_id=project_id, rejected_token=rejected_token
+        )
+        return True
+
     async def async_streaming(
         self,
         model: str,
@@ -2852,73 +2867,93 @@ class VertexLLM(VertexBase):
         gemini_api_key: str | None = None,
         extra_headers: dict | None = None,
     ) -> CustomStreamWrapper:
-        _auth_header, vertex_project = await self._ensure_access_token_async(
-            credentials=vertex_credentials,
-            project_id=vertex_project,
-            custom_llm_provider=custom_llm_provider,
-        )
+        sent_token: Final = [""]
+        typed_messages: Final = cast(Sequence[AllMessageValues], messages)  # cast-ok: bare list in the signature
+        typed_params: Final = cast(Mapping[str, object], optional_params)  # cast-ok: bare dict in the signature
+        retry_messages: Final = list(typed_messages)
+        retry_optional_params: Final = dict(typed_params)
+        typed_data: Final = cast(Mapping[str, object], data)  # cast-ok: bare dict in the signature
+        retry_data: Final = {**typed_data, "messages": retry_messages, "optional_params": retry_optional_params}
 
-        # Extract use_psc_endpoint_format from optional_params
-        use_psc_endpoint_format: Final = optional_params.get("use_psc_endpoint_format", False)
+        async def attempt() -> CustomStreamWrapper:
+            _auth_header, resolved_project = await self._ensure_access_token_async(
+                credentials=vertex_credentials,
+                project_id=vertex_project,
+                custom_llm_provider=custom_llm_provider,
+            )
+            sent_token[0] = _auth_header
 
-        auth_header, api_base = self._get_token_and_url(
-            model=model,
-            gemini_api_key=gemini_api_key,
-            auth_header=_auth_header,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            vertex_credentials=vertex_credentials,
-            stream=stream,
-            custom_llm_provider=custom_llm_provider,
-            api_base=api_base,
-            use_psc_endpoint_format=use_psc_endpoint_format,
-        )
+            # Extract use_psc_endpoint_format from optional_params
+            use_psc_endpoint_format: Final = optional_params.get("use_psc_endpoint_format", False)
 
-        headers: Final = VertexGeminiConfig().validate_environment(
-            api_key=auth_header,
-            headers=extra_headers,
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-        )
-
-        request_body: Final = await async_transform_request_body(
-            **data,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            vertex_auth_header=auth_header,
-        )
-
-        ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
-
-        request_body_str: Final = json.dumps(request_body)
-        streaming_response: Final = CustomStreamWrapper(
-            completion_stream=None,
-            make_call=partial(
-                make_call,
-                gemini_client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
+            auth_header, resolved_api_base = self._get_token_and_url(
+                model=model,
+                gemini_api_key=gemini_api_key,
+                auth_header=_auth_header,
+                vertex_project=resolved_project,
+                vertex_location=vertex_location,
+                vertex_credentials=vertex_credentials,
+                stream=stream,
+                custom_llm_provider=custom_llm_provider,
                 api_base=api_base,
-                headers=headers,
-                data=request_body_str,
+                use_psc_endpoint_format=use_psc_endpoint_format,
+            )
+
+            headers: Final = VertexGeminiConfig().validate_environment(
+                api_key=auth_header,
+                headers=extra_headers,
                 model=model,
                 messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+            )
+
+            request_body: Final = await async_transform_request_body(
+                **data,
+                vertex_project=resolved_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=auth_header,
+            )
+
+            ## LOGGING
+            logging_obj.pre_call(
+                input=messages,
+                api_key="",
+                additional_args={
+                    "complete_input_dict": request_body,
+                    "api_base": resolved_api_base,
+                    "headers": headers,
+                },
+            )
+
+            request_body_str: Final = json.dumps(request_body)
+            streaming_response: Final = CustomStreamWrapper(
+                completion_stream=None,
+                make_call=partial(
+                    make_call,
+                    gemini_client=(client if client is not None and isinstance(client, AsyncHTTPHandler) else None),
+                    api_base=resolved_api_base,
+                    headers=headers,
+                    data=request_body_str,
+                    model=model,
+                    messages=messages,
+                    logging_obj=logging_obj,
+                ),
+                model=model,
+                custom_llm_provider="vertex_ai_beta",
                 logging_obj=logging_obj,
-            ),
-            model=model,
-            custom_llm_provider="vertex_ai_beta",
-            logging_obj=logging_obj,
-        )
-        return streaming_response
+            )
+            return streaming_response
+
+        try:
+            return await attempt()
+        except VertexAIError as e:
+            if not self._retries_with_fresh_credentials(
+                e, custom_llm_provider, vertex_credentials, vertex_project, sent_token[0]
+            ):
+                raise
+            messages, optional_params, data = list(retry_messages), dict(retry_optional_params), dict(retry_data)
+            return await attempt()
 
     async def async_completion(
         self,
@@ -2945,96 +2980,117 @@ class VertexLLM(VertexBase):
         gemini_api_key: str | None = None,
         extra_headers: dict | None = None,
     ) -> ModelResponse | CustomStreamWrapper:
-        _auth_header, vertex_project = await self._ensure_access_token_async(
-            credentials=vertex_credentials,
-            project_id=vertex_project,
-            custom_llm_provider=custom_llm_provider,
-        )
+        sent_token: Final = [""]
+        typed_messages: Final = cast(Sequence[AllMessageValues], messages)  # cast-ok: bare list in the signature
+        typed_params: Final = cast(Mapping[str, object], optional_params)  # cast-ok: bare dict in the signature
+        retry_messages: Final = list(typed_messages)
+        retry_optional_params: Final = dict(typed_params)
+        typed_data: Final = cast(Mapping[str, object], data)  # cast-ok: bare dict in the signature
+        retry_data: Final = {**typed_data, "messages": retry_messages, "optional_params": retry_optional_params}
 
-        # Extract use_psc_endpoint_format from optional_params
-        use_psc_endpoint_format: Final = optional_params.get("use_psc_endpoint_format", False)
+        async def attempt() -> ModelResponse | CustomStreamWrapper:
+            _auth_header, resolved_project = await self._ensure_access_token_async(
+                credentials=vertex_credentials,
+                project_id=vertex_project,
+                custom_llm_provider=custom_llm_provider,
+            )
+            sent_token[0] = _auth_header
 
-        auth_header, api_base = self._get_token_and_url(
-            model=model,
-            gemini_api_key=gemini_api_key,
-            auth_header=_auth_header,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            vertex_credentials=vertex_credentials,
-            stream=stream,
-            custom_llm_provider=custom_llm_provider,
-            api_base=api_base,
-            use_psc_endpoint_format=use_psc_endpoint_format,
-        )
+            # Extract use_psc_endpoint_format from optional_params
+            use_psc_endpoint_format: Final = optional_params.get("use_psc_endpoint_format", False)
 
-        headers: Final = VertexGeminiConfig().validate_environment(
-            api_key=auth_header,
-            headers=extra_headers,
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-        )
+            auth_header, resolved_api_base = self._get_token_and_url(
+                model=model,
+                gemini_api_key=gemini_api_key,
+                auth_header=_auth_header,
+                vertex_project=resolved_project,
+                vertex_location=vertex_location,
+                vertex_credentials=vertex_credentials,
+                stream=stream,
+                custom_llm_provider=custom_llm_provider,
+                api_base=api_base,
+                use_psc_endpoint_format=use_psc_endpoint_format,
+            )
 
-        request_body: Final = await async_transform_request_body(
-            **data,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            vertex_auth_header=auth_header,
-        )
+            headers: Final = VertexGeminiConfig().validate_environment(
+                api_key=auth_header,
+                headers=extra_headers,
+                model=model,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+            )
 
-        _async_client_params: Final = {}
-        if timeout:
-            _async_client_params["timeout"] = timeout
-        if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(params=_async_client_params, llm_provider=litellm.LlmProviders.VERTEX_AI)
-        else:
-            client = client
-        ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": request_body,
-                "api_base": api_base,
-                "headers": headers,
-            },
-        )
+            request_body: Final = await async_transform_request_body(
+                **data,
+                vertex_project=resolved_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=auth_header,
+            )
+
+            _async_client_params: Final = {}
+            if timeout:
+                _async_client_params["timeout"] = timeout
+            http_client: Final = (
+                client
+                if client is not None and isinstance(client, AsyncHTTPHandler)
+                else get_async_httpx_client(params=_async_client_params, llm_provider=litellm.LlmProviders.VERTEX_AI)
+            )
+            ## LOGGING
+            logging_obj.pre_call(
+                input=messages,
+                api_key="",
+                additional_args={
+                    "complete_input_dict": request_body,
+                    "api_base": resolved_api_base,
+                    "headers": headers,
+                },
+            )
+
+            try:
+                response: Final = await http_client.post(
+                    resolved_api_base,
+                    headers=headers,
+                    json=cast(dict, request_body),
+                    logging_obj=logging_obj,
+                )
+                response.raise_for_status()
+            except httpx.HTTPStatusError as err:
+                error_code: Final = err.response.status_code
+                raise VertexAIError(
+                    status_code=error_code,
+                    message=err.response.text,
+                    headers=err.response.headers,
+                )
+            except httpx.TimeoutException:
+                raise VertexAIError(
+                    status_code=408,
+                    message="Timeout error occurred.",
+                    headers=None,
+                )
+
+            return VertexGeminiConfig().transform_response(
+                model=model,
+                raw_response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                api_key="",
+                request_data=cast(dict, request_body),
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                encoding=encoding,
+            )
 
         try:
-            response: Final = await client.post(
-                api_base,
-                headers=headers,
-                json=cast(dict, request_body),
-                logging_obj=logging_obj,
-            )
-            response.raise_for_status()
-        except httpx.HTTPStatusError as err:
-            error_code: Final = err.response.status_code
-            raise VertexAIError(
-                status_code=error_code,
-                message=err.response.text,
-                headers=err.response.headers,
-            )
-        except httpx.TimeoutException:
-            raise VertexAIError(
-                status_code=408,
-                message="Timeout error occurred.",
-                headers=None,
-            )
-
-        return VertexGeminiConfig().transform_response(
-            model=model,
-            raw_response=response,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            api_key="",
-            request_data=cast(dict, request_body),
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            encoding=encoding,
-        )
+            return await attempt()
+        except VertexAIError as e:
+            if not self._retries_with_fresh_credentials(
+                e, custom_llm_provider, vertex_credentials, vertex_project, sent_token[0]
+            ):
+                raise
+            messages, optional_params, data = list(retry_messages), dict(retry_optional_params), dict(retry_data)
+            return await attempt()
 
     def completion(
         self,
@@ -3060,29 +3116,60 @@ class VertexLLM(VertexBase):
         client: AsyncHTTPHandler | HTTPHandler | None = None,
         api_base: str | None = None,
     ) -> ModelResponse | CustomStreamWrapper:
-        stream: Final[bool | None] = optional_params.pop("stream", None)
+        sent_token: Final = [""]
+        typed_messages: Final = cast(Sequence[AllMessageValues], messages)  # cast-ok: bare list in the signature
+        typed_params: Final = cast(Mapping[str, object], optional_params)  # cast-ok: bare dict in the signature
+        retry_messages: Final = list(typed_messages)
+        retry_optional_params: Final = dict(typed_params)
 
-        transform_request_params: Final = {
-            "gemini_api_key": gemini_api_key,
-            "messages": messages,
-            "api_base": api_base,
-            "model": model,
-            "client": client,
-            "timeout": timeout,
-            "extra_headers": extra_headers,
-            "optional_params": optional_params,
-            "logging_obj": logging_obj,
-            "custom_llm_provider": custom_llm_provider,
-            "litellm_params": litellm_params,
-        }
+        def attempt() -> ModelResponse | CustomStreamWrapper:
+            stream: Final[bool | None] = optional_params.pop("stream", None)
 
-        ### ROUTING (ASYNC, STREAMING, SYNC)
-        if acompletion:
-            ### ASYNC STREAMING
-            if stream is True:
-                return self.async_streaming(
+            transform_request_params: Final = {
+                "gemini_api_key": gemini_api_key,
+                "messages": messages,
+                "api_base": api_base,
+                "model": model,
+                "client": client,
+                "timeout": timeout,
+                "extra_headers": extra_headers,
+                "optional_params": optional_params,
+                "logging_obj": logging_obj,
+                "custom_llm_provider": custom_llm_provider,
+                "litellm_params": litellm_params,
+            }
+
+            ### ROUTING (ASYNC, STREAMING, SYNC)
+            if acompletion:
+                ### ASYNC STREAMING
+                if stream is True:
+                    return self.async_streaming(
+                        model=model,
+                        messages=messages,
+                        api_base=api_base,
+                        model_response=model_response,
+                        print_verbose=print_verbose,
+                        encoding=encoding,
+                        logging_obj=logging_obj,
+                        optional_params=optional_params,
+                        stream=stream,
+                        litellm_params=litellm_params,
+                        logger_fn=logger_fn,
+                        timeout=timeout,
+                        client=client,
+                        data=transform_request_params,
+                        vertex_project=vertex_project,
+                        vertex_location=vertex_location,
+                        vertex_credentials=vertex_credentials,
+                        gemini_api_key=gemini_api_key,
+                        custom_llm_provider=custom_llm_provider,
+                        extra_headers=extra_headers,
+                    )
+                ### ASYNC COMPLETION
+                return self.async_completion(
                     model=model,
                     messages=messages,
+                    data=transform_request_params,
                     api_base=api_base,
                     model_response=model_response,
                     print_verbose=print_verbose,
@@ -3094,7 +3181,6 @@ class VertexLLM(VertexBase):
                     logger_fn=logger_fn,
                     timeout=timeout,
                     client=client,
-                    data=transform_request_params,
                     vertex_project=vertex_project,
                     vertex_location=vertex_location,
                     vertex_credentials=vertex_credentials,
@@ -3102,141 +3188,129 @@ class VertexLLM(VertexBase):
                     custom_llm_provider=custom_llm_provider,
                     extra_headers=extra_headers,
                 )
-            ### ASYNC COMPLETION
-            return self.async_completion(
+
+            _auth_header, resolved_project = self._ensure_access_token(
+                credentials=vertex_credentials,
+                project_id=vertex_project,
+                custom_llm_provider=custom_llm_provider,
+            )
+            sent_token[0] = _auth_header
+
+            # Extract use_psc_endpoint_format from optional_params
+            use_psc_endpoint_format: Final = optional_params.get("use_psc_endpoint_format", False)
+
+            auth_header, url = self._get_token_and_url(
                 model=model,
-                messages=messages,
-                data=transform_request_params,
-                api_base=api_base,
-                model_response=model_response,
-                print_verbose=print_verbose,
-                encoding=encoding,
-                logging_obj=logging_obj,
-                optional_params=optional_params,
-                stream=stream,
-                litellm_params=litellm_params,
-                logger_fn=logger_fn,
-                timeout=timeout,
-                client=client,
-                vertex_project=vertex_project,
+                gemini_api_key=gemini_api_key,
+                auth_header=_auth_header,
+                vertex_project=resolved_project,
                 vertex_location=vertex_location,
                 vertex_credentials=vertex_credentials,
-                gemini_api_key=gemini_api_key,
+                stream=stream,
                 custom_llm_provider=custom_llm_provider,
-                extra_headers=extra_headers,
+                api_base=api_base,
+                use_psc_endpoint_format=use_psc_endpoint_format,
             )
-
-        _auth_header, vertex_project = self._ensure_access_token(
-            credentials=vertex_credentials,
-            project_id=vertex_project,
-            custom_llm_provider=custom_llm_provider,
-        )
-
-        # Extract use_psc_endpoint_format from optional_params
-        use_psc_endpoint_format: Final = optional_params.get("use_psc_endpoint_format", False)
-
-        auth_header, url = self._get_token_and_url(
-            model=model,
-            gemini_api_key=gemini_api_key,
-            auth_header=_auth_header,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            vertex_credentials=vertex_credentials,
-            stream=stream,
-            custom_llm_provider=custom_llm_provider,
-            api_base=api_base,
-            use_psc_endpoint_format=use_psc_endpoint_format,
-        )
-        headers: Final = VertexGeminiConfig().validate_environment(
-            api_key=auth_header,
-            headers=extra_headers,
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-        )
-
-        ## TRANSFORMATION ##
-        data: Final = sync_transform_request_body(
-            **transform_request_params,
-            vertex_project=vertex_project,
-            vertex_location=vertex_location,
-            vertex_auth_header=auth_header,
-        )
-
-        ## LOGGING
-        logging_obj.pre_call(
-            input=messages,
-            api_key="",
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": url,
-                "headers": headers,
-            },
-        )
-
-        ## SYNC STREAMING CALL ##
-        if stream is True:
-            request_data_str: Final = json.dumps(data)
-            streaming_response: Final = CustomStreamWrapper(
-                completion_stream=None,
-                make_call=partial(
-                    make_sync_call,
-                    gemini_client=(client if client is not None and isinstance(client, HTTPHandler) else None),
-                    api_base=url,
-                    data=request_data_str,
-                    model=model,
-                    messages=messages,
-                    logging_obj=logging_obj,
-                    headers=headers,
-                ),
+            headers: Final = VertexGeminiConfig().validate_environment(
+                api_key=auth_header,
+                headers=extra_headers,
                 model=model,
-                custom_llm_provider="vertex_ai_beta",
-                logging_obj=logging_obj,
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
             )
 
-            return streaming_response
-        ## COMPLETION CALL ##
+            ## TRANSFORMATION ##
+            data: Final = sync_transform_request_body(
+                **transform_request_params,
+                vertex_project=resolved_project,
+                vertex_location=vertex_location,
+                vertex_auth_header=auth_header,
+            )
 
-        if client is None or isinstance(client, AsyncHTTPHandler):
-            _params: Final = {}
-            if timeout is not None:
-                if isinstance(timeout, float) or isinstance(timeout, int):
-                    timeout = httpx.Timeout(timeout)
-                _params["timeout"] = timeout
-            client = get_httpx_client(params=_params)
-        else:
-            client = client
+            ## LOGGING
+            logging_obj.pre_call(
+                input=messages,
+                api_key="",
+                additional_args={
+                    "complete_input_dict": data,
+                    "api_base": url,
+                    "headers": headers,
+                },
+            )
+
+            ## SYNC STREAMING CALL ##
+            if stream is True:
+                request_data_str: Final = json.dumps(data)
+                streaming_response: Final = CustomStreamWrapper(
+                    completion_stream=None,
+                    make_call=partial(
+                        make_sync_call,
+                        gemini_client=(client if client is not None and isinstance(client, HTTPHandler) else None),
+                        api_base=url,
+                        data=request_data_str,
+                        model=model,
+                        messages=messages,
+                        logging_obj=logging_obj,
+                        headers=headers,
+                    ),
+                    model=model,
+                    custom_llm_provider="vertex_ai_beta",
+                    logging_obj=logging_obj,
+                )
+
+                return streaming_response
+            ## COMPLETION CALL ##
+
+            http_client: Final = (
+                client
+                if client is not None and not isinstance(client, AsyncHTTPHandler)
+                else get_httpx_client(
+                    params={}
+                    if timeout is None
+                    else {"timeout": httpx.Timeout(timeout) if isinstance(timeout, (float, int)) else timeout}
+                )
+            )
+
+            try:
+                response: Final = http_client.post(url=url, headers=headers, json=data, logging_obj=logging_obj)
+                response.raise_for_status()
+            except httpx.HTTPStatusError as err:
+                error_code: Final = err.response.status_code
+                raise VertexAIError(
+                    status_code=error_code,
+                    message=err.response.text,
+                    headers=err.response.headers,
+                )
+            except httpx.TimeoutException:
+                raise VertexAIError(
+                    status_code=408,
+                    message="Timeout error occurred.",
+                    headers=None,
+                )
+
+            return VertexGeminiConfig().transform_response(
+                model=model,
+                raw_response=response,
+                model_response=model_response,
+                logging_obj=logging_obj,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                api_key="",
+                request_data=data,
+                messages=messages,
+                encoding=encoding,
+            )
 
         try:
-            response: Final = client.post(url=url, headers=headers, json=data, logging_obj=logging_obj)
-            response.raise_for_status()
-        except httpx.HTTPStatusError as err:
-            error_code: Final = err.response.status_code
-            raise VertexAIError(
-                status_code=error_code,
-                message=err.response.text,
-                headers=err.response.headers,
-            )
-        except httpx.TimeoutException:
-            raise VertexAIError(
-                status_code=408,
-                message="Timeout error occurred.",
-                headers=None,
-            )
-
-        return VertexGeminiConfig().transform_response(
-            model=model,
-            raw_response=response,
-            model_response=model_response,
-            logging_obj=logging_obj,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            api_key="",
-            request_data=data,
-            messages=messages,
-            encoding=encoding,
-        )
+            return attempt()
+        except VertexAIError as e:
+            if not self._retries_with_fresh_credentials(
+                e, custom_llm_provider, vertex_credentials, vertex_project, sent_token[0]
+            ):
+                raise
+            messages, optional_params = list(retry_messages), dict(retry_optional_params)
+            return attempt()
 
 
 class ModelResponseIterator:
