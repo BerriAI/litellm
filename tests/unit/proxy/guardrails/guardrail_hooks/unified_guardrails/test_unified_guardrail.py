@@ -49,6 +49,7 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
+    CallTypesLiteral,
     Delta,
     GenericGuardrailAPIInputs,
     ModelResponse,
@@ -3011,3 +3012,44 @@ class TestTranslationMappingsAreReadLive:
         assert not [
             name for name, value in vars(unified_module).items() if isinstance(value, dict) and CallTypes.aocr in value
         ]
+
+
+class AttachmentScanningGuardrail(RecordingGuardrail):
+    """Records the raw request it is handed for an attachment scan."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.attachment_scans: list[dict[str, object]] = []
+
+    async def async_scan_request_attachments(self, data: dict, call_type: CallTypesLiteral) -> None:
+        self.attachment_scans.append({"call_type": call_type, "apply_calls_so_far": len(self.apply_calls)})
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_scans_attachments_before_text_extraction():
+    guardrail = AttachmentScanningGuardrail()
+
+    await UnifiedLLMGuardrails().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        cache=DualCache(),
+        data={"guardrail_to_apply": guardrail, "model": "gpt-4o", "input": "hello"},
+        call_type=CallTypes.aresponses.value,
+    )
+
+    assert guardrail.attachment_scans == [{"call_type": CallTypes.aresponses.value, "apply_calls_so_far": 0}]
+    assert len(guardrail.apply_calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_skips_attachment_scan_when_guardrail_has_none():
+    guardrail = RecordingGuardrail()
+    guardrail.async_scan_request_attachments = None  # instance attribute, not a method on the class
+
+    await UnifiedLLMGuardrails().async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        cache=DualCache(),
+        data={"guardrail_to_apply": guardrail, "model": "gpt-4o", "input": "hello"},
+        call_type=CallTypes.aresponses.value,
+    )
+
+    assert len(guardrail.apply_calls) == 1
