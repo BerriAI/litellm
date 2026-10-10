@@ -95,9 +95,7 @@ def _normalize_caller_admission_credential(value: str) -> str:
 
 
 def _admission_request(scope: Scope) -> Request:
-    """Request whose ``body()`` serves the routing layer's lazily peeked JSON-RPC
-    bytes (``b"{}"`` when no peek callable was stashed) instead of the ASGI
-    receive channel."""
+    """Request whose ``body()`` serves the peeked JSON-RPC method (``b"{}"`` when nothing is stashed)."""
     request: Final = Request(scope=scope)
     peeked_body: Final[Callable[[], Awaitable[bytes]] | None] = scope.get(MCP_PEEKED_BODY_SCOPE_KEY)
 

@@ -327,6 +327,7 @@ jobs:
               tests/unit/llms/sagemaker
               tests/unit/llms/sail
               tests/unit/llms/sambanova
+              tests/unit/llms/scaledown
               tests/unit/llms/sap
               tests/unit/llms/scaleway
               tests/unit/llms/searchapi
