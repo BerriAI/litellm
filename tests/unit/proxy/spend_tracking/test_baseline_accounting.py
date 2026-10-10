@@ -119,11 +119,13 @@ def test_skipped_long_cache_lifetime_survives_shorter_followups(ttl: int | None,
     assert warm[0].usage is not None and warm[0].usage.prompt_tokens_details.cached_tokens == 6000
 
 
-@pytest.mark.parametrize("ambiguous_entry", (False, True))
-def test_legacy_checkpoint_accounts_for_refreshes_after_a_skipped_request(ambiguous_entry: bool) -> None:
+@pytest.mark.parametrize("uncertain_before,ambiguous_entry", ((1000.0, False), (0.0, True), (1.0, False)))
+def test_legacy_checkpoint_accounts_for_refreshes_after_a_skipped_request(
+    uncertain_before: float, ambiguous_entry: bool,
+) -> None:
     restored: Final = TypeAdapter(BaselineHistory).validate_python({
         "first_at": 1.0, "last_at": 80000.0, "equivalent": False,
-        "uncertain_before": 0.0 if ambiguous_entry else 1000.0,
+        "uncertain_before": uncertain_before,
         "entries": (CacheEntry("p:300", "p", 6000, 300, 80000.0, 83600.0, uncertain=True),)
         if ambiguous_entry else (),
     })
@@ -132,6 +134,21 @@ def test_legacy_checkpoint_accounts_for_refreshes_after_a_skipped_request(ambigu
     checkpoint: Final = TypeAdapter(BaselineHistory).validate_json(TypeAdapter(BaselineHistory).dump_json(updated))
     _, expired = advance_baseline_history(checkpoint, (_observation("expired", 180001.0),))
     assert expired[0].usage is not None and expired[0].usage.prompt_tokens_details.cached_tokens == 0
+
+
+@pytest.mark.parametrize("policy", ("anthropic", "estimated"))
+def test_healthy_legacy_checkpoint_preserves_known_cache_hits(policy: str) -> None:
+    history, _ = advance_baseline_history(BaselineHistory(), (_observation("first"),))
+    adapter: Final = TypeAdapter(BaselineHistory)
+    restored: Final = adapter.validate_python(adapter.dump_python(
+        history, exclude={"version", "uncertain_until", "uncertain_ttl_seconds"},
+    ))
+    updated, estimates = advance_baseline_history(
+        restored, (_observation("after_upgrade", 10002.0, cache_policy=policy),),
+    )
+    assert estimates[0].reason == "cache_prefix_available"
+    assert estimates[0].usage is not None and estimates[0].usage.prompt_tokens_details.cached_tokens == 6000
+    assert updated.uncertain_until == 0 and updated.uncertain_ttl_seconds == 0
 
 
 def test_skipped_turn_preserves_lifetime_of_an_earlier_ambiguous_write() -> None:

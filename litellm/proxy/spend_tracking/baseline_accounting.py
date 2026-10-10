@@ -384,7 +384,14 @@ def advance_baseline_history(
     )
     legacy_lifetime: Final = (
         MAX_ESTIMATED_CACHE_TTL
-        if history.version == 1 and (history.uncertain_before > 0 or any(entry.uncertain for entry in history.entries))
+        if history.version == 1
+        and (
+            history.uncertain_before > (history.first_at or 0)
+            or history.uncertain_before > 0
+            and not history.entries
+            or history.blocked_until > 0
+            or any(entry.uncertain for entry in history.entries)
+        )
         else 0
     )
     legacy_until: Final = (
