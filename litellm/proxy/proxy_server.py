@@ -7857,12 +7857,18 @@ class ProxyConfig:
         """
         Parse a router_settings value that may be a dict or a JSON/YAML string.
 
+        Null entries are stripped: the admin UI persists the whole router-settings
+        form on save, including fields left blank as explicit nulls. A null means
+        "no opinion - keep the router default", never "override the default with
+        nothing". An all-null form dump must also resolve to None (not an
+        empty-looking dict) so the key->team hierarchical fallback still applies.
+
         Returns a non-empty dict if valid, otherwise None.
         """
         if value is None:
             return None
 
-        parsed: dict | None = None
+        parsed: dict[str, object] | None = None
         if isinstance(value, dict):
             parsed = value
         elif isinstance(value, str):
@@ -7876,9 +7882,11 @@ class ProxyConfig:
                 except json.JSONDecodeError:
                     pass
 
-        if isinstance(parsed, dict) and parsed:
-            return parsed
-        return None
+        if not isinstance(parsed, dict) or not parsed:
+            return None
+
+        stripped: Final = {k: v for k, v in parsed.items() if v is not None}
+        return stripped or None
 
     async def get_hierarchical_router_settings(
         self,

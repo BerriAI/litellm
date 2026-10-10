@@ -3772,6 +3772,39 @@ def test_ProxyConfig__parse_router_settings_value_invalid_returns_none():
     assert ProxyConfig._parse_router_settings_value({}) is None
 
 
+def test_ProxyConfig__parse_router_settings_value_strips_null_entries():
+    # The admin UI persists the whole router-settings form, blank fields included.
+    # Nulls must not survive parsing: as per-request kwargs they would shadow the
+    # Router's own defaults (e.g. fallbacks=None disables the global fallback chain).
+    ui_form_dump = {
+        "routing_strategy": "simple-shuffle",
+        "enable_tag_filtering": False,
+        "fallbacks": None,
+        "num_retries": None,
+        "timeout": None,
+        "retry_after": None,
+        "retry_policy": None,
+        "allowed_fails": None,
+        "cooldown_time": None,
+        "model_group_alias": None,
+        "routing_strategy_args": None,
+        "context_window_fallbacks": None,
+    }
+    assert ProxyConfig._parse_router_settings_value(ui_form_dump) == {
+        "routing_strategy": "simple-shuffle",
+        "enable_tag_filtering": False,
+    }
+    # Falsy-but-set values are NOT nulls and must be kept.
+    assert ProxyConfig._parse_router_settings_value({"fallbacks": [], "timeout": 0}) == {
+        "fallbacks": [],
+        "timeout": 0,
+    }
+    # A settings dict that is *only* nulls carries no opinion -> None.
+    assert ProxyConfig._parse_router_settings_value({"fallbacks": None, "timeout": None}) is None
+    # Also for the JSON-string storage shape.
+    assert ProxyConfig._parse_router_settings_value('{"num_retries": null, "timeout": 30}') == {"timeout": 30}
+
+
 # ---------------------------------------------------------------------------
 # ProxyConfig._get_hierarchical_router_settings
 # ---------------------------------------------------------------------------
@@ -3844,6 +3877,32 @@ async def test_ProxyConfig__get_hierarchical_router_settings_key_shadows_team_en
     assert out == {"num_retries": 3}
     assert "model_group_alias" not in out
     team_lookup.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig__get_hierarchical_router_settings_all_null_key_falls_back_to_team(monkeypatch):
+    """A key whose stored settings are only nulls (an admin UI form save with
+    every field blank) carries no opinion and must not shadow the team's
+    configured settings, otherwise the team's model_group_alias is silently
+    dropped for every request on that key."""
+    pc = ProxyConfig()
+    fake_key = SimpleNamespace(
+        router_settings={"fallbacks": None, "num_retries": None, "timeout": None},
+        team_id="team-1",
+    )
+    team_settings = {"model_group_alias": {"group-a": "group-b"}, "routing_strategy": "simple-shuffle"}
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_team_object",
+        AsyncMock(return_value=SimpleNamespace(router_settings=team_settings)),
+    )
+
+    out = await pc._get_hierarchical_router_settings(
+        user_api_key_dict=fake_key,
+        prisma_client=None,
+        proxy_logging_obj=None,
+    )
+
+    assert out == team_settings
 
 
 # ---------------------------------------------------------------------------
