@@ -4573,6 +4573,15 @@ def get_optional_params(
                 unsupported_params[k] = non_default_params[k]
 
         if unsupported_params:
+            if "reasoning_effort" in unsupported_params and custom_llm_provider in ("openai", "azure"):
+                raise UnsupportedParamsError(
+                    status_code=500,
+                    message=(
+                        f"{custom_llm_provider} does not support reasoning_effort for model={model}. "
+                        "reasoning_effort cannot be silently dropped. To forward it to the provider, "
+                        "send allowed_openai_params=['reasoning_effort'] in your request."
+                    ),
+                )
             if litellm.drop_params is True or (drop_params is not None and drop_params is True):
                 for k in unsupported_params:
                     non_default_params.pop(k, None)

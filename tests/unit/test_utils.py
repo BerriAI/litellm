@@ -6509,6 +6509,42 @@ class TestFinalOptionalParamsLineRedaction:
         assert "'temperature': 0.25" in printed
 
 
+@pytest.mark.parametrize(
+    "custom_llm_provider, model",
+    [
+        ("openai", "gpt-4.1"),
+        ("openai", "gpt-4.1-mini"),
+        ("openai", "gpt-4o"),
+        ("openai", "gpt-4o-mini"),
+        ("azure", "gpt-4.1"),
+        ("azure", "gpt-4.1-mini"),
+        ("azure", "gpt-4o"),
+        ("azure", "gpt-4o-mini"),
+        ("azure", "azure/eu/gpt-4o-2024-08-06"),
+    ],
+)
+@pytest.mark.parametrize("request_drop, global_drop", [(True, False), (None, True)])
+def test_unsupported_reasoning_effort_is_not_silently_dropped(
+    custom_llm_provider: str,
+    model: str,
+    request_drop: bool | None,
+    global_drop: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.utils import get_optional_params
+
+    # https://github.com/BerriAI/litellm/issues/40470, verified 2026-10-02.
+    # https://github.com/BerriAI/litellm/pull/44060#discussion_r4159472144, verified 2026-10-02.
+    monkeypatch.setattr(litellm, "drop_params", global_drop)
+    with pytest.raises(litellm.UnsupportedParamsError, match="reasoning_effort"):
+        get_optional_params(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            reasoning_effort="low",
+            drop_params=request_drop,
+        )
+
+
 class TestDropParamsStringCoercion:
     @pytest.mark.parametrize("drop_params", ["true", "True", True])
     def test_truthy_drop_params_drops_unsupported_temperature(self, drop_params, monkeypatch):
