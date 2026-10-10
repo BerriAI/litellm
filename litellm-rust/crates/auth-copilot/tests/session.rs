@@ -81,6 +81,7 @@ fn session(token: &str, host: &str, expires: u64) -> CopilotSession {
     CopilotSession::new(SecretValue::new(token), Some(host), expires).unwrap()
 }
 
+#[rstest]
 #[tokio::test]
 async fn concurrent_calls_share_a_session_and_refresh_token_and_endpoint_together() {
     let source = Arc::new(Sessions {
@@ -120,6 +121,7 @@ async fn concurrent_calls_share_a_session_and_refresh_token_and_endpoint_togethe
     assert_eq!(source.acquisitions.load(Ordering::SeqCst), 2);
 }
 
+#[rstest]
 #[tokio::test]
 async fn failed_refresh_never_returns_an_expired_token_and_can_be_retried() {
     let source = Arc::new(Sessions {
@@ -140,6 +142,7 @@ async fn failed_refresh_never_returns_an_expired_token_and_can_be_retried() {
     assert_eq!(source.acquisitions.load(Ordering::SeqCst), 3);
 }
 
+#[rstest]
 #[tokio::test]
 async fn unexpired_persisted_session_needs_no_login_or_token_request() {
     let directory = tempfile::tempdir().unwrap();
@@ -197,6 +200,7 @@ async fn unusable_persisted_sessions_refresh_with_the_login_token(
     assert_eq!(loaded.api_base(), "https://fresh.githubcopilot.com");
 }
 
+#[rstest]
 #[tokio::test]
 async fn token_endpoint_redirects_cannot_forward_login_credentials() {
     let directory = tempfile::tempdir().unwrap();
