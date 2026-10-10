@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import (
     _SERVICE_TIER_TO_COST_KEY_SUFFIX,
     BilledTokenRates,
     CostCalculatorUtils,
+    calculate_batch_cache_writing_cost,
     calculate_cost_component,
     generic_cost_per_character,
     generic_cost_per_token,
@@ -2695,7 +2696,7 @@ def batch_cost_calculator(
         total_prompt_cost += calculate_cost_component(model_info, cache_read_cost_key, cache_read_tokens) / 2
 
         cache_creation_cost: Final = model_info.get("cache_creation_input_token_cost") or input_cost_per_token
-        total_prompt_cost += cache_creation_tokens * cache_creation_cost / 2
+        total_prompt_cost += calculate_batch_cache_writing_cost(model_info, usage, cache_creation_cost / 2)
     text_rate: Final = _batch_or_half(batch_rates.output, output_cost_per_token)
     image_rate: Final = _batch_or_half(
         model_info.get("output_cost_per_image_token_batches"),
@@ -2723,7 +2724,7 @@ def _batch_prompt_cost(
 ) -> float:
     details: Final = parse_prompt_tokens_details(usage)
     cached_tokens: Final = details["cache_hit_tokens"] if cache_read_rate is not None else 0
-    written_tokens: Final = details["cache_creation_tokens"] if cache_creation_rate is not None else 0
+    written_tokens: Final = details["cache_creation_tokens"]
     audio_tokens, image_tokens, video_tokens = (
         details["audio_tokens"],
         details["image_tokens"],
@@ -2738,7 +2739,9 @@ def _batch_prompt_cost(
         + image_tokens * _batch_rate(model_info, "input_cost_per_image_token_batches", input_rate)
         + video_tokens * _batch_rate(model_info, "input_cost_per_video_token_batches", input_rate)
         + cached_tokens * (cache_read_rate or 0.0)
-        + written_tokens * (cache_creation_rate or 0.0)
+        + calculate_batch_cache_writing_cost(
+            model_info, usage, cache_creation_rate if cache_creation_rate is not None else input_rate
+        )
     )
 
 

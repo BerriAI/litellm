@@ -11605,3 +11605,34 @@ def test_masking_function_not_in_metadata_when_not_provided():
     assert "_langfuse_masking_function" not in result
 
     assert result["metadata"]["some_key"] == "some_value"
+
+
+@pytest.mark.asyncio
+async def test_batch_success_log_keeps_separate_tool_cost() -> None:
+    from litellm.types.utils import LiteLLMBatch
+
+    start: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+    logger: Final = Logging(
+        model="claude-opus-5-5", messages=[], stream=False, call_type="aretrieve_batch",
+        start_time=start, litellm_call_id="batch-components", function_id="batch-components",
+    )
+    logger.update_environment_variables(
+        model="claude-opus-5-5", custom_llm_provider="anthropic", optional_params={},
+        litellm_params={"metadata": {}, "proxy_server_request": {}},
+    )
+    batch: Final = LiteLLMBatch(
+        id="batch-components", object="batch", endpoint="/v1/messages", input_file_id="input",
+        completion_window="24h", status="completed", created_at=0, output_file_id="output",
+        request_counts={"total": 1, "completed": 1, "failed": 0},
+    )
+    await logger.async_success_handler(
+        result=batch, start_time=start, end_time=start,
+        batch_cost=183.0, batch_usage=Usage(prompt_tokens=110, completion_tokens=10),
+        batch_models=["claude-opus-5-5"], batch_successful_requests=1, batch_failed_requests=0,
+        batch_prompt_cost=142.0, batch_completion_cost=20.0, batch_tool_cost=21.0,
+    )
+    payload: Final = logger.model_call_details["standard_logging_object"]
+    assert payload["response_cost"] == pytest.approx(183.0)
+    assert payload["cost_breakdown"]["input_cost"] == pytest.approx(142.0)
+    assert payload["cost_breakdown"]["output_cost"] == pytest.approx(20.0)
+    assert payload["cost_breakdown"]["tool_usage_cost"] == pytest.approx(21.0)

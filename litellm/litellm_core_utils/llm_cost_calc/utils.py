@@ -356,6 +356,31 @@ def get_batch_cost_rates(model_info: ModelInfo, usage: Usage, custom_llm_provide
     )
 
 
+def calculate_batch_cache_writing_cost(
+    model_info: ModelInfo,
+    usage: Usage,
+    cache_creation_rate: float,
+) -> float:
+    details: Final = parse_prompt_tokens_details(usage)
+    ttl: Final = details["cache_creation_token_details"]
+    one_hour_tokens: Final = min(
+        details["cache_creation_tokens"],
+        max(ttl.ephemeral_1h_input_tokens or 0, 0) if ttl is not None else 0,
+    )
+    if one_hour_tokens == 0:
+        return details["cache_creation_tokens"] * cache_creation_rate
+    standard_rates: Final = _get_token_base_cost(model_info, usage)
+    has_hour_price: Final = (
+        any(
+            key.startswith("cache_creation_input_token_cost_above_1hr") and value is not None
+            for key, value in model_info.items()
+        )
+        or _select_priced_tier(model_info, usage) is not None
+    )
+    one_hour_rate: Final = standard_rates[3] / 2 if has_hour_price else cache_creation_rate
+    return (details["cache_creation_tokens"] - one_hour_tokens) * cache_creation_rate + one_hour_tokens * one_hour_rate
+
+
 def _select_priced_tier(model_info: ModelInfo, usage: Usage) -> dict | None:
     tiered_pricing: Final = model_info.get("tiered_pricing")
     if not isinstance(tiered_pricing, list) or not tiered_pricing:
