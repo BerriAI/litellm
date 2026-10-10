@@ -94,6 +94,7 @@ import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import type { ListPluginsResponse, SkillRegisterRequest } from "./claude_code_plugins/types";
 import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
+import type { StoredModelMaxBudget } from "./key_team_helpers/modelMaxBudgetPayload";
 import type { ObjectPermission } from "./object_permission_types";
 import type { components } from "@/lib/http/schema";
 import { fetchClient } from "@/lib/http/api";
@@ -2831,6 +2832,7 @@ export interface Member {
   allowed_models?: string[] | null;
   temp_budget_increase?: number | null;
   temp_budget_expiry?: string | null;
+  model_max_budget?: StoredModelMaxBudget | null;
 }
 
 export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {
@@ -2970,6 +2972,9 @@ export const teamMemberUpdateCall = async (
     }
     if ("temp_budget_expiry" in formValues) {
       requestBody.temp_budget_expiry = orNull(formValues.temp_budget_expiry);
+    }
+    if (formValues.model_max_budget !== undefined) {
+      requestBody.model_max_budget = formValues.model_max_budget;
     }
 
     const response = await fetch(url, {
