@@ -5,6 +5,8 @@ Pre-call hook that filters MCP tools semantically before LLM inference.
 Reduces context window size and improves tool selection accuracy.
 """
 
+import asyncio
+import importlib.util
 from collections.abc import Awaitable, Callable, Collection, Iterable, Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Optional
 
@@ -24,11 +26,37 @@ from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
 
 if TYPE_CHECKING:
     from litellm.caching.caching import DualCache
+    from litellm.caching.redis_cache import RedisCache
     from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
         SemanticMCPToolFilter,
     )
+    from litellm.proxy._experimental.mcp_server.semantic_tool_index_store import ToolVectorStore
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
+
+
+def _make_vector_store(redis_cache: Optional["RedisCache"]) -> Optional["ToolVectorStore"]:
+    """Redis-backed shared vector store, or None when no Redis is configured."""
+    if redis_cache is None:
+        return None
+    from litellm.proxy._experimental.mcp_server.semantic_tool_index_store import (
+        RedisToolVectorStore,
+    )
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import (
+        PodLockManager,
+    )
+
+    return RedisToolVectorStore(redis_cache, PodLockManager(redis_cache))
+
+
+async def _run_deferred_index_build(semantic_filter: "SemanticMCPToolFilter") -> None:
+    """Background task for a shared (Redis-backed) index build; swallows failures so requests keep passing through."""
+    try:
+        await semantic_filter.build_router_from_mcp_registry(async_index=True)
+    except Exception:  # noqa: BLE001  # background task must not die; requests keep passing through
+        verbose_proxy_logger.exception(
+            "MCP semantic tool index deferred build failed; request-time indexing remains active"
+        )
 
 
 class SemanticToolFilterConfig(TypedDict, total=False):
@@ -69,6 +97,7 @@ class SemanticToolFilterHook(CustomLogger):
         """
         super().__init__()
         self.filter = semantic_filter
+        self.index_build_task: asyncio.Task[None] | None = None
 
         verbose_proxy_logger.debug(
             "Initialized SemanticToolFilterHook with filter: enabled=%s, top_k=%s",
@@ -314,8 +343,11 @@ class SemanticToolFilterHook(CustomLogger):
         if self._should_expand_mcp_tools(tools):
             verbose_proxy_logger.debug("Detected litellm_proxy MCP references, expanding before semantic filtering")
 
-            if not self.filter.enabled:
-                verbose_proxy_logger.debug("Semantic filter disabled, leaving MCP references untouched")
+            if not self.filter.enabled or not self.filter.startup_index_ready:
+                verbose_proxy_logger.debug(
+                    "Semantic filter %s, leaving MCP references untouched",
+                    "disabled" if not self.filter.enabled else "index still building",
+                )
                 return None
 
             try:
@@ -360,8 +392,11 @@ class SemanticToolFilterHook(CustomLogger):
             verbose_proxy_logger.debug("No messages in request, skipping semantic filter")
             return None
 
-        if not self.filter.enabled:
-            verbose_proxy_logger.debug("Semantic filter disabled, skipping")
+        if not self.filter.enabled or not self.filter.startup_index_ready:
+            verbose_proxy_logger.debug(
+                "Semantic filter %s, skipping",
+                "disabled" if not self.filter.enabled else "index still building",
+            )
             return None
 
         try:
@@ -476,6 +511,7 @@ class SemanticToolFilterHook(CustomLogger):
     async def initialize_from_config(
         config: SemanticToolFilterConfig | None,
         llm_router: Optional["Router"],
+        redis_cache: Optional["RedisCache"] = None,
     ) -> Optional["SemanticToolFilterHook"]:
         """
         Initialize semantic tool filter from proxy config.
@@ -483,6 +519,9 @@ class SemanticToolFilterHook(CustomLogger):
         Args:
             config: Proxy configuration dict (litellm_settings.mcp_semantic_tool_filter)
             llm_router: LiteLLM router instance for embeddings
+            redis_cache: Usage-tracking Redis cache; when configured the tool
+                index is built in the background with embeddings shared
+                cross-pod through it
 
         Returns:
             SemanticToolFilterHook instance if enabled, None otherwise
@@ -500,6 +539,9 @@ class SemanticToolFilterHook(CustomLogger):
             return None
 
         try:
+            if redis_cache is not None and importlib.util.find_spec("semantic_router") is None:
+                raise ImportError("No module named 'semantic_router'")
+
             embedding_model: Final = config.get("embedding_model", DEFAULT_MCP_SEMANTIC_FILTER_EMBEDDING_MODEL)
             top_k: Final = config.get("top_k", DEFAULT_MCP_SEMANTIC_FILTER_TOP_K)
             similarity_threshold = config.get("similarity_threshold", DEFAULT_MCP_SEMANTIC_FILTER_SIMILARITY_THRESHOLD)
@@ -510,18 +552,24 @@ class SemanticToolFilterHook(CustomLogger):
                 top_k=top_k,
                 similarity_threshold=similarity_threshold,
                 enabled=True,
+                vector_store=_make_vector_store(redis_cache),
             )
-
-            # Build router from MCP registry on startup
-            await semantic_filter.build_router_from_mcp_registry()
 
             hook: Final = SemanticToolFilterHook(semantic_filter)
 
+            if redis_cache is not None:
+                # Index builds in the background; requests pass through unfiltered until it finishes.
+                hook.index_build_task = asyncio.create_task(_run_deferred_index_build(semantic_filter))
+            else:
+                # Build router from MCP registry on startup
+                await semantic_filter.build_router_from_mcp_registry()
+
             verbose_proxy_logger.info(
-                "✅ MCP Semantic Tool Filter enabled: embedding_model=%s, top_k=%s, similarity_threshold=%s",
+                "✅ MCP Semantic Tool Filter enabled: embedding_model=%s, top_k=%s, similarity_threshold=%s, shared_index=%s",
                 embedding_model,
                 top_k,
                 similarity_threshold,
+                redis_cache is not None,
             )
 
             return hook

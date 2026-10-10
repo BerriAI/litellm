@@ -8,17 +8,26 @@ import asyncio
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
+from mcp.types import Tool as MCPTool
+from pydantic import TypeAdapter
+
 from litellm._logging import verbose_logger
 from litellm.exceptions import ContextWindowExceededError
 from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
 from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.faults import iter_exception_tree
+from litellm.proxy._experimental.mcp_server.semantic_tool_index_store import (
+    CachingToolEncoder,
+    ToolVectorStore,
+    tool_vector_key,
+)
 from litellm.proxy._experimental.mcp_server.utils import MCP_TOOL_PREFIX_SEPARATOR
 
 if TYPE_CHECKING:
     from semantic_router.routers import SemanticRouter
 
     from litellm.router import Router
+    from litellm.router_strategy.auto_router.litellm_encoder import LiteLLMRouterEncoder
 
 
 class SemanticToolFilterContextWindowError(Exception):
@@ -58,6 +67,8 @@ class SemanticMCPToolFilter:
         top_k: int = 10,
         similarity_threshold: float = 0.3,
         enabled: bool = True,
+        vector_store: ToolVectorStore | None = None,
+        lock_poll_interval_s: float = 5.0,
     ):
         """
         Initialize the semantic tool filter.
@@ -68,6 +79,11 @@ class SemanticMCPToolFilter:
             top_k: Maximum number of tools to return
             similarity_threshold: Minimum similarity score for filtering
             enabled: Whether filtering is enabled
+            vector_store: Shared embedding store; when set the index builds
+                cross-pod in the background and requests pass through unfiltered
+                until startup_index_ready flips
+            lock_poll_interval_s: How often to re-check the store while another
+                pod holds the build lock
         """
         self.enabled = enabled
         self.top_k = top_k
@@ -78,10 +94,58 @@ class SemanticMCPToolFilter:
         self.context_window_error: str | None = None
         self._tool_map: dict[str, object] = {}  # MCPTool objects or OpenAI function dicts
         self._index_sync_lock = asyncio.Lock()
+        self._vector_store = vector_store
+        self._lock_poll_interval_s = lock_poll_interval_s
+        self.embedding_identity = self._compute_embedding_identity()
+        self.startup_index_ready = vector_store is None
+
+    def _compute_embedding_identity(self) -> str:
+        """embedding_model plus every deployment model it routes to, so repointing an alias invalidates the shared vectors."""
+        try:
+            deployments: Final = self.router_instance.get_model_list(model_name=self.embedding_model) or ()
+            deployment_maps: Final = TypeAdapter(tuple[Mapping[str, object], ...]).validate_python(deployments)
+            litellm_params: Final = tuple(
+                TypeAdapter(Mapping[str, object]).validate_python(deployment.get("litellm_params") or {})
+                for deployment in deployment_maps
+            )
+            deployment_models: Final = sorted(
+                {str(model) for model in (p.get("model") for p in litellm_params) if model}
+            )
+        except (AttributeError, TypeError, KeyError, ValueError):
+            return self.embedding_model
+        if not deployment_models:
+            return self.embedding_model
+        return self.embedding_model + "|" + "|".join(deployment_models)
+
+    def _new_encoder(self) -> "LiteLLMRouterEncoder":
+        """Encoder used for every index build; cached in Redis when a store is set."""
+        from litellm.router_strategy.auto_router.litellm_encoder import (
+            LiteLLMRouterEncoder,
+        )
+
+        if self._vector_store is not None:
+            return CachingToolEncoder(
+                litellm_router_instance=self.router_instance,
+                model_name=self.embedding_model,
+                score_threshold=self.similarity_threshold,
+                store=self._vector_store,
+                embedding_identity=self.embedding_identity,
+            )
+        return LiteLLMRouterEncoder(
+            litellm_router_instance=self.router_instance,
+            model_name=self.embedding_model,
+            score_threshold=self.similarity_threshold,
+        )
 
     @catalog_operation(global_manager)
-    async def build_router_from_mcp_registry(self) -> None:
-        """Build semantic router from all MCP tools in the registry (no auth checks)."""
+    async def build_router_from_mcp_registry(self, *, async_index: bool = False) -> None:
+        """Build semantic router from all MCP tools in the registry (no auth checks).
+
+        With a vector store the shared Redis path runs: acquire the build lock
+        or wait for the holding pod's vectors, then embed only the misses.
+        Without one, the sync build blocks startup exactly as before; the
+        keyword arg lets a background task run the async (aadd) path instead.
+        """
         from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
             global_mcp_server_manager,
         )
@@ -95,7 +159,7 @@ class SemanticMCPToolFilter:
                 return
 
             # Fetch tools from all servers in parallel
-            all_tools: Final = []
+            all_tools: Final[Sequence[object]] = []
             for server_id, server in registry.items():
                 try:
                     tools = await global_mcp_server_manager.get_tools_for_server(server_id)
@@ -110,39 +174,66 @@ class SemanticMCPToolFilter:
                 return
 
             verbose_logger.info("Fetched %s tools from %s MCP servers", len(all_tools), len(registry))
-            self._build_router(all_tools)
+            if self._vector_store is not None or async_index:
+                await self._abuild_router(all_tools)
+            else:
+                self._build_router(all_tools)
 
         except Exception as e:
             verbose_logger.error("Failed to build router from MCP registry: %s", e)
             self.tool_router = None
             raise
+        finally:
+            self.startup_index_ready = True
 
-    def extract_tool_info(self, tool) -> tuple[str, str]:
+    def extract_tool_info(self, tool: object) -> tuple[str, str]:
         """Extract name and description from MCP tool or OpenAI function dict."""
         name: str
         description: str
 
         if isinstance(tool, dict):
             # OpenAI function format
-            name = tool.get("name", "")
-            description = tool.get("description", name)
+            tool_dict: Final = TypeAdapter(Mapping[str, object]).validate_python(tool)
+            name = str(tool_dict.get("name", ""))
+            description = str(tool_dict.get("description", name))
         else:
             # MCPTool object
-            name = str(tool.name)
-            description = str(tool.description) if tool.description else str(tool.name)
+            mcp_tool: Final = MCPTool.model_validate(tool, from_attributes=True)
+            name = str(mcp_tool.name)
+            description = str(mcp_tool.description) if mcp_tool.description else str(mcp_tool.name)
 
         return name, description
 
     _extract_tool_info = extract_tool_info
 
-    def _build_router(self, tools: list) -> None:
-        """Build semantic router with tools (MCPTool objects or OpenAI function dicts)."""
-        from semantic_router.routers import SemanticRouter
+    def _tools_to_routes_and_map(self, tools: Sequence[object]) -> tuple[Sequence[object], Mapping[str, object]]:
         from semantic_router.routers.base import Route
 
-        from litellm.router_strategy.auto_router.litellm_encoder import (
-            LiteLLMRouterEncoder,
-        )
+        extracted: Final = tuple((self.extract_tool_info(tool), tool) for tool in tools)
+        tool_map: Final = {name: tool for (name, _), tool in extracted}
+        routes: Final[Sequence[object]] = [
+            Route(
+                name=name,
+                description=description,
+                utterances=[description],
+                score_threshold=self.similarity_threshold,
+            )
+            for (name, description), _ in extracted
+        ]
+        return routes, tool_map
+
+    def _handle_build_error(self, error: Exception) -> bool:
+        """True when the failure was recorded as a context-window overflow; False when the caller should re-raise."""
+        verbose_logger.error("Failed to build semantic router: %s", error)
+        self.tool_router = None
+        if _is_context_window_error(error):
+            self.context_window_error = str(error)
+            return True
+        return False
+
+    def _build_router(self, tools: Sequence[object]) -> None:
+        """Build semantic router with tools (MCPTool objects or OpenAI function dicts)."""
+        from semantic_router.routers import SemanticRouter
 
         if not tools:
             self.tool_router = None
@@ -150,53 +241,95 @@ class SemanticMCPToolFilter:
 
         try:
             self.context_window_error = None
-            # Convert tools to routes
-            routes: Final = []
-            self._tool_map = {}
-
-            for tool in tools:
-                name, description = self.extract_tool_info(tool)
-                self._tool_map[name] = tool
-
-                routes.append(
-                    Route(
-                        name=name,
-                        description=description,
-                        utterances=[description],
-                        score_threshold=self.similarity_threshold,
-                    )
-                )
-
+            routes, tool_map = self._tools_to_routes_and_map(tools)
             self.tool_router = SemanticRouter(
-                routes=routes,
-                encoder=LiteLLMRouterEncoder(
-                    litellm_router_instance=self.router_instance,
-                    model_name=self.embedding_model,
-                    score_threshold=self.similarity_threshold,
-                ),
+                routes=list(routes),
+                encoder=self._new_encoder(),
                 auto_sync="local",
             )
+            self._tool_map = dict(tool_map)
 
             verbose_logger.info("Built semantic router with %s tools", len(routes))
 
         except Exception as e:
-            verbose_logger.error("Failed to build semantic router: %s", e)
-            self.tool_router = None
-            if _is_context_window_error(e):
-                self.context_window_error = str(e)
+            if self._handle_build_error(e):
                 return
             raise
 
+    async def _abuild_router(self, tools: Sequence[object]) -> None:
+        """
+        Async index build for the background path.
+
+        When a store is set, this first waits on the cross-pod build lock so
+        only one pod embeds; the caching encoder then fills any vectors the
+        holder did not write.
+        """
+        from semantic_router.routers import SemanticRouter
+
+        if not tools:
+            self.tool_router = None
+            return
+
+        lock_held: Final = await self._await_store_or_lock(tools) if self._vector_store is not None else False
+        try:
+            self.context_window_error = None
+            routes, tool_map = self._tools_to_routes_and_map(tools)
+            encoder: Final = self._new_encoder()
+            router: Final = SemanticRouter(  # pyright: ignore[reportUnknownVariableType]  # semantic_router ships no type stubs
+                routes=[],
+                encoder=encoder,
+                init_async_index=True,
+                top_k=self.top_k,
+            )
+
+            # aadd's lazy init probes index dimensions through the sync encoder,
+            # so dimensions are seeded with an async probe to keep the build async.
+            dims_probe: Final = await encoder.aencode_queries(["test"])  # pyright: ignore[reportUnknownMemberType]  # semantic_router ships no type stubs
+            router.index.dimensions = len(dims_probe[0])  # pyright: ignore[reportUnknownMemberType]  # semantic_router ships no type stubs
+            await router.aadd(list(routes))  # pyright: ignore[reportUnknownMemberType]  # semantic_router ships no type stubs
+
+            self._tool_map = dict(tool_map)
+            self.tool_router = router
+
+            verbose_logger.info("Built semantic router with %s tools via async index build", len(routes))
+
+        except Exception as e:
+            if self._handle_build_error(e):
+                return
+            raise
+        finally:
+            if lock_held and self._vector_store is not None:
+                await self._vector_store.release_build_lock()
+
+    async def _await_store_or_lock(self, tools: Sequence[object]) -> bool:
+        """True when this pod holds the build lock after the wait; False when every vector arrived without it."""
+        store: Final = self._vector_store
+        if store is None:
+            return False
+
+        descriptions: Final = tuple(self.extract_tool_info(tool)[1] for tool in tools)
+        keys: Final = tuple(tool_vector_key(self.embedding_identity, text) for text in set(descriptions))
+
+        while {key for key in keys if key not in await store.get_many(keys)}:
+            if await store.try_acquire_build_lock():
+                return True
+            await asyncio.sleep(self._lock_poll_interval_s)
+        return False
+
     def _has_tools_missing_from_index(self, tools: Sequence[object]) -> bool:
         """Allocation-free check for any named tool not yet in the semantic index."""
-        return any(name and name not in self._tool_map for name in (self.extract_tool_info(t)[0] for t in tools))
+        return any(
+            name and (name not in self._tool_map or self.extract_tool_info(self._tool_map[name])[1] != description)
+            for name, description in (self.extract_tool_info(t) for t in tools)
+        )
 
     def _tools_missing_from_index(self, tools: Sequence[object]) -> Mapping[str, object]:
         """Map name -> tool for every named tool not yet in the semantic index."""
+        infos: Final = ((self.extract_tool_info(t), t) for t in tools)
         return {
             name: tool
-            for name, tool in ((self.extract_tool_info(t)[0], t) for t in tools)
-            if name and name not in self._tool_map
+            for (name, description), tool in infos
+            if name and (name not in self._tool_map or self.extract_tool_info(self._tool_map[name])[1] != description)
         }
 
     async def _ensure_tools_indexed(self, available_tools: Sequence[object]) -> None:
@@ -216,11 +349,6 @@ class SemanticMCPToolFilter:
         description cannot poison the filter for other users on the worker.
         """
         from semantic_router.routers import SemanticRouter
-        from semantic_router.routers.base import Route
-
-        from litellm.router_strategy.auto_router.litellm_encoder import (
-            LiteLLMRouterEncoder,
-        )
 
         if not self._has_tools_missing_from_index(available_tools):
             return
@@ -230,32 +358,21 @@ class SemanticMCPToolFilter:
             if not missing:
                 return
 
-            descriptions: Final = {name: self.extract_tool_info(tool)[1] for name, tool in missing.items()}
-            routes: Final = [
-                Route(
-                    name=name,
-                    description=description,
-                    utterances=[description],
-                    score_threshold=self.similarity_threshold,
-                )
-                for name, description in descriptions.items()
-            ]
+            routes, _ = self._tools_to_routes_and_map(tuple(missing.values()))
 
             if self.tool_router is None:
                 router: Final = SemanticRouter(
                     routes=[],
-                    encoder=LiteLLMRouterEncoder(
-                        litellm_router_instance=self.router_instance,
-                        model_name=self.embedding_model,
-                        score_threshold=self.similarity_threshold,
-                    ),
+                    encoder=self._new_encoder(),
                     auto_sync="local",
                     top_k=self.top_k,
                 )
-                await router.aadd(routes)
+                await router.aadd(list(routes))
                 self.tool_router = router
             else:
-                await self.tool_router.aadd(routes)
+                for name in (name for name in missing if name in self._tool_map):
+                    await self.tool_router.adelete(name)  # pyright: ignore[reportUnknownMemberType]  # semantic_router ships no type stubs
+                await self.tool_router.aadd(list(routes))
 
             self._tool_map.update(missing)
             verbose_logger.info(

@@ -2239,3 +2239,109 @@ async def test_semantic_filter_hook_narrows_only_references_the_gateway_serves()
     )
 
     assert narrowed == [{**gateway_reference, "allowed_tools": ["srv-tool_1"]}, external_tool]
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
+async def test_semantic_filter_reindexes_tool_when_description_changes():
+    """
+    Regression test: a tool that keeps its name but gets a new description
+    must be re-embedded, otherwise the index keeps serving the stale vector.
+    """
+    recorded_inputs = []
+    filter_instance = _make_keyword_filter(recorded_inputs)
+    original = MCPTool(
+        name="srv-a-get_thing",
+        description="get the weather for a city",
+        inputSchema={"type": "object"},
+    )
+    edited = MCPTool(
+        name="srv-a-get_thing",
+        description="get a Linear ticket by id",
+        inputSchema={"type": "object"},
+    )
+    filter_instance._build_router([original])
+    recorded_inputs.clear()
+
+    filtered = await filter_instance.filter_tools(
+        query="linear ticket",
+        available_tools=[edited],
+    )
+
+    assert [edited] == filtered
+    assert any("get a Linear ticket by id" in text for batch in recorded_inputs for text in batch)
+    indexed_tool = filter_instance._tool_map["srv-a-get_thing"]
+    assert filter_instance.extract_tool_info(indexed_tool)[1] == "get a Linear ticket by id"
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
+async def test_hook_returns_before_shared_index_build_finishes():
+    """
+    With Redis configured the hook registers immediately and the shared
+    index build runs as a background task that finishes once the store
+    responds; without Redis the build stays inline.
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    gate = asyncio.Event()
+
+    class _GatedRedis:
+        def __init__(self):
+            self.backing = {}
+
+        async def async_batch_get_cache(self, key_list, parent_otel_span=None):
+            await gate.wait()
+            return {key: self.backing[key] for key in key_list if key in self.backing}
+
+        async def async_set_cache(self, key, value, **kwargs):
+            self.backing[key] = value
+            return True
+
+        async def async_get_cache(self, key):
+            return self.backing.get(key)
+
+        async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):
+            self.backing.update(dict(cache_list))
+
+    recorded_inputs = []
+    tool = MCPTool(
+        name="srv-a-get_thing",
+        description="get a Linear ticket by id",
+        inputSchema={"type": "object"},
+    )
+    with (
+        patch.object(global_mcp_server_manager, "get_registry", return_value={"srv-a": object()}),
+        patch.object(
+            global_mcp_server_manager, "get_tools_for_server", new=AsyncMock(return_value=[tool])
+        ),
+    ):
+        hook = await SemanticToolFilterHook.initialize_from_config(
+            config={"enabled": True},
+            llm_router=_make_keyword_embedding_router(recorded_inputs),
+            redis_cache=_GatedRedis(),
+        )
+
+        assert hook is not None
+        assert hook.index_build_task is not None
+        await asyncio.sleep(0)
+        assert not hook.index_build_task.done()
+        assert not hook.filter.startup_index_ready
+
+        gate.set()
+        await asyncio.wait_for(hook.index_build_task, timeout=30)
+        assert hook.filter.startup_index_ready
+        assert hook.filter.tool_router is not None
+
+        inline_hook = await SemanticToolFilterHook.initialize_from_config(
+            config={"enabled": True},
+            llm_router=_make_keyword_embedding_router([]),
+            redis_cache=None,
+        )
+        assert inline_hook is not None
+        assert inline_hook.index_build_task is None
+        assert inline_hook.filter.startup_index_ready
+        assert inline_hook.filter.tool_router is not None

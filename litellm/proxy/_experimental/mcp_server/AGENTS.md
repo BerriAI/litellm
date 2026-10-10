@@ -41,6 +41,7 @@ litellm/proxy/_experimental/mcp_server/
   sampling_handler.py        # MCP sampling to LiteLLM completion flow
   elicitation_handler.py     # MCP elicitation relay flow
   semantic_tool_filter.py    # semantic filtering of available MCP tools
+  semantic_tool_index_store.py # Redis-shared embeddings + build lock for the semantic tool index
   tool_search.py             # opt-in virtual tools (mcp_tool_search + mcp_tool_call) for large catalogs
   guardrail_translation/
     handler.py               # MCP guardrail result translation

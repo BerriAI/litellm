@@ -8560,6 +8560,11 @@ class ProxyConfig:
                     if active_hooks:
                         for active_hook in active_hooks:
                             if isinstance(active_hook, SemanticToolFilterHook):
+                                if active_hook.index_build_task is not None:
+                                    verbose_proxy_logger.debug(
+                                        "Semantic filter settings unchanged, index build already started; skipping reinitialization"
+                                    )
+                                    return
                                 if active_hook.filter is not None and active_hook.filter.tool_router is not None:
                                     verbose_proxy_logger.debug(
                                         "Semantic filter settings unchanged, skipping reinitialization"
@@ -8578,6 +8583,7 @@ class ProxyConfig:
                 hook: Final = await SemanticToolFilterHook.initialize_from_config(
                     config=mcp_semantic_filter_config,
                     llm_router=llm_router,
+                    redis_cache=redis_usage_cache,
                 )
                 if hook:
                     litellm.logging_callback_manager.add_litellm_callback(hook)
@@ -10596,6 +10602,7 @@ class ProxyStartupEvent:
         hook: Final = await SemanticToolFilterHook.initialize_from_config(
             config=mcp_semantic_filter_config,
             llm_router=llm_router,
+            redis_cache=redis_usage_cache,
         )
 
         if hook:
