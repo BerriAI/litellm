@@ -5,7 +5,6 @@ import { createApiClient } from "@/lib/http/client";
 import { isDecisionMode } from "@/lib/decisionModels";
 import {
   systemOneResponseSchema,
-  type DecisionEndpoint,
   type PlaygroundRequest,
   type SystemOneResponse,
 } from "../components/systemOneUI/lib/schemas";
@@ -55,10 +54,10 @@ export async function makeSystemOneRequest(
   payload: PlaygroundRequest,
   accessToken: string,
   customBaseUrl?: string,
-  { signal, endpoint = "/typesafe/v1/systemone" }: { signal?: AbortSignal; endpoint?: DecisionEndpoint } = {},
+  { signal }: { signal?: AbortSignal } = {},
 ): Promise<SystemOneResult> {
   const startedAt = performance.now();
-  const body = await proxyClient(customBaseUrl).post<unknown>(endpoint, {
+  const body = await proxyClient(customBaseUrl).post<unknown>("/v1/systemone", {
     body: payload,
     headers: authHeaders(accessToken),
     signal,

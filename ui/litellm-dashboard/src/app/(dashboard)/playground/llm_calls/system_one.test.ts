@@ -72,7 +72,7 @@ describe("makeSystemOneRequest", () => {
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
     expect(mockFetch).toHaveBeenCalledWith(
-      "https://custom.example.com/typesafe/v1/systemone",
+      "https://custom.example.com/v1/systemone",
       expect.objectContaining(expectedRequest),
     );
     expect(result.response).toEqual(responseBody);
@@ -82,7 +82,7 @@ describe("makeSystemOneRequest", () => {
   it("uses the proxy base URL when no custom base is provided", async () => {
     await makeSystemOneRequest(payload, "session-key");
 
-    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://proxy.example.com/typesafe/v1/systemone");
+    expect(mockFetch.mock.calls[0]?.[0]).toBe("https://proxy.example.com/v1/systemone");
   });
 
   it("throws the upstream error text for failed requests", async () => {
