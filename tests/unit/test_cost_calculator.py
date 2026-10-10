@@ -1,6 +1,8 @@
 import datetime
+import math
 import time
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
+from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Literal, cast
 
@@ -5815,6 +5817,211 @@ def test_completion_cost_bills_base_when_gemini_serves_on_demand(
     )
 
     assert cost == pytest.approx(100 * 0.001 + 50 * 0.002)
+
+
+_STORAGE_RATE_KEY: Final = "cache_storage_cost_per_token_per_hour"
+
+
+_FIXED_START_TIME: Final = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+
+
+@pytest.fixture
+def _storage_cost_map(_local_model_cost_map: None) -> Iterator[None]:
+    litellm.get_model_info.cache_clear()
+    yield
+    litellm.get_model_info.cache_clear()
+
+
+def _first_chat_model(provider_prefix: str, *, with_storage_rate: bool) -> str:
+    names: Final = [name for name in litellm.model_cost if isinstance(name, str)]
+    return next(
+        name
+        for name in names
+        if _is_priced_chat_entry(_cost_map_entry(name), provider_prefix, with_storage_rate=with_storage_rate)
+    )
+
+
+def _cost_map_entry(name: str) -> object:
+    entry: Final[object] = litellm.model_cost.get(name)
+    return entry
+
+
+def _is_priced_chat_entry(entry: object, provider_prefix: str, *, with_storage_rate: bool) -> bool:
+    return (
+        isinstance(entry, dict)
+        and entry.get("mode") == "chat"
+        and isinstance(provider := entry.get("litellm_provider"), str)
+        and provider.startswith(provider_prefix)
+        and entry.get("input_cost_per_token") is not None
+        and (_STORAGE_RATE_KEY in entry) == with_storage_rate
+    )
+
+
+def _cache_storage_logging_obj(model: str, token_hours: float) -> Logging:
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=_FIXED_START_TIME,
+        litellm_call_id="context-cache-storage",
+        function_id="f",
+    )
+    if token_hours:
+        logging_obj.record_context_cache_storage(token_hours)
+    return logging_obj
+
+
+def _chat_cost(model: str, logging_obj: Logging, **kwargs: object) -> float:
+    usage: Final = Usage(prompt_tokens=1_000, completion_tokens=100, total_tokens=1_100)
+    return completion_cost(
+        completion_response=ModelResponse(model=model, usage=usage),
+        model=model,
+        litellm_logging_obj=logging_obj,
+        **kwargs,
+    )
+
+
+def test_context_cache_storage_is_billed_on_the_creating_request(_storage_cost_map: None) -> None:
+    model: Final = _first_chat_model("vertex_ai", with_storage_rate=True)
+    rate: Final = litellm.get_model_info(model)[_STORAGE_RATE_KEY]
+    creating_request: Final = _cache_storage_logging_obj(model, token_hours=3_600.0)
+
+    with_storage: Final = _chat_cost(model, creating_request)
+    without_storage: Final = _chat_cost(model, _cache_storage_logging_obj(model, token_hours=0.0))
+
+    assert rate is not None and rate > 0
+    assert with_storage - without_storage == pytest.approx(3_600.0 * rate)
+    assert creating_request.cost_breakdown["additional_costs"] == pytest.approx({"cache_storage_cost": 3_600.0 * rate})
+    assert creating_request.cost_breakdown["total_cost"] == pytest.approx(with_storage)
+
+
+def test_context_cache_storage_costs_nothing_for_models_without_a_storage_rate(_storage_cost_map: None) -> None:
+    model: Final = _first_chat_model("gemini", with_storage_rate=False)
+    creating_request: Final = _cache_storage_logging_obj(model, token_hours=3_600.0)
+
+    with_storage: Final = _chat_cost(model, creating_request)
+
+    assert with_storage == _chat_cost(model, _cache_storage_logging_obj(model, token_hours=0.0))
+    assert creating_request.cost_breakdown.get("additional_costs") is None
+
+
+def test_context_cache_storage_uses_the_deployment_storage_rate(_storage_cost_map: None) -> None:
+    model: Final = _first_chat_model("vertex_ai", with_storage_rate=True)
+    deployment_rate: Final = litellm.get_model_info(model)[_STORAGE_RATE_KEY] * 3
+    litellm.register_model(
+        {
+            "storage-cost-deployment": {
+                "litellm_provider": "vertex_ai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                _STORAGE_RATE_KEY: deployment_rate,
+            }
+        }
+    )
+    pricing: Final = {"custom_pricing": True, "router_model_id": "storage-cost-deployment"}
+
+    with_storage: Final = _chat_cost(model, _cache_storage_logging_obj(model, token_hours=500.0), **pricing)
+    without_storage: Final = _chat_cost(model, _cache_storage_logging_obj(model, token_hours=0.0), **pricing)
+
+    assert with_storage - without_storage == pytest.approx(500.0 * deployment_rate)
+
+
+def test_context_cache_storage_joins_the_provider_additional_costs(_storage_cost_map: None) -> None:
+    litellm.register_model(
+        {"router-storage-deployment": {"litellm_provider": "azure_ai", "mode": "chat", _STORAGE_RATE_KEY: 1e-6}}
+    )
+    logging_obj: Final = _cache_storage_logging_obj("azure_ai/model-router", token_hours=500.0)
+    usage: Final = Usage(prompt_tokens=1_000_000, completion_tokens=100, total_tokens=1_000_100)
+
+    cost: Final = completion_cost(
+        completion_response=ModelResponse(model="azure_ai/gpt-4o-2024-08-06", usage=usage),
+        model="azure_ai/model-router",
+        custom_llm_provider="azure_ai",
+        litellm_logging_obj=logging_obj,
+        custom_pricing=True,
+        router_model_id="router-storage-deployment",
+    )
+
+    breakdown: Final = logging_obj.cost_breakdown
+    assert breakdown is not None
+    additional_costs: Final = breakdown.get("additional_costs") or {}
+    assert additional_costs["Azure Model Router Flat Cost"] > 0
+    assert math.isclose(additional_costs["cache_storage_cost"], 500.0 * 1e-6)
+    assert math.isclose(cost, sum(additional_costs.values()))
+
+
+_STORAGE_DEPLOYMENT_MODEL: Final = "gemini-2.5-flash"
+
+
+def _routed_request_cost(
+    token_prices: Mapping[str, float], token_hours: float, *, storage_rate: float | None = None
+) -> float | None:
+    from litellm import Router
+
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "storage-cost-deployment",
+                "litellm_params": {"model": f"vertex_ai/{_STORAGE_DEPLOYMENT_MODEL}", **token_prices},
+                "model_info": {} if storage_rate is None else {_STORAGE_RATE_KEY: storage_rate},
+            }
+        ]
+    )
+    deployment_id: Final = router.model_list[0]["model_info"]["id"]
+    assert isinstance(deployment_id, str)
+    return _vertex_request_cost({**token_prices, "metadata": {"model_info": {"id": deployment_id}}}, token_hours)
+
+
+def _vertex_request_cost(litellm_params: Mapping[str, object], token_hours: float) -> float | None:
+    logging_obj: Final = _cache_storage_logging_obj(_STORAGE_DEPLOYMENT_MODEL, token_hours)
+    logging_obj.update_environment_variables(
+        model=_STORAGE_DEPLOYMENT_MODEL,
+        litellm_params=dict(litellm_params),
+        optional_params={},
+        custom_llm_provider="vertex_ai",
+    )
+    usage: Final = Usage(prompt_tokens=1_000, completion_tokens=100, total_tokens=1_100)
+    return logging_obj.response_cost_calculator(ModelResponse(model=_STORAGE_DEPLOYMENT_MODEL, usage=usage))
+
+
+def test_custom_token_prices_without_a_storage_rate_bill_storage_at_the_underlying_model_rate(
+    _storage_cost_map: None,
+) -> None:
+    cost_map_rate: Final = litellm.get_model_info(f"vertex_ai/{_STORAGE_DEPLOYMENT_MODEL}")[_STORAGE_RATE_KEY]
+    token_prices: Final = {"input_cost_per_token": 1e-6, "output_cost_per_token": 2e-6}
+
+    with_storage: Final = _routed_request_cost(token_prices, token_hours=500.0)
+    without_storage: Final = _routed_request_cost(token_prices, token_hours=0.0)
+
+    assert cost_map_rate is not None and cost_map_rate > 0
+    assert without_storage == pytest.approx(1_000 * 1e-6 + 100 * 2e-6)
+    assert with_storage == pytest.approx(without_storage + 500.0 * cost_map_rate)
+
+
+def test_a_storage_only_override_keeps_the_underlying_token_prices(_storage_cost_map: None) -> None:
+    cost_map_rate: Final = litellm.get_model_info(f"vertex_ai/{_STORAGE_DEPLOYMENT_MODEL}")[_STORAGE_RATE_KEY]
+    assert isinstance(cost_map_rate, float)
+    deployment_rate: Final = cost_map_rate * 3
+
+    no_override: Final = _vertex_request_cost({}, token_hours=0.0)
+    without_storage: Final = _routed_request_cost({}, token_hours=0.0, storage_rate=deployment_rate)
+    with_storage: Final = _routed_request_cost({}, token_hours=500.0, storage_rate=deployment_rate)
+
+    assert no_override is not None and no_override > 0
+    assert without_storage == pytest.approx(no_override)
+    assert with_storage == pytest.approx(no_override + 500.0 * deployment_rate)
+
+
+def test_a_deployment_storage_rate_stays_off_the_shared_backend_key(_storage_cost_map: None) -> None:
+    backend_key: Final = f"vertex_ai/{_STORAGE_DEPLOYMENT_MODEL}"
+    cost_map_rate: Final = litellm.get_model_info(backend_key)[_STORAGE_RATE_KEY]
+    assert isinstance(cost_map_rate, float)
+
+    _routed_request_cost({}, token_hours=0.0, storage_rate=cost_map_rate * 3)
+
+    assert litellm.get_model_info(backend_key)[_STORAGE_RATE_KEY] == cost_map_rate
 
 
 def test_custom_pricing_as_completion_cost_param():

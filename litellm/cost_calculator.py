@@ -299,6 +299,45 @@ def _get_additional_costs(
     return None
 
 
+def _recorded_cache_storage_token_hours(litellm_logging_obj: LitellmLoggingObject | None) -> object:
+    return litellm_logging_obj.context_cache_storage_token_hours if litellm_logging_obj else 0.0
+
+
+def _context_cache_storage_cost(
+    litellm_logging_obj: LitellmLoggingObject | None,
+    *,
+    requested_model: str | None,
+    completion_response: object | None,
+    base_model: str | None,
+    custom_llm_provider: str | None,
+    router_model_id: str | None,
+    region_name: str | None,
+) -> float:
+    token_hours: Final = _recorded_cache_storage_token_hours(litellm_logging_obj)
+    if not isinstance(token_hours, int | float) or token_hours <= 0:
+        return 0.0
+    underlying_model: Final = select_model_name_for_cost_calc(
+        model=requested_model,
+        completion_response=completion_response,
+        base_model=base_model,
+        custom_llm_provider=custom_llm_provider,
+        region_name=region_name,
+    )
+    rate: Final = next(
+        (
+            price
+            for source in (
+                _deployment_model_info(litellm_logging_obj, custom_pricing=True, router_model_id=router_model_id),
+                _cost_map_model_info(underlying_model, custom_llm_provider) if underlying_model else None,
+            )
+            if source is not None
+            and isinstance(price := source.get("cache_storage_cost_per_token_per_hour"), int | float)
+        ),
+        0.0,
+    )
+    return token_hours * rate
+
+
 def _transcription_usage_has_token_details(
     usage_block: Usage | None,
 ) -> bool:
@@ -1482,6 +1521,7 @@ def completion_cost(
             region_name=region_name,
         )
 
+        requested_model: Final = model
         potential_model_names: Final = [
             selected_model,
             _get_response_model(completion_response),
@@ -1871,6 +1911,20 @@ def completion_cost(
                     )
                 else:
                     additional_costs = None
+                _storage_response: ModelResponse | None = (
+                    completion_response if isinstance(completion_response, ModelResponse) else None
+                )
+                _storage_provider: str | None = custom_llm_provider if isinstance(custom_llm_provider, str) else None
+                _storage_region: str | None = region_name if isinstance(region_name, str) else None
+                cache_storage_cost: float = _context_cache_storage_cost(
+                    litellm_logging_obj,
+                    requested_model=requested_model,
+                    completion_response=_storage_response,
+                    base_model=base_model,
+                    custom_llm_provider=_storage_provider,
+                    router_model_id=router_model_id,
+                    region_name=_storage_region,
+                )
 
                 _final_cost = prompt_tokens_cost_usd_dollar + completion_tokens_cost_usd_dollar
                 cost_for_built_in_tools = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
@@ -1883,6 +1937,12 @@ def completion_cost(
                 _final_cost += cost_for_built_in_tools
                 if additional_costs:
                     _final_cost += sum(additional_costs.values())
+                if cache_storage_cost > 0:
+                    _final_cost += cache_storage_cost
+                    if additional_costs is None:
+                        additional_costs = {"cache_storage_cost": cache_storage_cost}
+                    else:
+                        additional_costs["cache_storage_cost"] = cache_storage_cost
 
                 original_cost = _final_cost
                 if litellm.cost_discount_config:

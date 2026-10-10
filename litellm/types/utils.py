@@ -324,6 +324,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_above_100k_tokens_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
+    cache_storage_cost_per_token_per_hour: ReadOnly[float | None]
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
     prompt_cache_min_tokens: int | None
@@ -3945,12 +3946,15 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
 
 DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
 
+DEPLOYMENT_SCOPED_SEPARATE_CHARGE_FIELDS: Final[frozenset[str]] = frozenset({"cache_storage_cost_per_token_per_hour"})
+
 DEPLOYMENT_SCOPED_CAPABILITY_FIELDS: Final[frozenset[str]] = frozenset({"supports_regex_lookaround"})
 
 SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
     frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
     - frozenset(CustomPricingLiteLLMParams.model_fields)
     - DEPLOYMENT_SCOPED_PRICING_FIELDS
+    - DEPLOYMENT_SCOPED_SEPARATE_CHARGE_FIELDS
     - DEPLOYMENT_SCOPED_CAPABILITY_FIELDS
 )
 

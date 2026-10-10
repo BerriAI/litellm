@@ -833,6 +833,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "cache_creation_input_token_cost_flex": {"type": "number"},
                 "cache_creation_input_token_cost_priority": {"type": "number"},
                 "cache_creation_input_token_cost_ultrafast": {"type": "number"},
+                "cache_storage_cost_per_token_per_hour": {"type": "number"},
                 "cache_read_input_token_cost": {"type": "number"},
                 "cache_read_input_token_cost_above_32k_tokens": {"type": "number"},
                 "cache_read_input_token_cost_above_100k_tokens": {"type": "number"},
@@ -7290,6 +7291,26 @@ async def test_nested_wrapper_exits_schedule_one_async_success_log(monkeypatch: 
 
     assert len(counting_logger.logged_results) == 1, counting_logger.logged_results
     assert counting_logger.logged_results[0] is inner_result
+
+
+def test_get_model_info_surfaces_context_cache_storage_rate(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    local_cost_map: Final[Mapping[str, object]] = litellm.get_model_cost_map(url="")
+    monkeypatch.setattr(litellm, "model_cost", local_cost_map)
+    litellm.get_model_info.cache_clear()
+    priced: Final = {
+        name: entry["cache_storage_cost_per_token_per_hour"]
+        for name, entry in litellm.model_cost.items()
+        if isinstance(entry, dict) and "cache_storage_cost_per_token_per_hour" in entry
+    }
+
+    surfaced: Final = {
+        name: litellm.get_model_info(name).get("cache_storage_cost_per_token_per_hour") for name in priced
+    }
+    litellm.get_model_info.cache_clear()
+
+    assert priced
+    assert surfaced == priced
 
 
 def test_basic_trimming():

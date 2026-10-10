@@ -1,8 +1,10 @@
-from typing import Final
+from collections.abc import Mapping
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 
@@ -12,6 +14,7 @@ from litellm.llms.vertex_ai.common_utils import VertexAIError
 from litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching import (
     ContextCachingEndpoints,
 )
+from litellm.types.llms.openai import AllMessageValues
 
 
 @pytest.fixture
@@ -2289,3 +2292,144 @@ class TestContextCachingMultiRegionUrls:
 
         assert url.startswith("https://aiplatform.googleapis.com/")
         assert "/locations/global/cachedContents" in url
+
+
+_STORAGE_TEST_MODEL: Final = "gemini-2.5-pro"
+
+
+_STORAGE_TEST_CACHE_NAME: Final = "cachedContents/storage-cost"
+
+
+def _storage_logging_obj() -> Logging:
+    logging_obj: Final = Logging(
+        model=_STORAGE_TEST_MODEL,
+        messages=[],
+        stream=False,
+        call_type="acompletion",
+        start_time=None,
+        litellm_call_id="context-cache-storage",
+        function_id="context-cache-storage",
+    )
+    logging_obj.update_environment_variables(
+        model=_STORAGE_TEST_MODEL, litellm_params={}, optional_params={}, custom_llm_provider="gemini"
+    )
+    return logging_obj
+
+
+def _storage_messages() -> list[AllMessageValues]:
+    return [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "policy " * 6000, "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "user", "content": "Hello"},
+    ]
+
+
+def _json_response(method: str, payload: Mapping[str, object]) -> httpx.Response:
+    return httpx.Response(200, json=payload, request=httpx.Request(method, "https://example.invalid"))
+
+
+_CREATED_CACHE: Final = {
+    "name": _STORAGE_TEST_CACHE_NAME,
+    "model": f"models/{_STORAGE_TEST_MODEL}",
+    "usageMetadata": {"totalTokenCount": 7200},
+    "createTime": "2026-01-01T00:00:00Z",
+    "expireTime": "2026-01-01T00:30:00Z",
+}
+
+
+class _CreateCacheKwargs(TypedDict):
+    messages: ReadOnly[list[AllMessageValues]]
+    optional_params: ReadOnly[dict[str, object]]
+    api_key: ReadOnly[str]
+    api_base: ReadOnly[str | None]
+    model: ReadOnly[str]
+    client: ReadOnly[MagicMock]
+    timeout: ReadOnly[float]
+    logging_obj: ReadOnly[Logging]
+    custom_llm_provider: ReadOnly[Literal["gemini"]]
+    vertex_project: ReadOnly[str | None]
+    vertex_location: ReadOnly[str | None]
+    vertex_auth_header: ReadOnly[str | None]
+
+
+def _create_kwargs(logging_obj: Logging, client: MagicMock) -> _CreateCacheKwargs:
+    return {
+        "messages": _storage_messages(),
+        "optional_params": {},
+        "api_key": "test_key",
+        "api_base": None,
+        "model": _STORAGE_TEST_MODEL,
+        "client": client,
+        "timeout": 30.0,
+        "logging_obj": logging_obj,
+        "custom_llm_provider": "gemini",
+        "vertex_project": None,
+        "vertex_location": None,
+        "vertex_auth_header": None,
+    }
+
+
+def test_creating_a_cache_records_its_storage_token_hours(local_model_cost_map: None) -> None:
+    logging_obj: Final = _storage_logging_obj()
+    client: Final = MagicMock(spec=HTTPHandler)
+    client.get.return_value = _json_response("GET", {})
+    client.post.return_value = _json_response("POST", _CREATED_CACHE)
+
+    _, _, cache_name = ContextCachingEndpoints().check_and_create_cache(**_create_kwargs(logging_obj, client))
+
+    assert cache_name == _STORAGE_TEST_CACHE_NAME
+    assert logging_obj.context_cache_storage_token_hours == pytest.approx(7200 * 0.5)
+
+
+@pytest.mark.asyncio
+async def test_async_creating_a_cache_records_its_storage_token_hours(local_model_cost_map: None) -> None:
+    logging_obj: Final = _storage_logging_obj()
+    client: Final = MagicMock(spec=AsyncHTTPHandler)
+    client.get = AsyncMock(return_value=_json_response("GET", {}))
+    client.post = AsyncMock(return_value=_json_response("POST", _CREATED_CACHE))
+
+    _, _, cache_name = await ContextCachingEndpoints().async_check_and_create_cache(
+        **_create_kwargs(logging_obj, client)
+    )
+
+    assert cache_name == _STORAGE_TEST_CACHE_NAME
+    assert logging_obj.context_cache_storage_token_hours == pytest.approx(7200 * 0.5)
+
+
+def _listing_with(created_body: Mapping[str, object]) -> Mapping[str, object]:
+    return {"cachedContents": [{"name": _STORAGE_TEST_CACHE_NAME, "displayName": created_body["displayName"]}]}
+
+
+def test_reusing_an_existing_cache_records_no_storage(local_model_cost_map: None) -> None:
+    client: Final = MagicMock(spec=HTTPHandler)
+    client.get.return_value = _json_response("GET", {})
+    client.post.return_value = _json_response("POST", _CREATED_CACHE)
+    ContextCachingEndpoints().check_and_create_cache(**_create_kwargs(_storage_logging_obj(), client))
+    client.get.return_value = _json_response("GET", _listing_with(client.post.call_args.kwargs["json"]))
+    reusing_logging_obj: Final = _storage_logging_obj()
+
+    _, _, cache_name = ContextCachingEndpoints().check_and_create_cache(**_create_kwargs(reusing_logging_obj, client))
+
+    assert cache_name == _STORAGE_TEST_CACHE_NAME
+    assert client.post.call_count == 1
+    assert reusing_logging_obj.context_cache_storage_token_hours == 0.0
+
+
+@pytest.mark.asyncio
+async def test_async_reusing_an_existing_cache_records_no_storage(local_model_cost_map: None) -> None:
+    client: Final = MagicMock(spec=AsyncHTTPHandler)
+    client.get = AsyncMock(return_value=_json_response("GET", {}))
+    client.post = AsyncMock(return_value=_json_response("POST", _CREATED_CACHE))
+    await ContextCachingEndpoints().async_check_and_create_cache(**_create_kwargs(_storage_logging_obj(), client))
+    client.get.return_value = _json_response("GET", _listing_with(client.post.call_args.kwargs["json"]))
+    reusing_logging_obj: Final = _storage_logging_obj()
+
+    _, _, cache_name = await ContextCachingEndpoints().async_check_and_create_cache(
+        **_create_kwargs(reusing_logging_obj, client)
+    )
+
+    assert cache_name == _STORAGE_TEST_CACHE_NAME
+    assert client.post.call_count == 1
+    assert reusing_logging_obj.context_cache_storage_token_hours == 0.0
