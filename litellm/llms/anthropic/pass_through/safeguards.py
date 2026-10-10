@@ -415,7 +415,7 @@ def _every_tool_use_unavailable(
 async def with_safeguard_results(
     response: AnthropicMessagesResponse, evaluator: SafeguardsEvaluator | None
 ) -> AnthropicMessagesResponse:
-    if evaluator is None:
+    if evaluator is None or response.get("safeguard_results") is not None:
         return response
     blocks: Final = tuple(response.get("content") or ())
     cut_off_index: Final = len(blocks) - 1 if response.get("stop_reason") == "max_tokens" else None
@@ -478,7 +478,7 @@ class StreamedSafeguardResults:
             return event
         delta: Final = _mapping(event.get("delta"))
         stop_reason: Final = delta.get("stop_reason") if delta is not None else None
-        if delta is None or stop_reason is None:
+        if delta is None or stop_reason is None or delta.get("safeguard_results") is not None:
             return event
         results: Final = await self._evaluated_once(self._evaluator, stop_reason == "max_tokens")
         return {**event, "delta": {**delta, "safeguard_results": results}}

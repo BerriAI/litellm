@@ -1,4 +1,4 @@
-from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping
+from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequence
 from typing import (
     TYPE_CHECKING,
     Final,
@@ -20,7 +20,10 @@ from litellm.llms.anthropic.pass_through.context_management import (
     apply_context_management,
 )
 from litellm.llms.anthropic.pass_through.safeguards import (
+    SafeguardsEvaluator,
     build_safeguards_evaluator,
+    read_classifier_model_setting,
+    requested_dangerous_tool_use,
     with_safeguard_results,
 )
 from litellm.llms.anthropic.pass_through.utils import (
@@ -95,6 +98,29 @@ def _extract_proxy_litellm_metadata(
         return None, None
     user_api_key_auth: Final[UserAPIKeyAuth | None] = litellm_metadata.get("user_api_key_auth")
     return litellm_metadata, user_api_key_auth
+
+
+def _requested_router(kwargs: Mapping[str, object]) -> "Router | None":
+    from litellm.router import Router
+
+    requested: Final = kwargs.get("litellm_router")
+    return requested if isinstance(requested, Router) else None
+
+
+def request_safeguards_evaluator(
+    kwargs: Mapping[str, object], messages: Sequence[Mapping[str, object]]
+) -> SafeguardsEvaluator | None:
+    safeguards: Final = kwargs.get("safeguards")
+    if requested_dangerous_tool_use(safeguards) is None or read_classifier_model_setting() is None:
+        return None
+    proxy_litellm_metadata, user_api_key_auth = _extract_proxy_litellm_metadata(kwargs)
+    return build_safeguards_evaluator(
+        safeguards=safeguards,
+        messages=messages,
+        litellm_metadata=proxy_litellm_metadata,
+        user_api_key_auth=user_api_key_auth,
+        llm_router=_router_or_proxy_fallback(_requested_router(kwargs)),
+    )
 
 
 async def _prepare_context_managed_request(

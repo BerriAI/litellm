@@ -115,9 +115,10 @@ class _TextPartsClassifier:
         self._parts = parts
 
     async def __call__(self, *, messages: Sequence[Mapping[str, object]], **kwargs: object) -> ModelResponse:
-        response: Final = _classifier_response("")
-        response.choices[0].message.content = [{"type": "text", "text": part} for part in self._parts]
-        return response
+        text_parts: Final = Message.model_construct(
+            role="assistant", content=[{"type": "text", "text": part} for part in self._parts]
+        )
+        return ModelResponse(choices=[Choices(index=0, finish_reason="stop", message=text_parts)])
 
 
 @pytest.mark.asyncio
@@ -344,7 +345,7 @@ async def test_classifier_spend_row_logs_under_the_callers_key_hash():
         )
     assert evaluator is not None
     await evaluator.evaluate((LS,))
-    logged_at: Final = datetime.now(timezone.utc)
+    logged_at: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
     spend_row: Final = get_logging_payload(
         kwargs={"litellm_params": {"metadata": router.calls[0]["litellm_metadata"]}, "call_type": "acompletion"},
         response_obj=None,
@@ -551,6 +552,19 @@ async def test_with_safeguard_results_leaves_the_response_alone_without_an_evalu
     assert await with_safeguard_results(response, None) is response
 
 
+@pytest.mark.asyncio
+async def test_with_safeguard_results_keeps_results_the_backend_already_returned():
+    classifier: Final = _RecordingClassifier([])
+    response: Final = {
+        "id": "msg_1",
+        "stop_reason": "tool_use",
+        "content": [{"type": "tool_use", "id": "call_ls", "name": "Bash", "input": {"command": "ls"}}],
+        "safeguard_results": UNSUPPORTED,
+    }
+    assert await with_safeguard_results(response, _evaluator(classifier)) is response
+    assert classifier.calls == []
+
+
 _STREAM: Final = (
     {"type": "message_start", "message": {"id": "msg_1"}},
     {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
@@ -651,6 +665,20 @@ async def test_streamed_results_classify_once_when_a_stream_carries_two_stop_rea
     assert len(classifier.calls) == 1
     assert observed[-1]["delta"]["safeguard_results"] == observed[-3]["delta"]["safeguard_results"]
     assert observed[-1]["delta"]["stop_reason"] == "end_turn"
+
+
+@pytest.mark.asyncio
+async def test_streamed_results_keep_a_final_delta_that_already_carries_backend_results():
+    classifier: Final = _RecordingClassifier([])
+    collector: Final = StreamedSafeguardResults(_evaluator(classifier))
+    backend_stop: Final = {
+        "type": "message_delta",
+        "delta": {"stop_reason": "tool_use", "safeguard_results": list(UNSUPPORTED)},
+        "usage": {"output_tokens": 9},
+    }
+    observed: Final = [await collector.observe(event) for event in (*_STREAM[:-2], backend_stop)]
+    assert observed[-1] is backend_stop
+    assert classifier.calls == []
 
 
 @pytest.mark.asyncio

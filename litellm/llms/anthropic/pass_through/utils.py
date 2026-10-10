@@ -1,3 +1,4 @@
+import json
 import os
 from collections.abc import Mapping
 from types import MappingProxyType
@@ -99,6 +100,10 @@ def litellm_logging_obj_from_kwargs(kwargs: Mapping[str, object]) -> "LiteLLMLog
 
     candidate: Final = kwargs.get("litellm_logging_obj")
     return candidate if isinstance(candidate, Logging) else None
+
+
+def anthropic_sse_frame(event: Mapping[str, object]) -> bytes:
+    return f"event: {event.get('type', 'message')}\ndata: {json.dumps(event)}\n\n".encode()
 
 
 def local_model_name(model: str, custom_llm_provider: object) -> str:

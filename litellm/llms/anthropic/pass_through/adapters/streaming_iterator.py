@@ -23,6 +23,7 @@ from litellm._uuid import uuid
 from litellm.exceptions import MidStreamFallbackError
 from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.llms.anthropic.pass_through.safeguards import StreamedSafeguardResults
+from litellm.llms.anthropic.pass_through.utils import anthropic_sse_frame
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     AppliedEdit,
@@ -77,10 +78,6 @@ def _provider_error(exc: Exception) -> Exception:
     if isinstance(exc, MidStreamFallbackError) and exc.original_exception is not None:
         return exc.original_exception
     return exc
-
-
-def _sse_frame(event: Mapping[str, object]) -> bytes:
-    return f"event: {event.get('type', 'message')}\ndata: {json.dumps(event)}\n\n".encode()
 
 
 def _mid_stream_error_sse_event(exc: Exception) -> bytes:
@@ -1053,7 +1050,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         try:
             async for chunk in self:
                 if isinstance(chunk, dict):
-                    yield _sse_frame(await safeguard_results.observe(_SSE_EVENT.validate_python(chunk)))
+                    yield anthropic_sse_frame(await safeguard_results.observe(_SSE_EVENT.validate_python(chunk)))
                 else:
                     yield chunk
         except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event

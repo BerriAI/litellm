@@ -21,6 +21,8 @@ from litellm.types.llms.anthropic_messages.anthropic_response import (
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.utils import ProviderConfigManager
 
+from ..adapters.handler import request_safeguards_evaluator
+from ..safeguards import with_safeguard_results
 from ..utils import litellm_logging_obj_from_kwargs, local_model_name
 from .streaming_iterator import AnthropicResponsesStreamWrapper
 from .transformation import LiteLLMAnthropicToResponsesAPIAdapter
@@ -205,6 +207,7 @@ class LiteLLMMessagesToResponsesAPIHandler:
             extra_kwargs=kwargs,
         )
 
+        safeguards_evaluator: Final = request_safeguards_evaluator(kwargs, messages)
         result: Final = await litellm.aresponses(**responses_kwargs)
 
         if stream:
@@ -212,13 +215,14 @@ class LiteLLMMessagesToResponsesAPIHandler:
                 responses_stream=result,
                 model=local_model_name(model, kwargs.get("custom_llm_provider")),
                 litellm_logging_obj=litellm_logging_obj_from_kwargs(responses_kwargs),
+                safeguards_evaluator=safeguards_evaluator,
             )
             return wrapper.async_anthropic_sse_wrapper()
 
         if not isinstance(result, ResponsesAPIResponse):
             raise ValueError(f"Expected ResponsesAPIResponse, got {type(result)}")
 
-        return _ADAPTER.translate_response(result)
+        return await with_safeguard_results(_ADAPTER.translate_response(result), safeguards_evaluator)
 
     @staticmethod
     def anthropic_messages_handler(
