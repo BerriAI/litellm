@@ -4318,7 +4318,7 @@ class ComplexityRouter(CustomLogger):
     async def async_pre_routing_hook(
         self,
         model: str,
-        request_kwargs: dict,
+        request_kwargs: dict[str, object],
         messages: list[dict[str, Any]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
@@ -4524,6 +4524,16 @@ class ComplexityRouter(CustomLogger):
                             retained_pin,
                         )
                     )
+
+        if (
+            cache_key is not None
+            and not pin_replay_allowed
+            and self._matched_plan_mode_signal(request_kwargs, resolved_messages) is None
+        ):
+            try:
+                await self.litellm_router_instance.cache.async_delete_cache(key=cache_key)
+            except Exception:  # noqa: BLE001  # optional cache failures must not prevent routing
+                verbose_router_logger.debug("ComplexityRouter: task pin invalidation failed; continuing classification")
 
         routed_response: Final = await self._classify_and_route(
             model=model,
