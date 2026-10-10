@@ -328,7 +328,7 @@ def _new_async_github_client() -> _AsyncGitHubClient:
 
     return cast(  # cast-ok: pins the untyped litellm client factory to the local Protocol
         Callable[[str], _AsyncGitHubClient],
-        getattr(http_handler, "get_async_httpx_client"),  # noqa: B009  # untyped factory
+        http_handler.get_async_httpx_client,
     )(_LLM_PROVIDER)
 
 
@@ -548,13 +548,7 @@ def github_copilot_auth_mode(litellm_credential_name: object, auth_type_value: o
 
         credential: Final = CredentialAccessor.find_credential(litellm_credential_name)
         if credential is not None:
-            values: Final[object] = getattr(credential, "credential_values", None)
-            return isinstance(values, Mapping) and (
-                cast(  # cast-ok: value is Mapping-checked or dict-shaped at runtime
-                    Mapping[object, object], values
-                ).get(GITHUB_COPILOT_AUTH_TYPE_KEY)
-                == GITHUB_COPILOT_PER_USER_AUTH_TYPE
-            )
+            return credential.credential_values.get(GITHUB_COPILOT_AUTH_TYPE_KEY) == GITHUB_COPILOT_PER_USER_AUTH_TYPE
         return auth_type_value == GITHUB_COPILOT_PER_USER_AUTH_TYPE
     if auth_type_value == GITHUB_COPILOT_PER_USER_AUTH_TYPE:
         raise BadRequestError(

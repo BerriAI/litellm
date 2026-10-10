@@ -4,7 +4,6 @@ CRUD endpoints for storing reusable credentials.
 
 import time
 from collections.abc import Mapping
-from datetime import datetime
 from typing import (
     Annotated,
     Final,
@@ -540,17 +539,12 @@ async def list_user_connections(
                 detail={"error": CommonProxyErrors.db_not_connected_error.value},
             )
         rows: Final = await list_user_provider_credentials(prisma_client, user_id)
-        github_logins: Final[dict[str, str]] = {}  # mutable-ok: accumulates one entry per credential row
-        connected_at: Final[dict[str, str]] = {}  # mutable-ok: accumulates one entry per credential row
-        for row in rows:
-            if row.provider != _GITHUB_COPILOT_PROVIDER:
-                continue
-            payload = decode_user_provider_credential(row.credential_b64)
-            if payload is not None:
-                github_logins[row.credential_name] = payload.github_login
-            updated = getattr(row, "updated_at", None)
-            if isinstance(updated, datetime):
-                connected_at[row.credential_name] = updated.isoformat()
+        copilot_rows: Final = tuple(row for row in rows if row.provider == _GITHUB_COPILOT_PROVIDER)
+        payloads: Final = {
+            row.credential_name: decode_user_provider_credential(row.credential_b64) for row in copilot_rows
+        }
+        github_logins: Final = {name: payload.github_login for name, payload in payloads.items() if payload is not None}
+        connected_at: Final = {row.credential_name: row.updated_at.isoformat() for row in copilot_rows}
         return UserProviderConnectionsResponse(
             connections=[
                 UserProviderConnection(
