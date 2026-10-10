@@ -62,7 +62,6 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
 )
-from litellm.utils import supports_reasoning
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -85,16 +84,15 @@ def _model_uses_max_completion_tokens(model: str) -> bool:
     and accept ``maxCompletionTokens`` everywhere, so route the whole vendor
     prefix to it rather than chasing each new release in
     ``model_prices_and_context_window.json``. The ``openai.gpt-oss-*`` open
-    weights are served by OCI's own stack and keep ``maxTokens``. Any other
-    vendor falls back to the catalog's ``supports_reasoning`` flag.
+    weights are served by OCI's own stack and keep ``maxTokens``, as does every
+    other vendor whatever its catalog reasoning flag: OCI's Gemini models ignore
+    ``maxCompletionTokens`` and fall back to a default of about 4K output tokens.
     """
     if not model:
         return False
     name: Final = model[4:] if model.lower().startswith("oci/") else model
     lowered: Final = name.lower()
-    if lowered.startswith("openai."):
-        return not lowered.startswith("openai.gpt-oss")
-    return supports_reasoning(model=name, custom_llm_provider="oci")
+    return lowered.startswith("openai.") and not lowered.startswith("openai.gpt-oss")
 
 
 def _iter_sse_events(stream: Iterator[str]) -> Iterator[str]:
@@ -454,8 +452,7 @@ class OCIChatConfig(BaseConfig):
 
         # OpenAI reasoning models on OCI (e.g. GPT-5 family) reject "maxTokens"
         # and require "maxCompletionTokens" per OCI's /20231130/Chat schema.
-        # Driven by the supports_reasoning flag in the model catalog. Cohere's
-        # endpoint uses "maxTokens" regardless, so the override is GENERIC-only.
+        # Cohere's endpoint uses "maxTokens" regardless, so the override is GENERIC-only.
         max_tokens_key: Final = (
             "maxCompletionTokens"
             if vendor != OCIVendors.COHERE and model and _model_uses_max_completion_tokens(model)
