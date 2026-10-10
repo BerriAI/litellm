@@ -127,12 +127,12 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
           <CardTitle>Group Details</CardTitle>
         </CardHeader>
         <CardContent>
-          <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
+          <dl className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
             <dt className="text-muted-foreground">Description</dt>
             <dd className="text-foreground">{accessGroup.description || "—"}</dd>
             <dt className="text-muted-foreground">Created</dt>
-            <dd className="flex items-center gap-1 text-foreground">
-              {new Date(accessGroup.created_at).toLocaleString()}
+            <dd className="flex min-w-0 items-center gap-1 text-foreground">
+              <span className="shrink-0 whitespace-nowrap">{new Date(accessGroup.created_at).toLocaleString()}</span>
               {accessGroup.created_by && (
                 <>
                   <span>by</span>
@@ -141,8 +141,8 @@ export function AccessGroupDetail({ accessGroupId, onBack }: AccessGroupDetailPr
               )}
             </dd>
             <dt className="text-muted-foreground">Last Updated</dt>
-            <dd className="flex items-center gap-1 text-foreground">
-              {new Date(accessGroup.updated_at).toLocaleString()}
+            <dd className="flex min-w-0 items-center gap-1 text-foreground">
+              <span className="shrink-0 whitespace-nowrap">{new Date(accessGroup.updated_at).toLocaleString()}</span>
               {accessGroup.updated_by && (
                 <>
                   <span>by</span>

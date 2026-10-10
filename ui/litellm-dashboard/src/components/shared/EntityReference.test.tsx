@@ -22,6 +22,11 @@ describe("EntityReference", () => {
     expect(await screen.findByText("team-123")).toBeInTheDocument();
   });
 
+  it("caps the named trigger at the container width so long names truncate", () => {
+    const { container } = render(<EntityReference id="team-123" name="Review Team" />);
+    expect(container.querySelector("span")).toHaveClass("max-w-full");
+  });
+
   it("falls back to the raw id in mono when there is no name", () => {
     render(<EntityReference id="team-123" href="/ui/teams?team=team-123" />);
     const link = screen.getByRole("link", { name: "team-123" });

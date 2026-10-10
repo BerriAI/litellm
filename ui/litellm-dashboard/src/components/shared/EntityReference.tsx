@@ -21,7 +21,7 @@ export function EntityReference({ id, name, href }: EntityReferenceProps) {
     );
   }
   return (
-    <SimpleTooltip content={id}>
+    <SimpleTooltip content={id} className="min-w-0 max-w-full">
       <EntityLink href={href}>{name}</EntityLink>
     </SimpleTooltip>
   );
