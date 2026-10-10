@@ -12,8 +12,7 @@ from __future__ import annotations
 
 import base64
 import math
-import struct
-import zlib
+from pathlib import Path
 from typing import Final, Literal
 
 import pytest
@@ -33,6 +32,7 @@ OPENAI_EMBEDDING: Final = "openai/text-embedding-3-small"
 BEDROCK_TITAN_EMBEDDING: Final = "bedrock/amazon.titan-embed-text-v2:0"
 COHERE_EMBEDDING: Final = "cohere/embed-v4.0"
 COHERE_IMAGE_EMBEDDING: Final = "cohere/embed-english-v3.0"
+CAT_IMAGE: Final = Path(__file__).parent / "fixtures" / "cat.jpg"
 MISTRAL_EMBEDDING: Final = "mistral/mistral-embed"
 VERTEX_TEXT_EMBEDDING: Final = "vertex_ai/text-embedding-005"
 VERTEX_MULTIMODAL_EMBEDDING: Final = "vertex_ai/multimodalembedding@001"
@@ -73,20 +73,8 @@ class CohereImageEmbeddingResponse(BaseModel):
     usage: CohereImageUsage | None = None
 
 
-def _tiny_png_data_uri() -> str:
-    def chunk(kind: bytes, data: bytes) -> bytes:
-        encoded: Final = kind + data
-        return struct.pack(">I", len(data)) + encoded + struct.pack(">I", zlib.crc32(encoded))
-
-    red: Final = b"\x00" + bytes((255, 0, 0, 255)) * 4
-    mixed: Final = b"\x00" + bytes((255, 0, 0, 255)) + bytes((0, 0, 255, 255)) * 2 + bytes((255, 0, 0, 255))
-    image: Final = (
-        b"\x89PNG\r\n\x1a\n"
-        + chunk(b"IHDR", struct.pack(">IIBBBBB", 4, 4, 8, 6, 0, 0, 0))
-        + chunk(b"IDAT", zlib.compress(red + mixed * 2 + red))
-        + chunk(b"IEND", b"")
-    )
-    return f"data:image/png;base64,{base64.b64encode(image).decode('ascii')}"
+def _cat_image_data_uri() -> str:
+    return f"data:image/jpeg;base64,{base64.b64encode(CAT_IMAGE.read_bytes()).decode('ascii')}"
 
 
 def _cosine(left: list[float], right: list[float]) -> float:
@@ -217,7 +205,7 @@ class TestEmbeddingsEndpoint:
     @pytest.mark.parametrize(
         ("input_values", "token_type"),
         (
-            pytest.param((_tiny_png_data_uri(),), "image_tokens", id="image"),
+            pytest.param((_cat_image_data_uri(),), "image_tokens", id="image"),
             pytest.param((TOKENS_TEXT,), "text_tokens", id="text"),
         ),
     )
@@ -243,14 +231,10 @@ class TestEmbeddingsEndpoint:
                 response_type=CohereImageEmbeddingResponse,
             )
         )
-        assert response.usage is not None
-        assert response.usage.prompt_tokens_details is not None
-        if token_type == "image_tokens":
-            assert response.usage.prompt_tokens_details.image_tokens is not None
-            assert response.usage.prompt_tokens_details.image_tokens > 0
-        else:
-            assert response.usage.prompt_tokens_details.text_tokens is not None
-            assert response.usage.prompt_tokens_details.text_tokens > 0
+        details: Final = response.usage.prompt_tokens_details if response.usage else None
+        assert details is not None, f"{model}: /embeddings returned no prompt_tokens_details: {response}"
+        reported: Final = details.image_tokens if token_type == "image_tokens" else details.text_tokens
+        assert reported, f"{model}: {token_type} missing or zero in {details}"
 
     @pytest.mark.covers("llm.embeddings.vertex.basic.nonstream.works")
     @meta(

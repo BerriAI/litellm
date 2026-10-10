@@ -51,11 +51,9 @@ class VertexChatBody(BaseModel):
     tools: tuple[GoogleMapsTool, ...]
 
 
-def _register(
-    proxy: ProxyClient, resources: ResourceManager, base: str, model: str, location: str
-) -> tuple[str, str]:
-    model_name = f"{base}-{unique_marker()}"
-    model_id = proxy.create_model(
+def _register(proxy: ProxyClient, resources: ResourceManager, base: str, model: str, location: str) -> tuple[str, str]:
+    model_name: Final = f"{base}-{unique_marker()}"
+    model_id: Final = proxy.create_model(
         model_name,
         LiteLLMParamsBody(
             model=model,
@@ -79,16 +77,11 @@ class TestVertexCapabilities:
             mode=Mode.NONSTREAM,
         )
     )
-    def test_google_maps_tool_accepts_widget_and_location(
-        self, proxy: ProxyClient, resources: ResourceManager
-    ) -> None:
-        deployment: Final = _register(proxy, resources, "e2e-vertex-maps", GEMINI_MODEL, "global")
-        model, key = deployment
+    def test_google_maps_tool_accepts_widget_and_location(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+        model, key = _register(proxy, resources, "e2e-vertex-maps", GEMINI_MODEL, "global")
         options: Final = (
             GoogleMapsOptions(enableWidget=True),
-            GoogleMapsOptions(
-                enableWidget=True, latitude=37.7749, longitude=-122.4194, languageCode="en_US"
-            ),
+            GoogleMapsOptions(enableWidget=True, latitude=37.7749, longitude=-122.4194, languageCode="en_US"),
         )
         responses: Final = tuple(
             unwrap(
@@ -105,10 +98,8 @@ class TestVertexCapabilities:
             )
             for maps_options in options
         )
-        assert len(responses) == 2
         assert all(
-            response.choices[0].message is not None and response.choices[0].message.content
-            for response in responses
+            response.choices[0].message is not None and response.choices[0].message.content for response in responses
         )
 
     @pytest.mark.covers("llm.chat_completions.vertex.web_search.stream.works")
@@ -125,8 +116,7 @@ class TestVertexCapabilities:
     def test_google_search_grounding_metadata_is_returned(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        deployment: Final = _register(proxy, resources, "e2e-vertex-grounding", GEMINI_MODEL, "global")
-        model, key = deployment
+        model, key = _register(proxy, resources, "e2e-vertex-grounding", GEMINI_MODEL, "global")
         grounding_body: Final[VertexGroundingBody] = {"tools": ({"googleSearch": {}},)}
         chunks: Final = sdk.openai(key).chat.completions.create(
             model=model,
@@ -134,7 +124,7 @@ class TestVertexCapabilities:
             stream=True,
             extra_body=grounding_body,
         )
-        metadata = tuple(
+        metadata: Final = tuple(
             cast(object | None, getattr(chunk, "vertex_ai_grounding_metadata", None)) for chunk in chunks
         )
         assert any(value is not None for value in metadata)
@@ -153,8 +143,7 @@ class TestVertexCapabilities:
     def test_llama_tool_calling_returns_weather_tool_call(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        deployment: Final = _register(proxy, resources, "e2e-vertex-llama", LLAMA_MODEL, "us-east5")
-        model, key = deployment
+        model, key = _register(proxy, resources, "e2e-vertex-llama", LLAMA_MODEL, "us-east5")
         raw_response: Final = sdk.openai(key).chat.completions.with_raw_response.create(
             model=model,
             messages=[{"role": "user", "content": "What is the weather in Boston, MA today?"}],

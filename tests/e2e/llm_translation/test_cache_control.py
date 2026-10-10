@@ -44,7 +44,7 @@ from pydantic import BaseModel, ConfigDict
 
 from e2e_config import unique_marker
 from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
-from e2e_http import AnthropicHeaders, Result, UnknownApiError, unwrap
+from e2e_http import Result, UnknownApiError, unwrap
 from lifecycle import ResourceManager
 from models import CacheControl, ChatBody, ChatMessage, ChatResponse, LiteLLMParamsBody, RichMessage, TextBlock, Usage
 from passthrough_client import PassthroughClient
@@ -54,7 +54,7 @@ pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 BEDROCK_MODEL = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 VERTEX_MODEL = "vertex_ai/gemini-2.5-flash"
-ANTHROPIC_MODEL = "anthropic/claude-sonnet-4-6"
+ANTHROPIC_MODEL = "anthropic/claude-haiku-4-5-20251001"
 OPENAI_MODEL = "openai/gpt-5.6"
 VERTEX_CACHE_TTL: Final = "300s"
 VERTEX_COLD_CALL_ATTEMPTS: Final = 8
@@ -96,12 +96,7 @@ def _cached_read_tokens(usage: Usage | None) -> int:
 
 
 def _cache_chat(
-    client: PassthroughClient,
-    key: str,
-    model: str,
-    prefix: str,
-    ttl: str | None = None,
-    anthropic_version: str | None = None,
+    client: PassthroughClient, key: str, model: str, prefix: str, ttl: str | None = None
 ) -> Result[ChatResponse]:
     body = CacheChatBody(
         model=model,
@@ -113,16 +108,9 @@ def _cache_chat(
             RichMessage(role="user", content=[TextBlock(text="Reply with one word.")]),
         ],
     )
-    headers: Final = (
-        AnthropicHeaders.model_validate(
-            {"authorization": f"Bearer {key}", "anthropic-version": anthropic_version}
-        )
-        if anthropic_version is not None
-        else client.proxy.transport.bearer(key)
-    )
     return client.proxy.transport.post(
         "/chat/completions",
-        headers=headers,
+        headers=client.proxy.transport.bearer(key),
         json=body,
         response_type=ChatResponse,
     )
@@ -241,7 +229,6 @@ class TestCacheControl:
         "llm.chat_completions.bedrock_converse.prompt_cache_5m.nonstream.works",
         exercised_on=[],
     )
-    @pytest.mark.covers("llm.chat_completions.anthropic.prompt_cache_5m.nonstream.works")
     @meta(
         Subject(
             domain=Domain.LLM_TRANSLATION,
@@ -268,7 +255,6 @@ class TestCacheControl:
         "llm.chat_completions.vertex.prompt_cache_5m.nonstream.works",
         exercised_on=[],
     )
-    @pytest.mark.covers("llm.chat_completions.anthropic.prompt_cache_5m.nonstream.works")
     @meta(
         Subject(
             domain=Domain.LLM_TRANSLATION,
@@ -326,7 +312,6 @@ class TestCacheControl:
         _assert_cache_read_on_second_call(model, lambda prefix: _cache_chat(client, key, model, prefix))
 
     @pytest.mark.covers("llm.chat_completions.anthropic.prompt_cache_5m.nonstream.works")
-    @pytest.mark.covers("llm.chat_completions.anthropic.prompt_cache_5m.nonstream.works")
     @meta(
         Subject(
             domain=Domain.LLM_TRANSLATION,
@@ -343,16 +328,15 @@ class TestCacheControl:
         model: Final = f"e2e-anthropic-cache-version-{unique_marker()}"
         model_id: Final = client.proxy.create_model(
             model,
-            LiteLLMParamsBody(model=ANTHROPIC_MODEL, api_key="os.environ/ANTHROPIC_API_KEY"),
+            LiteLLMParamsBody(
+                model=ANTHROPIC_MODEL,
+                api_key="os.environ/ANTHROPIC_API_KEY",
+                extra_headers={"anthropic-version": "2023-06-01"},
+            ),
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
         key: Final = resources.key()
-        _assert_cache_read_on_second_call(
-            model,
-            lambda prefix: _cache_chat(
-                client, key, model, prefix, anthropic_version="2023-06-01"
-            ),
-        )
+        _assert_cache_read_on_second_call(model, lambda prefix: _cache_chat(client, key, model, prefix))
 
     @pytest.mark.covers("llm.chat_completions.anthropic.prompt_cache_5m.nonstream.works")
     @meta(
@@ -375,10 +359,30 @@ class TestCacheControl:
         )
         resources.defer(lambda: client.proxy.delete_model(model_id))
         key: Final = resources.key()
-        response: Final = unwrap(_cache_chat(client, key, model, _cacheable_prefix(), ttl="1h"))
-        assert response.usage is not None
-        assert response.usage.cache_creation_input_tokens is not None
-        assert response.usage.cache_creation_input_tokens > 0
+        body: Final = CacheChatBody(
+            model=model,
+            messages=[
+                RichMessage(
+                    role="system",
+                    content=[TextBlock(text=_cacheable_prefix(), cache_control=CacheControl(ttl="1h"))],
+                ),
+                RichMessage(
+                    role="user",
+                    content=[TextBlock(text="Reply with one word.", cache_control=CacheControl(ttl="5m"))],
+                ),
+            ],
+        )
+        response: Final = unwrap(
+            client.proxy.transport.post(
+                "/chat/completions",
+                headers=client.proxy.transport.bearer(key),
+                json=body,
+                response_type=ChatResponse,
+            )
+        )
+        assert response.usage and response.usage.cache_creation_input_tokens, (
+            f"{model}: a never-seen prefix marked 1h then 5m reported no cache-creation tokens ({response.usage})"
+        )
 
     @pytest.mark.covers(
         "llm.chat_completions.openai.prompt_cache_5m.nonstream.works",

@@ -25,7 +25,6 @@ from sdk_clients import SdkClients
 pytestmark = pytest.mark.e2e
 
 BEDROCK_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
-BEDROCK_PYDANTIC_MODEL: Final = "bedrock/us.anthropic.claude-sonnet-4-6"
 
 
 class CalendarEvent(BaseModel):
@@ -126,7 +125,7 @@ class TestBedrockNative:
             domain=Domain.LLM_TRANSLATION,
             route=Route.CHAT_COMPLETIONS,
             providers=(Provider.BEDROCK,),
-            models=(BEDROCK_PYDANTIC_MODEL,),
+            models=(BEDROCK_BACKEND,),
             capabilities=(Capability.RESPONSE_SCHEMA,),
             mode=Mode.NONSTREAM,
         )
@@ -134,17 +133,7 @@ class TestBedrockNative:
     def test_bedrock_chat_completion_pydantic_response(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
-        model: Final = f"e2e-bedrock-pydantic-{unique_marker()}"
-        model_id: Final = proxy.create_model(
-            model,
-            LiteLLMParamsBody(
-                model=BEDROCK_PYDANTIC_MODEL,
-                api_key="os.environ/AWS_BEARER_TOKEN_BEDROCK",
-                aws_region_name="us-east-1",
-            ),
-        )
-        resources.defer(lambda: proxy.delete_model(model_id))
-        key: Final = resources.key()
+        model, key = _register(proxy, resources)
         response: Final = sdk.openai(key).chat.completions.parse(
             model=model,
             messages=[{"role": "user", "content": "Create one event for the Apollo 11 launch in July 1969."}],
