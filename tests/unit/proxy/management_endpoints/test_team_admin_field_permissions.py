@@ -16,9 +16,11 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     team_admin_edit_verdict,
     team_admin_key_edit_verdict,
     team_admin_key_request_or_raise,
+    team_admin_may_create_member_keys,
     team_admin_may_edit_member_key_budgets,
     team_admin_may_manage_projects,
     team_admin_may_raise_max_budget,
+    team_admin_member_key_creation_or_raise,
     team_admin_request_or_raise,
 )
 
@@ -190,6 +192,33 @@ class TestTeamAdminMayEditMemberKeyBudgets:
     @pytest.mark.parametrize("raw", ["member_key_budgets", 7, [1, 2]])
     def test_malformed_setting_denies(self, raw):
         assert team_admin_may_edit_member_key_budgets({"team_admin_editable_team_fields": raw}) is False
+
+
+class TestTeamAdminMayCreateMemberKeys:
+    def test_missing_setting_denies(self):
+        assert team_admin_may_create_member_keys({}) is False
+
+    def test_other_permissions_do_not_grant(self):
+        configured = {"team_admin_editable_team_fields": ["tpm_limit", "projects", "member_key_budgets"]}
+        assert team_admin_may_create_member_keys(configured) is False
+
+    def test_create_member_keys_entry_grants(self):
+        configured = {"team_admin_editable_team_fields": ["create_member_keys"]}
+        assert team_admin_may_create_member_keys(configured) is True
+
+    @pytest.mark.parametrize("raw", ["create_member_keys", 7, [1, 2]])
+    def test_malformed_setting_denies(self, raw):
+        assert team_admin_may_create_member_keys({"team_admin_editable_team_fields": raw}) is False
+
+    def test_or_raise_passes_when_granted(self):
+        assert team_admin_member_key_creation_or_raise({"team_admin_editable_team_fields": ["create_member_keys"]}) is None
+
+    def test_or_raise_is_a_403_naming_the_permission_and_where_to_enable_it(self):
+        with pytest.raises(HTTPException) as exc:
+            team_admin_member_key_creation_or_raise({"team_admin_editable_team_fields": ["member_key_budgets"]})
+        assert exc.value.status_code == 403
+        assert "'create_member_keys'" in exc.value.detail
+        assert "Settings > UI > Team admin editable fields" in exc.value.detail
 
 
 class TestTeamAdminMayRaiseMaxBudget:

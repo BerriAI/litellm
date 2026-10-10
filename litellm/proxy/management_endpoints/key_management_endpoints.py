@@ -115,6 +115,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     team_admin_key_edit_verdict,
     team_admin_key_request_or_raise,
     team_admin_may_edit_member_key_budgets,
+    team_admin_member_key_creation_or_raise,
 )
 from litellm.proxy.management_helpers.access_group_key_sync import (
     sync_key_access_group_membership,
@@ -1215,6 +1216,28 @@ def _enforce_upperbound_key_params(
                         )
 
 
+def _acting_as_team_admin_for_key_generation(
+    data: GenerateKeyRequest,
+    team_table: LiteLLM_TeamTableCachedObj | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> bool:
+    """Whether the caller is a team admin creating a team key owned by another member of that team.
+
+    Raises 403 when the caller administers the team but the create_member_keys permission is disabled.
+    """
+    if (
+        user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value
+        or team_table is None
+        or data.user_id is None
+        or data.user_id == user_api_key_dict.user_id
+        or _get_user_in_team(team_table=team_table, user_id=data.user_id) is None
+        or not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_table)
+    ):
+        return False
+    team_admin_member_key_creation_or_raise(_general_settings())
+    return True
+
+
 async def _common_key_generation_helper(
     data: GenerateKeyRequest,
     user_api_key_dict: UserAPIKeyAuth,
@@ -1229,9 +1252,15 @@ async def _common_key_generation_helper(
         prisma_client,
     )
 
+    acting_as_team_admin: Final = _acting_as_team_admin_for_key_generation(
+        data=data,
+        team_table=team_table,
+        user_api_key_dict=user_api_key_dict,
+    )
     common_key_access_checks(
         user_api_key_dict=user_api_key_dict,
         data=data,
+        user_id=user_api_key_dict.user_id if acting_as_team_admin else None,
         llm_router=llm_router,
         premium_user=premium_user,
     )
@@ -2113,7 +2142,7 @@ async def generate_key_fn(
     - key_alias: Optional[str] - User defined key alias
     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
-    - user_id: Optional[str] - The user id of the key
+    - user_id: Optional[str] - The user id of the key. Non-admin callers may only pass their own id, except a team admin creating a key in a team they administer for another member of that team, when a proxy admin has added `create_member_keys` to `team_admin_editable_team_fields`.
     - agent_id: Optional[str] - The agent id associated with the key.
     - organization_id: Optional[str] - The organization id of the key. If not set, and team_id is set, the organization id will be the same as the team id. If conflict, an error will be raised.
     - project_id: Optional[str] - The project id of the key. When set, models and max_budget are validated against the project's limits.

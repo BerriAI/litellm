@@ -1,8 +1,9 @@
 """Proxy-wide allow-list of what a team admin may do on the teams they administer: team-settings fields on
 /team/update, the ``raise_max_budget`` permission that lets a team admin grow the team's ``max_budget`` (never
 above the organization's budget, never removing the cap), the ``projects`` permission for /project/new and
-/project/update, and the ``member_key_budgets`` permission for budget fields on other members' keys via
-/key/update."""
+/project/update, the ``member_key_budgets`` permission for budget fields on other members' keys via
+/key/update, and the ``create_member_keys`` permission for creating team keys owned by other members via
+/key/generate."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -30,10 +31,12 @@ SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS: Final[frozenset[str]] = frozenset({"t
 TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION: Final = "raise_max_budget"
 TEAM_ADMIN_PROJECTS_PERMISSION: Final = "projects"
 TEAM_ADMIN_MEMBER_KEY_BUDGETS_PERMISSION: Final = "member_key_budgets"
+TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION: Final = "create_member_keys"
 SUPPORTED_TEAM_ADMIN_PERMISSIONS: Final[frozenset[str]] = SUPPORTED_TEAM_ADMIN_EDITABLE_TEAM_FIELDS | {
     TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION,
     TEAM_ADMIN_PROJECTS_PERMISSION,
     TEAM_ADMIN_MEMBER_KEY_BUDGETS_PERMISSION,
+    TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION,
 }
 
 # spend is deliberately excluded: the stored row lags the live cross-pod counter, so a value-diff gate
@@ -107,6 +110,25 @@ def team_admin_may_manage_projects(general_settings: Mapping[str, object]) -> bo
 def team_admin_may_edit_member_key_budgets(general_settings: Mapping[str, object]) -> bool:
     return TEAM_ADMIN_MEMBER_KEY_BUDGETS_PERMISSION in resolve_team_admin_editable_fields(
         general_settings, frozenset({TEAM_ADMIN_MEMBER_KEY_BUDGETS_PERMISSION})
+    )
+
+
+def team_admin_may_create_member_keys(general_settings: Mapping[str, object]) -> bool:
+    return TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION in resolve_team_admin_editable_fields(
+        general_settings, frozenset({TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION})
+    )
+
+
+def team_admin_member_key_creation_or_raise(general_settings: Mapping[str, object]) -> None:
+    if team_admin_may_create_member_keys(general_settings):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            "Team admins on this proxy cannot create keys for other team members. "
+            f"Ask a proxy admin to enable '{TEAM_ADMIN_CREATE_MEMBER_KEYS_PERMISSION}' "
+            f"under {_SETTINGS_LOCATION}."
+        ),
     )
 
 

@@ -4022,6 +4022,28 @@ class TestTeamAdminEditableTeamFieldsSetting:
         assert stored["team_admin_editable_team_fields"] == ["member_key_budgets"]
         assert team_admin_may_edit_member_key_budgets(general_settings) is True
 
+    def test_patch_accepts_the_create_member_keys_permission(self, monkeypatch):
+        from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+            team_admin_may_create_member_keys,
+        )
+
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+        general_settings: dict = {}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+        assert team_admin_may_create_member_keys(general_settings) is False
+
+        try:
+            response = client.patch(
+                "/update/ui_settings", json={"team_admin_editable_team_fields": ["create_member_keys"]}
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        stored = json.loads(mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored["team_admin_editable_team_fields"] == ["create_member_keys"]
+        assert team_admin_may_create_member_keys(general_settings) is True
+
     def test_patch_with_an_empty_list_turns_team_admin_editing_off_again(self, monkeypatch):
         mock_prisma = self._as_proxy_admin(monkeypatch)
         general_settings: dict = {"team_admin_editable_team_fields": ["tpm_limit"]}

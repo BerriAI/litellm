@@ -365,6 +365,7 @@ class UISettings(LiteLLMBaseModel):
             "removes the cap. "
             "Include 'projects' to let team admins create and update projects for those teams. "
             "Include 'member_key_budgets' to let team admins update budget fields on keys owned by other members of those teams. "
+            "Include 'create_member_keys' to let team admins create team keys owned by other members of those teams. "
             "Empty means team admins cannot edit team settings or manage projects at all. "
             "Proxy admins and org admins are not affected."
         ),
