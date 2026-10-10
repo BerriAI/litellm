@@ -386,17 +386,20 @@ class Cache:
 
     def _get_proxy_cache_scope(self, kwargs: Mapping[str, object]) -> str:
         """Return a stable, non-secret scope for authenticated proxy callers."""
-        metadata_sources: Final[tuple[Mapping[str, object], ...]] = (
-            tuple(  # comprehension-ok: inspect both metadata locations
-                source.get(key) or {}
-                for source in (kwargs, kwargs.get("litellm_params") or {})
-                for key in ("metadata", "litellm_metadata")
-            )
-        )
-        scope_values: Final = (
-            (field, next((source[field] for source in metadata_sources if source.get(field) is not None), None))
-            for field in self._PROXY_CACHE_SCOPE_FIELDS
-        )
+
+        def as_mapping(value: object) -> Mapping[str, object]:
+            return value if isinstance(value, Mapping) else {}
+
+        litellm_params = as_mapping(kwargs.get("litellm_params"))
+        metadata_sources: list[Mapping[str, object]] = []
+        for source in (kwargs, litellm_params):
+            for key in ("metadata", "litellm_metadata"):
+                metadata_sources.append(as_mapping(source.get(key)))
+
+        scope_values: list[tuple[str, object | None]] = []
+        for field in self._PROXY_CACHE_SCOPE_FIELDS:
+            value = next((source[field] for source in metadata_sources if source.get(field) is not None), None)
+            scope_values.append((field, value))
         return "".join(f"{field}: {value}" for field, value in scope_values if value is not None)
 
     def get_cache_key(self, **kwargs) -> str:
@@ -437,7 +440,9 @@ class Cache:
         if is_semantic_cache:
             cache_key += self._get_semantic_cache_tenant_scope(kwargs)
         else:
-            cache_key += self._get_proxy_cache_scope(kwargs)  # rebind-ok: exact cache key is assembled incrementally
+            cache_key += self._get_proxy_cache_scope(
+                cast(Mapping[str, object], kwargs)
+            )  # cast-ok: cache kwargs are string-keyed
 
         hashed_cache_key = Cache._get_hashed_cache_key(cache_key)
         hashed_cache_key = self._add_namespace_to_cache_key(hashed_cache_key, **kwargs)

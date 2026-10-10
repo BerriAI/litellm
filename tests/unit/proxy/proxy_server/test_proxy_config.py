@@ -27,8 +27,11 @@ import pytest
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
+import litellm.proxy.proxy_server as proxy_server
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
+from litellm.proxy.utils import PrismaClient
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm import Router
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -102,10 +105,10 @@ async def test_db_router_rebuild_serves_same_proxy_caller_from_cache_and_isolate
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", [])
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
 
-    async def empty_config() -> dict:
+    async def empty_config() -> Mapping[str, object]:
         return {}
 
-    async def no_router_settings(_router: object, _prisma: object) -> None:
+    async def no_router_settings(_router: Router | None, _prisma: PrismaClient | None) -> None:
         return None
 
     await proxy_config._update_llm_router(
@@ -115,7 +118,8 @@ async def test_db_router_rebuild_serves_same_proxy_caller_from_cache_and_isolate
         model_decryptor=lambda _models: fake_model_list,
         router_settings_loader=no_router_settings,
     )
-    router = __import__("litellm.proxy.proxy_server", fromlist=["llm_router"]).llm_router
+    router = proxy_server.llm_router
+    assert router is not None
 
     request: Final = [{"role": "user", "content": "cache canary"}]
     caller_a: Final = {"user_api_key_hash": "hash-a"}
@@ -149,10 +153,10 @@ async def test_db_router_rebuild_cache_disabled_does_not_reuse_responses(
     monkeypatch.setattr("litellm.proxy.proxy_server.llm_model_list", [])
     monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
 
-    async def empty_config() -> dict:
+    async def empty_config() -> Mapping[str, object]:
         return {}
 
-    async def no_router_settings(_router: object, _prisma: object) -> None:
+    async def no_router_settings(_router: Router | None, _prisma: PrismaClient | None) -> None:
         return None
 
     await proxy_config._update_llm_router(
@@ -162,7 +166,8 @@ async def test_db_router_rebuild_cache_disabled_does_not_reuse_responses(
         model_decryptor=lambda _models: fake_model_list,
         router_settings_loader=no_router_settings,
     )
-    router = __import__("litellm.proxy.proxy_server", fromlist=["llm_router"]).llm_router
+    router = proxy_server.llm_router
+    assert router is not None
     request: Final = [{"role": "user", "content": "uncached canary"}]
     first = await router.acompletion(model="fake-model", messages=request)
     second = await router.acompletion(model="fake-model", messages=request)
@@ -180,7 +185,6 @@ async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) ->
 
     _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
     assert is_lens_tracing_enabled(settings["tracing"], {}) is True
-
 
 
 @pytest.mark.asyncio
@@ -208,7 +212,9 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
     with outcome:
         async with manage_tracing(enabled=True, client_factory=client):
-            logger: Final = next(callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter))
+            logger: Final = next(
+                callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter)
+            )
             await logger.async_log_success_event(
                 {"standard_logging_object": {"id": "response-1", "response_cost": 0.25}}, None, None, None
             )
@@ -222,7 +228,6 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     assert rows[0]["response_id"] == "response-1"
     assert logger not in litellm._async_success_callback
     assert logger.task is not None and logger.task.done() and not logger.task.cancelled()
-
 
 
 # ---------------------------------------------------------------------------
@@ -4873,7 +4878,9 @@ async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ui_settings_already_synced", [False, True])
-async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch, ui_settings_already_synced):
+async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(
+    monkeypatch, ui_settings_already_synced
+):
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
