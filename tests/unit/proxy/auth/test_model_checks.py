@@ -1141,3 +1141,66 @@ def test_get_known_models_from_wildcard_custom_api_base_does_not_advertise_local
         ),
     )
     assert result == []
+
+
+def test_get_provider_models_custom_api_base_without_provider_config_advertises_nothing(
+    monkeypatch,
+):
+    """#45504: a provider listed in models_by_provider can still have no model-info
+    class. Nothing can be discovered from api_base in that case, so the wildcard
+    must advertise nothing instead of calling the discovery helper with no config."""
+    import litellm
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_provider_models
+    from litellm.types.router import LiteLLM_Params
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    monkeypatch.setitem(litellm.models_by_provider, "deepseek", ["deepseek/deepseek-chat"])
+    assert (
+        ProviderConfigManager.get_provider_model_info(
+            model=None, provider=LlmProviders("deepseek")
+        )
+        is None
+    )
+
+    def _must_not_discover(*args, **kwargs):
+        raise AssertionError("discovery must not run without a provider config")
+
+    monkeypatch.setattr(model_checks, "_get_valid_models_from_provider_api", _must_not_discover)
+
+    result = get_provider_models(
+        "deepseek",
+        LiteLLM_Params(
+            model="deepseek/*",
+            custom_llm_provider="deepseek",
+            api_base="https://example.com/v1",
+        ),
+    )
+    assert result is None
+
+
+def test_get_provider_models_custom_api_base_unroutable_provider_advertises_nothing(
+    monkeypatch,
+):
+    """#45504: a name can sit in models_by_provider without being a routable
+    LlmProviders member (e.g. "palm"). A custom api_base must not turn that
+    wildcard into an uncaught ValueError."""
+    import litellm
+    from litellm.proxy.auth.model_checks import get_provider_models
+    from litellm.types.router import LiteLLM_Params
+    from litellm.types.utils import LlmProviders
+
+    monkeypatch.setitem(litellm.models_by_provider, "palm", ["palm/chat-bison-001"])
+    with pytest.raises(ValueError, match="is not a valid LlmProviders"):
+        LlmProviders("palm")
+
+    result = get_provider_models(
+        "palm",
+        LiteLLM_Params(
+            model="palm/*",
+            custom_llm_provider="palm",
+            api_base="https://example.com/v1",
+        ),
+    )
+    assert result is None
