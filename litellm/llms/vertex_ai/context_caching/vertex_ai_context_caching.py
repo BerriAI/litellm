@@ -1,5 +1,9 @@
 from collections.abc import Sequence
-from typing import Final, Literal, cast
+from typing import (
+    Final,
+    Literal,
+    cast,  # noqa: TID251  # preserve the runtime-compatible auth header union
+)
 
 import httpx
 from pydantic import ConfigDict, RootModel, with_config
