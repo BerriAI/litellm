@@ -9,11 +9,13 @@ use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
     prompt_templates::factory::{Conversation, TurnRole, build_conversation},
 };
-use litellm_llms_types::formats::chat_completions::{
-    ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
-    ChatCompletionsUsage, ChatMessage, ChatMessageContent,
+use litellm_llms_types::{
+    formats::chat_completions::{
+        ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse,
+        ChatCompletionsUsage, ChatMessage, ChatMessageContent,
+    },
+    providers::bedrock::{CONVERSE_PATH, ConverseResponse},
 };
-use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
@@ -62,61 +64,6 @@ const CONFIG_PARAMS: &[&str] = &[
     AWS_BEDROCK_RUNTIME_ENDPOINT,
 ];
 
-const CONVERSE_PATH_SUFFIX: &str = "/converse";
-
-#[derive(Deserialize)]
-pub(crate) struct ConverseResponse {
-    output: ConverseOutput,
-    // Converse always reports usage, but the transcription route tolerates its
-    // absence; the chat transform checks for the field itself.
-    #[serde(default)]
-    usage: ConverseUsage,
-    #[serde(rename = "stopReason")]
-    stop_reason: Option<String>,
-}
-
-#[derive(Deserialize)]
-struct ConverseOutput {
-    message: ConverseMessage,
-}
-
-#[derive(Deserialize)]
-struct ConverseMessage {
-    content: Vec<ConverseContentBlock>,
-}
-
-enum ConverseContentBlock {
-    Text { text: String },
-    Other(serde::de::IgnoredAny),
-}
-
-impl<'de> Deserialize<'de> for ConverseContentBlock {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let value = Value::deserialize(deserializer)?;
-        if let Some(text) = value.get("text") {
-            let text = text.as_str().ok_or_else(|| {
-                serde::de::Error::custom("invalid type for `text`, expected a string")
-            })?;
-            return Ok(Self::Text {
-                text: text.to_owned(),
-            });
-        }
-        Ok(Self::Other(serde::de::IgnoredAny))
-    }
-}
-
-#[derive(Default, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ConverseUsage {
-    input_tokens: u64,
-    output_tokens: u64,
-    #[serde(default)]
-    cache_read_input_tokens: u64,
-    #[serde(default)]
-    cache_write_input_tokens: u64,
-    total_tokens: Option<u64>,
-}
-
 enum ConverseStopReason {
     Value(String),
     Unknown(String),
@@ -138,28 +85,6 @@ impl ConverseStopReason {
         match self {
             Self::Value(value) | Self::Unknown(value) => value,
         }
-    }
-}
-
-impl ConverseResponse {
-    pub(crate) fn content_text(&self) -> String {
-        self.output
-            .message
-            .content
-            .iter()
-            .filter_map(|block| match block {
-                ConverseContentBlock::Text { text } => Some(text.as_str()),
-                ConverseContentBlock::Other(_) => None,
-            })
-            .collect()
-    }
-
-    pub(crate) fn message_content_is_non_text(&self) -> bool {
-        self.output
-            .message
-            .content
-            .iter()
-            .any(|block| matches!(block, ConverseContentBlock::Other(_)))
     }
 }
 
@@ -205,10 +130,10 @@ impl BaseConfig for AmazonConverseConfig {
         // A host that already built the full Converse URL (LiteLLM's Python
         // path encodes the model id itself) passes it through untouched, the
         // way the Anthropic config leaves a complete `/v1/messages` URL alone.
-        if endpoint.ends_with(CONVERSE_PATH_SUFFIX) {
+        if endpoint.ends_with(CONVERSE_PATH) {
             return Ok(endpoint.to_string());
         }
-        Ok(format!("{endpoint}/model/{model_id}{CONVERSE_PATH_SUFFIX}"))
+        Ok(format!("{endpoint}/model/{model_id}{CONVERSE_PATH}"))
     }
 
     fn transform_request(
