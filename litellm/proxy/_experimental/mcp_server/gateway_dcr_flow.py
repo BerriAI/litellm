@@ -69,6 +69,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
     SessionRefreshOpened,
     SessionSigningConfigError,
     active_session_signing_keys,
+    legacy_session_keys_from_master_key,
+    open_session_credential_with_legacy,
     open_session_refresh_bearer,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
@@ -77,6 +79,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     MintedSessionToken,
     OpenedSessionToken,
     SessionAudience,
+    SessionKeys,
     SessionPrincipal,
     SessionSigningKeys,
     is_session_refresh_token,
@@ -1299,6 +1302,7 @@ async def aggregate_token(
             resource=resource,
             signing=signing,
             issue=issue,
+            legacy_keys=legacy_session_keys_from_master_key(master_key, signing.keys),
         )
     if grant_type == TOKEN_EXCHANGE_GRANT_TYPE:
         return await _token_exchange_grant(
@@ -1486,11 +1490,16 @@ async def _authorization_code_grant(
 
 
 def _open_presented_refresh_token(
-    refresh_token: str | None, client_id: str, signing: SessionSigning
+    refresh_token: str | None,
+    client_id: str,
+    signing: SessionSigning,
+    legacy_keys: SessionKeys | None = None,
 ) -> SessionRefreshOpened | Response:
     if not refresh_token:
         return _oauth_error(400, "invalid_request", "refresh_token is required")
-    opened: Final = open_session_refresh_bearer(refresh_token, signing.keys, signing.now, expected_client_id=client_id)
+    opened: Final = open_session_refresh_bearer(
+        refresh_token, signing.keys, signing.now, expected_client_id=client_id, legacy_keys=legacy_keys
+    )
     if not isinstance(opened, SessionRefreshOpened):
         return _oauth_error(400, "invalid_grant", "the refresh token is invalid for this client")
     return opened
@@ -1503,8 +1512,9 @@ async def _refresh_token_grant(
     resource: str | None,
     signing: SessionSigning,
     issue: _GrantIssuer,
+    legacy_keys: SessionKeys | None = None,
 ) -> Response:
-    opened: Final = _open_presented_refresh_token(refresh_token, client_id, signing)
+    opened: Final = _open_presented_refresh_token(refresh_token, client_id, signing, legacy_keys=legacy_keys)
     if isinstance(opened, Response):
         return opened
     if _resource_conflicts_with_scope(request, resource, opened.principal.resource_server_id):
@@ -1540,7 +1550,9 @@ async def refresh_proxy_credential(
     signing: Final = resolve_session_signing(master_key, "mcp_gateway refresh grant")
     if isinstance(signing, Response):
         return signing
-    opened: Final = _open_presented_refresh_token(refresh_token, client_id, signing)
+    opened: Final = _open_presented_refresh_token(
+        refresh_token, client_id, signing, legacy_keys=legacy_session_keys_from_master_key(master_key, signing.keys)
+    )
     if isinstance(opened, Response):
         return opened
     if opened.principal.audience != PROXY_API_AUDIENCE:
@@ -1609,7 +1621,13 @@ async def revoke_session_refresh_token(
     signing: Final = resolve_session_signing(master_key, "mcp_gateway revoke")
     if isinstance(signing, Response):
         return signing
-    opened: Final = open_session_refresh_bearer(token, signing.keys, signing.now, expected_client_id=client_id)
+    opened: Final = open_session_refresh_bearer(
+        token,
+        signing.keys,
+        signing.now,
+        expected_client_id=client_id,
+        legacy_keys=legacy_session_keys_from_master_key(master_key, signing.keys),
+    )
     if isinstance(opened, SessionRefreshOpened):
         guard: Final = _SingleUseGuard(cache)
         ended: Final = await guard.claim(_refresh_family_key(opened.family), _REFRESH_CLAIM_TTL_SECONDS)
@@ -1677,10 +1695,11 @@ async def introspect_gateway_token(
         verbose_logger.error("mcp_gateway_dcr introspect rejected: %s", keys.detail)
         return _oauth_error(500, "server_error", keys.detail)
     now: Final = datetime.now(timezone.utc)
+    legacy_keys: Final = legacy_session_keys_from_master_key(master_key, keys)
     if is_session_token(token):
-        opened = open_session_token(token, keys, now)
+        opened = open_session_credential_with_legacy(open_session_token, token, keys, legacy_keys, now)
     elif is_session_refresh_token(token):
-        opened = open_session_refresh_token(token, keys, now)
+        opened = open_session_credential_with_legacy(open_session_refresh_token, token, keys, legacy_keys, now)
     else:
         return _inactive_introspection_response()
     if not isinstance(opened, OpenedSessionToken):

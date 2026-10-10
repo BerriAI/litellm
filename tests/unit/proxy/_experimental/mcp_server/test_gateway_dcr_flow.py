@@ -10,6 +10,7 @@ from typing import Final
 from urllib.parse import parse_qs, urlparse
 
 import pytest
+from pydantic import SecretStr
 from starlette.requests import Request
 
 from litellm.caching.caching import DualCache
@@ -40,9 +41,11 @@ from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import (
     native_client_auth_contract,
     native_client_authorize,
     open_gateway_dcr_client,
+    refresh_proxy_credential,
     register_aggregate_client,
     revoke_refresh_token,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.key_derivation import legacy_scrypt
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     SessionBearerAdmitted,
     SessionRefreshOpened,
@@ -53,6 +56,8 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token import (
     SESSION_ISSUER,
     SESSION_REFRESH_PREFIX,
+    MintedSessionToken,
+    SessionKeys,
     SessionPrincipal,
     mint_session_refresh_token,
     mint_session_token,
@@ -1914,7 +1919,9 @@ def _redis_that(async_increment, get=None):
     cache.redis_cache.async_increment = async_increment
     cache.redis_cache.check_and_fix_namespace = MagicMock(side_effect=lambda key: key)
     cache.redis_cache.init_async_client.return_value.get = get or AsyncMock(return_value=None)
-    cache.redis_cache.async_get_cache = AsyncMock(side_effect=AssertionError("peek must read the client, not the wrapper"))
+    cache.redis_cache.async_get_cache = AsyncMock(
+        side_effect=AssertionError("peek must read the client, not the wrapper")
+    )
     cache.async_increment_cache = AsyncMock(side_effect=AssertionError("must not fall back to in-memory"))
     return cache
 
@@ -2068,7 +2075,11 @@ async def test_refresh_of_a_rotated_token_answers_503_before_minting_while_redis
         (await _redeem_native(await _native_code(client_id, cache=issued), client_id, _Minter(), cache=issued)).body
     )
     rotated = json.loads(
-        (await _refresh_native(payload["refresh_token"], client_id, _Minter(), _redis_that(AsyncMock(return_value=1)))).body
+        (
+            await _refresh_native(
+                payload["refresh_token"], client_id, _Minter(), _redis_that(AsyncMock(return_value=1))
+            )
+        ).body
     )["refresh_token"]
 
     minter = _Minter()
@@ -2578,3 +2589,61 @@ async def test_token_exchange_relays_a_mint_refusal(failure, status, error):
     response = await _exchange_native(client_id, _Minter(failure), _Exchanger())
     assert response.status_code == status
     assert json.loads(response.body)["error"] == error
+
+
+def _legacy_session_refresh(user_id="u1", client_id="claude_code", team_id="team-b"):
+    signing: Final = legacy_scrypt(MASTER_KEY, b"litellm-mcp-gateway:session-signing:")
+    assert signing is not None
+    minted: Final = mint_session_refresh_token(
+        SessionPrincipal(user_id=user_id, client_id=client_id, audience="proxy_api", team_id=team_id),
+        SessionKeys(signing_key=SecretStr(signing)),
+        datetime.now(timezone.utc),
+    )
+    assert isinstance(minted, MintedSessionToken)
+    return minted.token.get_secret_value()
+
+
+@pytest.mark.asyncio
+async def test_claude_code_refresh_of_a_legacy_scrypt_token_is_renewed_during_the_grace_window(monkeypatch):
+    """The Claude Code ``/oauth/token`` refresh grant opens a scrypt-minted proxy-API
+    refresh token while ``LITELLM_MCP_LEGACY_KDF_GRACE=true``, exactly like the DCR
+    refresh grant, and the rotated token it returns opens under the HKDF key."""
+    monkeypatch.setenv("LITELLM_MCP_LEGACY_KDF_GRACE", "true")
+    monkeypatch.delenv("LITELLM_FIPS_MODE", raising=False)
+    minter: Final = _Minter()
+    renewed: Final = await refresh_proxy_credential(
+        refresh_token=_legacy_session_refresh(),
+        client_id="claude_code",
+        master_key=MASTER_KEY,
+        cache=DualCache(),
+        mint_proxy_credential=minter,
+    )
+    assert renewed.status_code == 200, renewed.body
+    body: Final = json.loads(renewed.body)
+    assert body["access_token"] == "sk-cli-u1"
+    assert body["user_id"] == "u1"
+    opened: Final = open_session_refresh_bearer(
+        body["refresh_token"],
+        session_keys_from_master_key(MASTER_KEY),
+        datetime.now(timezone.utc),
+        expected_client_id="claude_code",
+    )
+    assert isinstance(opened, SessionRefreshOpened)
+
+
+@pytest.mark.asyncio
+async def test_claude_code_refresh_of_a_legacy_scrypt_token_is_rejected_without_grace(monkeypatch):
+    """Without the grace variable the same scrypt-minted token answers invalid_grant and
+    the minter never runs."""
+    monkeypatch.delenv("LITELLM_MCP_LEGACY_KDF_GRACE", raising=False)
+    minter: Final = _Minter()
+    refused: Final = await refresh_proxy_credential(
+        refresh_token=_legacy_session_refresh(),
+        client_id="claude_code",
+        master_key=MASTER_KEY,
+        cache=DualCache(),
+        mint_proxy_credential=minter,
+    )
+    assert refused.status_code == 400
+    assert json.loads(refused.body)["error"] == "invalid_grant"
+    assert minter.calls == []

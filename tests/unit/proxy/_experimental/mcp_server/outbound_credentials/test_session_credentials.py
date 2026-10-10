@@ -1,6 +1,10 @@
 """Tests for the session-token KDF and the edge/token-endpoint resolvers."""
 
+import hashlib
+from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
+from typing import Final
 
 import pytest
 from cryptography.hazmat.primitives import serialization
@@ -11,6 +15,9 @@ from pydantic import SecretStr
 from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (
     envelope_keys_from_master_key,
 )
+from litellm.proxy._experimental.mcp_server.outbound_credentials.key_derivation import (
+    LEGACY_KDF_GRACE_ENV_VAR,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credentials import (
     NotSessionBearer,
     SessionBearerAdmitted,
@@ -19,6 +26,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_credent
     SessionRefreshOpened,
     SessionSigningConfigError,
     is_session_bearer_shaped,
+    legacy_session_keys_from_master_key,
     open_session_refresh_bearer,
     resolve_session_bearer,
     resolve_session_signing_keys,
@@ -34,6 +42,7 @@ from litellm.proxy._experimental.mcp_server.outbound_credentials.session_token i
     mint_session_token,
     session_public_key_pem,
 )
+from litellm.proxy.common_utils.fips import FIPS_MODE_ENV_VAR
 
 NOW = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 MASTER_KEY = "sk-master-key-for-tests"
@@ -230,3 +239,104 @@ def test_signing_config_error_detail_never_leaks_key_material():
     )
     assert isinstance(resolved, SessionSigningConfigError)
     assert pem.splitlines()[1] not in resolved.detail
+
+
+def _environ(values: Mapping[str, str]) -> Callable[[str], str | None]:
+    return values.get
+
+
+def _legacy_session_keys(master_key: str) -> SessionKeys:
+    signing: Final = hashlib.scrypt(
+        master_key.encode(),
+        salt=b"litellm-mcp-gateway:session-signing:",
+        n=2**15,
+        r=8,
+        p=1,
+        maxmem=128 * 2**15 * 8 * 2,
+        dklen=32,
+    ).hex()
+    return SessionKeys(signing_key=SecretStr(signing))
+
+
+def test_new_session_tokens_open_under_the_hkdf_key_with_no_legacy_fallback():
+    result: Final = resolve_session_bearer(f"Bearer {_access_token()}", KEYS, NOW)
+    assert isinstance(result, SessionBearerAdmitted)
+
+
+def test_legacy_session_token_opens_during_the_grace_window():
+    legacy: Final = _legacy_session_keys(MASTER_KEY)
+    minted: Final = mint_session_token(PRINCIPAL, legacy, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    grace: Final = legacy_session_keys_from_master_key(
+        MASTER_KEY, KEYS, environ=_environ(MappingProxyType({LEGACY_KDF_GRACE_ENV_VAR: "true"}))
+    )
+    assert grace == legacy
+    result: Final = resolve_session_bearer(f"Bearer {minted.token.get_secret_value()}", KEYS, NOW, legacy_keys=grace)
+    assert isinstance(result, SessionBearerAdmitted)
+    assert result.principal == PRINCIPAL
+
+
+def test_legacy_session_token_is_invalid_without_grace():
+    minted: Final = mint_session_token(PRINCIPAL, _legacy_session_keys(MASTER_KEY), NOW)
+    assert isinstance(minted, MintedSessionToken)
+    assert legacy_session_keys_from_master_key(MASTER_KEY, KEYS, environ=_environ(MappingProxyType({}))) is None
+    result: Final = resolve_session_bearer(f"Bearer {minted.token.get_secret_value()}", KEYS, NOW)
+    assert isinstance(result, SessionBearerInvalid)
+    assert result.expired is False
+
+
+def test_legacy_session_key_is_never_derived_for_configured_rs256_keys():
+    active: Final = AsymmetricSessionKeys(private_key_pem=SecretStr(_rsa_private_pem()), kid="k")
+    grace: Final = legacy_session_keys_from_master_key(
+        MASTER_KEY, active, environ=_environ(MappingProxyType({LEGACY_KDF_GRACE_ENV_VAR: "true"}))
+    )
+    assert grace is None
+
+
+def test_grace_is_disabled_under_fips():
+    grace: Final = legacy_session_keys_from_master_key(
+        MASTER_KEY,
+        KEYS,
+        environ=_environ(MappingProxyType({LEGACY_KDF_GRACE_ENV_VAR: "true", FIPS_MODE_ENV_VAR: "true"})),
+    )
+    assert grace is None
+
+
+def test_legacy_session_refresh_token_opens_during_grace():
+    legacy: Final = _legacy_session_keys(MASTER_KEY)
+    minted: Final = mint_session_refresh_token(PRINCIPAL, legacy, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    grace: Final = legacy_session_keys_from_master_key(
+        MASTER_KEY, KEYS, environ=_environ(MappingProxyType({LEGACY_KDF_GRACE_ENV_VAR: "true"}))
+    )
+    result: Final = open_session_refresh_bearer(
+        minted.token.get_secret_value(),
+        KEYS,
+        NOW,
+        expected_client_id="llm_client_abc",
+        legacy_keys=grace,
+    )
+    assert isinstance(result, SessionRefreshOpened)
+    assert result.principal == PRINCIPAL
+
+
+def test_legacy_session_refresh_token_is_invalid_without_grace():
+    minted: Final = mint_session_refresh_token(PRINCIPAL, _legacy_session_keys(MASTER_KEY), NOW)
+    assert isinstance(minted, MintedSessionToken)
+    result: Final = open_session_refresh_bearer(
+        minted.token.get_secret_value(), KEYS, NOW, expected_client_id="llm_client_abc"
+    )
+    assert isinstance(result, SessionRefreshInvalid)
+
+
+def test_expired_token_under_the_primary_key_still_reports_expired_during_grace():
+    legacy: Final = _legacy_session_keys(MASTER_KEY)
+    minted: Final = mint_session_token(PRINCIPAL, legacy, NOW)
+    assert isinstance(minted, MintedSessionToken)
+    grace: Final = legacy_session_keys_from_master_key(
+        MASTER_KEY, KEYS, environ=_environ(MappingProxyType({LEGACY_KDF_GRACE_ENV_VAR: "true"}))
+    )
+    later: Final = NOW + timedelta(seconds=SESSION_TTL_SECONDS + 1)
+    result: Final = resolve_session_bearer(f"Bearer {minted.token.get_secret_value()}", KEYS, later, legacy_keys=grace)
+    assert isinstance(result, SessionBearerInvalid)
+    assert result.expired is True
