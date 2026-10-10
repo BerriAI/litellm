@@ -3130,6 +3130,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.",
     )
+    disable_fallbacks_on_per_model_rate_limits: bool | None = Field(
+        None,
+        description=(
+            "If true, a request rejected by a key/team/org/project per-model rate limit "
+            "(model_rpm_limit / model_tpm_limit) returns 429 instead of retrying on the "
+            "configured fallbacks"
+        ),
+    )
     scheduled_job_stagger: ScheduledJobStaggerSettings | None = Field(
         None,
         description=(

@@ -1031,7 +1031,7 @@ class RealTimeStreaming:
                     cast(str, transcript),
                     item_id=cast(str | None, event.get("item_id")),
                 )
-                if not blocked and not self._is_transcription_session:
+                if not blocked and self._should_disable_vad_auto_response():
                     await self._send_to_backend(json.dumps({"type": "response.create"}))
                 continue
             ## LOGGING
@@ -1078,7 +1078,7 @@ class RealTimeStreaming:
                 transcript,
                 item_id=event_obj.get("item_id"),
             )
-            if not blocked and not self._is_transcription_session:
+            if not blocked and self._should_disable_vad_auto_response():
                 await self._send_to_backend(json.dumps({"type": "response.create"}))
             return True
         return False

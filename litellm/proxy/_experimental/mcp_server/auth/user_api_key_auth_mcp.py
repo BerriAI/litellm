@@ -8,7 +8,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, cast
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter
+from pydantic import SecretStr, TypeAdapter
 from starlette.datastructures import Headers
 from starlette.requests import Request
 from starlette.types import Scope
@@ -1531,6 +1531,11 @@ class MCPRequestHandler:
         return server_auth_headers
 
     _get_mcp_server_auth_headers_from_headers = get_mcp_server_auth_headers_from_headers
+
+    @staticmethod
+    def get_incoming_bearer_token(headers: Mapping[str, str]) -> SecretStr | None:
+        authorization: Final = next((value for key, value in headers.items() if key.lower() == "authorization"), "")
+        return SecretStr(authorization[len("bearer ") :]) if authorization.lower().startswith("bearer ") else None
 
     @staticmethod
     def get_oauth2_headers_from_headers(headers: Headers) -> dict[str, str]:

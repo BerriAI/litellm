@@ -143,14 +143,17 @@ def _get_guardrails_list_response(
             unmasked_length=4,
             number_of_asterisks=4,
         )
-        guardrail_configs.append(
-            GuardrailInfoResponse(
-                guardrail_id=guardrail.get("guardrail_id"),
-                guardrail_name=guardrail.get("guardrail_name"),
-                litellm_params=with_tolerated_stream_scope(masked_params),
-                guardrail_info=guardrail.get("guardrail_info"),
-            )
+        guardrail_info_response = GuardrailInfoResponse(
+            guardrail_id=guardrail.get("guardrail_id"),
+            guardrail_name=guardrail.get("guardrail_name"),
+            guardrail_info=guardrail.get("guardrail_info"),
         )
+        guardrail_info_response.litellm_params = parse_tolerant_litellm_params(
+            with_tolerated_stream_scope(masked_params),
+            guardrail_info_response.guardrail_name,
+            params_model=BaseLitellmParams,
+        )
+        guardrail_configs.append(guardrail_info_response)
     return ListGuardrailsResponse(guardrails=guardrail_configs)
 
 
@@ -1282,14 +1285,30 @@ async def patch_guardrail(
                 status_code=422,
                 detail=f"Invalid guardrail configuration, update rejected: {validation_error}",
             ) from validation_error
-        clear_stored_scope: Final = (
-            "logging_only_scope" not in requested_litellm_params
-            and parsed_litellm_params.logging_only_scope is not None
-            and GuardrailEventHooks.logging_only.value not in configured_event_hooks(parsed_litellm_params.mode)
+        mode_lacks_logging_only: Final = GuardrailEventHooks.logging_only.value not in configured_event_hooks(
+            parsed_litellm_params.mode
+        )
+        merged_overrides: Final = MappingProxyType(
+            {
+                **(
+                    {"logging_only_scope": None}
+                    if "logging_only_scope" not in requested_litellm_params
+                    and parsed_litellm_params.logging_only_scope is not None
+                    and mode_lacks_logging_only
+                    else {}
+                ),
+                **(
+                    {"logging_only_continue_on_input_failure": None}
+                    if "logging_only_continue_on_input_failure" not in requested_litellm_params
+                    and parsed_litellm_params.logging_only_continue_on_input_failure
+                    and mode_lacks_logging_only
+                    else {}
+                ),
+            }
         )
         litellm_params: Final = (
-            LitellmParams(**MappingProxyType({**merged_litellm_params, "logging_only_scope": None}))
-            if clear_stored_scope
+            LitellmParams(**MappingProxyType({**merged_litellm_params, **merged_overrides}))
+            if merged_overrides
             else parsed_litellm_params
         )
 
@@ -1320,7 +1339,9 @@ async def patch_guardrail(
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                 guardrail=guardrail,
-                reject_invalid_logging_only_scope="logging_only_scope" in requested_litellm_params,
+                reject_invalid_logging_only_scope=bool(
+                    {"logging_only_scope", "logging_only_continue_on_input_failure"} & set(requested_litellm_params)
+                ),
             )
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
