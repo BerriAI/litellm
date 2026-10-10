@@ -772,7 +772,7 @@ async def get_response(
     data["response_id"] = response_id
     processor: Final = ProxyBaseLLMRequestProcessing(data=data)
     try:
-        return await processor.base_process_llm_request(
+        response: Final[object] = await processor.base_process_llm_request(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
@@ -797,6 +797,27 @@ async def get_response(
             proxy_logging_obj=proxy_logging_obj,
             version=version,
         )
+    await _bill_finished_background_response(response=response, response_id=response_id)
+    return response
+
+
+async def _bill_finished_background_response(response: object, response_id: str) -> None:
+    from litellm.proxy.proxy_server import llm_router, prisma_client, proxy_logging_obj
+
+    if not isinstance(response, ResponsesAPIResponse):
+        return
+    if prisma_client is None or llm_router is None or response.status is None:
+        return
+    try:
+        from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
+
+        await CheckResponsesCost(
+            proxy_logging_obj=proxy_logging_obj,
+            prisma_client=prisma_client,
+            llm_router=llm_router,
+        ).bill_if_finished(unified_object_id=response_id, status=response.status)
+    except Exception as e:
+        verbose_proxy_logger.warning("Billing background response %s on read failed: %s", response_id, e)
 
 
 @router.delete(

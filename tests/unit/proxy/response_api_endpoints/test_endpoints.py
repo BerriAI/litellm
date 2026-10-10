@@ -328,6 +328,56 @@ async def test_responses_api_background_create_persists_the_creating_keys_attrib
     assert store_kwargs["request_tags"] == ("env:prod",)
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "stored_as_background, status, expected_billed_reads",
+    [(True, "completed", 1), (True, "in_progress", 0), (False, "completed", 0)],
+)
+async def test_reading_a_finished_background_response_bills_it(
+    stored_as_background: bool, status: str, expected_billed_reads: int
+):
+    """The read that first sees a background response finished bills it, since the provider may drop
+    a store=false response before the hourly cost poll reaches it; other reads stay free."""
+    from types import SimpleNamespace
+
+    from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call
+    from litellm.proxy.response_api_endpoints.endpoints import _bill_finished_background_response
+
+    read = ResponsesAPIResponse(
+        id="resp_read", object="response", status=status, created_at=1, output=[], usage=None
+    )
+    stored_row = SimpleNamespace(
+        id="job-read",
+        unified_object_id="resp_read",
+        status="queued",
+        file_object={"model": "gpt-5"},
+        created_by=None,
+        api_key=None,
+        team_id=None,
+        org_id=None,
+        request_tags=None,
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_managedobjecttable.find_first = AsyncMock(
+        return_value=stored_row if stored_as_background else None
+    )
+    prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=1)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.aget_responses", new_callable=AsyncMock, return_value=read) as provider_read,
+    ):
+        await _bill_finished_background_response(response=read, response_id="resp_read")
+
+    billed_reads = [
+        call
+        for call in provider_read.call_args_list
+        if not is_unbilled_non_inference_call("aget_responses", call.kwargs["litellm_metadata"])
+    ]
+    assert len(billed_reads) == expected_billed_reads
+
+
 class TestResponsesAPIEndpoints(unittest.TestCase):
     @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")

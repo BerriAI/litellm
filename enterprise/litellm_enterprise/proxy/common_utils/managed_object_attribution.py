@@ -36,6 +36,9 @@ class ManagedObjectRow(Protocol):
     def created_by(self) -> str | None: ...
 
     @property
+    def status(self) -> str | None: ...
+
+    @property
     def file_object(self) -> object: ...
 
     @property
