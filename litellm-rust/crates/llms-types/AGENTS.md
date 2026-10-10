@@ -12,6 +12,7 @@
 - Every format and provider is a folder with a `mod.rs` entrypoint and its own `AGENTS.md`. No standalone `<name>.rs` next to a folder
 - A provider `mod.rs` only declares modules and re-exports them (`pub use constants::*`). Constants go in `constants.rs`, types in a file named for what they describe
 - Format-independent helpers (`headers`, `recognized`, `serde_compat`, `json_schema`) stay at the crate root
+- AGENTS.md files follow the convention in `../llms/AGENTS.md`. Nested files: `src/formats/<format>/` for every format, `src/providers/<provider>/` for every provider
 
 ## Formats
 
@@ -55,3 +56,7 @@
 
 - Cover serialization, malformed-input rejection, unknown-value preservation and value semantics here
 - Transformations and header policy are tested in their owning crates
+
+# references
+
+- https://json-schema.org/draft/2020-12/json-schema-core

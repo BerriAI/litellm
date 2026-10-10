@@ -1,8 +1,7 @@
 # rules
 
-- Claude on Bedrock InvokeModel: reuses `anthropic/messages` shaping, moves the model into the URL, signs with SigV4 or a bearer token, and decodes the AWS event stream
+- Claude on Bedrock InvokeModel: reuses `anthropic/messages` shaping, moves the model into the URL, and decodes the AWS event stream
 - Invocation metrics in the response map onto Messages usage here
-- Keep Bedrock differences here, not in the Anthropic helpers
 
 # references
 

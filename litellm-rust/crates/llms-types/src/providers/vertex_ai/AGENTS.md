@@ -6,4 +6,3 @@
 # references
 
 - https://cloud.google.com/vertex-ai/docs/general/locations
-- https://cloud.google.com/vertex-ai/generative-ai/docs/partner-models/claude/use-claude
