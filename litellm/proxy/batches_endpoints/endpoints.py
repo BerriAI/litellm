@@ -18,6 +18,7 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.batches.main import CancelBatchRequest, RetrieveBatchRequest
 from litellm.litellm_core_utils.hidden_params import get_hidden_params, set_hidden_param
+from litellm.llms.openai.workload_identity import resolve_openai_workload_identity_config
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.batches_endpoints.common_utils import validate_batch_list_limit
@@ -179,6 +180,8 @@ def _raise_not_found_when_openai_fallback_unservable(
     if requested_provider is not None:
         return
     if data.get("api_key") or litellm.api_key or litellm.openai_key or os.getenv("OPENAI_API_KEY"):
+        return
+    if resolve_openai_workload_identity_config(api_key=None, api_base=None, litellm_params=data) is not None:
         return
     raise ProxyException(
         message=not_found_message,

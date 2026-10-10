@@ -259,6 +259,7 @@ def create_file(
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
                 create_file_data=_create_file_request,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -380,6 +381,7 @@ def file_retrieve(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                litellm_params=optional_params.model_dump(exclude_none=True),
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -561,6 +563,7 @@ def file_delete(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -767,6 +770,7 @@ def file_list(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                litellm_params=optional_params.model_dump(exclude_none=True),
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -964,6 +968,7 @@ def file_content(
                 timeout=timeout,
                 max_retries=optional_params.max_retries,
                 organization=openai_creds.organization,
+                litellm_params=litellm_params_dict,
             )
         elif custom_llm_provider == "azure":
             azure_creds: Final = get_azure_credentials(
@@ -1085,6 +1090,7 @@ def file_content_streaming(
             organization=openai_creds.organization,
             chunk_size=chunk_size,
             client=client if isinstance(client, (OpenAI, AsyncOpenAI)) else None,
+            litellm_params=optional_params.model_dump(exclude_none=True),
         )
     elif custom_llm_provider == LlmProviders.VERTEX_AI.value:
         if not _is_async:

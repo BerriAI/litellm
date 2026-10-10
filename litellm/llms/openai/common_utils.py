@@ -396,6 +396,10 @@ class BaseOpenAILLM:
             http2=http2_enabled(),
         )
 
+    @classmethod
+    def get_sync_http_client(cls) -> httpx.Client | None:
+        return cls._get_sync_http_client()
+
 
 class OpenAICredentials(NamedTuple):
     api_base: str

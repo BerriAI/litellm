@@ -35,6 +35,7 @@ import logging
 from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any, Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -519,6 +520,29 @@ async def test_create__fallback_explicit_provider_bypasses_not_found_gate(harnes
     await call_create(harness, provider="anthropic")
 
     assert harness.acreate_kwargs()["custom_llm_provider"] == "anthropic"
+
+
+@pytest.mark.asyncio
+async def test_create__fallback_workload_identity_alone_forwards(
+    harness: Harness, no_openai_creds: None, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    token_file = tmp_path / "subject_token.jwt"
+    token_file.write_text("subject-token-from-file")
+    monkeypatch.setenv("OPENAI_IDENTITY_PROVIDER_ID", "idp_test123")
+    monkeypatch.setenv("OPENAI_SERVICE_ACCOUNT_ID", "user-test456")
+    monkeypatch.setenv("OPENAI_IDENTITY_TOKEN_FILE", str(token_file))
+    set_body(
+        harness,
+        {
+            "input_file_id": "file-plain",
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        },
+    )
+
+    await call_create(harness)
+
+    assert harness.acreate_kwargs()["custom_llm_provider"] == "openai"
 
 
 @pytest.mark.asyncio
