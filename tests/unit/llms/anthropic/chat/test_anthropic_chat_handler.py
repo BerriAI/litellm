@@ -1,7 +1,8 @@
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from typing import Final
+from itertools import chain
+from typing import Final, Literal, TypedDict
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -13,6 +14,13 @@ from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.llms.anthropic import (
+    ContentBlockDelta,
+    ContentBlockStop,
+    ContentJsonBlockDelta,
+    MessageBlockDelta,
+    ToolUseBlock,
+)
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -531,6 +539,53 @@ def test_regular_tool_finish_reason():
     # Verify that finish_reason remains "tool_calls" for regular tools
     assert model_response_iterator.converted_response_format_tool is False
     assert model_response.choices[0].finish_reason == "tool_calls"
+
+
+class _ToolUseBlockStart(TypedDict):
+    type: Literal["content_block_start"]
+    index: int
+    content_block: ToolUseBlock
+
+
+def _tool_use_events(
+    index: int, tool_id: str, name: str, arguments: str
+) -> tuple[_ToolUseBlockStart, ContentBlockDelta, ContentBlockStop]:
+    return (
+        _ToolUseBlockStart(
+            type="content_block_start",
+            index=index,
+            content_block=ToolUseBlock(type="tool_use", id=tool_id, name=name, input={}, caller=None),
+        ),
+        ContentBlockDelta(
+            type="content_block_delta",
+            index=index,
+            delta=ContentJsonBlockDelta(type="input_json_delta", partial_json=arguments),
+        ),
+        ContentBlockStop(type="content_block_stop", index=index),
+    )
+
+
+@pytest.mark.parametrize("json_tool_first", [True, False])
+def test_response_format_tool_with_user_tool_call_streams_tool_calls_finish_reason(json_tool_first: bool):
+    json_tool: Final = _tool_use_events(
+        0 if json_tool_first else 1, "toolu_json", RESPONSE_FORMAT_TOOL_NAME, '{"answer": 42}'
+    )
+    user_tool: Final = _tool_use_events(1 if json_tool_first else 0, "toolu_user", "get_weather", '{"location": "NY"}')
+    tool_events: Final = json_tool + user_tool if json_tool_first else user_tool + json_tool
+    message_delta: Final = MessageBlockDelta(
+        type="message_delta", delta={"stop_reason": "tool_use"}, usage={"output_tokens": 20}
+    )
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=True)
+
+    chunks: Final = [iterator.chunk_parser(event) for event in (*tool_events, message_delta)]
+
+    streamed_tool_calls: Final = [
+        (tool_call.id, tool_call.function.name, tool_call.function.arguments)
+        for tool_call in chain.from_iterable(chunk.choices[0].delta.tool_calls or () for chunk in chunks)
+    ]
+    assert chunks[-1].choices[0].finish_reason == "tool_calls", "a user tool call must not be reported as a final stop"
+    assert streamed_tool_calls == [("toolu_user", "get_weather", ""), (None, None, '{"location": "NY"}')]
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == '{"answer": 42}'
 
 
 def test_text_only_streaming_has_index_zero():
