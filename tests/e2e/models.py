@@ -1320,6 +1320,8 @@ class ModelInfoBody(BaseModel):
     team_id: str | None = None
     allowed_fails: int | None = None
     allowed_fails_policy: dict[str, int] | None = None
+    base_model: str | None = None
+    max_input_tokens: int | None = None
 
 
 class ModelNewBody(BaseModel):

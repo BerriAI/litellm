@@ -11147,7 +11147,9 @@ class Router:
 
         Augment litellm info with additional params set in `model_info`.
 
-        For azure models, ignore the `model:`. Only set max tokens, cost values if base_model is set.
+        A deployment's `base_model` (model_info first, then litellm_params) is the cost-map key for every
+        provider, the way /model/info resolves it. Without one, azure needs the deployment name to be a
+        known azure key and every other provider resolves its own `model:`.
 
         Returns
         - ModelInfo - If found -> typed dict with max tokens, input cost, etc.
@@ -11189,7 +11191,7 @@ class Router:
         )
 
         ## SET MODEL TO 'model=' - if base_model is None + not azure
-        if custom_llm_provider == "azure" and base_model is None:
+        if base_model is None and custom_llm_provider == "azure":
             # Router init auto-registers every deployment name into
             # litellm.model_cost as a zeroed stub, so membership alone can't
             # tell a resolvable name apart; require usable limits/costs.
@@ -11211,7 +11213,7 @@ class Router:
                     "Could not identify azure model '%s'. Set azure 'base_model' for accurate max tokens, cost tracking, etc.- https://docs.litellm.ai/docs/proxy/cost_tracking#spend-tracking-for-azure-openai-models",
                     _model,
                 )
-        elif custom_llm_provider != "azure":
+        elif base_model is None:
             model = _model
 
             if "*" in model:  # only call pattern_router for wildcard models

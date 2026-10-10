@@ -14192,6 +14192,81 @@ class TestAzureBaseModelFallbackLogging:
         )
         assert model_info["max_input_tokens"] == litellm.model_cost["azure/gpt-4o-mini"]["max_input_tokens"]
 
+
+INFERENCE_PROFILE_ARN: Final = (
+    "bedrock/converse/arn:aws:bedrock:us-west-2:000000000000:application-inference-profile/abc123xyz"
+)
+INFERENCE_PROFILE_BASE_MODEL: Final = "global.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+
+@pytest.mark.usefixtures("local_model_cost_map")
+class TestBaseModelResolvesWindowForEveryProvider:
+    """A Bedrock application inference profile ARN is not in the cost map, so its window and
+    prices only exist through `base_model`. get_router_model_info used to read base_model for
+    azure alone and resolved every other provider's deployment by its own `model:`, so the
+    ARN came back unmapped and the complexity router's context-window escalation, which
+    treats an unknown window as infinite, never moved an oversized request off that tier."""
+
+    def _router(self, model_info: dict[str, object], litellm_params: dict[str, object] | None = None) -> litellm.Router:
+        return litellm.Router(
+            model_list=[
+                {
+                    "model_name": "haiku",
+                    "litellm_params": {"model": INFERENCE_PROFILE_ARN, **(litellm_params or {})},
+                    "model_info": {"id": "haiku-profile", **model_info},
+                }
+            ]
+        )
+
+    def test_model_info_base_model_resolves_a_non_azure_deployment(self):
+        router: Final = self._router({"base_model": INFERENCE_PROFILE_BASE_MODEL})
+
+        model_info: Final = router.get_router_model_info(
+            deployment=None, received_model_name="haiku", id="haiku-profile"
+        )
+
+        base: Final = litellm.get_model_info(model=f"bedrock/{INFERENCE_PROFILE_BASE_MODEL}")
+        assert model_info["max_input_tokens"] == base["max_input_tokens"]
+        assert model_info["input_cost_per_token"] == base["input_cost_per_token"]
+
+    def test_litellm_params_base_model_resolves_a_non_azure_deployment(self):
+        router: Final = self._router({}, {"base_model": INFERENCE_PROFILE_BASE_MODEL})
+
+        model_info: Final = router.get_router_model_info(
+            deployment=None, received_model_name="haiku", id="haiku-profile"
+        )
+
+        base: Final = litellm.get_model_info(model=f"bedrock/{INFERENCE_PROFILE_BASE_MODEL}")
+        assert model_info["max_input_tokens"] == base["max_input_tokens"]
+
+    def test_explicit_max_input_tokens_still_wins_over_base_model(self):
+        base_window: Final = litellm.get_model_info(model=f"bedrock/{INFERENCE_PROFILE_BASE_MODEL}")["max_input_tokens"]
+        assert base_window is not None
+        router: Final = self._router({"base_model": INFERENCE_PROFILE_BASE_MODEL, "max_input_tokens": base_window // 2})
+
+        model_info: Final = router.get_router_model_info(
+            deployment=None, received_model_name="haiku", id="haiku-profile"
+        )
+
+        assert model_info["max_input_tokens"] == base_window // 2
+
+    def test_a_deployment_without_base_model_still_resolves_its_own_model(self):
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "nova",
+                    "litellm_params": {"model": "bedrock/converse/global.amazon.nova-2-lite-v1:0"},
+                    "model_info": {"id": "nova-plain"},
+                }
+            ]
+        )
+
+        model_info: Final = router.get_router_model_info(deployment=None, received_model_name="nova", id="nova-plain")
+
+        own: Final = litellm.get_model_info(model="bedrock/converse/global.amazon.nova-2-lite-v1:0")
+        assert model_info["max_input_tokens"] == own["max_input_tokens"]
+
+
 def test_model_group_info_intersects_supported_reasoning_efforts():
     router = litellm.Router(
         model_list=[
