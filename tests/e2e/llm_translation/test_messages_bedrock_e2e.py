@@ -3,7 +3,18 @@ from __future__ import annotations
 from typing import Final
 
 import pytest
-from anthropic.types import RawContentBlockDeltaEvent, RawMessageDeltaEvent, TextBlock, TextDelta, ToolParam
+from _pytest.mark.structures import ParameterSet
+from anthropic import Anthropic
+from anthropic.types import (
+    Message,
+    MessageParam,
+    RawContentBlockDeltaEvent,
+    RawMessageDeltaEvent,
+    TextBlock,
+    TextDelta,
+    ToolParam,
+    ToolUseBlock,
+)
 from e2e_config import unique_marker
 from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
@@ -17,6 +28,59 @@ pytestmark = pytest.mark.e2e
 GPT_6_1_SOL_BACKEND: Final = "bedrock/global.openai.gpt-6.1-sol"
 CONVERSE_CLAUDE_BACKEND: Final = "bedrock/converse/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 NOVA_BACKEND: Final = "bedrock/us.amazon.nova-2-lite-v1:0"
+TOOL_RESULT_IMAGE_CLAUDE_BACKEND: Final = "bedrock/converse/us.anthropic.claude-haiku-5-5"
+TOOL_RESULT_IMAGE_BACKENDS: Final = (
+    GPT_6_1_SOL_BACKEND,
+    "bedrock/global.openai.gpt-6-sol",
+    "bedrock/global.openai.gpt-5.6-sol",
+    "bedrock/global.openai.gpt-5.5",
+    "bedrock/global.openai.gpt-5.4",
+    "bedrock/qwen.qwen3-vl-235b-a22b",
+    "bedrock/global.moonshotai.kimi-k3",
+    "bedrock/mistral.mistral-large-3-675b-instruct",
+    TOOL_RESULT_IMAGE_CLAUDE_BACKEND,
+    NOVA_BACKEND,
+)
+
+RED_PIXEL_PNG_B64: Final = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+)
+READ_TOOL: Final[ToolParam] = {
+    "name": "Read",
+    "description": "Read a file from the local filesystem.",
+    "input_schema": {
+        "type": "object",
+        "properties": {"file_path": {"type": "string"}},
+        "required": ["file_path"],
+    },
+}
+READ_TOOL_USE_ID: Final = "toolu_01A09q90qw90lq917835lq9"
+READ_IMAGE_CONVERSATION: Final[tuple[MessageParam, ...]] = (
+    {"role": "user", "content": "What color is the image in pixel.png? Answer in one word."},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": READ_TOOL_USE_ID, "name": "Read", "input": {"file_path": "pixel.png"}}],
+    },
+    {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": READ_TOOL_USE_ID,
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/png", "data": RED_PIXEL_PNG_B64},
+                    }
+                ],
+            }
+        ],
+    },
+)
+FOLLOW_UP_TURNS: Final[tuple[MessageParam, ...]] = (
+    {"role": "assistant", "content": "The file holds a single pixel."},
+    {"role": "user", "content": "Thanks. Reply with the word done."},
+)
 
 TOOL_SEARCH: Final[ToolParam] = {
     "name": "ToolSearch",
@@ -60,6 +124,39 @@ def _register(proxy: ProxyClient, resources: ResourceManager, backend: str) -> s
     )
     resources.defer(lambda: proxy.delete_model(model_id))
     return model
+
+
+def _tool_result_image_params() -> list[ParameterSet]:
+    return [
+        pytest.param(
+            backend,
+            id=backend.rsplit("/", 1)[-1],
+            marks=meta(
+                Subject(
+                    domain=Domain.LLM_TRANSLATION,
+                    route=Route.MESSAGES,
+                    providers=(Provider.BEDROCK,),
+                    models=(backend,),
+                    capabilities=(Capability.FUNCTION_CALLING, Capability.VISION),
+                    mode=Mode.NONSTREAM,
+                )
+            ),
+        )
+        for backend in TOOL_RESULT_IMAGE_BACKENDS
+    ]
+
+
+def _reply(client: Anthropic, model: str, messages: tuple[MessageParam, ...]) -> Message:
+    return client.messages.create(
+        model=model, max_tokens=2048, tools=[READ_TOOL], messages=messages, extra_body=NO_PROXY_CACHE
+    )
+
+
+def _answered(message: Message) -> bool:
+    return any(
+        isinstance(block, ToolUseBlock) or (isinstance(block, TextBlock) and block.text.strip())
+        for block in message.content
+    )
 
 
 class TestBedrockMessages:
@@ -175,3 +272,24 @@ class TestBedrockMessages:
         assert len(deltas) == 1, f"expected exactly one message_delta: {types}"
         assert deltas[0].delta.stop_reason is not None, f"message_delta carried no stop_reason: {deltas[0]!r}"
         assert deltas[0].usage.output_tokens > 0, f"message_delta reported no output tokens: {deltas[0]!r}"
+
+
+class TestBedrockToolResultImages:
+    @pytest.mark.parametrize("backend", _tool_result_image_params())
+    def test_image_returned_by_a_tool_gets_a_reply(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str
+    ) -> None:
+        """Claude Code's Read tool returns an image file as an image inside tool_result.
+        Converse documents that nesting for Claude and Nova only and rejects it for other
+        models (#45576), so the proxy has to reshape it for them. The image stays in
+        history on every later turn, so the follow-up must be accepted too or the session
+        is stuck. Some models answer by calling Read again, which is still a well-formed
+        next turn."""
+        model: Final = _register(proxy, resources, backend)
+        client: Final = sdk.anthropic(resources.key())
+
+        tool_result_reply: Final = _reply(client, model, READ_IMAGE_CONVERSATION)
+        assert _answered(tool_result_reply), f"{backend} sent back no text or tool call: {tool_result_reply!r}"
+
+        follow_up_reply: Final = _reply(client, model, (*READ_IMAGE_CONVERSATION, *FOLLOW_UP_TURNS))
+        assert _answered(follow_up_reply), f"{backend} sent back no text or tool call: {follow_up_reply!r}"
