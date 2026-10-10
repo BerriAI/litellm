@@ -1905,7 +1905,7 @@ class UpdateUserRequestNoUserIDorEmail(GenerateRequestBase):  # shared with Bulk
     # repr=False keeps the plaintext out of management-endpoint alerts, which str() the request model
     password: str | None = Field(default=None, repr=False)
     spend: float | None = None
-    metadata: dict | None = None
+    metadata: dict[object, object] | None = None
     user_alias: str | None = None
     user_role: (
         Literal[
@@ -1927,7 +1927,7 @@ class UpdateUserRequest(UpdateUserRequestNoUserIDorEmail):
 
     @model_validator(mode="before")
     @classmethod
-    def check_user_info(cls, values):
+    def check_user_info(cls, values: Mapping[str, object]) -> Mapping[str, object]:
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
         return values
@@ -4588,7 +4588,7 @@ class MemberDeleteRequest(LiteLLMPydanticObjectBase):
 
     @model_validator(mode="before")
     @classmethod
-    def check_user_info(cls, values):
+    def check_user_info(cls, values: Mapping[str, object]) -> Mapping[str, object]:
         if values.get("user_id") is None and values.get("user_email") is None:
             raise ValueError("Either user id or user email must be provided")
         return values
