@@ -246,6 +246,10 @@ class LLMCallEvent:
     # ``InternalCallOrigin`` such as ``autorouter_classifier``), ``None`` for the
     # caller's own provider attempt.
     purpose: str | None
+    # True for a response served from the litellm response cache. A cache hit
+    # never hands off to a provider, so ``upstream_started`` stays False even
+    # though the call completed and is worth a span.
+    cache_hit: bool
     # A best-effort ``"{operation} {model}"`` name known at ``pre_call`` time. The
     # span is renamed from the typed payload at close (``finish_span``); this only
     # needs to be reasonable for a span that never gets closed (a leak).
@@ -270,6 +274,7 @@ class LLMCallEvent:
             upstream_started=kwargs.get("api_call_start_time") is not None,
             upstream_start_seconds=_epoch_seconds(kwargs.get("api_call_start_time")),
             purpose=internal_call_origin(payload, kwargs),
+            cache_hit=bool(payload.get("cache_hit")) if payload else False,  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
             trace=trace,

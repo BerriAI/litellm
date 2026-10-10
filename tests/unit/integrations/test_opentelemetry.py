@@ -479,6 +479,70 @@ class TestOpenTelemetryCostBreakdown(unittest.TestCase):
         assert ("gen_ai.cost.tool_usage_cost", 0.0001) not in call_args_list
         assert ("gen_ai.cost.original_cost", 0.004) not in call_args_list
 
+    def test_cache_hit_span_carries_cache_indicator_and_saved_cost(self):
+        """
+        A cache-hit span reports litellm.cache_hit and litellm.saved_cache_cost so cost
+        attribution can tell a cache-served response apart from a billed call.
+        """
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "cache_hit": True,
+                "saved_cache_cost": 0.003,
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        mock_span.set_attribute.assert_any_call("litellm.cache_hit", True)
+        mock_span.set_attribute.assert_any_call("litellm.saved_cache_cost", 0.003)
+
+    def test_non_cache_hit_span_has_no_cache_indicator(self):
+        otel = OpenTelemetry()
+        mock_span = MagicMock()
+
+        kwargs = {
+            "model": "gpt-4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "id": "test-id",
+                "call_type": "completion",
+                "metadata": {},
+                "cache_hit": False,
+            },
+        }
+
+        response_obj = {
+            "id": "test-response-id",
+            "model": "gpt-4",
+            "choices": [],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        }
+
+        otel.set_attributes(span=mock_span, kwargs=kwargs, response_obj=response_obj)
+
+        call_args_list = [call[0] for call in mock_span.set_attribute.call_args_list]
+        assert all(key != "litellm.cache_hit" for key, _value in call_args_list)
+        assert all(key != "litellm.saved_cache_cost" for key, _value in call_args_list)
+
 
 class TestOpenTelemetryProviderInitialization(unittest.TestCase):
     """Test suite for verifying provider initialization respects existing providers"""

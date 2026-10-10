@@ -126,7 +126,10 @@ class ResponseMetadata:
             "api_base": get_api_base(model=model or "", optional_params=kwargs),
             "model_id": model_id,
             "response_cost": logging_obj.response_cost_calculator(
-                result=self.result, litellm_model_name=model, router_model_id=model_id
+                result=self.result,
+                litellm_model_name=model,
+                router_model_id=model_id,
+                cache_hit=True if self._result_is_cache_hit() else None,
             ),
             "additional_headers": process_response_headers(
                 self._get_additional_headers_from_hidden_params() or {},
@@ -147,6 +150,10 @@ class ResponseMetadata:
             # For HiddenParams object, set attributes individually
             for key, value in new_params.items():
                 setattr(self._hidden_params, key, value)
+
+    def _result_is_cache_hit(self) -> bool:
+        """The caching handler stamps `_hidden_params["cache_hit"]` before update_response_metadata runs"""
+        return self._hidden_params.get("cache_hit") is True
 
     def _get_additional_headers_from_hidden_params(self) -> httpx.Headers | dict[str, str] | None:
         """Get `additional_headers` from hidden params - handles when self._hidden_params is a dict or HiddenParams object"""

@@ -2459,6 +2459,60 @@ async def test_partial_embedding_cache_hit_sends_only_misses_and_keeps_input_ord
     assert [item["embedding"] for item in repeat.data] == [[float(len(text))] for text in mixed_input]
 
 
+def test_text_completion_cache_hit_is_marked_and_stamped_zero_cost(monkeypatch):
+    """A cached text_completion dict rebuilds into a HiddenParams carrier that still gets the cache_hit marker and a 0 cost."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+    deployment_id = "lit8679-text-completion-deployment"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+                "litellm_provider": "openai",
+                "mode": "completion",
+            }
+        }
+    )
+    caching_handler = LLMCachingHandler(original_function=lambda: None, request_kwargs={}, start_time=datetime.now())
+    logging_obj = LiteLLMLogging(
+        litellm_call_id="lit8679-text-completion-hit",
+        call_type=CallTypes.text_completion.value,
+        model="gpt-3.5-turbo-instruct",
+        messages="Hello",
+        function_id=str(uuid.uuid4()),
+        stream=False,
+        start_time=datetime.now(),
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-3.5-turbo-instruct",
+        litellm_params={"metadata": {"model_info": {"id": deployment_id}}},
+        optional_params={},
+        custom_llm_provider="openai",
+    )
+
+    result = caching_handler._convert_cached_result_to_model_response(
+        cached_result={
+            "id": "cmpl-lit8679",
+            "object": "text_completion",
+            "created": 1,
+            "model": "gpt-3.5-turbo-instruct",
+            "choices": [{"text": "Hello, how can I help you today?", "index": 0, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+        },
+        call_type=CallTypes.text_completion.value,
+        kwargs={"model_info": {"id": deployment_id}},
+        logging_obj=logging_obj,
+        model="gpt-3.5-turbo-instruct",
+        args=(),
+    )
+
+    assert isinstance(result, TextCompletionResponse)
+    assert result._hidden_params.get("cache_hit") is True
+    assert result._hidden_params.get("response_cost") == 0.0
+    assert logging_obj.cost_breakdown is None
+
+
 @pytest.mark.asyncio
 async def test_response_cache_lookup_and_write_declare_the_llm_response_target(monkeypatch):
     """Both the lookup and the write run under ``service_target("llm_response")`` so the

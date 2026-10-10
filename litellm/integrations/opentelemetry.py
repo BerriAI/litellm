@@ -2443,6 +2443,19 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                             key=f"gen_ai.cost.{key}",
                             value=value,
                         )
+            if standard_logging_payload.get("cache_hit") is True:
+                self.safe_set_attribute(
+                    span=span,
+                    key="litellm.cache_hit",
+                    value=True,
+                )
+                saved_cache_cost: Final = standard_logging_payload.get("saved_cache_cost")
+                if isinstance(saved_cache_cost, (int, float)):
+                    self.safe_set_attribute(
+                        span=span,
+                        key="litellm.saved_cache_cost",
+                        value=saved_cache_cost,
+                    )
             #############################################
             ########## LLM Request Attributes ###########
             #############################################

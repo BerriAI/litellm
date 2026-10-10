@@ -441,6 +441,8 @@ class LLMCallSpanData:
     embedding_output: EmbeddingOutput | None = None
     promoted_metadata: Mapping[str, str] = field(default_factory=lambda: _EMPTY_METADATA)
     routing_attributes: Mapping[str, RoutingAttributeValue] = field(default_factory=lambda: MappingProxyType({}))
+    cache_hit: bool | None = None
+    saved_cache_cost: float | None = None
 
     @classmethod
     def from_standard_logging_payload(
@@ -507,6 +509,8 @@ class LLMCallSpanData:
             session_id=session_id or None,
             embedding_output=embedding_output if capture_content else None,
             routing_attributes=routing_decision_attributes(decision),
+            cache_hit=as_bool(payload.get("cache_hit")),  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
+            saved_cache_cost=as_float(payload.get("saved_cache_cost")),  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
         )
 
 

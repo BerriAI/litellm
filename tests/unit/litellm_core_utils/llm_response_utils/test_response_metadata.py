@@ -26,7 +26,7 @@ from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
-from litellm.types.utils import ModelResponse, Usage
+from litellm.types.utils import ModelResponse, TextCompletionResponse, Usage
 
 
 class TestCallbackDurationMs:
@@ -649,3 +649,112 @@ def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_
 
     assert result._response_ms == pytest.approx(2000)
     assert result._hidden_params["response_cost"] == pytest.approx(0.02 * 2)
+
+
+def test_update_response_metadata_stamps_zero_response_cost_for_cache_hit_result(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    deployment_id: Final = "cache-hit-deployment-response-metadata"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    start_time: Final = datetime.datetime(2026, 9, 28, 12, 0, 0)
+    logging_obj: Final = Logging(
+        model="gpt-5.4-nano",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=start_time,
+        litellm_call_id="cache-hit-response-metadata",
+        function_id="f",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        litellm_params={
+            "metadata": {"model_info": {"id": deployment_id}},
+        },
+        optional_params={},
+        custom_llm_provider="openai",
+    )
+    result: Final = ModelResponse(
+        model="gpt-5.4-nano",
+        usage=Usage(prompt_tokens=11, completion_tokens=7, total_tokens=18),
+    )
+    result._hidden_params = {"cache_hit": True, "cache_key": "lit8679-cache-key"}
+
+    update_response_metadata(
+        result=result,
+        logging_obj=logging_obj,
+        model="gpt-5.4-nano",
+        kwargs={"model_info": {"id": deployment_id}},
+        start_time=start_time,
+        end_time=start_time + datetime.timedelta(seconds=2),
+    )
+
+    assert result._hidden_params["response_cost"] == 0.0
+    assert logging_obj.cost_breakdown is None
+
+
+def test_update_response_metadata_stamps_zero_response_cost_for_cache_hit_hidden_params_carrier(monkeypatch):
+    """A cache hit whose _hidden_params is a HiddenParams object (text_completion's carrier) stamps 0 cost, not the full price."""
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    deployment_id: Final = "cache-hit-deployment-hiddenparams"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+                "litellm_provider": "openai",
+                "mode": "completion",
+            }
+        }
+    )
+    start_time: Final = datetime.datetime(2026, 9, 28, 12, 0, 0)
+    logging_obj: Final = Logging(
+        model="gpt-3.5-turbo-instruct",
+        messages="Hi",
+        stream=False,
+        call_type="text_completion",
+        start_time=start_time,
+        litellm_call_id="cache-hit-hiddenparams",
+        function_id="f",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-3.5-turbo-instruct",
+        litellm_params={
+            "metadata": {"model_info": {"id": deployment_id}},
+        },
+        optional_params={},
+        custom_llm_provider="openai",
+    )
+    result: Final = TextCompletionResponse(
+        id="cmpl-x",
+        object="text_completion",
+        created=1,
+        model="gpt-3.5-turbo-instruct",
+        choices=[{"text": "ok", "index": 0, "finish_reason": "stop"}],
+        usage={"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+    )
+    result._hidden_params["cache_hit"] = True
+
+    update_response_metadata(
+        result=result,
+        logging_obj=logging_obj,
+        model="gpt-3.5-turbo-instruct",
+        kwargs={"model_info": {"id": deployment_id}},
+        start_time=start_time,
+        end_time=start_time + datetime.timedelta(seconds=2),
+    )
+
+    assert result._hidden_params.get("response_cost") == 0.0
+    assert logging_obj.cost_breakdown is None
