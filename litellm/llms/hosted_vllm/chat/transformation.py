@@ -95,13 +95,18 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         if _tools is not None:
             non_default_params["tools"] = _tools
 
+        output_config: Final = non_default_params.pop("output_config", None)
         thinking: Final = non_default_params.pop("thinking", None)
-        if thinking is not None and isinstance(thinking, dict):
-            if thinking.get("type") == "enabled":
-                if "reasoning_effort" not in non_default_params:
+        if "reasoning_effort" not in non_default_params:
+            if isinstance(output_config, dict) and output_config.get("effort"):
+                non_default_params["reasoning_effort"] = output_config["effort"]
+            elif thinking is not None and isinstance(thinking, dict):
+                if thinking.get("type") == "enabled":
                     non_default_params["reasoning_effort"] = reasoning_effort_from_thinking_budget(
                         thinking.get("budget_tokens", 0)
                     )
+                elif thinking.get("type") == "adaptive" and thinking.get("effort"):
+                    non_default_params["reasoning_effort"] = thinking["effort"]
 
         return super().map_openai_params(non_default_params, optional_params, model, drop_params)
 
