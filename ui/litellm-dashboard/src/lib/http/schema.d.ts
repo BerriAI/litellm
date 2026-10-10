@@ -32010,7 +32010,7 @@ export interface components {
             allowed_routes: unknown[] | null;
             /**
              * Allowed Service Tiers
-             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset permits all tiers, an empty list denies all tiers. Only proxy admins can change this field.
+             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset, null, or an empty list permits all tiers. Only proxy admins can change this field.
              */
             allowed_service_tiers?: string[] | null;
             /** Allowed Vector Store Indexes */
@@ -32185,7 +32185,7 @@ export interface components {
             allowed_routes: unknown[] | null;
             /**
              * Allowed Service Tiers
-             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset permits all tiers, an empty list denies all tiers. Only proxy admins can change this field.
+             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset, null, or an empty list permits all tiers. Only proxy admins can change this field.
              */
             allowed_service_tiers?: string[] | null;
             /** Allowed Vector Store Indexes */
@@ -38649,7 +38649,7 @@ export interface components {
             allowed_routes: unknown[] | null;
             /**
              * Allowed Service Tiers
-             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset permits all tiers, an empty list denies all tiers. Only proxy admins can change this field.
+             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset, null, or an empty list permits all tiers. Only proxy admins can change this field.
              */
             allowed_service_tiers?: string[] | null;
             /** Allowed Vector Store Indexes */
@@ -41011,7 +41011,7 @@ export interface components {
             allowed_routes: unknown[] | null;
             /**
              * Allowed Service Tiers
-             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset permits all tiers, an empty list denies all tiers. Only proxy admins can change this field.
+             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset, null, or an empty list permits all tiers. Only proxy admins can change this field.
              */
             allowed_service_tiers?: string[] | null;
             /** Allowed Vector Store Indexes */
@@ -46938,7 +46938,7 @@ export interface components {
             allowed_routes: unknown[] | null;
             /**
              * Allowed Service Tiers
-             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset permits all tiers, an empty list denies all tiers. Only proxy admins can change this field.
+             * @description Allowed service tiers for Chat Completions and Responses, including WebSockets. Unset, null, or an empty list permits all tiers. Only proxy admins can change this field.
              */
             allowed_service_tiers?: string[] | null;
             /** Allowed Vector Store Indexes */

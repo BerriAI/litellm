@@ -41,7 +41,7 @@ def service_tier_policy(
 
 
 def service_tier_denial(policy: ServiceTierPolicy, tier: str, model: str) -> ServiceTierDenied | None:
-    if policy.allowed_service_tiers is None:
+    if not policy.allowed_service_tiers:
         return None
     allowed: Final = frozenset(map(normalize_service_tier, policy.allowed_service_tiers))
     return None if normalize_service_tier(tier) in allowed else ServiceTierDenied(tier=tier, model=model)
@@ -58,7 +58,7 @@ def raise_service_tier_denial(denial: ServiceTierDenied | None) -> None:
 
 
 def apply_service_tier_policy(request: Mapping[str, object], policy: ServiceTierPolicy) -> Mapping[str, object]:
-    if policy.allowed_service_tiers is None:
+    if not policy.allowed_service_tiers:
         return request
     extra_body: Final = _REQUEST.validate_python(request.get("extra_body") or {})
     raw_tier: Final = extra_body.get("service_tier", request.get("service_tier"))

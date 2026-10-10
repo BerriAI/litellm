@@ -363,7 +363,7 @@ async def _enforce_custom_key_policy(
         )
 
 
-_KEY_UPDATE_JSON_STRING_COLUMNS: Final = frozenset({"router_settings", "budget_limits", "allowed_service_tiers"})
+_KEY_UPDATE_JSON_STRING_COLUMNS: Final = frozenset({"router_settings", "budget_limits"})
 
 _KEY_METADATA_REQUEST_FIELDS: Final = frozenset(
     (*LiteLLM_ManagementEndpoint_MetadataFields_Premium, *LiteLLM_ManagementEndpoint_MetadataFields)
@@ -2608,7 +2608,7 @@ async def prepare_key_update_data(
     return {
         **non_default_values,
         **(
-            {"allowed_service_tiers": safe_dumps(data.allowed_service_tiers)}
+            {"allowed_service_tiers": list(data.allowed_service_tiers or ())}
             if "allowed_service_tiers" in data.model_fields_set
             else {}
         ),
@@ -3553,12 +3553,12 @@ async def update_key_fn(
         )
 
         # Only validate key_alias format if it's actually being changed
-        new_key_alias: Final = non_default_values.get("key_alias", None)
+        new_key_alias: Final = data.key_alias
         if new_key_alias != existing_key_row.key_alias:
             _validate_key_alias_format(key_alias=new_key_alias)
 
         await _enforce_unique_key_alias(
-            key_alias=non_default_values.get("key_alias", None),
+            key_alias=new_key_alias,
             prisma_client=prisma_client,
             existing_key_token=existing_key_row.token,
         )
@@ -3567,7 +3567,7 @@ async def update_key_fn(
         _set_key_rotation_fields(
             non_default_values,
             non_default_values.get("auto_rotate", False) is True,
-            non_default_values.get("rotation_interval"),
+            data.rotation_interval,
             existing_key_alias=existing_key_row.key_alias,
         )
 
@@ -4799,7 +4799,7 @@ async def generate_key_helper_fn(
             "created_by": created_by,
             "updated_by": updated_by,
             "allowed_routes": allowed_routes or [],
-            "allowed_service_tiers": safe_dumps(allowed_service_tiers),
+            "allowed_service_tiers": list(allowed_service_tiers or ()),
             "key_type": key_type,
             "object_permission_id": object_permission_id,
             "router_settings": router_settings_json,
@@ -4819,7 +4819,7 @@ async def generate_key_helper_fn(
             pass
         else:
             key_data["key_name"] = abbreviate_api_key(api_key=token)
-        saved_token: Final = copy.deepcopy({**key_data, "allowed_service_tiers": allowed_service_tiers})
+        saved_token: Final = copy.deepcopy(key_data)
         if isinstance(saved_token["aliases"], str):
             saved_token["aliases"] = json.loads(saved_token["aliases"])
         if isinstance(saved_token["config"], str):
@@ -4914,7 +4914,7 @@ async def generate_key_helper_fn(
         # if this is a /user/new request update the key_date with user_data fields
         key_data.update(user_data)
 
-    return {**key_data, "allowed_service_tiers": allowed_service_tiers}
+    return key_data
 
 
 async def _team_key_deletion_check(
@@ -5195,7 +5195,6 @@ def _transform_verification_tokens_to_deleted_records(
             "model_max_budget",
             "budget_fallbacks",
             "router_settings",
-            "allowed_service_tiers",
         ]:
             if json_field in record and record[json_field] is not None:
                 record[json_field] = json.dumps(record[json_field])
@@ -5692,7 +5691,7 @@ async def _execute_virtual_key_regeneration(
             data=data, existing_key_row=key_in_db, prisma_client=prisma_client, llm_router=llm_router
         )
         # Only validate key_alias format if it's actually being changed
-        new_key_alias: Final = non_default_values.get("key_alias")
+        new_key_alias: Final = data.key_alias
         if new_key_alias != key_in_db.key_alias:
             _validate_key_alias_format(key_alias=new_key_alias)
         verbose_proxy_logger.debug("non_default_values: %s", non_default_values)

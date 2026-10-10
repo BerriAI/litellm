@@ -21274,7 +21274,7 @@ async def test_key_service_tier_update_round_trips_and_omission_preserves_existi
     existing: Final = LiteLLM_VerificationToken(token="test-key", allowed_service_tiers=("default",))
     requested: Final = UpdateKeyRequest(key="test-key", allowed_service_tiers=tiers)
     update: Final = await prepare_key_update_data(requested, existing)
-    assert json.loads(update["allowed_service_tiers"]) == (list(tiers) if tiers is not None else None)
-    assert _effective_key_after_update(existing, update).allowed_service_tiers == tiers
+    assert update["allowed_service_tiers"] == list(tiers or ())
+    assert _effective_key_after_update(existing, update).allowed_service_tiers == (tiers or ())
     omitted: Final = await prepare_key_update_data(UpdateKeyRequest(key="test-key", key_alias="renamed"), existing)
     assert _effective_key_after_update(existing, omitted).allowed_service_tiers == ("default",)

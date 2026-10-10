@@ -1657,6 +1657,7 @@ class TestVerificationTokenRepositoryExtended:
         repo._prisma_client.db.litellm_verificationtoken._records["sk-arch"] = {
             "token": "sk-arch",
             "key_name": "Archive Me",
+            "allowed_service_tiers": ["default", "priority"],
             "aliases": json.dumps({"a": "b"}),
             "metadata": json.dumps({"team": "x"}),
             "permissions": json.dumps({"read": True}),
@@ -1692,6 +1693,7 @@ class TestVerificationTokenRepositoryExtended:
         assert "org_id" not in archived
 
         assert archived["budget_id"] == "budget-9"
+        assert archived["allowed_service_tiers"] == ("default", "priority")
 
         for relation_field in (
             "object_permission",

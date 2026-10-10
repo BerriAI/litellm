@@ -25183,7 +25183,7 @@ async def test_key_service_tier_permission_blocks_upstream_attempts(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("surface", ("chat", "responses"))
-@pytest.mark.parametrize("allowed", (None, ("default",)))
+@pytest.mark.parametrize("allowed", (None, (), ("default",)))
 async def test_key_service_tier_permission_allows_standard_provider_calls(
     surface: str, allowed: tuple[str, ...] | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -25221,4 +25221,4 @@ async def test_key_service_tier_permission_allows_standard_provider_calls(
             assert isinstance(completion, litellm.ModelResponse)
             assert completion.choices[0].message.content == "ok"
         sent: Final = json.loads(wire.calls[0].request.content)
-        assert sent.get("service_tier") == ("default" if allowed is not None else None)
+        assert sent.get("service_tier") == ("default" if allowed else None)

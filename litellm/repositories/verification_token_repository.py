@@ -66,7 +66,6 @@ _JSON_ENCODED_TOKEN_FIELDS: Final = (
     "model_spend",
     "model_max_budget",
     "router_settings",
-    "allowed_service_tiers",
     "budget_limits",
     "litellm_budget_table",
 )
@@ -417,7 +416,6 @@ class VerificationTokenRepository(BaseRepository[LiteLLM_VerificationToken]):
             "model_spend",
             "model_max_budget",
             "router_settings",
-            "allowed_service_tiers",
         ]
         for field in json_fields:
             if field in data:

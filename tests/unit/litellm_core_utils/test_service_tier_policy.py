@@ -32,7 +32,6 @@ def test_allowed_tier_matches_the_outbound_payload(
         ({"service_tier": "ultrafast"}, ("default", "priority")),
         ({"service_tier": "default", "extra_body": {"service_tier": "ultrafast"}}, ("default",)),
         ({"service_tier": "auto"}, ("default",)),
-        ({}, ()),
     ),
 )
 def test_disallowed_tier_returns_permission_denied(
@@ -44,6 +43,7 @@ def test_disallowed_tier_returns_permission_denied(
     assert "service_tier=" in error.value.message
 
 
-def test_unrestricted_key_preserves_payload_identity() -> None:
+@pytest.mark.parametrize("allowed", (None, ()))
+def test_unrestricted_key_preserves_payload_identity(allowed: tuple[str, ...] | None) -> None:
     payload: Final[dict[str, object]] = {"service_tier": "future-tier"}
-    assert apply_service_tier_policy(payload, ServiceTierPolicy()) is payload
+    assert apply_service_tier_policy(payload, ServiceTierPolicy(allowed_service_tiers=allowed)) is payload
