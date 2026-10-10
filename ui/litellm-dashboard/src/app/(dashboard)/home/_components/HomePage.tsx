@@ -47,7 +47,7 @@ export default function HomePage() {
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(16rem,1fr)]">
         <div className="flex min-w-0 flex-col gap-6">
-          <section aria-labelledby="home-whats-new" className="flex flex-col gap-3">
+          <section aria-labelledby="home-whats-new" data-testid="home-whats-new" className="flex flex-col gap-3">
             <div>
               <h2 id="home-whats-new" className="flex items-center gap-2 text-lg font-semibold">
                 <Sparkles className="size-4 text-muted-foreground" />

@@ -117,7 +117,7 @@ describe("HomePage", () => {
 
   it("lists the curated launches newest first with their links", () => {
     renderHome();
-    const section = screen.getByRole("heading", { name: /what's new in litellm/i }).closest("section")!;
+    const section = screen.getByTestId("home-whats-new");
     const links = within(section).getAllByRole("link");
     expect(links.map((link) => link.getAttribute("href"))).toEqual(WHATS_NEW_ITEMS.map((item) => item.href));
     const dates = WHATS_NEW_ITEMS.map((item) => item.publishedOn);
