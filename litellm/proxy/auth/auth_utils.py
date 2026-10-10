@@ -41,6 +41,23 @@ from litellm.types.router import reject_server_owned_wif_params as _reject_serve
 from litellm.types.utils import CustomPricingLiteLLMParams, oauth_token_exchange_litellm_params
 
 
+class MissingCredentialError(Exception):
+    pass
+
+
+EXPECTED_CREDENTIAL_CHALLENGE_STATE_KEY: Final = "litellm_expected_credential_challenge"
+
+
+def mark_expected_credential_challenge(request: Request) -> None:
+    setattr(request.state, EXPECTED_CREDENTIAL_CHALLENGE_STATE_KEY, True)
+
+
+def is_expected_credential_challenge(exception: BaseException, request: Request) -> bool:
+    return isinstance(exception, MissingCredentialError) and (
+        getattr(request.state, EXPECTED_CREDENTIAL_CHALLENGE_STATE_KEY, False) is True
+    )
+
+
 def is_invalid_virtual_key_error(exception: BaseException | None) -> bool:
     """True when an authentication error rejects a malformed virtual key.
 
