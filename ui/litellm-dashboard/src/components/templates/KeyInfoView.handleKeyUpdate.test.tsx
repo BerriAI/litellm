@@ -31,6 +31,10 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
   useOrganizations: () => ({ data: [] }),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/teams/useTeamMemberBudgets", () => ({
+  useTeamMemberBudgets: vi.fn().mockReturnValue({}),
+}));
+
 // Networking: wire the hoisted fns so we can assert calls later
 vi.mock("../networking", () => {
   return {

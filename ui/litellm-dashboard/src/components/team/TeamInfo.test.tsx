@@ -5,6 +5,7 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { chooseSelectOption, renderWithProviders, testQueryClient } from "../../../tests/test-utils";
 import { toast } from "@/lib/toast";
+import type { Member } from "@/components/networking";
 import type { EffectiveMcpServer } from "../mcp_server_management/effectiveMcpServers";
 import type { MCPServer } from "../mcp_tools/types";
 import TeamInfoView, {
@@ -133,11 +134,29 @@ vi.mock("@/components/mcp_server_management/MCPServerSelector", () => ({
 }));
 
 vi.mock("@/components/team/TeamMemberTab", () => ({
-  default: vi.fn(({ setIsAddMemberModalVisible }) => (
-    <div>
-      <button onClick={() => setIsAddMemberModalVisible(true)}>Add Member</button>
-    </div>
-  )),
+  default: vi.fn(
+    ({
+      setIsAddMemberModalVisible,
+      setSelectedEditMember,
+      setIsEditMemberModalVisible,
+    }: {
+      setIsAddMemberModalVisible: (visible: boolean) => void;
+      setSelectedEditMember: (member: Member) => void;
+      setIsEditMemberModalVisible: (visible: boolean) => void;
+    }) => (
+      <div>
+        <button onClick={() => setIsAddMemberModalVisible(true)}>Add Member</button>
+        <button
+          onClick={() => {
+            setSelectedEditMember({ user_email: "edit@test.com", user_id: "edit-user", role: "user" });
+            setIsEditMemberModalVisible(true);
+          }}
+        >
+          Edit Member
+        </button>
+      </div>
+    ),
+  ),
 }));
 
 vi.mock("@/components/common_components/user_search_modal", () => ({
@@ -1074,6 +1093,31 @@ describe("TeamInfoView", () => {
       await waitFor(() => {
         expect(networking.teamMemberAddCall).toHaveBeenCalled();
       });
+    });
+
+    it("invalidates the member budget query after a successful member update", async () => {
+      const user = userEvent.setup({ delay: null });
+      const teamData = createMockTeamData();
+      vi.mocked(networking.teamInfoCall).mockResolvedValue(teamData);
+      testQueryClient.clear();
+      const invalidateQueriesSpy = vi.spyOn(testQueryClient, "invalidateQueries");
+
+      try {
+        renderWithProviders(<TeamInfoView {...defaultProps} />);
+
+        await user.click(await screen.findByRole("tab", { name: "Members" }));
+        await user.click(await screen.findByRole("button", { name: "Edit Member" }));
+        await user.click(await screen.findByRole("button", { name: "Submit" }));
+
+        await waitFor(() => expect(networking.teamMemberUpdateCall).toHaveBeenCalled());
+        await waitFor(() =>
+          expect(invalidateQueriesSpy).toHaveBeenCalledWith({
+            queryKey: ["teams", "memberBudget", defaultProps.teamId],
+          }),
+        );
+      } finally {
+        invalidateQueriesSpy.mockRestore();
+      }
     });
 
     it("should display soft budget in settings view when present", async () => {
