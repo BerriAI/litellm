@@ -161,6 +161,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
           uv run --no-sync python scripts/openapi_docs_gate.py --base "$GATE_BASE_SHA"
 
       - name: Print OpenAI version

@@ -77,7 +77,7 @@ jobs:
       - name: Install the proxy
         if: matrix.checker == 'openapi-docs'
         run: |
-          uv sync --frozen --group proxy-dev --group e2e-dev
+          uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
           uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Emit ${{ matrix.checker }} counts for HEAD
