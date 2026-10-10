@@ -130,7 +130,7 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
   if (error) {
     return (
       <Alert variant="destructive">
-        <AlertTitle>System One request failed</AlertTitle>
+        <AlertTitle>Decisions request failed</AlertTitle>
         <AlertDescription>{error}</AlertDescription>
       </Alert>
     );
@@ -141,7 +141,7 @@ export default function ResponseView({ response, fallbackModel, latencyMs, error
       <Card>
         <CardHeader>
           <CardTitle>Calibrated probabilities</CardTitle>
-          <CardDescription>Send a request to see System One answers and probabilities.</CardDescription>
+          <CardDescription>Send a request to see decision answers and probabilities.</CardDescription>
         </CardHeader>
       </Card>
     );
