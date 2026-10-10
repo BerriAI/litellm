@@ -41,6 +41,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     read_request_body,
 )
 from litellm.proxy.common_utils.openai_endpoint_utils import (
+    apply_openai_project_to_data,
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
@@ -284,6 +285,7 @@ async def create_batch(
             "Request received by LiteLLM:\n%s",
             json.dumps(data, indent=4),
         )
+        apply_openai_project_to_data(data=data, request=request, general_settings=general_settings)
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
@@ -614,6 +616,7 @@ async def retrieve_batch(
             proxy_config=proxy_config,
             route_type="aretrieve_batch",
         )
+        apply_openai_project_to_data(data=data, request=request, general_settings=general_settings)
 
         unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
         if unified_model_id is not None:
@@ -919,6 +922,8 @@ async def list_batches(
             proxy_config=proxy_config,
             route_type="alist_batches",
         )
+        data = dict(data)  # rebind-ok: private copy so the project resolution below can drop or set `project`
+        apply_openai_project_to_data(data=data, request=request, general_settings=general_settings)
 
         # Try to use managed objects table for listing batches (returns encoded IDs).
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
@@ -1113,6 +1118,7 @@ async def cancel_batch(
             proxy_config=proxy_config,
             route_type="acancel_batch",
         )
+        apply_openai_project_to_data(data=data, request=request, general_settings=general_settings)
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
