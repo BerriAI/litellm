@@ -52,6 +52,14 @@ def _mock_gemini_post_response():
             }
         ]
     }
+
+    async def _aiter_lines():
+        # The async handler reads the first SSE event before returning, so a stream
+        # stand-in has to end (a bare MagicMock yields mock lines forever).
+        yield 'data: {"candidates": [{"content": {"parts": [{"text": "hi"}]}}]}'
+        yield ""
+
+    resp.aiter_lines = _aiter_lines
     return resp
 
 

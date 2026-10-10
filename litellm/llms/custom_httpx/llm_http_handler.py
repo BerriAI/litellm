@@ -12055,7 +12055,7 @@ class BaseLLMHTTPHandler:
                     stream=True,
                 )
                 # Return async streaming iterator
-                return AsyncGoogleGenAIGenerateContentStreamingIterator(
+                iterator = AsyncGoogleGenAIGenerateContentStreamingIterator(
                     response=response,
                     model=model,
                     logging_obj=logging_obj,
@@ -12070,6 +12070,18 @@ class BaseLLMHTTPHandler:
                         response_headers=response.headers,
                     ),
                 )
+                # Read the first event before returning: this call is what the router
+                # wraps in its retry loop, so a stream that drops before its first event
+                # has to fail here, not in the consumer that reads the iterator later.
+                try:
+                    await iterator.prime_first_chunk()
+                except Exception:
+                    try:
+                        await response.aclose()
+                    except Exception as close_error:  # noqa: BLE001  # closing must not mask the stream failure
+                        verbose_logger.debug("Could not close the dropped google genai stream: %s", close_error)
+                    raise
+                return iterator
             else:
                 response = await async_httpx_client.post(
                     url=api_base,

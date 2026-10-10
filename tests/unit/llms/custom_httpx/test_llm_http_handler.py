@@ -5144,3 +5144,109 @@ async def test_retrieve_file_rejects_unverified_bedrock_range_error(
                 )
         finally:
             sync_client.close()
+
+
+class _LineStreamDroppingOnFirstRead:
+    """A line iterator that drops the connection before yielding anything."""
+
+    def __aiter__(self):
+        return self
+
+    async def __anext__(self):
+        raise httpx.ReadError("Connection closed.")
+
+
+def _google_genai_provider_config_mock() -> Mock:
+    provider_config = Mock()
+    provider_config.get_auth_token_and_url = AsyncMock(
+        return_value=({}, "https://generativelanguage.googleapis.com")
+    )
+    provider_config.transform_generate_content_request = Mock(return_value={"contents": []})
+    return provider_config
+
+
+@pytest.mark.asyncio
+async def test_google_genai_async_stream_priming_fails_retriably_when_the_stream_drops_before_its_first_event():
+    """
+    A stream that drops before its first event must fail inside the caller's own retry window.
+
+    The handler returns as soon as the response headers arrive, so without priming the first
+    body read happens in the proxy's data generator, long after the router recorded the call
+    as a success and spent its retry budget.
+    """
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    mock_response = Mock()
+    mock_response.headers = {}
+    mock_response.aclose = AsyncMock()
+    mock_response.aiter_lines = _LineStreamDroppingOnFirstRead
+
+    provider_config = _google_genai_provider_config_mock()
+    provider_config.get_error_class = Mock(
+        side_effect=lambda error_message, status_code, headers: BaseLLMException(
+            status_code=status_code, message=error_message, headers=headers
+        )
+    )
+
+    handler = BaseLLMHTTPHandler()
+    client = Mock(spec=AsyncHTTPHandler)
+    client.post = AsyncMock(return_value=mock_response)
+
+    with pytest.raises(BaseLLMException) as exc_info:
+        await handler.async_generate_content_handler(
+            model="gemini-3.8-flash",
+            contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+            generate_content_provider_config=provider_config,
+            generate_content_config_dict={},
+            tools=None,
+            custom_llm_provider="vertex_ai",
+            litellm_params=GenericLiteLLMParams(),
+            logging_obj=Mock(spec=LiteLLMLoggingObj),
+            client=client,
+            stream=True,
+        )
+
+    # The router retries on this status, so the drop now lands inside its retry loop.
+    assert litellm.should_retry(exc_info.value.status_code)
+    mock_response.aclose.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_google_genai_async_stream_priming_returns_an_iterator_that_still_yields_the_whole_stream():
+    """Priming must not consume the first event: the consumer sees the entire stream."""
+    from litellm.google_genai.streaming_iterator import (
+        AsyncGoogleGenAIGenerateContentStreamingIterator,
+    )
+    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+
+    mock_response = Mock()
+    mock_response.headers = {}
+
+    async def _aiter_lines():
+        yield 'data: {"first": 1}'
+        yield ""
+        yield 'data: {"second": 2}'
+        yield ""
+
+    mock_response.aiter_lines = _aiter_lines
+
+    handler = BaseLLMHTTPHandler()
+    client = Mock(spec=AsyncHTTPHandler)
+    client.post = AsyncMock(return_value=mock_response)
+
+    iterator = await handler.async_generate_content_handler(
+        model="gemini-3.8-flash",
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        generate_content_provider_config=_google_genai_provider_config_mock(),
+        generate_content_config_dict={},
+        tools=None,
+        custom_llm_provider="vertex_ai",
+        litellm_params=GenericLiteLLMParams(),
+        logging_obj=Mock(spec=LiteLLMLoggingObj),
+        client=client,
+        stream=True,
+    )
+
+    assert isinstance(iterator, AsyncGoogleGenAIGenerateContentStreamingIterator)
+    assert await iterator.__anext__() == b'data: {"first": 1}\n\n'
+    assert await iterator.__anext__() == b'data: {"second": 2}\n\n'
