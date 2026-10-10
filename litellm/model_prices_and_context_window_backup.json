@@ -23222,6 +23222,14 @@
             "notes": "Nimble Search API pay-as-you-go list price: $5 per 1,000 searches, up to 100 results per search. Volume plans price differently."
         }
     },
+    "scavio/search": {
+        "input_cost_per_query": 0.01,
+        "litellm_provider": "scavio",
+        "mode": "search",
+        "metadata": {
+            "notes": "Scavio Google Search API pay-as-you-go list price: $0.01 per search (1 credit). Subscription plans price lower per credit."
+        }
+    },
     "elevenlabs/scribe_v1": {
         "input_cost_per_second": 6.11e-05,
         "litellm_provider": "elevenlabs",
