@@ -71,6 +71,12 @@ const selectEndpoint = async (endpoint: "/v1/decisions" | "/v1/systemone") => {
   await userEvent.click(await screen.findByRole("option", { name: endpoint, exact: true }));
 };
 
+const selectPreset = async (label: string) => {
+  screen.getByRole("combobox", { name: "Example" }).focus();
+  await userEvent.keyboard("{ArrowDown}");
+  await userEvent.click(await screen.findByRole("option", { name: label }));
+};
+
 const createResponse = (body: SystemOneResponse | OpenAIDecisionsResponse, status = 200, errorText = "") =>
   ({
     ok: status >= 200 && status < 300,
@@ -99,20 +105,81 @@ describe("SystemOneUI integration", () => {
     document.cookie = "token=; path=/; max-age=0";
   });
 
-  it("restores the example after the request is edited", async () => {
-    const user = userEvent.setup();
+  it("switches between example presets and reads Custom once the request is edited", async () => {
     render(<SystemOneUI accessToken="session-key" />);
     const editor = await openJsonEditor();
     const example = (editor as HTMLTextAreaElement).value;
-    const resetButton = screen.getByRole("button", { name: "Reset example" });
-    expect(resetButton).toBeDisabled();
+    const picker = screen.getByRole("combobox", { name: "Example" });
+    expect(picker).toHaveTextContent("Triage a bug report");
 
     fireEvent.change(editor, { target: { value: "{}" } });
-    expect(resetButton).toBeEnabled();
-    await user.click(resetButton);
-
+    expect(picker).toHaveTextContent("Custom");
+    await selectPreset("Triage a bug report");
     expect(editor).toHaveValue(example);
-    expect(resetButton).toBeDisabled();
+    expect(picker).toHaveTextContent("Triage a bug report");
+
+    await selectPreset("Score a sales lead");
+    expect(picker).toHaveTextContent("Score a sales lead");
+    expect(JSON.parse((editor as HTMLTextAreaElement).value)).toMatchObject({ questions: { fit: { type: "score" } } });
+  });
+
+  it("clears the whole request and lets a preset be picked from nothing", async () => {
+    const user = userEvent.setup();
+    render(<SystemOneUI accessToken="session-key" />);
+    const clear = screen.getByRole("button", { name: "Clear" });
+    expect(screen.getByRole("textbox", { name: "Input" })).toHaveDisplayValue(/streaming responses/);
+
+    await user.click(clear);
+    expect(screen.getByRole("textbox", { name: "Input" })).toHaveValue("");
+    expect(screen.queryAllByRole("group", { name: /Question / })).toHaveLength(0);
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(clear).toBeDisabled();
+    expect(screen.getByRole("combobox", { name: "Example" })).toHaveTextContent("Custom");
+
+    await selectPreset("Route a support ticket");
+    expect(screen.getByRole("textbox", { name: "Input" })).toHaveDisplayValue(/charged twice/);
+    expect(screen.getAllByRole("group", { name: /Question / })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  it("keeps the preset label after picking a model and leaves an omitted model out when clearing", async () => {
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    render(<SystemOneUI accessToken="session-key" />);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest"));
+    const picker = screen.getByRole("combobox", { name: "Example" });
+    const editor = await openJsonEditor();
+    const example = JSON.parse((editor as HTMLTextAreaElement).value) as Record<string, unknown>;
+    const { model: _model, ...withoutModel } = example;
+
+    fireEvent.change(editor, {
+      target: { value: JSON.stringify({ ...withoutModel, model: "pplx-decider" }, null, 2) },
+    });
+    expect(picker).toHaveTextContent("Triage a bug report");
+
+    fireEvent.change(editor, { target: { value: JSON.stringify(withoutModel, null, 2) } });
+    expect(picker).toHaveTextContent("Triage a bug report");
+    await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(JSON.parse((editor as HTMLTextAreaElement).value)).toEqual({ state: "", questions: {} });
+    await selectPreset("Score a sales lead");
+    expect(JSON.parse((editor as HTMLTextAreaElement).value)).not.toHaveProperty("model");
+  });
+
+  it("offers the same presets on /v1/decisions in the OpenAI shape and clears to an empty input", async () => {
+    const user = userEvent.setup();
+    render(<SystemOneUI accessToken="session-key" />);
+    await selectEndpoint("/v1/decisions");
+    await selectPreset("Moderate a forum comment");
+    await user.click(screen.getByRole("tab", { name: "JSON" }));
+    const editor = screen.getByRole("textbox", { name: "Decisions JSON payload" }) as HTMLTextAreaElement;
+    const payload = JSON.parse(editor.value);
+    expect(payload.input).toMatch(/stream=false/);
+    expect(payload.questions).toEqual([
+      { type: "predicate", name: "breaks_rules", instructions: "Does this comment break the community guidelines?" },
+    ]);
+
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(JSON.parse(editor.value)).toEqual({ input: "", questions: [] });
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 
   it("offers both literal proxy endpoints without TypeSafe or product prefixes", async () => {
@@ -227,7 +294,7 @@ describe("SystemOneUI integration", () => {
 
     await selectEndpoint("/v1/decisions");
     expect(screen.getByRole("textbox", { name: "Decisions JSON payload" })).toHaveValue(JSON.stringify(payload));
-    await user.click(screen.getByRole("button", { name: "Reset example" }));
+    await selectPreset("Triage a bug report");
     expect(screen.getByRole("textbox", { name: "Decisions JSON payload" })).toHaveValue(nativeExample);
     await selectEndpoint("/v1/systemone");
     expect(screen.getByRole("textbox", { name: "System One JSON payload" })).toHaveValue(systemOneDraft);
@@ -403,7 +470,7 @@ describe("SystemOneUI integration", () => {
     );
     expect(next).toEqual({ ...payload, questions: [{ ...payload.questions[0], instructions: "Is it urgent?" }] });
     await user.click(screen.getByRole("tab", { name: "Form" }));
-    await user.click(screen.getByRole("button", { name: "Reset example" }));
+    await selectPreset("Triage a bug report");
     expect(screen.getByRole("textbox", { name: "Input" })).toBeInTheDocument();
     expect(screen.getAllByRole("group", { name: /Question \d/ })).toHaveLength(3);
     await selectEndpoint("/v1/systemone");
