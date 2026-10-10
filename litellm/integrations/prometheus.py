@@ -4232,28 +4232,30 @@ class PrometheusLogger(CustomLogger):
                 max_budget=max_budget if max_budget is not None else carried.max_budget,
                 budget_reset_at=carried.budget_reset_at,
             )
-        team_object: Final = LiteLLM_TeamTable(
-            team_id=team_id,
-            team_alias=team_alias,
-            spend=_total_team_spend,
-            max_budget=max_budget,
-        )
+        team_info: LiteLLM_TeamTable | None = None
         try:
-            team_info: Final = await get_team_object(
+            team_info = await get_team_object(
                 team_id=team_id,
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
             )
         except Exception as e:
             verbose_logger.debug("[Non-Blocking] Prometheus: Error getting team info: %s", e)
-            return team_object
 
-        if team_info:
-            team_object.budget_reset_at = team_info.budget_reset_at
-            if team_object.max_budget is None and team_info.max_budget is not None:
-                team_object.max_budget = team_info.max_budget
-
-        return team_object
+        # metadata spend of None means "unknown", not "nothing spent" -- fall back to the DB value
+        _base_spend: Final = (
+            spend if spend is not None else (team_info.spend if team_info and team_info.spend is not None else 0)
+        )
+        _resolved_max_budget: Final = (
+            max_budget if max_budget is not None else (team_info.max_budget if team_info else None)
+        )
+        return LiteLLM_TeamTable(
+            team_id=team_id,
+            team_alias=team_alias,
+            spend=_base_spend + response_cost,
+            max_budget=_resolved_max_budget,
+            budget_reset_at=team_info.budget_reset_at if team_info else None,
+        )
 
     def _set_team_budget_metrics(
         self,
