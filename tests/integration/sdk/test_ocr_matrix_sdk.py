@@ -25,6 +25,7 @@ pytestmark = pytest.mark.asyncio
 Document = Mapping[str, object]
 AuthMode = Literal["explicit", "env"]
 CallStyle = Literal["sync", "async"]
+PriceField = Literal["ocr_cost_per_page", "ocr_cost_per_credit"]
 
 PAGE_TEXT: Final = "scripted ocr page"
 PDF_BYTES: Final = b"%PDF-1.4\n%ocr matrix document\n%%EOF\n"
@@ -37,6 +38,11 @@ DOCUMENTS: Final = {
 }
 DI_ANALYZE_PATH: Final = "/documentintelligence/documentModels/prebuilt-layout"
 OCR_CALL_TYPES: Final = frozenset({"ocr", "aocr"})
+UPLOADED_FILE_ID: Final = "reducto://scripted-upload"
+BILLED_PAGES: Final = 2
+BILLED_CREDITS: Final = 3
+RATE: Final = 0.0125
+PAGE_NUMBERS: Final = tuple(range(1, BILLED_PAGES + 1))
 _JSON: Final = TypeAdapter(dict[str, JsonValue])
 _STRING_KEYED: Final = TypeAdapter(dict[str, object])
 _FLOAT: Final = TypeAdapter(float)
@@ -61,36 +67,30 @@ def _respond(request: Request) -> Reply:
         content, content_type = DOCUMENTS[path]
         return Reply(body=content, content_type=content_type)
     if path == "/upload":
-        return _json_reply({"file_id": "reducto://scripted-upload"})
+        return _json_reply({"file_id": UPLOADED_FILE_ID})
     if path == "/parse":
+        chunks: Final = [
+            {"content": PAGE_TEXT, "blocks": [{"content": PAGE_TEXT, "bbox": {"page": page}}]} for page in PAGE_NUMBERS
+        ]
         return _json_reply(
             {
                 "job_id": "scripted-job",
-                "usage": {"num_pages": 1, "credits": 1},
-                "result": {"chunks": [{"content": PAGE_TEXT, "blocks": [{"content": PAGE_TEXT, "bbox": {"page": 1}}]}]},
+                "usage": {"num_pages": BILLED_PAGES, "credits": BILLED_CREDITS},
+                "result": {"chunks": chunks},
             }
         )
     if path == f"{DI_ANALYZE_PATH}:analyze":
         operation: Final = f"http://{request.headers['host']}{DI_ANALYZE_PATH}/analyzeResults/scripted?api-version=1"
         return Reply(status=202, body=b"", headers={"operation-location": operation})
     if path.startswith(f"{DI_ANALYZE_PATH}/analyzeResults/"):
-        return _json_reply(
-            {
-                "status": "succeeded",
-                "analyzeResult": {
-                    "content": PAGE_TEXT,
-                    "pages": [{"pageNumber": 1, "lines": [{"content": PAGE_TEXT}]}],
-                },
-            }
-        )
+        pages: Final = [{"pageNumber": page, "lines": [{"content": PAGE_TEXT}]} for page in PAGE_NUMBERS]
+        return _json_reply({"status": "succeeded", "analyzeResult": {"content": PAGE_TEXT, "pages": pages}})
     if path == "/v2/parse":
-        return _json_reply(
-            {"pages": [{"index": 0, "markdown": {"content": PAGE_TEXT}}], "meta": {"billed_units": {"pages": 1}}}
-        )
+        cohere_pages: Final = [{"index": page - 1, "markdown": {"content": PAGE_TEXT}} for page in PAGE_NUMBERS]
+        return _json_reply({"pages": cohere_pages, "meta": {"billed_units": {"pages": BILLED_PAGES}}})
     model: Final = _JSON.validate_json(request.body)["model"]
-    return _json_reply(
-        {"pages": [{"index": 0, "markdown": PAGE_TEXT}], "model": model, "usage_info": {"pages_processed": 1}}
-    )
+    mistral_pages: Final = [{"index": page - 1, "markdown": PAGE_TEXT} for page in PAGE_NUMBERS]
+    return _json_reply({"pages": mistral_pages, "model": model, "usage_info": {"pages_processed": BILLED_PAGES}})
 
 
 @dataclass(frozen=True, slots=True)
@@ -202,9 +202,15 @@ class Provider:
     auth_header: str
     base_env: str | None = None
     downloads_urls: bool = False
+    parse_input_field: str | None = None
+    price_field: PriceField = "ocr_cost_per_page"
 
     def credential_header(self, key: str) -> str:
         return key if self.auth_header == "ocp-apim-subscription-key" else f"Bearer {key}"
+
+    @property
+    def billed_units(self) -> int:
+        return BILLED_CREDITS if self.price_field == "ocr_cost_per_credit" else BILLED_PAGES
 
 
 MISTRAL: Final = Provider("mistral", "mistral/mistral-ocr-latest", "MISTRAL_API_KEY", "authorization")
@@ -224,8 +230,22 @@ AZURE_DOC_INTELLIGENCE: Final = Provider(
     base_env="AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT",
 )
 COHERE: Final = Provider("cohere", "cohere/parse-v5.0", "COHERE_API_KEY", "authorization")
-REDUCTO_V3: Final = Provider("reducto_v3", "reducto/parse-v3", "REDUCTO_API_KEY", "authorization")
-REDUCTO_LEGACY: Final = Provider("reducto_legacy", "reducto/parse-legacy", "REDUCTO_API_KEY", "authorization")
+REDUCTO_V3: Final = Provider(
+    "reducto_v3",
+    "reducto/parse-v3",
+    "REDUCTO_API_KEY",
+    "authorization",
+    parse_input_field="input",
+    price_field="ocr_cost_per_credit",
+)
+REDUCTO_LEGACY: Final = Provider(
+    "reducto_legacy",
+    "reducto/parse-legacy",
+    "REDUCTO_API_KEY",
+    "authorization",
+    parse_input_field="document_url",
+    price_field="ocr_cost_per_credit",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -256,10 +276,11 @@ class Case:
         return {}
 
     async def run(self, document: Document, credentials: Mapping[str, str]) -> OCRResponse:
+        kwargs: Final = {**credentials, self.provider.price_field: RATE}
         response: Final = (
-            await _OCR_CLIENT.aocr(model=self.provider.model, document=document, **credentials)
+            await _OCR_CLIENT.aocr(model=self.provider.model, document=document, **kwargs)
             if self.call == "async"
-            else _OCR_CLIENT.ocr(model=self.provider.model, document=document, **credentials)
+            else _OCR_CLIENT.ocr(model=self.provider.model, document=document, **kwargs)
         )
         assert isinstance(response, OCRResponse)
         return response
@@ -282,6 +303,10 @@ CASES: Final = (
     Case(REDUCTO_V3, "explicit", PDF_DATA_URI, "async"),
     Case(REDUCTO_LEGACY, "explicit", PDF_AS_BYTES, "sync"),
 )
+
+
+def _path(request: Request) -> str:
+    return request.target.split("?", 1)[0]
 
 
 def _decoded(value: str) -> bytes | str:
@@ -316,46 +341,50 @@ def _sent_document(request: Request) -> bytes | str:
 
 
 def _assert_sent(case: Case, requests: tuple[Request, ...], document: Document) -> None:
-    provider_calls: Final = tuple(request for request in requests if request.target.split("?", 1)[0] not in DOCUMENTS)
+    provider_calls: Final = tuple(request for request in requests if _path(request) not in DOCUMENTS)
     assert provider_calls, requests
     assert {request.headers.get(case.provider.auth_header) for request in provider_calls} == {
         case.provider.credential_header(case.key)
     }
-    downloads: Final = tuple(request for request in requests if request.target.split("?", 1)[0] in DOCUMENTS)
+    downloads: Final = tuple(_path(request) for request in requests if _path(request) in DOCUMENTS)
     url: Final = document.get("document_url") or document.get("image_url")
     passes_url_through: Final = case.document.url_path is not None and not case.provider.downloads_urls
     assert _sent_document(provider_calls[0]) == (url if passes_url_through else case.document.content)
-    assert [request.target for request in downloads] == (
-        [case.document.url_path] if case.document.url_path is not None and case.provider.downloads_urls else []
+    assert downloads == (
+        (case.document.url_path,) if case.document.url_path is not None and case.provider.downloads_urls else ()
     )
+    if case.provider.parse_input_field is not None:
+        parse_bodies: Final = tuple(
+            _JSON.validate_json(request.body) for request in provider_calls if _path(request) == "/parse"
+        )
+        assert parse_bodies == ({case.provider.parse_input_field: UPLOADED_FILE_ID},)
 
 
 def _assert_ocr_response(response: OCRResponse, model: str) -> None:
     assert response.object == "ocr"
     assert response.model == model.split("/", 1)[1]
-    assert [page.index for page in response.pages] == list(range(len(response.pages)))
-    assert PAGE_TEXT in " ".join(page.markdown for page in response.pages)
+    assert [page.index for page in response.pages] == list(range(BILLED_PAGES))
+    assert [page.markdown for page in response.pages] == [PAGE_TEXT] * BILLED_PAGES
     assert response.usage_info is not None
-    assert response.usage_info.pages_processed == len(response.pages)
+    assert response.usage_info.pages_processed == BILLED_PAGES
 
 
-def _assert_logged(logged: LoggedCall, response: OCRResponse, model: str, call: CallStyle) -> None:
+def _assert_logged(logged: LoggedCall, response: OCRResponse, case: Case) -> None:
     assert logged.response is response
     assert logged.payload["status"] == "success"
-    assert logged.payload["call_type"] == ("aocr" if call == "async" else "ocr")
-    assert logged.payload["custom_llm_provider"] == model.split("/", 1)[0]
+    assert logged.payload["call_type"] == ("aocr" if case.call == "async" else "ocr")
+    assert logged.payload["custom_llm_provider"] == case.provider.model.split("/", 1)[0]
     assert logged.payload["model"] == response.model
-    assert _FLOAT.validate_python(logged.payload["response_cost"]) > 0
+    assert _FLOAT.validate_python(logged.payload["response_cost"]) == pytest.approx(case.provider.billed_units * RATE)
 
 
 @pytest.mark.parametrize("case", CASES, ids=[case.id for case in CASES])
-async def test_ocr_sends_the_bound_credential_and_document_then_logs_a_priced_call(
+async def test_ocr_sends_the_bound_credential_and_document_then_logs_the_billed_cost(
     case: Case,
     monkeypatch: pytest.MonkeyPatch,
     logger: RecordingLogger,
     tmp_path: Path,
 ) -> None:
-    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     with wire_server(_respond) as wire:
         monkeypatch.setattr(litellm, "user_url_allowed_hosts", [wire.url.removeprefix("http://")])
         credentials: Final = case.bind_credentials(monkeypatch, wire.url)
@@ -366,4 +395,4 @@ async def test_ocr_sends_the_bound_credential_and_document_then_logs_a_priced_ca
 
     _assert_ocr_response(response, case.provider.model)
     _assert_sent(case, requests, document)
-    _assert_logged(logged, response, case.provider.model, case.call)
+    _assert_logged(logged, response, case)

@@ -37,50 +37,52 @@ def _deployment(backend: str) -> LiteLLMParamsBody:
     )
 
 
-@pytest.mark.parametrize(
-    ("backend", "beta_provider", "tools"),
-    [
-        pytest.param(_ANTHROPIC_MODEL, "anthropic", [_CODE_EXECUTION], id="anthropic"),
-        pytest.param(f"bedrock/invoke/{_BEDROCK_MODEL_ID}", "bedrock", [], id="bedrock-invoke"),
-        pytest.param(f"bedrock/converse/{_BEDROCK_MODEL_ID}", "bedrock_converse", [], id="bedrock-converse"),
-    ],
-)
-@pytest.mark.covers(
-    "llm.messages.anthropic.basic.nonstream.works",
-    "llm.messages.bedrock_invoke.basic.nonstream.works",
-    "llm.messages.bedrock_converse.basic.nonstream.works",
-)
-@meta(
-    Subject(
-        domain=Domain.LLM_TRANSLATION,
-        route=Route.MESSAGES,
-        providers=(Provider.ANTHROPIC, Provider.BEDROCK),
-        models=(_ANTHROPIC_MODEL, _BEDROCK_MODEL_ID),
-        mode=Mode.NONSTREAM,
+class TestAnthropicBetaHeaders:
+    @pytest.mark.parametrize(
+        ("backend", "beta_provider", "tools"),
+        [
+            pytest.param(_ANTHROPIC_MODEL, "anthropic", [_CODE_EXECUTION], id="anthropic"),
+            pytest.param(f"bedrock/invoke/{_BEDROCK_MODEL_ID}", "bedrock", [], id="bedrock-invoke"),
+            pytest.param(f"bedrock/converse/{_BEDROCK_MODEL_ID}", "bedrock_converse", [], id="bedrock-converse"),
+        ],
     )
-)
-def test_every_mapped_beta_header_is_accepted_by_the_provider(
-    proxy: ProxyClient,
-    resources: ResourceManager,
-    sdk: SdkClients,
-    backend: str,
-    beta_provider: str,
-    tools: list[ToolUnionParam],
-) -> None:
-    model: Final = f"e2e-messages-beta-{unique_marker()}"
-    model_id: Final = proxy.create_model(model, _deployment(backend))
-    resources.defer(lambda: proxy.delete_model(model_id))
-
-    message: Final = sdk.anthropic(resources.key()).messages.create(
-        model=model,
-        max_tokens=64,
-        messages=[{"role": "user", "content": "Say 'hello' and nothing else"}],
-        tools=tools,
-        extra_headers={"anthropic-beta": _mapped_beta_headers(beta_provider)},
-        extra_body=NO_PROXY_CACHE,
+    @pytest.mark.covers(
+        "llm.messages.anthropic.basic.nonstream.works",
+        "llm.messages.bedrock_invoke.basic.nonstream.works",
+        "llm.messages.bedrock_converse.basic.nonstream.works",
     )
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC, Provider.BEDROCK),
+            models=(_ANTHROPIC_MODEL, _BEDROCK_MODEL_ID),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_every_mapped_beta_header_is_accepted_by_the_provider(
+        self,
+        proxy: ProxyClient,
+        resources: ResourceManager,
+        sdk: SdkClients,
+        backend: str,
+        beta_provider: str,
+        tools: list[ToolUnionParam],
+    ) -> None:
+        model: Final = f"e2e-messages-beta-{unique_marker()}"
+        model_id: Final = proxy.create_model(model, _deployment(backend))
+        resources.defer(lambda: proxy.delete_model(model_id))
 
-    text: Final = "".join(block.text for block in message.content if isinstance(block, TextBlock))
-    assert message.role == "assistant"
-    assert "hello" in text.lower(), message.content
-    assert message.usage.input_tokens > 0 and message.usage.output_tokens > 0, message.usage
+        message: Final = sdk.anthropic(resources.key()).messages.create(
+            model=model,
+            max_tokens=64,
+            messages=[{"role": "user", "content": "Say 'hello' and nothing else"}],
+            tools=tools,
+            extra_headers={"anthropic-beta": _mapped_beta_headers(beta_provider)},
+            extra_body=NO_PROXY_CACHE,
+        )
+
+        text: Final = "".join(block.text for block in message.content if isinstance(block, TextBlock))
+        assert message.role == "assistant"
+        assert "hello" in text.lower(), message.content
+        assert message.usage.input_tokens > 0 and message.usage.output_tokens > 0, message.usage

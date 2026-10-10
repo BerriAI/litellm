@@ -19,6 +19,8 @@ TOOL_SEARCH_BACKENDS: Final = (
     pytest.param(ANTHROPIC_MODEL, id="anthropic"),
     *BEDROCK_BACKENDS,
 )
+
+
 def _tool_search_tools() -> list[ToolUnionParam]:
     return [
         cast(
@@ -52,6 +54,8 @@ def _tool_search_tools() -> list[ToolUnionParam]:
             },
         ),
     ]
+
+
 CACHED_DOCUMENT: Final = "This agreement describes payment terms, renewal dates, and service obligations. " * 120
 
 pytestmark = pytest.mark.e2e
@@ -103,195 +107,197 @@ def _message_text(message: Message) -> str:
     return "".join(block.text for block in message.content if isinstance(block, TextBlock))
 
 
-@pytest.mark.parametrize("backend", BEDROCK_BACKENDS)
-@pytest.mark.covers(
-    "llm.messages.bedrock_converse.prompt_cache_5m.nonstream.works",
-    "llm.messages.bedrock_invoke.prompt_cache_5m.nonstream.works",
-)
-@meta(
-    Subject(
-        domain=Domain.LLM_TRANSLATION,
-        route=Route.MESSAGES,
-        providers=(Provider.BEDROCK,),
-        models=(BEDROCK_MODEL_ID,),
-        mode=Mode.NONSTREAM,
+class TestBedrockMessagesPromptCaching:
+    @pytest.mark.parametrize("backend", BEDROCK_BACKENDS)
+    @pytest.mark.covers(
+        "llm.messages.bedrock_converse.prompt_cache_5m.nonstream.works",
+        "llm.messages.bedrock_invoke.prompt_cache_5m.nonstream.works",
     )
-)
-def test_bedrock_messages_prompt_caching_creates_cache(
-    proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str
-) -> None:
-    model, key = _register_deployment(proxy, resources, _deployment_params(backend), "e2e-prompt-cache-create")
-    client = sdk.anthropic(key)
-    message = client.messages.create(
-        model=model,
-        max_tokens=100,
-        messages=_cached_messages(unique_marker()),
-        extra_body=NO_PROXY_CACHE,
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_MODEL_ID,),
+            mode=Mode.NONSTREAM,
+        )
     )
+    def test_bedrock_messages_prompt_caching_creates_cache(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str
+    ) -> None:
+        model, key = _register_deployment(proxy, resources, _deployment_params(backend), "e2e-prompt-cache-create")
+        client = sdk.anthropic(key)
+        message = client.messages.create(
+            model=model,
+            max_tokens=100,
+            messages=_cached_messages(unique_marker()),
+            extra_body=NO_PROXY_CACHE,
+        )
 
-    assert message.role == "assistant", f"unexpected role: {message.role!r}"
-    assert (message.usage.cache_creation_input_tokens or 0) > 0 or (message.usage.cache_read_input_tokens or 0) > 0, (
-        f"prompt cache was not created or read: {message.usage!r}"
+        assert message.role == "assistant", f"unexpected role: {message.role!r}"
+        assert (message.usage.cache_creation_input_tokens or 0) > 0 or (
+            message.usage.cache_read_input_tokens or 0
+        ) > 0, f"prompt cache was not created or read: {message.usage!r}"
+
+    @pytest.mark.parametrize("backend", BEDROCK_BACKENDS)
+    @pytest.mark.covers(
+        "llm.messages.bedrock_converse.prompt_cache_5m.nonstream.works",
+        "llm.messages.bedrock_invoke.prompt_cache_5m.nonstream.works",
     )
-
-
-@pytest.mark.parametrize("backend", BEDROCK_BACKENDS)
-@pytest.mark.covers(
-    "llm.messages.bedrock_converse.prompt_cache_5m.nonstream.works",
-    "llm.messages.bedrock_invoke.prompt_cache_5m.nonstream.works",
-)
-@meta(
-    Subject(
-        domain=Domain.LLM_TRANSLATION,
-        route=Route.MESSAGES,
-        providers=(Provider.BEDROCK,),
-        models=(BEDROCK_MODEL_ID,),
-        mode=Mode.NONSTREAM,
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_MODEL_ID,),
+            mode=Mode.NONSTREAM,
+        )
     )
-)
-def test_bedrock_messages_prompt_caching_reads_cache_on_second_call(
-    proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str
-) -> None:
-    model, key = _register_deployment(proxy, resources, _deployment_params(backend), "e2e-prompt-cache-read")
-    client = sdk.anthropic(key)
-    messages: Final = _cached_messages(unique_marker())
+    def test_bedrock_messages_prompt_caching_reads_cache_on_second_call(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str
+    ) -> None:
+        model, key = _register_deployment(proxy, resources, _deployment_params(backend), "e2e-prompt-cache-read")
+        client = sdk.anthropic(key)
+        messages: Final = _cached_messages(unique_marker())
 
-    client.messages.create(model=model, max_tokens=100, messages=messages, extra_body=NO_PROXY_CACHE)
-    message = client.messages.create(model=model, max_tokens=100, messages=messages, extra_body=NO_PROXY_CACHE)
+        client.messages.create(model=model, max_tokens=100, messages=messages, extra_body=NO_PROXY_CACHE)
+        message = client.messages.create(model=model, max_tokens=100, messages=messages, extra_body=NO_PROXY_CACHE)
 
-    assert (message.usage.cache_read_input_tokens or 0) > 0, f"cache read was not reported: {message.usage!r}"
+        assert (message.usage.cache_read_input_tokens or 0) > 0, f"cache read was not reported: {message.usage!r}"
 
-
-@pytest.mark.parametrize("backend", BEDROCK_BACKENDS)
-@pytest.mark.covers(
-    "llm.messages.bedrock_converse.basic.stream.works",
-    "llm.messages.bedrock_invoke.basic.stream.works",
-)
-@meta(
-    Subject(
-        domain=Domain.LLM_TRANSLATION,
-        route=Route.MESSAGES,
-        providers=(Provider.BEDROCK,),
-        models=(BEDROCK_MODEL_ID,),
-        mode=Mode.STREAM,
+    @pytest.mark.parametrize("backend", BEDROCK_BACKENDS)
+    @pytest.mark.covers(
+        "llm.messages.bedrock_converse.basic.stream.works",
+        "llm.messages.bedrock_invoke.basic.stream.works",
     )
-)
-def test_bedrock_messages_streaming_prompt_caching_reads_cache(
-    proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str
-) -> None:
-    model, key = _register_deployment(proxy, resources, _deployment_params(backend), "e2e-prompt-cache-stream")
-    client = sdk.anthropic(key)
-    messages: Final = _cached_messages(unique_marker())
-    client.messages.create(model=model, max_tokens=100, messages=messages, extra_body=NO_PROXY_CACHE)
-
-    with client.messages.stream(
-        model=model,
-        max_tokens=100,
-        messages=messages,
-        extra_body=NO_PROXY_CACHE,
-    ) as stream:
-        message: Final = stream.get_final_message()
-
-    assert (message.usage.cache_read_input_tokens or 0) > 0, f"streaming cache read was not reported: {message.usage!r}"
-    assert _message_text(message).strip(), f"streaming response contained no text: {message.content!r}"
-
-
-@pytest.mark.parametrize("backend", TOOL_SEARCH_BACKENDS)
-@pytest.mark.covers(
-    "llm.messages.anthropic.tool_search.nonstream.works",
-    "llm.messages.bedrock_converse.tool_search.nonstream.works",
-    "llm.messages.bedrock_invoke.tool_search.nonstream.works",
-)
-@meta(
-    Subject(
-        domain=Domain.LLM_TRANSLATION,
-        route=Route.MESSAGES,
-        providers=(Provider.ANTHROPIC, Provider.BEDROCK),
-        models=(ANTHROPIC_MODEL, BEDROCK_MODEL_ID),
-        mode=Mode.NONSTREAM,
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_MODEL_ID,),
+            mode=Mode.STREAM,
+        )
     )
-)
-def test_anthropic_tool_search_returns_a_message(
-    proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str
-) -> None:
-    model, key = _register_deployment(proxy, resources, _deployment_params(backend), "e2e-tool-search")
-    message = sdk.anthropic(key).messages.create(
-        model=model,
-        max_tokens=1024,
-        messages=[{"role": "user", "content": f"Find the weather tool for San Francisco. {unique_marker()}"}],
-        tools=_tool_search_tools(),
-        extra_headers={"anthropic-beta": "tool-search-tool-2025-10-19,advanced-tool-use-2025-11-20"},
-        extra_body=NO_PROXY_CACHE,
+    def test_bedrock_messages_streaming_prompt_caching_reads_cache(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str
+    ) -> None:
+        model, key = _register_deployment(proxy, resources, _deployment_params(backend), "e2e-prompt-cache-stream")
+        client = sdk.anthropic(key)
+        messages: Final = _cached_messages(unique_marker())
+        client.messages.create(model=model, max_tokens=100, messages=messages, extra_body=NO_PROXY_CACHE)
+
+        with client.messages.stream(
+            model=model,
+            max_tokens=100,
+            messages=messages,
+            extra_body=NO_PROXY_CACHE,
+        ) as stream:
+            message: Final = stream.get_final_message()
+
+        assert (message.usage.cache_read_input_tokens or 0) > 0, (
+            f"streaming cache read was not reported: {message.usage!r}"
+        )
+        assert _message_text(message).strip(), f"streaming response contained no text: {message.content!r}"
+
+
+class TestAnthropicToolSearch:
+    @pytest.mark.parametrize("backend", TOOL_SEARCH_BACKENDS)
+    @pytest.mark.covers(
+        "llm.messages.anthropic.tool_search.nonstream.works",
+        "llm.messages.bedrock_converse.tool_search.nonstream.works",
+        "llm.messages.bedrock_invoke.tool_search.nonstream.works",
     )
-
-    assert message.role == "assistant", f"unexpected role: {message.role!r}"
-    assert message.content, "tool search response contained no content"
-    assert message.usage.input_tokens > 0, f"tool search response had no input usage: {message.usage!r}"
-
-
-@pytest.mark.parametrize("backend", TOOL_SEARCH_BACKENDS)
-@pytest.mark.covers(
-    "llm.messages.anthropic.tool_search.nonstream.works",
-    "llm.messages.bedrock_converse.tool_search.nonstream.works",
-    "llm.messages.bedrock_invoke.tool_search.nonstream.works",
-)
-@meta(
-    Subject(
-        domain=Domain.LLM_TRANSLATION,
-        route=Route.MESSAGES,
-        providers=(Provider.ANTHROPIC, Provider.BEDROCK),
-        models=(ANTHROPIC_MODEL, BEDROCK_MODEL_ID),
-        mode=Mode.STREAM,
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC, Provider.BEDROCK),
+            models=(ANTHROPIC_MODEL, BEDROCK_MODEL_ID),
+            mode=Mode.NONSTREAM,
+        )
     )
-)
-def test_anthropic_tool_search_streaming_returns_a_message(
-    proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str
-) -> None:
-    model, key = _register_deployment(proxy, resources, _deployment_params(backend), "e2e-tool-search-stream")
-    client = sdk.anthropic(key)
+    def test_anthropic_tool_search_returns_a_message(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str
+    ) -> None:
+        model, key = _register_deployment(proxy, resources, _deployment_params(backend), "e2e-tool-search")
+        message = sdk.anthropic(key).messages.create(
+            model=model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": f"Find the weather tool for San Francisco. {unique_marker()}"}],
+            tools=_tool_search_tools(),
+            extra_headers={"anthropic-beta": "tool-search-tool-2025-10-19,advanced-tool-use-2025-11-20"},
+            extra_body=NO_PROXY_CACHE,
+        )
 
-    with client.messages.stream(
-        model=model,
-        max_tokens=1024,
-        messages=[{"role": "user", "content": f"Find the weather tool for Tokyo. {unique_marker()}"}],
-        tools=_tool_search_tools(),
-        extra_headers={"anthropic-beta": "tool-search-tool-2025-10-19,advanced-tool-use-2025-11-20"},
-        extra_body=NO_PROXY_CACHE,
-    ) as stream:
-        message: Final = stream.get_final_message()
+        assert message.role == "assistant", f"unexpected role: {message.role!r}"
+        assert message.content, "tool search response contained no content"
+        assert message.usage.input_tokens > 0, f"tool search response had no input usage: {message.usage!r}"
 
-    assert message.role == "assistant", f"unexpected role: {message.role!r}"
-    assert message.content, "streaming tool search response contained no content"
-    assert message.usage.input_tokens > 0, f"streaming tool search response had no input usage: {message.usage!r}"
-
-
-@pytest.mark.covers("llm.messages.bedrock_invoke.basic.nonstream.works")
-@meta(
-    Subject(
-        domain=Domain.LLM_TRANSLATION,
-        route=Route.MESSAGES,
-        providers=(Provider.BEDROCK,),
-        models=(BEDROCK_MODEL_ID,),
-        mode=Mode.NONSTREAM,
+    @pytest.mark.parametrize("backend", TOOL_SEARCH_BACKENDS)
+    @pytest.mark.covers(
+        "llm.messages.anthropic.tool_search.nonstream.works",
+        "llm.messages.bedrock_converse.tool_search.nonstream.works",
+        "llm.messages.bedrock_invoke.tool_search.nonstream.works",
     )
-)
-def test_bedrock_invoke_messages_accepts_forwarded_headers(
-    proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
-) -> None:
-    params: Final = _deployment_params(f"bedrock/invoke/{BEDROCK_MODEL_ID}")
-    model, key = _register_deployment(proxy, resources, params, "e2e-bedrock-forwarded-headers")
-    message = sdk.anthropic(key).messages.create(
-        model=model,
-        max_tokens=32,
-        messages=[{"role": "user", "content": f"Reply with one word. {unique_marker()}"}],
-        extra_headers={
-            "x-forwarded-for": "10.11.232.194",
-            "x-forwarded-port": "443",
-            "x-forwarded-proto": "https",
-            "x-app": "cli",
-        },
-        extra_body=NO_PROXY_CACHE,
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.ANTHROPIC, Provider.BEDROCK),
+            models=(ANTHROPIC_MODEL, BEDROCK_MODEL_ID),
+            mode=Mode.STREAM,
+        )
     )
+    def test_anthropic_tool_search_streaming_returns_a_message(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, backend: str
+    ) -> None:
+        model, key = _register_deployment(proxy, resources, _deployment_params(backend), "e2e-tool-search-stream")
+        client = sdk.anthropic(key)
 
-    assert message.role == "assistant", f"unexpected role: {message.role!r}"
-    assert _message_text(message).strip(), f"forwarded-header response contained no text: {message.content!r}"
+        with client.messages.stream(
+            model=model,
+            max_tokens=1024,
+            messages=[{"role": "user", "content": f"Find the weather tool for Tokyo. {unique_marker()}"}],
+            tools=_tool_search_tools(),
+            extra_headers={"anthropic-beta": "tool-search-tool-2025-10-19,advanced-tool-use-2025-11-20"},
+            extra_body=NO_PROXY_CACHE,
+        ) as stream:
+            message: Final = stream.get_final_message()
+
+        assert message.role == "assistant", f"unexpected role: {message.role!r}"
+        assert message.content, "streaming tool search response contained no content"
+        assert message.usage.input_tokens > 0, f"streaming tool search response had no input usage: {message.usage!r}"
+
+
+class TestBedrockInvokeForwardedHeaders:
+    @pytest.mark.covers("llm.messages.bedrock_invoke.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_MODEL_ID,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_bedrock_invoke_messages_accepts_forwarded_headers(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        params: Final = _deployment_params(f"bedrock/invoke/{BEDROCK_MODEL_ID}")
+        model, key = _register_deployment(proxy, resources, params, "e2e-bedrock-forwarded-headers")
+        message = sdk.anthropic(key).messages.create(
+            model=model,
+            max_tokens=32,
+            messages=[{"role": "user", "content": f"Reply with one word. {unique_marker()}"}],
+            extra_headers={
+                "x-forwarded-for": "10.11.232.194",
+                "x-forwarded-port": "443",
+                "x-forwarded-proto": "https",
+                "x-app": "cli",
+            },
+            extra_body=NO_PROXY_CACHE,
+        )
+
+        assert message.role == "assistant", f"unexpected role: {message.role!r}"
+        assert _message_text(message).strip(), f"forwarded-header response contained no text: {message.content!r}"
