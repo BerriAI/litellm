@@ -12,11 +12,13 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { UtcDateTimeInput } from "@/components/shared/form/UtcDateTimeInput";
+import { ModelMaxBudgetEditor } from "../key_team_helpers/ModelMaxBudgetEditor";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import {
   buildMemberFormData,
   buildMemberFormValues,
   emptyMemberFormValues,
+  isModelMaxBudget,
   TEMP_BUDGET_PAIR_MESSAGE,
   tempBudgetPairError,
   type MemberAdditionalField,
@@ -51,7 +53,11 @@ const ROLE_REQUIRED_MESSAGE = "Please select a role!";
 const isEmailish = (value: string): boolean =>
   value === "" || z.email({ pattern: z.regexes.html5Email }).safeParse(value).success;
 
-const memberFieldSchema = z.union([z.string(), z.number(), z.null(), z.array(z.string())]).optional();
+const modelMaxBudgetSchema = z.record(z.string(), z.looseObject({ budget_limit: z.number(), time_period: z.string() }));
+
+const memberFieldSchema = z
+  .union([z.string(), z.number(), z.null(), z.array(z.string()), modelMaxBudgetSchema])
+  .optional();
 
 const buildMemberSchema = (config: ModalConfig): z.ZodType<MemberFormValues, MemberFormValues> => {
   const shape = {
@@ -169,6 +175,16 @@ const MemberModal = <T extends BaseMember>({
                 id={id}
                 value={typeof value === "string" ? value : null}
                 onChange={(next) => onChange(mode === "add" ? next ?? undefined : next)}
+              />
+            );
+          case "model-max-budget":
+            return (
+              <ModelMaxBudgetEditor
+                key={`${visible}-${initialData?.user_id ?? initialData?.user_email ?? ""}`}
+                value={isModelMaxBudget(value) ? value : {}}
+                onChange={onChange}
+                availableModels={field.availableModels ?? []}
+                premiumUser={field.premiumUser ?? false}
               />
             );
           case "utc-datetime":

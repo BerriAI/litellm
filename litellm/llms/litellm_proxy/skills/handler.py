@@ -15,8 +15,7 @@ from litellm.llms.litellm_proxy.skills.constants import (
     LITELLM_SKILL_ID_PREFIX,
     MAX_SKILLS_PER_SEARCH,
 )
-from litellm.models.skills import LiteLLM_SkillsTable
-from litellm.proxy._types import NewSkillRequest
+from litellm.models.skills import LiteLLM_SkillsTable, NewSkillRequest
 from litellm.proxy.common_utils.resource_ownership import (
     get_primary_resource_owner_scope,
     get_resource_owner_scopes,
