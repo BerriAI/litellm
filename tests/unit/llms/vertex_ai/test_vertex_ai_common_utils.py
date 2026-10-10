@@ -1882,3 +1882,73 @@ def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(mode
     assert get_vertex_ai_lyria_model_info(model=model) is None
 
 
+
+def test_type_array_keeps_scalar_constraints_on_anyof_branches():
+    """A nullable type array must not lose enum/min-max/pattern/format (issue #43325)."""
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "status": {"type": ["string", "null"], "enum": ["open", "closed"], "maxLength": 6},
+            "priority": {"type": ["integer", "null"], "minimum": 1, "maximum": 5},
+            "code": {"type": ["string", "null"], "pattern": "^[A-Z]+$", "format": "date-time"},
+        },
+        "required": ["status"],
+    }
+
+    assert _build_vertex_schema(schema) == {
+        "type": "object",
+        "properties": {
+            "status": {
+                "anyOf": [
+                    {"type": "string", "enum": ["open", "closed"], "maxLength": 6},
+                    {"type": "null"},
+                ]
+            },
+            "priority": {
+                "anyOf": [
+                    {"type": "integer", "minimum": 1, "maximum": 5},
+                    {"type": "null"},
+                ]
+            },
+            "code": {
+                "anyOf": [
+                    {"type": "string", "pattern": "^[A-Z]+$", "format": "date-time"},
+                    {"type": "null"},
+                ]
+            },
+        },
+        "required": ["status"],
+    }
+
+
+def test_type_array_mixed_enum_only_string_values_on_string_branch():
+    """A mixed-type enum must not leak non-string values onto the string branch."""
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "mixed": {"type": ["string", "integer"], "enum": ["a", 1]},
+            "numbers": {"type": ["string", "integer"], "enum": [1, 2]},
+        },
+    }
+
+    assert _build_vertex_schema(schema) == {
+        "type": "object",
+        "properties": {
+            "mixed": {
+                "anyOf": [
+                    {"type": "string", "enum": ["a"]},
+                    {"type": "integer"},
+                ]
+            },
+            "numbers": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "integer"},
+                ]
+            },
+        },
+    }

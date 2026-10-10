@@ -1049,6 +1049,20 @@ def _convert_schema_types(schema, depth=0):
                 "minProperties",
                 "maxProperties",
             }
+            # Constraint keywords that apply to primitive types and should move
+            # into the anyOf branch with the type. Without this they are left on
+            # the parent next to anyOf and dropped by _filter_anyof_fields.
+            # multipleOf is not copied on purpose: filter_schema_fields drops it
+            # from the branch anyway, so carrying it would only imply it survives.
+            scalar_constraint_fields: Final = {
+                "enum",
+                "pattern",
+                "minLength",
+                "maxLength",
+                "minimum",
+                "maximum",
+                "format",
+            }
 
             any_of: Final[list[dict[str, object]]] = []
             for t in type_val:
@@ -1059,23 +1073,31 @@ def _convert_schema_types(schema, depth=0):
                     any_of.append({"type": "null"})
                     continue
 
-                # For object/array types, include type-specific fields
-                if t in ("object", "array"):
-                    item_schema: dict[str, object] = {"type": t}
-                    # Move type-specific fields into this anyOf item
-                    for field in type_specific_fields:
-                        if field in schema:
-                            item_schema[field] = deepcopy(schema[field])
-                    any_of.append(item_schema)
-                else:
-                    # For primitive types, only include the type
-                    any_of.append({"type": t})
+                item_schema: dict[str, object] = {"type": t}
+                # For object/array types, move the type-specific fields into
+                # the branch; for primitives, carry the scalar constraint
+                # keywords so they survive _filter_anyof_fields.
+                branch_fields = type_specific_fields if t in ("object", "array") else scalar_constraint_fields
+                for field in branch_fields:
+                    if field not in schema:
+                        continue
+                    if field == "enum":
+                        # enums only land on the string branch, string values
+                        # only: a mixed enum like ["a", 1] must not put 1 on
+                        # the string branch. _fix_enum_types drops the rest.
+                        if t == "string" and isinstance(schema["enum"], list):
+                            string_values = [v for v in schema["enum"] if isinstance(v, str)]
+                            if string_values:
+                                item_schema["enum"] = string_values
+                        continue
+                    item_schema[field] = deepcopy(schema[field])
+                any_of.append(item_schema)
 
-            # Remove type-specific fields from parent if we moved them into anyOf
+            # Remove the fields we moved into anyOf branches from the parent
             has_object_or_array: Final = any(t in ("object", "array") for t in type_val if isinstance(t, str))
-            if has_object_or_array:
-                for field in type_specific_fields:
-                    schema.pop(field, None)
+            parent_fields = type_specific_fields if has_object_or_array else scalar_constraint_fields
+            for field in parent_fields:
+                schema.pop(field, None)
 
             schema["anyOf"] = any_of
             schema.pop("type")
