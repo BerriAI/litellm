@@ -35,6 +35,8 @@ jobs:
             script: scripts/type_discipline_gate.py
           - checker: test-quality
             script: scripts/test_quality_gate.py
+          - checker: openapi-docs
+            script: scripts/openapi_docs_gate.py
           - checker: basedpyright
             script: scripts/type_check_gate.py
 
@@ -60,15 +62,23 @@ jobs:
         uses: ./.github/actions/cache-cargo-build
 
       - name: Cache Prisma binaries
-        if: matrix.checker == 'basedpyright'
+        if: matrix.checker == 'basedpyright' || matrix.checker == 'openapi-docs'
         uses: ./.github/actions/cache-prisma-binaries
 
-      # The three source scanners only need the pinned dev tools (ruff and the
+      # The source scanners only need the pinned dev tools (ruff and the
       # stdlib checkers), the same versions test-linting.yml's python job runs.
       - name: Install the dev tools
-        if: matrix.checker != 'basedpyright'
+        if: matrix.checker != 'basedpyright' && matrix.checker != 'openapi-docs'
         run: |
           uv sync --frozen --only-group dev --no-install-project
+
+      # The OpenAPI gate imports the proxy app, so it needs the same install the
+      # test-linting.yml python job uses, Prisma client included.
+      - name: Install the proxy
+        if: matrix.checker == 'openapi-docs'
+        run: |
+          uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
 
       - name: Emit ${{ matrix.checker }} counts for HEAD
         if: matrix.checker != 'basedpyright'
