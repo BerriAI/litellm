@@ -3,7 +3,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.proxy.common_utils.prompt_cache_pricing import price_cache_tokens
+from litellm.llms.anthropic.prompt_cache_pricing import price_cache_tokens
 from litellm.types.management_endpoints.prompt_cache_prediction import CacheTokenBuckets
 
 
