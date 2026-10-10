@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import without_server_streaming_classification
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
-from litellm.proxy._types import PassThroughGuardrailSettings
+from litellm.types.passthrough_endpoints.pass_through_endpoints import PassThroughGuardrailSettings
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
