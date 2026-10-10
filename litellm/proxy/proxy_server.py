@@ -19513,7 +19513,6 @@ async def get_config(
     "/config/yaml",
     tags=["config.yaml"],
     dependencies=[Depends(user_api_key_auth)],
-    include_in_schema=False,
 )
 async def config_yaml_endpoint(config_info: ConfigYAML):
     """

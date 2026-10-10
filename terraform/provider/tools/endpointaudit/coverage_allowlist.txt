@@ -78,6 +78,7 @@ GET /team/available
 GET /team/metadata_schema
 GET /team/{team_id}/members/me
 GET /user/available_users
+GET /config/yaml                                  # docs-only mock; renders the config.yaml reference page in Swagger
 
 # Imperative one-shot operations: bulk edits, rotation, health probes, test hooks,
 # migrations, and approval workflows; procedural, not declarative state
