@@ -1,3 +1,5 @@
+import { isDecisionMode } from "@/lib/decisionModels";
+
 import type { DecisionModelCheckDraft } from "./buildDecisionModelParams";
 
 export interface DecisionModelGroup {
@@ -6,20 +8,20 @@ export interface DecisionModelGroup {
   mode?: string | null;
 }
 
-const isDecisionGroup = (group: DecisionModelGroup): boolean => group.mode === "evaluation";
-
 export function decisionProvidersForGroups(
   allowedProviders: readonly string[],
   groups: readonly DecisionModelGroup[],
 ): string[] {
-  const deployed = new Set(groups.filter(isDecisionGroup).flatMap((group) => group.providers ?? []));
+  const deployed = new Set(
+    groups.filter((group) => isDecisionMode(group.mode)).flatMap((group) => group.providers ?? []),
+  );
   return allowedProviders.filter((provider) => deployed.has(provider));
 }
 
 export function decisionModelsForProvider(groups: readonly DecisionModelGroup[], provider: string | null): string[] {
   if (!provider) return [];
   return groups
-    .filter((group) => isDecisionGroup(group) && (group.providers ?? []).includes(provider))
+    .filter((group) => isDecisionMode(group.mode) && (group.providers ?? []).includes(provider))
     .map((group) => group.model_group)
     .toSorted((a, b) => a.localeCompare(b));
 }
