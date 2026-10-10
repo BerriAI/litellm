@@ -31,7 +31,7 @@
   - Provider wire-type docs: `litellm-llms-types/src/providers/<provider>/`
   - Provider-wide docs (auth, errors, regions): `src/<provider>/`
   - One host's endpoint docs: `src/<provider>/<format>/`
-- `tests/code_coverage_tests/check_rust_agents_md.py` enforces the last two rules
+- Run `python tests/code_coverage_tests/check_rust_agents_md.py` after editing AGENTS.md files to catch a repeated URL or a missing file
 
 ## Nested files
 
