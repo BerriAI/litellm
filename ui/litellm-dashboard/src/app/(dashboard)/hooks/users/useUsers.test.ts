@@ -462,7 +462,13 @@ describe("useUserDisplayNames", () => {
     const response = buildUserListResponse(1, 1, 0);
     vi.mocked(userListCall).mockImplementation(async (_token, userIDs) => ({
       ...response,
-      users: [{ ...response.users[0], user_id: userIDs![0], user_alias: `Alias ${userIDs![0]}` } as UserListResponse["users"][number]],
+      users: [
+        {
+          ...response.users[0],
+          user_id: userIDs![0],
+          user_alias: `Alias ${userIDs![0]}`,
+        } as UserListResponse["users"][number],
+      ],
     }));
 
     const { result } = renderHook(() => useUserDisplayNames(ids), { wrapper });
