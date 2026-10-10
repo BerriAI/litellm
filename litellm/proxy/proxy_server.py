@@ -17561,7 +17561,7 @@ async def _rollback_onboarding_invite_claim(
 async def _generate_onboarding_ui_session_token(user_obj: _UserTableRow) -> str:
     global master_key, general_settings
 
-    onboarding_key_data: Final[dict[str, object]] = {
+    onboarding_key_data: Final[Mapping[str, object]] = {
         "user_role": user_obj.user_role,
         "duration": LITELLM_UI_SESSION_DURATION,
         "key_max_budget": litellm.max_ui_session_budget,
