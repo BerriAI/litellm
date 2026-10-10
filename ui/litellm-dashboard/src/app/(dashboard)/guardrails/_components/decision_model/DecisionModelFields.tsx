@@ -64,7 +64,7 @@ const ThresholdSlider: React.FC<{
       step={0.01}
       value={[value]}
       onValueChange={(next) => onChange(Array.isArray(next) ? next[0] ?? 0 : next)}
-      className="min-w-[120px] flex-1"
+      className="min-w-[120px] flex-1 **:data-[slot=slider-track]:bg-muted-foreground/25"
     />
     <span className="w-9 whitespace-nowrap text-right text-xs tabular-nums text-muted-foreground">
       {value.toFixed(2)}
