@@ -16,6 +16,7 @@ import litellm
 import litellm.litellm_core_utils
 import litellm.litellm_core_utils.litellm_logging
 import litellm.types
+from litellm._internal_context import service_target
 from litellm._logging import verbose_logger, verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.constants import (
@@ -30,26 +31,27 @@ from litellm.integrations.SlackAlerting.hanging_request_check import (
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
-    _add_key_name_and_team_to_alert,
+    add_key_name_and_team_to_alert,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import (
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.repositories.table_repositories import InvitationLinkRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.types.integrations.slack_alerting import *
+from litellm.types.integrations.slack_alerting import (
     AlertType,
     CallInfo,
     InvitationModel,
     InvitationNew,
     Litellm_EntityType,
-    UserAPIKeyAuth,
     VirtualKeyEvent,
     WebhookEvent,
 )
-from litellm.repositories.table_repositories import InvitationLinkRepository
-from litellm.repositories.team_repository import TeamRepository
-from litellm.repositories.user_repository import UserRepository
-from litellm.types.integrations.slack_alerting import *
 from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
     DEPRECATION_IDLE_POLL_SECONDS,
@@ -82,6 +84,9 @@ def _proxy_llm_router() -> Router | None:
     return llm_router
 
 
+_DAILY_REPORT_TARGET: Final = "daily_report_schedule"
+
+
 class SlackAlerting(CustomBatchLogger):
     """
     Class for sending Slack Alerts
@@ -99,6 +104,7 @@ class SlackAlerting(CustomBatchLogger):
         alerting_args={},
         default_webhook_url: str | None = None,
         alert_type_config: dict[str, dict] | None = None,
+        async_http_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
         if alerting_threshold is None:
@@ -107,13 +113,16 @@ class SlackAlerting(CustomBatchLogger):
         self.alerting = alerting
         self.alert_types = alert_types
         self.internal_usage_cache = internal_usage_cache or DualCache()
-        self.async_http_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        self.async_http_handler = async_http_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
         self.alert_to_webhook_url = process_slack_alerting_variables(alert_to_webhook_url=alert_to_webhook_url)
         self.is_running = False
         self.alerting_args = SlackAlertingArgs(**alerting_args)
         self.default_webhook_url = default_webhook_url
         self.flush_lock = asyncio.Lock()
         self.periodic_started = False
+        self._periodic_flush_task: asyncio.Task[None] | None = None
         self.hanging_request_check = AlertingHangingRequestCheck(
             slack_alerting_object=self,
         )
@@ -124,6 +133,12 @@ class SlackAlerting(CustomBatchLogger):
         self.digest_buckets: dict[str, DigestEntry] = {}
         self.digest_lock = asyncio.Lock()
         super().__init__(**kwargs, flush_lock=self.flush_lock)
+
+    def _ensure_periodic_flush_task(self) -> None:
+        if self.periodic_started and (self._periodic_flush_task is None or not self._periodic_flush_task.done()):
+            return
+        self._periodic_flush_task = asyncio.create_task(self.periodic_flush())
+        self.periodic_started = True
 
     def update_values(
         self,
@@ -137,17 +152,14 @@ class SlackAlerting(CustomBatchLogger):
     ):
         if alerting is not None:
             self.alerting = alerting
-            asyncio.create_task(self.periodic_flush())
-            self.periodic_started = True
+            self._ensure_periodic_flush_task()
         if alerting_threshold is not None:
             self.alerting_threshold = alerting_threshold
         if alert_types is not None:
             self.alert_types = alert_types
         if alerting_args is not None:
             self.alerting_args = SlackAlertingArgs(**alerting_args)
-            if not self.periodic_started:
-                asyncio.create_task(self.periodic_flush())
-                self.periodic_started = True
+            self._ensure_periodic_flush_task()
         if alert_type_config is not None:
             for key, val in alert_type_config.items():
                 self.alert_type_config[key] = AlertTypeConfig(**val) if isinstance(val, dict) else val
@@ -281,7 +293,7 @@ class SlackAlerting(CustomBatchLogger):
             # add deployment latencies to alert
             if kwargs is not None and "litellm_params" in kwargs and "metadata" in kwargs["litellm_params"]:
                 _metadata: Final[dict] = kwargs["litellm_params"]["metadata"]
-                request_info = _add_key_name_and_team_to_alert(request_info=request_info, metadata=_metadata)
+                request_info = add_key_name_and_team_to_alert(request_info=request_info, metadata=_metadata)
 
                 _deployment_latency_map: Final = self._get_deployment_latencies_to_alert(metadata=_metadata)
                 if _deployment_latency_map is not None:
@@ -368,8 +380,12 @@ class SlackAlerting(CustomBatchLogger):
         if combined_metrics_values is None:
             return False
 
+        metric_values: Final[list[float | None]] = [
+            val if isinstance(val, (int, float)) else None for val in combined_metrics_values
+        ]
+
         all_none = True
-        for val in combined_metrics_values:
+        for val in metric_values:
             if val is not None and val > 0:
                 all_none = False
                 break
@@ -377,8 +393,8 @@ class SlackAlerting(CustomBatchLogger):
         if all_none:
             return False
 
-        failed_request_values: Final = combined_metrics_values[: len(failed_request_keys)]  # # [1, 2, None, ..]
-        latency_values: Final = combined_metrics_values[len(failed_request_keys) :]
+        failed_request_values: Final = metric_values[: len(failed_request_keys)]  # # [1, 2, None, ..]
+        latency_values: Final = metric_values[len(failed_request_keys) :]
 
         # find top 5 failed
         ## Replace None values with a placeholder value (-1 in this case)
@@ -547,7 +563,11 @@ class SlackAlerting(CustomBatchLogger):
         budget_alert_class: Final = get_budget_alert_type(type)
         _id: Final = budget_alert_class.get_id(user_info)
         user_info_str: Final = self._get_user_info_str(user_info)
-        event_message = budget_alert_class.get_event_message()
+        event_message = (
+            "Team Member Budget: "
+            if user_info.event_group == Litellm_EntityType.TEAM_MEMBER
+            else budget_alert_class.get_event_message()
+        )
 
         # Set default event unless we're in projected_limit_exceeded
         event: (
@@ -1115,7 +1135,7 @@ Model Info:
             message=message,
             level=level,
             alert_type=AlertType.model_deprecation_warnings,
-            alerting_metadata={  # mutable-ok: send_alert takes a dict payload
+            alerting_metadata={
                 "deprecated_count": len(snapshot.deprecated),
                 "imminent_count": len(snapshot.imminent),
                 "upcoming_count": len(snapshot.upcoming),
@@ -1229,8 +1249,8 @@ Model Info:
         try:
             existing_invitations: Final = TypeAdapter(list[InvitationModel]).validate_python(
                 await InvitationLinkRepository(prisma_client).table.find_many(  # pyright: ignore[reportAny]  # untyped prisma boundary (any-ok), result validated by TypeAdapter
-                    where={"user_id": recipient_user_id},  # mutable-ok: prisma find_many requires a dict where filter
-                    order={"created_at": "desc"},  # mutable-ok: prisma find_many requires a dict order arg
+                    where={"user_id": recipient_user_id},
+                    order={"created_at": "desc"},
                 ),
                 from_attributes=True,
             )
@@ -1442,9 +1462,8 @@ Model Info:
             return
 
         # Start periodic flush if not already started
-        if not self.periodic_started and self.alerting is not None and len(self.alerting) > 0:
-            asyncio.create_task(self.periodic_flush())
-            self.periodic_started = True
+        if self.alerting is not None and len(self.alerting) > 0:
+            self._ensure_periodic_flush_task()
 
         if "webhook" in self.alerting and alert_type == "budget_alerts" and user_info is not None:
             await self.send_webhook_alert(webhook_event=user_info)
@@ -1583,12 +1602,12 @@ Model Info:
         if not self.log_queue:
             return
 
-        squashed_queue: Final = squash_payloads(self.log_queue)
-        tasks: Final = [
-            send_to_webhook(slackAlertingInstance=self, item=item["item"], count=item["count"])
-            for item in squashed_queue.values()
-        ]
-        await asyncio.gather(*tasks)
+        await asyncio.gather(
+            *(
+                send_to_webhook(slackAlertingInstance=self, item=squashed.item, count=squashed.count)
+                for squashed in squash_payloads(self.log_queue)
+            )
+        )
         self.log_queue.clear()
 
     async def _flush_digest_buckets(self):
@@ -1745,18 +1764,20 @@ Model Info:
         """
         report_sent_bool = False
 
-        report_sent: Final = await self.internal_usage_cache.async_get_cache(
-            key=SlackAlertingCacheKeys.report_sent_key.value,
-            parent_otel_span=None,
-        )  # None | float
+        with service_target(_DAILY_REPORT_TARGET):
+            report_sent: Final = await self.internal_usage_cache.async_get_cache(
+                key=SlackAlertingCacheKeys.report_sent_key.value,
+                parent_otel_span=None,
+            )  # None | float
 
         current_time: Final = time.time()
 
         if report_sent is None:
-            await self.internal_usage_cache.async_set_cache(
-                key=SlackAlertingCacheKeys.report_sent_key.value,
-                value=current_time,
-            )
+            with service_target(_DAILY_REPORT_TARGET):
+                await self.internal_usage_cache.async_set_cache(
+                    key=SlackAlertingCacheKeys.report_sent_key.value,
+                    value=current_time,
+                )
         elif isinstance(report_sent, float):
             # Check if current time - interval >= time last sent
             interval_seconds: Final = self.alerting_args.daily_report_frequency
@@ -1775,17 +1796,18 @@ Model Info:
                 # Sneak in the reporting logic here
                 await self.send_daily_reports(router=llm_router)
                 # Also, don't forget to update the report_sent time after sending the report!
-                await self.internal_usage_cache.async_set_cache(
-                    key=SlackAlertingCacheKeys.report_sent_key.value,
-                    value=current_time,
-                )
+                with service_target(_DAILY_REPORT_TARGET):
+                    await self.internal_usage_cache.async_set_cache(
+                        key=SlackAlertingCacheKeys.report_sent_key.value,
+                        value=current_time,
+                    )
                 report_sent_bool = True
 
         return report_sent_bool
 
     async def _run_scheduled_daily_report(
         self,
-        llm_router: Any | None = None,
+        llm_router: object | None = None,
         pod_lock_manager: "PodLockManager | None" = None,
     ):
         """
@@ -1823,7 +1845,7 @@ Model Info:
 
         try:
             from litellm.proxy.spend_tracking.spend_management_endpoints import (
-                _get_spend_report_for_time_range,
+                get_spend_report_for_time_range,
             )
 
             # Parse the time range
@@ -1840,7 +1862,7 @@ Model Info:
             if await self.internal_usage_cache.async_get_cache(key=_event_cache_key):
                 return
 
-            _resp: Final = await _get_spend_report_for_time_range(
+            _resp: Final = await get_spend_report_for_time_range(
                 start_date=start_date.strftime("%Y-%m-%d"),
                 end_date=todays_date.strftime("%Y-%m-%d"),
             )
@@ -1887,7 +1909,7 @@ Model Info:
             from calendar import monthrange
 
             from litellm.proxy.spend_tracking.spend_management_endpoints import (
-                _get_spend_report_for_time_range,
+                get_spend_report_for_time_range,
             )
 
             todays_date: Final = datetime.datetime.now().date()
@@ -1899,7 +1921,7 @@ Model Info:
             if await self.internal_usage_cache.async_get_cache(key=_event_cache_key):
                 return
 
-            _resp: Final = await _get_spend_report_for_time_range(
+            _resp: Final = await get_spend_report_for_time_range(
                 start_date=first_day_of_month.strftime("%Y-%m-%d"),
                 end_date=last_day_of_month.strftime("%Y-%m-%d"),
             )
@@ -1996,7 +2018,7 @@ Model Info:
                     message="\n\n".join(event.message for event in typed_events),
                     level="High",
                     alert_type=alert_type,
-                    alerting_metadata={},  # mutable-ok: send_alert takes a dict payload
+                    alerting_metadata={},
                 )
                 for event in typed_events:
                     await self.internal_usage_cache.async_set_cache(

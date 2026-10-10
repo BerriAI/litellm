@@ -2,11 +2,13 @@ import json
 import re
 from collections.abc import Collection, Mapping
 from types import MappingProxyType, UnionType
-from typing import Annotated, Any, Final, Union, get_args, get_origin
+from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
-from typing_extensions import NotRequired, ReadOnly, Required
+from starlette._utils import get_route_path
+from starlette.requests import HTTPConnection
+from typing_extensions import NotRequired, ReadOnly, Required, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
@@ -14,6 +16,7 @@ from litellm.constants import (
     CLIENT_REQUESTED_MODEL_SCOPE_KEY,
     MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
 )
+from litellm.integrations.otel.runtime import phase_event
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -21,8 +24,45 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.types.router import Deployment
 
 _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
+# Binary bodies (e.g. OTLP trace exports on POST /v1/traces) are not JSON: arbitrary bytes used to
+# hit the JSON surrogate-repair path and fail auth with a 400. JSON under these types still parses.
+_BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobuf", "application/protobuf"})
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
+
+
+def resolve_inference_model(
+    body_model: object,
+    settings: Mapping[str, object],
+    cli_model: str | None,
+    endpoint_model: object = None,
+    *,
+    kind: Literal[
+        "completion", "image_generation", "image_edit", "moderation", "speech", "body", "path"
+    ] = "completion",
+) -> object:
+    match kind:
+        case "image_generation":
+            return cli_model or endpoint_model or settings.get("image_generation_model") or body_model
+        case "image_edit":
+            return (
+                settings.get("completion_model")
+                or cli_model
+                or endpoint_model
+                or settings.get("image_generation_model")
+                or body_model
+            )
+        case "moderation":
+            return cli_model or settings.get("moderation_model") or body_model
+        case "speech":
+            return cli_model or body_model
+        case "body":
+            return body_model
+        case "path":
+            return endpoint_model
+        case "completion":
+            return settings.get("completion_model") or cli_model or endpoint_model or body_model
+    return assert_never(kind)
 
 
 def _normalize_media_type(content_type: str) -> str:
@@ -56,14 +96,18 @@ def _unqualified(annotation: object) -> object:
     return _unqualified(qualified[0])
 
 
+def _union_members(annotation: object) -> tuple[object, ...]:
+    """The non-``None`` members of a union annotation, or the annotation itself when it is not a union."""
+    if get_origin(annotation) not in (Union, UnionType):
+        return (annotation,)
+    members: Final[tuple[object, ...]] = get_args(annotation)
+    return tuple(arg for arg in members if arg is not type(None))
+
+
 def _numeric_form_type(annotation: object) -> type[int] | type[float] | None:
     """The scalar to parse an ``int``/``float``-typed field as, else ``None``."""
     unwrapped: Final = _unqualified(annotation)
-    candidates: Final = (
-        tuple(arg for arg in get_args(unwrapped) if arg is not type(None))
-        if get_origin(unwrapped) in (Union, UnionType)
-        else (unwrapped,)
-    )
+    candidates: Final = _union_members(unwrapped)
     if len(candidates) != 1:
         return None
     if candidates[0] is int:
@@ -115,7 +159,37 @@ def coerce_numeric_form_fields(
     }
 
 
-async def _read_request_body(request: Request | None) -> dict:
+def _parse_binary_body(body: bytes) -> dict:
+    """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
+    try:
+        parsed: Final = orjson.loads(body)
+        if isinstance(parsed, dict):
+            return parsed
+    except orjson.JSONDecodeError:
+        pass
+    return {}
+
+
+def _declared_content_length(headers: Mapping[str, str]) -> int | None:
+    declared: Final = headers.get("content-length")
+    return int(declared) if isinstance(declared, str) and declared.isdigit() else None
+
+
+def _mark_body_received(byte_count: int | None) -> None:
+    """Marks the end of body transfer on the request's server span, once per body read."""
+    phase_event(
+        "litellm.request.body_received",
+        None if byte_count is None else {"litellm.request.body_bytes": byte_count},
+    )
+
+
+def is_otlp_trace_request(request: HTTPConnection) -> bool:
+    if request.scope.get("type") != "http":
+        return False
+    return request.scope.get("method") == "POST" and get_route_path(request.scope) in {"/v1/traces", "/v1/logs"}
+
+
+async def read_request_body(request: Request | None) -> dict:
     """
     Safely read the request body and parse it as JSON.
 
@@ -129,17 +203,25 @@ async def _read_request_body(request: Request | None) -> dict:
         if request is None:
             return {}
 
+        if is_otlp_trace_request(request):
+            return {}
+
         # Check if we already read and parsed the body
         _cached_request_body: Final[dict | None] = _safe_get_request_parsed_body(request=request)
         if _cached_request_body is not None:
             return _cached_request_body
 
-        _request_headers: Final[dict] = _safe_get_request_headers(request=request)
+        _request_headers: Final[dict] = safe_get_request_headers(request=request)
         content_type: Final = _request_headers.get("content-type", "")
 
-        if _is_form_content_type(content_type):
+        if _normalize_media_type(content_type) in _BINARY_CONTENT_TYPES:
+            binary_body: Final = await request.body()
+            _mark_body_received(len(binary_body))
+            parsed_body = _parse_binary_body(binary_body)
+        elif _is_form_content_type(content_type):
             try:
                 form_data: Final = await request.form()
+                _mark_body_received(_declared_content_length(request.headers))
             except Exception as e:
                 # ``request.form()`` raises on malformed multipart (missing
                 # boundary, malformed chunk encoding, …). Surface as 400 so
@@ -160,6 +242,7 @@ async def _read_request_body(request: Request | None) -> dict:
         else:
             # Read the request body
             body: Final = await request.body()
+            _mark_body_received(len(body))
 
             # Return empty dict if body is empty or None
             if not body:
@@ -205,7 +288,7 @@ async def _read_request_body(request: Request | None) -> dict:
                         )
 
         # Cache the parsed result
-        _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
+        safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
         return parsed_body
 
     except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
@@ -216,6 +299,9 @@ async def _read_request_body(request: Request | None) -> dict:
         # Catch unexpected errors to avoid crashes
         verbose_proxy_logger.exception("Unexpected error reading request body - %s", e)
         return {}
+
+
+_read_request_body: Final = read_request_body
 
 
 def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
@@ -229,7 +315,7 @@ def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
 async def read_raw_json_body(request: Request | None) -> bytes | None:
     if request is None or _safe_get_request_parsed_body(request=request) is None:
         return None
-    content_type: Final = _safe_get_request_headers(request=request).get("content-type", "")
+    content_type: Final = safe_get_request_headers(request=request).get("content-type", "")
     if _is_form_content_type(content_type):
         return None
     try:
@@ -254,7 +340,7 @@ def get_client_requested_model(request: Request | None) -> str | None:
     return model if isinstance(model, str) else None
 
 
-def _safe_get_request_query_params(request: Request | None) -> dict:
+def safe_get_request_query_params(request: Request | None) -> dict:
     if request is None:
         return {}
     try:
@@ -266,7 +352,10 @@ def _safe_get_request_query_params(request: Request | None) -> dict:
         return {}
 
 
-def _safe_set_request_parsed_body(
+_safe_get_request_query_params: Final = safe_get_request_query_params
+
+
+def safe_set_request_parsed_body(
     request: Request | None,
     parsed_body: dict,
 ) -> None:
@@ -276,6 +365,9 @@ def _safe_set_request_parsed_body(
         request.scope["parsed_body"] = (tuple(parsed_body.keys()), parsed_body)
     except Exception as e:
         verbose_proxy_logger.debug("Unexpected error setting request parsed body - %s", e)
+
+
+_safe_set_request_parsed_body: Final = safe_set_request_parsed_body
 
 
 def rewrite_request_model(
@@ -291,12 +383,12 @@ def rewrite_request_model(
         return
     cached_body: Final = _safe_get_request_parsed_body(request=request)
     body: Final = {**cached_body, "model": model} if cached_body is not None else request_data
-    _safe_set_request_parsed_body(request=request, parsed_body=body)
-    request._json = body
-    request._body = orjson.dumps(body)
+    safe_set_request_parsed_body(request=request, parsed_body=body)
+    request._json = body  # pyright: ignore[reportPrivateUsage]  # Starlette JSON cache
+    request._body = orjson.dumps(body)  # pyright: ignore[reportPrivateUsage]  # Starlette body cache
 
 
-def _safe_get_request_headers(request: Request | None) -> dict:
+def safe_get_request_headers(request: Request | None) -> dict:
     """
     [Non-Blocking] Safely get the request headers.
     Caches the result on request.state to avoid re-creating dict(request.headers) per call.
@@ -323,6 +415,9 @@ def _safe_get_request_headers(request: Request | None) -> dict:
     except Exception:
         pass  # request.state may not be available in all contexts
     return headers
+
+
+_safe_get_request_headers: Final = safe_get_request_headers
 
 
 def check_file_size_under_limit(
@@ -457,7 +552,7 @@ async def get_request_body(request: Request) -> dict[str, Any]:
     if request.method == "POST":
         content_type: Final = request.headers.get("content-type", "")
         if is_json_content_type(content_type):
-            return await _read_request_body(request)
+            return await read_request_body(request)
         elif _is_form_content_type(content_type):
             return await get_form_data(request)
         else:
@@ -605,7 +700,7 @@ def populate_request_with_path_params(request_data: dict, request: Request) -> d
         dict: Updated request_data with path parameters and query parameters added
     """
     # Add query parameters to request_data (for GET requests, etc.)
-    query_params: Final = _safe_get_request_query_params(request)
+    query_params: Final = safe_get_request_query_params(request)
     if query_params:
         for key, value in query_params.items():
             # Don't overwrite existing values from request body

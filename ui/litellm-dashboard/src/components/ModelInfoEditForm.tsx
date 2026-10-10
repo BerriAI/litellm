@@ -5,7 +5,7 @@ import { CircleHelp } from "lucide-react";
 import type { Dayjs } from "dayjs";
 import * as React from "react";
 import { useForm, type Resolver } from "react-hook-form";
-import { z } from "zod/v4";
+import { z } from "zod";
 
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
 import { FormField } from "@/components/shared/form/FormField";
@@ -14,6 +14,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { credentialLabelsByName, credentialOptions } from "@/components/shared/credentialOptions";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -102,7 +104,7 @@ export interface ModelEditFormValues {
   vector_store_ids?: string[];
   tags?: string[];
   health_check_model?: string | null;
-  litellm_credential_name?: string;
+  litellm_credential_name?: string | null;
   litellm_extra_params?: string;
   model_info?: string;
   team_id?: string;
@@ -139,7 +141,7 @@ const modelEditShape = {
   vector_store_ids: z.array(z.string()).optional(),
   tags: z.array(z.string()).optional(),
   health_check_model: z.string().nullish(),
-  litellm_credential_name: textish,
+  litellm_credential_name: z.string().nullish(),
   litellm_extra_params: textish,
   model_info: textish,
   team_id: textish,
@@ -254,7 +256,7 @@ export const toModelEditFormValues = (localModelData: any, isWildcardModel: bool
   tags: Array.isArray(localModelData.litellm_params?.tags) ? localModelData.litellm_params.tags : [],
   // antd never mounted this field for a non-wildcard model, so the key must be absent, not null.
   ...(isWildcardModel ? { health_check_model: localModelData.model_info?.health_check_model } : {}),
-  litellm_credential_name: localModelData.litellm_params?.litellm_credential_name || "",
+  litellm_credential_name: localModelData.litellm_params?.litellm_credential_name ?? null,
   litellm_extra_params: JSON.stringify(
     Object.fromEntries(
       Object.entries(localModelData.litellm_params || {}).filter(
@@ -344,6 +346,9 @@ const ChipList: React.FC<{ values: unknown; emptyLabel: string }> = ({ values, e
     </div>
   );
 };
+
+const attachedCredentialLabel = (credentialName: string | null | undefined, credentials: CredentialItem[]): string =>
+  credentialName ? credentialLabelsByName(credentials).get(credentialName) ?? credentialName : "Manual";
 
 const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
   localModelData,
@@ -634,36 +639,23 @@ const ModelInfoEditForm: React.FC<ModelInfoEditFormProps> = ({
               <FieldLabel>Existing Credentials</FieldLabel>
               {isEditing ? (
                 <FormField control={form.control} name="litellm_credential_name">
-                  {({ id, value, onChange, onBlur }) => {
-                    const items = [
-                      { value: "", label: "None" },
-                      ...credentialsList.map((credential) => ({
-                        value: credential.credential_name,
-                        label: credential.credential_name,
-                      })),
-                    ];
-                    return (
-                      <Select
-                        items={items}
-                        value={(value as string) ?? ""}
-                        onValueChange={(selected: string | null) => onChange(selected ?? "")}
-                      >
-                        <SelectTrigger id={id} className="w-full" onBlur={onBlur}>
-                          <SelectValue placeholder="Select or search for existing credentials" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          {items.map((item) => (
-                            <SelectItem key={item.value} value={item.value}>
-                              {item.label}
-                            </SelectItem>
-                          ))}
-                        </SelectContent>
-                      </Select>
-                    );
-                  }}
+                  {({ id, value, onChange }) => (
+                    <SearchSelect
+                      inputId={id}
+                      placeholder="Select or search for existing credentials"
+                      options={credentialOptions(credentialsList)}
+                      value={(value as string | null) ?? ""}
+                      allowClear={false}
+                      onValueChange={(selected) => {
+                        if (selected !== null) onChange(selected === "" ? null : selected);
+                      }}
+                    />
+                  )}
                 </FormField>
               ) : (
-                <Display>{localModelData.litellm_params?.litellm_credential_name || "Manual"}</Display>
+                <Display>
+                  {attachedCredentialLabel(localModelData.litellm_params?.litellm_credential_name, credentialsList)}
+                </Display>
               )}
             </div>
 

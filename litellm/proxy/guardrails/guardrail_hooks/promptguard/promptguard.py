@@ -129,7 +129,7 @@ class PromptGuardGuardrail(CustomGuardrail):
     ) -> GenericGuardrailAPIInputs:
         texts: Final = inputs.get("texts", [])
         images: Final = inputs.get("images", [])
-        structured_messages: Final = inputs.get("structured_messages") if input_type == "request" else None
+        structured_messages: Final = inputs.get("structured_messages", [])
         model: Final = inputs.get("model")
 
         if structured_messages:
@@ -168,7 +168,7 @@ class PromptGuardGuardrail(CustomGuardrail):
                     "Content-Type": "application/json",
                 },
                 json=payload,
-                timeout=10.0,
+                timeout=self.timeout if self.timeout is not None else 10.0,
             )
             response.raise_for_status()
             view: Final[PromptGuardHTTPView] = {"guard_response": response.json()}

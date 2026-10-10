@@ -14,22 +14,24 @@ interface RoutingGroupUsagePanelProps {
   baseUrl: string;
 }
 
-const exampleModel = (group: RoutingGroup): string => group.models[0] ?? "<your-model>";
+const exampleModel = (group: RoutingGroup): string =>
+  group.routing_strategy === "priority" ? group.group_name : group.models[0] ?? "<your-model>";
 
 const buildCurlSnippet = (group: RoutingGroup, baseUrl: string): string =>
   `curl -X POST '${baseUrl}/v1/chat/completions' \\
   -H 'Content-Type: application/json' \\
-  -H 'Authorization: Bearer $LITELLM_API_KEY' \\
+  -H "Authorization: Bearer $LITELLM_API_KEY" \\
   -d '{
     "model": "${exampleModel(group)}",
     "messages": [{"role": "user", "content": "Hello!"}]
   }'`;
 
 const buildPythonSnippet = (group: RoutingGroup, baseUrl: string): string =>
-  `from openai import OpenAI
+  `import os
+from openai import OpenAI
 
 client = OpenAI(
-    api_key="$LITELLM_API_KEY",
+    api_key=os.environ["LITELLM_API_KEY"],
     base_url="${baseUrl}",
 )
 
@@ -69,8 +71,17 @@ export function RoutingGroupUsagePanel({ group, baseUrl }: RoutingGroupUsagePane
         <span className="text-sm font-medium text-foreground">How routing works for this group</span>
       </div>
       <p className="mb-3 text-sm text-muted-foreground">
-        Callers request any model in the group by name; LiteLLM picks a deployment behind the scenes using the{" "}
-        <span className="font-medium text-foreground">{formatStrategyLabel(group.routing_strategy)}</span> strategy.
+        {group.routing_strategy === "priority" ? (
+          <>
+            Request <span className="font-medium text-foreground">{group.group_name}</span> to try eligible models in
+            priority order. Direct requests to a member model keep their existing routing behavior.
+          </>
+        ) : (
+          <>
+            Callers request any model in the group by name; LiteLLM picks a deployment behind the scenes using the{" "}
+            <span className="font-medium text-foreground">{formatStrategyLabel(group.routing_strategy)}</span> strategy.
+          </>
+        )}
       </p>
       <Tabs defaultValue="curl">
         <TabsList variant="line" className="h-auto w-full justify-start rounded-none border-b p-0">

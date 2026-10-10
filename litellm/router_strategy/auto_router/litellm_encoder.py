@@ -87,7 +87,7 @@ class LiteLLMRouterEncoder(CustomDenseEncoder, AsymmetricDenseMixin):
         limit: Final = self.max_input_chars
         if limit <= 0:
             return docs
-        clamped: Final = [doc[:limit] for doc in docs]  # mutable-ok: embedding() takes `input: str | list`
+        clamped: Final = [doc[:limit] for doc in docs]
         if clamped != docs:
             verbose_router_logger.debug(
                 "LiteLLMRouterEncoder: cut input to %s chars for embedding model %s", limit, self.model_name

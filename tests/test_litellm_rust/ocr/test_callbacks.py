@@ -12,10 +12,11 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
 import litellm
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
-from tests.test_litellm_rust.support.isolation import isolated_callback_registries
+from tests.test_litellm_rust.support.isolation import isolated_callback_registries, rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import (
     OCR_DOCUMENT,
@@ -62,6 +63,23 @@ def test_native_ocr_pre_call_callback_receives_transformed_provider_request(ocr_
         "document": OCR_DOCUMENT,
         "pages": [0],
     }
+
+
+@pytest.mark.asyncio
+async def test_native_ocr_does_not_restore_keywords_deleted_by_a_pre_call_hook(ocr_server: RecordingServer) -> None:
+    class DropKeywords(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: object
+        ) -> dict[str, object]:
+            return {name: value for name, value in kwargs.items() if name not in ("pages", "extra_headers")}
+
+    with rebound(litellm, "callbacks", [DropKeywords()]):
+        await call_native_aocr(ocr_server, pages=[0], extra_headers={"x-deleted": "remove this header"})
+
+    assert len(ocr_server.requests) == 1
+    sent: Final = ocr_server.requests[0]
+    assert sent.body == {"model": "mistral-ocr-latest", "document": OCR_DOCUMENT}
+    assert sent.headers.get("x-deleted") is None
 
 
 @pytest.mark.parametrize("raise_after_edit", [False, True], ids=["callback-returns", "callback-raises"])
@@ -420,7 +438,7 @@ async def test_native_aocr_state_stashed_before_a_blocking_hook_raises_reaches_f
     class Blocked(Exception):
         pass
 
-    class Block(CustomLogger):
+    class Block(CustomGuardrail):
         async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
             request_data["litellm_logging_obj"].model_call_details["blocked-by"] = token
             raise Blocked("blocked after the provider answered")

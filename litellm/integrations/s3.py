@@ -16,11 +16,14 @@ from litellm.constants import (
     MAX_S3_OBJECT_KEY_BYTES,
     S3_BOUNDED_OBJECT_KEY_HEAD_BYTES,
     S3_LOG_PROMPTS_ONLY_ENV_VAR,
+    S3_PARTITION_GRANULARITY_ENV_VAR,
     S3_PREFIX_DIGEST_CHARS,
 )
+from litellm.types.integrations.s3_v2 import S3PartitionGranularity
 from litellm.types.utils import StandardLoggingPayload
 
-_S3_LOG_PROMPTS_ONLY: Final = TypeAdapter(bool)
+_S3_BOOL: Final = TypeAdapter(bool)
+_UPLOAD_BOUND: Final = TypeAdapter(int)
 
 
 def resolve_s3_log_prompts_only(configured: object, environ: Mapping[str, str] | None = None) -> bool:
@@ -29,10 +32,116 @@ def resolve_s3_log_prompts_only(configured: object, environ: Mapping[str, str] |
     if raw is None or raw == "":
         return False
     try:
-        return _S3_LOG_PROMPTS_ONLY.validate_python(raw.strip() if isinstance(raw, str) else raw)
+        return _S3_BOOL.validate_python(raw.strip() if isinstance(raw, str) else raw)
     except ValidationError:
         verbose_logger.warning("s3 logging: s3_log_prompts_only=%r is not a boolean, logging prompts only", raw)
         return True
+
+
+def resolve_s3_partition_granularity(
+    configured: object, environ: Mapping[str, str] | None = None
+) -> S3PartitionGranularity:
+    env: Final = os.environ if environ is None else environ
+    raw: Final = env.get(S3_PARTITION_GRANULARITY_ENV_VAR) if configured is None else configured
+    if raw == "hour":
+        return "hour"
+    if raw is not None and raw not in ("", "day"):
+        verbose_logger.warning("s3 logging: s3_partition_granularity=%r is not one of day, hour, using day", raw)
+    return "day"
+
+
+def _resolve_positive_int(setting: str, configured: object, fallback: int, *, reject_bool: bool) -> int:
+    if configured is None or configured == "":
+        return fallback
+    if reject_bool and isinstance(configured, bool):
+        verbose_logger.warning(
+            "s3 logging: %s=%r is a boolean, not an integer, using %s", setting, configured, fallback
+        )
+        return fallback
+    try:
+        bound: Final = _UPLOAD_BOUND.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning("s3 logging: %s=%r is not an integer, using %s", setting, configured, fallback)
+        return fallback
+    if bound < 1:
+        verbose_logger.warning("s3 logging: %s=%r must be at least 1, using %s", setting, configured, fallback)
+        return fallback
+    return bound
+
+
+def resolve_s3_max_concurrent_uploads(configured: object, fallback: int) -> int:
+    return _resolve_positive_int("s3_max_concurrent_uploads", configured, fallback, reject_bool=False)
+
+
+def resolve_s3_max_queue_size(configured: object, fallback: int) -> int:
+    return _resolve_positive_int("s3_max_queue_size", configured, fallback, reject_bool=True)
+
+
+def resolve_s3_max_retry_age_seconds(configured: object, fallback: int | None) -> int | None:
+    if configured is None or configured == "":
+        return None
+    if isinstance(configured, bool):
+        verbose_logger.warning(
+            "s3 logging: s3_max_retry_age_seconds=%r is a boolean, not an integer, falling back to %r",
+            configured,
+            fallback,
+        )
+        return fallback
+    try:
+        bound: Final = _UPLOAD_BOUND.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning(
+            "s3 logging: s3_max_retry_age_seconds=%r is not an integer, falling back to %r", configured, fallback
+        )
+        return fallback
+    if bound < 0:
+        verbose_logger.warning(
+            "s3 logging: s3_max_retry_age_seconds=%r must be at least 0, falling back to %r", configured, fallback
+        )
+        return fallback
+    return bound or None
+
+
+def resolve_s3_max_adaptive_concurrency(configured: object, fallback: int) -> int:
+    return _resolve_positive_int("s3_max_adaptive_concurrency", configured, fallback, reject_bool=True)
+
+
+def resolve_s3_drop_on_terminal_error(configured: object) -> bool:
+    if configured is None or configured == "":
+        return True
+    try:
+        return _S3_BOOL.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning(
+            "s3 logging: s3_drop_on_terminal_error=%r is not a boolean, dropping terminal-failed uploads",
+            configured,
+        )
+        return True
+
+
+def resolve_s3_adaptive_concurrency(configured: object) -> bool:
+    if configured is None or configured == "":
+        return False
+    try:
+        return _S3_BOOL.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning(
+            "s3 logging: s3_adaptive_concurrency=%r is not a boolean, keeping the fixed upload width",
+            configured,
+        )
+        return False
+
+
+def resolve_s3_batch_file_upload(configured: object) -> bool:
+    if configured is None or configured == "":
+        return False
+    try:
+        return _S3_BOOL.validate_python(configured.strip() if isinstance(configured, str) else configured)
+    except ValidationError:
+        verbose_logger.warning(
+            "s3 logging: s3_batch_file_upload=%r is not a boolean, keeping per-request objects", configured
+        )
+        return False
 
 
 def prompts_only_payload(payload: StandardLoggingPayload) -> StandardLoggingPayload:
@@ -276,10 +385,11 @@ def get_s3_object_key(
     prefix: str,
     start_time: datetime,
     s3_file_name: str,
+    partition_granularity: S3PartitionGranularity = "day",
 ) -> str:
-    sanitized_s3_file_name: Final = s3_file_name.replace("/", "_")
+    sanitized_s3_file_name: Final = s3_file_name.replace("/", "_").replace(":", "_")
     configured_prefix: Final = (s3_path.rstrip("/") + "/" if s3_path else "") + prefix
-    date_segment: Final = start_time.strftime("%Y-%m-%d") + "/"
+    date_segment: Final = start_time.strftime("%Y-%m-%d/%H/" if partition_granularity == "hour" else "%Y-%m-%d/")
     # we need the s3 key to include the time, so we log cache hits too
     s3_object_key: Final = configured_prefix + date_segment + sanitized_s3_file_name + ".json"
     if len(s3_object_key.encode("utf-8")) <= MAX_S3_OBJECT_KEY_BYTES:

@@ -3,164 +3,129 @@ mod errors;
 mod host;
 mod project;
 
-use std::sync::{Arc, LazyLock};
-
-use host::OcrRouteHost;
-use litellm_auth_gcp::VertexAuth;
-use litellm_callbacks_legacy::{LegacySurface, PublicCall, run_legacy_call};
-use litellm_core::ocr::route::ocr_machine;
+use host::OcrPythonHost;
+use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::settings::ProcessEnvironment;
-use litellm_llms::base_llm::ocr::{
-    handler::OcrClient,
-    settings::{OcrSettings, Secrets},
-};
-use pyo3::{
-    prelude::*,
-    types::{PyDict, PyTuple},
-};
+use litellm_host_python::to_py;
+use litellm_inference_ocr::provider_config;
+use litellm_llms::base_llm::ocr::settings::OcrSettings;
+use pyo3::prelude::*;
 
-use crate::{errors::RustBridgeDeclined, http, python_settings::PythonSettings};
+use super::NativeCall;
 
-const SURFACE: LegacySurface = LegacySurface {
-    call_type: "ocr",
-    input_description: "OCR document processing",
-    stream: None,
+use crate::{
+    coercion::FieldSpec,
+    http,
+    python_settings::{PythonSettings, Snapshot},
 };
 
-const ASYNC_SURFACE: LegacySurface = LegacySurface {
-    call_type: "aocr",
-    ..SURFACE
-};
+const ENABLE_AZURE_AD_TOKEN_REFRESH: FieldSpec<bool> =
+    FieldSpec::new("enable_azure_ad_token_refresh", |field| {
+        Ok(field.exact_true())
+    });
 
-static VERTEX_AUTH: LazyLock<VertexAuth> = LazyLock::new(VertexAuth::default);
-
-fn run_ocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-    asynchronous: bool,
-) -> PyResult<Py<PyAny>> {
-    let secrets = process_environment_secrets(&PythonSettings::SecretManager.read(py)?)?;
-    let config = http::call_config(py, &kwargs, asynchronous)?;
-    let client = OcrClient::new(
-        http::pool(),
-        &config,
-        http::url_policy(py)?,
-        VERTEX_AUTH.clone(),
-        ocr_settings(py)?,
-        secrets,
-    )
-    .map_err(|error| RustBridgeDeclined::new_err(error.to_string()))?;
-    run_legacy_call(
+fn run_ocr(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
+    let (arguments, hooks) =
+        crate::routes::call_hooks(py, LoggingOperation::Ocr, &call, asynchronous)?;
+    crate::routes::run_public_call(
         py,
-        if asynchronous { ASYNC_SURFACE } else { SURFACE },
-        PublicCall::capture(&request, &args, &kwargs)?,
-        ocr_machine(client),
-        OcrRouteHost::new(request.unbind()),
+        arguments,
+        move |py, arguments, request| {
+            let config = http::call_config(py, arguments, asynchronous)?;
+            let client = litellm_llms::base_llm::ocr::handler::OcrClient::new(
+                &http::resources().pool,
+                &config,
+                http::url_policy(py)?,
+                http::resources().auth.clone(),
+                ocr_settings(py)?,
+                crate::secrets::source(py)?,
+            )
+            .map_err(http::client_error)?;
+            let route = litellm_inference_ocr::OcrRoute::new(client);
+            Ok(route.machine(request, None))
+        },
+        OcrPythonHost::new(call.view()?),
+        hooks,
         asynchronous,
     )
 }
 
-#[derive(FromPyObject)]
-struct PythonSecretManager {
-    readable: bool,
-}
-
-fn process_environment_secrets(secret_manager: &Bound<'_, PyAny>) -> PyResult<Secrets> {
-    let manager: PythonSecretManager = secret_manager.extract()?;
-    if manager.readable {
-        return Err(RustBridgeDeclined::new_err(
-            "a readable secret manager is configured and the Rust route only reads the process environment",
-        ));
-    }
-    Ok(Arc::new(ProcessEnvironment))
-}
-
-#[derive(FromPyObject)]
-struct PythonProviderDefaults {
-    vertex_project: Option<String>,
-    vertex_location: Option<String>,
-    enable_azure_ad_token_refresh: Option<bool>,
-}
-
 fn ocr_settings(py: Python<'_>) -> PyResult<OcrSettings> {
-    let defaults: PythonProviderDefaults = PythonSettings::ProviderDefaults
-        .read(py)?
-        .extract()
-        .map_err(|error: PyErr| {
-            RustBridgeDeclined::new_err(format!(
-                "litellm provider defaults cannot be used by the Rust route: {error}"
-            ))
-        })?;
+    project_provider_defaults(&PythonSettings::ProviderDefaults.read(py)?)
+}
+
+fn project_provider_defaults(snapshot: &Snapshot<'_>) -> PyResult<OcrSettings> {
     Ok(OcrSettings {
-        vertex_project: defaults.vertex_project,
-        vertex_location: defaults.vertex_location,
-        enable_azure_ad_token_refresh: defaults.enable_azure_ad_token_refresh == Some(true),
+        enable_azure_ad_token_refresh: snapshot.read(&ENABLE_AZURE_AD_TOKEN_REFRESH)?,
         ..OcrSettings::from_environment(&ProcessEnvironment)
     })
 }
 
 #[pyfunction]
-pub(crate) fn ocr(
-    py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
-) -> PyResult<Py<PyAny>> {
-    run_ocr(py, request, args, kwargs, false)
+pub(crate) fn ocr(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    run_ocr(py, call, false)
 }
 
 #[pyfunction]
-pub(crate) fn aocr(
+pub(crate) fn aocr(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<PyAny>> {
+    run_ocr(py, call, true)
+}
+
+#[pyfunction]
+pub(crate) fn ocr_health_check_document(
     py: Python<'_>,
-    request: Bound<'_, PyAny>,
-    args: Bound<'_, PyTuple>,
-    kwargs: Bound<'_, PyDict>,
+    model: &str,
+    custom_llm_provider: Option<&str>,
 ) -> PyResult<Py<PyAny>> {
-    run_ocr(py, request, args, kwargs, true)
+    let document = provider_config::get_health_check_document(model, custom_llm_provider)
+        .map_err(errors::to_pyerr)?;
+    to_py(py, &document)
+}
+
+#[pyfunction]
+pub(crate) fn ocr_passthrough_response(
+    py: Python<'_>,
+    model: &str,
+    endpoint: &str,
+    body: &[u8],
+) -> PyResult<Option<Py<PyAny>>> {
+    provider_config::passthrough_response(model, endpoint, body)
+        .map_err(errors::to_pyerr)?
+        .map(|response| to_py(py, &response.into_json()))
+        .transpose()
 }
 
 #[cfg(test)]
 mod tests {
-    use pyo3::{prelude::*, types::PyDict};
+    use pyo3::prelude::*;
 
-    use super::process_environment_secrets;
-    use crate::errors::RustBridgeDeclined;
+    use crate::python_settings::PythonSettings;
 
-    fn secret_manager<'py>(py: Python<'py>, readable: bool) -> Bound<'py, PyAny> {
-        let locals = PyDict::new(py);
-        locals.set_item("readable", readable).unwrap();
-        py.run(
-            c"import types\nmanager = types.SimpleNamespace(readable=readable)",
-            Some(&locals),
-            Some(&locals),
-        )
-        .unwrap();
-        locals.get_item("manager").unwrap().unwrap()
-    }
-
-    #[test]
-    fn a_readable_secret_manager_sends_the_call_back_to_python() {
+    #[rstest::rstest]
+    fn provider_defaults_read_exact_true_only() {
         Python::initialize();
         Python::attach(|py| {
-            let declined = process_environment_secrets(&secret_manager(py, true))
-                .err()
-                .expect("the Rust route declines");
-            assert!(declined.is_instance_of::<RustBridgeDeclined>(py));
-        });
-    }
-
-    #[test]
-    fn without_a_readable_secret_manager_secrets_are_the_process_environment() {
-        Python::initialize();
-        Python::attach(|py| {
-            let secrets = process_environment_secrets(&secret_manager(py, false)).unwrap();
-            assert_eq!(
-                secrets.get("LITELLM_RUST_BRIDGE_UNSET_VARIABLE_FOR_TEST"),
-                None
+            let value = py
+                .eval(
+                    c"__import__('types').SimpleNamespace(enable_azure_ad_token_refresh=1)",
+                    None,
+                    None,
+                )
+                .unwrap();
+            let snapshot = PythonSettings::ProviderDefaults.snapshot(value.clone());
+            assert!(
+                !super::project_provider_defaults(&snapshot)
+                    .unwrap()
+                    .enable_azure_ad_token_refresh
             );
-            assert_eq!(secrets.get("PATH"), std::env::var("PATH").ok());
+            value
+                .setattr("enable_azure_ad_token_refresh", true)
+                .unwrap();
+            assert!(
+                super::project_provider_defaults(&snapshot)
+                    .unwrap()
+                    .enable_azure_ad_token_refresh
+            );
         });
     }
 }

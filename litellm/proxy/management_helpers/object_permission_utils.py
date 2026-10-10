@@ -4,11 +4,11 @@ organizations, teams, and keys.
 """
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 from fastapi import HTTPException, status
 from pydantic import TypeAdapter
@@ -17,6 +17,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import ObjectPermissionDict, SpecialMCPServerName, SpecialMCPServerNames
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache, object_permission_cache_key
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.table_repositories import MCPServerRepository
@@ -181,10 +183,26 @@ async def handle_update_object_permission_common(
     return created_object_permission_row.object_permission_id
 
 
-async def _set_object_permission(
-    data_json: dict,
+async def invalidate_cached_object_permissions(
+    object_permission_ids: Iterable[object],
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """Drop permission rows an entitlement change makes stale.
+
+    ``get_object_permission`` caches a row under its own id separate from the entity's cache entry, and an
+    upsert keeps that id, so pass both the outgoing and incoming ids since a change can also mint a new row.
+    """
+    cache_keys: Final = tuple(
+        object_permission_cache_key(object_permission_id)
+        for object_permission_id in dict.fromkeys(pid for pid in object_permission_ids if isinstance(pid, str))
+    )
+    await evict_and_broadcast(cache_keys, user_api_key_cache)
+
+
+async def set_object_permission(
+    data_json: dict[str, object],
     prisma_client: PrismaClient | None,
-):
+) -> dict[str, object]:
     """
     Creates the LiteLLM_ObjectPermissionTable record for the key/team.
     Handles permissions for vector stores and mcp servers.
@@ -219,6 +237,9 @@ async def _set_object_permission(
     return data_json
 
 
+_set_object_permission: Final = set_object_permission
+
+
 def _dedupe_preserving_order(values: list[str]) -> list[str]:
     seen: Final[set[str]] = set()
     result: Final[list[str]] = []
@@ -230,7 +251,7 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
     return result
 
 
-def _mcp_server_identifier_matches(server: Any, identifier: str) -> bool:
+def _mcp_server_identifier_matches(server: object, identifier: str) -> bool:
     return identifier in {
         getattr(server, "server_id", None),
         getattr(server, "alias", None),
@@ -344,7 +365,7 @@ async def reject_ambiguous_mcp_tool_permission_keys(
         return
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
-        detail={  # mutable-ok: HTTPException.detail has no immutable form; same shape as the sibling errors here
+        detail={
             "error": (
                 f"Ambiguous mcp_tool_permissions key: {collisions}. "
                 "Key tool permissions by server_id when servers share a name or alias."
@@ -429,7 +450,7 @@ async def _resolve_team_allowed_mcp_servers(
     direct_servers: Final[list[str]] = team_object_permission.mcp_servers or []
     if SpecialMCPServerName.all_proxy_servers.value in direct_servers:
         return _get_all_mcp_server_ids()
-    access_group_servers: Final[list[str]] = await MCPRequestHandler._get_mcp_servers_from_access_groups(
+    access_group_servers: Final[list[str]] = await MCPRequestHandler.get_mcp_servers_from_access_groups(
         team_object_permission.mcp_access_groups or []
     )
     raw_tool_perms = team_object_permission.mcp_tool_permissions or {}
@@ -445,13 +466,16 @@ async def _resolve_team_allowed_mcp_servers(
     return _flatten_resolved_mcp_server_ids(resolved_servers) | unresolved_servers
 
 
-def _get_allow_all_keys_server_ids() -> set[str]:
+def get_allow_all_keys_server_ids() -> set[str]:
     """Return the set of MCP server IDs marked with allow_all_keys=True."""
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
 
     return set(global_mcp_server_manager.get_allow_all_keys_server_ids())
+
+
+_get_allow_all_keys_server_ids: Final = get_allow_all_keys_server_ids
 
 
 def _get_all_mcp_server_ids() -> set[str]:
@@ -540,27 +564,48 @@ async def _get_grandfathered_key_mcp_server_ids(
     )
 
 
-async def _get_team_allowed_mcp_servers(
+async def get_team_allowed_mcp_servers(
     team_obj: Optional["LiteLLM_TeamTableCachedObj"],
     prisma_client: PrismaClient | None = None,
 ) -> set[str]:
     """
     Get the full set of MCP server IDs a team allows.
 
-    If team has no object_permission or no MCP config, returns empty set
-    (meaning only allow_all_keys servers are permitted).
+    Combines servers granted via the team's object_permission with servers
+    granted via the team's unified access groups (access_group_ids). If the
+    team grants neither, returns empty set (meaning only allow_all_keys
+    servers are permitted).
     """
     if team_obj is None:
         return set()
 
+    from litellm.proxy.auth.auth_checks import (
+        get_mcp_server_ids_from_access_groups,  # pyright: ignore[reportPrivateUsage]  # same resolver runtime MCP auth calls
+    )
+
+    access_group_servers: Final = await get_mcp_server_ids_from_access_groups(
+        access_group_ids=team_obj.access_group_ids or [],
+        prisma_client=prisma_client,
+    )
+    resolved_access_group_servers: Final = await _resolve_mcp_server_identifiers_to_ids(
+        identifiers=set(access_group_servers),
+        prisma_client=prisma_client,
+    )
+    unified_servers: Final = _flatten_resolved_mcp_server_ids(resolved_access_group_servers) | {
+        server for server in access_group_servers if not resolved_access_group_servers.get(server)
+    }
+
     team_object_permission: Final = team_obj.object_permission
     if team_object_permission is None:
-        return set()
+        return unified_servers
 
-    return await _resolve_team_allowed_mcp_servers(
+    return unified_servers | await _resolve_team_allowed_mcp_servers(
         team_object_permission=team_object_permission,
         prisma_client=prisma_client,
     )
+
+
+_get_team_allowed_mcp_servers: Final = get_team_allowed_mcp_servers
 
 
 def _extract_requested_mcp_server_ids(
@@ -632,14 +677,17 @@ async def validate_key_mcp_servers_against_team(
 
     Rules:
     - If key is in a team: key's mcp_servers must be a subset of
-      (team's allowed servers + allow_all_keys servers)
+      (team's allowed servers + allow_all_keys servers), where the team's
+      allowed servers include servers granted via the team's unified
+      access groups
     - If key is NOT in a team and the caller is a proxy admin: any server or
       access group may be assigned. A proxy admin can already reach every MCP
       server, and runtime access is granted directly from the key's own
       object_permission, so the key is scoped to exactly what the admin selected
     - If key is NOT in a team and the caller is not a proxy admin: key's
       mcp_servers must only contain allow_all_keys servers
-    - If team has no MCP config: key can only use allow_all_keys servers
+    - If team has no MCP config (no object_permission and no unified
+      access groups): key can only use allow_all_keys servers
 
     Raises HTTPException(403) if validation fails.
     """
@@ -653,8 +701,8 @@ async def validate_key_mcp_servers_against_team(
     if not requested_servers and not requested_access_groups and not requested_toolsets:
         return object_permission
 
-    allow_all_keys_servers: Final = _get_allow_all_keys_server_ids()
-    team_allowed_servers: Final = await _get_team_allowed_mcp_servers(
+    allow_all_keys_servers: Final = get_allow_all_keys_server_ids()
+    team_allowed_servers: Final = await get_team_allowed_mcp_servers(
         team_obj=team_obj,
         prisma_client=prisma_client,
     )

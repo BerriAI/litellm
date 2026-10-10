@@ -37,7 +37,7 @@ class CacheCodec:
     """
 
     @staticmethod
-    def serialize(value: Any, model_type: type[T] | None = None) -> Any:
+    def serialize(value: object, model_type: type[T] | None = None) -> object:
         """
         Encode a value for DualCache / Redis (``json.dumps``-safe).
 

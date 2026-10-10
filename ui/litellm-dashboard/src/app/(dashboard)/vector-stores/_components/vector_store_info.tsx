@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
-import { ArrowLeft, CircleHelp } from "lucide-react";
-import { z } from "zod/v4";
+import { ArrowLeft, CircleHelp, Lock } from "lucide-react";
+import { z } from "zod";
 import {
   vectorStoreInfoCall,
   vectorStoreUpdateCall,
@@ -15,23 +15,19 @@ import VectorStoreTester from "./VectorStoreTester";
 import { toast } from "@/lib/toast";
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
+import { StatusBadge } from "@/components/shared/table_cells";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
-import {
-  Combobox,
-  ComboboxContent,
-  ComboboxEmpty,
-  ComboboxInput,
-  ComboboxItem,
-  ComboboxList,
-} from "@/components/ui/combobox";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { credentialOptions } from "@/components/shared/credentialOptions";
 
 interface VectorStoreInfoViewProps {
   vectorStoreId: string;
@@ -65,11 +61,6 @@ const toFormValues = (vectorStore: VectorStore): VectorStoreEditValues => ({
   custom_llm_provider: vectorStore.custom_llm_provider ?? "",
   litellm_credential_name: vectorStore.litellm_credential_name,
 });
-
-interface CredentialOption {
-  label: string;
-  value: string | null;
-}
 
 const labelWithHint = (label: string, hint: string): React.ReactNode => (
   <>
@@ -173,14 +164,6 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
     }
   };
 
-  const credentialOptions: CredentialOption[] = [
-    { value: null, label: "None" },
-    ...credentials.map((credential) => ({
-      value: credential.credential_name,
-      label: credential.credential_name,
-    })),
-  ];
-
   if (loadFailed) {
     return (
       <div className="p-4 max-w-full">
@@ -200,6 +183,9 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
     return <div>Loading...</div>;
   }
 
+  const canEdit = is_admin && !vectorStoreDetails.is_config;
+  const showEditForm = isEditing && canEdit;
+
   return (
     <div className="p-4 max-w-full">
       <div className="flex justify-between items-center mb-6">
@@ -208,13 +194,30 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
             <ArrowLeft />
             Back to Vector Stores
           </Button>
-          <h1 className="text-xl font-semibold">Vector Store ID: {vectorStoreDetails.vector_store_id}</h1>
+          <div className="flex items-center gap-2">
+            <h1 className="text-xl font-semibold">Vector Store ID: {vectorStoreDetails.vector_store_id}</h1>
+            <StatusBadge
+              tone={vectorStoreDetails.is_config ? "neutral" : "info"}
+              label={vectorStoreDetails.is_config ? "Config" : "DB"}
+            />
+          </div>
           <p className="text-sm text-muted-foreground">
             {vectorStoreDetails.vector_store_description || "No description"}
           </p>
         </div>
-        {is_admin && !isEditing && <Button onClick={startEditing}>Edit Vector Store</Button>}
+        {canEdit && !isEditing && <Button onClick={startEditing}>Edit Vector Store</Button>}
       </div>
+
+      {vectorStoreDetails.is_config && (
+        <Alert variant="info" className="mb-4">
+          <Lock className="size-4" aria-hidden />
+          <AlertTitle>Read only: defined in the config file</AlertTitle>
+          <AlertDescription>
+            This vector store comes from the proxy config YAML, so it cannot be edited or deleted on the dashboard.
+            Change or remove it in the config file and restart the proxy.
+          </AlertDescription>
+        </Alert>
+      )}
 
       <Tabs defaultValue="details">
         <TabsList variant="line" className="mb-6 h-auto w-full justify-start rounded-none p-0">
@@ -227,7 +230,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
         </TabsList>
 
         <TabsContent value="details" keepMounted>
-          {isEditing ? (
+          {showEditForm ? (
             <div>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Edit Vector Store</h3>
@@ -299,43 +302,16 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
                         </p>
 
                         <FormField control={form.control} name="litellm_credential_name" label="Existing Credentials">
-                          {({
-                            id,
-                            value,
-                            onChange,
-                            "aria-invalid": ariaInvalid,
-                            "aria-describedby": ariaDescribedBy,
-                          }) => (
-                            <Combobox
-                              items={credentialOptions}
-                              value={credentialOptions.find((option) => option.value === value) ?? null}
-                              onValueChange={(option: CredentialOption | null) =>
-                                onChange(option ? option.value : undefined)
+                          {({ id, value, onChange }) => (
+                            <SearchSelect
+                              inputId={id}
+                              placeholder="Select or search for existing credentials"
+                              options={credentialOptions(credentials)}
+                              value={value ?? ""}
+                              onValueChange={(selected) =>
+                                onChange(selected === "" || selected === null ? undefined : selected)
                               }
-                              itemToStringLabel={(option: CredentialOption) => option.label}
-                              isItemEqualToValue={(option: CredentialOption, selected: CredentialOption) =>
-                                option.value === selected.value
-                              }
-                            >
-                              <ComboboxInput
-                                id={id}
-                                aria-invalid={ariaInvalid}
-                                aria-describedby={ariaDescribedBy}
-                                placeholder="Select or search for existing credentials"
-                                className="w-full"
-                                showClear={value !== undefined}
-                              />
-                              <ComboboxContent>
-                                <ComboboxEmpty>No matching credentials</ComboboxEmpty>
-                                <ComboboxList>
-                                  {(option: CredentialOption) => (
-                                    <ComboboxItem key={option.label} value={option}>
-                                      {option.label}
-                                    </ComboboxItem>
-                                  )}
-                                </ComboboxList>
-                              </ComboboxContent>
-                            </Combobox>
+                            />
                           )}
                         </FormField>
 
@@ -373,7 +349,7 @@ const VectorStoreInfoView: React.FC<VectorStoreInfoViewProps> = ({
             <div>
               <div className="flex justify-between items-center mb-4">
                 <h3 className="text-lg font-medium">Vector Store Details</h3>
-                {is_admin && <Button onClick={startEditing}>Edit Vector Store</Button>}
+                {canEdit && <Button onClick={startEditing}>Edit Vector Store</Button>}
               </div>
               <Card>
                 <CardContent>

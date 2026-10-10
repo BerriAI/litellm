@@ -19,6 +19,7 @@ import {
   updateConfigFieldSetting,
 } from "@/components/networking";
 import { MCPServer, MCPSubmissionsSummary } from "@/components/mcp_tools/types";
+import type { generalSettingsItem } from "@/app/(dashboard)/router-settings/_components/general_settings";
 import { FIELD_GROUPS, MCP_REQUIRED_FIELD_DEFS, SETTINGS_KEY } from "./MCPStandardsSettings";
 import { toast } from "@/lib/toast";
 
@@ -43,6 +44,14 @@ const STATUS_CONFIG: Record<MCPStatus, { label: string; bg: string; text: string
     text: "text-destructive",
     dot: "bg-destructive",
   },
+};
+
+const EMPTY_SUMMARY: MCPSubmissionsSummary = {
+  total: 0,
+  pending_review: 0,
+  active: 0,
+  rejected: 0,
+  items: [],
 };
 
 function formatDate(value: string | null | undefined): string {
@@ -141,9 +150,10 @@ type SubmissionRulesPanelProps = {
   onChange: (fields: string[]) => void;
   onSave: () => Promise<void>;
   isSaving: boolean;
+  disabled: boolean;
 };
 
-function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: SubmissionRulesPanelProps) {
+function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving, disabled }: SubmissionRulesPanelProps) {
   const [expanded, setExpanded] = useState(false);
   const activeLabels = MCP_REQUIRED_FIELD_DEFS.filter((f) => requiredFields.includes(f.key));
 
@@ -153,7 +163,6 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
 
   return (
     <div className="mb-5 border border-border rounded-lg bg-card overflow-hidden">
-      {/* Header — always visible */}
       <div
         className="flex items-center justify-between px-4 py-3 cursor-pointer select-none"
         onClick={() => setExpanded((v) => !v)}
@@ -170,7 +179,6 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
           )}
         </div>
         <div className="flex items-center gap-3">
-          {/* Active rule chips — collapsed view */}
           {!expanded && activeLabels.length > 0 && (
             <div className="flex flex-wrap gap-1.5 max-w-md">
               {activeLabels.map((f) => (
@@ -192,7 +200,6 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
         </div>
       </div>
 
-      {/* Expanded editor */}
       {expanded && (
         <div className="border-t border-border px-4 pt-4 pb-4">
           <p className="text-xs text-muted-foreground mb-4">
@@ -214,6 +221,7 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
                           type="checkbox"
                           checked={active}
                           onChange={() => toggle(field.key)}
+                          disabled={disabled}
                           className="mt-0.5 h-4 w-4 rounded-sm border-border text-info focus:ring-ring cursor-pointer"
                         />
                         <div>
@@ -232,7 +240,7 @@ function SubmissionRulesPanel({ requiredFields, onChange, onSave, isSaving }: Su
           <div className="mt-5 flex items-center gap-3">
             <button
               type="button"
-              disabled={isSaving}
+              disabled={isSaving || disabled}
               onClick={async () => {
                 await onSave();
                 setExpanded(false);
@@ -262,23 +270,164 @@ type MCPServerCardProps = {
   requiredFields: string[];
 };
 
-function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServerCardProps) {
-  const approvalStatus = (server.approval_status ?? "active") as MCPStatus;
-  const statusCfg = STATUS_CONFIG[approvalStatus] ?? STATUS_CONFIG["active"];
+type ComplianceCheck = {
+  key: string;
+  label: string;
+  description: string;
+  passed: boolean;
+};
 
-  const checks = MCP_REQUIRED_FIELD_DEFS.filter((f) => requiredFields.includes(f.key)).map((f) => ({
-    key: f.key,
-    label: f.label,
-    description: f.description,
-    passed: f.check(server),
-  }));
+type CardReviewActionsProps = {
+  approvalStatus: MCPStatus;
+  onApprove: () => void;
+  onReject: () => void;
+};
+
+function CardReviewActions({ approvalStatus, onApprove, onReject }: CardReviewActionsProps) {
+  return (
+    <>
+      {approvalStatus !== "rejected" && (
+        <div className="flex items-center gap-2 shrink-0">
+          {approvalStatus !== "active" && (
+            <button
+              type="button"
+              onClick={onApprove}
+              className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
+            >
+              Approve
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onReject}
+            className="text-xs border border-destructive/30 text-destructive hover:bg-destructive/10 px-3 py-1.5 rounded-md transition-colors font-medium"
+          >
+            Reject
+          </button>
+        </div>
+      )}
+      {approvalStatus === "rejected" && (
+        <div className="flex items-center gap-2 shrink-0">
+          <button
+            type="button"
+            onClick={onApprove}
+            className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
+          >
+            Re-approve
+          </button>
+        </div>
+      )}
+    </>
+  );
+}
+
+type ComplianceChecksPanelProps = {
+  checks: ComplianceCheck[];
+  approvalStatus: MCPStatus;
+  onApprove: () => void;
+  onReject: () => void;
+};
+
+function ComplianceChecksPanel({ checks, approvalStatus, onApprove, onReject }: ComplianceChecksPanelProps) {
   const passCount = checks.filter((c) => c.passed).length;
   const failCount = checks.length - passCount;
   const allPassed = checks.length > 0 && failCount === 0;
 
   return (
+    <div className="border-t border-border">
+      <div
+        className={`flex items-center gap-3 px-4 py-3 ${
+          allPassed ? "bg-success/10 border-b border-success/15" : "bg-destructive/10 border-b border-destructive/15"
+        }`}
+      >
+        <div
+          className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
+            allPassed ? "bg-success" : "bg-destructive"
+          }`}
+        >
+          {allPassed ? (
+            <CheckIcon className="h-4 w-4 text-success-foreground" />
+          ) : (
+            <XIcon className="h-4 w-4 text-destructive-foreground" />
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className={`text-sm font-semibold leading-tight ${allPassed ? "text-success" : "text-destructive"}`}>
+            {allPassed ? "All checks passed" : `${failCount} check${failCount !== 1 ? "s" : ""} failed`}
+          </div>
+          <div className="text-xs text-muted-foreground mt-0.5">
+            {passCount} passing, {failCount} failing
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          {approvalStatus !== "active" && approvalStatus !== "rejected" && (
+            <button
+              type="button"
+              onClick={onApprove}
+              className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
+            >
+              Approve
+            </button>
+          )}
+          {approvalStatus === "rejected" && (
+            <button
+              type="button"
+              onClick={onApprove}
+              className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
+            >
+              Re-approve
+            </button>
+          )}
+          {approvalStatus !== "rejected" && (
+            <button
+              type="button"
+              onClick={onReject}
+              className="text-xs border border-destructive/30 text-destructive hover:bg-destructive/10 bg-card px-3 py-1.5 rounded-md transition-colors font-medium"
+            >
+              Reject
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="divide-y divide-border">
+        {checks.map((c) => (
+          <div key={c.key} className="flex items-center gap-3 px-4 py-2.5">
+            <div
+              className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
+                c.passed ? "bg-success/15" : "bg-destructive/15"
+              }`}
+            >
+              {c.passed ? (
+                <CheckIcon className="h-3 w-3 text-success" />
+              ) : (
+                <XIcon className="h-3 w-3 text-destructive" />
+              )}
+            </div>
+            <span className={`text-sm flex-1 ${c.passed ? "text-foreground" : "text-foreground"}`}>{c.label}</span>
+            <span className={`text-xs ${c.passed ? "text-success" : "text-destructive"}`}>
+              {c.passed ? "Passes" : "Missing"}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServerCardProps) {
+  const approvalStatus = (server.approval_status ?? "active") as MCPStatus;
+  const statusCfg = STATUS_CONFIG[approvalStatus] ?? STATUS_CONFIG["active"];
+
+  const checks: ComplianceCheck[] = MCP_REQUIRED_FIELD_DEFS.filter((f) => requiredFields.includes(f.key)).map((f) => ({
+    key: f.key,
+    label: f.label,
+    description: f.description,
+    passed: f.check(server),
+  }));
+
+  return (
     <div className="bg-card border border-border rounded-lg overflow-hidden">
-      {/* Server info */}
       <div className="px-4 pt-4 pb-3">
         <div className="flex items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
@@ -317,128 +466,19 @@ function MCPServerCard({ server, onApprove, onReject, requiredFields }: MCPServe
               <p className="text-xs text-destructive mt-1.5">Rejection reason: {server.review_notes}</p>
             )}
           </div>
-          {/* Approve/Reject when no checks panel (no rules configured) */}
-          {checks.length === 0 && approvalStatus !== "rejected" && (
-            <div className="flex items-center gap-2 shrink-0">
-              {approvalStatus !== "active" && (
-                <button
-                  type="button"
-                  onClick={onApprove}
-                  className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
-                >
-                  Approve
-                </button>
-              )}
-              <button
-                type="button"
-                onClick={onReject}
-                className="text-xs border border-destructive/30 text-destructive hover:bg-destructive/10 px-3 py-1.5 rounded-md transition-colors font-medium"
-              >
-                Reject
-              </button>
-            </div>
-          )}
-          {checks.length === 0 && approvalStatus === "rejected" && (
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                type="button"
-                onClick={onApprove}
-                className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
-              >
-                Re-approve
-              </button>
-            </div>
+          {checks.length === 0 && (
+            <CardReviewActions approvalStatus={approvalStatus} onApprove={onApprove} onReject={onReject} />
           )}
         </div>
       </div>
 
-      {/* GitHub-style checks panel */}
       {checks.length > 0 && (
-        <div className="border-t border-border">
-          {/* Overall status header */}
-          <div
-            className={`flex items-center gap-3 px-4 py-3 ${
-              allPassed
-                ? "bg-success/10 border-b border-success/15"
-                : "bg-destructive/10 border-b border-destructive/15"
-            }`}
-          >
-            {/* Large status circle */}
-            <div
-              className={`w-8 h-8 rounded-full flex items-center justify-center shrink-0 ${
-                allPassed ? "bg-success" : "bg-destructive"
-              }`}
-            >
-              {allPassed ? (
-                <CheckIcon className="h-4 w-4 text-success-foreground" />
-              ) : (
-                <XIcon className="h-4 w-4 text-destructive-foreground" />
-              )}
-            </div>
-            <div className="flex-1 min-w-0">
-              <div className={`text-sm font-semibold leading-tight ${allPassed ? "text-success" : "text-destructive"}`}>
-                {allPassed ? "All checks passed" : `${failCount} check${failCount !== 1 ? "s" : ""} failed`}
-              </div>
-              <div className="text-xs text-muted-foreground mt-0.5">
-                {passCount} passing, {failCount} failing
-              </div>
-            </div>
-            {/* Approve / Reject in header */}
-            <div className="flex items-center gap-2 shrink-0">
-              {approvalStatus !== "active" && approvalStatus !== "rejected" && (
-                <button
-                  type="button"
-                  onClick={onApprove}
-                  className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
-                >
-                  Approve
-                </button>
-              )}
-              {approvalStatus === "rejected" && (
-                <button
-                  type="button"
-                  onClick={onApprove}
-                  className="text-xs bg-success hover:bg-success/80 text-success-foreground px-3 py-1.5 rounded-md transition-colors font-medium"
-                >
-                  Re-approve
-                </button>
-              )}
-              {approvalStatus !== "rejected" && (
-                <button
-                  type="button"
-                  onClick={onReject}
-                  className="text-xs border border-destructive/30 text-destructive hover:bg-destructive/10 bg-card px-3 py-1.5 rounded-md transition-colors font-medium"
-                >
-                  Reject
-                </button>
-              )}
-            </div>
-          </div>
-
-          {/* Individual check rows */}
-          <div className="divide-y divide-border">
-            {checks.map((c) => (
-              <div key={c.key} className="flex items-center gap-3 px-4 py-2.5">
-                {/* Small circle icon */}
-                <div
-                  className={`w-5 h-5 rounded-full flex items-center justify-center shrink-0 ${
-                    c.passed ? "bg-success/15" : "bg-destructive/15"
-                  }`}
-                >
-                  {c.passed ? (
-                    <CheckIcon className="h-3 w-3 text-success" />
-                  ) : (
-                    <XIcon className="h-3 w-3 text-destructive" />
-                  )}
-                </div>
-                <span className={`text-sm flex-1 ${c.passed ? "text-foreground" : "text-foreground"}`}>{c.label}</span>
-                <span className={`text-xs ${c.passed ? "text-success" : "text-destructive"}`}>
-                  {c.passed ? "Passes" : "Missing"}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
+        <ComplianceChecksPanel
+          checks={checks}
+          approvalStatus={approvalStatus}
+          onApprove={onApprove}
+          onReject={onReject}
+        />
       )}
     </div>
   );
@@ -449,13 +489,7 @@ interface MCPSubmissionsTabProps {
 }
 
 export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
-  const [summary, setSummary] = useState<MCPSubmissionsSummary>({
-    total: 0,
-    pending_review: 0,
-    active: 0,
-    rejected: 0,
-    items: [],
-  });
+  const [summary, setSummary] = useState<MCPSubmissionsSummary>(EMPTY_SUMMARY);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | MCPStatus>("all");
   const [confirmAction, setConfirmAction] = useState<{
@@ -485,10 +519,8 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
         }),
       ]);
       setSummary(res);
-      if (settings?.data && Array.isArray(settings.data)) {
-        const row = settings.data.find(
-          (r: { field_name: string; field_value: unknown }) => r.field_name === SETTINGS_KEY,
-        );
+      if (Array.isArray(settings)) {
+        const row = settings.find((r: generalSettingsItem) => r.field_name === SETTINGS_KEY);
         if (row && Array.isArray(row.field_value)) {
           setRequiredFields(row.field_value as string[]);
         }
@@ -528,6 +560,8 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
     return true;
   });
 
+  const showEmptyState = !isLoading && !error && filtered.length === 0;
+
   async function handleApprove(serverId: string, serverName: string) {
     if (!accessToken) return;
     try {
@@ -556,12 +590,12 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
 
   return (
     <div className="p-6">
-      {/* Submission Rules panel */}
       <SubmissionRulesPanel
         requiredFields={requiredFields}
         onChange={setRequiredFields}
         onSave={handleSaveRules}
         isSaving={isSavingRules}
+        disabled={isLoading}
       />
 
       <div className="grid grid-cols-4 gap-4 mb-6">
@@ -597,7 +631,7 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
       <div className="space-y-3">
         {isLoading && <div className="text-center py-12 text-muted-foreground text-sm">Loading submissions…</div>}
         {error && <div className="text-center py-12 text-destructive text-sm">{error}</div>}
-        {!isLoading && !error && filtered.length === 0 && (
+        {showEmptyState && (
           <div className="text-center py-12 text-muted-foreground text-sm">
             No MCP server submissions match your filters.
           </div>
@@ -616,14 +650,15 @@ export function MCPSubmissionsTab({ accessToken }: MCPSubmissionsTabProps) {
                   action: "approve",
                 })
               }
-              onReject={() =>
-                setConfirmAction({
+              onReject={() => {
+                const rejectAction: NonNullable<typeof confirmAction> = {
                   serverId: server.server_id,
                   serverName: server.alias ?? server.server_name ?? server.server_id,
                   action: "reject",
                   isCurrentlyActive: server.approval_status === "active",
-                })
-              }
+                };
+                setConfirmAction(rejectAction);
+              }}
             />
           ))}
       </div>

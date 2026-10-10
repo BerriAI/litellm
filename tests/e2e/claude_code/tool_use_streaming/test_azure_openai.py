@@ -31,6 +31,7 @@ from typing import Any, Mapping, Sequence
 
 import pytest
 
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from claude_code._env import require_proxy
 from claude_code.cli_driver import (
     ClaudeCLIError,
@@ -88,6 +89,16 @@ def _count_input_json_deltas(events: Sequence[Mapping[str, Any]]) -> int:
     )
 
 
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.MESSAGES,
+        providers=(Provider.AZURE,),
+        models=tuple(AZURE_OPENAI_MODELS),
+        capabilities=(Capability.FUNCTION_CALLING,),
+        mode=Mode.STREAM,
+    )
+)
 def test_tool_use_streaming_azure_openai(compat_result):
     proxy = require_proxy(compat_result)
 

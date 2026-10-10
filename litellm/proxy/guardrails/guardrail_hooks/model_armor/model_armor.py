@@ -337,6 +337,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 url=url,
                 json=body,
                 headers=headers,
+                timeout=self.timeout,
             )
         except httpx.HTTPStatusError as e:
             detail = self._build_api_error_detail(e.response.status_code, e.response.text)
@@ -377,7 +378,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         else:
             return {"modelResponseData": {"byteItem": {"byteDataType": file_type, "byteData": base64_data}}}
 
-    def _should_block_content(self, armor_response: Mapping[str, Any], allow_sanitization: bool = False) -> bool:
+    def _should_block_content(self, armor_response: Mapping[str, object], allow_sanitization: bool = False) -> bool:
         """Check if Model Armor response indicates content should be blocked, including both inspectResult and deidentifyResult."""
         for filt in self._filter_result_items(armor_response):
             # Check RAI, PI/Jailbreak, Malicious URI, CSAM, Virus scan as before
@@ -446,7 +447,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
             return filter_results
         return []
 
-    def _has_deidentify_match(self, armor_response: Mapping[str, Any]) -> bool:
+    def _has_deidentify_match(self, armor_response: Mapping[str, object]) -> bool:
         """Whether an SDP de-identify filter matched, i.e. Model Armor owes this response a redaction."""
         for filter_entry in self._filter_result_items(armor_response):
             sdp = filter_entry.get("sdpFilterResult")
@@ -456,7 +457,7 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
     def _resolve_streaming_outcome(
         self,
-        armor_response: Mapping[str, Any],
+        armor_response: Mapping[str, object],
         assembled_response: object,
         content: str,
     ) -> tuple[bool, str | None]:
@@ -499,8 +500,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
         if existing is None:
             return armor_response
         if isinstance(existing, list):
-            return [*existing, armor_response]  # mutable-ok: logging pipeline requires list[dict], not tuple
-        return [existing, armor_response]  # mutable-ok: logging pipeline requires list[dict], not tuple
+            return [*existing, armor_response]
+        return [existing, armor_response]
 
     def _process_response(
         self,
@@ -984,8 +985,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
                 output_item=output_item,
                 output_idx=output_idx,
                 texts_to_check=texts,
-                images_to_check=[],  # mutable-ok: the extractor's images sink, unused here
-                task_mappings=[],  # mutable-ok: the extractor's task-mapping sink, unused here
+                images_to_check=[],
+                task_mappings=[],
                 tool_calls_to_check=tool_calls,
             )
         return "".join((*texts, *(json.dumps(tool_call) for tool_call in tool_calls)))

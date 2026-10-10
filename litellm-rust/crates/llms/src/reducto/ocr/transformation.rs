@@ -5,6 +5,7 @@ use litellm_core_utils::{
     params::OpaqueParams,
     url_utils::ApiUrl,
 };
+use litellm_http::outbound::OutboundRequest;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
@@ -13,10 +14,12 @@ use crate::base_llm::ocr::{
     error::Error,
     handler::{CallHooks, OcrClient, build_http_request, guardrail_document},
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OCR_INLINE_MAX_BYTES, OcrConnection, OcrDocument,
-        OcrPage, OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
+        BaseOcrConfig, OCR_INLINE_MAX_BYTES, OcrConnection, OcrRequestContext, PreparedOcrRequest,
         decode_and_normalize_response,
     },
+};
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrResponseFormat, OcrUsageInfo,
 };
 
 const REDUCTO_API_BASE: &str = "https://platform.reducto.ai";
@@ -71,9 +74,9 @@ struct ReductoResult {
 #[serde_with::serde_as]
 #[derive(Clone, Debug, Default, Deserialize)]
 struct ReductoUsage {
-    #[serde_as(deserialize_as = "Option<litellm_core_utils::serde_compat::LaxI64>")]
+    #[serde_as(deserialize_as = "Option<litellm_llms_types::serde_compat::LaxI64>")]
     pub num_pages: Option<i64>,
-    #[serde_as(deserialize_as = "Option<litellm_core_utils::serde_compat::FiniteF64>")]
+    #[serde_as(deserialize_as = "Option<litellm_llms_types::serde_compat::FiniteF64>")]
     pub credits: Option<f64>,
 }
 
@@ -90,6 +93,10 @@ impl BaseOcrConfig for ReductoParseV3Config {
     type OcrParams = ReductoV3Params;
     type ProviderRequest = ReductoV3Request;
     type Environment = Vec<(String, String)>;
+
+    fn secret_names(&self) -> Vec<&'static str> {
+        vec![REDUCTO_API_KEY_ENV]
+    }
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
         &["formatting", "retrieval", "settings"]
@@ -166,7 +173,7 @@ impl BaseOcrConfig for ReductoParseV3Config {
         request: &PreparedOcrRequest,
         client: &OcrClient,
         hooks: &dyn CallHooks<Error>,
-    ) -> Result<reqwest::Request, Error> {
+    ) -> Result<OutboundRequest, Error> {
         prepare_upload_request(self, request, client, hooks).await
     }
 }
@@ -178,6 +185,10 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
     type OcrParams = ReductoLegacyParams;
     type ProviderRequest = ReductoLegacyRequest;
     type Environment = Vec<(String, String)>;
+
+    fn secret_names(&self) -> Vec<&'static str> {
+        vec![REDUCTO_API_KEY_ENV]
+    }
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
         &["enhance"]
@@ -251,7 +262,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
         request: &PreparedOcrRequest,
         client: &OcrClient,
         hooks: &dyn CallHooks<Error>,
-    ) -> Result<reqwest::Request, Error> {
+    ) -> Result<OutboundRequest, Error> {
         prepare_upload_request(self, request, client, hooks).await
     }
 }
@@ -264,7 +275,7 @@ async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, Stri
     request: &PreparedOcrRequest,
     client: &OcrClient,
     hooks: &dyn CallHooks<Error>,
-) -> Result<reqwest::Request, Error> {
+) -> Result<OutboundRequest, Error> {
     let params = config.map_ocr_params(&request.optional_params, &request.model)?;
     let headers = config.validate_environment(request, client).await?;
     let url = config.get_complete_url(request, &params, &headers)?;
@@ -286,7 +297,7 @@ async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, Stri
         &body,
         config.get_supported_ocr_params(&request.model),
     )?;
-    build_http_request(client, request, &url, &headers, &body)
+    build_http_request(request, url, headers, &body)
 }
 
 fn uploaded_file_id(document: OcrDocument) -> Result<ReductoFileId, Error> {
@@ -544,6 +555,53 @@ async fn upload_bytes_async(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn v3_body_keeps_explicit_null_options_and_drops_unknown_ones() {
+        use crate::base_llm::ocr::{handler::OcrClient, transformation::OcrRequestContext};
+
+        let overrides =
+            serde_json::from_value(json!({"formatting":null,"settings":{},"unknown":true}))
+                .unwrap();
+        let params = ReductoParseV3Config
+            .map_ocr_params(&overrides, "parse-v3")
+            .unwrap();
+        let client = OcrClient::for_test(
+            litellm_http::Client::plain_for_test(),
+            litellm_http::Client::no_redirect_for_test(),
+        );
+        let connection = OcrConnection::default();
+        let document = serde_json::from_value(
+            json!({"type":"document_url","document_url":"reducto://ready.pdf"}),
+        )
+        .unwrap();
+
+        let body = ReductoParseV3Config
+            .async_transform_ocr_request(
+                "parse-v3",
+                document,
+                &params,
+                &[],
+                OcrRequestContext {
+                    client: &client,
+                    connection: &connection,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(body).unwrap(),
+            json!({"input":"reducto://ready.pdf", "formatting":null, "settings":{}})
+        );
+        let absent = ReductoParseV3Config
+            .map_ocr_params(
+                &litellm_core_utils::call_arguments::CallArguments::default(),
+                "parse-v3",
+            )
+            .unwrap();
+        assert_eq!(serde_json::to_value(absent).unwrap(), json!({}));
+    }
 
     #[test]
     fn options_preserve_null_and_select_the_provider_fields() {

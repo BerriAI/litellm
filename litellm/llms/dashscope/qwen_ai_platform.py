@@ -23,7 +23,7 @@ def _require_qwen_ai_platform_api_key(api_key: str | None) -> str:
     resolved: Final = _resolve_qwen_ai_platform_api_key(api_key)
     if resolved is None:
         raise ValueError(
-            "Qwen AI Platform API key is required. Set 'QWEN_AI_PLATFORM_API_KEY' or 'DASHSCOPE_API_KEY' env var "
+            "Qianwen AI Platform API key is required. Set 'QWEN_AI_PLATFORM_API_KEY' or 'DASHSCOPE_API_KEY' env var "
             "or pass api_key explicitly."
         )
     return resolved

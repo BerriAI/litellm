@@ -6,9 +6,11 @@ use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OcrConnection, OcrDocument, OcrPage, OcrResponseFormat,
-        OcrUsageInfo, PreparedOcrRequest, decode_and_normalize_response,
+        BaseOcrConfig, OcrConnection, PreparedOcrRequest, decode_and_normalize_response,
     },
+};
+use litellm_llms_types::formats::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrResponseFormat, OcrUsageInfo,
 };
 
 const MISTRAL_OCR_API_BASE: &str = "https://api.mistral.ai/v1";
@@ -67,6 +69,14 @@ impl BaseOcrConfig for MistralOcrConfig {
 
     fn get_api_key_env_var(&self) -> Option<&'static str> {
         Some(MISTRAL_OCR_API_KEY_ENV_VAR)
+    }
+
+    fn secret_names(&self) -> Vec<&'static str> {
+        vec![
+            MISTRAL_OCR_API_KEY_ENV_VAR,
+            "MISTRAL_AZURE_API_KEY",
+            "MISTRAL_AZURE_API_BASE",
+        ]
     }
 
     fn map_ocr_params(
@@ -318,7 +328,7 @@ mod tests {
             .transform_ocr_response(
                 "model",
                 raw,
-                crate::base_llm::ocr::transformation::OcrResponseFormat::Native,
+                litellm_llms_types::formats::ocr::OcrResponseFormat::Native,
             )
             .unwrap();
         assert_eq!(response.pages[0].index, 2);

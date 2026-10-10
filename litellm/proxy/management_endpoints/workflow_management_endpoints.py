@@ -23,8 +23,6 @@ try:
     from prisma.errors import UniqueViolationError
 except ImportError:
     UniqueViolationError = None
-from pydantic import BaseModel
-
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import (
     CommonProxyErrors,
@@ -38,6 +36,7 @@ from litellm.repositories.table_repositories import (
     WorkflowMessageRepository,
     WorkflowRunRepository,
 )
+from litellm.types.llms.base import LiteLLMBaseModel
 
 router: Final = APIRouter()
 
@@ -76,7 +75,7 @@ _EVENT_STATUS_MAP: Final[Mapping[str, str]] = {
 # ---------------------------------------------------------------------------
 
 
-class WorkflowRunCreateRequest(BaseModel):
+class WorkflowRunCreateRequest(LiteLLMBaseModel):
     workflow_type: str
     input: Mapping[str, object] | None = None
     metadata: Mapping[str, object] | None = None
@@ -85,19 +84,19 @@ class WorkflowRunCreateRequest(BaseModel):
 WorkflowRunStatus = Literal["pending", "running", "paused", "completed", "failed"]
 
 
-class WorkflowRunUpdateRequest(BaseModel):
+class WorkflowRunUpdateRequest(LiteLLMBaseModel):
     status: WorkflowRunStatus | None = None
     output: Mapping[str, object] | None = None
     metadata: Mapping[str, object] | None = None
 
 
-class WorkflowEventCreateRequest(BaseModel):
+class WorkflowEventCreateRequest(LiteLLMBaseModel):
     event_type: str
     step_name: str
     data: Mapping[str, object] | None = None
 
 
-class WorkflowMessageCreateRequest(BaseModel):
+class WorkflowMessageCreateRequest(LiteLLMBaseModel):
     role: str
     content: str
     session_id: str | None = None

@@ -618,6 +618,24 @@
         "interactions": true
       }
     },
+    "cortecs": {
+      "display_name": "Cortecs (`cortecs`)",
+      "url": "https://docs.litellm.ai/docs/providers/cortecs",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "custom": {
       "display_name": "Custom (`custom`)",
       "url": "https://docs.litellm.ai/docs/providers/custom_llm_server",
@@ -691,7 +709,7 @@
       }
     },
     "qwen_ai_platform": {
-      "display_name": "Qwen AI Platform (`qwen_ai_platform`)",
+      "display_name": "Qianwen AI Platform (`qwen_ai_platform`)",
       "url": "https://docs.litellm.ai/docs/providers/qwencloud",
       "endpoints": {
         "chat_completions": true,
@@ -813,6 +831,24 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "edenai": {
+      "display_name": "Eden AI (`edenai`)",
+      "url": "https://docs.litellm.ai/docs/providers/edenai",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": true,
+        "audio_transcriptions": true,
+        "audio_speech": true,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "interactions": false,
+        "video_generations": true
       }
     },
     "duckduckgo": {
@@ -1925,6 +1961,23 @@
         "interactions": true
       }
     },
+    "prism": {
+      "display_name": "Prism (`prism`)",
+      "url": "https://docs.litellm.ai/docs/providers/prism",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "recraft": {
       "display_name": "Recraft (`recraft`)",
       "url": "https://docs.litellm.ai/docs/providers/recraft",
@@ -2011,6 +2064,24 @@
         "search": true
       }
     },
+    "scaledown": {
+      "display_name": "ScaleDown (`scaledown`)",
+      "url": "https://docs.litellm.ai/docs/providers/scaledown",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "sambanova": {
       "display_name": "Sambanova (`sambanova`)",
       "url": "https://docs.litellm.ai/docs/providers/sambanova",
@@ -2045,6 +2116,24 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "reka": {
+      "display_name": "Reka (`reka`)",
+      "url": "https://docs.litellm.ai/docs/providers/reka",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
       }
     },
     "scaleway": {
@@ -2283,7 +2372,7 @@
       }
     },
     "voyage": {
-      "display_name": "Voyage AI (`voyage`)",
+      "display_name": "VoyageAI by MongoDB (`voyage`)",
       "url": "https://docs.litellm.ai/docs/providers/voyage",
       "endpoints": {
         "chat_completions": false,

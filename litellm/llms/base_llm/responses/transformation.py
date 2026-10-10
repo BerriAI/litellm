@@ -1,5 +1,6 @@
 import types
 from abc import ABC, abstractmethod
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -129,6 +130,22 @@ class BaseResponsesAPIConfig(ABC):
         headers: dict,
     ) -> dict:
         pass
+
+    async def async_transform_responses_api_request(
+        self,
+        model: str,
+        input: str | ResponseInputParam,
+        response_api_optional_request_params: dict,
+        litellm_params: GenericLiteLLMParams,
+        headers: dict,
+    ) -> dict:
+        return self.transform_responses_api_request(
+            model=model,
+            input=input,
+            response_api_optional_request_params=response_api_optional_request_params,
+            litellm_params=litellm_params,
+            headers=headers,
+        )
 
     @abstractmethod
     def transform_response_api_response(
@@ -340,13 +357,22 @@ class BaseResponsesAPIConfig(ABC):
         """
         if not isinstance(input, list):
             return input
-        out: Final[list[Any]] = []
+        out: Final[list[object]] = []
         for item in input:
             if isinstance(item, dict) and item.get("type") == "custom_tool_call":
                 out.append({k: v for k, v in item.items() if k != "namespace"})
             else:
                 out.append(item)
         return cast(ResponseInputParam, out)
+
+    def transform_extra_body(
+        self,
+        extra_body: Mapping[str, object],
+        request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+    ) -> Mapping[str, object]:
+        return extra_body
 
     @staticmethod
     def normalize_responses_api_request_dict(data: dict[str, Any]) -> dict[str, Any]:

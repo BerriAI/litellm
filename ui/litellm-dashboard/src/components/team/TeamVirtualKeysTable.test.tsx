@@ -1,13 +1,19 @@
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi, MockedFunction } from "vitest";
+import { QueryClient, QueryObserver } from "@tanstack/react-query";
 import { fireEvent, renderWithProviders, screen, waitFor, within } from "../../../tests/test-utils";
 import { TeamVirtualKeysTable } from "./TeamVirtualKeysTable";
 import { KeysResponse, useKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
+import { useTeamMemberBudgets } from "@/app/(dashboard)/hooks/teams/useTeamMemberBudgets";
 import { KeyResponse } from "../key_team_helpers/key_list";
 import { Organization } from "../networking";
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
   useKeys: vi.fn(),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/teams/useTeamMemberBudgets", () => ({
+  useTeamMemberBudgets: vi.fn(),
 }));
 
 vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
@@ -31,6 +37,7 @@ vi.mock("@tanstack/react-pacer/debouncer", () => ({
 }));
 
 const mockUseKeys = useKeys as MockedFunction<typeof useKeys>;
+const mockUseTeamMemberBudgets = useTeamMemberBudgets as MockedFunction<typeof useTeamMemberBudgets>;
 
 const KEY_HASH = "88a145505dd6e87e2ea166fcef1e4b53948dbdb32af6431dfd05ec06b571ee52";
 
@@ -50,6 +57,18 @@ const createMockKey = (overrides: Partial<KeyResponse> = {}): KeyResponse =>
     models: ["gpt-4"],
     ...overrides,
   }) as KeyResponse;
+
+const createKeysQueryResult = (data: KeysResponse): ReturnType<typeof useKeys> => {
+  const queryClient = new QueryClient();
+  const queryOptions = {
+    queryKey: ["team-virtual-keys-table-test"],
+    queryFn: async () => data,
+    initialData: data,
+    enabled: false,
+  };
+  const observer = new QueryObserver<KeysResponse>(queryClient, queryOptions);
+  return observer.getCurrentResult();
+};
 
 const mockOrganization: Organization = {
   organization_id: "org-123",
@@ -78,6 +97,7 @@ describe("TeamVirtualKeysTable", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    mockUseTeamMemberBudgets.mockReturnValue({});
     mockUseKeys.mockReturnValue({
       data: { keys: [], total_count: 0, current_page: 1, total_pages: 1 } as KeysResponse,
       isPending: false,
@@ -131,6 +151,14 @@ describe("TeamVirtualKeysTable", () => {
     });
   });
 
+  it("right-aligns the Spend (USD) and Budget (USD) columns", async () => {
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    expect(await screen.findByRole("columnheader", { name: "Spend (USD)" })).toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: "Budget (USD)" })).toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: "Key ID" })).not.toHaveClass("text-right");
+  });
+
   it("should display keys in table when data is loaded", async () => {
     mockUseKeys.mockReturnValue({
       data: {
@@ -153,6 +181,33 @@ describe("TeamVirtualKeysTable", () => {
       expect(screen.getByText("alice_key_team1")).toBeInTheDocument();
     });
     expect(screen.getByText("bob_key_team1")).toBeInTheDocument();
+  });
+
+  it("shows the team member budget for budgetless keys and keeps each key's own budget", async () => {
+    const keysResponse: KeysResponse = {
+      keys: [
+        createMockKey({ token: "sk-no-budget", token_id: "key-no-budget", max_budget: null }),
+        createMockKey({ token: "sk-own-budget", token_id: "key-own-budget", max_budget: 75 }),
+      ],
+      total_count: 2,
+      current_page: 1,
+      total_pages: 1,
+    };
+    mockUseKeys.mockReturnValue(createKeysQueryResult(keysResponse));
+    const teamMemberBudgets = {
+      "team-1": {
+        team_info: { team_id: "team-1", team_member_budget_table: { max_budget: 50 } },
+        team_memberships: [],
+      },
+    };
+    mockUseTeamMemberBudgets.mockReturnValue(teamMemberBudgets);
+
+    renderWithProviders(<TeamVirtualKeysTable {...defaultProps} />);
+
+    const inheritedBudget = await screen.findByText("$50", { exact: false });
+    expect(inheritedBudget).toHaveTextContent("$50 (team member)");
+    expect(screen.getByText("$75")).toBeInTheDocument();
+    expect(mockUseTeamMemberBudgets).toHaveBeenCalledWith(["team-1"]);
   });
 
   it("should show the current range from total_count when multiple pages exist", async () => {
