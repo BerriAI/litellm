@@ -29,7 +29,6 @@ from litellm.types.llms.anthropic import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         RateLimitDescriptor,
         RateLimitDescriptorRateLimitObject,
@@ -41,6 +40,7 @@ if TYPE_CHECKING:
         AllAnthropicToolsValues,
     )
     from litellm.types.llms.openai import ChatCompletionToolParam
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.utils import ModelResponse
 
 from ..constants import (
