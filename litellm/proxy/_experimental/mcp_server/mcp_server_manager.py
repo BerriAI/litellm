@@ -44,6 +44,7 @@ from mcp.types import (
     GetPromptRequestParams,
     GetPromptResult,
     InputRequiredResult,
+    InputResponses,
     ListPromptsRequest,
     ListPromptsResult,
     ListResourcesRequest,
@@ -56,7 +57,7 @@ from mcp.types import (
     ResourceTemplate,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl, Field, TypeAdapter
+from pydantic import AnyUrl, Field, SecretStr, TypeAdapter
 from typing_extensions import ReadOnly, assert_never
 
 import litellm
@@ -96,6 +97,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     raise_classified_list_failure,
     upstream_auth_challenge,
 )
+from litellm.proxy._experimental.mcp_server.interactions import bind_target
 from litellm.proxy._experimental.mcp_server.mcp_debug import describe_upstream_http_failure, record_auth_resolution
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
     MCPPerUserTokenCache,
@@ -1294,7 +1296,7 @@ def _openapi_forwarded_extra_headers(
     )
     forwarded: Final[dict[str, str]] = {}
     for header_name in mcp_server.extra_headers:
-        if not isinstance(header_name, str):
+        if not isinstance(header_name, str) or header_name.lower() == "x-litellm-api-key":
             continue
         if skip_caller_authorization and header_name.lower() == "authorization":
             continue
@@ -4888,7 +4890,10 @@ class MCPServerManager:
         extra_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
-    ) -> ReadResourceResult:
+        input_responses: InputResponses | None = None,
+        request_state: str | None = None,
+        allow_input_required: bool = False,
+    ) -> ReadResourceResult | InputRequiredResult:
         """Read resource contents from a specific MCP server."""
 
         verbose_logger.debug("Connecting to url: %s", server.url)
@@ -4913,7 +4918,10 @@ class MCPServerManager:
             user_api_key_auth=user_api_key_auth,
         )
 
-        return await client.read_resource(url)
+        result: Final = await client.read_resource(
+            url, input_responses=input_responses, request_state=request_state, allow_input_required=allow_input_required
+        )
+        return bind_target(result, server) if isinstance(result, InputRequiredResult) else result
 
     async def get_prompt_from_server(
         self,
@@ -4925,7 +4933,10 @@ class MCPServerManager:
         extra_headers: dict[str, str] | None = None,
         raw_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
-    ) -> GetPromptResult:
+        input_responses: InputResponses | None = None,
+        request_state: str | None = None,
+        allow_input_required: bool = False,
+    ) -> GetPromptResult | InputRequiredResult:
         """Fetch a specific prompt definition from a single MCP server."""
 
         verbose_logger.debug("Connecting to url: %s", server.url)
@@ -4953,8 +4964,11 @@ class MCPServerManager:
         get_prompt_request_params: Final = GetPromptRequestParams(
             name=prompt_name,
             arguments=arguments,
+            input_responses=input_responses,
+            request_state=request_state,
         )
-        return await client.get_prompt(get_prompt_request_params)
+        result: Final = await client.get_prompt(get_prompt_request_params, allow_input_required=allow_input_required)
+        return bind_target(result, server) if isinstance(result, InputRequiredResult) else result
 
     @staticmethod
     def _is_same_authority_metadata_url(url: str, server_url: str) -> bool:
@@ -5907,6 +5921,7 @@ class MCPServerManager:
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         guardrail_context: Mapping[str, object] | None = None,
         tool: MCPTool | None = None,
+        incoming_bearer_token: SecretStr | None | EllipsisType = ...,
     ) -> dict[str, Any]:
         """
         Run pre-call checks and guardrail hooks for an MCP tool call.
@@ -5963,13 +5978,11 @@ class MCPServerManager:
         if proxy_logging_obj is None:
             return hook_result
 
-        # Extract incoming Bearer token from raw request headers so
-        # guardrails like MCPJWTSigner can verify + re-sign it (FR-5).
-        normalized_raw: Final = {k.lower(): v for k, v in (raw_headers or {}).items()}
-        incoming_bearer_token: str | None = None
-        auth_hdr: Final = normalized_raw.get("authorization", "")
-        if auth_hdr.lower().startswith("bearer "):
-            incoming_bearer_token = auth_hdr[len("bearer ") :]
+        caller_bearer: Final = (
+            MCPRequestHandler.get_incoming_bearer_token(raw_headers or {})
+            if incoming_bearer_token is ...
+            else incoming_bearer_token
+        )
 
         pre_hook_kwargs: Final = {
             "guardrail_context": guardrail_context,
@@ -5984,7 +5997,7 @@ class MCPServerManager:
                 getattr(user_api_key_auth, "end_user_id", None) if user_api_key_auth else None
             ),
             "user_api_key_hash": (getattr(user_api_key_auth, "api_key_hash", None) if user_api_key_auth else None),
-            "incoming_bearer_token": incoming_bearer_token,
+            "incoming_bearer_token": caller_bearer.get_secret_value() if caller_bearer is not None else None,
             "headers": logging_safe_mcp_headers(raw_headers),
             "tool_description": tool.description if tool is not None else None,
             "tool_input_schema": tool.input_schema if tool is not None else None,
@@ -6178,6 +6191,8 @@ class MCPServerManager:
         user_api_key_auth: UserAPIKeyAuth | None = None,
         client_ip: str | None = None,
         allow_input_required: bool = False,
+        input_responses: InputResponses | None = None,
+        request_state: str | None = None,
     ) -> CallToolResult | InputRequiredResult:
         """
         Call a regular MCP tool using the MCP client.
@@ -6256,7 +6271,7 @@ class MCPServerManager:
             )
 
             for header in mcp_server.extra_headers:
-                if not isinstance(header, str):
+                if not isinstance(header, str) or header.lower() == "x-litellm-api-key":
                     continue
                 if header.lower() == "authorization" and strip_caller_authorization:
                     continue
@@ -6319,6 +6334,8 @@ class MCPServerManager:
         call_tool_params: Final = MCPCallToolRequestParams(
             name=original_tool_name,
             arguments=arguments,
+            input_responses=input_responses,
+            request_state=request_state,
         )
 
         if _obo_retry_applies(mcp_server, subject_token):
@@ -6425,7 +6442,11 @@ class MCPServerManager:
         result: Final = mcp_responses[result_index]
         self._remember_upstream_initialize_instructions(mcp_server, client)
 
-        return cast("CallToolResult | InputRequiredResult", result)
+        return (
+            bind_target(result, mcp_server)
+            if isinstance(result, InputRequiredResult)
+            else cast("CallToolResult", result)
+        )
 
     def _resolve_mcp_server_for_tool_call(
         self,
@@ -6637,9 +6658,12 @@ class MCPServerManager:
         guardrail_context: Mapping[str, object] | None = None,
         client_ip: str | None = None,
         wire_compat: WireCompat = WireCompat.LEGACY,
+        input_responses: InputResponses | None = None,
+        request_state: str | None = None,
         *,
         catalog_auth_header: str | None | EllipsisType = ...,
         listed_tool: MCPTool | None | EllipsisType = ...,
+        incoming_bearer_token: SecretStr | None | EllipsisType = ...,
     ) -> CallToolResult | InputRequiredResult:
         """
         Call a tool with the given name and arguments
@@ -6694,6 +6718,7 @@ class MCPServerManager:
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
             tool=self.get_listed_tool(mcp_server, name, listed_caller) if listed_tool is ... else listed_tool,
+            incoming_bearer_token=incoming_bearer_token,
         )
         if "arguments" in hook_result:
             arguments = hook_result["arguments"]
@@ -6779,6 +6804,8 @@ class MCPServerManager:
                 hook_extra_headers=hook_result.get("extra_headers"),
                 user_api_key_auth=user_api_key_auth,
                 allow_input_required=wire_compat is WireCompat.MODERN,
+                input_responses=input_responses,
+                request_state=request_state,
             )
 
         return await self._gather_openapi_tool_tasks(tasks, proxy_logging_obj)

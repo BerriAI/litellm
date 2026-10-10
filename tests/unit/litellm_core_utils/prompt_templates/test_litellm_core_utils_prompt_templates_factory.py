@@ -3264,6 +3264,41 @@ def test_convert_to_anthropic_tool_result_openai_file_pdf_becomes_document():
     assert tool_result["content"][0]["document"]["source"]["bytes"] == pdf_b64
 
 
+def test_convert_to_bedrock_tool_call_result_maps_tool_references_to_text() -> None:
+    tool_reference_message: Final[ChatCompletionToolMessage] = {
+        "role": "tool",
+        "tool_call_id": "toolu_1",
+        "content": [
+            {"type": "tool_reference", "tool_name": "WebFetch"},
+            {"type": "tool_reference", "tool_name": "WebSearch"},
+        ],
+    }
+    mixed_message: Final[ChatCompletionToolMessage] = {
+        "role": "tool",
+        "tool_call_id": "toolu_2",
+        "content": [
+            {"type": "text", "text": "Loaded tools:"},
+            {"type": "tool_reference", "tool_name": "WebSearch"},
+        ],
+    }
+
+    tool_reference_result: Final = _convert_to_bedrock_tool_call_result(tool_reference_message)
+    mixed_result: Final = _convert_to_bedrock_tool_call_result(mixed_message)
+
+    assert tool_reference_result == {
+        "toolResult": {
+            "toolUseId": "toolu_1",
+            "content": [{"text": "WebFetch"}, {"text": "WebSearch"}],
+        }
+    }
+    assert mixed_result == {
+        "toolResult": {
+            "toolUseId": "toolu_2",
+            "content": [{"text": "Loaded tools:"}, {"text": "WebSearch"}],
+        }
+    }
+
+
 def test_bedrock_converse_messages_pt_document_various_formats():
     """Test that various document media types produce the correct format value."""
     test_cases = [
@@ -7025,3 +7060,20 @@ def test_has_tool_with_name_anthropic_shape_without_type_field():
 def test_has_tool_with_name_not_a_list():
     assert not has_tool_with_name(None, "my_tool")
     assert not has_tool_with_name("not a list", "my_tool")
+
+
+def test_completion_bedrock_invalid_role_exception(monkeypatch):
+    """
+    Test if litellm raises a BadRequestError for an invalid role on Bedrock
+    """
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[{"role": "very-bad-role", "content": "hello"}],
+        )
+
+    assert (
+        str(exc_info.value)
+        == "litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}"
+    )

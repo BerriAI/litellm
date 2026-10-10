@@ -1,5 +1,6 @@
 pub(crate) mod audio_transcription;
 pub(crate) mod chat_completions;
+pub(crate) mod clickhouse_spend;
 pub(crate) mod embeddings;
 mod inference;
 pub(crate) mod messages;
@@ -10,27 +11,95 @@ pub(crate) mod traces;
 
 use litellm_callbacks_legacy_python::{LegacyLogging, LoggingOperation, PublicCall};
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
-use litellm_host_python::{HookChain, PythonBinding, PythonCallHooks, PythonHostCalls};
+use litellm_host_python::{
+    HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
+};
+use litellm_host_python::{missing_state, present};
 use pyo3::{
+    gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::{PyDict, PyMapping, PyTuple},
 };
 
+/// The public call as Python bound it: `base` holds the positional arguments by name plus
+/// the signature defaults, `kwargs` the caller's keyword dict.
+#[derive(FromPyObject)]
 pub(crate) struct NativeCall<'py> {
+    #[pyo3(attribute)]
     args: Bound<'py, PyTuple>,
+    #[pyo3(attribute, from_py_with = mapping_dict)]
     kwargs: Bound<'py, PyDict>,
-    bound: Bound<'py, PyDict>,
+    #[pyo3(attribute, from_py_with = mapping_dict)]
+    base: Bound<'py, PyDict>,
 }
 
-impl<'py> FromPyObject<'_, 'py> for NativeCall<'py> {
-    type Error = PyErr;
+impl<'py> NativeCall<'py> {
+    /// The call before any hook ran, for the reads that admit or decline it.
+    fn resolved(&self) -> PyResult<Bound<'py, PyDict>> {
+        effective_py_args(&self.base, &self.kwargs)
+    }
 
-    fn extract(call: Borrowed<'_, 'py, PyAny>) -> PyResult<Self> {
-        Ok(Self {
-            args: call.getattr("args")?.cast_into()?,
-            kwargs: mapping_dict(&call.getattr("kwargs")?)?,
-            bound: mapping_dict(&call.getattr("bound")?)?,
-        })
+    /// The view a route host reads its arguments from.
+    fn view(&self) -> PyResult<RequestView> {
+        RequestView::new(&self.base, &self.kwargs)
+    }
+}
+
+/// The keyword view a route host reads: the signature base under the caller's keywords,
+/// laid again once the hooks have rewritten them so a keyword a hook deleted stays deleted
+/// instead of falling back to the caller's value.
+pub(crate) struct RequestView(Option<RequestDicts>);
+
+struct RequestDicts {
+    base: Py<PyDict>,
+    request: Py<PyDict>,
+}
+
+impl RequestView {
+    pub(crate) fn new(base: &Bound<'_, PyDict>, kwargs: &Bound<'_, PyDict>) -> PyResult<Self> {
+        Ok(Self(Some(RequestDicts {
+            base: base.clone().unbind(),
+            request: effective_py_args(base, kwargs)?.unbind(),
+        })))
+    }
+
+    fn dicts(&self) -> PyResult<&RequestDicts> {
+        self.0.as_ref().ok_or_else(missing_state)
+    }
+
+    pub(crate) fn resolve(
+        &mut self,
+        py: Python<'_>,
+        arguments: &Bound<'_, PyDict>,
+    ) -> PyResult<()> {
+        let dicts = self.0.as_mut().ok_or_else(missing_state)?;
+        dicts.request = effective_py_args(dicts.base.bind(py), arguments)?.unbind();
+        Ok(())
+    }
+
+    pub(crate) fn request<'py>(&self, py: Python<'py>) -> PyResult<&Bound<'py, PyDict>> {
+        Ok(self.dicts()?.request.bind(py))
+    }
+
+    pub(crate) fn argument<'py>(
+        &self,
+        py: Python<'py>,
+        arguments: &Bound<'py, PyDict>,
+        name: &str,
+    ) -> PyResult<Option<Bound<'py, PyAny>>> {
+        present(arguments, self.request(py)?, name)
+    }
+
+    pub(crate) fn close(&mut self) {
+        self.0 = None;
+    }
+
+    pub(crate) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        let Some(dicts) = &self.0 else {
+            return Ok(());
+        };
+        visit.call(&dicts.base)?;
+        visit.call(&dicts.request)
     }
 }
 
@@ -50,7 +119,7 @@ fn call_hooks(
     call: &NativeCall<'_>,
     asynchronous: bool,
 ) -> PyResult<(Py<PyDict>, impl PythonCallHooks + use<>)> {
-    let call = PublicCall::capture(&call.bound, &call.args, &call.kwargs)?;
+    let call = PublicCall::capture(&call.base, &call.args, &call.kwargs)?;
     let arguments = call.arguments(py);
     Ok((
         arguments,
@@ -117,13 +186,49 @@ mod tests {
             .set_item("args", pyo3::types::PyTuple::empty(py))
             .unwrap();
         attributes.set_item("kwargs", &fields).unwrap();
-        attributes.set_item("bound", &fields).unwrap();
+        attributes.set_item("base", PyDict::new(py)).unwrap();
         py.import("types")
             .unwrap()
             .getattr("SimpleNamespace")
             .unwrap()
             .call((), Some(&attributes))
             .unwrap()
+    }
+
+    fn dict<'py>(py: Python<'py>, source: &str) -> Bound<'py, PyDict> {
+        py.eval(&std::ffi::CString::new(source).unwrap(), None, None)
+            .unwrap()
+            .cast_into::<PyDict>()
+            .unwrap()
+    }
+
+    #[rstest]
+    #[case::deleted_keyword_stays_deleted("{'system': None}", "{'system': 'caller'}", "{}", None)]
+    #[case::deleted_keyword_without_default("{}", "{'system': 'caller'}", "{}", None)]
+    #[case::rewritten_keyword_wins(
+        "{'system': None}",
+        "{'system': 'caller'}",
+        "{'system': 'hook'}",
+        Some("hook")
+    )]
+    #[case::signature_default_survives("{'system': 'default'}", "{}", "{}", Some("default"))]
+    fn request_view_reads_the_hook_rewritten_keywords_over_the_base(
+        #[case] base: &str,
+        #[case] kwargs: &str,
+        #[case] prepared: &str,
+        #[case] expected: Option<&str>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            let mut view = super::RequestView::new(&dict(py, base), &dict(py, kwargs)).unwrap();
+            let prepared = dict(py, prepared);
+            view.resolve(py, &prepared).unwrap();
+            let value = view
+                .argument(py, &prepared, "system")
+                .unwrap()
+                .map(|value| value.extract::<String>().unwrap());
+            assert_eq!(value.as_deref(), expected);
+        });
     }
 
     #[rstest]

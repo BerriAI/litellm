@@ -6,12 +6,24 @@ import {
   screen,
   waitFor,
   waitForElementToBeRemoved,
+  within,
 } from "@testing-library/react";
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import SystemOneUI from "./SystemOneUI";
 import type { SystemOneResponse } from "./lib/schemas";
+
+interface ModelGroupInfo {
+  model_group: string;
+  mode: string;
+}
+
+const DECISION_AND_CHAT_MODELS: ModelGroupInfo[] = [
+  { model_group: "gpt-5.5", mode: "chat" },
+  { model_group: "jev-latest", mode: "evaluation" },
+  { model_group: "pplx-decider", mode: "evaluation" },
+];
 
 const responseBody: SystemOneResponse = {
   model: "jev-1.13.0",
@@ -32,6 +44,26 @@ const render = (ui: ReactElement) =>
     </QueryClientProvider>,
   );
 
+const modelGroupInfoResponse = (groups: ModelGroupInfo[]) =>
+  ({ ok: true, status: 200, text: async () => JSON.stringify({ data: groups }) }) as Response;
+
+const EXPIRED_KEY_RESPONSE = {
+  ok: false,
+  status: 401,
+  text: async () =>
+    JSON.stringify({ error: { message: "Authentication Error - Expired Key.", type: "expired_key", code: "401" } }),
+} as Response;
+
+const isModelLookup = (input: RequestInfo | URL) => String(input).endsWith("/model_group/info");
+
+const lookupAuthHeaders = (calls: Parameters<typeof fetch>[]) =>
+  calls.map(([, init]) => Object.values((init?.headers ?? {}) as Record<string, string>));
+
+const openJsonEditor = async () => {
+  await userEvent.click(screen.getByRole("tab", { name: "JSON" }));
+  return screen.getByRole("textbox", { name: "System One JSON payload" });
+};
+
 const createResponse = (body: SystemOneResponse, status = 200, errorText = "") =>
   ({
     ok: status >= 200 && status < 300,
@@ -41,23 +73,29 @@ const createResponse = (body: SystemOneResponse, status = 200, errorText = "") =
 
 describe("SystemOneUI integration", () => {
   const mockFetch = vi.fn<typeof fetch>();
+  const mockModelLookup = vi.fn<typeof fetch>();
 
   beforeEach(() => {
     sessionStorage.clear();
     mockFetch.mockReset();
-    vi.stubGlobal("fetch", mockFetch);
+    mockModelLookup.mockReset();
+    vi.stubGlobal("fetch", (input: RequestInfo | URL, init?: RequestInit) =>
+      isModelLookup(input) ? mockModelLookup(input, init) : mockFetch(input, init),
+    );
     mockFetch.mockResolvedValue(createResponse(responseBody));
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse([]));
   });
 
   afterEach(() => {
     vi.unstubAllGlobals();
     sessionStorage.clear();
+    document.cookie = "token=; path=/; max-age=0";
   });
 
   it("restores the example after the request is edited", async () => {
     const user = userEvent.setup();
     render(<SystemOneUI accessToken="session-key" />);
-    const editor = screen.getByRole("textbox", { name: "System One JSON payload" });
+    const editor = await openJsonEditor();
     const example = (editor as HTMLTextAreaElement).value;
     const resetButton = screen.getByRole("button", { name: "Reset example" });
     expect(resetButton).toBeDisabled();
@@ -75,10 +113,14 @@ describe("SystemOneUI integration", () => {
     render(<SystemOneUI accessToken="session-key" />);
     screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
     await user.keyboard("{ArrowDown}");
-    await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
+    await user.click(await screen.findByRole("option", { name: "Decisions · /v1/systemone" }));
 
     expect(screen.getByRole("note", { name: "Decision endpoint notice" })).toHaveTextContent(
       "omit model to use the proxy's configured default.",
+    );
+    expect(screen.getByRole("link", { name: "How to call /v1/decisions and /v1/systemone" })).toHaveAttribute(
+      "href",
+      "https://docs.litellm.ai/docs/decisions",
     );
     expect(screen.getByRole("link", { name: "Give us feedback on what you want for decision models" })).toHaveAttribute(
       "href",
@@ -87,10 +129,110 @@ describe("SystemOneUI integration", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
+  it("opens on /v1/systemone with the first decision model the key can call", async () => {
+    const user = userEvent.setup();
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    render(<SystemOneUI accessToken="session-key" />);
+
+    expect(await screen.findByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest");
+    expect(lookupAuthHeaders(mockModelLookup.mock.calls)).toEqual([expect.arrayContaining(["Bearer session-key"])]);
+    await user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("Selected choice")).toBeInTheDocument();
+    expect(mockFetch.mock.calls[0]?.[0]).toMatch(/\/v1\/systemone$/);
+    expect(mockFetch.mock.calls[0]?.[0]).not.toMatch(/typesafe/);
+    expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string)).toMatchObject({
+      model: "jev-latest",
+      questions: { has_repro_steps: { type: "noul" } },
+    });
+  });
+
+  it("offers only decision models and writes the picked one into the request", async () => {
+    const user = userEvent.setup();
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    render(<SystemOneUI accessToken="session-key" />);
+    const picker = await screen.findByRole("combobox", { name: "Decision model" });
+
+    await user.clear(picker);
+    await user.type(picker, "p");
+    expect(await screen.findByRole("option", { name: "pplx-decider" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "gpt-5.5" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "pplx-decider" }));
+
+    const editor = await openJsonEditor();
+    expect(JSON.parse((editor as HTMLTextAreaElement).value)).toMatchObject({
+      model: "pplx-decider",
+      questions: { has_repro_steps: { type: "noul" } },
+    });
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Selected choice")).toBeInTheDocument();
+    expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string).model).toBe("pplx-decider");
+  });
+
+  it("links to Add Model when the key cannot call any decision model", async () => {
+    const user = userEvent.setup();
+    render(<SystemOneUI accessToken="session-key" />);
+    screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
+    await user.keyboard("{ArrowDown}");
+    await user.click(await screen.findByRole("option", { name: "Decisions · /v1/systemone" }));
+
+    expect(await screen.findByRole("link", { name: "Add a decision model" })).toHaveAttribute(
+      "href",
+      "/ui/models-and-endpoints",
+    );
+    expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveAttribute(
+      "placeholder",
+      "No decision models yet",
+    );
+  });
+
+  it("looks up a typed virtual key's decision models once, after typing settles", async () => {
+    const user = userEvent.setup();
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    render(<SystemOneUI accessToken={null} disabledPersonalKeyCreation />);
+
+    await user.type(screen.getByLabelText("Virtual Key", { exact: true }), "sk-typed-key");
+
+    expect(await screen.findByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest");
+    expect(lookupAuthHeaders(mockModelLookup.mock.calls)).toEqual([expect.arrayContaining(["Bearer sk-typed-key"])]);
+  });
+
+  it("keeps the admin signed in when a typed virtual key has expired", async () => {
+    document.cookie = "token=ui-session; path=/";
+    mockModelLookup.mockResolvedValue(EXPIRED_KEY_RESPONSE);
+    render(<SystemOneUI accessToken={null} disabledPersonalKeyCreation />);
+
+    fireEvent.change(screen.getByLabelText("Virtual Key", { exact: true }), { target: { value: "sk-expired" } });
+
+    await waitFor(() => expect(mockModelLookup).toHaveBeenCalled());
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    expect(document.cookie).toContain("token=ui-session");
+    expect(screen.getByRole("combobox", { name: "Decision endpoint" })).toHaveTextContent("/typesafe/v1/systemone");
+  });
+
+  it("keeps an edited TypeSafe request in place when decision models load afterwards", async () => {
+    const models = Promise.withResolvers<Response>();
+    mockModelLookup.mockReturnValue(models.promise);
+    render(<SystemOneUI accessToken="session-key" />);
+    const editor = await openJsonEditor();
+    const draft = JSON.stringify({ state: "edited", questions: { q: { type: "noul", instructions: "Yes?" } } });
+    fireEvent.change(editor, { target: { value: draft } });
+
+    await act(async () => {
+      models.resolve(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    expect(editor).toHaveValue(draft);
+    expect(screen.queryByRole("combobox", { name: "Decision model" })).not.toBeInTheDocument();
+  });
+
   it("shows invalid JSON and disables Send", async () => {
     render(<SystemOneUI accessToken="session-key" />);
 
-    fireEvent.change(screen.getByRole("textbox", { name: "System One JSON payload" }), {
+    fireEvent.change(await openJsonEditor(), {
       target: { value: "{" },
     });
 
@@ -137,7 +279,7 @@ describe("SystemOneUI integration", () => {
   it("keeps legacy validation when question values have invalid types", async () => {
     render(<SystemOneUI accessToken="session-key" />);
 
-    fireEvent.change(screen.getByRole("textbox", { name: "System One JSON payload" }), {
+    fireEvent.change(await openJsonEditor(), {
       target: {
         value: JSON.stringify({
           state: "A new support request",
@@ -162,8 +304,8 @@ describe("SystemOneUI integration", () => {
     render(<SystemOneUI accessToken="session-key" />);
     screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
     await user.keyboard("{ArrowDown}");
-    await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
-    const editor = screen.getByRole("textbox", { name: "System One JSON payload" });
+    await user.click(await screen.findByRole("option", { name: "Decisions · /v1/systemone" }));
+    const editor = await openJsonEditor();
     const draft = JSON.stringify({
       model: "my-decider",
       state: {},
@@ -185,7 +327,7 @@ describe("SystemOneUI integration", () => {
 
     screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
     await user.keyboard("{ArrowDown}");
-    await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
+    await user.click(await screen.findByRole("option", { name: "Decisions · /v1/systemone" }));
     expect(editor).toHaveValue(draft);
     expect(screen.queryByText("Selected choice")).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Send" }));
@@ -199,9 +341,9 @@ describe("SystemOneUI integration", () => {
     render(<SystemOneUI accessToken="session-key" />);
     screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
     await user.keyboard("{ArrowDown}");
-    await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
+    await user.click(await screen.findByRole("option", { name: "Decisions · /v1/systemone" }));
     const payload = { state: "An outage", questions: { urgent: { type: "noul", instructions: "Is this urgent?" } } };
-    fireEvent.change(screen.getByRole("textbox", { name: "System One JSON payload" }), {
+    fireEvent.change(await openJsonEditor(), {
       target: { value: JSON.stringify(payload) },
     });
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
@@ -227,7 +369,7 @@ describe("SystemOneUI integration", () => {
     await screen.findByRole("button", { name: "Cancel request" });
     screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
     await user.keyboard("{ArrowDown}");
-    await user.click(await screen.findByRole("option", { name: "System One · /v1/systemone" }));
+    await user.click(await screen.findByRole("option", { name: "Decisions · /v1/systemone" }));
     expect(mockFetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
 
@@ -306,7 +448,7 @@ describe("SystemOneUI integration", () => {
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("Selected choice")).toBeInTheDocument();
 
-    fireEvent.change(screen.getByRole("textbox", { name: "System One JSON payload" }), {
+    fireEvent.change(await openJsonEditor(), {
       target: {
         value: JSON.stringify({
           state: "A different support request",
@@ -363,5 +505,161 @@ describe("SystemOneUI integration", () => {
 
     expect(mockFetch.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+  });
+
+  describe("request form", () => {
+    const question = (name: string) => within(screen.getByRole("group", { name: `Question ${name}` }));
+    const sentBody = () => JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string);
+
+    async function pickAnswerType(user: ReturnType<typeof userEvent.setup>, name: string, type: string) {
+      question(name).getByRole("combobox", { name: "Answer type" }).focus();
+      await user.keyboard("{ArrowDown}");
+      await user.click(await screen.findByRole("option", { name: type }));
+    }
+
+    const fill = (field: HTMLElement, value: string) => fireEvent.change(field, { target: { value } });
+
+    function rename(field: HTMLElement, name: string) {
+      fill(field, name);
+      fireEvent.blur(field);
+    }
+
+    it("sends a choice and a yes/no question built in the form without opening JSON", async () => {
+      const user = userEvent.setup();
+      render(<SystemOneUI accessToken="session-key" />);
+      const input = screen.getByRole("textbox", { name: "Input" });
+      fill(input, "The login page is blank after the upgrade");
+      for (const name of ["area", "has_repro_steps", "severity"]) {
+        await user.click(screen.getByRole("button", { name: `Remove question ${name}` }));
+      }
+
+      await user.click(screen.getByRole("button", { name: "Add question" }));
+      rename(question("question_1").getByRole("textbox", { name: "Question name" }), "team");
+      fill(question("team").getByRole("textbox", { name: "Instructions" }), "Which team owns this?");
+      const [first, second] = question("team").getAllByRole("textbox", { name: "Option label" });
+      rename(first, "frontend");
+      rename(second, "backend");
+      fill(question("team").getByRole("textbox", { name: "Description of frontend" }), "Dashboard and UI");
+      await user.click(question("team").getByRole("button", { name: "Add option" }));
+      rename(question("team").getAllByRole("textbox", { name: "Option label" })[2], "infra");
+      fill(question("team").getByRole("textbox", { name: "Description of infra" }), "Deploys");
+
+      await user.click(screen.getByRole("button", { name: "Add question" }));
+      await pickAnswerType(user, "question_1", "Yes / no");
+      rename(question("question_1").getByRole("textbox", { name: "Question name" }), "urgent");
+      fill(question("urgent").getByRole("textbox", { name: "Instructions" }), "Is this blocking users?");
+      fill(question("urgent").getByRole("textbox", { name: "Yes means" }), "Nobody can log in");
+
+      await user.click(screen.getByRole("button", { name: "Send" }));
+
+      expect(await screen.findByText("Selected choice")).toBeInTheDocument();
+      expect(screen.queryByRole("textbox", { name: "System One JSON payload" })).not.toBeInTheDocument();
+      expect(mockFetch.mock.calls[0]?.[0]).toMatch(/\/typesafe\/v1\/systemone$/);
+      expect(sentBody()).toEqual({
+        model: "jev-latest",
+        state: "The login page is blank after the upgrade",
+        questions: {
+          team: {
+            type: "choice",
+            instructions: "Which team owns this?",
+            criteria: { frontend: "Dashboard and UI", backend: "", infra: "Deploys" },
+          },
+          urgent: { type: "noul", instructions: "Is this blocking users?", criteria: { true: "Nobody can log in" } },
+        },
+      });
+      expect(Object.keys(sentBody().questions)).toEqual(["team", "urgent"]);
+      expect(Object.keys(sentBody().questions.team.criteria)).toEqual(["frontend", "backend", "infra"]);
+    });
+
+    it("edits score levels and keeps instructions when a question changes type", async () => {
+      const user = userEvent.setup();
+      mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+      render(<SystemOneUI accessToken="session-key" />);
+      expect(await screen.findByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest");
+
+      const level = question("severity").getByRole("textbox", { name: "Level 0" });
+      fill(level, "Typo");
+      await user.click(question("severity").getByRole("button", { name: "Remove level 4" }));
+      await user.click(question("severity").getByRole("button", { name: "Add level" }));
+      fill(question("severity").getByRole("textbox", { name: "Level 4" }), "Data loss");
+      await pickAnswerType(user, "has_repro_steps", "Choice");
+      await user.click(question("has_repro_steps").getByRole("button", { name: "Add option" }));
+      await user.click(question("area").getByRole("button", { name: "Remove option docs" }));
+
+      await user.click(screen.getByRole("button", { name: "Send" }));
+
+      expect(await screen.findByText("Selected choice")).toBeInTheDocument();
+      expect(mockFetch.mock.calls[0]?.[0]).toMatch(/\/v1\/systemone$/);
+      expect(sentBody().model).toBe("jev-latest");
+      expect(sentBody().questions.severity.criteria).toEqual([
+        "Typo",
+        "Minor bug with an easy workaround",
+        "Broken feature with a workaround",
+        "Broken feature with no workaround",
+        "Data loss",
+      ]);
+      expect(sentBody().questions.has_repro_steps).toEqual({
+        type: "choice",
+        instructions: "Does the issue include steps someone could follow to reproduce it?",
+        criteria: { option_1: "", option_2: "", option_3: "" },
+      });
+      expect(Object.keys(sentBody().questions.area.criteria)).toEqual(["backend", "sdk", "ui"]);
+    });
+
+    it("refuses an empty or taken question name and trims a new one", async () => {
+      const user = userEvent.setup();
+      render(<SystemOneUI accessToken="session-key" />);
+      const name = question("severity").getByRole("textbox", { name: "Question name" });
+      expect(name).toHaveAttribute("aria-invalid", "false");
+
+      fill(name, "area");
+      expect(name).toHaveAttribute("aria-invalid", "true");
+      expect(question("severity").getByText('"area" is already used')).toBeInTheDocument();
+      fireEvent.blur(name);
+      expect(name).toHaveValue("severity");
+
+      fill(name, "");
+      expect(question("severity").getByText("Enter a name")).toBeInTheDocument();
+      fireEvent.blur(name);
+      expect(name).toHaveValue("severity");
+
+      rename(name, "  impact  ");
+      expect(question("impact").getByRole("textbox", { name: "Question name" })).toHaveValue("impact");
+      await user.click(screen.getByRole("button", { name: "Add question" }));
+      await user.click(screen.getByRole("button", { name: "Add question" }));
+      const json = JSON.parse(((await openJsonEditor()) as HTMLTextAreaElement).value);
+      expect(Object.keys(json.questions)).toEqual(["area", "has_repro_steps", "impact", "question_1", "question_2"]);
+    });
+
+    it("round-trips unknown fields between JSON and the form and points to JSON when it cannot show one", async () => {
+      const user = userEvent.setup();
+      render(<SystemOneUI accessToken="session-key" />);
+      expect(screen.queryByRole("button", { name: "Format JSON" })).not.toBeInTheDocument();
+
+      fireEvent.change(await openJsonEditor(), {
+        target: { value: JSON.stringify({ state: { ticket: 1 }, questions: {} }) },
+      });
+      expect(screen.getByRole("button", { name: "Format JSON" })).toBeInTheDocument();
+      await user.click(screen.getByRole("tab", { name: "Form" }));
+      expect(screen.getByText(/This request has JSON the form can.t show/)).toBeInTheDocument();
+      await user.click(screen.getByRole("button", { name: "Edit in JSON" }));
+
+      const payload = {
+        model: "m",
+        state: "s",
+        metadata: { k: 1 },
+        questions: { q: { type: "noul", instructions: "i", note: "x" } },
+      };
+      fireEvent.change(screen.getByRole("textbox", { name: "System One JSON payload" }), {
+        target: { value: JSON.stringify(payload) },
+      });
+      await user.click(screen.getByRole("tab", { name: "Form" }));
+      expect(screen.getByRole("textbox", { name: "Input" })).toHaveValue("s");
+      fill(question("q").getByRole("textbox", { name: "Yes means" }), "y");
+
+      const json = JSON.parse(((await openJsonEditor()) as HTMLTextAreaElement).value);
+      expect(json).toEqual({ ...payload, questions: { q: { ...payload.questions.q, criteria: { true: "y" } } } });
+      expect(Object.keys(json)).toEqual(["model", "state", "metadata", "questions"]);
+    });
   });
 });

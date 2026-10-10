@@ -60,21 +60,30 @@ def _public_request(
     max_tokens: Final = fields.get("max_tokens")
     if not isinstance(model, str) or messages is None or not isinstance(max_tokens, int):
         return None
-    return native_call(args, kwargs, fields)
+    return native_call(legacy, args, kwargs)
 
 
 def _resolved_provider(request: NativeCall) -> str | None:
     try:
-        return get_llm_provider(str(request.bound["model"]), optional_str(request.bound.get("custom_llm_provider")))[1]
+        return get_llm_provider(
+            str(request.resolved["model"]), optional_str(request.resolved.get("custom_llm_provider"))
+        )[1]
     except BadRequestError:
-        return optional_str(request.bound.get("custom_llm_provider"))
+        return optional_str(request.resolved.get("custom_llm_provider"))
+
+
+def _python_serves(request: NativeCall) -> bool:
+    """Vertex AI serves only Claude through the Anthropic Messages config, as
+    ``get_provider_anthropic_messages_config`` does; every other Vertex model keeps Python's
+    translation through Chat Completions."""
+    return _resolved_provider(request) == "vertex_ai" and "claude" not in str(request.resolved["model"]).lower()
 
 
 def _context(request: NativeCall) -> RouteContext:
     return RouteContext(
         Route.MESSAGES,
         provider=_resolved_provider(request),
-        model=str(request.bound["model"]),
+        model=str(request.resolved["model"]),
     )
 
 
@@ -82,13 +91,14 @@ _DISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
     context=_context,
-    bypass=lambda request: request.kwargs.get("is_async") is True,
+    bypass=lambda request: request.kwargs.get("is_async") is True or _python_serves(request),
 )
 
 _ADISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_AMESSAGES, args, kwargs),
     context=_context,
+    bypass=_python_serves,
 )
 
 

@@ -527,8 +527,6 @@ async def test_native_failures_raise_the_public_exception_class(
         ("ssl_verify", object()),
         ("ssl_certificate", 1),
         ("ssl_certificate", ""),
-        ("vertex_project", 1),
-        ("vertex_location", ["region"]),
         ("user_url_allowed_hosts", ["example.test", 1]),
     ],
 )
@@ -541,9 +539,33 @@ async def test_native_settings_fail_before_provider_io(
 ) -> None:
     ocr_server.expected_requests = 0
     monkeypatch.setattr(litellm, name, value)
-    with pytest.raises(ValueError, match=r"http_settings|provider_defaults|url_policy"):
+    with pytest.raises(ValueError, match=r"http_settings|url_policy"):
         await call_native(ocr_server, asynchronous, num_retries=0)
     assert ocr_server.requests == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", [False, True], ids=["sync", "async"])
+@pytest.mark.parametrize(
+    "name,value",
+    [
+        ("vertex_project", 1),
+        ("vertex_location", ["region"]),
+    ],
+)
+async def test_native_vertex_globals_fail_before_provider_io_only_for_vertex_calls(
+    ocr_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    asynchronous: bool,
+    name: str,
+    value: object,
+) -> None:
+    ocr_server.expected_requests = 1
+    monkeypatch.setattr(litellm, name, value)
+    await call_native(ocr_server, asynchronous, num_retries=0)
+    with pytest.raises(ValueError, match=r"provider_defaults"):
+        await call_native(ocr_server, asynchronous, model="vertex_ai/mistral-ocr-latest", num_retries=0)
+    assert len(ocr_server.requests) == 1
 
 
 @pytest.mark.asyncio
@@ -624,7 +646,7 @@ def test_native_projection_errors_never_select_python(
     request: Final = NativeCall(
         args=(),
         kwargs={},
-        bound={
+        base={
             "model": "mistral/mistral-ocr-latest",
             "document": OCR_DOCUMENT,
             "api_key": "test-key",
