@@ -18,8 +18,11 @@ jobs:
         with:
           repo-token: "${{ secrets.GITHUB_TOKEN }}"
           stale-issue-message: "This issue has been automatically marked as stale because it has not had recent activity. It will be closed if no further activity occurs."
-          stale-pr-message: "This pull request has been automatically marked as stale because it has not had recent activity. It will be closed if no further activity occurs."
+          stale-pr-message: "This pull request has been automatically marked as stale because it has had no activity for 14 days. It will be closed in 7 days if no further activity occurs."
+          close-pr-message: "Closing this pull request after 3 weeks without activity. If you would like us to work on this issue, please reach out to us on Discord: https://discord.gg/wuPM9dRgDw"
           days-before-stale: 90 # Revert to 60 days
           days-before-close: 7 # Revert to 7 days
+          days-before-pr-stale: 14
+          days-before-pr-close: 7
           stale-issue-label: "stale"
           operations-per-run: 1000
