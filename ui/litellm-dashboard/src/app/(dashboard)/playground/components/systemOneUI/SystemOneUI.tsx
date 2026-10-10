@@ -271,20 +271,26 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
               }}
             >
               <TabsList aria-label="Request editor">
-                <TabsTrigger value="form">Form</TabsTrigger>
-                <TabsTrigger value="json">JSON</TabsTrigger>
+                <TabsTrigger value="form" className="w-16">
+                  Form
+                </TabsTrigger>
+                <TabsTrigger value="json" className="w-16">
+                  JSON
+                </TabsTrigger>
               </TabsList>
             </Tabs>
             <Button variant="outline" onClick={handleResetExample} disabled={drafts[endpoint] === undefined}>
               <RotateCcw />
               Reset example
             </Button>
-            {activeEditor === "json" && (
-              <Button variant="outline" onClick={handleFormatJson} disabled={!rawPayload.trim() || hasSyntaxError}>
-                <Code />
-                Format JSON
-              </Button>
-            )}
+            <Button
+              variant="outline"
+              onClick={handleFormatJson}
+              disabled={activeEditor === "form" || !rawPayload.trim() || hasSyntaxError}
+            >
+              <Code />
+              Format JSON
+            </Button>
             {isLoading && (
               <Button variant="outline" onClick={clearRequestState}>
                 Cancel request

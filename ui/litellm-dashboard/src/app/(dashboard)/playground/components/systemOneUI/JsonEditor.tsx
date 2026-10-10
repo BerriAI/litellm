@@ -1,11 +1,10 @@
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/cva.config";
 import { CircleAlert, CircleCheck, TriangleAlert } from "lucide-react";
-import { useId, useMemo, useRef } from "react";
+import { useId, useRef } from "react";
 import { createElement, PrismLight as SyntaxHighlighter } from "react-syntax-highlighter";
 import type { SyntaxHighlighterProps } from "react-syntax-highlighter";
 import json from "react-syntax-highlighter/dist/esm/languages/prism/json";
-import { findRootBlocks, ROOT_BLOCK_STYLES, type RootBlock } from "./lib/rootBlocks";
 import type { SystemOnePayloadValidation } from "./lib/validatePayload";
 
 SyntaxHighlighter.registerLanguage("json", json);
@@ -17,11 +16,11 @@ const CONTENT_INSET = "pl-14 pr-3";
 const CODE_TAG_PROPS = { className: "language-json", style: { whiteSpace: "pre-wrap" } } as const;
 
 const TOKEN_COLORS = [
-  "[&_.token.property]:text-sky-700 dark:[&_.token.property]:text-sky-300",
-  "[&_.token.string]:text-emerald-700 dark:[&_.token.string]:text-emerald-300",
-  "[&_.token.number]:text-amber-700 dark:[&_.token.number]:text-amber-300",
-  "[&_.token.boolean]:text-violet-700 dark:[&_.token.boolean]:text-violet-300",
-  "[&_.token.null]:text-violet-700 dark:[&_.token.null]:text-violet-300",
+  "[&_.token.property]:text-foreground",
+  "[&_.token.string]:text-sky-800 dark:[&_.token.string]:text-sky-300",
+  "[&_.token.number]:text-sky-800 dark:[&_.token.number]:text-sky-300",
+  "[&_.token.boolean]:text-sky-800 dark:[&_.token.boolean]:text-sky-300",
+  "[&_.token.null]:text-sky-800 dark:[&_.token.null]:text-sky-300",
   "[&_.token.punctuation]:text-muted-foreground [&_.token.operator]:text-muted-foreground",
 ].join(" ");
 
@@ -69,39 +68,23 @@ function IssueList({ id, validation }: { id: string; validation: SystemOnePayloa
   );
 }
 
-function renderLines(rootBlocks: readonly RootBlock[]) {
-  return function LineRows({ rows, stylesheet, useInlineStyles }: LineRendererProps) {
-    return rows.map((row, line) => {
-      const lineElement = { node: row, stylesheet, useInlineStyles, key: line };
-      const block = rootBlocks.find(({ startLine, endLine }) => line >= startLine && line <= endLine);
-      return (
-        <div key={line} className="flex">
-          <span className={cn(GUTTER_WIDTH, "shrink-0 select-none pr-3 text-right text-muted-foreground")}>
-            {line + 1}
-          </span>
-          <span
-            className={cn(
-              "relative min-h-5 min-w-0 flex-1 px-3",
-              block && [
-                "before:absolute before:inset-y-0 before:left-0 before:w-0.5",
-                ROOT_BLOCK_STYLES[block.key].band,
-                line === block.startLine && "rounded-t-sm before:rounded-t-sm",
-                line === block.endLine && "rounded-b-sm before:rounded-b-sm",
-              ],
-            )}
-          >
-            {createElement(lineElement)}
-          </span>
-        </div>
-      );
-    });
-  };
+function LineRows({ rows, stylesheet, useInlineStyles }: LineRendererProps) {
+  return rows.map((row, line) => {
+    const lineElement = { node: row, stylesheet, useInlineStyles, key: line };
+    return (
+      <div key={line} className="flex">
+        <span className={cn(GUTTER_WIDTH, "shrink-0 select-none pr-3 text-right text-muted-foreground")}>
+          {line + 1}
+        </span>
+        <span className="min-h-5 min-w-0 flex-1 px-3">{createElement(lineElement)}</span>
+      </div>
+    );
+  });
 }
 
 export default function JsonEditor({ value, onChange, validation }: JsonEditorProps) {
   const issuesId = useId();
   const highlightRef = useRef<HTMLDivElement>(null);
-  const renderer = useMemo(() => renderLines(findRootBlocks(value)), [value]);
   const lineCount = value.split("\n").length;
   const hasErrors = !validation.isValid;
 
@@ -134,7 +117,7 @@ export default function JsonEditor({ value, onChange, validation }: JsonEditorPr
             useInlineStyles={false}
             PreTag="div"
             codeTagProps={CODE_TAG_PROPS}
-            renderer={renderer}
+            renderer={LineRows}
           >
             {value}
           </SyntaxHighlighter>
