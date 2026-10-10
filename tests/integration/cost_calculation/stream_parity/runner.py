@@ -1,21 +1,31 @@
-import time
 from collections import Counter
 from hashlib import sha256
 from typing import Final
 
-from integration._support.client import Gateway
+from integration._support.client import Gateway, Scenario
 from integration.cost_calculation.assertions import assert_exact
-from integration.cost_calculation.conftest import CostRow, poll_rows, read_rows_now, register_scenario_deployment
+from integration.cost_calculation.conftest import (
+    poll_rows,
+    poll_rows_where,
+    read_rows_now,
+    register_scenario_deployment,
+)
 from integration.cost_calculation.cost_tracking_case import ExactExpected
+from integration.cost_calculation.stream_parity.bases import openai_responses
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase
 
-SPEND_LOG_SETTLE_SECONDS: Final = 2.0
+FLUSH_CASE: Final = openai_responses.GPT_5_3_CODEX_RESPONSES
 
 
-def rows_after_settle(key: str, count: int) -> tuple[CostRow, ...]:
-    poll_rows(key, count)
-    time.sleep(SPEND_LOG_SETTLE_SECONDS)
-    return read_rows_now(key)
+def flush_spend_logs(scenario: Scenario, gateway: Gateway, key: str) -> str:
+    """A /v1/responses row wakes the spend-log writer at once, and the queue is FIFO, so every row queued before it lands."""
+    flush: Final = register_scenario_deployment(scenario, FLUSH_CASE, "flush", key)
+    response: Final = gateway.request(
+        "POST", FLUSH_CASE.endpoint, {**FLUSH_CASE.request, "model": flush.model_name}, key=key
+    )
+    assert response.status_code == 200, ("flush", response.text[:400])
+    poll_rows_where(key, 1, lambda row: row.model_id == flush.identity)
+    return flush.identity
 
 
 def assert_stream_parity(case: StreamParityTestCase, gateway: Gateway) -> None:
@@ -36,10 +46,13 @@ def assert_stream_parity(case: StreamParityTestCase, gateway: Gateway) -> None:
         for leg in (case.plain, case.streamed):
             assert responses[leg.name].status_code == 200, (leg.name, responses[leg.name].text[:400])
 
-        rows: Final = rows_after_settle(key, 2)
+        poll_rows(key, 2)
+        flush_identity: Final = flush_spend_logs(scenario, gateway, key)
+        rows: Final = read_rows_now(key)
         rows_per_deployment: Final = Counter(row.model_id for row in rows)
-        assert rows_per_deployment == {deployments[leg.name].identity: 1 for leg in (case.plain, case.streamed)}, (
-            f"{case.id}: expected exactly one SpendLogs row per leg, got {dict(rows_per_deployment)}",
+        expected_rows: Final = {deployments[leg.name].identity: 1 for leg in (case.plain, case.streamed)}
+        assert rows_per_deployment == {**expected_rows, flush_identity: 1}, (
+            f"{case.id}: expected exactly one SpendLogs row per leg plus the flush row, got {dict(rows_per_deployment)}",
             rows,
         )
         billed: Final = {
