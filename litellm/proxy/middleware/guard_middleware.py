@@ -32,6 +32,8 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any
 
+from litellm._logging import verbose_proxy_logger
+
 if TYPE_CHECKING:
     from guard import SecurityConfig
 
@@ -138,10 +140,11 @@ class GuardMiddleware:
         except ImportError as exc:
             self._guard_failed = True
             # Log loudly once; security misconfiguration must be visible.
-            print(
-                f"LITELLM_GUARD_ENABLED is set but fastapi-guard is not "
-                f"installed: {exc}. Install it with: "
-                f"pip install fastapi-guard. Guard is DISABLED until then."
+            verbose_proxy_logger.error(
+                "LITELLM_GUARD_ENABLED is set but fastapi-guard is not "
+                "installed: %s. Install it with: pip install fastapi-guard. "
+                "Guard is DISABLED until then.",
+                exc,
             )
             return False
 
