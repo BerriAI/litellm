@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from itertools import count, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 from urllib.parse import urlencode, urlparse
 
 import httpx
@@ -120,7 +120,7 @@ from litellm.proxy.litellm_pre_call_utils import (  # noqa: F401  # legacy modul
     get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
-from litellm.proxy.utils import normalize_route_for_root_path
+from litellm.proxy.utils import ProxyLogging, normalize_route_for_root_path
 from litellm.repositories.team_repository import TeamRepository
 from litellm.secret_managers.main import get_secret_str
 from litellm.types import utils as types_utils
@@ -1080,6 +1080,20 @@ from litellm.passthrough.timeout_utils import (
 )
 
 
+def _has_passthrough_body_hook() -> bool:
+    # Non-object bodies are forwarded as raw bytes. Dict-based content hooks
+    # cannot inspect or rewrite those bytes, so reject before invoking them.
+    return any(
+        isinstance(callback, CustomLogger)
+        and (
+            callback.default_on is True
+            if isinstance(callback, CustomGuardrail)
+            else type(callback).async_pre_call_hook is not CustomLogger.async_pre_call_hook  # pyright: ignore[reportUnknownMemberType]  # compare legacy hook descriptors without invoking their untyped dict signature
+        )
+        for callback in ProxyLogging._callback_capabilities().resolved_callbacks  # pyright: ignore[reportPrivateUsage]  # resolve callback strings exactly as the pre-call dispatcher does
+    )
+
+
 async def pass_through_request(
     request: Request,
     target: str,
@@ -1130,7 +1144,7 @@ async def pass_through_request(
     url: httpx.URL | None = None
 
     # parsed request body
-    _parsed_body: dict | None = None
+    _parsed_body: object = None
     # kwargs for pass through endpoint, contains metadata, litellm_params, call_type, litellm_call_id, passthrough_logging_payload
     kwargs: dict | None = None
     logging_obj: Logging | None = None
@@ -1155,19 +1169,24 @@ async def pass_through_request(
             str(url), custom_llm_provider
         )
 
+        _request_state: Final = getattr(request, "state", None)
         # SigV4-signed callers (e.g. Bedrock) attach the exact bytes that were
         # signed via request.state; we must send those instead of re-encoding the
         # parsed dict (hooks mutate it, breaking the signature / Content-Length).
         # Tolerate request objects without `state` (test fixtures) and only honor
         # values httpx accepts for `content=`.
-        _request_state: Final = getattr(request, "state", None)
-        state_raw_body: str | bytes | None = (
+        state_body_value: Final[object] = (
             getattr(_request_state, LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY, None)
             if _request_state is not None
             else None
         )
-        if state_raw_body is not None and not isinstance(state_raw_body, (str, bytes, bytearray)):
-            state_raw_body = None
+        state_raw_body: Final = (
+            state_body_value
+            if isinstance(state_body_value, (str, bytes))
+            else bytes(state_body_value)
+            if isinstance(state_body_value, bytearray)
+            else None
+        )
 
         # Skip body parsing for multipart requests - make_multipart_http_request will handle it
         # But if custom_body is provided (e.g., JSON parsed despite multipart content-type), use it
@@ -1179,7 +1198,24 @@ async def pass_through_request(
             # Don't parse multipart body here - it will be handled by make_multipart_http_request
             _parsed_body = {}
         else:
-            _parsed_body = await read_request_body(request)  # rebind-ok: pre-existing rebinding on a rename-only line
+            _parsed_body = TypeAdapter(object).validate_python(await read_request_body(request))
+        raw_body_to_forward: Final = (
+            state_raw_body
+            if state_raw_body is not None
+            else await request.body()
+            if not isinstance(_parsed_body, dict)
+            else None
+        )
+        raw_body_headers: Final = (
+            {
+                **upstream_headers,
+                "Content-Type": "application/json",
+            }
+            if raw_body_to_forward is not None
+            and state_raw_body is None
+            and not any(header.lower() == "content-type" for header in upstream_headers)
+            else upstream_headers
+        )
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
@@ -1187,14 +1223,15 @@ async def pass_through_request(
             _parsed_body,
         )
 
-        if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
+        if isinstance(_parsed_body, dict) and not _key_or_team_allows_client_pricing_override(user_api_key_dict):
             pricing_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
             _strip_client_pricing_overrides(pricing_body)
             _parsed_body = pricing_body
         if custom_llm_provider in ("laya", "bespoke"):
             decision_request: Final = TypeAdapter(Mapping[str, object]).validate_python(_parsed_body)
             checkpoint: Final = validate_oss_request(custom_llm_provider, decision_request)
-            _parsed_body["model"] = f"{custom_llm_provider}/{checkpoint}"
+            if isinstance(_parsed_body, dict):
+                _parsed_body["model"] = f"{custom_llm_provider}/{checkpoint}"
 
         ### COLLECT GUARDRAILS FOR PASSTHROUGH ENDPOINT ###
         # Passthrough endpoints are opt-in only for guardrails
@@ -1204,19 +1241,30 @@ async def pass_through_request(
             passthrough_guardrails_config=guardrails_config,
         )
 
+        if (guardrails_to_run or _has_passthrough_body_hook()) and not isinstance(_parsed_body, dict):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="JSON request body must be an object when pre-call hooks or guardrails run on this pass-through endpoint",
+            )
+
         # Add guardrails to metadata if any should run
-        if guardrails_to_run and len(guardrails_to_run) > 0:
-            if _parsed_body is None:
-                _parsed_body = {}
-            if "metadata" not in _parsed_body:
-                _parsed_body["metadata"] = {}
-            _parsed_body["metadata"]["guardrails"] = guardrails_to_run
+        if guardrails_to_run:
+            guarded_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
+            metadata: Final = TypeAdapter(dict[str, object]).validate_python(guarded_body.get("metadata") or {})
+            metadata["guardrails"] = guardrails_to_run
+            guarded_body["metadata"] = metadata
+            _parsed_body = guarded_body
             verbose_proxy_logger.debug("Added guardrails to passthrough request metadata: %s", guardrails_to_run)
 
         ## LOGGING OBJECT ## - initialize before pre_call_hook so guardrails can access it
         # Surface the requested model (when the body carries one) so logging/spans
         # read e.g. ``chat gpt-4o`` instead of ``chat unknown``.
-        passthrough_model: Final = (_parsed_body.get("model") if isinstance(_parsed_body, dict) else None) or "unknown"
+        model_value: Final = (
+            TypeAdapter(dict[str, object]).validate_python(_parsed_body).get("model")
+            if isinstance(_parsed_body, dict)
+            else None
+        )
+        passthrough_model: Final = model_value if isinstance(model_value, str) and model_value else "unknown"
         start_time: Final = datetime.now()
         team_callbacks: Final = _resolve_team_callback_wiring(
             user_api_key_dict=user_api_key_dict,
@@ -1240,7 +1288,7 @@ async def pass_through_request(
         logging_obj.passthrough_guardrails_config = guardrails_config
 
         # Store logging_obj in data so guardrails can access it
-        if _parsed_body is None:
+        if not isinstance(_parsed_body, dict):
             _parsed_body = {}
         _parsed_body["litellm_logging_obj"] = logging_obj
         is_streaming_pass_through: Final = bool(
@@ -1253,11 +1301,16 @@ async def pass_through_request(
         _parsed_body = guardrail_request_data_with_streaming(typed_body, is_streaming=is_streaming_pass_through)
 
         ### CALL HOOKS ### - modify incoming data / reject request before calling the model
-        _parsed_body = await proxy_logging_obj.pre_call_hook(
-            user_api_key_dict=user_api_key_dict,
-            data=_parsed_body,
-            call_type="pass_through_endpoint",
-            endpoint_type=endpoint_type,
+        _parsed_body = (
+            cast(  # cast-ok: dispatcher returns an object payload; retain its identity and legacy invalid-hook handling
+                dict[str, object],
+                await proxy_logging_obj.pre_call_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    data=_parsed_body,
+                    call_type="pass_through_endpoint",
+                    endpoint_type=endpoint_type,
+                ),
+            )
         )
         if custom_llm_provider in ("laya", "bespoke"):
             hook_body: Final = TypeAdapter(dict[str, object]).validate_python(_parsed_body)
@@ -1484,10 +1537,10 @@ async def pass_through_request(
                         request.method,
                         url,
                         params=requested_query_params,
-                        headers=upstream_headers,
-                        content=state_raw_body,
+                        headers=raw_body_headers,
+                        content=raw_body_to_forward,
                     )
-                    if state_raw_body is not None
+                    if raw_body_to_forward is not None
                     else async_client.build_request(
                         request.method,
                         url,
@@ -1564,15 +1617,15 @@ async def pass_through_request(
                 status_code=relay_response.status_code,
             )
 
-        if state_raw_body is not None:
+        if raw_body_to_forward is not None:
             # SigV4-signed callers (Bedrock) require the exact pre-signed bytes
             # to be forwarded so the signature/Content-Length stay valid.
             raw_body_request: Final = async_client.build_request(
                 request.method,
                 url,
-                headers=upstream_headers,
+                headers=raw_body_headers,
                 params=requested_query_params,
-                content=state_raw_body,
+                content=raw_body_to_forward,
             )
             response = await async_client.send(raw_body_request, stream=True)
         else:
@@ -1925,7 +1978,9 @@ async def pass_through_request(
         # Monitoring: Trigger post_call_failure_hook
         # for pass through endpoint failure
         #########################################################
-        request_payload: Final[dict] = _parsed_body or {}
+        request_payload: Final = (
+            TypeAdapter(dict[str, object]).validate_python(_parsed_body) if isinstance(_parsed_body, dict) else {}
+        )
         # add user_api_key_dict, litellm_call_id, passthrough_logging_payloa for logging
         if kwargs:
             for key, value in kwargs.items():
@@ -1934,7 +1989,7 @@ async def pass_through_request(
             request_payload["litellm_logging_obj"] = logging_obj
 
         if "model" not in request_payload and _parsed_body and isinstance(_parsed_body, dict):
-            request_payload["model"] = _parsed_body.get("model", "")
+            request_payload["model"] = request_payload.get("model", "")
         if "custom_llm_provider" not in request_payload and custom_llm_provider:
             request_payload["custom_llm_provider"] = custom_llm_provider
 
@@ -2014,15 +2069,9 @@ def _update_metadata_with_tags_in_header(request: Request, metadata: dict) -> di
     return metadata
 
 
-class _PassThroughRequestEnvelope(TypedDict, total=False):
-    query_params: Mapping[str, object] | None
-    custom_body: Mapping[str, object] | None
-    stream: bool | None
-
-
 async def _parse_request_data_by_content_type(
     request: Request,
-) -> tuple[object, object, None, bool | None]:
+) -> tuple[object, object, None, object]:
     """
     Parse request data based on content type.
 
@@ -2041,10 +2090,12 @@ async def _parse_request_data_by_content_type(
     if "application/json" in content_type:
         # ✅ Handle JSON
         try:
-            body: _PassThroughRequestEnvelope = await request.json()
-            query_params_data = body.get("query_params")
-            custom_body_data = body.get("custom_body")
-            stream = body.get("stream")
+            json_body: Final[object] = await request.json()
+            if isinstance(json_body, dict):
+                json_envelope: Final = TypeAdapter(dict[str, object]).validate_python(json_body)
+                query_params_data = json_envelope.get("query_params")
+                custom_body_data = json_envelope.get("custom_body")
+                stream = json_envelope.get("stream")
         except json.JSONDecodeError:
             # Handle requests with no body (e.g., DELETE requests)
             pass
@@ -2052,14 +2103,14 @@ async def _parse_request_data_by_content_type(
         # ✅ Try to parse as JSON first (handles misconfigured clients sending JSON with multipart content-type)
         # If that fails, skip parsing - pass_through_request will handle actual multipart
         try:
-            body = await request.json()
-            # Successfully parsed as JSON - treat as JSON body
-            query_params_data = body.get("query_params")
-            custom_body_data = body.get("custom_body")
-            stream = body.get("stream")
-            # If custom_body is not set, use the entire body
-            if custom_body_data is None and body:
-                custom_body_data = body
+            multipart_body: Final[object] = await request.json()
+            if isinstance(multipart_body, dict):
+                multipart_envelope: Final = TypeAdapter(dict[str, object]).validate_python(multipart_body)
+                query_params_data = multipart_envelope.get("query_params")
+                custom_body_data = multipart_envelope.get("custom_body")
+                stream = multipart_envelope.get("stream")
+                if custom_body_data is None and multipart_body:
+                    custom_body_data = multipart_body
         except (json.JSONDecodeError, Exception):
             # Not JSON - this is actual multipart data
             # Skip parsing here to avoid consuming the request body stream

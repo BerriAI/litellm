@@ -19,6 +19,7 @@ import fastapi
 import orjson
 from fastapi import HTTPException, Request, WebSocket, status
 from fastapi.security.api_key import APIKeyHeader
+from pydantic import TypeAdapter
 from starlette.exceptions import WebSocketException
 
 import litellm
@@ -1445,9 +1446,21 @@ async def _read_request_body_deferring_parse_failure(
         safe_set_request_parsed_body(request=request, parsed_body={})
         return {}, None
     try:
-        parsed_body: Final = await read_request_body(request=request)
+        parsed_body: Final = TypeAdapter(object).validate_python(await read_request_body(request=request))
     except ProxyException as parse_exception:
         return {}, parse_exception
+    if not isinstance(parsed_body, dict):
+        empty_body: Final[dict[str, object]] = {}
+        # Provider pass-through endpoints may forward a JSON array or scalar.
+        # Auth only needs a mapping for its own checks; leave the raw body intact.
+        if request_dispatched_to_pass_through_endpoint(request) or request_dispatched_to_provider_pass_through(request):
+            return empty_body, None
+        return empty_body, ProxyException(
+            message="JSON request body must be an object",
+            type="invalid_request_error",
+            param="request_body",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
     return populate_request_with_path_params(request_data=parsed_body, request=request), None
 
 
