@@ -791,7 +791,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # 1. string content, or a tool message: insert cache control at message level.
         #    Anthropic only accepts cache_control on the tool_result block itself, never
         #    inside tool_result.content; the message-level marker maps onto that block.
-        if message.get("role") == "tool" or isinstance(message_content, str):
+        if message["role"] == "tool" or isinstance(message_content, str):
             message["cache_control"] = control
         # 2. list of objects - only apply to the last item Claude accepts a breakpoint on
         elif isinstance(message_content, list):
