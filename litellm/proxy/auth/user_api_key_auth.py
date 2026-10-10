@@ -2892,7 +2892,11 @@ async def run_centralized_common_checks(
     pass_through_endpoints: Final = general_settings.get("pass_through_endpoints", None)
     if not force_virtual_key_checks and pass_through_endpoints is not None:
         for endpoint in pass_through_endpoints:
-            if isinstance(endpoint, dict) and endpoint.get("path", "") == route and endpoint.get("auth") is not True:
+            if (
+                isinstance(endpoint, dict)
+                and endpoint.get("path", "") == route
+                and endpoint.get("auth", True) is not True
+            ):
                 return
 
     # No-auth dev mode: master_key unset AND no JWT/OAuth2 auth
