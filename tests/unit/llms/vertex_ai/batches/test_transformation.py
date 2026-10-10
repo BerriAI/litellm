@@ -22,10 +22,7 @@ import pytest
 from litellm.llms.vertex_ai.batches.transformation import (  # noqa: E402
     VertexAIBatchTransformation,
 )
-from litellm.llms.vertex_ai.common_utils import (  # noqa: E402
-    VertexAIError,
-    convert_vertex_datetime_to_openai_datetime,
-)
+from litellm.llms.vertex_ai.common_utils import VertexAIError  # noqa: E402
 from litellm.types.utils import LiteLLMBatch  # noqa: E402
 
 T = VertexAIBatchTransformation
@@ -142,10 +139,7 @@ def test_transform_vertex_response_full_mapping():
     assert isinstance(batch, LiteLLMBatch)
     assert batch.id == "3814889423749775360"
     assert batch.completion_window == "24h"
-    # created_at is parsed via the shared helper (uses local tz); assert the
-    # transform forwards createTime through that helper rather than a hardcoded
-    # epoch that would be tz-dependent
-    assert batch.created_at == convert_vertex_datetime_to_openai_datetime("2024-12-04T21:53:12.120184Z")
+    assert batch.created_at == 1733349192
     assert batch.endpoint == ""
     assert batch.object == "batch"
     assert batch.input_file_id == "gs://bucket/in.jsonl"

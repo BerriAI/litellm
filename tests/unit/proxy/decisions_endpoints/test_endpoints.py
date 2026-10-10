@@ -674,6 +674,7 @@ def test_proxy_refuses_decisions_media_it_cannot_send(
     endpoint: str,
     request_body: Mapping[str, object],
 ) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
     _route_to_clef_omni(monkeypatch)
     clef_upstream: Final = respx_mock.post(_CLEF_OMNI_UPSTREAM).respond(json=_CLEF_OMNI_RESPONSE)
     perplexity_upstream: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
@@ -744,6 +745,52 @@ def test_a_non_string_safety_identifier_is_refused_unless_the_deployment_drops_p
         "model": "gpt-6-luna",
         "input": "The package arrived with a broken screen.",
         "questions": _OPENAI_FORMAT_REQUEST["questions"][:1],
+    }
+
+
+@pytest.mark.parametrize("endpoint", ("/v1/systemone", "/v1/decisions"))
+@pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
+def test_clips_for_a_model_without_media_support_are_refused_unless_the_deployment_drops_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    deployment_drops_params: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "clef-flash",
+                    "litellm_params": {
+                        "model": "cloudflare/clef-flash",
+                        "api_base": "https://cf.example",
+                        "api_key": "cf-key",
+                        "drop_params": deployment_drops_params,
+                    },
+                }
+            ]
+        ),
+    )
+    upstream: Final = respx_mock.post("https://cf.example/ai/run/@cf/cloudflare/clef-flash").respond(
+        json=_CLEF_OMNI_RESPONSE
+    )
+
+    response: Final = client.post(endpoint, json={**_clef_omni_request(endpoint), "model": "clef-flash"})
+
+    if not deployment_drops_params:
+        assert response.status_code == 400, response.text
+        assert "['audio', 'videos']" in response.json()["error"]["message"]
+        assert not upstream.called
+        return
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "clef-flash",
+        "state": "Evaluate the clips",
+        "questions": {"heard": {"type": "noul", "instructions": "Is there speech?"}},
     }
 
 
