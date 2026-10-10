@@ -1990,6 +1990,8 @@ def response_cost_calculator(
         "asearch",
         "decisions",
         "adecisions",
+        "systemone",
+        "asystemone",
     ],
     optional_params: dict,
     cache_hit: bool | None = None,
