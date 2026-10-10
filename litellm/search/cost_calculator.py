@@ -61,6 +61,13 @@ def search_provider_cost_per_query(
         )
         return (input_cost, 0.0)
 
+    if custom_llm_provider == "keenable":
+        from litellm.llms.keenable.search.transformation import KEENABLE_KEYLESS_PARAM
+
+        # /v1/search/public is free; only keyed searches carry the per-query price.
+        if (optional_params or EMPTY_OPTIONAL_PARAMS).get(KEENABLE_KEYLESS_PARAM) is True:
+            return (0.0, 0.0)
+
     model_info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
 
     # Check for tiered pricing (e.g., Exa AI based on max_results)

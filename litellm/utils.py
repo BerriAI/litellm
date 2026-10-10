@@ -9973,6 +9973,7 @@ class ProviderConfigManager:
         from litellm.llms.fastcrw.search.transformation import FastCRWSearchConfig
         from litellm.llms.firecrawl.search.transformation import FirecrawlSearchConfig
         from litellm.llms.google_pse.search.transformation import GooglePSESearchConfig
+        from litellm.llms.keenable.search.transformation import KeenableSearchConfig
         from litellm.llms.linkup.search.transformation import LinkupSearchConfig
         from litellm.llms.nimble.search.transformation import NimbleSearchConfig
         from litellm.llms.parallel_ai.search.transformation import (
@@ -9996,6 +9997,7 @@ class ProviderConfigManager:
             SearchProviders.DATAFORSEO: DataForSEOSearchConfig,
             SearchProviders.FIRECRAWL: FirecrawlSearchConfig,
             SearchProviders.FASTCRW: FastCRWSearchConfig,
+            SearchProviders.KEENABLE: KeenableSearchConfig,
             SearchProviders.SEARXNG: SearXNGSearchConfig,
             SearchProviders.LINKUP: LinkupSearchConfig,
             SearchProviders.DUCKDUCKGO: DuckDuckGoSearchConfig,
