@@ -2,8 +2,10 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import ExitStack, asynccontextmanager
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -21,10 +23,13 @@ from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
+    _complete_cli_sso_callback_session,
     _setup_team_mappings,
     _sync_user_role_from_jwt_role_map,
+    cli_sso_callback,
     normalize_email,
     process_sso_jwt_access_token,
+    sso_lookup_user_ids,
 )
 from litellm.types.proxy.management_endpoints.ui_sso import (
     DefaultTeamSSOParams,
@@ -1181,6 +1186,33 @@ async def test_insert_sso_user_sets_user_alias_from_display_name():
     assert new_user_request.user_alias == "Doe, Jane"
 
 
+@pytest.mark.parametrize("user_id", ["", "   "])
+@pytest.mark.asyncio
+async def test_insert_sso_user_refuses_a_blank_user_id(user_id: str) -> None:
+    from litellm.proxy._types import SSOUserDefinedValues
+    from litellm.proxy.management_endpoints.ui_sso import insert_sso_user
+
+    user_defined_values: Final[SSOUserDefinedValues] = {
+        "models": [],
+        "user_id": user_id,
+        "user_email": "u@example.com",
+        "max_budget": None,
+        "user_role": "internal_user",
+        "budget_duration": None,
+    }
+
+    with (
+        patch("litellm.proxy.management_endpoints.ui_sso.new_user") as mock_new_user,
+        pytest.raises(ValueError, match="SSO user id is blank"),
+    ):
+        await insert_sso_user(
+            result_openid=CustomOpenID(email="u@example.com", provider="generic", team_ids=[]),
+            user_defined_values=user_defined_values,
+        )
+
+    mock_new_user.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_upsert_sso_user_does_not_update_invalid_role():
     """
@@ -1306,6 +1338,237 @@ def test_get_user_email_and_id_extracts_microsoft_role():
     assert parsed.get("user_role") == "proxy_admin_viewer"
 
 
+@pytest.mark.parametrize(
+    ("result", "expected_user_id"),
+    [
+        pytest.param(
+            CustomOpenID(id="entra-object-id", email="a@example.com", provider="microsoft", team_ids=[]),
+            "entra-object-id",
+            id="id",
+        ),
+        pytest.param(CustomOpenID(email="a@example.com", provider="generic", team_ids=[]), "a@example.com", id="email"),
+        pytest.param(
+            CustomOpenID(id="   ", email="a@example.com", provider="generic", team_ids=[]),
+            "a@example.com",
+            id="whitespace-id-email-fallback",
+        ),
+        pytest.param(
+            CustomOpenID(first_name=" ", email="a@example.com", provider="generic", team_ids=[]),
+            "a@example.com",
+            id="whitespace-name-email-fallback",
+        ),
+        pytest.param(
+            CustomOpenID(first_name="Ada", last_name="Lovelace", provider="generic", team_ids=[]),
+            "AdaLovelace",
+            id="names",
+        ),
+    ],
+)
+def test_get_user_email_and_id_resolves_identity(result: CustomOpenID, expected_user_id: str) -> None:
+    parsed: Final = SSOAuthenticationHandler._get_user_email_and_id_from_result(result=result, generic_client_id=None)
+
+    assert parsed.get("user_id") == expected_user_id
+
+
+def _empty_identity_redirect_patches(
+    custom_sso: Callable[[CustomOpenID], Awaitable[Mapping[str, object] | None]] | None,
+    user_info_from_db: AsyncMock,
+    generate_key: AsyncMock,
+) -> tuple[MagicMock, ExitStack]:
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.scope = {}
+    mock_request.base_url = "http://localhost:4000/"
+    mock_request.cookies = {}
+    stack: Final = ExitStack()
+    for target, value in (
+        ("litellm.proxy.utils.get_prisma_client_or_throw", MagicMock(return_value=MagicMock())),
+        ("litellm.proxy.proxy_server.master_key", "sk-master"),
+        ("litellm.proxy.proxy_server.general_settings", {}),
+        ("litellm.proxy.proxy_server.premium_user", False),
+        ("litellm.proxy.proxy_server.user_custom_sso", custom_sso),
+        ("litellm.proxy.proxy_server.proxy_logging_obj", MagicMock()),
+        ("litellm.proxy.proxy_server.redis_usage_cache", None),
+        ("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+        ("litellm.proxy.proxy_server.generate_key_helper_fn", generate_key),
+        ("litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db", user_info_from_db),
+    ):
+        stack.enter_context(patch(target, value))  # test-quality-ok: endpoint reads proxy globals and DB helpers
+    return mock_request, stack
+
+
+@pytest.mark.asyncio
+async def test_redirect_from_openid_allows_custom_sso_to_resolve_missing_provider_identity() -> None:
+    async def custom_sso(result: CustomOpenID) -> Mapping[str, object]:
+        return {
+            "models": [],
+            "user_id": (result.extra_fields or {})["employee_id"],
+            "user_email": None,
+            "user_role": None,
+            "max_budget": None,
+            "budget_duration": None,
+        }
+
+    user_info_from_db: Final = AsyncMock(side_effect=RuntimeError("stop after identity resolution"))
+    generate_key: Final = AsyncMock()
+    mock_request, stack = _empty_identity_redirect_patches(custom_sso, user_info_from_db, generate_key)
+    result: Final = CustomOpenID(provider="generic", team_ids=[], extra_fields={"employee_id": "mapped-user"})
+
+    with stack, pytest.raises(RuntimeError, match="stop after identity resolution"):
+        await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result=result,
+            request=mock_request,
+            received_response=None,
+            generic_client_id=None,
+            ui_access_mode=None,
+        )
+
+    assert user_info_from_db.await_args.kwargs["user_defined_values"]["user_id"] == "mapped-user"
+    generate_key.assert_not_awaited()
+
+
+_GRAPH_ME_ERROR_PAYLOAD: Final = {
+    "error": {
+        "code": "Authentication_MissingOrMalformed",
+        "message": "Access Token missing or malformed.",
+    }
+}
+
+
+@pytest.mark.asyncio
+async def test_redirect_from_openid_rejects_graph_error_payload_before_db_and_key_mint() -> None:
+    user_info_from_db: Final = AsyncMock(return_value=None)
+    generate_key: Final = AsyncMock(return_value={"token": "sk-ui-key", "user_id": ""})
+    mock_request, stack = _empty_identity_redirect_patches(None, user_info_from_db, generate_key)
+    graph_error: Final = MicrosoftSSOHandler.openid_from_response(
+        response=_GRAPH_ME_ERROR_PAYLOAD, team_ids=[], user_role=None
+    )
+
+    with stack, pytest.raises(HTTPException) as exc_info:
+        await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result=graph_error,
+            request=mock_request,
+            received_response=None,
+            generic_client_id=None,
+            ui_access_mode=None,
+        )
+
+    assert exc_info.value.status_code == 401
+    user_info_from_db.assert_not_awaited()
+    generate_key.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_redirect_from_openid_rejects_the_empty_provider_result_before_db_and_key_mint() -> None:
+    user_info_from_db: Final = AsyncMock(return_value=None)
+    generate_key: Final = AsyncMock(return_value={"token": "sk-ui-key", "user_id": ""})
+    mock_request, stack = _empty_identity_redirect_patches(None, user_info_from_db, generate_key)
+
+    with stack, pytest.raises(HTTPException) as exc_info:
+        await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result={},
+            request=mock_request,
+            received_response=None,
+            generic_client_id=None,
+            ui_access_mode=None,
+        )
+
+    assert exc_info.value.status_code == 401
+    user_info_from_db.assert_not_awaited()
+    generate_key.assert_not_awaited()
+
+
+def _custom_sso_returning_user_id(custom_user_id: object) -> Callable[[CustomOpenID], Awaitable[Mapping[str, object]]]:
+    async def custom_sso(result: CustomOpenID) -> Mapping[str, object]:
+        return {
+            "models": [],
+            "user_id": custom_user_id,
+            "user_email": None,
+            "user_role": None,
+            "max_budget": None,
+            "budget_duration": None,
+        }
+
+    return custom_sso
+
+
+@pytest.mark.parametrize("custom_user_id", [None, "", "   ", 424242])
+@pytest.mark.asyncio
+async def test_redirect_from_openid_signs_a_custom_sso_user_in_as_the_matched_account(custom_user_id: object) -> None:
+    user_info_from_db: Final = AsyncMock(return_value=LiteLLM_UserTable(user_id="existing-user"))
+    generate_key: Final = AsyncMock(side_effect=RuntimeError("stop at key mint"))
+    mock_request, stack = _empty_identity_redirect_patches(
+        _custom_sso_returning_user_id(custom_user_id), user_info_from_db, generate_key
+    )
+
+    with stack, pytest.raises(RuntimeError, match="stop at key mint"):
+        await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result=CustomOpenID(id="idp-subject", email="u@example.com", provider="generic", team_ids=[]),
+            request=mock_request,
+        )
+
+    user_info_from_db.assert_awaited_once()
+    assert generate_key.await_args.kwargs["user_id"] == "existing-user"
+
+
+@pytest.mark.parametrize("custom_user_id", [None, "", "   ", 424242])
+@pytest.mark.asyncio
+async def test_redirect_from_openid_rejects_a_custom_sso_user_id_that_resolves_no_account(
+    custom_user_id: object,
+) -> None:
+    user_info_from_db: Final = AsyncMock(return_value=None)
+    generate_key: Final = AsyncMock(side_effect=AssertionError("A blank identity must not reach key generation"))
+    mock_request, stack = _empty_identity_redirect_patches(
+        _custom_sso_returning_user_id(custom_user_id), user_info_from_db, generate_key
+    )
+
+    with stack, pytest.raises(HTTPException) as exc_info:
+        await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result=CustomOpenID(id="idp-subject", provider="generic", team_ids=[]),
+            request=mock_request,
+        )
+
+    assert exc_info.value.status_code == 401
+    user_info_from_db.assert_awaited_once()
+    generate_key.assert_not_awaited()
+
+
+@pytest.mark.parametrize("user_id", ["", "   "])
+@pytest.mark.asyncio
+async def test_redirect_from_openid_rejects_blank_database_identity_before_key_mint(user_id: str) -> None:
+    user_info_from_db: Final = AsyncMock(return_value=LiteLLM_UserTable(user_id=user_id))
+    generate_key: Final = AsyncMock(side_effect=AssertionError("A blank identity must not reach key generation"))
+    mock_request, stack = _empty_identity_redirect_patches(None, user_info_from_db, generate_key)
+
+    with stack, pytest.raises(HTTPException) as exc_info:
+        await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result=CustomOpenID(id="idp-subject", team_ids=[]),
+            request=mock_request,
+        )
+
+    assert exc_info.value.status_code == 401
+    user_info_from_db.assert_awaited_once()
+    generate_key.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_redirect_from_openid_keeps_the_unmapped_custom_sso_failure() -> None:
+    async def custom_sso(result: CustomOpenID) -> None:
+        return None
+
+    user_info_from_db: Final = AsyncMock(return_value=LiteLLM_UserTable(user_id="idp-subject"))
+    generate_key: Final = AsyncMock()
+    mock_request, stack = _empty_identity_redirect_patches(custom_sso, user_info_from_db, generate_key)
+
+    with stack, pytest.raises(Exception, match="Unable to map user identity to known values"):
+        await SSOAuthenticationHandler.get_redirect_response_from_openid(
+            result=CustomOpenID(id="idp-subject", provider="generic", team_ids=[]),
+            request=mock_request,
+        )
+
+    user_info_from_db.assert_awaited_once()
+    generate_key.assert_not_awaited()
+
+
 @pytest.mark.asyncio
 async def test_get_user_info_from_db_user_exists():
     """
@@ -1390,6 +1653,21 @@ async def test_get_user_info_from_db_user_exists_alternate_user_id():
         await get_user_info_from_db(**args)
         mock_get_user_object.assert_called_once()
         assert mock_get_user_object.call_args.kwargs["user_id"] == "krrishd-email1234"
+
+
+@pytest.mark.parametrize(
+    ("alternate_user_id", "provider_id", "expected"),
+    [
+        pytest.param("new@example.com", "   ", ("new@example.com",), id="blank-provider-id"),
+        pytest.param("", "provider-id", ("provider-id",), id="blank-alternate-id"),
+        pytest.param(None, " ", (), id="nothing-usable"),
+        pytest.param("alt", "provider-id", ("alt", "provider-id"), id="both"),
+    ],
+)
+def test_sso_lookup_user_ids_never_offers_a_blank_id(
+    alternate_user_id: str | None, provider_id: str | None, expected: tuple[str, ...]
+) -> None:
+    assert sso_lookup_user_ids(alternate_user_id, provider_id) == expected
 
 
 @pytest.mark.asyncio
@@ -1583,6 +1861,102 @@ async def test_get_user_info_from_db_user_exists_updates_user():
 
         # Should return the updated user
         assert user_info == updated_user
+
+
+def _database_outage() -> httpx.ConnectError:
+    return httpx.ConnectError("All connection attempts failed")
+
+
+async def _new_user_during_database_outage(**_: object) -> NewUserResponse:
+    raise HTTPException(status_code=500, detail="user insert failed") from _database_outage()
+
+
+async def _sso_user_info_from_db(
+    custom_user_id: object,
+    prisma_client: MagicMock,
+    cached_user: LiteLLM_UserTable | None = None,
+) -> LiteLLM_UserTable | NewUserResponse | None:
+    from litellm.proxy.management_endpoints.ui_sso import get_user_info_from_db
+
+    subject: Final = f"idp-subject-{uuid.uuid4().hex}"
+    email: Final = f"{subject}@example.com"
+    with patch("litellm.proxy.management_endpoints.ui_sso.new_user", _new_user_during_database_outage):
+        return await get_user_info_from_db(
+            result=CustomOpenID(id=subject, email=email, provider="generic", team_ids=[]),
+            prisma_client=prisma_client,
+            user_api_key_cache=MagicMock(
+                async_get_cache=AsyncMock(return_value=cached_user), async_set_cache=AsyncMock()
+            ),
+            proxy_logging_obj=MagicMock(),
+            user_email=email,
+            user_defined_values={
+                "models": [],
+                "user_id": custom_user_id,
+                "user_email": email,
+                "max_budget": None,
+                "user_role": None,
+                "budget_duration": None,
+            },
+            alternate_user_id=subject,
+        )
+
+
+@pytest.mark.parametrize("custom_user_id", [None, "", "   ", 424242])
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_fails_with_500_when_the_database_is_down_for_a_sign_in_with_no_user_id(
+    custom_user_id: object,
+) -> None:
+    prisma_client: Final = MagicMock(**{"db.litellm_usertable.find_unique": AsyncMock(side_effect=_database_outage())})
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _sso_user_info_from_db(custom_user_id, prisma_client)
+
+    assert (exc_info.value.status_code, exc_info.value.detail) == (500, "Failed to retrieve user information from SSO")
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_fails_with_500_when_the_database_drops_while_creating_the_account() -> None:
+    prisma_client: Final = MagicMock(
+        **{
+            "db.litellm_usertable.find_unique": AsyncMock(return_value=None),
+            "db.litellm_usertable.find_first": AsyncMock(return_value=None),
+        }
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _sso_user_info_from_db(None, prisma_client)
+
+    assert (exc_info.value.status_code, exc_info.value.detail) == (500, "Failed to retrieve user information from SSO")
+
+
+@pytest.mark.parametrize("custom_user_id", ["", "   "])
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_resolves_no_account_when_the_database_finds_none_for_a_blank_user_id(
+    custom_user_id: str,
+) -> None:
+    prisma_client: Final = MagicMock(
+        **{
+            "db.litellm_usertable.find_unique": AsyncMock(return_value=None),
+            "db.litellm_usertable.find_first": AsyncMock(return_value=None),
+        }
+    )
+
+    assert await _sso_user_info_from_db(custom_user_id, prisma_client) is None
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_keeps_reading_a_database_outage_as_no_account_for_a_mapped_user_id() -> None:
+    prisma_client: Final = MagicMock(**{"db.litellm_usertable.find_unique": AsyncMock(side_effect=_database_outage())})
+
+    assert await _sso_user_info_from_db("mapped-user-id", prisma_client) is None
+
+
+@pytest.mark.asyncio
+async def test_get_user_info_from_db_keeps_the_matched_account_when_its_update_hits_a_database_outage() -> None:
+    matched: Final = LiteLLM_UserTable(user_id="existing-user", user_email="existing@example.com")
+    prisma_client: Final = MagicMock(**{"db.litellm_usertable.update_many": AsyncMock(side_effect=_database_outage())})
+
+    assert await _sso_user_info_from_db(None, prisma_client, cached_user=matched) is matched
 
 
 @pytest.mark.asyncio
@@ -3175,7 +3549,7 @@ class TestCLIKeyRegenerationFlow:
             teams=[],
             models=[],
         )
-        mock_sso_result = {"user_email": "test@example.com", "user_id": "test-user-123"}
+        mock_sso_result: Final = CustomOpenID(id="test-user-123", email="test@example.com", team_ids=[])
 
         mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
@@ -3345,7 +3719,7 @@ class TestCLIKeyRegenerationFlow:
         )
 
         # Mock SSO result
-        mock_sso_result = {"user_email": "test@example.com", "user_id": "test-user-123"}
+        mock_sso_result: Final = CustomOpenID(id="test-user-123", email="test@example.com", team_ids=[])
 
         # Mock cache
         mock_cache = MagicMock(redis_cache=None)
@@ -7288,7 +7662,7 @@ class TestCliSsoAttributionMetadata:
             teams=[],
             models=[],
         )
-        mock_sso_result = CustomOpenID(
+        mock_sso_result: Final = CustomOpenID(
             id="cli-test-user",
             email="cli-test@example.com",
             display_name="cli-test-user",
@@ -7345,7 +7719,7 @@ class TestCliSsoAttributionMetadata:
             "user_code_verified": False,
             "session_data": None,
         }
-        mock_sso_result = CustomOpenID(
+        mock_sso_result: Final = CustomOpenID(
             id="cli-test-user",
             email="cli-test@example.com",
             display_name="cli-test-user",
@@ -7403,11 +7777,12 @@ class TestCliSsoAttributionMetadata:
             teams=["team1"],
             models=["gpt-4"],
         )
-        mock_sso_result = {
-            "user_email": "test@example.com",
-            "user_id": "test-user-123",
-            "employment_type": "contractor",
-        }
+        mock_sso_result: Final = CustomOpenID(
+            id="test-user-123",
+            email="test@example.com",
+            team_ids=[],
+            extra_fields={"employment_type": "contractor"},
+        )
         mock_cache = MagicMock(redis_cache=None)
         mock_cache.get_cache.return_value = {
             "poll_secret_hash": "poll-secret-hash",
@@ -9402,6 +9777,173 @@ async def test_cli_completion_fails_the_login_when_team_lookup_fails():
 
     assert exc_info.value.status_code == 500
     assert "session_data" not in flow
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parsed_user_id", ["", "   "])
+async def test_cli_completion_rejects_a_blank_provider_identity_before_db(parsed_user_id: str) -> None:
+    flow: Final = {}
+    defaults: Final = _cli_callback_kwargs(flow)
+    kwargs: Final = {
+        **defaults,
+        "parsed_openid_result": {**defaults["parsed_openid_result"], "user_id": parsed_user_id},
+    }
+    get_user_info_mock: Final = AsyncMock(return_value=_cli_callback_user_info([]))
+
+    with (
+        patch("litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db", get_user_info_mock),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _complete_cli_sso_callback_session(**kwargs)
+
+    assert exc_info.value.status_code == 401
+    get_user_info_mock.assert_not_awaited()
+    assert "session_data" not in flow
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom_user_id", [None, "", "   ", 424242])
+async def test_cli_completion_signs_a_custom_sso_user_in_as_the_matched_account(custom_user_id: object) -> None:
+    flow: Final = {}
+    defaults: Final = _cli_callback_kwargs(flow)
+    kwargs: Final = {
+        **defaults,
+        "parsed_openid_result": {**defaults["parsed_openid_result"], "user_id": ""},
+        "user_defined_values": {
+            "models": [],
+            "user_id": custom_user_id,
+            "user_email": "u@example.com",
+            "max_budget": None,
+            "user_role": None,
+            "budget_duration": None,
+        },
+    }
+    get_user_info_mock: Final = AsyncMock(return_value=_cli_callback_user_info([]))
+
+    with (
+        patch("litellm.proxy.proxy_server.user_custom_sso", _custom_sso_returning_user_id(custom_user_id)),
+        patch("litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db", get_user_info_mock),
+        patch("litellm.proxy.management_endpoints.ui_sso.fetch_cli_sso_team_details", AsyncMock(return_value=())),
+        patch("litellm.proxy.management_endpoints.ui_sso.build_cli_sso_attribution_metadata", return_value={}),
+        patch("litellm.proxy.management_endpoints.ui_sso.retain_sso_identity_assertion_for_ema", AsyncMock()),
+    ):
+        response: Final = await _complete_cli_sso_callback_session(**kwargs)
+
+    assert response.status_code == 200
+    get_user_info_mock.assert_awaited_once()
+    assert flow["session_data"]["user_id"] == "cli-user-id"
+
+
+def _cli_custom_sso_kwargs(flow: dict, custom_user_id: object) -> dict:
+    defaults: Final = _cli_callback_kwargs(flow)
+    return {
+        **defaults,
+        "parsed_openid_result": {**defaults["parsed_openid_result"], "user_id": ""},
+        "user_defined_values": {
+            "models": [],
+            "user_id": custom_user_id,
+            "user_email": "u@example.com",
+            "max_budget": None,
+            "user_role": None,
+            "budget_duration": None,
+        },
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("custom_user_id", [None, "", "   ", "\t", 424242])
+async def test_cli_completion_rejects_a_custom_sso_user_id_that_resolves_no_account(custom_user_id: object) -> None:
+    flow: Final = {}
+    kwargs: Final = _cli_custom_sso_kwargs(flow, custom_user_id)
+    get_user_info_mock: Final = AsyncMock(return_value=None)
+
+    with (
+        patch("litellm.proxy.proxy_server.user_custom_sso", _custom_sso_returning_user_id(custom_user_id)),
+        patch("litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db", get_user_info_mock),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _complete_cli_sso_callback_session(**kwargs)
+
+    assert exc_info.value.status_code == 401
+    assert exc_info.value.detail == "SSO login failed: this sign-in did not resolve to a user id"
+    get_user_info_mock.assert_awaited_once()
+    assert "session_data" not in flow
+    kwargs["cli_sso_session_cache"].set_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cli_completion_keeps_the_lookup_failure_for_a_custom_sso_user_id() -> None:
+    flow: Final = {}
+    kwargs: Final = _cli_custom_sso_kwargs(flow, "mapped-user-id")
+
+    with (
+        patch("litellm.proxy.proxy_server.user_custom_sso", _custom_sso_returning_user_id("mapped-user-id")),
+        patch("litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db", AsyncMock(return_value=None)),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _complete_cli_sso_callback_session(**kwargs)
+
+    assert exc_info.value.status_code == 500
+    assert exc_info.value.detail == "Failed to retrieve user information from SSO"
+    assert "session_data" not in flow
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("user_id", ["", "   "])
+async def test_cli_completion_rejects_blank_database_identity_before_session(user_id: str) -> None:
+    flow: Final = {}
+    kwargs: Final = _cli_callback_kwargs(flow)
+    get_user_info_mock: Final = AsyncMock(return_value=LiteLLM_UserTable(user_id=user_id))
+
+    with (
+        patch("litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db", get_user_info_mock),
+        pytest.raises(HTTPException) as exc_info,
+    ):
+        await _complete_cli_sso_callback_session(**kwargs)
+
+    assert exc_info.value.status_code == 401
+    assert "session_data" not in flow
+    kwargs["cli_sso_session_cache"].set_cache.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_cli_sso_callback_completes_for_an_existing_user_when_custom_sso_returns_none() -> None:
+    async def custom_sso(_result: CustomOpenID) -> None:
+        return None
+
+    mock_request: Final = MagicMock(spec=Request)
+    mock_request.scope = {}
+    mock_request.base_url = "http://internal-proxy.local/"
+    mock_cache: Final = MagicMock(redis_cache=None)
+    mock_cache.get_cache.return_value = {
+        "poll_secret_hash": "poll-secret-hash",
+        "user_code_hash": "user-code-hash",
+        "sso_complete": False,
+        "user_code_verified": False,
+        "session_data": None,
+    }
+    get_user_info_mock: Final = AsyncMock(
+        return_value=LiteLLM_UserTable(user_id="provider-id", user_role="internal_user")
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.cli_sso_session_cache", mock_cache),
+        patch("litellm.proxy.proxy_server.user_custom_sso", custom_sso),
+        patch("litellm.proxy.management_endpoints.ui_sso.get_user_info_from_db", get_user_info_mock),
+    ):
+        response: Final = await cli_sso_callback(
+            request=mock_request,
+            key="cli-session-4567890",
+            result=CustomOpenID(id="provider-id", email="u@example.com", team_ids=[]),
+        )
+
+    assert response.status_code == 200
+    assert get_user_info_mock.await_args.kwargs["alternate_user_id"] == "provider-id"
+    assert get_user_info_mock.await_args.kwargs["user_defined_values"] is None
+    stored_flow: Final = mock_cache.set_cache.call_args.kwargs["value"]
+    assert stored_flow["session_data"]["user_id"] == "provider-id"
 
 
 class TestSameOriginReturnPath:

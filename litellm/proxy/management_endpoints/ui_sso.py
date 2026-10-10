@@ -110,6 +110,7 @@ from litellm.proxy.common_utils.html_forms.jwt_display_template import (
 )
 from litellm.proxy.common_utils.html_forms.ui_login import build_ui_login_form
 from litellm.proxy.common_utils.user_api_key_cache import AUTH_OBJECTS_TARGET, UserApiKeyCache
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.sso.id_jag_assertion_capture import (
@@ -1767,6 +1768,7 @@ async def get_existing_user_info_from_db(
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
+    raise_database_outage: bool = False,
 ) -> LiteLLM_UserTable | None:
     try:
         user_info = await get_user_object(
@@ -1780,10 +1782,21 @@ async def get_existing_user_info_from_db(
             sso_user_id=user_id,
         )
     except Exception as e:
+        if raise_database_outage and PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
+            raise
         verbose_proxy_logger.debug("Error getting user object: %s", e)
         user_info = None
 
     return user_info
+
+
+def sso_lookup_user_ids(alternate_user_id: str | None, provider_id: str | None) -> tuple[str, ...]:
+    """The nonblank ids an SSO sign-in can match an existing account by, the alternate id first"""
+    return tuple(
+        user_id
+        for user_id in (alternate_user_id, provider_id)
+        if user_id is not None and not _is_blank_sso_user_id(user_id)
+    )
 
 
 async def get_user_info_from_db(
@@ -1795,18 +1808,15 @@ async def get_user_info_from_db(
     user_defined_values: SSOUserDefinedValues | None,
     alternate_user_id: str | None = None,
 ) -> LiteLLM_UserTable | NewUserResponse | None:
+    mapped_user_id: Final = None if user_defined_values is None else user_defined_values.get("user_id")
+    resolved_by_database_only: Final = user_defined_values is not None and (
+        not isinstance(mapped_user_id, str) or _is_blank_sso_user_id(mapped_user_id)
+    )
     try:
-        potential_user_ids: Final = []
-        if alternate_user_id is not None:
-            potential_user_ids.append(alternate_user_id)
-        if not isinstance(result, dict):
-            _id = getattr(result, "id", None)
-            if _id is not None and isinstance(_id, str):
-                potential_user_ids.append(_id)
-        else:
-            _id = result.get("id", None)
-            if _id is not None and isinstance(_id, str):
-                potential_user_ids.append(_id)
+        provider_id: Final = result.get("id", None) if isinstance(result, dict) else getattr(result, "id", None)
+        potential_user_ids: Final = sso_lookup_user_ids(
+            alternate_user_id, provider_id if isinstance(provider_id, str) else None
+        )
 
         user_email = normalize_email(
             getattr(result, "email", None) if not isinstance(result, dict) else result.get("email", None)
@@ -1821,6 +1831,7 @@ async def get_user_info_from_db(
                 prisma_client=prisma_client,
                 user_api_key_cache=user_api_key_cache,
                 proxy_logging_obj=proxy_logging_obj,
+                raise_database_outage=resolved_by_database_only,
             )
             if user_info is not None:
                 break
@@ -1836,6 +1847,7 @@ async def get_user_info_from_db(
             user_email=user_email,
             user_defined_values=user_defined_values,
             prisma_client=prisma_client,
+            raise_database_outage=resolved_by_database_only,
         )
 
         await SSOAuthenticationHandler.add_user_to_teams_from_sso_response(
@@ -1845,6 +1857,9 @@ async def get_user_info_from_db(
 
         return user_info
     except Exception as e:
+        if resolved_by_database_only and PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e):
+            verbose_proxy_logger.exception("SSO login failed: the database could not resolve the account: %s", e)
+            raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO") from e
         verbose_proxy_logger.exception("[Non-Blocking] Error trying to add sso user to db: %s", e)
 
     return None
@@ -2323,7 +2338,11 @@ async def _complete_cli_sso_callback_session(
 ):
     from fastapi.responses import HTMLResponse
 
+    from litellm.proxy.proxy_server import user_custom_sso
+
     user_id: Final = parsed_openid_result.get("user_id")
+    if user_custom_sso is None:
+        _require_sso_user_id(user_id)
     user_email: Final = parsed_openid_result.get("user_email")
     user_info: Final = await get_user_info_from_db(
         result=result,
@@ -2335,11 +2354,12 @@ async def _complete_cli_sso_callback_session(
         alternate_user_id=user_id,
     )
     if user_info is None:
+        if user_defined_values is not None:
+            _require_sso_user_id(user_defined_values["user_id"])
         raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
-    if not user_info.user_id:
-        raise HTTPException(status_code=500, detail="Failed to retrieve user information from SSO")
+    resolved_user_id: Final = _require_sso_user_id(user_info.user_id)
 
-    await retain_sso_identity_assertion_for_ema(user_id=user_info.user_id, assertion=sso_assertion)
+    await retain_sso_identity_assertion_for_ema(user_id=resolved_user_id, assertion=sso_assertion)
     await warn_if_id_jag_assertion_uncaptured(sso_assertion)
 
     teams: list[str] = []
@@ -2355,19 +2375,19 @@ async def _complete_cli_sso_callback_session(
     from litellm.proxy.management_endpoints.sso.agent_subject_enrollment import enroll_microsoft_subject
 
     await enroll_microsoft_subject(
-        request.scope.get("litellm_microsoft_interactive_subject"), user_info.user_id, prisma_client
+        request.scope.get("litellm_microsoft_interactive_subject"), resolved_user_id, prisma_client
     )
     resolved_teams: Final = _cli_sso_session_teams(team_details)
     attribution_metadata: Final = build_cli_sso_attribution_metadata(result=result)
     if attribution_metadata:
         await _persist_cli_sso_user_metadata(
             prisma_client=prisma_client,
-            user_id=cast(str, user_info.user_id),
+            user_id=resolved_user_id,
             attribution_metadata=attribution_metadata,
         )
 
     flow["session_data"] = {
-        "user_id": cast(str, user_info.user_id),
+        "user_id": resolved_user_id,
         "user_role": user_info.user_role,
         "models": user_info.models if hasattr(user_info, "models") else [],
         "user_email": user_email,
@@ -2382,7 +2402,7 @@ async def _complete_cli_sso_callback_session(
 
     verbose_proxy_logger.info(
         "Stored CLI SSO session for user: %s, teams: %s, num_teams: %s",
-        user_info.user_id,
+        resolved_user_id,
         resolved_teams,
         len(resolved_teams),
     )
@@ -2628,6 +2648,8 @@ async def insert_sso_user(
 
     if user_defined_values is None:
         raise ValueError("user_defined_values is None")
+    if _is_blank_sso_user_id(user_defined_values.get("user_id")):
+        raise ValueError("SSO user id is blank")
 
     # Apply default_internal_user_params
     if litellm.default_internal_user_params:
@@ -2900,6 +2922,18 @@ def _persist_return_to_cookie(response: Response, return_to: str | None, request
             samesite="lax",
             secure=IPAddressUtils.is_request_https(request),
         )
+
+
+def _is_blank_sso_user_id(user_id: object) -> bool:
+    return isinstance(user_id, str) and not user_id.strip()
+
+
+def _require_sso_user_id(user_id: object) -> str:
+    """Return a nonblank SSO user id or reject the login with a 401"""
+    if not isinstance(user_id, str) or _is_blank_sso_user_id(user_id):
+        verbose_proxy_logger.warning("SSO login rejected: the sign-in did not resolve to a user id")
+        raise HTTPException(status_code=401, detail="SSO login failed: this sign-in did not resolve to a user id")
+    return user_id
 
 
 class SSOAuthenticationHandler:
@@ -3285,6 +3319,7 @@ class SSOAuthenticationHandler:
         user_email: str | None,
         user_defined_values: SSOUserDefinedValues | None,
         prisma_client: PrismaClient,
+        raise_database_outage: bool = False,
     ):
         """
         Connects the SSO Users to the User Table in LiteLLM DB
@@ -3314,6 +3349,12 @@ class SSOAuthenticationHandler:
                 )
             return user_info
         except Exception as e:
+            if (
+                user_info is None
+                and raise_database_outage
+                and PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(e)
+            ):
+                raise
             verbose_proxy_logger.exception("Error upserting SSO user into LiteLLM DB: %s", e)
             return user_info
 
@@ -3534,7 +3575,7 @@ class SSOAuthenticationHandler:
             _last_name: Final = getattr(result, "last_name", "") or ""
             user_id = _first_name + _last_name
 
-        if user_email is not None and (user_id is None or len(user_id) == 0):
+        if user_email is not None and (user_id is None or not user_id.strip()):
             user_id = user_email
 
         return ParsedOpenIDResult(
@@ -3614,6 +3655,9 @@ class SSOAuthenticationHandler:
             received_response=received_response,
         )
 
+        if custom_sso_handler is None:
+            _require_sso_user_id(user_id)
+
         user_info = await get_user_info_from_db(
             result=result,
             prisma_client=prisma_client,
@@ -3659,7 +3703,7 @@ class SSOAuthenticationHandler:
             spend=0,
             team_id="litellm-dashboard",
             models=user_defined_values["models"],
-            user_id=user_defined_values["user_id"],
+            user_id=_require_sso_user_id(user_defined_values["user_id"]),
             user_email=user_defined_values["user_email"],
             user_role=user_defined_values["user_role"],
             max_budget=user_defined_values["max_budget"],
