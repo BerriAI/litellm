@@ -7,32 +7,32 @@ qualification_initialize() {
   qualification_output=${LENS_QUALIFICATION_RESULTS_DIR:-}
   if [[ -n "$qualification_output" ]]; then
     mkdir -p "$qualification_output"
-    test ! -e "$qualification_output/host-$chart_selection-$qualification_mode.json"
+    test ! -e "$qualification_output/host-$layout_selection-$qualification_mode.json"
   fi
 }
 
 qualification_record() {
   if [[ "$qualification_mode" == smoke ]]; then return; fi
-  jq -nc --arg chart "${chart:-bootstrap}" --arg case "$1" --arg result "$2" \
-    --arg at "$(date -u +%FT%TZ)" '{chart:$chart,case:$case,result:$result,at:$at}' >> "$qualification_events"
+  jq -nc --arg layout "${layout:-bootstrap}" --arg case "$1" --arg result "$2" \
+    --arg at "$(date -u +%FT%TZ)" '{layout:$layout,case:$case,result:$result,at:$at}' >> "$qualification_events"
 }
 
 qualification_finish() {
   if [[ "$qualification_mode" == smoke || -z "$qualification_output" ]]; then return; fi
   jq -n --slurpfile checks "$qualification_events" --arg mode "$qualification_mode" \
-    --arg selection "$chart_selection" --arg started "$qualification_started" \
+    --arg selection "$layout_selection" --arg started "$qualification_started" \
     --arg finished "$(date -u +%FT%TZ)" --arg source "$(git rev-parse HEAD)" --argjson exit_code "$1" \
-    '{qualification:"isolated candidate host behavior",mode:$mode,chart_selection:$selection,
+    '{qualification:"isolated candidate host behavior",mode:$mode,layout_selection:$selection,
       started_at:$started,finished_at:$finished,harness_source:$source,exit_code:$exit_code,
       passed:($exit_code == 0),paid_provider_qualified:($mode == "release" and $exit_code == 0),
       signed_release_qualified:false,production_deployed:false,checks:$checks}' \
-    > "$qualification_output/host-$chart_selection-$qualification_mode.json"
+    > "$qualification_output/host-$layout_selection-$qualification_mode.json"
 }
 
 qualification_request() {
   local credential=$1 method=$2 route=$3 expected=$4 label=$5 input=${6:-}
   local port=14418
-  if [[ "$chart" == litellm && "$route" == /v1/chat/completions ]]; then port=14420; fi
+  if [[ "$layout" == componentized && "$route" == /v1/chat/completions ]]; then port=14420; fi
   local response="$qa_dir/release-response.json" status
   printf 'Authorization: Bearer %s\nContent-Type: application/json\n' "$credential" > "$qa_dir/release-headers"
   local arguments=(--silent --show-error --max-time 90 --request "$method" \
@@ -50,7 +50,7 @@ qualification_request() {
 
 qualification_forward_control() {
   forward "$control" 14418 "$control_port"
-  if [[ "$qualification_mode" == release && "$chart" == litellm ]]; then
+  if [[ "$qualification_mode" == release && "$layout" == componentized ]]; then
     forward lens-gateway 14420 4000
   fi
 }
@@ -60,10 +60,7 @@ qualification_provider_values() {
   printf '%s' "$LENS_RELEASE_PROVIDER_API_KEY" > "$qa_dir/provider-key"
   kubectl -n "$namespace" create secret generic lens-release-provider \
     --from-file="LENS_RELEASE_PROVIDER_API_KEY=$qa_dir/provider-key" > /dev/null
-  if [[ "$chart" == litellm-helm ]]; then
-    printf 'environmentSecrets: [lens-release-provider]\n' > "$qa_dir/provider.yaml"
-  else
-    cat > "$qa_dir/provider.yaml" <<'YAML'
+  cat > "$qa_dir/provider.yaml" <<'YAML'
 gateway:
   extraEnv:
     - {name: STORE_MODEL_IN_DB, value: "True"}
@@ -75,7 +72,6 @@ backend:
     - name: LENS_RELEASE_PROVIDER_API_KEY
       valueFrom: {secretKeyRef: {name: lens-release-provider, key: LENS_RELEASE_PROVIDER_API_KEY}}
 YAML
-  fi
   install+=(-f "$qa_dir/provider.yaml")
 }
 
@@ -197,8 +193,8 @@ qualification_inference() {
   qualification_total_cost=$(jq -en --arg total "$qualification_total_cost" --arg cost "$cost" '($total|tonumber)+($cost|tonumber)')
   jq -en --arg total "$qualification_total_cost" '($total|tonumber) <= 0.10' > /dev/null
   qualification_record "$phase-billing-matches-usage-and-team" passed
-  jq -nc --arg chart "$chart" --arg phase "$phase" --arg response_id "$response_id" \
-    --arg call_id "$call_id" --argjson cost "$cost" '{chart:$chart,case:($phase+"-paid-receipt"),result:"passed",response_id:$response_id,request_id:$call_id,cost_usd:$cost}' >> "$qualification_events"
+  jq -nc --arg layout "$layout" --arg phase "$phase" --arg response_id "$response_id" \
+    --arg call_id "$call_id" --argjson cost "$cost" '{layout:$layout,case:($phase+"-paid-receipt"),result:"passed",response_id:$response_id,request_id:$call_id,cost_usd:$cost}' >> "$qualification_events"
 }
 
 qualification_outage() {
@@ -226,59 +222,4 @@ qualification_outage() {
   deployment_pods "$control" > "$qa_dir/outage-gateway-after.json"
   cmp "$qa_dir/outage-gateway-before.json" "$qa_dir/outage-gateway-after.json"
   qualification_record lens-outage-without-gateway-restart passed
-}
-
-qualification_bundled_postgres() {
-  local chart=bundled-postgresql release=lens-bootstrap
-  namespace=lens-bundled-postgresql
-  kubectl create namespace "$namespace"
-  master_key="sk-$(openssl rand -hex 24)"
-  printf '%s' "$master_key" > "$qa_dir/bootstrap-master"
-  kubectl -n "$namespace" create secret generic bootstrap-master --from-file="key=$qa_dir/bootstrap-master" > /dev/null
-  cat > "$qa_dir/bootstrap.yaml" <<YAML
-fullnameOverride: $release
-replicaCount: 0
-image: {repository: lens-ci-monolith, tag: v0.0.0-lens-ci, pullPolicy: Never}
-masterkeySecretName: bootstrap-master
-masterkeySecretKey: key
-envVars: {STORE_MODEL_IN_DB: "True"}
-db: {deployStandalone: true, useExisting: false}
-postgresql:
-  auth: {username: litellm, database: litellm, password: "$(openssl rand -hex 24)", postgresPassword: "$(openssl rand -hex 24)"}
-  primary: {persistence: {enabled: false}}
-redis: {enabled: false}
-lensWorker: {enabled: false}
-migrationJob:
-  ttlSecondsAfterFinished: 3600
-  hooks: {helm: {enabled: false}, argocd: {enabled: false}}
-proxy_config:
-  model_list: []
-  general_settings: {master_key: os.environ/PROXY_MASTER_KEY, store_model_in_db: true}
-YAML
-  helm upgrade --install "$release" helm/litellm-helm -n "$namespace" -f "$qa_dir/bootstrap.yaml" \
-    --wait --wait-for-jobs --timeout 8m
-  kubectl -n "$namespace" get deployment "$release" -o json | jq -e '.spec.replicas == 0 and (.status.replicas // 0) == 0' > /dev/null
-  kubectl -n "$namespace" get job "$release-migrations" -o json \
-    | jq -e '.status.succeeded == 1 and .metadata.annotations["helm.sh/hook"] == null and .metadata.annotations["argocd.argoproj.io/hook"] == null' > /dev/null
-  qualification_record bundled-postgres-migrated-before-gateway-start passed
-  kubectl -n "$namespace" scale deployment/"$release" --replicas=1
-  kubectl -n "$namespace" rollout status deployment/"$release" --timeout=180s
-  forward "$release" 14418 4000
-  jq -n '{key_alias:"Bundled PostgreSQL persisted key"}' > "$qa_dir/request.json"
-  qualification_request "$master_key" POST /key/generate 200 bundled-postgres-key-create "$qa_dir/request.json"
-  local generated
-  generated=$(jq -er .key "$qa_dir/release-response.json")
-  qualification_request "$generated" GET /v1/models 200 bundled-postgres-key-auth
-  kubectl -n "$namespace" rollout restart deployment/"$release"
-  kubectl -n "$namespace" rollout status deployment/"$release" --timeout=180s
-  stop_forwards
-  forward "$release" 14418 4000
-  qualification_request "$generated" GET /v1/models 200 bundled-postgres-key-survives-gateway-restart
-  jq -n --arg key "$generated" '{keys:[$key]}' > "$qa_dir/request.json"
-  qualification_request "$master_key" POST /key/delete 200 bundled-postgres-key-delete "$qa_dir/request.json"
-  qualification_request "$generated" GET /v1/models 401 bundled-postgres-key-revoked
-  qualification_record bundled-postgres-ordinary-job-two-phase-bootstrap passed
-  stop_forwards
-  kubectl delete namespace "$namespace" --wait=true
-  namespace=
 }

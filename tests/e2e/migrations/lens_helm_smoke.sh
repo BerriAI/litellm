@@ -2,9 +2,9 @@
 set -euo pipefail
 
 qualification_mode=${LENS_QUALIFICATION_MODE:-smoke}
-chart_selection=${LENS_HELM_CHART:-all}
+layout_selection=${LENS_HELM_LAYOUT:-all}
 case "$qualification_mode" in smoke|boundaries|release) ;; *) printf 'LENS_QUALIFICATION_MODE must be smoke, boundaries or release\n' >&2; exit 2 ;; esac
-case "$chart_selection" in all|litellm-helm|litellm) ;; *) printf 'LENS_HELM_CHART must be all, litellm-helm or litellm\n' >&2; exit 2 ;; esac
+case "$layout_selection" in all|monolith|componentized) ;; *) printf 'LENS_HELM_LAYOUT must be all, monolith or componentized\n' >&2; exit 2 ;; esac
 if [[ "$qualification_mode" == release ]]; then
   : "${LENS_RELEASE_PROVIDER_API_KEY:?A separately authorized provider credential is required}"
   : "${LENS_RELEASE_PROVIDER_API_BASE:?Set the authorized provider API base}"
@@ -32,25 +32,17 @@ cleanup() {
 trap cleanup EXIT
 umask 077
 export KUBECONFIG="$qa_dir/kubeconfig"
-for component in gateway backend monolith; do
-  baseline_id=$(docker image inspect "lens-ci-$component:v0.0.0-lens-ci-baseline" --format '{{.Id}}')
-  current_id=$(docker image inspect "lens-ci-$component:v0.0.0-lens-ci" --format '{{.Id}}')
-  test "$baseline_id" != "$current_id"
-done
+test "$(docker image inspect lens-ci-litellm:v0.0.0-lens-ci-baseline --format '{{.Id}}')" != \
+  "$(docker image inspect lens-ci-litellm:v0.0.0-lens-ci --format '{{.Id}}')"
 cluster_owned=true
 kind create cluster --name "$cluster" \
   --image kindest/node:v1.32.2@sha256:f226345927d7e348497136874b6d207e0b32cc52154ad8323129352923a3142f \
   --wait 120s
-for component in gateway backend ui migrations monolith; do
-  kind load docker-image --name "$cluster" "lens-ci-$component:v0.0.0-lens-ci"
-done
-for component in gateway backend monolith; do
-  kind load docker-image --name "$cluster" "lens-ci-$component:v0.0.0-lens-ci-baseline"
-done
+kind load docker-image --name "$cluster" lens-ci-litellm:v0.0.0-lens-ci lens-ci-litellm:v0.0.0-lens-ci-baseline
 test "$(docker image inspect lens-ci-worker:baseline --format '{{.Id}}')" != \
   "$(docker image inspect lens-ci-worker:upgrade --format '{{.Id}}')"
 kind load docker-image --name "$cluster" lens-ci-worker:baseline lens-ci-worker:upgrade
-test -f helm/litellm-helm/charts/lens-0.1.0-dev.0.tgz
+test -f helm/litellm/charts/lens-0.1.0-dev.0.tgz
 
 api() {
   curl --fail-with-body --silent --show-error --max-time 20 \
@@ -153,7 +145,7 @@ gateway_pods() {
   local component=$1 tag=$2 deployment="lens-$1"
   if [[ "$component" == monolith ]]; then deployment=lens; fi
   deployment_pods "$deployment" \
-    | jq -S -e --arg expected "lens-ci-$component:$tag" '
+    | jq -S -e --arg expected "lens-ci-litellm:$tag" '
       if all(.[]; any(.images[]; .image == $expected)) then
         [.[] as $pod | $pod.images[] | select(.image == $expected) | . as $requested
           | $pod.containers[] | select(.name == $requested.name)
@@ -173,12 +165,9 @@ migration_job() {
 
 source tests/e2e/migrations/lens_release_qualification.sh
 qualification_initialize
-if [[ "$qualification_mode" != smoke && "$chart_selection" != litellm ]]; then
-  qualification_bundled_postgres
-fi
-for chart in litellm-helm litellm; do
-  if [[ "$chart_selection" != all && "$chart_selection" != "$chart" ]]; then continue; fi
-  namespace="lens-$chart"
+for layout in monolith componentized; do
+  if [[ "$layout_selection" != all && "$layout_selection" != "$layout" ]]; then continue; fi
+  namespace="lens-$layout"
   kubectl create namespace "$namespace"
   master_key="sk-$(openssl rand -hex 24)"
   kubectl -n "$namespace" create secret generic lens-secrets \
@@ -276,41 +265,15 @@ lensWorker:
   retentionDays: 45
   publicUrl: http://127.0.0.1:14419
 YAML
-  if [[ "$chart" == litellm-helm ]]; then
-    control=lens
-    control_port=4000
-    cat > "$qa_dir/chart.yaml" <<'YAML'
-image: {repository: lens-ci-monolith, tag: v0.0.0-lens-ci-baseline, pullPolicy: Never}
-masterkeySecretName: lens-secrets
-masterkeySecretKey: master-key
-envVars: {STORE_MODEL_IN_DB: "True"}
-db:
-  deployStandalone: false
-  useExisting: true
-  endpoint: postgres
-  secret: {name: lens-secrets, usernameKey: username, passwordKey: password}
-redis: {enabled: false}
-proxy_config:
-  model_list: []
-  general_settings:
-    master_key: os.environ/PROXY_MASTER_KEY
-    store_model_in_db: true
-    tracing: {enabled: true, store: {type: lens}}
-YAML
-  else
-    control=lens-backend
-    control_port=4001
-    cat > "$qa_dir/chart.yaml" <<'YAML'
+  cat > "$qa_dir/chart.yaml" <<'YAML'
+image: {repository: lens-ci-litellm, tag: v0.0.0-lens-ci-baseline, pullPolicy: Never}
 masterKey: {secretName: lens-secrets, secretKey: master-key}
 database:
   writer:
     host: postgres
     dbname: litellm
     passwordSecret: {name: lens-secrets, usernameKey: username, passwordKey: password}
-migrationJob:
-  image: {repository: lens-ci-migrations, tag: v0.0.0-lens-ci, pullPolicy: Never}
 gateway:
-  image: {repository: lens-ci-gateway, tag: v0.0.0-lens-ci-baseline, pullPolicy: Never}
   numWorkers: 1
   extraEnv: [{name: STORE_MODEL_IN_DB, value: "True"}]
   hpa: {enabled: false}
@@ -324,15 +287,20 @@ gateway:
         tracing: {enabled: true, store: {type: lens}}
 backend:
   extraEnv: [{name: STORE_MODEL_IN_DB, value: "True"}]
-  image: {repository: lens-ci-backend, tag: v0.0.0-lens-ci-baseline, pullPolicy: Never}
   hpa: {enabled: false}
   resources: {requests: {cpu: 100m, memory: 512Mi}, limits: {memory: 2Gi}}
 ui:
-  image: {repository: lens-ci-ui, tag: v0.0.0-lens-ci, pullPolicy: Never}
   hpa: {enabled: false}
 YAML
+  if [[ "$layout" == monolith ]]; then
+    control=lens
+    control_port=4000
+    printf 'monolith: {enabled: true}\n' >> "$qa_dir/chart.yaml"
+  else
+    control=lens-backend
+    control_port=4001
   fi
-  install=(helm upgrade --install lens "helm/$chart" -n "$namespace" \
+  install=(helm upgrade --install lens helm/litellm -n "$namespace" \
     -f "$qa_dir/common.yaml" -f "$qa_dir/chart.yaml" --wait --wait-for-jobs --timeout 8m)
   qualification_provider_values
   "${install[@]}" || diagnose
@@ -380,15 +348,10 @@ YAML
     | jq -S .spec.template > "$qa_dir/lens-before.json"
   deployment_pods lens-lens-worker > "$qa_dir/lens-pods-before.json"
   gateway_components=(monolith)
+  if [[ "$layout" == componentized ]]; then gateway_components=(gateway backend ui); fi
   gateway_upgrade=(--set image.tag=v0.0.0-lens-ci)
-  migration_baseline=lens-ci-monolith:v0.0.0-lens-ci-baseline
-  migration_current=lens-ci-monolith:v0.0.0-lens-ci
-  if [[ "$chart" == litellm ]]; then
-    gateway_components=(gateway backend)
-    gateway_upgrade=(--set gateway.image.tag=v0.0.0-lens-ci --set backend.image.tag=v0.0.0-lens-ci)
-    migration_baseline=lens-ci-migrations:v0.0.0-lens-ci
-    migration_current=$migration_baseline
-  fi
+  migration_baseline=lens-ci-litellm:v0.0.0-lens-ci-baseline
+  migration_current=lens-ci-litellm:v0.0.0-lens-ci
   migration_before=$(migration_job "$migration_baseline")
   for component in "${gateway_components[@]}"; do
     gateway_pods "$component" v0.0.0-lens-ci-baseline > "$qa_dir/$component-before.json"
@@ -426,9 +389,9 @@ YAML
   qualification_forward_control
   saved_trace
   qualification_outage
-  printf '%s: fresh install, ingestion, Lens upgrade and rollback, independent gateway image upgrade, and restart passed\n' "$chart"
+  printf '%s: fresh install, ingestion, Lens upgrade and rollback, independent gateway image upgrade, and restart passed\n' "$layout"
   stop_forwards
-  helm upgrade --install external-lens helm/litellm-helm/charts/lens-0.1.0-dev.0.tgz \
+  helm upgrade --install external-lens helm/litellm/charts/lens-0.1.0-dev.0.tgz \
     -n "$namespace" --wait --timeout 5m \
     --set fullnameOverride=external-lens \
     --set image.repository=lens-ci-worker --set image.tag=upgrade --set image.pullPolicy=Never \
@@ -457,11 +420,8 @@ YAML
   kubectl -n "$namespace" get deployment external-lens -o json \
     | jq -S '{uid:.metadata.uid,template:.spec.template}' > "$qa_dir/external-before.json"
   stop_forwards
-  tracing_setting=proxy_config.general_settings.tracing.enabled
-  if [[ "$chart" == litellm ]]; then
-    tracing_setting=gateway.config.proxy_config.general_settings.tracing.enabled
-  fi
-  "${install[@]}" --set lensWorker.mode=disabled --set "$tracing_setting=false" || diagnose
+  "${install[@]}" --set lensWorker.mode=disabled \
+    --set gateway.config.proxy_config.general_settings.tracing.enabled=false || diagnose
   test -z "$(kubectl -n "$namespace" get deployment lens-lens-worker --ignore-not-found -o name)"
   qualification_forward_control
   api /lens/service | jq -e '.configured == false and .connected == false'
@@ -470,7 +430,7 @@ YAML
   kubectl -n "$namespace" get deployment external-lens -o json \
     | jq -S '{uid:.metadata.uid,template:.spec.template}' > "$qa_dir/external-after.json"
   cmp "$qa_dir/external-before.json" "$qa_dir/external-after.json"
-  printf '%s: external Lens trace reads/writes and disabled gateway behavior passed\n' "$chart"
+  printf '%s: external Lens trace reads/writes and disabled gateway behavior passed\n' "$layout"
   qualification_record chart-lifecycle passed
   stop_forwards
   kubectl delete namespace "$namespace" --wait=true

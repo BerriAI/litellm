@@ -1,4 +1,4 @@
-{{- if and .Values.ui.enabled .Values.ui.hpa.enabled }}
+{{- if and (include "litellm.ui.render" .) .Values.ui.hpa.enabled }}
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
 metadata:

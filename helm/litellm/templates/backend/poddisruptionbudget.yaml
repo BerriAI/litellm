@@ -1,5 +1,6 @@
 {{- include "litellm.pdb" (dict
   "root" $
+  "enabled" (include "litellm.backend.render" .)
   "component" .Values.backend
   "componentName" "backend"
   "fullname" (include "litellm.backend.fullname" .)
