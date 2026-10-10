@@ -98,6 +98,7 @@ class RagRig:
     outage: threading.Event
     tenants: Tenants
     signing_key: rsa.RSAPrivateKey
+    scenario: Scenario
 
     def jwt(self, subject: str, team_id: str) -> str:
         issued_at: Final = int(time.time())
@@ -466,15 +467,18 @@ def rag_rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[RagRig]:
         wire_server(jwks_reply) as jwks,
     ):
         tenants: Final = _tenants(admin_gateway, scenario, upstream.url)
-        with owned_proxy(
-            admin_gateway,
-            directory,
-            {**_provider_environment(upstream.url), "JWT_PUBLIC_KEY_URL": jwks.url},
-            config=_proxy_config(directory),
-            remove_environment=("GOOGLE_API_KEY",),
-            workers=2,
-        ) as gateway:
-            yield RagRig(gateway, upstream, outage, tenants, signing_key)
+        with (
+            owned_proxy(
+                admin_gateway,
+                directory,
+                {**_provider_environment(upstream.url), "JWT_PUBLIC_KEY_URL": jwks.url},
+                config=_proxy_config(directory),
+                remove_environment=("GOOGLE_API_KEY",),
+                workers=2,
+            ) as gateway,
+            gateway.scenario() as owned_scenario,
+        ):
+            yield RagRig(gateway, upstream, outage, tenants, signing_key, owned_scenario)
 
 
 def _ingest_request(name: str, vector_store: Mapping[str, JsonValue]) -> Mapping[str, str]:
@@ -533,11 +537,13 @@ def _chat_signature(prefix: str, api_key: str) -> Signature:
     return (prefix, "POST", "/v1/chat/completions", f"Bearer {api_key}")
 
 
-def _completed_store(response: httpx.Response) -> str:
+def _completed_store(rig: RagRig, response: httpx.Response) -> str:
     assert response.status_code == 200, response.text
     body: Final = object_value(response.json())
     assert body["status"] == "completed", response.text
-    return string_value(body["vector_store_id"])
+    store_id: Final = string_value(body["vector_store_id"])
+    rig.scenario.cleanups.callback(rig.gateway.post, "/vector_store/delete", {"vector_store_id": store_id})
+    return store_id
 
 
 def _store_rows(store_id: str) -> list[dict[str, JsonValue]]:
@@ -557,7 +563,7 @@ def _closed_url() -> str:
 
 def test_viewer_ingest_and_team_and_jwt_query_use_team_provider_credentials(rag_rig: RagRig) -> None:
     tenants: Final = rag_rig.tenants
-    store_id: Final = _completed_store(_ingest(rag_rig.gateway, tenants.viewer_key))
+    store_id: Final = _completed_store(rag_rig, _ingest(rag_rig.gateway, tenants.viewer_key))
     assert rag_rig.signatures() == _ingest_signatures("team", TEAM_API_KEY, store_id)
 
     team_query: Final = _query(
@@ -613,7 +619,9 @@ def test_unreachable_credential_api_base_fails_ingest_without_saving_a_store(rag
 
 
 def test_rag_alias_ingest_and_query_use_the_team_wildcard_deployment(rag_rig: RagRig) -> None:
-    store_id: Final = _completed_store(_ingest(rag_rig.gateway, rag_rig.tenants.team_w_key, path="/rag/ingest"))
+    store_id: Final = _completed_store(
+        rag_rig, _ingest(rag_rig.gateway, rag_rig.tenants.team_w_key, path="/rag/ingest")
+    )
     assert rag_rig.signatures() == _ingest_signatures("wildcard", WILDCARD_API_KEY, store_id)
     rows: Final = _store_rows(store_id)
     assert len(rows) == 1, rows
@@ -637,7 +645,7 @@ def test_rag_alias_ingest_and_query_use_the_team_wildcard_deployment(rag_rig: Ra
 def test_jwt_team_member_ingest_uses_team_provider_credentials(rag_rig: RagRig) -> None:
     token: Final = rag_rig.jwt(rag_rig.tenants.jwt_member, rag_rig.tenants.team_a)
 
-    store_id: Final = _completed_store(_ingest(rag_rig.gateway, token))
+    store_id: Final = _completed_store(rag_rig, _ingest(rag_rig.gateway, token))
 
     assert rag_rig.signatures() == _ingest_signatures("team", TEAM_API_KEY, store_id)
     rows: Final = _store_rows(store_id)
@@ -646,11 +654,12 @@ def test_jwt_team_member_ingest_uses_team_provider_credentials(rag_rig: RagRig) 
 
 def test_caller_credential_name_wins_over_the_team_deployment(rag_rig: RagRig) -> None:
     store_id: Final = _completed_store(
+        rag_rig,
         _ingest(
             rag_rig.gateway,
             rag_rig.tenants.team_a_key,
             {**OPENAI, "litellm_credential_name": rag_rig.tenants.credential_name},
-        )
+        ),
     )
 
     assert rag_rig.signatures() == _ingest_signatures("credential", CREDENTIAL_API_KEY, store_id)
@@ -676,7 +685,7 @@ def test_blank_caller_credential_name_falls_back_to_the_team_deployment(rag_rig:
     tenants: Final = rag_rig.tenants
 
     store_id: Final = _completed_store(
-        _ingest(rag_rig.gateway, tenants.team_a_key, {**OPENAI, "litellm_credential_name": blank})
+        rag_rig, _ingest(rag_rig.gateway, tenants.team_a_key, {**OPENAI, "litellm_credential_name": blank})
     )
     assert rag_rig.signatures() == _ingest_signatures("team", TEAM_API_KEY, store_id)
 
@@ -696,7 +705,7 @@ def test_ingest_without_a_usable_team_deployment_uses_the_environment_credential
 ) -> None:
     key: Final = getattr(rag_rig.tenants, caller)
 
-    store_id: Final = _completed_store(_ingest(rag_rig.gateway, key))
+    store_id: Final = _completed_store(rag_rig, _ingest(rag_rig.gateway, key))
 
     assert rag_rig.signatures() == _ingest_signatures("environment", ENVIRONMENT_API_KEY, store_id)
 
@@ -719,7 +728,7 @@ def test_files_upload_keeps_the_accessible_deployment_fallback(
 
 def test_gemini_ingest_never_receives_the_team_openai_key(rag_rig: RagRig) -> None:
     store_id: Final = _completed_store(
-        _ingest(rag_rig.gateway, rag_rig.tenants.team_a_key, {"custom_llm_provider": "gemini"})
+        rag_rig, _ingest(rag_rig.gateway, rag_rig.tenants.team_a_key, {"custom_llm_provider": "gemini"})
     )
 
     store_name: Final = store_id.removeprefix("fileSearchStores/")
@@ -874,7 +883,7 @@ def test_azure_query_never_receives_the_team_openai_key(rag_rig: RagRig) -> None
 
 def test_another_team_cannot_query_a_team_store(rag_rig: RagRig) -> None:
     tenants: Final = rag_rig.tenants
-    store_id: Final = _completed_store(_ingest(rag_rig.gateway, tenants.team_a_key))
+    store_id: Final = _completed_store(rag_rig, _ingest(rag_rig.gateway, tenants.team_a_key))
     assert rag_rig.signatures() == _ingest_signatures("team", TEAM_API_KEY, store_id)
 
     response: Final = _query(
@@ -1021,7 +1030,7 @@ async def test_ingest_burst_during_a_provider_outage_fails_each_request_then_rec
 
     recovered: Final = await _ingest_burst(rag_rig, _burst_names())
 
-    store_ids: Final = tuple(_completed_store(response) for response in recovered)
+    store_ids: Final = tuple(_completed_store(rag_rig, response) for response in recovered)
     assert len(frozenset(store_ids)) == 10, store_ids
     assert sorted(rag_rig.signatures()) == _all_ingest_signatures(store_ids)
     assert [[row["team_id"] for row in _store_rows(store_id)] for store_id in store_ids] == [
