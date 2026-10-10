@@ -5,7 +5,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 from collections.abc import AsyncIterable, Coroutine, Iterable
 from typing import TYPE_CHECKING, Any, Final, Union
 
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.types.llms.openai import ResponsesAPIResponse
 
@@ -23,6 +23,7 @@ class ResponsesToCompletionBridgeHandlerInputKwargs(TypedDict):
     logging_obj: "LiteLLMLoggingObj"
     custom_llm_provider: str
     encoding: object
+    client: ReadOnly[object]
 
 
 def _restore_routing_prefix(model: str, custom_llm_provider: str) -> str:
@@ -152,6 +153,7 @@ class ResponsesToCompletionBridgeHandler:
             logging_obj=logging_obj,
             custom_llm_provider=custom_llm_provider,
             encoding=typed_kwargs.get("encoding"),
+            client=typed_kwargs.get("client"),
         )
 
     def completion(
@@ -186,7 +188,7 @@ class ResponsesToCompletionBridgeHandler:
             litellm_params=litellm_params,
             headers=headers,
             litellm_logging_obj=logging_obj,
-            client=kwargs.get("client"),
+            client=validated_kwargs["client"],
         )
 
         # Set on request_data rather than passed as explicit kwargs: the spread of
@@ -282,6 +284,7 @@ class ResponsesToCompletionBridgeHandler:
                 litellm_params=litellm_params,
                 headers=headers,
                 litellm_logging_obj=logging_obj,
+                client=validated_kwargs["client"],
             )
         except Exception as e:
             raise e

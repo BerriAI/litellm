@@ -5723,7 +5723,11 @@ def completion(
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
         }
-        optional_params = get_optional_params(**optional_param_args, **non_default_params)
+        optional_params = get_optional_params(
+            **optional_param_args,
+            **non_default_params,
+            responses_api_bridge_allowed=not skip_responses_api_bridge,
+        )
         processed_non_default_params: Final = pre_process_non_default_params(
             model=model,
             passed_params=optional_param_args,
@@ -5878,11 +5882,32 @@ def completion(
                 api_base=api_base,
             )
 
+        request_params: Final = MappingProxyType(
+            _OPTIONAL_PARAMS_ADAPTER.validate_python(
+                {
+                    **optional_param_args,
+                    **non_default_params,
+                    "responses_api_bridge_allowed": not skip_responses_api_bridge,
+                }
+            )
+        )
+        bedrock_bridges_to_responses: Final = (
+            custom_llm_provider == "bedrock"
+            and bedrock_route_for_request(
+                model,
+                request_params,
+                _ADDITIONAL_DROP_PARAMS_ADAPTER.validate_python(kwargs.get("additional_drop_params") or ()),
+            )
+            == "responses"
+        )
+
         # Use base_model (the true underlying model) for Azure model-type
         # detection when the deployment name differs from the model name.
         _azure_detection_model: Final = base_model or model
 
-        if responses_api_model_info.get("mode") == "responses" and not skip_responses_api_bridge:
+        if (
+            responses_api_model_info.get("mode") == "responses" or bedrock_bridges_to_responses
+        ) and not skip_responses_api_bridge:
             from litellm.completion_extras import responses_api_bridge
 
             optional_params, rs_val = strip_reasoning_summary_aliases_from_optional_params(optional_params)
@@ -5950,9 +5975,7 @@ def completion(
             optional_params=optional_params,
             organization=organization,
             provider_config=provider_config,
-            request_params=MappingProxyType(
-                _OPTIONAL_PARAMS_ADAPTER.validate_python({**optional_param_args, **non_default_params})
-            ),
+            request_params=request_params,
             shared_session=shared_session,
             stream=stream,
             temperature=temperature,
