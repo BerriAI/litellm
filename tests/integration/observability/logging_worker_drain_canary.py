@@ -19,5 +19,5 @@ async def test_2_never_inherits_the_pending_event() -> None:
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
     queued_on, ran_on = RUNS.get_nowait()
     assert RUNS.empty()
-    assert ran_on is queued_on
-    assert ran_on is not asyncio.get_running_loop()
+    assert queued_on.is_closed()
+    assert ran_on is asyncio.get_running_loop()

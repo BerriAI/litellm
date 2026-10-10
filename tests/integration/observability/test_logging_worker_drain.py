@@ -6,6 +6,8 @@ from tests.test_litellm_rust.support.child_interpreter import run_child_interpre
 
 CANARY_MODULE: Final = Path(__file__).with_name("logging_worker_drain_canary.py")
 CANARY_RUN: Final = (
+    "import sys\n"
+    f"sys.path.insert(0, {str(Path(__file__).parents[2])!r})\n"
     "import pytest\n"
     f"raise SystemExit(pytest.main([{str(CANARY_MODULE)!r}, '-p', 'no:xdist', '-p', 'no:cacheprovider', '-q']))\n"
 )

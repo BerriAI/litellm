@@ -109,8 +109,8 @@ async def test_completion_with_vector_store_ids_prepends_the_kb_context_block(re
 
 @pytest.mark.asyncio
 async def test_streaming_completion_carries_the_search_results_on_a_chunk_delta(respx_mock: respx.MockRouter) -> None:
-    _kb_route(respx_mock)
-    respx_mock.post(_ANTHROPIC_URL).mock(
+    kb: Final = _kb_route(respx_mock)
+    anthropic: Final = respx_mock.post(_ANTHROPIC_URL).mock(
         return_value=httpx.Response(200, text=_ANTHROPIC_STREAM, headers={"content-type": "text/event-stream"})
     )
 
@@ -128,6 +128,8 @@ async def test_streaming_completion_carries_the_search_results_on_a_chunk_delta(
         if choice.delta.provider_specific_fields and "search_results" in choice.delta.provider_specific_fields
     )
 
+    assert kb.call_count == 1
+    assert anthropic.call_count == 1
     assert len(chunks) > 0
     assert len(annotated) >= 1
     assert annotated[0][0]["object"] == "vector_store.search_results.page"
@@ -137,7 +139,9 @@ async def test_streaming_completion_carries_the_search_results_on_a_chunk_delta(
 @pytest.mark.asyncio
 async def test_file_search_filters_reach_the_kb_as_a_bedrock_equals_filter(respx_mock: respx.MockRouter) -> None:
     kb: Final = _kb_route(respx_mock)
-    respx_mock.post(_ANTHROPIC_URL).mock(return_value=httpx.Response(200, json=_ANTHROPIC_MESSAGE))
+    anthropic: Final = respx_mock.post(_ANTHROPIC_URL).mock(
+        return_value=httpx.Response(200, json=_ANTHROPIC_MESSAGE)
+    )
 
     response: Final = await litellm.acompletion(
         model="anthropic/claude-haiku-4-5-20251001",
@@ -156,6 +160,15 @@ async def test_file_search_filters_reach_the_kb_as_a_bedrock_equals_filter(respx
         _sent_body(kb)["retrievalConfiguration"]
     )
     assert retrieval["vectorSearchConfiguration"]["filter"] == {"equals": {"key": "user_id", "value": "fake-user-id"}}
+    assert _sent_body(anthropic)["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": f"{_PREFIX}{_KB_TEXT}\n\n"},
+                {"type": "text", "text": "what is litellm?"},
+            ],
+        }
+    ]
     assert response.choices[0].message.content == "LiteLLM simplifies LLM access."
 
 
