@@ -1,4 +1,8 @@
-from typing import Final, Literal, cast
+from typing import (
+    Final,
+    Literal,
+    cast,  # noqa: TID251  # preserve the runtime-compatible auth header union
+)
 
 import httpx
 

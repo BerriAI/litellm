@@ -19,7 +19,14 @@ import datetime
 import inspect
 import time
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Generator, Mapping
-from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    Optional,
+    TypeVar,
+    cast,  # noqa: TID251  # typed boundary for dynamic cache request kwargs
+)
 
 from pydantic import ConfigDict, SkipValidation, TypeAdapter, ValidationError
 
@@ -104,6 +111,11 @@ def _drop_logging_obj_from_kwargs(request_kwargs: dict[str, object]) -> dict[str
     if "litellm_logging_obj" not in request_kwargs:
         return request_kwargs
     return {k: v for k, v in request_kwargs.items() if k != "litellm_logging_obj"}
+
+
+def _set_cache_key_if_available(request_kwargs: dict[str, object], cache_key: str | None) -> None:
+    if cache_key is not None:
+        request_kwargs["cache_key"] = cache_key
 
 
 def _is_response_cache_excluded(model: str | None, kwargs: Mapping[str, object]) -> bool:
@@ -464,8 +476,7 @@ class LLMCachingHandler:
                 new_kwargs.pop("metadata", None)
             if new_kwargs.get("stream") is True and "cache_key" not in new_kwargs:
                 derived_cache_key = litellm.cache.get_cache_key(**cast(dict[str, object], new_kwargs))
-                if derived_cache_key is not None:
-                    new_kwargs["cache_key"] = derived_cache_key
+                _set_cache_key_if_available(new_kwargs, derived_cache_key)
             self.request_kwargs = _drop_logging_obj_from_kwargs(new_kwargs)
             print_verbose("Checking Sync Cache")
             with response_cache_phase("get"):
@@ -879,8 +890,7 @@ class LLMCachingHandler:
             return None
         if new_kwargs.get("stream") is True and "cache_key" not in new_kwargs:
             derived_cache_key = litellm.cache.get_cache_key(**new_kwargs)
-            if derived_cache_key is not None:
-                new_kwargs["cache_key"] = derived_cache_key
+            _set_cache_key_if_available(new_kwargs, derived_cache_key)
         cached_result: object | None = None
         if call_type == CallTypes.aembedding.value:
             new_kwargs["input"] = self.handle_kwargs_input_list_or_str(new_kwargs)
