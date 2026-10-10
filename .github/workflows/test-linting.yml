@@ -156,6 +156,14 @@ jobs:
         run: |
           uv run --no-sync python scripts/test_quality_gate.py --base "$GATE_BASE_SHA"
 
+      - name: Check OpenAPI docs (POST routes without a request schema, description or 200 schema, delta vs merge-base counts)
+        if: steps.changes.outputs.decision != 'skip'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          uv sync --frozen --group proxy-dev --group e2e-dev --extra proxy
+          uv run --no-sync python scripts/openapi_docs_gate.py --base "$GATE_BASE_SHA"
+
       - name: Print OpenAI version
         if: steps.changes.outputs.decision != 'skip'
         run: |
