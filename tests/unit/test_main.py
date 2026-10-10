@@ -5320,6 +5320,11 @@ def test_completion_anthropic_hanging():
         messages, model="claude-3-sonnet-20240229", llm_provider="anthropic"
     )
 
+    assert len(converted_messages) == 3
+    for i, msg in enumerate(converted_messages):
+        if i < len(converted_messages) - 1:
+            assert msg["role"] != converted_messages[i + 1]["role"]
+
 
 @respx.mock
 def test_completion_openai_returns_the_scripted_assistant_message():
@@ -5402,6 +5407,7 @@ def test_completion_openai_response_headers(monkeypatch: pytest.MonkeyPatch, ope
 
     assert len(route.calls) == 1
     assert response._response_headers["x-ratelimit-remaining-tokens"] == "99"
+    assert response._hidden_params["additional_headers"]["x-ratelimit-remaining-requests"] == "9"
     assert response._hidden_params["additional_headers"]["llm_provider-x-ratelimit-remaining-requests"] == "9"
     stream: Final = litellm.completion(
         model="gpt-6-sol",
@@ -5411,7 +5417,23 @@ def test_completion_openai_response_headers(monkeypatch: pytest.MonkeyPatch, ope
     chunks: Final = list(stream)
     assert len(route.calls) == 2
     assert stream._response_headers["x-ratelimit-remaining-tokens"] == "99"
+    assert stream._hidden_params["additional_headers"]["x-ratelimit-remaining-requests"] == "9"
     assert chunks[0].choices[0].delta.content == "Hello!"
+
+    respx.post("https://api.openai.com/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+            headers={"x-ratelimit-remaining-tokens": "98"},
+        )
+    )
+    embedding: Final = litellm.embedding(model="text-embedding-3-small", input="hello")
+    assert embedding._response_headers["x-ratelimit-remaining-tokens"] == "98"
 
 
 @pytest.mark.asyncio
@@ -5419,11 +5441,39 @@ def test_completion_openai_response_headers(monkeypatch: pytest.MonkeyPatch, ope
 async def test_async_completion_openai_response_headers(monkeypatch: pytest.MonkeyPatch, openai_api_response):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
+    stream_body: Final = (
+        "data: "
+        + json.dumps(
+            {
+                "id": "chatcmpl-test",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "gpt-6-sol",
+                "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": "stop"}],
+            }
+        )
+        + "\n\ndata: [DONE]\n\n"
+    )
     route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=(
+            httpx.Response(200, json=openai_api_response, headers={"x-ratelimit-remaining-tokens": "99"}),
+            httpx.Response(
+                200,
+                text=stream_body,
+                headers={"x-ratelimit-remaining-tokens": "97", "content-type": "text/event-stream"},
+            ),
+        )
+    )
+    respx.post("https://api.openai.com/v1/embeddings").mock(
         return_value=httpx.Response(
             200,
-            json=openai_api_response,
-            headers={"x-ratelimit-remaining-tokens": "99"},
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+            headers={"x-ratelimit-remaining-tokens": "98"},
         )
     )
     monkeypatch.setattr(litellm, "return_response_headers", True)
@@ -5432,9 +5482,47 @@ async def test_async_completion_openai_response_headers(monkeypatch: pytest.Monk
         model="gpt-6-sol",
         messages=[{"role": "user", "content": "hello"}],
     )
+    stream: Final = await litellm.acompletion(
+        model="gpt-6-sol",
+        messages=[{"role": "user", "content": "hello"}],
+        stream=True,
+    )
+    stream_text: Final = "".join([chunk.choices[0].delta.content or "" async for chunk in stream])
+    embedding: Final = await litellm.aembedding(model="text-embedding-3-small", input="hello")
 
-    assert len(route.calls) == 1
+    assert len(route.calls) == 2
     assert response._response_headers["x-ratelimit-remaining-tokens"] == "99"
+    assert stream._response_headers["x-ratelimit-remaining-tokens"] == "97"
+    assert stream_text == "Hi"
+    assert embedding._response_headers["x-ratelimit-remaining-tokens"] == "98"
+
+
+@pytest.mark.parametrize("async_mode", [False, True])
+@pytest.mark.asyncio
+@respx.mock
+async def test_azure_rate_limit_error_carries_retry_after_header(async_mode: bool, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    respx.post("https://example.openai.azure.com/openai/deployments/text-embedding-3-small/embeddings").mock(
+        return_value=httpx.Response(
+            429,
+            json={"error": {"message": "Rate Limit Error!", "code": "429"}},
+            headers={"retry-after": "30"},
+        )
+    )
+    request: Final = {
+        "model": "azure/text-embedding-3-small",
+        "input": "hello",
+        "api_base": "https://example.openai.azure.com",
+        "api_version": "2024-02-01",
+        "api_key": "azure-test-key",
+        "max_retries": 0,
+    }
+
+    with pytest.raises(litellm.RateLimitError) as error:
+        await (litellm.aembedding(**request) if async_mode else asyncio.to_thread(litellm.embedding, **request))
+
+    assert error.value.litellm_response_headers["retry-after"] == "30"
 
 
 @respx.mock
@@ -5848,6 +5936,7 @@ def test_completion_forwards_openai_optional_parameters(openai_api_response):
         user="test-user",
         response_format={"type": "json_object"},
         reasoning_effort="none",
+        logit_bias=None,
     )
 
     request_body: Final = json.loads(route.calls[0].request.content)
@@ -5985,18 +6074,26 @@ def test_gemini_completion_translates_messages_and_parses_candidate():
         "https://generativelanguage.googleapis.com/v1alpha/models/gemini-3.8-flash:generateContent"
     ).mock(return_value=httpx.Response(200, json=response_data))
 
+    safety_settings: Final = [
+        {"category": "HARM_CATEGORY_HARASSMENT", "threshold": "BLOCK_NONE"},
+        {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "threshold": "BLOCK_NONE"},
+    ]
     response: Final = litellm.completion(
         model="gemini/gemini-3.8-flash",
-        messages=[{"role": "user", "content": "Hey, how's it going?"}],
+        messages=[
+            {"role": "system", "content": "Be a good bot!"},
+            {"role": "user", "content": "Hey, how's it going?"},
+        ],
+        safety_settings=safety_settings,
         api_key="test-gemini-key",
     )
 
     request: Final = route.calls[0].request
     request_body: Final = json.loads(request.content)
     assert request.headers["x-goog-api-key"] == "test-gemini-key"
-    assert request_body["contents"] == [
-        {"parts": [{"text": "Hey, how's it going?"}], "role": "user"}
-    ]
+    assert request_body["system_instruction"] == {"parts": [{"text": "Be a good bot!"}]}
+    assert request_body["contents"] == [{"parts": [{"text": "Hey, how's it going?"}], "role": "user"}]
+    assert request_body["safetySettings"] == safety_settings
     assert response.choices[0].message.content == "Hello there!"
     assert response.usage.total_tokens == 4
 
@@ -6263,7 +6360,7 @@ def test_mock_request_with_mock_timeout_raises_litellm_timeout():
         litellm.completion(
             model="gpt-5.6",
             messages=[{"role": "user", "content": "hello"}],
-            timeout=3.0,
+            timeout=0.01,
             mock_timeout=True,
             num_retries=0,
         )
@@ -6289,7 +6386,7 @@ def test_router_mock_request_with_mock_timeout_raises_litellm_timeout():
         router.completion(
             model="gpt-5.6",
             messages=[{"role": "user", "content": "hello"}],
-            timeout=3.0,
+            timeout=0.01,
             mock_timeout=True,
         )
 
@@ -6298,14 +6395,9 @@ def test_router_mock_request_with_mock_timeout_raises_litellm_timeout():
 
 @respx.mock
 def test_router_mock_request_fallback_uses_fallback_model(openai_api_response):
-    def respond(request: httpx.Request) -> httpx.Response:
-        request_body: Final = json.loads(request.content)
-        if request_body["model"] == "gpt-5.6":
-            return httpx.Response(500, json={"error": {"message": "primary unavailable"}})
-        response_data: Final = {**openai_api_response, "model": request_body["model"]}
-        return httpx.Response(200, json=response_data)
-
-    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(side_effect=respond)
+    route: Final = respx.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(200, json={**openai_api_response, "model": "gpt-5.5"})
+    )
     router: Final = litellm.Router(
         model_list=[
             {
@@ -6324,9 +6416,11 @@ def test_router_mock_request_fallback_uses_fallback_model(openai_api_response):
     response: Final = router.completion(
         model="gpt-5.6",
         messages=[{"role": "user", "content": "hello"}],
+        timeout=0.01,
+        mock_timeout=True,
     )
 
-    assert [json.loads(call.request.content)["model"] for call in route.calls] == ["gpt-5.6", "gpt-5.5"]
+    assert [json.loads(call.request.content)["model"] for call in route.calls] == ["gpt-5.5"]
     assert response.model == "gpt-5.5"
 
 
@@ -7342,6 +7436,7 @@ def test_openai_chat_stream_routes_legacy_function_calls_and_usage(
         for chunk in answer_chunks
         if chunk.choices and chunk.choices[0].finish_reason is not None
     ) == ("stop",)
+    assert answer_chunks[-2].choices[0].finish_reason == "stop"
     assert tuple(getattr(chunk, "usage", None) for chunk in answer_chunks[:-1]) == (
         None,
         None,
