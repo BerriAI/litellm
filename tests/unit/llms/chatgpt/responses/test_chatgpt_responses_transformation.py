@@ -186,8 +186,65 @@ class TestChatGPTResponsesAPITransformation:
         )
 
         assert request["stream"] is True
+        assert request["input"] == [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "hi"}],
+            }
+        ]
         assert "reasoning.encrypted_content" in request["include"]
         assert request["instructions"].startswith("You are Codex, based on GPT-5.")
+
+    def test_chatgpt_normalizes_string_input_with_tools(self) -> None:
+        config: Final = ChatGPTResponsesAPIConfig()
+        tools: Final = [{"type": "function", "name": "echo", "parameters": {}}]
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-6.1-sol",
+            input="Call echo with ping.",
+            response_api_optional_request_params={
+                "tools": tools,
+                "tool_choice": "required",
+            },
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "Call echo with ping."}],
+            }
+        ]
+        assert request["tools"] == tools
+        assert request["tool_choice"] == "required"
+
+    def test_chatgpt_keeps_list_input_unchanged(self) -> None:
+        config: Final = ChatGPTResponsesAPIConfig()
+        list_input: Final = [
+            {"role": "user", "content": [{"type": "input_text", "text": "first"}]},
+            {"type": "function_call_output", "call_id": "call_1", "output": "done"},
+        ]
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-6.1-sol",
+            input=list_input,
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == list_input
+
+    def test_chatgpt_leaves_empty_string_input_for_the_backend_to_reject(self) -> None:
+        config: Final = ChatGPTResponsesAPIConfig()
+        request: Final = config.transform_responses_api_request(
+            model="chatgpt/gpt-6.1-sol",
+            input="",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+
+        assert request["input"] == ""
 
     @pytest.mark.parametrize(
         "model_name",
