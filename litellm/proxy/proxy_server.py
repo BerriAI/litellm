@@ -312,7 +312,6 @@ from litellm.constants import (
 from litellm.exceptions import RejectedRequestError
 from litellm.integrations.custom_guardrail import CustomGuardrail, ModifyResponseException
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
 from litellm.litellm_core_utils.agentic_loop_settings import (
     validated_max_agentic_loops,
 )
@@ -16825,6 +16824,58 @@ def _nested_setting_source(
     return "db" if field_name in db_values else unset_source
 
 
+def _alerting_field_value(
+    source: FieldSource,
+    field_name: str,
+    config_values: Mapping[str, JsonValue],
+    db_values: Mapping[str, JsonValue],
+) -> JsonValue | None:
+    if source == "config":
+        return config_values.get(field_name)
+    if source == "db":
+        return db_values.get(field_name)
+    return None
+
+
+def _alerting_stored_in_db(source: FieldSource) -> bool | None:
+    if source == "db":
+        return True
+    if source == "config":
+        return False
+    return None
+
+
+def _alerting_field_response(
+    *,
+    settings: SettingsStore,
+    db_values: Mapping[str, JsonValue],
+    config_values: Mapping[str, JsonValue],
+    allowed_args: Mapping[str, str],
+    field_name: str,
+    field_info: FieldInfo,
+) -> ConfigList:
+    field_default: Final[JsonValue] = _get_field_default(field_info)
+    field_source: Final[FieldSource] = _nested_setting_source(
+        settings,
+        db_values,
+        "alerting_args",
+        field_name,
+        field_default,
+    )
+    field_value: Final = _alerting_field_value(field_source, field_name, config_values, db_values)
+    stored_in_db: Final = _alerting_stored_in_db(field_source)
+    return ConfigList(
+        field_name=field_name,
+        field_type=allowed_args[field_name],
+        field_description=field_info.description or "",
+        field_value=field_value,
+        stored_in_db=stored_in_db,
+        source=field_source,
+        field_default_value=field_default,
+        premium_field=field_name == "region_outage_alert_ttl",
+    )
+
+
 @router.get(
     "/alerting/settings",
     description="Return the configurable alerting param, description, and current value",
@@ -16835,7 +16886,7 @@ def _nested_setting_source(
 async def alerting_settings(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
-    global proxy_logging_obj, prisma_client
+    global prisma_client
     """
     Used by UI to generate 'alerting settings' page
     {
@@ -16897,8 +16948,10 @@ async def alerting_settings(
         }
     )
 
-    _slack_alerting: Final[SlackAlerting] = proxy_logging_obj.slack_alerting_instance
-    _slack_alerting_args_dict: Final = _slack_alerting.alerting_args.model_dump()
+    config_alerting_args_value: Final = settings.config_value("alerting_args")
+    config_alerting_args: Final[Mapping[str, JsonValue]] = (
+        config_alerting_args_value if isinstance(config_alerting_args_value, Mapping) else MappingProxyType({})
+    )
 
     return_val: Final = []
 
@@ -16922,30 +16975,16 @@ async def alerting_settings(
 
     for field_name, field_info in SlackAlertingArgs.model_fields.items():
         if field_name in allowed_args:
-            field_default: JsonValue = _get_field_default(field_info)
-            _stored_in_db: bool | None = None
-            if field_name in alerting_args_dict:
-                _stored_in_db = True
-            else:
-                _stored_in_db = False
-
-            _response_obj = ConfigList(
-                field_name=field_name,
-                field_type=allowed_args[field_name],
-                field_description=field_info.description or "",
-                field_value=_slack_alerting_args_dict.get(field_name, field_default),
-                stored_in_db=_stored_in_db,
-                source=_nested_setting_source(
-                    settings,
-                    alerting_args_dict,
-                    "alerting_args",
-                    field_name,
-                    field_default,
-                ),
-                field_default_value=field_default,
-                premium_field=(True if field_name == "region_outage_alert_ttl" else False),
+            return_val.append(
+                _alerting_field_response(
+                    settings=settings,
+                    db_values=alerting_args_dict,
+                    config_values=config_alerting_args,
+                    allowed_args=allowed_args,
+                    field_name=field_name,
+                    field_info=field_info,
+                )
             )
-            return_val.append(_response_obj)
     return return_val
 
 
