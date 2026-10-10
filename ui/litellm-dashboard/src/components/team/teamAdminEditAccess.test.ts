@@ -13,6 +13,8 @@ describe("teamAdminFieldLabel", () => {
     ["tpm_limit", "Tokens per minute Limit (TPM)"],
     ["rpm_limit", "Requests per minute Limit (RPM)"],
     ["max_budget", "Max Budget (USD)"],
+    ["raise_max_budget", "Raise the team's max budget"],
+    ["projects", "Create and update projects"],
   ])("names %s the way the team settings form does", (field, label) => {
     expect(teamAdminFieldLabel(field)).toBe(label);
   });
@@ -128,6 +130,20 @@ describe("parseTeamEditAccess", () => {
     expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["tpm_limit"] })).toEqual({
       kind: "team_admin",
       editableFields: new Set(["tpm_limit"]),
+      mayRaiseMaxBudget: false,
+    });
+  });
+
+  it.each([
+    ["the proxy allows raising", { may_raise_max_budget: true }, true],
+    ["the proxy forbids raising", { may_raise_max_budget: false }, false],
+    ["an older proxy omits the flag", {}, false],
+    ["the flag is not a boolean", { may_raise_max_budget: "yes" }, false],
+  ])("lets a team admin raise the max budget only when %s", (_label, flag, mayRaiseMaxBudget) => {
+    expect(parseTeamEditAccess({ kind: "team_admin", editable_fields: ["max_budget"], ...flag })).toEqual({
+      kind: "team_admin",
+      editableFields: new Set(["max_budget"]),
+      mayRaiseMaxBudget,
     });
   });
 

@@ -31,5 +31,5 @@ function getSnapshot() {
 }
 
 export function useHideAutoRouterAnnouncement() {
-  return useSyncExternalStore(subscribe, getSnapshot);
+  return useSyncExternalStore(subscribe, getSnapshot, () => false);
 }

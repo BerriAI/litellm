@@ -1,7 +1,10 @@
 from enum import Enum
 from typing import Final
 
+from pydantic import Field
 from typing_extensions import TypedDict
+
+from litellm.types.llms.base import LiteLLMPydanticObjectBase
 
 # Request.state key for programmatic pass-through callers (e.g. Bedrock proxy) that attach
 # JSON without a FastAPI `custom_body` parameter (which would consume the HTTP body).
@@ -28,7 +31,9 @@ class EndpointType(str, Enum):
     GEMINI = "gemini"
     ANTHROPIC = "anthropic"
     OPENAI = "openai"
+    TINYFISH = "tinyfish"
     GENERIC = "generic"
+    DECISIONS = "decisions"
 
 
 class PassthroughStandardLoggingPayload(TypedDict, total=False):
@@ -62,3 +67,20 @@ class PassthroughStandardLoggingPayload(TypedDict, total=False):
 
     Optional field, we use this for cost tracking only if it's set.
     """
+
+
+class PassThroughGuardrailSettings(LiteLLMPydanticObjectBase):
+    """
+    Settings for a specific guardrail on a passthrough endpoint.
+
+    Allows field-level targeting for guardrail execution.
+    """
+
+    request_fields: list[str] | None = Field(
+        default=None,
+        description="JSONPath expressions for input field targeting (pre_call). Examples: 'query', 'documents[*].text', 'messages[*].content'. If not specified, guardrail runs on entire request payload.",
+    )
+    response_fields: list[str] | None = Field(
+        default=None,
+        description="JSONPath expressions for output field targeting (post_call). Examples: 'results[*].text', 'output'. If not specified, guardrail runs on entire response payload.",
+    )

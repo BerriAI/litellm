@@ -1,6 +1,6 @@
 import { ChevronRight } from "lucide-react";
 import React from "react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { useCreateBudget } from "@/app/(dashboard)/hooks/budgets/useBudgets";
 import { applyBudgetPrecision } from "./budgetPrecision";
 import { toast } from "@/lib/toast";

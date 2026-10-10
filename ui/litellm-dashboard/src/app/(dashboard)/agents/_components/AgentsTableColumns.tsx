@@ -90,7 +90,7 @@ export const getAgentsTableColumns = ({
   {
     id: "spend",
     accessorKey: "spend",
-    meta: { title: "Spend (USD)" },
+    meta: { title: "Spend (USD)", numeric: true },
     header: ({ column }) => <DataTableSortHeader column={column} title="Spend (USD)" />,
     size: 130,
     enableSorting: true,
@@ -136,6 +136,7 @@ export const getAgentsTableColumns = ({
     enableSorting: false,
     cell: ({ row }) => {
       const hasKeys = (row.original.keys?.length ?? 0) > 0;
+      if (row.original.jwt_auth_configured) return <StatusBadge tone="success" label="JWT configured" />;
       return hasKeys ? (
         <StatusBadge tone="success" label="Active" />
       ) : (

@@ -1,6 +1,8 @@
 import asyncio
 import io
 from collections.abc import Sequence
+from itertools import chain
+from types import MappingProxyType
 from typing import Final, get_type_hints
 
 import orjson
@@ -21,6 +23,7 @@ from litellm.proxy.common_request_processing import (
 from litellm.proxy.common_utils.http_parsing_utils import (
     coerce_numeric_form_fields,
     numeric_form_fields,
+    resolve_inference_model,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     error_status_code,
@@ -35,6 +38,11 @@ from litellm.types.llms.openai import ChatCompletionUserMessage
 router: Final = APIRouter()
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
+IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
+
+IMAGE_ARRAY_FIELD: Final = "image[]"
+MASK_ARRAY_FIELD: Final = "mask[]"
+BRACKETED_FILE_FIELDS: Final = frozenset({IMAGE_ARRAY_FIELD, MASK_ARRAY_FIELD})
 
 
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
@@ -114,14 +122,9 @@ async def image_generation(
         if isinstance(model, str):
             reject_url_valued_destination("model", model)
 
-        data["model"] = (
-            model
-            or general_settings.get("image_generation_model", None)  # server default
-            or user_model  # model name passed via cli args
-            or data.get("model", None)  # default passed in http request
+        data["model"] = resolve_inference_model(
+            data.get("model"), general_settings, user_model, model, kind="image_generation"
         )
-        if user_model:
-            data["model"] = user_model
 
         ### MODEL ALIAS MAPPING ###
         # check if model name in model alias map
@@ -244,9 +247,9 @@ async def image_edit_api(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     image: list[UploadFile] | None = File(None),
-    image_array: list[UploadFile] | None = File(None, alias="image[]"),
+    image_array: list[UploadFile] | None = File(None, alias=IMAGE_ARRAY_FIELD),
     mask: list[UploadFile] | None = File(None),
-    mask_array: list[UploadFile] | None = File(None, alias="mask[]"),
+    mask_array: list[UploadFile] | None = File(None, alias=MASK_ARRAY_FIELD),
     model: str | None = None,
 ):
     """
@@ -256,7 +259,7 @@ async def image_edit_api(
     curl -s -D >(grep -i x-request-id >&2) \
     -o >(jq -r '.data[0].b64_json' | base64 --decode > gift-basket.png) \
     -X POST "http://localhost:4000/v1/images/edits" \
-    -H "Authorization: Bearer sk-1234" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -F "model=gpt-image-1" \
         -F "image[]=@soap.png" \
         -F 'prompt=Create a studio ghibli image of this'
@@ -277,11 +280,11 @@ async def image_edit_api(
     # The validation will be done at the model level if image is truly required
 
     from litellm.proxy.proxy_server import (
-        _read_request_body,
         general_settings,
         llm_router,
         proxy_config,
         proxy_logging_obj,
+        read_request_body,
         select_data_generator,
         user_api_base,
         user_max_tokens,
@@ -294,12 +297,15 @@ async def image_edit_api(
     #########################################################
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
-    data: Final = dict(
-        coerce_numeric_form_fields(
-            parsed_body=await _read_request_body(request=request),
-            numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
-        )
+    form_fields: Final = coerce_numeric_form_fields(
+        parsed_body=await read_request_body(request=request),
+        numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
     )
+    data: Final = {
+        key: value
+        for key, value in chain(IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS.items(), form_fields.items())
+        if key not in BRACKETED_FILE_FIELDS
+    }
     image_files: Final = await batch_to_bytesio(image)
     mask_files: Final = await batch_to_bytesio(mask)
     if image_files:
@@ -314,16 +320,6 @@ async def image_edit_api(
                 detail=f"'{_field}' must be provided as a multipart file upload, not a string.",
             )
 
-    # Ensure prompt exists in data (default to None for models that don't require it)
-    if "prompt" not in data:
-        data["prompt"] = None
-
-    data["model"] = (
-        model
-        or general_settings.get("image_generation_model", None)  # server default
-        or user_model  # model name passed via cli args
-        or data.get("model", None)  # default passed in http request
-    )
     #########################################################
     # Process request
     #########################################################
@@ -340,7 +336,7 @@ async def image_edit_api(
             general_settings=general_settings,
             proxy_config=proxy_config,
             select_data_generator=select_data_generator,
-            model=None,
+            model=model,
             user_model=user_model,
             user_temperature=user_temperature,
             user_request_timeout=user_request_timeout,
@@ -349,7 +345,7 @@ async def image_edit_api(
             version=version,
         )
     except Exception as e:
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

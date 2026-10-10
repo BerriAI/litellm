@@ -1,4 +1,4 @@
-# MCP module. Grounded in litellm/proxy/_experimental/mcp_server/. See tests/e2e/CLAUDE.md for the grammar.
+# MCP module. Grounded in litellm/proxy/_experimental/mcp_server/. See tests/e2e/AGENTS.md for the grammar.
 - id: mcp.list_tools.api_key.succeeds
   module: mcp
   tier: P0
@@ -71,6 +71,14 @@
   assertions: [succeeds]
   source: "db.py user_oauth_credential lookup"
   rationale: OAuth2 token passthrough; per-user credential storage
+- id: mcp.call_tool.oauth.persists_across_processes
+  module: mcp
+  tier: P1
+  operation: call_tool
+  auth_family: oauth
+  assertions: [persists_across_processes]
+  source: "outbound_credentials/per_user_oauth_store.py V2PerUserTokenStore"
+  rationale: Stored per-user token survives a verified restart of an owned gateway with no Redis cache
 - id: mcp.list_tools.none.succeeds
   module: mcp
   tier: P1

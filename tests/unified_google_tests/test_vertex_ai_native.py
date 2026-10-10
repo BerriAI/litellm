@@ -8,9 +8,10 @@ class TestVertexAIGenerateContent(BaseGoogleGenAITest, BaseGoogleGenAIProxySDKTe
     @property
     def model_config(self):
         return {
-            "model": "vertex_ai/gemini-2.5-flash-lite",
+            "model": "vertex_ai/gemini-3.5-flash-lite",
+            "vertex_location": "global",
         }
 
     @property
     def proxy_model_name(self) -> str:
-        return "vertex-gemini-2.5-flash-lite"
+        return "vertex-gemini-3.5-flash-lite"

@@ -11,8 +11,8 @@ const makeModel = (overrides: Partial<ModelData> = {}): ModelData =>
     model_name: "gpt-4-public",
     litellm_model_name: "openai/gpt-4",
     provider: "openai",
-    input_cost: 30 as unknown as number,
-    output_cost: 60 as unknown as number,
+    input_cost: "30",
+    output_cost: "60",
     max_tokens: 8192,
     max_input_tokens: 8192,
     litellm_params: { model: "openai/gpt-4" },
@@ -157,6 +157,19 @@ describe("AllModelsTable", () => {
     expect(screen.getByText("Manual")).toBeInTheDocument();
   });
 
+  it("renders the credential's display name when one is set and keeps the name as the tooltip", () => {
+    render(
+      <AllModelsTable
+        {...baseProps}
+        credentialLabels={new Map([["openai-prod", "Prod OpenAI"]])}
+        data={[makeModel({ litellm_params: { model: "openai/gpt-4", litellm_credential_name: "openai-prod" } })]}
+      />,
+    );
+    expect(screen.getByText("Prod OpenAI")).toBeInTheDocument();
+    expect(screen.queryByText("openai-prod")).not.toBeInTheDocument();
+    expect(screen.getByTitle("openai-prod")).toBeInTheDocument();
+  });
+
   it("shows 'Defined in config' for a config model and the creator for a DB model", () => {
     const { rerender } = render(<AllModelsTable {...baseProps} />);
     expect(screen.getByText("alice")).toBeInTheDocument();
@@ -174,14 +187,44 @@ describe("AllModelsTable", () => {
     const { rerender } = render(<AllModelsTable {...baseProps} />);
     expect(screen.getByText("$30")).toBeInTheDocument();
     expect(screen.getByText("$60")).toBeInTheDocument();
+    expect(screen.getByRole("cell", { name: /\$30/ })).toHaveClass("text-right");
+    expect(screen.getByRole("columnheader", { name: /costs/i })).toHaveClass("text-right");
+
+    rerender(<AllModelsTable {...baseProps} data={[makeModel({ input_cost: null, output_cost: null })]} />);
+    expect(screen.queryByText(/^\$/)).not.toBeInTheDocument();
+  });
+
+  it("renders the per-second rate instead of $0.00 token costs for a video model priced per second", () => {
+    const { rerender } = render(
+      <AllModelsTable
+        {...baseProps}
+        data={[
+          makeModel({
+            input_cost: "0.00",
+            output_cost: "0.00",
+            output_cost_per_second: 0.4,
+          }),
+        ]}
+      />,
+    );
+    expect(screen.getByText("$0.40/s")).toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
 
     rerender(
       <AllModelsTable
         {...baseProps}
-        data={[makeModel({ input_cost: null as unknown as number, output_cost: null as unknown as number })]}
+        data={[
+          makeModel({
+            input_cost: "0.60",
+            output_cost: "0.00",
+            output_cost_per_second: 0.015,
+          }),
+        ]}
       />,
     );
-    expect(screen.queryByText(/^\$/)).not.toBeInTheDocument();
+    expect(screen.getByText("$0.60")).toBeInTheDocument();
+    expect(screen.getByText("$0.015/s")).toBeInTheDocument();
+    expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
   });
 
   it("collapses extra access groups behind a +N more badge", () => {

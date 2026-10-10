@@ -1,8 +1,10 @@
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, TypeVar
+
+from pydantic import TypeAdapter
 
 if TYPE_CHECKING:
     from litellm.types.llms.openai import OpenAIFileObject
@@ -12,11 +14,21 @@ from litellm._logging import verbose_logger, verbose_router_logger
 from litellm.constants import ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.types.router import CredentialLiteLLMParams
 from litellm.types.utils import LlmProviders
 
+_V = TypeVar("_V")
 
-def _is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
+ROUTER_ONLY_CALL_KWARGS: Final = frozenset({"silent_model", "include_fallback_errors"})
+_OBJECT_MAPPING_ADAPTER: Final[TypeAdapter[Mapping[object, object]]] = TypeAdapter(Mapping[object, object])
+
+
+def without_router_only_kwargs(kwargs: Mapping[str, _V]) -> dict[str, _V]:
+    return {key: value for key, value in kwargs.items() if key not in ROUTER_ONLY_CALL_KWARGS}
+
+
+def is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool:
     if request_kwargs is None:
         return False
     metadata_value: Final = request_kwargs.get("metadata")
@@ -25,6 +37,9 @@ def _is_proxy_admin_request(request_kwargs: Mapping[str, object] | None) -> bool
     litellm_metadata: Final = litellm_metadata_value if isinstance(litellm_metadata_value, Mapping) else {}
     user_api_key_auth: Final = metadata.get("user_api_key_auth") or litellm_metadata.get("user_api_key_auth")
     return getattr(user_api_key_auth, "user_role", None) == "proxy_admin"
+
+
+_is_proxy_admin_request = is_proxy_admin_request
 
 
 def get_request_team_id(request_kwargs: Mapping[str, object] | None) -> str | None:
@@ -60,6 +75,30 @@ def resolve_model_group_alias(model_group_alias: object, model: str) -> str | No
     return target
 
 
+def resolve_served_model(
+    model: str,
+    model_alias_map: object,
+    key_aliases: object,
+    model_group_alias: object,
+) -> str:
+    """Model the request preparation serves for `model`.
+
+    Apply the global alias map, then key aliases, then `router_settings.model_group_alias`.
+    """
+    global_aliases: Final = (
+        _OBJECT_MAPPING_ADAPTER.validate_python(model_alias_map) if isinstance(model_alias_map, Mapping) else None
+    )
+    global_target: Final = global_aliases.get(model) if global_aliases is not None else None
+    after_global: Final = global_target if isinstance(global_target, str) else model
+    key_alias_mapping: Final = (
+        _OBJECT_MAPPING_ADAPTER.validate_python(key_aliases) if isinstance(key_aliases, Mapping) else None
+    )
+    key_target: Final = key_alias_mapping.get(after_global) if key_alias_mapping is not None else None
+    after_key: Final = key_target if isinstance(key_target, str) else after_global
+    router_target: Final = resolve_model_group_alias(model_group_alias, after_key)
+    return router_target if router_target is not None else after_key
+
+
 def truncate_fallback_error_detail(detail: str) -> str:
     """
     Bound a fallback failure detail before it is logged or appended to an exception message.
@@ -74,6 +113,36 @@ def truncate_fallback_error_detail(detail: str) -> str:
         return detail
     dropped: Final = len(detail) - ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS
     return f"{detail[:ROUTER_FALLBACK_ERROR_DETAIL_MAX_CHARS]}... [truncated {dropped} characters]"
+
+
+def format_no_fallback_group_message(lookup_groups: Sequence[str], fallbacks: Sequence[Mapping[str, object]]) -> str:
+    """User-facing explanation appended when a request fails and no fallback chain matches its model group."""
+    requested: Final = " -> ".join(lookup_groups)
+    configured: Final = tuple(dict.fromkeys(key for entry in fallbacks for key in entry))
+    configured_text: Final = (
+        f" Fallbacks are configured for: {', '.join(configured)}." if configured else " No fallbacks are configured."
+    )
+    return (
+        f"\n\nLiteLLM: model group '{requested}' failed with the error above and no fallback model group was found "
+        f"for it, so the request was not retried on another model.{configured_text}"
+        " Add a fallbacks entry for that model group (Router fallbacks or proxy router_settings.fallbacks)"
+        " to retry on another model."
+    )
+
+
+def format_fallback_outcome_message(
+    model_group: str | None,
+    fallback_model_group: Sequence[object] | None,
+    fallback_failure_detail: str,
+) -> str:
+    """User-facing explanation appended when the fallback orchestrator gives up and re-raises the primary error."""
+    lead: Final = f"\n\nLiteLLM: model group '{model_group}' failed with the error above."
+    if not fallback_model_group:
+        return f"{lead} No fallback was attempted."
+    targets: Final = ", ".join(str(mask_sensitive_structure(target)) for target in fallback_model_group)
+    if not fallback_failure_detail:
+        return f"{lead} Fallback model group(s) configured: {targets}."
+    return f"{lead} Fallback to {targets} also failed: {fallback_failure_detail}"
 
 
 def get_litellm_params_sensitive_credential_hash(litellm_params: dict) -> str:
@@ -124,7 +193,7 @@ def filter_team_based_models(
     metadata: Final = request_kwargs.get("metadata") or {}
     litellm_metadata: Final = request_kwargs.get("litellm_metadata") or {}
     request_team_id: Final = get_request_team_id(request_kwargs)
-    if request_team_id is None and _is_proxy_admin_request(request_kwargs) and isinstance(healthy_deployments, list):
+    if request_team_id is None and is_proxy_admin_request(request_kwargs) and isinstance(healthy_deployments, list):
         requested_model: Final = (
             request_kwargs.get("model") or metadata.get("model_group") or litellm_metadata.get("model_group")
         )

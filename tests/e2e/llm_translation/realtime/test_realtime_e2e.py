@@ -12,9 +12,13 @@ hard failure, not a skip; once configured, a protocol failure is likewise a hard
 failure. See REALTIME_COVERAGE_MATRIX.md.
 """
 
-import pytest
-from pydantic import BaseModel
+from typing import Final
 
+import pytest
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
+from lifecycle import ResourceManager
+from models import LiteLLMParamsBody
+from pydantic import BaseModel
 from realtime_client import (
     PROVIDERS,
     ConversationItemCreate,
@@ -27,18 +31,56 @@ from realtime_client import (
     RealtimeProvider,
     ResponseCreate,
     ResponseDone,
+    ServerEnvelope,
     SessionConfig,
     SessionUpdate,
+    as_text,
     function_call_item,
     parse_last,
     realtime_model,
     transcript,
     user_message,
 )
+from websockets.exceptions import ConnectionClosedError
 
 pytestmark = pytest.mark.e2e
 
-PROVIDER_PARAMS = [pytest.param(p, id=p.id) for p in PROVIDERS]
+AZURE_REALTIME_MODEL: Final = "azure/gpt-realtime"
+
+TEXT_PARAMS: Final = tuple(
+    pytest.param(
+        p,
+        id=p.id,
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.REALTIME,
+                providers=(Provider(p.id),),
+                models=(p.litellm_params.model,),
+                mode=Mode.WEBSOCKET,
+            )
+        ),
+    )
+    for p in PROVIDERS
+)
+
+TOOL_PARAMS: Final = tuple(
+    pytest.param(
+        p,
+        id=p.id,
+        marks=meta(
+            Subject(
+                domain=Domain.LLM_TRANSLATION,
+                route=Route.REALTIME,
+                providers=(Provider(p.id),),
+                models=(p.litellm_params.model,),
+                capabilities=(Capability.FUNCTION_CALLING,),
+                mode=Mode.WEBSOCKET,
+            )
+        ),
+    )
+    for p in PROVIDERS
+)
 
 WEATHER_TOOL = FunctionTool(
     name="get_weather",
@@ -58,7 +100,7 @@ class WeatherResult(BaseModel):
     temperature_f: int
 
 
-@pytest.mark.parametrize("provider", PROVIDER_PARAMS)
+@pytest.mark.parametrize("provider", TEXT_PARAMS)
 def test_text_conversation(
     client: RealtimeClient,
     scoped_key: str,
@@ -95,7 +137,7 @@ def test_text_conversation(
         assert done.response.usage is not None, "response.done missing normalized usage"
 
 
-@pytest.mark.parametrize("provider", PROVIDER_PARAMS)
+@pytest.mark.parametrize("provider", TOOL_PARAMS)
 def test_tool_call_round_trip(
     client: RealtimeClient,
     scoped_key: str,
@@ -147,3 +189,48 @@ def test_tool_call_round_trip(
         second = session.collect_until("response.done", timeout=60)
 
         assert "72" in transcript(second), "follow-up did not use the tool result"
+
+
+_REFUSED_UPSTREAMS = (
+    RealtimeProvider(
+        "azure-bad-key",
+        "azure-realtime-refused",
+        LiteLLMParamsBody(
+            model=AZURE_REALTIME_MODEL,
+            api_key="invalid-e2e-key",
+            api_version="2025-08-28",
+            realtime_protocol="GA",
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize("provider", _REFUSED_UPSTREAMS, ids=[p.id for p in _REFUSED_UPSTREAMS])
+@meta(
+    Subject(
+        domain=Domain.LLM_TRANSLATION,
+        route=Route.REALTIME,
+        providers=(Provider.AZURE,),
+        models=(AZURE_REALTIME_MODEL,),
+        mode=Mode.WEBSOCKET,
+    )
+)
+def test_upstream_handshake_refusal_is_an_error_event_and_policy_close(
+    client: RealtimeClient,
+    resources: ResourceManager,
+    scoped_key: str,
+    provider: RealtimeProvider,
+) -> None:
+    model_name, model_id = client.provision(provider)
+    resources.defer(lambda: client.proxy.delete_model(model_id))
+
+    with client.connect(key=scoped_key, model=model_name) as session:
+        first = ServerEnvelope.model_validate_json(
+            as_text(session.connection.recv(timeout=15))
+        )
+        assert first.type == "error", first
+        with pytest.raises(ConnectionClosedError) as closed:
+            session.connection.recv(timeout=15)
+
+    assert closed.value.rcvd is not None
+    assert closed.value.rcvd.code == 1008, closed.value

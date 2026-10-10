@@ -10,7 +10,7 @@ from litellm.types.guardrails import BlockedWord, ContentFilterAction, Guardrail
 from litellm.types.utils import CallTypes
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import OCR_RESPONSE, call_native_aocr
+from tests.test_litellm_rust.support.requests import OCR_RESPONSE, call_native, call_native_aocr
 
 pytestmark = pytest.mark.requires_rust_extension
 

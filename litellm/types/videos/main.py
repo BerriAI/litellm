@@ -2,11 +2,13 @@ import builtins
 from typing import Any, Literal
 
 from openai.types.audio.transcription_create_params import FileTypes
-from pydantic import BaseModel
+from pydantic import Field, PrivateAttr
 from typing_extensions import ReadOnly, TypedDict
 
+from litellm.types.llms.base import LiteLLMBaseModel
 
-class VideoObject(BaseModel):
+
+class VideoObject(LiteLLMBaseModel):
     """Represents a generated video object."""
 
     id: str
@@ -22,7 +24,15 @@ class VideoObject(BaseModel):
     size: str | None = None
     model: str | None = None
     usage: dict[str, Any] | None = None
-    _hidden_params: dict[str, builtins.object] = {}
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -44,11 +54,11 @@ class VideoObject(BaseModel):
             return self.dict()
 
 
-class VideoResponse(BaseModel):
+class VideoResponse(LiteLLMBaseModel):
     """Response object for video generation requests."""
 
     data: list[VideoObject]
-    hidden_params: dict[str, object] = {}
+    hidden_params: dict[str, object] = Field(default={})
 
     def __contains__(self, key) -> bool:
         return hasattr(self, key)
@@ -104,14 +114,22 @@ class DecodedVideoId(TypedDict, total=False):
     video_id: str
 
 
-class CharacterObject(BaseModel):
+class CharacterObject(LiteLLMBaseModel):
     """Represents a character created from a video."""
 
     id: str
     object: Literal["character"] = "character"
     created_at: int
     name: str
-    _hidden_params: dict[str, builtins.object] = {}
+    _hidden_params: dict[str, builtins.object] = PrivateAttr(default={})
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __contains__(self, key) -> bool:
         return hasattr(self, key)

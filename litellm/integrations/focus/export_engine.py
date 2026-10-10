@@ -2,14 +2,15 @@
 
 from __future__ import annotations
 
-from typing import Any, Final
+from collections.abc import Callable
+from typing import Any, Final, SupportsFloat, SupportsIndex, SupportsInt, cast
 
 import polars as pl
 
 from litellm._logging import verbose_logger
 
 from .database import FocusLiteLLMDatabase
-from .destinations import FocusDestinationFactory, FocusTimeWindow
+from .destinations import FocusDestination, FocusDestinationFactory, FocusTimeWindow
 from .serializers import FocusCsvSerializer, FocusParquetSerializer, FocusSerializer
 from .transformer import FocusTransformer
 
@@ -28,14 +29,46 @@ class FocusExportEngine:
         self.provider = provider
         self.export_format = export_format
         self.prefix = prefix
-        self._destination = FocusDestinationFactory.create(
+        self.destination = FocusDestinationFactory.create(
             provider=self.provider,
             prefix=self.prefix,
             config=destination_config,
         )
-        self._serializer = self._init_serializer()
-        self._transformer = FocusTransformer()
-        self._database = FocusLiteLLMDatabase()
+        self.serializer = self._init_serializer()
+        self.transformer = FocusTransformer()
+        self.database = FocusLiteLLMDatabase()
+
+    @property
+    def _destination(self) -> FocusDestination:
+        return self.destination
+
+    @_destination.setter
+    def _destination(self, value: FocusDestination) -> None:
+        self.destination = value
+
+    @property
+    def _serializer(self) -> FocusSerializer:
+        return self.serializer
+
+    @_serializer.setter
+    def _serializer(self, value: FocusSerializer) -> None:
+        self.serializer = value
+
+    @property
+    def _transformer(self) -> FocusTransformer:
+        return self.transformer
+
+    @_transformer.setter
+    def _transformer(self, value: FocusTransformer) -> None:
+        self.transformer = value
+
+    @property
+    def _database(self) -> FocusLiteLLMDatabase:
+        return self.database
+
+    @_database.setter
+    def _database(self, value: FocusLiteLLMDatabase) -> None:
+        self.database = value
 
     def _init_serializer(self) -> FocusSerializer:
         if self.export_format == "csv":
@@ -45,18 +78,18 @@ class FocusExportEngine:
         raise NotImplementedError(f"Export format '{self.export_format}' not supported. Use 'parquet' or 'csv'.")
 
     async def dry_run_export_usage_data(self, limit: int | None) -> dict[str, Any]:
-        data: Final = await self._database.get_usage_data(limit=limit)
-        normalized: Final = self._transformer.transform(data)
+        data: Final = await self.database.get_usage_data(limit=limit)
+        normalized: Final = self.transformer.transform(data)
 
         usage_sample: Final = data.head(min(50, len(data))).to_dicts()
         normalized_sample: Final = normalized.head(min(50, len(normalized))).to_dicts()
 
         summary: Final = {
             "total_records": len(normalized),
-            "total_spend": self._sum_column(data, "spend"),
-            "total_tokens": self._sum_column(data, "total_tokens"),
-            "unique_teams": self._count_unique(data, "team_id"),
-            "unique_models": self._count_unique(data, "model"),
+            "total_spend": self.sum_column(data, "spend"),
+            "total_tokens": self.sum_column(data, "total_tokens"),
+            "unique_teams": self.count_unique(data, "team_id"),
+            "unique_models": self.count_unique(data, "model"),
         }
 
         return {
@@ -71,12 +104,12 @@ class FocusExportEngine:
         limit: int | None,
     ) -> None:
         """Export all available data without time-window filtering."""
-        data: Final = await self._database.get_usage_data(limit=limit)
+        data: Final = await self.database.get_usage_data(limit=limit)
         if data.is_empty():
             verbose_logger.debug("Focus export: no usage data available")
             return
 
-        normalized: Final = self._transformer.transform(data)
+        normalized: Final = self.transformer.transform(data)
         if normalized.is_empty():
             verbose_logger.debug("Focus export: normalized data empty")
             return
@@ -98,7 +131,7 @@ class FocusExportEngine:
         window: FocusTimeWindow,
         limit: int | None,
     ) -> None:
-        data: Final = await self._database.get_usage_data(
+        data: Final = await self.database.get_usage_data(
             limit=limit,
             start_time_utc=window.start_time,
             end_time_utc=window.end_time,
@@ -107,7 +140,7 @@ class FocusExportEngine:
             verbose_logger.debug("Focus export: no usage data for window %s", window)
             return
 
-        normalized: Final = self._transformer.transform(data)
+        normalized: Final = self.transformer.transform(data)
         if normalized.is_empty():
             verbose_logger.debug("Focus export: normalized data empty for window %s", window)
             return
@@ -115,39 +148,45 @@ class FocusExportEngine:
         await self._serialize_and_upload(normalized, window)
 
     async def _serialize_and_upload(self, frame: pl.DataFrame, window: FocusTimeWindow) -> None:
-        payload: Final = self._serializer.serialize(frame)
+        payload: Final = self.serializer.serialize(frame)
         if not payload:
             verbose_logger.debug("Focus export: serializer returned empty payload")
             return
-        await self._destination.deliver(
+        await self.destination.deliver(
             content=payload,
             time_window=window,
-            filename=self._build_filename(window),
+            filename=self.build_filename(window),
         )
 
-    def _build_filename(self, window: FocusTimeWindow) -> str:
-        if not self._serializer.extension:
+    def build_filename(self, window: FocusTimeWindow) -> str:
+        if not self.serializer.extension:
             raise ValueError("Serializer must declare a file extension")
         # Include time window in filename so Vantage (which deduplicates
         # by filename) doesn't overwrite previous uploads.
         start_str: Final = window.start_time.strftime("%Y%m%dT%H%M%SZ")
         end_str: Final = window.end_time.strftime("%Y%m%dT%H%M%SZ")
-        return f"usage_{start_str}_{end_str}.{self._serializer.extension}"
+        return f"usage_{start_str}_{end_str}.{self.serializer.extension}"
+
+    _build_filename = build_filename
 
     @staticmethod
-    def _sum_column(frame: pl.DataFrame, column: str) -> float:
+    def sum_column(frame: pl.DataFrame, column: str) -> float:
         if frame.is_empty() or column not in frame.columns:
             return 0.0
-        value: Final = frame.select(pl.col(column).sum().alias("sum")).row(0)[0]
+        value: Final[object] = frame.select(pl.col(column).sum().alias("sum")).row(0)[0]
         if value is None:
             return 0.0
-        return float(value)
+        return float(cast(SupportsFloat | SupportsIndex | str | bytes | bytearray, value))
+
+    _sum_column: Final[Callable[[pl.DataFrame, str], float]] = sum_column
 
     @staticmethod
-    def _count_unique(frame: pl.DataFrame, column: str) -> int:
+    def count_unique(frame: pl.DataFrame, column: str) -> int:
         if frame.is_empty() or column not in frame.columns:
             return 0
-        value: Final = frame.select(pl.col(column).n_unique().alias("unique")).row(0)[0]
+        value: Final[object] = frame.select(pl.col(column).n_unique().alias("unique")).row(0)[0]
         if value is None:
             return 0
-        return int(value)
+        return int(cast(SupportsInt | SupportsIndex | str | bytes | bytearray, value))
+
+    _count_unique: Final[Callable[[pl.DataFrame, str], int]] = count_unique

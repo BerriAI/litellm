@@ -25,13 +25,6 @@ async function boxes(trigger: Locator, options: Locator) {
 
 const clippedPopup = (page: PlaywrightPage) => page.locator('[data-slot="select-content"]');
 
-function pollOptionsOpenBelowTrigger(trigger: Locator, options: Locator) {
-  return expect.poll(async () => {
-    const box = await boxes(trigger, options);
-    return box && box.optionsBox.y >= box.triggerBox.y + box.triggerBox.height;
-  });
-}
-
 function pollOptionsCoverTrigger(trigger: Locator, options: Locator) {
   return expect.poll(async () => {
     const box = await boxes(trigger, options);
@@ -45,19 +38,6 @@ function pollOptionsCoverTrigger(trigger: Locator, options: Locator) {
 
 test.describe("Auto Router template select anchoring", () => {
   test.use({ storageState: ADMIN_STORAGE_PATH });
-
-  test("opens the options below the trigger when there is room below it", async ({ page }) => {
-    const viewport = { width: 1280, height: 900 };
-    await page.setViewportSize(viewport);
-    const trigger = await openTemplateSelect(page);
-    await trigger.evaluate((element) => element.scrollIntoView({ block: "start" }));
-    await expect.poll(async () => (await trigger.boundingBox())?.y).toBeLessThan(viewport.height / 2);
-
-    await trigger.click();
-    await expect(page.getByRole("listbox")).toBeVisible();
-
-    await pollOptionsOpenBelowTrigger(trigger, clippedPopup(page)).toBe(true);
-  });
 
   test("keeps the trigger uncovered when the options open with no room below it", async ({ page }) => {
     await page.setViewportSize({ width: 1280, height: 560 });

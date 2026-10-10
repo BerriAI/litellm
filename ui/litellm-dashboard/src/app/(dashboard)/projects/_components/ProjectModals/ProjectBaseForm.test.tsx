@@ -11,6 +11,11 @@ vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useTeams: () => mockUseTeams(),
 }));
 
+const mockUseAuthorized = vi.fn();
+vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
+  default: () => mockUseAuthorized(),
+}));
+
 vi.mock("@/components/organisms/create_key_button", () => ({
   fetchTeamModels: vi.fn().mockResolvedValue([]),
 }));
@@ -32,6 +37,7 @@ function FormWrapper() {
 describe("ProjectBaseForm", () => {
   beforeEach(() => {
     mockUseTeams.mockReturnValue({ data: [], isLoading: false });
+    mockUseAuthorized.mockReturnValue({ accessToken: "token", userId: "admin-user", userRole: "Admin" });
   });
 
   it("should render", () => {
@@ -81,6 +87,32 @@ describe("ProjectBaseForm", () => {
       expect(screen.getByText("Engineering")).toBeInTheDocument();
     });
     expect(screen.getByText("Sales")).toBeInTheDocument();
+  });
+
+  it("should offer a team admin only the teams they administer", async () => {
+    const user = userEvent.setup();
+    mockUseAuthorized.mockReturnValue({ accessToken: "token", userId: "team-admin", userRole: "Internal User" });
+    mockUseTeams.mockReturnValue({
+      data: [
+        {
+          team_id: "team-1",
+          team_alias: "Engineering",
+          models: [],
+          members_with_roles: [{ user_id: "team-admin", role: "admin" }],
+        },
+        {
+          team_id: "team-2",
+          team_alias: "Sales",
+          models: [],
+          members_with_roles: [{ user_id: "team-admin", role: "user" }],
+        },
+      ],
+      isLoading: false,
+    });
+    renderWithProviders(<FormWrapper />);
+    await user.click(screen.getByLabelText("Team"));
+    expect(await screen.findByText("Engineering")).toBeInTheDocument();
+    expect(screen.queryByText("Sales")).not.toBeInTheDocument();
   });
 
   it("should show the Max Budget field", () => {

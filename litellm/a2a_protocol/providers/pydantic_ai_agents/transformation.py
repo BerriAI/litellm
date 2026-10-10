@@ -7,7 +7,7 @@ This module provides fake streaming by converting non-streaming responses into s
 
 import asyncio
 from collections.abc import AsyncIterator, Mapping, Sequence
-from typing import Any, Final, Protocol, cast, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 from uuid import uuid4
 
 from pydantic import TypeAdapter
@@ -100,7 +100,7 @@ class PydanticAITransformation:
         request_id: str,
         max_attempts: int = 30,
         poll_interval: float = 0.5,
-        agent_extra_headers: dict[str, str] | None = None,
+        agent_extra_headers: Mapping[str, str] | None = None,
     ) -> dict[str, object]:
         """
         Poll for task completion using tasks/get method.
@@ -156,7 +156,7 @@ class PydanticAITransformation:
         request_id: str,
         params: "_SupportsModelDump | _SupportsPydanticDict | Mapping[str, object]",
         timeout: float = 60.0,
-        agent_extra_headers: dict[str, str] | None = None,
+        agent_extra_headers: Mapping[str, str] | None = None,
     ) -> dict[str, object]:
         """
         Send a request to Pydantic AI agent and return the raw task response.
@@ -200,7 +200,7 @@ class PydanticAITransformation:
 
         # Send request to Pydantic AI agent using shared async HTTP client
         client: Final = get_async_httpx_client(
-            llm_provider=cast(Any, "pydantic_ai_agent"),
+            llm_provider="pydantic_ai_agent",
             params={"timeout": timeout},
         )
         response: Final = await client.post(
@@ -242,7 +242,7 @@ class PydanticAITransformation:
         request_id: str,
         params: "_SupportsModelDump | _SupportsPydanticDict | Mapping[str, object]",
         timeout: float = 60.0,
-        agent_extra_headers: dict[str, str] | None = None,
+        agent_extra_headers: Mapping[str, str] | None = None,
     ) -> dict[str, object]:
         """
         Send a non-streaming A2A request to Pydantic AI agent and wait for completion.
@@ -278,7 +278,7 @@ class PydanticAITransformation:
         request_id: str,
         params: "_SupportsModelDump | _SupportsPydanticDict | Mapping[str, object]",
         timeout: float = 60.0,
-        agent_extra_headers: dict[str, str] | None = None,
+        agent_extra_headers: Mapping[str, str] | None = None,
     ) -> dict[str, object]:
         """
         Send a request to Pydantic AI agent and return the raw task response.

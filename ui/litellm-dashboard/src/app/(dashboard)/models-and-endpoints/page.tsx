@@ -9,7 +9,7 @@ import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings"
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
 import { autoRouterCreationScope, canCreateModels } from "@/utils/modelPermissions";
 import BetaBadge from "@/components/BetaBadge";
-import CostOptimizationFeedbackBanner from "@/components/molecules/cost_optimization_feedback_banner";
+import DecisionModelsBanner from "@/components/molecules/DecisionModelsBanner";
 import ModelInfoView from "@/components/model_info_view";
 import TeamInfoView from "@/components/team/TeamInfo";
 import { useModelDetailRouting } from "@/app/(dashboard)/models-and-endpoints/detailNavigation";
@@ -114,16 +114,17 @@ export default function ModelsAndEndpointsPage() {
       // effectiveSessionRole reports proxy_admin_viewer as "Admin", so isAdmin alone would show a
       // viewer these write-only panels; only the raw-role isViewOnly separates them. Health Status
       // stays: it is the bucket's one read view, and viewers keep read parity with admins.
-      ...(isAdmin && !isViewOnly ? (["llm-credentials", "pass-through"] as const) : []),
+      ...(!isViewOnly && (isAdmin || isInternalUser) ? (["llm-credentials"] as const) : []),
+      ...(isAdmin && !isViewOnly ? (["pass-through"] as const) : []),
       ...(isAdmin ? (["health"] as const) : []),
       ...(isAdmin && !isViewOnly
         ? (["retry-settings", "model-group-alias", "access-group-budgets", "price-data"] as const)
         : []),
     ],
-    [canCreate, canViewAutoRouters, isAdmin, isViewOnly],
+    [canCreate, canViewAutoRouters, isAdmin, isInternalUser, isViewOnly],
   );
 
-  const allModelsLabel = isAdmin ? "All Models" : "Your Models";
+  const allModelsLabel = isAdmin ? "Deployed Models" : "Your Models";
   const tabLabel = (slug: "" | ModelTabSlug): React.ReactNode => {
     if (!slug) return allModelsLabel;
     if (slug === "auto-routers" || slug === "access-group-budgets") {
@@ -151,7 +152,7 @@ export default function ModelsAndEndpointsPage() {
           onClose={close}
           accessToken={accessToken}
           is_team_admin={userRole === "Admin" && !isViewOnly}
-          is_proxy_admin={userRole === "Proxy Admin"}
+          is_proxy_admin={userRole === "Admin" && !isViewOnly}
           userModels={allModelsOnProxy}
           editTeam={false}
           onUpdate={invalidateModels}
@@ -177,7 +178,7 @@ export default function ModelsAndEndpointsPage() {
           </div>
         </div>
 
-        <CostOptimizationFeedbackBanner />
+        {!isViewOnly && <DecisionModelsBanner />}
 
         {modelId ? (
           <ModelInfoView

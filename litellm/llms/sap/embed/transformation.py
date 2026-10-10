@@ -6,13 +6,14 @@ from functools import cached_property
 from typing import Final, Literal
 
 import httpx
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from litellm.llms.base_llm.embedding.transformation import (
     BaseEmbeddingConfig,
     LiteLLMLoggingObj,
 )
 from litellm.llms.sap.chat.models import MaskingModuleConfig
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
 
@@ -20,30 +21,30 @@ from ..chat.handler import GenAIHubOrchestrationError
 from ..credentials import get_token_creator
 
 
-class Usage(BaseModel):
+class Usage(LiteLLMBaseModel):
     prompt_tokens: int
     total_tokens: int
 
 
-class EmbeddingItem(BaseModel):
+class EmbeddingItem(LiteLLMBaseModel):
     object: Literal["embedding"]
     embedding: list[float] = Field(..., description="Vector of floats (length varies by model).")
     index: int
 
 
-class FinalResult(BaseModel):
+class FinalResult(LiteLLMBaseModel):
     object: Literal["list"]
     data: list[EmbeddingItem]
     model: str
     usage: Usage
 
 
-class EmbeddingsResponse(BaseModel):
+class EmbeddingsResponse(LiteLLMBaseModel):
     request_id: str
     final_result: FinalResult
 
 
-class EmbeddingModel(BaseModel):
+class EmbeddingModel(LiteLLMBaseModel):
     name: str
     version: str = "latest"
     params: dict = Field(default_factory=dict)
@@ -51,25 +52,25 @@ class EmbeddingModel(BaseModel):
     max_retries: int | None = Field(default=None, ge=0, le=5)
 
 
-class EmbeddingsModelConfig(BaseModel):
+class EmbeddingsModelConfig(LiteLLMBaseModel):
     model: EmbeddingModel
 
 
-class EmbeddingsModules(BaseModel):
+class EmbeddingsModules(LiteLLMBaseModel):
     embeddings: EmbeddingsModelConfig
     masking: MaskingModuleConfig | None = None
 
 
-class EmbeddingInput(BaseModel):
+class EmbeddingInput(LiteLLMBaseModel):
     text: str | list[str]
     type: Literal["text", "document", "query"] | None = None
 
 
-class EmbeddingConfig(BaseModel):
+class EmbeddingConfig(LiteLLMBaseModel):
     modules: EmbeddingsModules
 
 
-class EmbeddingRequest(BaseModel):
+class EmbeddingRequest(LiteLLMBaseModel):
     config: EmbeddingConfig
     input: EmbeddingInput
 

@@ -61,3 +61,4 @@ class LiteLLM_ManagedVectorStoresTable(LiteLLMPydanticObjectBase):
     litellm_params: dict[str, Any] | None = None
     team_id: str | None = None
     user_id: str | None = None
+    is_config: bool = False

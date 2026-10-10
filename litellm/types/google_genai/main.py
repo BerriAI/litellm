@@ -23,6 +23,14 @@ if TYPE_CHECKING:
     class GenerateContentResponse(GoogleGenAIGenerateContentResponse, BaseLiteLLMOpenAIResponseObject):
         _hidden_params: dict = {}
 
+        @property
+        def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+            return self._hidden_params
+
+        @hidden_params.setter
+        def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+            self._hidden_params = hidden_params
+
 else:
     # Fallback types when google.genai is not available
     ContentListUnion = Any
@@ -50,6 +58,14 @@ else:
             super().__init__(**kwargs)
 
     class GenerateContentResponse(BaseLiteLLMOpenAIResponseObject):
+        @property
+        def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+            return self._hidden_params
+
+        @hidden_params.setter
+        def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+            self._hidden_params = hidden_params
+
         def __init__(self, **kwargs) -> None:
             super().__init__(**kwargs)
             self._hidden_params = kwargs.get("_hidden_params", {})

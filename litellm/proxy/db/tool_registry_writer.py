@@ -8,6 +8,7 @@ Admins use the management endpoints to read and update input_policy / output_pol
 import uuid
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Protocol
 
 from pydantic import TypeAdapter
@@ -18,8 +19,11 @@ from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ToolRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.types.tool_management import (
     LiteLLM_ToolTableRow,
+    ToolDiscoveryUser,
     ToolPolicyOverrideRow,
 )
 
@@ -155,18 +159,65 @@ async def batch_upsert_tools(
         verbose_proxy_logger.error("tool_registry_writer batch_upsert_tools error: %s", e)
 
 
+_NO_OWNERS: Final[Mapping[str, ToolDiscoveryUser]] = MappingProxyType({})
+
+
+async def _key_owners(prisma_client: "PrismaClient", key_hashes: frozenset[str]) -> Mapping[str, ToolDiscoveryUser]:
+    """Map each key hash to the user that owns the key, skipping keys without an owner or an unknown owner."""
+    if not key_hashes:
+        return _NO_OWNERS
+    keys: Final = await VerificationTokenRepository(prisma_client).find_many_in("token", sorted(key_hashes))
+    owner_ids: Final = frozenset(key.user_id for key in keys if key.user_id)
+    if not owner_ids:
+        return _NO_OWNERS
+    users: Final = await UserRepository(prisma_client).find_many_in("user_id", sorted(owner_ids))
+    users_by_id: Final = MappingProxyType(
+        {
+            user.user_id: ToolDiscoveryUser(
+                user_id=user.user_id, user_email=user.user_email, user_alias=user.user_alias
+            )
+            for user in users
+        }
+    )
+    return MappingProxyType(
+        {key.token: users_by_id[key.user_id] for key in keys if key.token and key.user_id in users_by_id}
+    )
+
+
+async def _key_owners_or_none(
+    prisma_client: "PrismaClient", key_hashes: frozenset[str]
+) -> Mapping[str, ToolDiscoveryUser]:
+    from prisma.errors import PrismaError
+
+    try:
+        return await _key_owners(prisma_client, key_hashes)
+    except PrismaError as e:
+        verbose_proxy_logger.error("tool_registry_writer owner lookup error: %s", e)
+        return _NO_OWNERS
+
+
+async def _with_owners(
+    prisma_client: "PrismaClient", tools: Sequence[LiteLLM_ToolTableRow]
+) -> tuple[LiteLLM_ToolTableRow, ...]:
+    """Attach to each tool the user owning the key that discovered it; tools stay listed when that lookup fails."""
+    owners: Final = await _key_owners_or_none(
+        prisma_client, frozenset(tool.key_hash for tool in tools if tool.key_hash)
+    )
+    return tuple(tool.model_copy(update=MappingProxyType({"user": owners.get(tool.key_hash or "")})) for tool in tools)
+
+
 async def list_tools(
     prisma_client: "PrismaClient",
     input_policy: str | None = None,
 ) -> list[LiteLLM_ToolTableRow]:
-    """Return all tools, optionally filtered by input_policy."""
+    """Return all tools, optionally filtered by input_policy, each with the user owning the key that discovered it."""
     try:
         where: Final[Mapping[str, str]] = {"input_policy": input_policy} if input_policy is not None else {}
         rows: Final = await _tool_table_actions(prisma_client).find_many(
             where=where,
             order={"created_at": "desc"},
         )
-        return [_row_to_model(row) for row in rows]
+        return list(await _with_owners(prisma_client, tuple(_row_to_model(row) for row in rows)))
     except Exception as e:
         verbose_proxy_logger.error("tool_registry_writer list_tools error: %s", e)
         return []
@@ -176,14 +227,14 @@ async def get_tool(
     prisma_client: "PrismaClient",
     tool_name: str,
 ) -> LiteLLM_ToolTableRow | None:
-    """Return a single tool row by tool_name."""
+    """Return a single tool row by tool_name, with the user owning the key that discovered it."""
     try:
         row: Final = await _tool_table_actions(prisma_client).find_unique(
             where={"tool_name": tool_name},
         )
         if row is None:
             return None
-        return _row_to_model(row)
+        return (await _with_owners(prisma_client, (_row_to_model(row),)))[0]
     except Exception as e:
         verbose_proxy_logger.error("tool_registry_writer get_tool error: %s", e)
         return None

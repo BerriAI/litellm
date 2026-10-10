@@ -15,7 +15,7 @@ import httpx
 import os
 import json
 
-TEST_MASTER_KEY = "sk-1234"
+TEST_MASTER_KEY = os.environ["LITELLM_MASTER_KEY"]
 PROXY_BASE_URL = "http://0.0.0.0:4000"
 US_BASE_URL = f"{PROXY_BASE_URL}/assemblyai"
 ASSEMBLYAI_API_KEY_ENV_VAR = "ASSEMBLYAI_API_KEY"

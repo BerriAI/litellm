@@ -142,7 +142,7 @@ class TestRAGVertexAI(BaseRAGTest):
         - Long-running operation polling for corpus creation
         - File upload to the newly created corpus
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         filename, unique_id = self.get_unique_filename("create_corpus")
         text_content = f"""
@@ -207,7 +207,7 @@ class TestRAGVertexAI(BaseRAGTest):
         if not corpus_id:
             pytest.skip("Skipping test: VERTEX_CORPUS_ID not set")
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         filename, unique_id = self.get_unique_filename("existing_corpus")
         text_content = f"""
