@@ -18,8 +18,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import httpx
 import pytest
 import respx
-from openai import APITimeoutError
+from openai import APITimeoutError, OpenAI
 from openai.types.chat.chat_completion import ChatCompletion
+from openai.types.completion import Completion
+from openai.types.completion_choice import CompletionChoice
+from openai.types.completion_usage import CompletionUsage
 
 import litellm
 from litellm import acompletion, completion
@@ -5875,6 +5878,90 @@ def test_completion_openai_metadata(monkeypatch, enable_preview_features):
             assert "metadata" not in mock_completion.call_args.kwargs
 
 
+
+class _FakeRawTextCompletions:
+    def __init__(self) -> None:
+        self.kwargs: dict = {}
+
+    def create(self, **kwargs):  # type: ignore[no-untyped-def]
+        self.kwargs = kwargs
+        parsed: Final = Completion(
+            id="chatcmpl-test",
+            choices=[
+                CompletionChoice(
+                    finish_reason="stop", index=0, logprobs=None, text="ok"
+                )
+            ],
+            created=0,
+            model=kwargs["model"],
+            object="text_completion",
+            usage=CompletionUsage(
+                completion_tokens=1, prompt_tokens=5, total_tokens=6
+            ),
+        )
+        return type(
+            "_Raw",
+            (),
+            {"parse": lambda self: parsed, "headers": httpx.Headers()},
+        )()
+
+
+class _FakeTextCompletions:
+    def __init__(self) -> None:
+        self.with_raw_response: Final = _FakeRawTextCompletions()
+
+
+class _FakeOpenAITextClient(OpenAI):
+    def __init__(self) -> None:
+        super().__init__(api_key="EMPTY", base_url="http://127.0.0.1:18000/v1")
+        self.completions = _FakeTextCompletions()  # type: ignore[assignment]
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "hosted_vllm/Qwen/Qwen3-8B",
+        "fireworks_ai/accounts/fireworks/models/llama-v3p1-8b-instruct",
+    ],
+)
+def test_text_completion_token_ids_openai_compatible_providers(model: str) -> None:
+    token_ids: Final = [151644, 872, 198, 14990, 151645]
+    client: Final = _FakeOpenAITextClient()
+
+    litellm.text_completion(
+        model=model,
+        prompt=token_ids,
+        api_base="http://127.0.0.1:18000/v1",
+        api_key="EMPTY",
+        max_tokens=4,
+        client=client,
+    )
+
+    sent: Final = client.completions.with_raw_response.kwargs
+    assert sent["prompt"] == token_ids
+
+
+def test_text_completion_token_ids_together_ai_provider_validation() -> None:
+    token_ids: Final = [151644, 872, 198, 14990, 151645]
+    with pytest.raises(Exception, match="TogetherAI does not support integers"):
+        litellm.text_completion(
+            model="together_ai/Qwen/Qwen3-8B",
+            prompt=token_ids,
+            api_base="http://127.0.0.1:18000/v1",
+            api_key="EMPTY",
+            max_tokens=4,
+        )
+
+
+def test_text_completion_token_ids_unsupported_provider_raises() -> None:
+    token_ids: Final = [151644, 872, 198, 14990, 151645]
+    with pytest.raises(Exception, match="Unmapped prompt format"):
+        litellm.text_completion(
+            model="anthropic/claude-3-5-sonnet-20241022",
+            prompt=token_ids,
+            api_key="sk-ant-fake",
+            max_tokens=4,
+        )
 AZURE_TTS_BASE: Final = "https://tts.example.azure.com"
 SPEECH_INPUT: Final = "the quick brown fox jumped over the lazy dogs"
 

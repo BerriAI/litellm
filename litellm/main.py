@@ -7751,6 +7751,7 @@ def text_completion(
             or custom_llm_provider == "azure_text"
             or custom_llm_provider == "text-completion-codestral"
             or custom_llm_provider == "text-completion-openai"
+            or custom_llm_provider in litellm.openai_text_completion_compatible_providers
         )
         and isinstance(prompt, list)
         and len(prompt) > 0
