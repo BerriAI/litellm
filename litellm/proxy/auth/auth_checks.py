@@ -1273,6 +1273,17 @@ async def common_checks(
                 ),
                 _team_multi_budget_check(team_object=team_object),
                 _virtual_key_multi_budget_check(valid_token=valid_token) if valid_token is not None else None,
+                # The key's own max_budget. The stock virtual-key branch runs
+                # this inline, but custom-auth requests (custom_auth_run_common_checks)
+                # only pass through this gather, so without it a key's max_budget
+                # is never enforced on that path.
+                virtual_key_max_budget_check(
+                    valid_token=valid_token,
+                    proxy_logging_obj=proxy_logging_obj,
+                    user_obj=user_object,
+                )
+                if valid_token is not None and RouteChecks.is_llm_api_route(route=route)
+                else None,
                 _team_soft_budget_check(
                     team_object=team_object,
                     proxy_logging_obj=proxy_logging_obj,
