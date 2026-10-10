@@ -25121,3 +25121,70 @@ def test_reset_custom_routing_strategy():
     assert router.async_get_available_deployment.__func__ is Router.async_get_available_deployment
 
     router._reset_custom_routing_strategy()
+
+
+def test_azure_router_passes_deployment_credentials_for_sync_and_stream(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.delenv("AZURE_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("AZURE_AI_API_KEY", raising=False)
+
+    api_key: Final = "deployment-api-key"
+    api_base: Final = "https://router-azure.example.com"
+    api_version: Final = "2025-04-01-preview"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "router-azure.example.com"
+        assert request.url.path == "/openai/deployments/gpt-4.1-mini/chat/completions"
+        assert request.url.params.get("api-version") == api_version
+        assert request.headers["api-key"] == api_key
+        body: Final = json.loads(request.content)
+        if body.get("stream"):
+            chunk: Final = {
+                "id": "chatcmpl-router-test",
+                "object": "chat.completion.chunk",
+                "created": 1,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "delta": {"content": "ok"}, "finish_reason": "stop"}],
+            }
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                text=f"data: {json.dumps(chunk)}\n\ndata: [DONE]\n\n",
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-router-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4.1-mini",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+            },
+        )
+
+    route: Final = respx_mock.post(url__regex=r"https://router-azure\.example\.com/.*").mock(side_effect=respond)
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "azure-routed",
+                "litellm_params": {
+                    "model": "azure/gpt-4.1-mini",
+                    "api_key": api_key,
+                    "api_base": api_base,
+                    "api_version": api_version,
+                },
+            }
+        ]
+    )
+
+    response: Final = router.completion(model="azure-routed", messages=[{"role": "user", "content": "hello"}])
+    assert response.choices[0].message.content == "ok"
+    stream: Final = router.completion(
+        model="azure-routed", messages=[{"role": "user", "content": "hello"}], stream=True
+    )
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in stream) == "ok"
+    assert route.call_count == 2
+    stream_values: Final = tuple(json.loads(call.request.content).get("stream", False) for call in route.calls)
+    assert stream_values == (False, True)

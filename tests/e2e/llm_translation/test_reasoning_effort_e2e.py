@@ -25,25 +25,25 @@ CHAT_ROUTES: Final = (
     pytest.param(
         "azure_ai",
         "azure_ai/claude-fable-5-1",
-        ("AZURE_FOUNDRY_API_BASE", "AZURE_FOUNDRY_API_KEY"),
+        ("AZURE_AI_API_BASE", "AZURE_AI_API_KEY"),
         id="azure-ai",
     ),
     pytest.param(
         "vertex_ai",
         "vertex_ai/claude-fable-5-1",
-        ("VERTEX_PROJECT", "VERTEXAI_CREDENTIALS"),
+        ("VERTEXAI_PROJECT", "VERTEXAI_CREDENTIALS", "VERTEXAI_LOCATION"),
         id="vertex-ai",
     ),
     pytest.param(
         "bedrock_converse",
         "bedrock/converse/us.anthropic.claude-fable-5-1",
-        ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"),
+        ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"),
         id="bedrock-converse",
     ),
     pytest.param(
         "bedrock_invoke_chat",
         "bedrock/invoke/us.anthropic.claude-opus-4-6-v1",
-        ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"),
+        ("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"),
         id="bedrock-invoke-chat",
     ),
 )
@@ -57,14 +57,14 @@ def _deployment_params(route_name: str, model: str) -> LiteLLMParamsBody:
         case "azure_ai":
             return LiteLLMParamsBody(
                 model=model,
-                api_base="os.environ/AZURE_FOUNDRY_API_BASE",
-                api_key="os.environ/AZURE_FOUNDRY_API_KEY",
+                api_base="os.environ/AZURE_AI_API_BASE",
+                api_key="os.environ/AZURE_AI_API_KEY",
             )
         case "vertex_ai":
             return LiteLLMParamsBody(
                 model=model,
-                vertex_project="os.environ/VERTEX_PROJECT",
-                vertex_location="us-east5",
+                vertex_project="os.environ/VERTEXAI_PROJECT",
+                vertex_location="os.environ/VERTEXAI_LOCATION",
                 vertex_credentials="os.environ/VERTEXAI_CREDENTIALS",
             )
         case "bedrock_converse" | "bedrock_invoke_chat" | "bedrock_invoke_messages":
@@ -72,7 +72,7 @@ def _deployment_params(route_name: str, model: str) -> LiteLLMParamsBody:
                 model=model,
                 aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
                 aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
-                aws_region_name="us-east-1",
+                aws_region_name="os.environ/AWS_REGION",
             )
         case _:
             raise AssertionError(f"unknown reasoning route: {route_name}")
@@ -162,7 +162,7 @@ class TestReasoningEffort:
         resources: ResourceManager,
         sdk: SdkClients,
     ) -> None:
-        missing: Final = _missing_credentials(("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"))
+        missing: Final = _missing_credentials(("AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_REGION"))
         if missing:
             pytest.skip(f"bedrock_invoke_messages requires provider credentials: {', '.join(missing)}")
 
