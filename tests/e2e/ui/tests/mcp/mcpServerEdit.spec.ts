@@ -1,4 +1,7 @@
 import { test, expect, type Page as PlaywrightPage } from "@playwright/test";
+import { masterKey } from "../../helpers/traffic";
+import { navigateToPage } from "../../helpers/navigation";
+import { Page } from "../../fixtures/pages";
 import { ADMIN_STORAGE_PATH } from "../../constants";
 import { createMcpServer, deleteMcpServerByName } from "../../helpers/mcp";
 import { captureRequestBody, readBack } from "../../helpers/roundTrip";
@@ -78,7 +81,9 @@ test.describe("MCP Servers - edit and delete", () => {
     await page.getByRole("menuitem", { name: "Delete" }).click();
 
     const dialog = page.getByRole("alertdialog");
-    await expect(dialog.getByText("Delete MCP Server?")).toBeVisible({ timeout: 5_000 });
+    await expect(dialog.getByText("Delete MCP Server?")).toBeVisible({
+      timeout: 5_000,
+    });
     await dialog.getByRole("button", { name: "Delete", exact: true }).click();
 
     // One attempt has to be enough; the report is a delete that needs two.
@@ -88,5 +93,71 @@ test.describe("MCP Servers - edit and delete", () => {
         timeout: 15_000,
       })
       .toBeUndefined();
+  });
+});
+
+test.describe("MCP Servers - stdio environment", () => {
+  test.use({ storageState: ADMIN_STORAGE_PATH });
+  let serverName = "";
+
+  test.afterEach(async ({ page }) => {
+    if (serverName) await deleteMcpServerByName(page, serverName);
+  });
+
+  test("Editing a stdio server preserves, replaces, and clears its environment", async ({ page }, testInfo) => {
+    serverName = `e2e_stdio_env_${Date.now()}`;
+    const savedEnv = {
+      E2E_SETTING: "saved-value",
+      E2E_OPTION: "another-value",
+    };
+    const created = await page.request.post("/v1/mcp/server", {
+      headers: { Authorization: `Bearer ${masterKey()}` },
+      data: {
+        server_name: serverName,
+        alias: serverName,
+        transport: "stdio",
+        command: "python3",
+        args: ["--version"],
+        env: savedEnv,
+        mcp_info: {
+          server_name: serverName,
+          description: "Environment persistence regression",
+        },
+      },
+    });
+    expect(created.ok(), await created.text()).toBe(true);
+    await navigateToPage(page, Page.McpServers);
+    const openSettings = async () => {
+      await page.getByTestId("mcp-servers-grid").getByText(serverName).first().click();
+      await page.getByRole("tab", { name: "Settings", exact: true }).click();
+      const editSettings = page.getByRole("button", { name: "Edit Settings" });
+      if (await editSettings.isVisible()) await editSettings.click();
+    };
+    await openSettings();
+    const settingsPanel = page.getByRole("tabpanel", { name: "Settings" });
+    const envInput = settingsPanel.getByLabel("Environment (JSON object)");
+    await expect(envInput).toBeVisible();
+    await envInput.scrollIntoViewIfNeeded();
+    const screenshotPath = testInfo.outputPath("stdio-environment-form.png");
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+    await testInfo.attach("stdio-environment-form", { path: screenshotPath, contentType: "image/png" });
+    await expect.soft(envInput).toHaveValue(JSON.stringify(savedEnv, null, 2));
+
+    for (const env of [savedEnv, { E2E_SETTING: "replacement" }, {}]) {
+      if (env !== savedEnv) {
+        await openSettings();
+        await envInput.fill(Object.keys(env).length ? JSON.stringify(env) : "");
+      }
+      const saved = page.waitForResponse(
+        (response) => response.request().method() === "PUT" && response.url().includes("/v1/mcp/server"),
+      );
+      const update = await captureRequestBody(page, { method: "PUT", urlIncludes: "/v1/mcp/server" }, async () => {
+        await settingsPanel.getByRole("button", { name: "Save Changes" }).click();
+      });
+      expect.soft(update.env).toEqual(env);
+      expect((await saved).ok()).toBe(true);
+      await expect(page.getByTestId("mcp-servers-grid")).toBeVisible();
+      await expect.poll(async () => (await findServerByName(page, serverName))?.env).toEqual(env);
+    }
   });
 });

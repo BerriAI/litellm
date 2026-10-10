@@ -11387,6 +11387,10 @@ class Router:
         reasoning_efforts_initialized = False
         reasoning_efforts_unknown = False
         model_list: Final = self.get_model_list_of_routed_group(model_group)
+        model_group_description: Final[str | None] = next(
+            (d for d in (m.get("model_info", {}).get("description") for m in model_list) if isinstance(d, str)),
+            None,
+        )
         for model in model_list:
             is_match = False
             if (
@@ -11492,6 +11496,7 @@ class Router:
                     **{
                         "model_group": user_facing_model_group_name,
                         "providers": [llm_provider],
+                        "description": model_group_description,
                         **model_info,
                         "supports_fast_mode": True,
                         "supported_reasoning_efforts": None,
