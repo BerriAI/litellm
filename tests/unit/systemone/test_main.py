@@ -82,16 +82,27 @@ async def test_systemone_rejects_openai_input_and_points_at_decisions(respx_mock
 
 
 @pytest.mark.asyncio
-async def test_decisions_rejects_systemone_state_and_points_at_systemone(respx_mock: respx.MockRouter) -> None:
-    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json={})
+@pytest.mark.parametrize("use_async", (True, False), ids=("adecisions", "decisions"))
+async def test_decisions_with_state_still_sends_the_systemone_format_and_warns(
+    use_async: bool, respx_mock: respx.MockRouter
+) -> None:
+    route: Final = respx_mock.post(_TYPESAFE_URL).respond(json=_SYSTEMONE_RESPONSE)
+    kwargs: Final[Mapping[str, object]] = MappingProxyType(
+        {"model": "typesafe/jev-1.13", "state": _STATE, "questions": _SYSTEMONE_QUESTIONS, "api_key": "caller-key"}
+    )
 
-    with pytest.raises(litellm.BadRequestError, match=r"litellm\.systemone") as caught:
-        await litellm.adecisions(
-            model="openai/gpt-6-luna", state=_STATE, questions=_OPENAI_QUESTIONS, api_key="caller-key"
-        )
+    with pytest.warns(DeprecationWarning, match=r"litellm\.systemone"):
+        response: Final = await litellm.adecisions(**kwargs) if use_async else litellm.decisions(**kwargs)
 
-    assert caught.value.status_code == 400
-    assert not route.called
+    assert route.called
+    call: Final[Call] = respx_mock.calls.last
+    assert json.loads(call.request.content) == {
+        "model": "jev-1.13",
+        "state": _STATE,
+        "questions": {"is_refund": {"type": "noul", "instructions": "Is this a refund request?"}},
+    }
+    assert isinstance(response, DecisionsResponse)
+    assert response.answers["is_refund"].model_dump(mode="json") == {"type": "noul", "noul": 0.93}
 
 
 @pytest.mark.asyncio
