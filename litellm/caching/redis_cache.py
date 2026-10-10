@@ -797,6 +797,8 @@ class RedisCache(BaseCache):
     def init_async_client(
         self,
     ) -> async_redis_client | async_redis_cluster_client:
+        from redis.asyncio import RedisCluster
+
         from litellm import in_memory_llm_clients_cache
 
         from .._redis import get_redis_async_client, get_redis_connection_pool
@@ -809,7 +811,11 @@ class RedisCache(BaseCache):
             # Create new connection pool and client for current event loop
             self.async_redis_conn_pool = get_redis_connection_pool(**self.redis_kwargs)
             redis_async_client = get_redis_async_client(connection_pool=self.async_redis_conn_pool, **self.redis_kwargs)
-            in_memory_llm_clients_cache.set_cache(key=cache_key, value=redis_async_client)
+            in_memory_llm_clients_cache.set_cache(
+                key=cache_key,
+                value=redis_async_client,
+                litellm_owned_client=isinstance(redis_async_client, RedisCluster),
+            )
 
         self.redis_async_client = redis_async_client
         return redis_async_client
