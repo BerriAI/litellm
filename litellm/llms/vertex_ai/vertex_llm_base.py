@@ -416,6 +416,31 @@ class VertexBase:
         if self._async_refresh_locks.get(credential_cache_key) is lock:
             self._async_refresh_locks.pop(credential_cache_key, None)
 
+    def invalidate_cached_credentials(
+        self,
+        credentials: VERTEX_CREDENTIALS_TYPES | None,
+        project_id: str | None,
+        rejected_token: str,
+    ) -> None:
+        cache_credentials: Final = json.dumps(credentials) if isinstance(credentials, dict) else credentials
+        stale_keys: Final = [
+            key
+            for key in self._credentials_project_mapping
+            if key[0] == cache_credentials and self._cached_token(key) == rejected_token
+        ]
+        for key in stale_keys:
+            self._credentials_project_mapping.pop(key, None)
+        verbose_logger.debug(
+            "Dropped %d cached Vertex credential entries for project_id: %s", len(stale_keys), project_id
+        )
+
+    def _cached_token(self, credential_cache_key: tuple[VERTEX_CREDENTIALS_TYPES | None, str | None]) -> str | None:
+        entry: Final = self._credentials_project_mapping.get(credential_cache_key)
+        creds: Final = entry[0] if isinstance(entry, tuple) else entry
+        if creds is None or not isinstance(creds.token, str):
+            return None
+        return creds.token
+
     def _try_get_cached_token(
         self,
         credential_cache_key: tuple,

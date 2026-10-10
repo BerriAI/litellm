@@ -8945,3 +8945,204 @@ def test_map_openai_params_audio_voice_reaches_speech_config_mapped() -> None:
         drop_params=False,
     )
     assert optional_params["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"] == "Kore"
+
+
+class _FakeVertexCredentials:
+    """Stands in for google.oauth2 service-account credentials. Each refresh mints the next
+    token from a shared sequence so a reload after invalidation is visible as a new token."""
+
+    def __init__(self, tokens: "list[str]"):
+        import datetime
+
+        from google.auth.credentials import TokenState
+
+        self._tokens = tokens
+        self.token: str | None = None
+        self.expiry = datetime.datetime(2099, 1, 1)
+        self.token_state = TokenState.INVALID
+        self.project_id = "proj-1"
+        self.quota_project_id = "proj-1"
+
+    def refresh(self, request) -> None:
+        from google.auth.credentials import TokenState
+
+        self.token = self._tokens.pop(0)
+        self.token_state = TokenState.FRESH
+
+    @property
+    def expired(self) -> bool:
+        return False
+
+    @property
+    def valid(self) -> bool:
+        return self.token is not None
+
+
+def _patch_google_credentials(tokens: "list[str]"):
+    """Every credential load mints the next token in `tokens`."""
+    return patch(
+        "google.oauth2.service_account.Credentials.from_service_account_info",
+        side_effect=lambda *_, **__: _FakeVertexCredentials(tokens),
+    )
+
+
+def _gemini_ok(request: httpx.Request, text: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={
+            "candidates": [{"content": {"parts": [{"text": text}], "role": "model"}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+        },
+        request=request,
+    )
+
+
+def _gemini_auth_error(request: httpx.Request, status: int) -> httpx.Response:
+    return httpx.Response(
+        status,
+        json={"error": {"code": status, "status": "UNAUTHENTICATED", "message": "token rejected"}},
+        request=request,
+    )
+
+
+def _vertex_call_kwargs(test_name: str) -> dict:
+    """Distinct credentials per test: the handler's credential cache is module level."""
+    return {
+        "model": "vertex_ai/gemini-2.0-flash",
+        "messages": [{"role": "user", "content": "hi"}],
+        "vertex_project": "proj-1",
+        "vertex_location": "us-central1",
+        "vertex_credentials": {"type": "service_account", "project_id": "proj-1", "private_key_id": test_name},
+    }
+
+
+@pytest.mark.asyncio
+async def test_vertex_401_invalidates_cached_credentials_and_retries_once():
+    """A token Google rejects with 401 must be dropped from the credential cache and the
+    request retried once with freshly loaded credentials. Regression for the case where a
+    cached but revoked or edge-expired token was served until it expired on its own."""
+    tokens_seen: list[str] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        tokens_seen.append(request.headers["Authorization"])
+        if request.headers["Authorization"] == "Bearer tok-1":
+            return _gemini_auth_error(request, 401)
+        return _gemini_ok(request, "ok after refresh")
+
+    with _patch_google_credentials(["tok-1", "tok-2"]) as mock_loader:
+        response = await litellm.acompletion(
+            **_vertex_call_kwargs("test_vertex_401_invalidates_cached_credentials_and_retries_once"),
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream)),
+        )
+
+    assert response.choices[0].message.content == "ok after refresh"
+    assert tokens_seen == ["Bearer tok-1", "Bearer tok-2"]
+    assert mock_loader.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_vertex_401_retry_happens_only_once():
+    calls = 0
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _gemini_auth_error(request, 401)
+
+    with (
+        _patch_google_credentials(["tok-1", "tok-2", "tok-3"]),
+        pytest.raises(litellm.AuthenticationError),
+    ):
+        await litellm.acompletion(
+            **_vertex_call_kwargs("test_vertex_401_retry_happens_only_once"),
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream)),
+        )
+
+    assert calls == 2
+
+
+@pytest.mark.asyncio
+async def test_vertex_non_401_error_is_not_retried():
+    calls = 0
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        return _gemini_auth_error(request, 403)
+
+    with (
+        _patch_google_credentials(["tok-1", "tok-2"]) as mock_loader,
+        pytest.raises(litellm.BadRequestError),
+    ):
+        await litellm.acompletion(
+            **_vertex_call_kwargs("test_vertex_non_401_error_is_not_retried"),
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream)),
+        )
+
+    assert calls == 1
+    assert mock_loader.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_vertex_401_from_context_cache_lookup_is_retried_with_fresh_credentials():
+    """With cache_control on the prompt LiteLLM lists Vertex cachedContents before generateContent,
+    with the same token. A 401 from that listing must also drop the credential and retry."""
+    cache_requests: list[tuple[str, str, str]] = []
+    cache_name = "projects/proj-1/locations/us-central1/cachedContents/4242"
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        token = request.headers["Authorization"]
+        if request.url.path.endswith("/cachedContents"):
+            cache_requests.append((request.method, request.url.path, token))
+            if token == "Bearer tok-1":
+                return _gemini_auth_error(request, 401)
+            if request.method == "GET":
+                return httpx.Response(200, json={"cachedContents": []}, request=request)
+            return httpx.Response(200, json={"name": cache_name, "model": "gemini-2.0-flash"}, request=request)
+        body = json.loads(request.content)
+        assert body.get("cachedContent") == cache_name
+        return _gemini_ok(request, "cached ok")
+
+    long_system_prompt = " ".join(f"rule{i} applies to every answer" for i in range(400))
+    kwargs = _vertex_call_kwargs("test_vertex_401_from_context_cache_lookup_is_retried_with_fresh_credentials")
+    kwargs["messages"] = [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": long_system_prompt, "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "hi", "cache_control": {"type": "ephemeral"}}]},
+    ]
+
+    with _patch_google_credentials(["tok-1", "tok-2"]):
+        response = await litellm.acompletion(
+            **kwargs,
+            client=AsyncHTTPHandler(transport=httpx.MockTransport(upstream)),
+        )
+
+    assert response.choices[0].message.content == "cached ok"
+    assert [(method, token) for method, _, token in cache_requests] == [
+        ("GET", "Bearer tok-1"),
+        ("GET", "Bearer tok-2"),
+        ("POST", "Bearer tok-2"),
+    ]
+
+
+def test_vertex_401_sync_completion_retries_with_fresh_credentials():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    tokens_seen: list[str] = []
+
+    def upstream(request: httpx.Request) -> httpx.Response:
+        tokens_seen.append(request.headers["Authorization"])
+        if request.headers["Authorization"] == "Bearer tok-1":
+            return _gemini_auth_error(request, 401)
+        return _gemini_ok(request, "sync ok")
+
+    with _patch_google_credentials(["tok-1", "tok-2"]):
+        response = litellm.completion(
+            **_vertex_call_kwargs("test_vertex_401_sync_completion_retries_with_fresh_credentials"),
+            client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(upstream))),
+        )
+
+    assert response.choices[0].message.content == "sync ok"
+    assert tokens_seen == ["Bearer tok-1", "Bearer tok-2"]
