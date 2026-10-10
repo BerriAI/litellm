@@ -658,6 +658,7 @@ if MCP_AVAILABLE:
         _stateful_session_locks.pop(session_id, None)
         _stateful_session_active_request_counts.pop(session_id, None)
         _stateful_session_client_info.pop(session_id, None)
+        operations.global_mcp_server_manager.release_upstream_sessions(session_id)
 
     # Keep this alias so existing references to session_manager still work
     session_manager: Final = session_manager_stateless
@@ -793,6 +794,7 @@ if MCP_AVAILABLE:
                     _stateful_auth_context_cleanup_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await _stateful_auth_context_cleanup_task
+                await operations.global_mcp_server_manager.close_all_upstream_sessions()
                 if _session_manager_stateful_cm:
                     await _session_manager_stateful_cm.__aexit__(None, None, None)
                 if _session_manager_cm:
@@ -2859,6 +2861,7 @@ if MCP_AVAILABLE:
                         _stateful_session_auth_contexts[session_id] = auth_user
                         _stateful_session_auth_context_last_seen[session_id] = time.monotonic()
                         _stateful_session_owners[session_id] = owner_fingerprint
+                        operations.global_mcp_server_manager.track_gateway_session(session_id)
                         if client_info is not None:
                             _stateful_session_client_info[session_id] = client_info
                         break
