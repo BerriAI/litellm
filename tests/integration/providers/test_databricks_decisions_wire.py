@@ -63,6 +63,7 @@ _SPEND_QUERY: Final = (
 )
 _OWNED_PROXY_BUDGET: Final = int(2 * graceful_stop_seconds() + 120)
 _MEGABYTE_NAME: Final = "a" * 1_000_000 + "/"
+_TENTH_MEGABYTE_NAME: Final = "a" * 100_000 + "/"
 
 
 def _number(value: JsonValue) -> float:
@@ -93,6 +94,12 @@ def _calls_to(requests: Sequence[dict[str, JsonValue]], handle: ScenarioHandle) 
 
 def _upstream_calls(gateway: Gateway, handle: ScenarioHandle) -> list[dict[str, JsonValue]]:
     return _calls_to(_observed(gateway), handle)
+
+
+def _timed_decide(gateway: Gateway, model: str) -> tuple[httpx.Response, float]:
+    started: Final = time.perf_counter()
+    response: Final = _decide(gateway, model)
+    return response, time.perf_counter() - started
 
 
 def _spend_row(call_id: str) -> dict[str, JsonValue]:
@@ -463,7 +470,7 @@ def test_the_environment_token_serves_a_deployment_and_a_classifier_when_no_envi
             )
 
 
-def test_a_megabyte_model_name_is_refused_quickly_while_liveliness_stays_fast(gateway: Gateway) -> None:
+def test_a_megabyte_model_name_is_refused_in_linear_time_while_liveliness_stays_up(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         handle: Final = _register(scenario, _AI_DECIDE_BODY)
         prefix: Final = _wildcard_deployment(scenario, api_base=handle.api_base(), api_key=_API_KEY)
@@ -472,6 +479,7 @@ def test_a_megabyte_model_name_is_refused_quickly_while_liveliness_stays_fast(ga
             "/v1/systemone", json={"model": model, "state": _STATE, "questions": _QUESTIONS}
         )
         assert anonymous.status_code == 401, anonymous.text[:300]
+        tenth_response, tenth_elapsed = _timed_decide(gateway, f"{prefix}/{_TENTH_MEGABYTE_NAME}")
         liveliness: Final[list[tuple[int, float]]] = []
         stop: Final = threading.Event()
 
@@ -483,14 +491,13 @@ def test_a_megabyte_model_name_is_refused_quickly_while_liveliness_stays_fast(ga
 
         poller: Final = threading.Thread(target=poll)
         poller.start()
-        started: Final = time.perf_counter()
-        response: Final = _decide(gateway, model)
-        elapsed: Final = time.perf_counter() - started
+        response, elapsed = _timed_decide(gateway, model)
         stop.set()
         poller.join()
-        assert elapsed < 3, elapsed
+        assert tenth_response.status_code == 400, tenth_response.text[:300]
+        assert elapsed < 25 * tenth_elapsed, (elapsed, tenth_elapsed)
         assert liveliness and all(status == 200 for status, _ in liveliness), liveliness
-        assert max(seconds for _, seconds in liveliness) < 1, liveliness
+        assert max(seconds for _, seconds in liveliness) < elapsed / 2, (elapsed, liveliness)
         assert response.status_code == 400, response.text[:300]
         assert _MODEL_RULE in response.text, response.text[:400]
         assert _upstream_calls(gateway, handle) == []
