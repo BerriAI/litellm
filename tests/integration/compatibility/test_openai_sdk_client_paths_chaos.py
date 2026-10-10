@@ -390,7 +390,7 @@ def test_c02_worker_sigkill_mid_burst_keeps_serving_and_respawns(
             respawned: Final = eventually(
                 partial(_alive_workers, owned.process),
                 lambda found: len(found) == 2 and victim.pid not in {worker.pid for worker in found},
-                seconds=120,
+                seconds=graceful_stop_seconds() + 60,
             )
             record_property("c02_process_tree_after_respawn", _process_tree(owned.process))
             record_property("c02_respawned_worker_pids", str(tuple(worker.pid for worker in respawned)))
@@ -403,9 +403,10 @@ def test_c02_worker_sigkill_mid_burst_keeps_serving_and_respawns(
             _landed_once((survivor.response_id, after_respawn.response_id))
             response_ids: Final = tuple(outcome.response_id for outcome in completed)
             assert len(set(response_ids)) == len(completed), response_ids
-            landed: Final = tuple(outcome for outcome in completed if len(_spend_rows(outcome.response_id)) == 1)
-            lost: Final = tuple(outcome for outcome in completed if len(_spend_rows(outcome.response_id)) == 0)
-            assert len(landed) + len(lost) == len(completed), (landed, lost)
+            spend_row_counts: Final = tuple((outcome, len(_spend_rows(outcome.response_id))) for outcome in completed)
+            landed: Final = tuple(outcome for outcome, count in spend_row_counts if count == 1)
+            lost: Final = tuple(outcome for outcome, count in spend_row_counts if count == 0)
+            assert len(landed) + len(lost) == len(completed), spend_row_counts
             record_property("c02_spend_query", _SPEND_QUERY)
             record_property("c02_burst_ids_landed_once", len(landed))
             record_property("c02_burst_ids_lost", len(lost))

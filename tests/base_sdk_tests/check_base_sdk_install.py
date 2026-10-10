@@ -55,7 +55,7 @@ def check_environment_is_base_only() -> str:
     owners: Final = packages_distributions()
     installed: Final = tuple(name for name in EXTRAS_ONLY_MODULES if importlib.util.find_spec(name) is not None)
     inherited: Final = tuple(
-        name for name in installed if from_base & {_canonical(owner) for owner in owners.get(name, ())}
+        name for name in installed if from_base & {_canonical(owner) for owner in owners.get(name) or (name,)}
     )
     present: Final = tuple(name for name in installed if name not in inherited)
     _require(
