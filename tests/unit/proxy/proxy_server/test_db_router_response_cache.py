@@ -80,10 +80,14 @@ async def test_db_router_rebuild_serves_same_caller_from_cache_and_isolates_call
     first = await router.acompletion(model="fake-model", messages=request, user=same_caller_id)
     await asyncio.wait_for(cache_write_complete.wait(), timeout=5)
     same_caller = await router.acompletion(model="fake-model", messages=request, user=same_caller_id)
+    # The identical body and caller must be served from the cached response.
+    assert same_caller.id == first.id
+    assert provider_calls == 1
+
     other_caller = await router.acompletion(model="fake-model", messages=request, user=other_caller_id)
 
-    assert first.id == same_caller.id
-    assert first.id != other_caller.id
+    # Changing only the authenticated caller must miss the cache.
+    assert other_caller.id != first.id
     assert provider_calls == 2
 
 
