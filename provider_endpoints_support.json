@@ -1581,6 +1581,24 @@
         "interactions": true
       }
     },
+    "llmman": {
+      "display_name": "Llmman (`llmman`)",
+      "url": "https://docs.litellm.ai/docs/providers/llmman",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": true,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": true,
+        "interactions": true
+      }
+    },
     "lm_studio": {
       "display_name": "LM Studio (`lm_studio`)",
       "url": "https://docs.litellm.ai/docs/providers/lm_studio",

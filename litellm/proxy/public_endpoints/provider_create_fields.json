@@ -2024,6 +2024,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "LLMMAN",
+    "provider_display_name": "Llmman",
+    "litellm_provider": "llmman",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "http://127.0.0.1:17434/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": false,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "qwen3.8"
+  },
+  {
     "provider": "LM_STUDIO",
     "provider_display_name": "Lm Studio",
     "litellm_provider": "lm_studio",
