@@ -874,7 +874,7 @@ describe("SystemOneUI integration", () => {
       fill(question("team").getByRole("textbox", { name: "Description of infra" }), "Deploys");
 
       await user.click(screen.getByRole("button", { name: "Add question" }));
-      await pickAnswerType(user, "question_1", "noul");
+      await pickAnswerType(user, "question_1", "Noul");
       rename(question("question_1").getByRole("textbox", { name: "Question name" }), "urgent");
       fill(question("urgent").getByRole("textbox", { name: "Instructions" }), "Is this blocking users?");
       fill(question("urgent").getByRole("textbox", { name: "Yes means" }), "Nobody can log in");
