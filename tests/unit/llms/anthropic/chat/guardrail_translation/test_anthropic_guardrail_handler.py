@@ -182,7 +182,7 @@ class TestAnthropicMessagesHandlerStreamingRequestData:
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=True),
             patch(
-                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler.build_complete_streaming_response",
                 return_value=mock_response,
             ),
         ):
@@ -241,7 +241,7 @@ class TestAnthropicMessagesHandlerStreamingOutputProcessing:
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=True),
             patch(
-                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler.build_complete_streaming_response",
                 return_value=None,
             ),
         ):
@@ -1353,7 +1353,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=True),
             patch(
-                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler.build_complete_streaming_response",
                 return_value=mock_response,
             ),
         ):
@@ -1400,7 +1400,7 @@ class TestAnthropicMessagesHandlerInputProcessing:
         with (
             patch.object(handler, "_check_streaming_has_ended", return_value=True),
             patch(
-                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler._build_complete_streaming_response",
+                "litellm.llms.anthropic.chat.guardrail_translation.handler.AnthropicPassthroughLoggingHandler.build_complete_streaming_response",
                 return_value=mock_response,
             ),
         ):
@@ -2488,6 +2488,28 @@ class TestAnthropicMessagesHandlerStreamingScanKey:
         assert len(ended_key.tool_calls) == 1 and "get_weather" in ended_key.tool_calls[0]
         assert ended_key.tool_calls_in_flight is False
         assert ended_key != open_key
+
+    def test_released_stream_as_ended_keys_the_tool_use_the_client_already_received(self):
+        handler = AnthropicMessagesHandler()
+        tool_use = self._sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 1,
+                "content_block": {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {}},
+            },
+        )
+        stopped_key = handler.get_streaming_scan_key([self._text_delta("hi"), tool_use, self._stop("tool_use")])
+        released_key = handler.get_streaming_scan_key(
+            handler.released_stream_as_ended([self._text_delta("hi"), tool_use])
+        )
+        assert released_key.stream_ended is True
+        assert released_key == stopped_key
+
+    def test_released_stream_as_ended_leaves_a_text_only_stream_as_released(self):
+        released = (self._text_delta("hi"), self._text_delta(" there"))
+        ended = AnthropicMessagesHandler().released_stream_as_ended(released)
+        assert ended == released and all(a is b for a, b in zip(ended, released, strict=True))
 
 
 class PerRowTextGuardrail(CustomGuardrail):

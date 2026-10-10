@@ -1,10 +1,34 @@
 import os
 import sys
+from enum import Enum
 from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_in_range, get_env_int_or_none
 
+MICROSOFT_GRAPH_BETA_BASE: Final = "https://graph.microsoft.com/beta"
+OAUTH_TOKEN_EXCHANGE_CACHE_SAFETY_MARGIN_SECONDS: Final = 60
+MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_PROFILE: Final = "jwt_bearer_obo"
+MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.microsoft.com/.default"
+# Replies depend on the caller's delegated identity, which response-cache keys do not include.
+RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot"})
+MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
+GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
+GITHUB_COPILOT_AUTH_TYPE_KEY: Final = "github_copilot_auth_type"
+GITHUB_COPILOT_USER_TOKEN_SAFETY_MARGIN_SECONDS: Final = 60
+GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
+GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX: Final = "github_copilot_device_flow"
+USER_PROVIDER_CREDENTIAL_CACHE_PREFIX: Final = "user_provider_credential"
+USER_PROVIDER_CREDENTIAL_NOT_CONNECTED: Final = "__not_connected__"
+SERVER_STREAMING_CLASSIFICATION_KEY: Final = "litellm_server_streaming_classification"
+
+
+class ServerStreamingClassification(str, Enum):
+    MARKER = "litellm-server-streaming"
+
+
+SERVER_STREAMING_CLASSIFICATION_MARKER: Final = ServerStreamingClassification.MARKER
+DEFER_PYDANTIC_BUILD: Final = os.getenv("DEFER_PYDANTIC_BUILD", "true") in ("true", "1", "on")
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
 AZURE_OPENAI_AUDIO_PROVIDERS: Final = frozenset({"azure", "azure_ai"})
@@ -55,9 +79,16 @@ DEFAULT_AGENT_TRACING_RETENTION_DAYS: Final = 14
 OTLP_MAX_BODY_BYTES: Final = get_env_int("OTLP_MAX_BODY_BYTES", 16 * 1024 * 1024)
 OTLP_MAX_ATTRIBUTE_VALUE_BYTES: Final = get_env_int("OTLP_MAX_ATTRIBUTE_VALUE_BYTES", 64 * 1024)
 OTLP_RETRY_AFTER_SECONDS: Final = get_env_int("OTLP_RETRY_AFTER_SECONDS", 2)
+TRACE_READ_RETRY_AFTER_SECONDS: Final = get_env_int("TRACE_READ_RETRY_AFTER_SECONDS", 2)
 OTLP_MAX_CONCURRENT_INGESTS: Final = get_env_int("OTLP_MAX_CONCURRENT_INGESTS", 2)
 AGENT_TRACING_INPUT_PREVIEW_CHARS: Final = get_env_int("AGENT_TRACING_INPUT_PREVIEW_CHARS", 240)
 AGENT_TRACING_LIST_PAGE_SIZE: Final = get_env_int("AGENT_TRACING_LIST_PAGE_SIZE", 50)
+AGENT_TRACING_AGENT_LIST_LIMIT: Final = get_env_int("AGENT_TRACING_AGENT_LIST_LIMIT", 500)
+LENS_DATASET_MAX_CASES: Final = get_env_int("LENS_DATASET_MAX_CASES", 200)
+LENS_DATASET_MAX_CASE_CHARS: Final = get_env_int("LENS_DATASET_MAX_CASE_CHARS", 20_000)
+LENS_DATASET_TRACE_PAGE_SIZE: Final = 500
+LENS_FEEDBACK_MAX_COMMENT_CHARS: Final = 10_000
+LENS_FEEDBACK_MAX_SCORE: Final = 10
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_S3_BATCH_SIZE: Final = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
 DEFAULT_S3_MAX_CONCURRENT_UPLOADS: Final = int(os.getenv("DEFAULT_S3_MAX_CONCURRENT_UPLOADS", "16"))
@@ -267,6 +298,7 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = int(
 
 # Provider-specific API base URLs
 XAI_API_BASE: Final = "https://api.x.ai/v1"
+PLACEHOLDER_API_KEY: Final = "fake-api-key"
 OPEN_SANDBOX_API_BASE_ENV_VAR: Final = "OPEN_SANDBOX_API_BASE"
 OPEN_SANDBOX_API_KEY_ENV_VAR: Final = "OPEN_SANDBOX_API_KEY"
 OPEN_SANDBOX_DEFAULT_TEMPLATE: Final = "opensandbox/code-interpreter:v1.1.0"
@@ -385,6 +417,11 @@ DEFAULT_SSL_CIPHERS: Final = os.getenv(
 ########### v2 Architecture constants for managing writing updates to the database ###########
 REDIS_UPDATE_BUFFER_KEY: Final = "litellm_spend_update_buffer"
 REDIS_GATEWAY_REQUESTS_BUFFER_KEY: Final = "litellm_gateway_requests_buffer"
+REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2: Final = "litellm_gateway_requests_buffer_v2"
+REDIS_REQUEST_ERRORS_BUFFER_KEY: Final = "litellm_request_errors_buffer"
+REQUEST_ERRORS_UNKNOWN_STATUS_CODE: Final = 0
+REQUEST_ERRORS_MAX_ROWS_PER_UPSERT: Final = 1000
+GATEWAY_REQUESTS_MAX_ROWS_PER_UPSERT: Final = 1000
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_team_spend_update_buffer"
 REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_org_spend_update_buffer"
@@ -662,6 +699,10 @@ EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE: Final = float(
 ANTHROPIC_TOKEN_COUNTING_BETA_VERSION = os.getenv("ANTHROPIC_TOKEN_COUNTING_BETA_VERSION", "token-counting-2024-11-01")
 ANTHROPIC_SKILLS_API_BETA_VERSION: Final = "skills-2025-10-02"
 ANTHROPIC_BATCHES_ROUTE: Final = "/v1/messages/batches"
+ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX: Final = 1568
+ANTHROPIC_IMAGE_MAX_PIXELS: Final = 1_150_000
+ANTHROPIC_IMAGE_PIXELS_PER_TOKEN: Final = 750
+PDF_DATA_URL_PREFIX: Final = "data:application/pdf;base64,"
 VERTEX_BATCH_PREDICTION_JOBS_ROUTE: Final = "batchPredictionJobs"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES: Final = {
     "low": 1,
@@ -965,6 +1006,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.cortecs.ai/v1",
     "https://api.scx.ai/v1",
     "https://api.prisminference.com/v1",
+    "https://api.reka.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
 ]
 
@@ -1041,6 +1083,7 @@ openai_compatible_providers: Final[list] = [
     "scx-ai",
     "prism",
     "sail",
+    "reka",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
@@ -1070,7 +1113,7 @@ openai_text_completion_compatible_providers: Final[list] = [  # providers that s
     "hyperbolic",
     "wandb",
 ]
-_openai_like_providers: Final[list] = [
+_openai_like_providers: Final[list[str]] = [
     "predibase",
     "databricks",
     "lemonade",
@@ -1546,6 +1589,8 @@ AZURE_STORAGE_DEFAULT_ENDPOINT_SUFFIX: Final = "core.windows.net"
 PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES: Final = int(
     os.getenv("PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES", 5)
 )
+PROMETHEUS_OVERFLOW_SERIES_LABEL_VALUE: Final = "other"
+PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX: Final = "litellm_admitted_series_"
 CLOUDZERO_EXPORT_INTERVAL_MINUTES: Final = int(os.getenv("CLOUDZERO_EXPORT_INTERVAL_MINUTES", 60))
 MCP_TOOL_NAME_PREFIX: Final = "mcp_tool"
 MAXIMUM_TRACEBACK_LINES_TO_LOG: Final = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG", 100))
@@ -1801,6 +1846,7 @@ SPEND_LOG_PARTITION_INTERVAL: Final = os.getenv("SPEND_LOG_PARTITION_INTERVAL", 
 SPEND_LOG_PARTITION_PRECREATE_AHEAD: Final = int(os.getenv("SPEND_LOG_PARTITION_PRECREATE_AHEAD", 7))
 SPEND_LOG_WRITE_BATCH_MAX_BYTES: Final = max(1, int(os.getenv("SPEND_LOG_WRITE_BATCH_MAX_BYTES", 2_000_000)))
 SPEND_LOG_WRITE_BATCH_MAX_ROWS: Final = max(1, int(os.getenv("SPEND_LOG_WRITE_BATCH_MAX_ROWS", "100")))
+SPEND_ROLLUP_LOCK_TIMEOUT_MS: Final = max(1, int(os.getenv("SPEND_ROLLUP_LOCK_TIMEOUT_MS", "5000")))
 SPEND_LOG_QUEUE_SIZE_THRESHOLD: Final = int(os.getenv("SPEND_LOG_QUEUE_SIZE_THRESHOLD", 100))
 SPEND_LOG_QUEUE_MAX_BYTES: Final = max(1, int(os.getenv("SPEND_LOG_QUEUE_MAX_BYTES", "64000000")))
 SPEND_LOG_QUEUE_POLL_INTERVAL: Final = float(os.getenv("SPEND_LOG_QUEUE_POLL_INTERVAL", 2.0))
@@ -1822,6 +1868,8 @@ RESET_BUDGET_JOB_LOCK_TTL_SECONDS: Final[int] = 900
 PROXY_BATCH_POLLING_INTERVAL: Final = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 3600))
 MAX_OBJECTS_PER_POLL_CYCLE: Final = max(1, int(os.getenv("MAX_OBJECTS_PER_POLL_CYCLE", 50)))
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS: Final = max(1, int(os.getenv("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7)))
+BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS: Final = 10.0
+BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS: Final = 60
 STALE_OBJECT_CLEANUP_BATCH_SIZE: Final = max(1, int(os.getenv("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000)))
 # Set PROXY_BATCH_POLLING_ENABLED=false to disable the CheckBatchCost and
 # CheckResponsesCost background polling jobs entirely (e.g. to avoid DB load on
@@ -2204,6 +2252,16 @@ BATCH_ENQUEUED_TOKEN_TTL_SECONDS: Final[int] = 8 * 24 * 60 * 60
 # admins may write it: when present it replaces the standard RPM/TPM checks for
 # batch submissions.
 BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
+MAX_BATCH_FILE_RECORDS_KEY: Final = "max_batch_file_records"
+MAX_BATCH_FILE_UPLOADS_PER_DAY_KEY: Final = "max_batch_file_uploads_per_day"
+MAX_FILE_DOWNLOADS_PER_MINUTE_KEY: Final = "max_file_downloads_per_minute"
+ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS: Final = (
+    BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    MAX_BATCH_FILE_RECORDS_KEY,
+    MAX_BATCH_FILE_UPLOADS_PER_DAY_KEY,
+    MAX_FILE_DOWNLOADS_PER_MINUTE_KEY,
+)
+FILE_USAGE_MAX_TRACKED_COUNTERS: Final = 20_000
 
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.
@@ -2234,3 +2292,5 @@ HARNESS_SNAPSHOT_SKIP_DIRS: Final = frozenset(
         ".ruff_cache",
     }
 )
+
+DEFAULT_TOOL_LOOP_MAX_ROUNDS: Final = 20

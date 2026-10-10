@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, TypeAdapter
+from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -30,6 +30,7 @@ from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import (
     SpendLogsPartitionManager,
 )
 from litellm.proxy.utils import PrismaClient
+from litellm.types.llms.base import LiteLLMBaseModel
 
 StopReason: TypeAlias = Literal["exhausted", "budget_exhausted", "batch_cap_reached", "aborted"]
 
@@ -76,7 +77,7 @@ def _record_run_batch(rows_deleted: int) -> None:
         progress.record_batch(rows_deleted)
 
 
-class _RemainingRow(BaseModel):
+class _RemainingRow(LiteLLMBaseModel):
     """One row of the capped outstanding-rows probe, validated out of prisma's untyped result."""
 
     remaining: int

@@ -14,11 +14,11 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from litellm.llms.vertex_ai.gemini.transformation import (
+    gemini_convert_messages_with_history,
+)
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
-)
-from litellm.llms.vertex_ai.gemini.transformation import (
-    _gemini_convert_messages_with_history,
 )
 from litellm.types.llms.vertex_ai import HttpxPartType
 
@@ -227,7 +227,7 @@ class TestReInjectServerSideToolInvocations:
             {"role": "user", "content": "Thanks!"},
         ]
 
-        contents = _gemini_convert_messages_with_history(messages)
+        contents = gemini_convert_messages_with_history(messages)
 
         # Find the model turn
         model_turn = [c for c in contents if c["role"] == "model"]
@@ -276,7 +276,7 @@ class TestReInjectServerSideToolInvocations:
             {"role": "user", "content": "Thanks!"},
         ]
 
-        contents = _gemini_convert_messages_with_history(messages)
+        contents = gemini_convert_messages_with_history(messages)
 
         model_turn = [c for c in contents if c["role"] == "model"]
         assert len(model_turn) == 1
@@ -312,7 +312,7 @@ class TestReInjectServerSideToolInvocations:
             {"role": "user", "content": "Thanks!"},
         ]
 
-        contents = _gemini_convert_messages_with_history(messages)
+        contents = gemini_convert_messages_with_history(messages)
 
         model_turn = [c for c in contents if c["role"] == "model"]
         assert len(model_turn) == 1
@@ -331,7 +331,7 @@ class TestReInjectServerSideToolInvocations:
             {"role": "user", "content": "Bye"},
         ]
 
-        contents = _gemini_convert_messages_with_history(messages)
+        contents = gemini_convert_messages_with_history(messages)
         model_turn = [c for c in contents if c["role"] == "model"]
         assert len(model_turn) == 1
 

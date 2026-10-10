@@ -10,6 +10,8 @@ from pathlib import Path
 
 import pytest
 
+from litellm.constants import PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 COMPONENT_ENTRYPOINT = REPO_ROOT / "docker" / "component_entrypoint.sh"
 PROD_ENTRYPOINT = REPO_ROOT / "docker" / "prod_entrypoint.sh"
@@ -229,11 +231,14 @@ def test_gating_matches_the_monolithic_entrypoint_and_get_secret_bool(
 
 def test_wipes_the_prometheus_multiproc_dir_before_uvicorn_forks(tmp_path: Path) -> None:
     """A restarted container inherits the emptyDir of its predecessor, whose worker pids it may reuse, so the
-    stale .db files must be gone before any worker opens the one carrying its own pid."""
+    stale .db files must be gone before any worker opens the one carrying its own pid. The admitted-series
+    files go with them, or the restarted workers would keep counting new label sets on `other` for the
+    label sets the previous container admitted."""
     multiproc_dir = tmp_path / "multiproc"
     multiproc_dir.mkdir()
     (multiproc_dir / "gauge_livesum_7.db").write_bytes(b"stale")
     (multiproc_dir / "counter_7.db").write_bytes(b"stale")
+    (multiproc_dir / f"{PROMETHEUS_ADMITTED_SERIES_FILE_PREFIX}litellm_requests_metric").write_bytes(b"stale")
     (multiproc_dir / "keep.txt").write_text("not a sample")
 
     bin_dir = tmp_path / "bin"

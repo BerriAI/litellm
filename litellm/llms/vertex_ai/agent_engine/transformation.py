@@ -11,7 +11,7 @@ API Reference:
 
 import json
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
+from typing import TYPE_CHECKING, Any, Final, Optional, Union
 
 import httpx
 
@@ -373,12 +373,12 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         """Get a CustomStreamWrapper for synchronous streaming."""
         from litellm.llms.custom_httpx.http_handler import (
             HTTPHandler,
-            _get_httpx_client,
+            get_httpx_client,
         )
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client(params={})
+            client = get_httpx_client(params={})
 
         # Avoid logging sensitive api_base directly
         verbose_logger.debug("Making sync streaming request to Vertex AI endpoint.")
@@ -439,7 +439,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         from litellm.utils import CustomStreamWrapper
 
         if client is None or not isinstance(client, AsyncHTTPHandler):
-            client = get_async_httpx_client(llm_provider=cast(Any, "vertex_ai"), params={})
+            client = get_async_httpx_client(llm_provider="vertex_ai", params={})
 
         # Avoid logging sensitive api_base directly
         verbose_logger.debug("Making async streaming request to Vertex AI endpoint.")

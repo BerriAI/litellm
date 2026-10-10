@@ -1,51 +1,41 @@
 use serde_json::{Map, Value};
 use strum::IntoStaticStr;
 
+mod content;
+pub use content::{
+    ChatContentPart, ChatFile, ChatInputAudio, ChatLogprobs, ChatMediaUrl, ChatMediaUrlParameters,
+    ChatTokenLogprob, ChatTopLogprob, ChatVideoMetadata, PromptCacheBreakpoint, PromptCacheMode,
+};
+
 /// Reasoning effort level accepted or applied by the model.
-#[macro_rules_attribute::apply(wire_type)]
-#[derive(Copy, Eq, IntoStaticStr)]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Copy, Eq, IntoStaticStr, strum::EnumString, strum::VariantArray)]
 #[serde(rename_all = "snake_case")]
-#[strum(serialize_all = "snake_case")]
 pub enum ReasoningEffort {
+    #[strum(serialize = "none")]
     None,
+    #[strum(serialize = "minimal")]
     Minimal,
+    #[strum(serialize = "low")]
     Low,
+    #[strum(serialize = "medium")]
     Medium,
+    #[strum(serialize = "high")]
     High,
+    #[strum(serialize = "xhigh")]
     Xhigh,
+    #[strum(serialize = "max")]
     Max,
 }
 
-impl ReasoningEffort {
-    pub const ALL: [Self; 7] = [
-        Self::None,
-        Self::Minimal,
-        Self::Low,
-        Self::Medium,
-        Self::High,
-        Self::Xhigh,
-        Self::Max,
-    ];
-
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|effort| effort.as_str() == value)
-    }
-}
-
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum ChatMessageContent {
     Text(String),
     Parts(Vec<Value>),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatMessage {
     pub role: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -56,7 +46,7 @@ pub struct ChatMessage {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionToolCallFunctionChunk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<String>,
@@ -65,7 +55,7 @@ pub struct ChatCompletionToolCallFunctionChunk {
     pub provider_specific_fields: Option<Map<String, Value>>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionToolCallChunk {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
@@ -75,7 +65,7 @@ pub struct ChatCompletionToolCallChunk {
     pub index: i64,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ChatCompletionThinkingBlock {
     Thinking {
@@ -96,7 +86,7 @@ pub enum ChatCompletionThinkingBlock {
 
 /// OpenAI `usage`, including the `prompt_tokens_details` split LiteLLM's Python
 /// path reports so cost tracking sees the same numbers on either path.
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct PromptTokensDetails {
     pub cached_tokens: u64,
@@ -104,7 +94,7 @@ pub struct PromptTokensDetails {
     pub text_tokens: u64,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ChatCompletionsUsage {
     pub prompt_tokens: u64,
@@ -113,7 +103,7 @@ pub struct ChatCompletionsUsage {
     pub prompt_tokens_details: PromptTokensDetails,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionsChoiceMessage {
     pub role: String,
     // Whether an empty turn is `None` or `""` is the provider's choice, not a
@@ -123,7 +113,7 @@ pub struct ChatCompletionsChoiceMessage {
     pub content: Option<String>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionsChoice {
     pub index: u64,
     pub message: ChatCompletionsChoiceMessage,
@@ -135,7 +125,7 @@ pub struct ChatCompletionsChoice {
 /// There is deliberately no `id`: Python mints the `chatcmpl-…` id on the
 /// `ModelResponse` it already created, and echoing the provider's own id here
 /// would change it. Pinned by `response_carries_no_id` in the Anthropic chat transformation tests.
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionsResponse {
     pub created: u64,
     pub model: String,
@@ -143,7 +133,7 @@ pub struct ChatCompletionsResponse {
     pub usage: ChatCompletionsUsage,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ChatCompletionDelta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -162,7 +152,7 @@ pub struct ChatCompletionDelta {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionStreamingChoice {
     pub index: u64,
     pub delta: ChatCompletionDelta,
@@ -172,7 +162,7 @@ pub struct ChatCompletionStreamingChoice {
     pub logprobs: Option<Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct ChatCompletionChunk {
     pub id: String,
     pub created: u64,
@@ -189,6 +179,7 @@ pub struct ChatCompletionChunk {
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
+    use strum::VariantArray;
 
     use super::*;
 
@@ -207,10 +198,10 @@ mod tests {
     ) {
         assert_eq!(
             serde_json::to_value(effort).unwrap(),
-            Value::String(effort.as_str().to_string())
+            Value::String(<&'static str>::from(effort).to_string())
         );
-        assert_eq!(ReasoningEffort::parse(effort.as_str()), Some(effort));
-        assert!(ReasoningEffort::ALL.contains(&effort));
+        assert_eq!(<&'static str>::from(effort).parse(), Ok(effort));
+        assert!(ReasoningEffort::VARIANTS.contains(&effort));
     }
 
     #[rstest]
@@ -218,6 +209,6 @@ mod tests {
     #[case::uppercase("HIGH")]
     #[case::empty("")]
     fn reasoning_effort_parse_rejects(#[case] value: &str) {
-        assert_eq!(ReasoningEffort::parse(value), None);
+        assert!(value.parse::<ReasoningEffort>().is_err());
     }
 }

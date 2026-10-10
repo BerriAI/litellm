@@ -20,6 +20,12 @@ litellm --model claude-sonnet-4-20250514
 litellm --config config.yaml
 ```
 
+Generate a master key before starting the proxy:
+
+```bash
+export LITELLM_MASTER_KEY="sk-$(openssl rand -hex 32)"
+```
+
 ### 3. Run the chat
 
 **Basic Agent (no MCP):**
@@ -58,7 +64,7 @@ Set these environment variables if needed:
 
 ```bash
 export LITELLM_PROXY_URL="http://localhost:4000"
-export LITELLM_API_KEY="sk-1234"
+export LITELLM_API_KEY="$LITELLM_MASTER_KEY"
 export LITELLM_MODEL="bedrock-claude-sonnet-4.5"
 ```
 
@@ -98,7 +104,7 @@ The key is pointing the Agent SDK to LiteLLM instead of directly to Anthropic:
 ```python
 # Point to LiteLLM gateway (not Anthropic)
 os.environ["ANTHROPIC_BASE_URL"] = "http://localhost:4000"
-os.environ["ANTHROPIC_API_KEY"] = "sk-1234"  # Your LiteLLM key
+os.environ["ANTHROPIC_API_KEY"] = os.environ["LITELLM_API_KEY"]
 
 # Use any model configured in LiteLLM
 options = ClaudeAgentOptions(

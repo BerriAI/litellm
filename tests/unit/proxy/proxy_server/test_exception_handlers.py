@@ -5,6 +5,7 @@ Pins covered:
 - ``_close_dangling_otel_server_span``
 - ``otel_request_validation_exception_handler``
 - ``otel_unhandled_exception_handler``
+- ``otlp_http_exception_handler``
 """
 
 from __future__ import annotations
@@ -16,8 +17,12 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from fastapi import HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+from fastapi.testclient import TestClient
+from starlette.testclient import WebSocketDenialResponse
+from starlette.types import Message
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from litellm.proxy._types import ProxyException
 from litellm.proxy.proxy_server import (
@@ -25,6 +30,7 @@ from litellm.proxy.proxy_server import (
     openai_exception_handler,
     otel_request_validation_exception_handler,
     otel_unhandled_exception_handler,
+    otlp_http_exception_handler,
 )
 
 from .conftest import normalize
@@ -507,6 +513,7 @@ async def test_otlp_auth_errors_hide_internal_details_and_survive_missing_native
         if isinstance(error, ProxyException)
         else await otlp_http_exception_handler(request, error)
     )
+    assert response is not None
     assert response.status_code == (401 if isinstance(error, ProxyException) else 403)
     assert response.headers["content-type"].startswith(media_type)
     message: Final = (
@@ -516,3 +523,98 @@ async def test_otlp_auth_errors_hide_internal_details_and_survive_missing_native
     )
     expected: Final = "Unauthorized" if isinstance(error, ProxyException) else "Forbidden"
     assert message == (expected if native_available or media_type == "application/json" else "")
+
+
+def _websocket(sent: list[Message]) -> WebSocket:
+    async def receive() -> Message:
+        return {"type": "websocket.connect"}
+
+    async def send(message: Message) -> None:
+        sent.append(message)
+
+    return WebSocket({"type": "websocket", "path": "/v1/responses", "headers": [], "query_string": b""}, receive, send)
+
+
+@pytest.mark.asyncio
+async def test_http_exception_on_a_plain_http_request_keeps_the_default_json_body() -> None:
+    request: Final = _make_request(path="/v1/models")
+
+    response: Final = await otlp_http_exception_handler(request, HTTPException(404, "not found"))
+
+    assert response is not None
+    assert response.status_code == 404
+    assert json.loads(bytes(response.body)) == {"detail": "not found"}
+
+
+@pytest.mark.asyncio
+async def test_http_exception_on_a_websocket_closed_before_accept_sends_nothing_more() -> None:
+    sent: Final[list[Message]] = []
+    websocket: Final = _websocket(sent)
+    await websocket.close(code=1008)
+
+    response: Final = await otlp_http_exception_handler(websocket, HTTPException(403, "No API key provided"))
+
+    assert response is None
+    assert sent == [{"type": "websocket.close", "code": 1008, "reason": ""}]
+
+
+@pytest.mark.asyncio
+async def test_http_exception_on_a_connecting_websocket_denies_the_upgrade_with_its_status() -> None:
+    websocket: Final = _websocket([])
+
+    response: Final = await otlp_http_exception_handler(websocket, HTTPException(403, "No API key provided"))
+
+    assert response is not None
+    assert response.status_code == 403
+    assert json.loads(bytes(response.body)) == {"detail": "No API key provided"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status_code", "close_code"), [(403, 1008), (429, 1008), (500, 1011), (503, 1011)])
+async def test_http_exception_on_an_accepted_websocket_closes_it_with_a_matching_code(
+    status_code: int, close_code: int
+) -> None:
+    sent: Final[list[Message]] = []
+    websocket: Final = _websocket(sent)
+    await websocket.accept()
+
+    response: Final = await otlp_http_exception_handler(websocket, HTTPException(status_code, "late failure"))
+
+    assert response is None
+    assert sent[-1] == {"type": "websocket.close", "code": close_code, "reason": ""}
+
+
+def test_websocket_auth_rejection_reaches_the_client_as_a_denial_instead_of_a_server_error() -> None:
+    async def reject_like_user_api_key_auth_websocket(websocket: WebSocket) -> None:
+        await websocket.close(code=1008)
+        raise HTTPException(status_code=403, detail="No API key provided")
+
+    async def responses(websocket: WebSocket, _: None = Depends(reject_like_user_api_key_auth_websocket)) -> None:
+        await websocket.accept()
+
+    app: Final = FastAPI()
+    app.exception_handler(HTTPException)(otlp_http_exception_handler)
+    app.add_api_websocket_route("/v1/responses", responses)
+
+    with pytest.raises(WebSocketDisconnect) as disconnect, TestClient(app).websocket_connect("/v1/responses"):
+        pass
+
+    assert disconnect.value.code == 1008
+
+
+def test_websocket_rejected_before_any_close_reaches_the_client_as_an_http_denial_with_the_status() -> None:
+    async def reject_without_closing(websocket: WebSocket) -> None:
+        raise HTTPException(status_code=403, detail="No API key provided")
+
+    async def responses(websocket: WebSocket, _: None = Depends(reject_without_closing)) -> None:
+        await websocket.accept()
+
+    app: Final = FastAPI()
+    app.exception_handler(HTTPException)(otlp_http_exception_handler)
+    app.add_api_websocket_route("/v1/responses", responses)
+
+    with pytest.raises(WebSocketDenialResponse) as denial, TestClient(app).websocket_connect("/v1/responses"):
+        pass
+
+    assert denial.value.status_code == 403
+    assert denial.value.json() == {"detail": "No API key provided"}

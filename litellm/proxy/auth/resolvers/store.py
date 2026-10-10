@@ -8,10 +8,13 @@ from pydantic import BaseModel
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
-from litellm.proxy.auth.auth_checks import (
-    _cache_key_object,
-    _copy_user_api_key_auth_for_cache,
-    _fetch_key_object_from_db_with_reconnect,
+from litellm.proxy.auth.auth_checks import (  # noqa: F401  # legacy module exports
+    _cache_key_object,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _copy_user_api_key_auth_for_cache,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    _fetch_key_object_from_db_with_reconnect,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    cache_key_object,
+    copy_user_api_key_auth_for_cache,
+    fetch_key_object_from_db_with_reconnect,
     get_object_permission,
 )
 from litellm.proxy.auth.auth_method import AuthMethod
@@ -81,7 +84,7 @@ class IdentityStore:
         network: NetworkContext | None = None,
     ) -> Principal:
         key: Final = await self._resolve_key(hashed_token)
-        return self._principal_from_key(
+        return self.principal_from_key(
             key,
             auth_method=auth_method,
             network=network,
@@ -108,12 +111,12 @@ class IdentityStore:
 
         cached: Final = await self._cache.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
         if cached is not None:
-            return _copy_user_api_key_auth_for_cache(user_api_key_obj=cached)
+            return copy_user_api_key_auth_for_cache(user_api_key_obj=cached)
 
         if self._check_cache_only:
             raise KeyNotInCacheError(hashed_token)
 
-        from_db: Final[BaseModel | None] = await _fetch_key_object_from_db_with_reconnect(
+        from_db: Final[BaseModel | None] = await fetch_key_object_from_db_with_reconnect(
             hashed_token=hashed_token,
             prisma_client=self._prisma,
             parent_otel_span=self._parent_otel_span,
@@ -140,7 +143,7 @@ class IdentityStore:
                     e,
                 )
 
-        await _cache_key_object(
+        await cache_key_object(
             hashed_token=hashed_token,
             user_api_key_obj=key,
             user_api_key_cache=self._cache,
@@ -149,7 +152,7 @@ class IdentityStore:
         return key
 
     @staticmethod
-    def _principal_from_key(
+    def principal_from_key(
         key: UserAPIKeyAuth,
         *,
         auth_method: AuthMethod,
@@ -192,3 +195,5 @@ class IdentityStore:
             network=network or NetworkContext(),
             source_key=key,
         )
+
+    _principal_from_key = principal_from_key

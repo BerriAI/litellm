@@ -8,7 +8,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping
 from typing import Any, Final
 
-from openai.lib import _parsing, _pydantic
+from openai.lib import _parsing, _pydantic  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
@@ -128,7 +128,7 @@ class BaseLLMModelInfo(ABC):
         return None
 
 
-def _convert_tool_response_to_message(
+def convert_tool_response_to_message(
     tool_calls: list[ChatCompletionToolCallChunk],
 ) -> Message | None:
     """
@@ -152,6 +152,9 @@ def _convert_tool_response_to_message(
         # json decode error does occur, return the original tool response str
         return Message(content=json_mode_content_str)
     return None
+
+
+_convert_tool_response_to_message = convert_tool_response_to_message
 
 
 def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict:
@@ -211,7 +214,7 @@ def type_to_response_format_param(
     # type checkers don't narrow the negation of a `TypeGuard` as it isn't
     # a safe default behaviour but we know that at this point the `response_format`
     # can only be a `type`
-    if not _parsing._completions.is_basemodel_type(response_format):
+    if not _parsing._completions.is_basemodel_type(response_format):  # pyright: ignore[reportPrivateUsage]  # SDK parser internals
         raise TypeError(f"Unsupported response_format type - {response_format}")
 
     if ref_template is not None:

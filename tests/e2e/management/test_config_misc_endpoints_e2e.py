@@ -32,6 +32,7 @@ from pydantic import BaseModel
 
 from e2e_config import unique_marker
 from e2e_http import NoBody, Success, unwrap, unwrap_status
+from e2e_metadata import Domain, Route, Subject, meta
 from lifecycle import ResourceManager
 from management_client import ManagementClient
 from models import KeyGenerateBody, LiteLLMParamsBody, TeamNewBody
@@ -231,6 +232,7 @@ class McpServerResponse(BaseModel):
 
 class TestInventoryRoutes:
     @pytest.mark.covers("mgmt.callback.list.happy_path")
+    @meta(Subject(domain=Domain.OBSERVABILITY))
     def test_callbacks_list_reports_active_logging_callbacks(self, client: ManagementClient) -> None:
         listing = unwrap(
             client.proxy.transport.get(
@@ -247,6 +249,7 @@ class TestInventoryRoutes:
         )
 
     @pytest.mark.covers("mgmt.tool_management.list.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT))
     def test_tool_list_returns_catalog_with_consistent_total(self, client: ManagementClient) -> None:
         listing = unwrap(
             client.proxy.transport.get(
@@ -261,6 +264,7 @@ class TestInventoryRoutes:
         )
 
     @pytest.mark.covers("mgmt.workflow.list.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT))
     def test_workflow_runs_list_returns_consistent_count(self, client: ManagementClient) -> None:
         listing = unwrap(
             client.proxy.transport.get(
@@ -275,6 +279,7 @@ class TestInventoryRoutes:
         )
 
     @pytest.mark.covers("mgmt.credential_migration.check.happy_path")
+    @meta(Subject(domain=Domain.DEPLOY_OPS))
     def test_credential_migration_check_reports_residual_scan(self, client: ManagementClient) -> None:
         report = unwrap(
             client.proxy.transport.get(
@@ -295,6 +300,7 @@ class TestInventoryRoutes:
 
 class TestCostEstimate:
     @pytest.mark.covers("mgmt.cost_tracking.estimate.happy_path")
+    @meta(Subject(domain=Domain.COST_MAP))
     def test_estimate_computes_cost_from_token_counts(self, client: ManagementClient) -> None:
         estimate = unwrap(
             client.proxy.transport.post(
@@ -325,6 +331,7 @@ class TestCostEstimate:
 
 class TestComplianceRoutes:
     @pytest.mark.covers("mgmt.compliance.gdpr.happy_path")
+    @meta(Subject(domain=Domain.MANAGEMENT))
     def test_gdpr_check_derives_verdict_from_the_request(self, client: ManagementClient) -> None:
         result = unwrap(
             client.proxy.transport.post(
@@ -356,6 +363,7 @@ class TestComplianceRoutes:
 
 class TestFallbackManagement:
     @pytest.mark.covers("mgmt.fallback_management.update.happy_path")
+    @meta(Subject(domain=Domain.ROUTING))
     def test_create_persists_and_is_read_back(self, client: ManagementClient, resources: ResourceManager) -> None:
         primary = f"e2e-fallback-primary-{unique_marker()}"
         secondary = f"e2e-fallback-secondary-{unique_marker()}"
@@ -410,6 +418,7 @@ class TestFallbackManagement:
 
 class TestJwtKeyMapping:
     @pytest.mark.covers("mgmt.jwt_key_mapping.new.happy_path")
+    @meta(Subject(domain=Domain.PROXY_AUTH))
     def test_new_persists_mapping_and_is_read_back(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -461,6 +470,7 @@ class TestJwtKeyMapping:
 
 class TestRouterSettings:
     @pytest.mark.covers("mgmt.router_settings.update.happy_path")
+    @meta(Subject(domain=Domain.ROUTING, route=Route.PROXY_CONFIG))
     def test_config_update_persists_router_setting_to_get(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:
@@ -531,6 +541,7 @@ class TestRouterSettings:
 
 class TestMcpServerSubmission:
     @pytest.mark.covers("mgmt.mcp_server.register.happy_path")
+    @meta(Subject(domain=Domain.MCP, route=Route.MCP))
     def test_register_submits_pending_server(self, client: ManagementClient, resources: ResourceManager) -> None:
         """A non-admin, team-scoped key submits an MCP server for review; the proxy
         stores it as pending_review without loading it into the runtime registry."""
@@ -564,6 +575,7 @@ class TestMcpServerSubmission:
         )
 
     @pytest.mark.covers("mgmt.mcp_server.approve.persists")
+    @meta(Subject(domain=Domain.MCP, route=Route.MCP))
     def test_approve_activates_submission_and_persists(
         self, client: ManagementClient, resources: ResourceManager
     ) -> None:

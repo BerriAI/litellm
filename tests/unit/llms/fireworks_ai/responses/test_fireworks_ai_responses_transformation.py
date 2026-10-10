@@ -27,7 +27,7 @@ from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
 
 FIREWORKS_RESPONSES_URL: Final = "https://api.fireworks.ai/inference/v1/responses"
-HTTPX_CLIENT_FACTORY: Final = "litellm.llms.custom_httpx.llm_http_handler._get_httpx_client"
+HTTPX_CLIENT_FACTORY: Final = "litellm.llms.custom_httpx.llm_http_handler.get_httpx_client"
 NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 NO_PARAMS: Final[Mapping[str, object]] = MappingProxyType({})
 
@@ -608,3 +608,62 @@ def test_streaming_responses_call_hits_native_endpoint_and_yields_every_firework
     assert tuple(event.type for event in received) == tuple(event["type"] for event in FIREWORKS_SSE_EVENTS)
     assert "".join(event.delta for event in received if event.type == "response.output_text.delta") == "pong"
     assert received[-1].response.usage.output_tokens == 89
+
+
+@pytest.mark.parametrize(
+    "call_kwargs, expected_user",
+    [
+        pytest.param(
+            {"fireworks_forward_user_id": True, "litellm_metadata": {"user_api_key_user_id": "dev-alice"}},
+            "dev-alice",
+            id="opted-in-sends-litellm-user-id",
+        ),
+        pytest.param(
+            {
+                "fireworks_forward_user_id": True,
+                "litellm_metadata": {"user_api_key_user_id": "dev-alice"},
+                "user": "caller",
+            },
+            "dev-alice",
+            id="litellm-user-id-replaces-caller-user",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": True, "metadata": {"user_api_key_user_id": "dev-alice"}},
+            None,
+            id="ignores-caller-responses-metadata",
+        ),
+        pytest.param(
+            {"fireworks_forward_user_id": True, "user": "caller"},
+            "caller",
+            id="no-litellm-user-id-keeps-caller-user",
+        ),
+        pytest.param(
+            {"litellm_metadata": {"user_api_key_user_id": "dev-alice"}},
+            None,
+            id="not-opted-in-sends-no-user",
+        ),
+        pytest.param(
+            {
+                "fireworks_forward_user_id": True,
+                "litellm_metadata": {"user_api_key_user_id": "dev-alice"},
+                "extra_body": {"user": "dev-bob"},
+            },
+            "dev-alice",
+            id="litellm-user-id-replaces-extra-body-user",
+        ),
+        pytest.param(
+            {"litellm_metadata": {"user_api_key_user_id": "dev-alice"}, "extra_body": {"user": "dev-bob"}},
+            "dev-bob",
+            id="not-opted-in-keeps-extra-body-user",
+        ),
+    ],
+)
+def test_responses_call_forwards_litellm_user_id_as_user(
+    call_kwargs: Mapping[str, object], expected_user: str | None
+) -> None:
+    client: Final = _mock_http_client(_fireworks_response("accounts/fireworks/models/kimi-k3"))
+    with patch(HTTPX_CLIENT_FACTORY, return_value=client):
+        litellm.responses(model="fireworks_ai/kimi-k3", input="hi", api_key="fw-test-key", **call_kwargs)
+    _, _, body = _sent_request(client)
+    assert body.get("user") == expected_user
+    assert "fireworks_forward_user_id" not in body

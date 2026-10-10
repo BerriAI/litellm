@@ -116,8 +116,17 @@ import { MCP_TOOLS_PREVIEW_FORBIDDEN_MESSAGE } from "./mcp_tools/constants";
 import type { ComplexityRouterConfigPayload } from "./add_model/build_complexity_router_config";
 import type { AutoRouterPresetsResponse } from "@/lib/autorouter_presets";
 import type { VectorStoreIndex } from "@/app/(dashboard)/vector-stores/_components/IndexesTab";
-import type { RoutingDecision } from "./view_logs/LogDetailsDrawer/RoutingDecisionCard";
-import type { SpanDetail, SpanErrorPage, Trace, TracePage } from "./view_logs/TraceView/traceTypes";
+import type { RoutingDecision } from "./logs/detail/RoutingDecisionCard";
+import type {
+  SpanDetail,
+  SpanErrorPage,
+  SpanErrorQuery,
+  SpanQuery,
+  Trace,
+  TraceDetailQuery,
+  TraceListQuery,
+  TracePage,
+} from "@litellm/lens-ui";
 import {
   createApiClient,
   deriveErrorMessage,
@@ -309,6 +318,8 @@ export interface Organization {
 
 export interface CredentialItem {
   credential_name: string;
+  display_name?: string | null;
+  source?: "db" | "config";
   credential_values: any;
   credential_info: {
     custom_llm_provider?: string;
@@ -544,9 +555,10 @@ export const getOpenAPISchema = async () => {
   return jsonData;
 };
 
-export const modelCostMap = async () => {
+export const modelCostMap = async (catalogOnly = false) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/public/litellm_model_cost_map` : `/public/litellm_model_cost_map`;
+    const path = catalogOnly ? "/public/litellm_model_cost_map?catalog_only=true" : "/public/litellm_model_cost_map";
+    const url = proxyBaseUrl ? `${proxyBaseUrl}${path}` : path;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1082,6 +1094,8 @@ export interface UserInfoV2Response {
   user_role: string | null;
   spend: number;
   max_budget: number | null;
+  tpm_limit?: number | null;
+  rpm_limit?: number | null;
   models: string[];
   budget_duration: string | null;
   budget_reset_at: string | null;
@@ -1968,7 +1982,7 @@ export const agentTraceListCall = async ({
   endMs: number;
   cursor?: string | null;
 }): Promise<TracePage> => {
-  const query = { start_ms: startMs, end_ms: endMs, cursor: cursor ?? undefined };
+  const query = { start_ms: startMs, end_ms: endMs, cursor: cursor ?? undefined } satisfies TraceListQuery;
   return apiClient.get<TracePage>(`/v1/traces`, { accessToken, query });
 };
 
@@ -1983,7 +1997,7 @@ export const agentTraceCall = async (
 ): Promise<Trace> =>
   apiClient.get<Trace>(`/v1/traces/${encodeURIComponent(traceId)}`, {
     accessToken,
-    query: { trace_ref: traceRef || undefined, cursor: cursor ?? undefined, page_size: 200 },
+    query: { trace_ref: traceRef || undefined, cursor: cursor ?? undefined, page_size: 200 } satisfies TraceDetailQuery,
   });
 
 export const agentTraceSpanCall = async (
@@ -1994,7 +2008,7 @@ export const agentTraceSpanCall = async (
 ): Promise<SpanDetail> =>
   apiClient.get<SpanDetail>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}`, {
     accessToken,
-    query: { trace_ref: traceRef || undefined },
+    query: { trace_ref: traceRef || undefined } satisfies SpanQuery,
   });
 
 export const agentTraceSpanErrorCall = async (
@@ -2005,7 +2019,7 @@ export const agentTraceSpanErrorCall = async (
 ): Promise<SpanErrorPage> =>
   apiClient.get<SpanErrorPage>(`/v1/traces/${encodeURIComponent(traceId)}/spans/${encodeURIComponent(spanId)}/error`, {
     accessToken,
-    query: { trace_ref: options.traceRef || undefined, cursor: options.cursor || undefined },
+    query: { trace_ref: options.traceRef || undefined, cursor: options.cursor || undefined } satisfies SpanErrorQuery,
   });
 
 export const adminSpendLogsCall = async (accessToken: string) => {
@@ -2451,6 +2465,27 @@ export const gatewayDailyActivityCall = async (accessToken: string, startTime: D
   }
 };
 
+export const requestErrorActivityCall = async (accessToken: string, startTime: Date, endTime: Date) => {
+  try {
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    return await apiClient.get(`/gateway/errors/activity`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch request error activity:", error);
+    throw error;
+  }
+};
+
 export const getPossibleUserRoles = async (accessToken: string) => {
   try {
     const data = (await apiClient.get(`/user/available_roles`, { accessToken })) as Record<
@@ -2563,6 +2598,59 @@ export const credentialDeleteCall = async (accessToken: string, credentialName: 
     throw error;
   }
 };
+
+export interface UserProviderConnection {
+  credential_name: string;
+  provider: string;
+  connected: boolean;
+  github_login: string | null;
+  connected_at: string | null;
+}
+
+export interface UserProviderConnectionsResponse {
+  connections: UserProviderConnection[];
+}
+
+export interface UserConnectionStartResponse {
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+  flow_handle: string;
+}
+
+export type UserConnectionPollStatus = "pending" | "slow_down" | "expired" | "denied" | "no_copilot_seat" | "connected";
+
+export interface UserConnectionPollResponse {
+  status: UserConnectionPollStatus;
+  interval?: number | null;
+  github_login?: string | null;
+}
+
+const userConnectionPath = (credentialName: string): string =>
+  `/credentials/${encodeURIComponent(credentialName)}/user_connection`;
+
+export const userConnectionsListCall = (accessToken: string): Promise<UserProviderConnectionsResponse> =>
+  apiClient.get<UserProviderConnectionsResponse>("/credentials/user_connections", { accessToken });
+
+export const userConnectionStartCall = (
+  accessToken: string,
+  credentialName: string,
+): Promise<UserConnectionStartResponse> =>
+  apiClient.post<UserConnectionStartResponse>(`${userConnectionPath(credentialName)}/start`, { accessToken });
+
+export const userConnectionPollCall = (
+  accessToken: string,
+  credentialName: string,
+  flowHandle: string,
+): Promise<UserConnectionPollResponse> =>
+  apiClient.post<UserConnectionPollResponse>(`${userConnectionPath(credentialName)}/poll`, {
+    accessToken,
+    body: { flow_handle: flowHandle },
+  });
+
+export const userConnectionDeleteCall = (accessToken: string, credentialName: string): Promise<void> =>
+  apiClient.delete<void>(userConnectionPath(credentialName), { accessToken });
 
 export const credentialUpdateCall = async (
   accessToken: string,
@@ -7038,6 +7126,13 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   }
   const data = await response.json();
   return data;
+};
+
+export const startMoyaiQuickConnect = async (accessToken: string, moyaiUrl: string, returnTo: string) => {
+  return apiClient.post<{ connect_url: string }>("/moyai/connect/start", {
+    accessToken,
+    body: { moyai_url: moyaiUrl, return_to: returnTo },
+  });
 };
 
 export type UserBannerSeverity = "info" | "warning" | "error";

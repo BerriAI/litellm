@@ -62,6 +62,7 @@ describe("makeSystemOneRequest", () => {
     const expectedRequest: Partial<RequestInit> = {
       method: "POST",
       headers: {
+        Accept: "application/json",
         "Content-Type": "application/json",
         Authorization: "Bearer session-key",
       },

@@ -268,7 +268,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
                 model=model, provider=LlmProviders(custom_llm_provider)
             )
             if isinstance(provider_config, OpenAIGPTConfig) or isinstance(provider_config, OpenAIConfig):
-                messages = provider_config._transform_messages(messages=messages, model=model)
+                messages = provider_config.transform_messages(messages=messages, model=model)
 
         data: Final = {
             "model": model,

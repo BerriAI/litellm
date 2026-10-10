@@ -3,7 +3,7 @@ import { TriangleAlert } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import RoutingDecisionCard from "@/components/view_logs/LogDetailsDrawer/RoutingDecisionCard";
+import RoutingDecisionCard from "@/components/logs/detail/RoutingDecisionCard";
 import { AutoRouterRoutingTestResult, testAutoRouterRouting } from "../networking";
 import { ComplexityRouterConfigPayload, getHeuristicV2SuccessThresholdError } from "./build_complexity_router_config";
 import { buildAutoRouterRoutingTestRequest } from "./build_auto_router_routing_test_request";
