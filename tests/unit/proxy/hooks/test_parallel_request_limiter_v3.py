@@ -7467,6 +7467,36 @@ def test_rate_limit_error_reports_reset_time_in_utc_on_a_non_utc_proxy(process_t
     )
 
 
+def test_per_model_rate_limit_error_carries_descriptor_key() -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    over_limit: Final[RateLimitResponse] = {
+        "overall_code": "OVER_LIMIT",
+        "statuses": [
+            {
+                "code": "OVER_LIMIT",
+                "descriptor_key": "model_per_key",
+                "descriptor_value": "gpt-4o-mini",
+                "limit_remaining": 0,
+                "rate_limit_type": "requests",
+                "current_limit": 2,
+            }
+        ],
+    }
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        handler._handle_rate_limit_error(
+            response=over_limit,
+            descriptors=[
+                {"key": "model_per_key", "value": "gpt-4o-mini", "rate_limit": None}
+            ],
+            requested_model="gpt-4o-mini",
+        )
+
+    assert exc_info.value.descriptor_key == "model_per_key"
+
+
 def _resolve_alias_to_target(model: str) -> str | None:
     return "target" if model == "alias" else None
 

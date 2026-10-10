@@ -223,6 +223,7 @@ def sanitize_for_log(value: object) -> str:
 
 from litellm.router import Router
 from litellm.secret_managers.main import get_secret_bool
+from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.types.llms.anthropic import ANTHROPIC_API_HEADERS
 from litellm.types.services import ServiceTypes
 from litellm.types.utils import (
@@ -342,14 +343,7 @@ _UNTRUSTED_ROOT_CONTROL_FIELDS: Final = (
     # re-wrapped as a synthetic stream the caller never asked for, or raise the
     # loop ceiling to drive many upstream model calls and sandbox executions
     # from a single request.
-    "_agentic_loop_depth",
-    "_agentic_loop_fingerprints",
-    "_code_interpreter_interception_active",
-    "_code_interpreter_interception_converted_stream",
-    "_code_interpreter_interception_sandbox_key",
-    "_code_interpreter_interception_session_scoped",
-    "_headroom_interception_converted_stream",
-    "max_agentic_loops",
+    *AGENTIC_LOOP_KWARG_NAMES,
     # Recomputed below from the actual caller-controlled timeout sources (headers and
     # body fields); a client-forged value here would let a request either dodge cooldown
     # protection on a real deployment failure or force a false "not caller-controlled"

@@ -301,6 +301,7 @@ class BaseDecisionsConfig(ABC):
     api_key_env: tuple[str, ...] = ()
     api_base_env: tuple[str, ...] = ()
     api_key_required: bool = True
+    supports_safety_identifier: bool = False
     health_check_questions: Mapping[str, Mapping[str, object]] = MappingProxyType(
         {"reachable": MappingProxyType({"type": "noul", "instructions": "Is the service reachable?"})}
     )
@@ -339,6 +340,20 @@ class BaseDecisionsConfig(ABC):
 
     def get_complete_url(self, api_base: str, model: str) -> str:
         return f"{api_base.rstrip('/').removesuffix('/v1')}{self.path}"
+
+    def signs_with_aws(self, api_base: str) -> bool:
+        return False
+
+    def sign_request(
+        self,
+        headers: Mapping[str, str],
+        url: str,
+        api_base: str,
+        body: Mapping[str, object],
+        api_key: str | None,
+        litellm_params: Mapping[str, object],
+    ) -> tuple[Mapping[str, str], bytes | None]:
+        return headers, None
 
     def transform_decisions_request(
         self,
