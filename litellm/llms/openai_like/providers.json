@@ -223,5 +223,10 @@
     "base_url": "https://api.reka.ai/v1",
     "api_key_env": "REKA_API_KEY",
     "api_base_env": "REKA_API_BASE"
+  },
+  "apimodels": {
+    "base_url": "https://api.apimodels.app/v1",
+    "api_key_env": "APIMODELS_API_KEY",
+    "api_base_env": "APIMODELS_API_BASE"
   }
 }
