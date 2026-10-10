@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import time
 import uuid
 from dataclasses import dataclass
@@ -12,6 +13,7 @@ from integration._support.database import read_rows, write_rows
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 from pydantic import JsonValue
+from redis import Redis
 
 XAI_MODEL: Final = "xai/grok-4.20-0309-non-reasoning"
 XAI_BATCH_ID: Final = "batch_$REQUEST_ID"
@@ -294,7 +296,7 @@ def test_xai_batch_output_file_registered_by_the_batch_job_first_carries_the_dow
         assert (results_reads, state_reads) == (2, 2), upstream_paths
 
 
-def test_xai_batch_output_file_left_as_a_placeholder_keeps_its_registration_time_when_a_read_refreshes_it(
+def test_xai_batch_output_file_left_as_a_placeholder_keeps_its_registration_time_when_the_proxy_refreshes_it(
     gateway: Gateway,
 ) -> None:
     with gateway.scenario() as scenario:
@@ -309,6 +311,8 @@ def test_xai_batch_output_file_left_as_a_placeholder_keeps_its_registration_time
             "WHERE unified_file_id = %s",
             (raw_batch_id, str(REGISTERED_AT), output_id),
         )
+        with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache:
+            assert cache.delete(output_id) == 1
 
         refreshed: Final = eventually(
             lambda: JSON_OBJECT.validate_json(
