@@ -2854,6 +2854,22 @@ class TestIsRequestBodySafeBlocksBedrockProjectOverride:
         )
 
 
+def test_agentcore_runtime_session_id_in_request_body_is_rejected_without_admin_opt_in():
+    body: Final = {"model": "strands-decider", "agentcore_runtime_session_id": "caller-session-0123456789abcdef0123"}
+
+    with pytest.raises(ValueError, match="agentcore_runtime_session_id"):
+        is_request_body_safe(request_body=body, general_settings={}, llm_router=None, model="strands-decider")
+    assert (
+        is_request_body_safe(
+            request_body=body,
+            general_settings={"allow_client_side_credentials": True},
+            llm_router=None,
+            model="strands-decider",
+        )
+        is True
+    )
+
+
 class TestIsRequestBodySafeBlocksClaudePlatformWorkspaceOverride:
     @pytest.mark.parametrize(
         "alias", ["workspace_id", "aws_workspace_id", "anthropic_workspace_id", "anthropic-workspace-id"]
