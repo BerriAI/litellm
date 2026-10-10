@@ -8,6 +8,7 @@ Tests that:
 """
 
 import json
+from collections.abc import Callable
 from typing import Final
 from unittest.mock import MagicMock
 
@@ -1901,8 +1902,7 @@ def _make_streaming(**kwargs):
 class _TurnLoggingRecorder:
     """Stands in for a socket's connection-level Logging object and keeps every per-turn copy it hands out."""
 
-    def __init__(self, response_cost: float = 0.0) -> None:
-        self.response_cost = response_cost
+    def __init__(self) -> None:
         self.turns: list[MagicMock] = []
         self.connection = MagicMock()
         self.connection.copy_for_new_call = MagicMock(side_effect=self._copy_for_new_call)
@@ -1916,9 +1916,14 @@ class _TurnLoggingRecorder:
         turn.model_call_details = {}
         turn.dispatch_success_handlers = AsyncMock()
         turn.dispatch_failure_handlers = AsyncMock()
-        turn.response_cost_calculator = MagicMock(return_value=self.response_cost)
+        turn.response_cost_calculator = MagicMock(return_value=0.0)
         self.turns.append(turn)
         return turn
+
+    def logged_turns(self) -> int:
+        return sum(
+            1 for turn in self.turns if turn.dispatch_success_handlers.await_count or turn.dispatch_failure_handlers.await_count
+        )
 
 
 class TestNativeWebSocketGuardrailMasking:
@@ -3272,27 +3277,20 @@ async def _until(condition) -> bool:
 class _ScriptedClient:
     """Sends each frame only after the previous turn's log was dispatched, then hangs up."""
 
-    def __init__(self, frames: list[str], recorder: _TurnLoggingRecorder) -> None:
+    def __init__(self, frames: list[str], logged_turns: Callable[[], int]) -> None:
         self.frames = list(frames)
-        self.recorder = recorder
+        self.logged_turns = logged_turns
         self.sent_text: list[str] = []
         self.logged_turns_before_each_frame: list[int] = []
         self.logged_turns_before_hang_up: int | None = None
 
-    def _logged_turns(self) -> int:
-        return sum(
-            1
-            for turn in self.recorder.turns
-            if turn.dispatch_success_handlers.await_count or turn.dispatch_failure_handlers.await_count
-        )
-
     async def receive_text(self) -> str:
         sent_so_far = len(self.logged_turns_before_each_frame)
-        await _until(lambda: self._logged_turns() >= sent_so_far)
+        await _until(lambda: self.logged_turns() >= sent_so_far)
         if self.frames:
-            self.logged_turns_before_each_frame.append(self._logged_turns())
+            self.logged_turns_before_each_frame.append(self.logged_turns())
             return self.frames.pop(0)
-        self.logged_turns_before_hang_up = self._logged_turns()
+        self.logged_turns_before_hang_up = self.logged_turns()
         raise Exception("client hung up")
 
     async def send_text(self, text: str) -> None:
@@ -3309,7 +3307,7 @@ class TestNativeWebSocketPerTurnLogging:
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
         recorder = _TurnLoggingRecorder()
-        client = _ScriptedClient([_response_create(text) for text in ("one", "two", "three")], recorder)
+        client = _ScriptedClient([_response_create(text) for text in ("one", "two", "three")], recorder.logged_turns)
         backend = _ScriptedBackend(
             [_completed_turn("resp_1", 10, 1), _completed_turn("resp_2", 20, 2), _completed_turn("resp_3", 30, 3)]
         )
@@ -3349,7 +3347,7 @@ class TestNativeWebSocketPerTurnLogging:
 
         recorder = _TurnLoggingRecorder()
         on_turn_failure = AsyncMock()
-        client = _ScriptedClient([_response_create(text) for text in ("one", "two", "three")], recorder)
+        client = _ScriptedClient([_response_create(text) for text in ("one", "two", "three")], recorder.logged_turns)
         backend = _ScriptedBackend(
             [
                 _completed_turn("resp_1", 10, 1),
@@ -3393,11 +3391,46 @@ class TestNativeWebSocketPerTurnLogging:
         assert "not found" in str(booked_exception)
 
     @pytest.mark.asyncio
-    async def test_a_failed_turn_records_only_its_own_partial_usage(self):
+    async def test_a_failed_turn_bills_the_usage_its_failure_event_reports(self):
+        from datetime import datetime
+
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
 
-        recorder = _TurnLoggingRecorder(response_cost=0.01)
-        client = _ScriptedClient([_response_create(text) for text in ("one", "two")], recorder)
+        import litellm
+        from litellm.integrations.custom_logger import CustomLogger
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+        from litellm.types.utils import CallTypes
+
+        logged: list[dict[str, object]] = []
+
+        class _SpendRows(CustomLogger):
+            async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+                logged.append(kwargs["standard_logging_object"])
+
+            async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+                logged.append(kwargs["standard_logging_object"])
+
+        spend_rows = _SpendRows()
+        connection = Logging(
+            model="gpt-4o",
+            messages=[],
+            stream=False,
+            call_type=CallTypes.aresponses_websocket.value,
+            start_time=datetime.now(),  # noqa: DTZ005  # logging pipeline uses naive datetimes
+            litellm_call_id="ws-connection",
+            function_id="ws-connection",
+            dynamic_async_success_callbacks=[spend_rows],
+            dynamic_async_failure_callbacks=[spend_rows],
+        )
+        connection.update_environment_variables(
+            litellm_params={"metadata": {}, "proxy_server_request": {}},
+            optional_params={},
+            model="gpt-4o",
+            custom_llm_provider="openai",
+        )
+        failed_usage = {"input_tokens": 7, "output_tokens": 2, "total_tokens": 9}
+        client = _ScriptedClient([_response_create(text) for text in ("one", "two")], lambda: len(logged))
         backend = _ScriptedBackend(
             [
                 _completed_turn("resp_1", 10, 5),
@@ -3409,30 +3442,51 @@ class TestNativeWebSocketPerTurnLogging:
                             "id": "resp_2",
                             "status": "failed",
                             "error": {"code": "server_error", "message": "upstream blew up"},
-                            "usage": {"input_tokens": 7, "output_tokens": 2, "total_tokens": 9},
+                            "usage": failed_usage,
                         },
                     },
                 ],
             ]
         )
         handler = _make_streaming(
-            websocket=client, backend_ws=backend, logging_obj=recorder.connection, request_data={}
+            websocket=client,
+            backend_ws=backend,
+            logging_obj=connection,
+            request_data={},
+            authorized_model="gpt-4o",
+            custom_llm_provider="openai",
         )
 
         await handler.bidirectional_forward()
+        await _until(lambda: len(logged) == 2)
 
-        first, failed = recorder.turns
-        first.record_partial_usage_for_failure.assert_not_called()
-        usage, response_cost = failed.record_partial_usage_for_failure.call_args[0]
-        assert (usage.prompt_tokens, usage.completion_tokens) == (0, 0)
-        assert response_cost == 0.01
+        completed, failed = logged
+        assert (completed["status"], failed["status"]) == ("success", "failure")
+        assert (completed["prompt_tokens"], completed["completion_tokens"]) == (10, 5)
+        assert (failed["prompt_tokens"], failed["completion_tokens"]) == (7, 2)
+        http_failed_cost = litellm.completion_cost(
+            completion_response=ResponsesAPIResponse(
+                id="resp_2",
+                created_at=0,
+                model="gpt-4o",
+                object="response",
+                output=[],
+                status="failed",
+                usage=ResponseAPIUsage(**failed_usage),
+            ),
+            model="gpt-4o",
+            call_type=CallTypes.aresponses.value,
+            custom_llm_provider="openai",
+        )
+        assert http_failed_cost > 0
+        assert failed["response_cost"] == pytest.approx(http_failed_cost)
 
     @pytest.mark.asyncio
     async def test_a_turn_still_in_flight_when_the_socket_closes_is_logged_with_what_it_received(self):
         import websockets.exceptions  # noqa: F401  (lazy submodule must be importable)
 
         recorder = _TurnLoggingRecorder()
-        client = _ScriptedClient([_response_create(text) for text in ("one", "two", "three")], recorder)
+        client = _ScriptedClient([_response_create(text) for text in ("one", "two", "three")], recorder.logged_turns)
         backend = _ScriptedBackend(
             [
                 _completed_turn("resp_1", 10, 1),
