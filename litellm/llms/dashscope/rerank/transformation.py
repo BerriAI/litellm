@@ -60,7 +60,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
     Reference: https://help.aliyun.com/zh/model-studio/text-rerank-api
 
     Targets DashScope's qwen3-rerank model. Request fields: model, query,
-    documents, top_n, return_documents. Response: results[].index,
+    documents, top_n, return_documents, instruct. Response: results[].index,
     results[].relevance_score, optionally results[].document.text (when
     return_documents=true), plus a top-level usage.total_tokens counter.
     """
@@ -115,7 +115,7 @@ class DashScopeRerankConfig(BaseRerankConfig):
         }
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:
-        return ["query", "documents", "top_n", "return_documents"]
+        return ["query", "documents", "top_n", "return_documents", "instruction"]
 
     def map_cohere_rerank_params(
         self,
@@ -132,8 +132,6 @@ class DashScopeRerankConfig(BaseRerankConfig):
         max_tokens_per_doc: int | None = None,
         instruction: str | None = None,
     ) -> dict:
-        # qwen3-rerank accepts query/documents/top_n/return_documents. The
-        # rest (rank_fields, max_*_per_doc) are silently dropped.
         params: Final[OptionalRerankParams] = OptionalRerankParams(
             query=query,
             documents=documents,
@@ -142,12 +140,14 @@ class DashScopeRerankConfig(BaseRerankConfig):
             params["top_n"] = top_n
         if return_documents is not None:
             params["return_documents"] = return_documents
+        if instruction is not None:
+            params["instruction"] = instruction
         return dict(params)
 
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
+        optional_rerank_params: dict[str, object],
         headers: dict,
         litellm_params: dict | None = None,
     ) -> dict:
@@ -165,7 +165,10 @@ class DashScopeRerankConfig(BaseRerankConfig):
             request["top_n"] = optional_rerank_params["top_n"]
         if optional_rerank_params.get("return_documents") is not None:
             request["return_documents"] = optional_rerank_params["return_documents"]
-        return request
+        instruction: Final = optional_rerank_params.get("instruction")
+        if instruction is None:
+            return request
+        return dict(request, instruct=_STR.validate_python(instruction))
 
     def transform_rerank_response(
         self,
