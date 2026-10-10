@@ -18,7 +18,7 @@ export const CustomCodeLoggingOnlyScopeSelect: React.FC<{
   value: LoggingOnlyScopeChoice;
   onChange: (choice: LoggingOnlyScopeChoice) => void;
 }> = ({ value, onChange }) => (
-  <div className="w-[200px]">
+  <div className="w-[240px]">
     <label className="mb-1 block text-xs font-medium text-muted-foreground">Logging only scope</label>
     <Select
       items={LOGGING_ONLY_SCOPE_ITEMS}

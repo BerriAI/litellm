@@ -436,8 +436,8 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
         </DialogHeader>
 
         {/* Top Controls */}
-        <div className="flex items-center gap-4 border-b border-border py-4">
-          <div className="max-w-[200px] flex-1">
+        <div className="flex flex-wrap items-center gap-4 border-b border-border py-4">
+          <div className="min-w-[160px] max-w-[200px] flex-1">
             <label className="mb-1 block text-xs font-medium text-muted-foreground">Guardrail Name</label>
             <Input
               value={guardrailName}
@@ -483,7 +483,7 @@ const CustomCodeModal: React.FC<CustomCodeModalProps> = ({ visible, onClose, onS
             <CustomCodeLoggingOnlyScopeSelect value={loggingOnlyScopeChoice} onChange={setLoggingOnlyScopeChoice} />
           )}
           {mode.includes("logging_only") && (
-            <div className="flex items-center gap-2 pt-5">
+            <div className="flex shrink-0 items-center gap-2 pt-5">
               <span className="text-sm text-muted-foreground">
                 Continue observing the response after a flagged request
               </span>
