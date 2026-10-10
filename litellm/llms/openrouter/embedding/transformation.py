@@ -10,7 +10,9 @@ Docs: https://openrouter.ai/docs
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
+from litellm.litellm_core_utils.core_helpers import set_response_cost_in_hidden_params
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.types.llms.openai import AllEmbeddingInputValues
 from litellm.types.utils import EmbeddingResponse
@@ -24,6 +26,30 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+
+class _OpenRouterEmbeddingCostDetails(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    upstream_inference_cost: float | None = None
+    upstream_inference_prompt_cost: float | None = None
+    upstream_inference_completions_cost: float | None = None
+
+
+class _OpenRouterEmbeddingUsage(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    cost: float | None = None
+    cost_details: _OpenRouterEmbeddingCostDetails | None = None
+
+
+class _OpenRouterEmbeddingResponse(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    usage: _OpenRouterEmbeddingUsage | None = None
+
+
+_OPENROUTER_EMBEDDING_RESPONSE_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
 
 
 class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
@@ -136,13 +162,20 @@ class OpenrouterEmbeddingConfig(BaseEmbeddingConfig):
         logging_obj.post_call(original_response=raw_response.text)
 
         # OpenRouter returns standard OpenAI-compatible embedding response
-        response_json: Final = raw_response.json()
-
-        return convert_to_model_response_object(
+        response_json: Final = _OPENROUTER_EMBEDDING_RESPONSE_ADAPTER.validate_json(raw_response.content)
+        usage: Final = _OpenRouterEmbeddingResponse.model_validate(response_json).usage or _OpenRouterEmbeddingUsage()
+        convert_to_model_response_object(
             response_object=response_json,
             model_response_object=model_response,
             response_type="embedding",
+            hidden_params=(
+                {"response_cost_details": usage.cost_details.model_dump(exclude_none=True)}
+                if usage.cost_details is not None
+                else None
+            ),
         )
+        set_response_cost_in_hidden_params(model_response, usage.cost)
+        return model_response
 
     def get_supported_openai_params(self, model: str) -> list:
         """
