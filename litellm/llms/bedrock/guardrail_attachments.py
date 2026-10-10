@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from functools import reduce
 from itertools import chain
 from types import MappingProxyType
-from typing import Final, Literal, NamedTuple, TypeGuard
+from typing import Final, Literal, NamedTuple, TypeAlias, TypeGuard  # noqa: TID251  # narrows request JSON to str keys
 
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
@@ -13,7 +13,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
 )
 from litellm.types.utils import CallTypes
 
-BedrockImageFormat = Literal["png", "jpeg"]
+BedrockImageFormat: TypeAlias = Literal["png", "jpeg"]
 
 
 class RequestAttachments(NamedTuple):
@@ -40,9 +40,9 @@ class _Block(NamedTuple):
     document_depth: int = 0
 
 
-_Classified = _Image | _Unscannable | _DocumentText | None
-_BlockClassifier = Callable[[Mapping[str, object]], _Classified]
-_NestedToolBlocks = Callable[
+_Classified: TypeAlias = _Image | _Unscannable | _DocumentText | None
+_BlockClassifier: TypeAlias = Callable[[Mapping[str, object]], _Classified]
+_NestedToolBlocks: TypeAlias = Callable[
     [Mapping[str, object]],
     tuple[Mapping[str, object], ...],
 ]
@@ -62,6 +62,7 @@ _ANTHROPIC_UNSCANNABLE_TYPES: Final = frozenset({"document", "container_upload"}
 _TEXT_DOCUMENT_SOURCE_TYPES: Final = frozenset({"text", "content"})
 _MAX_DOCUMENT_DEPTH: Final = 3
 _CONVERSE_UNSCANNABLE_KEYS: Final = ("document", "video", "audio")
+_CONVERSE_BINARY_SOURCE_KEYS: Final = ("bytes", "s3Location")
 _MAX_IMAGE_BYTES: Final = 4 * 1024 * 1024
 _MAX_IMAGE_BASE64_CHARS: Final = -(-_MAX_IMAGE_BYTES // 3) * 4
 _URL_SAFE_TO_STANDARD_BASE64: Final = str.maketrans("-_", "+/")
@@ -276,7 +277,8 @@ def _is_text_document(block: Mapping[str, object]) -> bool:
 
 
 def _classify_converse_block(block: Mapping[str, object]) -> _Classified:
-    image: Final = block.get("image")
+    guard_content: Final = block.get("guardContent")
+    image: Final = guard_content.get("image") if _is_mapping(guard_content) else block.get("image")
     if _is_mapping(image):
         image_format: Final = image.get("format")
         source: Final = image.get("source")
@@ -285,10 +287,39 @@ def _classify_converse_block(block: Mapping[str, object]) -> _Classified:
             return _Unscannable("image (no inline bytes)")
         mime: Final = f"image/{image_format}" if isinstance(image_format, str) else None
         return _classify_base64(mime, encoded, "image")
+    document: Final = block.get("document")
+    document_text: Final = _converse_document_text(document) if _is_mapping(document) else None
+    if document_text is not None:
+        return _DocumentText(document_text) if document_text else None
     for key in _CONVERSE_UNSCANNABLE_KEYS:
         if block.get(key) is not None:
             return _Unscannable(key)
     return None
+
+
+def _converse_document_text(document: Mapping[str, object]) -> str | None:
+    source: Final = document.get("source")
+    if not _is_mapping(source) or any(source.get(key) is not None for key in _CONVERSE_BINARY_SOURCE_KEYS):
+        return None
+    parts: Final = _converse_document_parts(source)
+    if parts is None:
+        return None
+    return "\n".join(
+        part for part in (document.get("name"), document.get("context"), *parts) if isinstance(part, str) and part
+    )
+
+
+def _converse_document_parts(source: Mapping[str, object]) -> tuple[str, ...] | None:
+    text: Final = source.get("text")
+    if isinstance(text, str):
+        return (text,)
+    content: Final = source.get("content")
+    if not _is_list(content):
+        return None
+    parts: Final = tuple(item.get("text") if _is_mapping(item) else None for item in content)
+    return (
+        tuple(part for part in parts if isinstance(part, str)) if all(isinstance(part, str) for part in parts) else None
+    )
 
 
 def _classify_data_uri(url: object, label: str) -> _Classified:
@@ -336,7 +367,7 @@ def _pixel_size(data: bytes, image_format: BedrockImageFormat) -> tuple[int, ...
         return (
             (int.from_bytes(data[16:20], "big"), int.from_bytes(data[20:24], "big")) if data[12:16] == b"IHDR" else ()
         )
-    offset = 2
+    offset = 2  # rebind-ok: cursor that walks the JPEG segments
     while offset + 4 <= len(data) and data[offset] == 0xFF:
         marker = data[offset + 1]
         if marker == 0xFF or marker in _JPEG_STANDALONE_MARKERS:

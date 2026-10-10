@@ -242,6 +242,14 @@ def _without_image_bytes(content: Sequence[BedrockContentItem]) -> tuple[Bedrock
     )
 
 
+def _allowed_dynamic_body_params(params: Mapping[str, object]) -> Mapping[str, object]:
+    return {key: value for key, value in params.items() if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST}
+
+
+def _overridden(guardrail: object, name: str) -> bool:
+    return getattr(getattr(guardrail, name, None), "__func__", None) is not getattr(BedrockGuardrail, name)
+
+
 def _is_responses_api_route(request_route: str | None) -> bool:
     if request_route is None:
         return False
@@ -290,6 +298,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self.chunk_budget_chars = chunk_budget_chars
         self.contextual_grounding_from_messages = contextual_grounding_from_messages
         self.experimental_use_latest_role_message_only = bool(kwargs.get("experimental_use_latest_role_message_only"))
+        self.skip_unscannable_attachments: Final = kwargs.get("skip_unscannable_attachments") is True
 
         # Resource-less, detect-only InvokeGuardrailChecks mode. Present `checks`
         # routes the guardrail to InvokeGuardrailChecks; absent => ApplyGuardrail.
@@ -944,10 +953,21 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         guardrail call and is logged exactly once here.
         """
         start_time: Final = datetime.now(timezone.utc)
-        bedrock_request_data, api_key = self._bedrock_request_body(
-            self.convert_to_bedrock_format(source=source, messages=messages, response=response),
-            request_data,
+        bedrock_request_data: Final[dict] = dict(
+            self.convert_to_bedrock_format(source=source, messages=messages, response=response)
         )
+        api_key: str | None = None
+        if request_data:
+            dynamic_request_body_params = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
+            bedrock_request_data.update(
+                {
+                    key: value
+                    for key, value in dynamic_request_body_params.items()
+                    if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST
+                }
+            )
+            if request_data.get("api_key") is not None:
+                api_key = request_data["api_key"]
 
         event_type: Final = (
             logging_event_type
@@ -975,32 +995,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             allow_chunking=not self._content_uses_contextual_grounding(content),
         )
 
-    def _bedrock_request_body(
-        self,
-        base_request: BedrockRequest,
-        request_data: dict | None,  # mutable-ok: proxy request body dict, read by the dynamic-params helper
-    ) -> tuple[dict, str | None]:  # mutable-ok: ApplyGuardrail JSON request body
-        bedrock_request_data: Final[dict] = dict(base_request)  # mutable-ok: JSON request body
-        api_key: str | None = None
-        if request_data:
-            dynamic_request_body_params = self.get_guardrail_dynamic_request_body_params(request_data=request_data)
-            bedrock_request_data.update(
-                {
-                    key: value
-                    for key, value in dynamic_request_body_params.items()
-                    if key not in _BEDROCK_DYNAMIC_BODY_DENYLIST
-                }
-            )
-            if request_data.get("api_key") is not None:
-                api_key = request_data["api_key"]
-        return bedrock_request_data, api_key
-
     async def _apply_guardrail_to_content(
         self,
         content: Sequence[BedrockContentItem],
         bedrock_request_data: Mapping[str, object],
         api_key: str | None,
-        request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        request_data: dict[str, object] | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
         allow_chunking: bool,
@@ -1051,7 +1051,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         credentials: "Credentials | None",
         aws_region_name: str,
         api_key: str | None,
-        request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        request_data: dict[str, object] | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
         allow_chunking: bool,
@@ -1371,7 +1371,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _log_apply_guardrail_success(
         self,
         merged_response: BedrockGuardrailResponse,
-        request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        request_data: dict[str, object] | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
         aws_region_name: str | None,
@@ -1405,7 +1405,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _log_apply_guardrail_failure(
         self,
         detail: object,
-        request_data: dict | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        request_data: dict[str, object] | None,  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
         start_time: "datetime",
         aws_region_name: str | None,
@@ -2537,14 +2537,11 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     async def async_scan_request_attachments(
         self,
-        data: dict,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
         call_type: CallTypesLiteral,
         event_type: GuardrailEventHooks = GuardrailEventHooks.pre_call,
     ) -> None:
-        if (
-            getattr(self.apply_guardrail, "__func__", None) is not BedrockGuardrail.apply_guardrail
-            or getattr(self.make_bedrock_api_request, "__func__", None) is not BedrockGuardrail.make_bedrock_api_request
-        ):
+        if _overridden(self, "apply_guardrail") or _overridden(self, "make_bedrock_api_request"):
             return
         attachments: Final = find_request_attachments(
             data,
@@ -2556,7 +2553,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         images: Final = attachments.images if self.checks is None else ()
         unscannable: Final = attachments.unscannable + tuple("image" for _ in attachments.images if self.checks)
         if unscannable:
-            if self.optional_params.get("skip_unscannable_attachments") is not True:
+            if not self.skip_unscannable_attachments:
                 raise self._unscannable_attachments_exception(unscannable, request_data=data, event_type=event_type)
             verbose_proxy_logger.warning(
                 "Bedrock Guardrail %s: letting %d unscannable attachment(s) through unscanned because "
@@ -2568,13 +2565,19 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             await self._scan_document_texts(attachments.document_texts, request_data=data, event_type=event_type)
         if not images:
             return
-        bedrock_request_data, api_key = self._bedrock_request_body(BedrockRequest(source="INPUT"), data)
+        bedrock_request_data: Final = {
+            "source": "INPUT",
+            **_allowed_dynamic_body_params(
+                self.get_guardrail_dynamic_request_body_params(request_data=data)  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # the base helper returns an untyped dict
+            ),
+        }
+        api_key: Final = data.get("api_key")
         try:
             for start in range(0, len(images), _BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES):
                 await self._apply_guardrail_to_content(
                     content=images[start : start + _BEDROCK_APPLY_GUARDRAIL_MAX_IMAGES],
                     bedrock_request_data=bedrock_request_data,
-                    api_key=api_key,
+                    api_key=api_key if isinstance(api_key, str) else None,
                     request_data=data,
                     event_type=event_type,
                     start_time=datetime.now(timezone.utc),
@@ -2586,12 +2589,12 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if event_type != GuardrailEventHooks.pre_call:
                 raise
             verbose_proxy_logger.error("Bedrock Guardrail: Failed to scan attachments: %s", str(e))
-            raise Exception(f"Bedrock guardrail failed: {e}") from e
+            raise Exception(f"Bedrock guardrail failed: {e}") from e  # noqa: TRY002  # same error the text scan raises
 
     async def _scan_document_texts(
         self,
         document_texts: Sequence[str],
-        request_data: dict,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        request_data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
     ) -> None:
         response: Final = await self.make_bedrock_api_request(
@@ -2610,7 +2613,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
     def _unscannable_attachments_exception(
         self,
         unscannable: Sequence[str],
-        request_data: dict,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        request_data: dict[str, object],  # mutable-ok: proxy request body dict, mutated by the logging helper
         event_type: GuardrailEventHooks,
     ) -> HTTPException | ModifyResponseException:
         reason: Final = (
@@ -2629,9 +2632,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             event_type=event_type,
         )
         if self.disable_exception_on_block is True:
+            model: Final = request_data.get("model", "bedrock-guardrail")
             return ModifyResponseException(
                 message=reason,
-                model=request_data.get("model", "bedrock-guardrail"),
+                model=model if isinstance(model, str) else "bedrock-guardrail",
                 request_data=request_data,
                 guardrail_name=self.guardrail_name,
             )
@@ -2649,7 +2653,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         self,
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
-        data: dict,
+        data: dict[str, object],  # mutable-ok: the hook writes the guarded messages back into the request
         call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         verbose_proxy_logger.debug("Inside Bedrock Pre-Call Hook for call_type: %s", call_type)
@@ -2715,7 +2719,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
 
     async def async_moderation_hook(
         self,
-        data: dict,
+        data: dict[str, object],  # mutable-ok: the hook writes the guarded messages back into the request
         user_api_key_dict: UserAPIKeyAuth,
         call_type: CallTypesLiteral,
     ):

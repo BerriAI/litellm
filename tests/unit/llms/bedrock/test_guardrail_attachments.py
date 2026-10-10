@@ -562,3 +562,78 @@ def test_images_bedrock_cannot_scan_are_unscannable(mime, raw, label):
 
     assert len(found.images) == 1
     assert found.unscannable == (label,)
+
+
+def _converse_document(source: dict, **fields: str) -> dict:
+    return {"document": {"format": "txt", "name": "notes", **fields, "source": source}}
+
+
+@pytest.mark.parametrize(
+    "block, document_texts",
+    [
+        pytest.param(_converse_document({"text": "SSN 123-45-6789"}), ("notes\nSSN 123-45-6789",), id="text"),
+        pytest.param(
+            _converse_document({"text": "body"}, context="SSN 123-45-6789"),
+            ("notes\nSSN 123-45-6789\nbody",),
+            id="text-with-context",
+        ),
+        pytest.param(
+            _converse_document({"content": [{"text": "first"}, {"text": "SSN 123-45-6789"}, {"text": "last"}]}),
+            ("notes\nfirst\nSSN 123-45-6789\nlast",),
+            id="content",
+        ),
+        pytest.param(_converse_document({"text": ""}, name=""), (), id="empty-text"),
+    ],
+)
+def test_converse_text_source_document_is_scanned_as_text(block, document_texts):
+    found = find_request_attachments(
+        _converse({"text": "hi"}, block), CallTypes.allm_passthrough_route.value, False, False
+    )
+
+    assert found.document_texts == document_texts
+    assert found.images == ()
+    assert found.unscannable == ()
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        pytest.param({"bytes": PDF_B64}, id="bytes"),
+        pytest.param({"s3Location": {"uri": "s3://b/k.txt"}}, id="s3"),
+        pytest.param({"text": "hi", "bytes": PDF_B64}, id="text-and-bytes"),
+        pytest.param({"content": [{"text": "hi"}, {"image": {"format": "png"}}]}, id="content-with-non-text"),
+        pytest.param({"content": [{"text": "hi"}, "raw"]}, id="content-with-string"),
+        pytest.param({"content": "hi"}, id="content-not-a-list"),
+        pytest.param({}, id="no-source-fields"),
+    ],
+)
+def test_converse_document_without_text_source_stays_unscannable(source):
+    found = find_request_attachments(
+        _converse(_converse_document(source)), CallTypes.allm_passthrough_route.value, False, False
+    )
+
+    assert found.document_texts == ()
+    assert found.unscannable == ("document",)
+
+
+def test_converse_text_document_in_tool_result_follows_the_tool_scope():
+    data = _converse({"toolResult": {"toolUseId": "t1", "content": [_converse_document({"text": "SSN 123-45-6789"})]}})
+
+    scanned = find_request_attachments(data, CallTypes.allm_passthrough_route.value, False, False)
+    skipped = find_request_attachments(data, CallTypes.allm_passthrough_route.value, True, False)
+
+    assert scanned.document_texts == ("notes\nSSN 123-45-6789",)
+    assert skipped.document_texts == ()
+
+
+def test_converse_guard_content_image_is_scanned():
+    data = _converse(
+        {"guardContent": {"image": _png_item()["image"]}},
+        {"guardContent": {"image": {"format": "png", "source": {"s3Location": {"uri": "s3://b/k.png"}}}}},
+        {"guardContent": {"text": {"text": "hi"}}},
+    )
+
+    found = find_request_attachments(data, CallTypes.allm_passthrough_route.value, False, False)
+
+    assert list(found.images) == [_png_item()]
+    assert found.unscannable == ("image (no inline bytes)",)

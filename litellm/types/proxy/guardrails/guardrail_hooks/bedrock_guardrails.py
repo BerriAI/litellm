@@ -23,7 +23,7 @@ class BedrockImageContent(TypedDict):
 
 class BedrockContentItem(TypedDict, total=False):
     text: BedrockTextContent
-    image: BedrockImageContent
+    image: ReadOnly[BedrockImageContent]
 
 
 class BedrockRequest(TypedDict, total=False):

@@ -57,9 +57,16 @@ _RequestData: TypeAlias = dict[str, object]
 class RequestAttachmentScanner(Protocol):
     async def async_scan_request_attachments(
         self,
-        data: dict,  # mutable-ok: proxy request body dict, mutated by the logging helper
+        data: _RequestData,
         call_type: CallTypesLiteral,
     ) -> None: ...
+
+
+async def _scan_request_attachments(
+    guardrail: CustomGuardrail, data: _RequestData, call_type: CallTypesLiteral
+) -> None:
+    if isinstance(guardrail, RequestAttachmentScanner) and hasattr(type(guardrail), "async_scan_request_attachments"):
+        await guardrail.async_scan_request_attachments(data=data, call_type=call_type)
 
 
 class _EndpointTranslation(Protocol):
@@ -260,10 +267,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         _ensure_litellm_metadata(data, user_api_key_dict)
 
-        if isinstance(guardrail_to_apply, RequestAttachmentScanner) and hasattr(
-            type(guardrail_to_apply), "async_scan_request_attachments"
-        ):
-            await guardrail_to_apply.async_scan_request_attachments(data=data, call_type=call_type)
+        await _scan_request_attachments(guardrail_to_apply, data, call_type)  # pyright: ignore[reportUnknownArgumentType]  # hook data is an untyped dict
 
         data = await endpoint_translation.process_input_messages(
             data=data,
