@@ -29454,6 +29454,11 @@ export interface components {
              */
             disable_password_login_when_sso_enabled?: boolean | null;
             /**
+             * Disable Requester Ip Address Logging
+             * @description If True, new spend log rows store requester_ip_address as null in the column, the metadata and the stored request. The stored request also drops client-IP forwarding headers such as x-forwarded-for, and IP addresses in stored error messages are masked. Guardrails, metrics and callbacks that read the standard logging payload still receive the IP. Default is False.
+             */
+            disable_requester_ip_address_logging?: boolean | null;
+            /**
              * Disable Responses Id Security
              * @description If True, disables ownership enforcement on Responses API ids. Keys may then retrieve, cancel, delete, and chain from any response id, including ids belonging to another user or team and ids this proxy never issued. WARNING: this removes tenant isolation on /v1/responses
              */
