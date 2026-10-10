@@ -400,6 +400,8 @@ class AnthropicMessagesStreamingResponse:
 
 
 _SSE_FRAME_END: Final = re.compile(rb"(?<=\n\n)|(?<=\r\n\r\n)")
+_SSE_FRAME_TERMINATORS: Final = (b"\n\n", b"\r\n\r\n")
+_SSE_TERMINATOR_OVERLAP: Final = max(len(terminator) for terminator in _SSE_FRAME_TERMINATORS) - 1
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
 
 
@@ -419,16 +421,25 @@ async def _stamped_sse_frame(frame: bytes, safeguard_results: StreamedSafeguardR
     return frame if stamped is event else anthropic_sse_frame(stamped)
 
 
+def _ends_a_frame(open_frame: bytearray, scan_from: int) -> bool:
+    return any(open_frame.find(terminator, scan_from) != -1 for terminator in _SSE_FRAME_TERMINATORS)
+
+
 async def _stamped_sse_frames(
     stream: AsyncIterator[bytes], safeguard_results: StreamedSafeguardResults
 ) -> AsyncGenerator[bytes, None]:
-    unterminated = b""  # rebind-ok: carries the partial frame a chunk ends on into the next chunk
+    open_frame: Final = bytearray()
     async for chunk in stream:
-        *frames, unterminated = _SSE_FRAME_END.split(unterminated + chunk)
+        scan_from = max(len(open_frame) - _SSE_TERMINATOR_OVERLAP, 0)
+        open_frame.extend(chunk)
+        if not _ends_a_frame(open_frame, scan_from):
+            continue
+        *frames, unterminated = _SSE_FRAME_END.split(open_frame)
+        open_frame[:] = unterminated
         for frame in frames:
             yield await _stamped_sse_frame(frame, safeguard_results)
-    if unterminated:
-        yield await _stamped_sse_frame(unterminated, safeguard_results)
+    if open_frame:
+        yield await _stamped_sse_frame(bytes(open_frame), safeguard_results)
 
 
 class SafeguardedAnthropicSSEStream:
