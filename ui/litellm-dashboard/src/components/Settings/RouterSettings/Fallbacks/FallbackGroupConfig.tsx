@@ -56,10 +56,10 @@ export function FallbackGroupConfig({
   };
 
   const handleFallbackSelect = (values: string[]) => {
-    const limitedValues = expandFallbackSelection(values, availableModels, modelProviders, group.primaryModel).slice(
-      0,
+    const limitedValues = expandFallbackSelection(values, availableModels, modelProviders, {
+      primaryModel: group.primaryModel,
       maxFallbacks,
-    );
+    });
 
     onChange({
       ...group,

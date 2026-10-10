@@ -61,12 +61,14 @@ export const expandFallbackSelection = (
   values: readonly string[],
   models: readonly string[],
   modelProviders: ModelProviders,
-  primaryModel: string | null,
+  { primaryModel, maxFallbacks }: { primaryModel: string | null; maxFallbacks: number },
 ): string[] => {
   const expanded = values.flatMap((value) =>
     isProviderWildcard(value) && !models.includes(value)
       ? modelsForProvider(wildcardProvider(value), models, modelProviders)
       : [value],
   );
-  return Array.from(new Set(expanded)).filter((model) => model !== primaryModel);
+  return Array.from(new Set(expanded))
+    .filter((model) => model !== primaryModel)
+    .slice(0, maxFallbacks);
 };

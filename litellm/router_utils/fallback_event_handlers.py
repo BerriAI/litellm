@@ -1,6 +1,5 @@
 import hashlib
 import json
-import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -248,13 +247,13 @@ def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     return False
 
 
-def _matches_wildcard_fallback_key(model_group: str, fallback_key: str) -> bool:
-    if fallback_key == "*" or "*" not in fallback_key:
-        return False
-    if re.fullmatch(re.escape(fallback_key).replace(r"\*", ".*"), model_group) is not None:
-        return True
+def _matches_provider_wildcard_key(model_group: str, fallback_key: str) -> bool:
     provider, separator, rest = fallback_key.partition("/")
-    return separator == "/" and rest == "*" and "/" not in model_group and inferred_provider(model_group) == provider
+    if separator != "/" or rest != "*" or not provider or "*" in provider:
+        return False
+    if model_group.startswith(f"{provider}/"):
+        return True
+    return "/" not in model_group and inferred_provider(model_group) == provider
 
 
 def _provider_prefixed_model_group(model_group: str, fallback_keys: Sequence[str]) -> str | None:
@@ -558,9 +557,11 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
     - exact match
     - stripped model group match
     - provider-prefixed model group match
+    - provider wildcard match (e.g. "openai/*")
     - generic fallback
     """
     generic_fallback_idx: int | None = None
+    provider_wildcard_fallback_idx: int | None = None
     stripped_model_fallback: list[str] | None = None
     fallback_model_group: list[str] | None = None
     fallback_keys: Final = tuple(next(iter(item)) for item in fallbacks if isinstance(item, dict) and item)
@@ -572,15 +573,14 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
             if fallback_key == model_group:  # check exact match
                 fallback_model_group = item[model_group]
                 break
-            elif (
-                fallback_key == prefixed_model_group
-                or _check_stripped_model_group(model_group=model_group, fallback_key=fallback_key)
-                or (
-                    isinstance(fallback_key, str)
-                    and _matches_wildcard_fallback_key(model_group=model_group, fallback_key=fallback_key)
-                )
+            elif fallback_key == prefixed_model_group or _check_stripped_model_group(
+                model_group=model_group, fallback_key=fallback_key
             ):
                 stripped_model_fallback = item[fallback_key]
+            elif isinstance(fallback_key, str) and _matches_provider_wildcard_key(
+                model_group=model_group, fallback_key=fallback_key
+            ):
+                provider_wildcard_fallback_idx = idx
             elif fallback_key == "*":  # check generic fallback
                 generic_fallback_idx = idx
         elif isinstance(item, str):
@@ -589,6 +589,8 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
     if fallback_model_group is None:
         if stripped_model_fallback is not None:
             fallback_model_group = stripped_model_fallback
+        elif provider_wildcard_fallback_idx is not None:
+            fallback_model_group = next(iter(fallbacks[provider_wildcard_fallback_idx].values()))
         elif generic_fallback_idx is not None:
             fallback_model_group = fallbacks[generic_fallback_idx]["*"]
 

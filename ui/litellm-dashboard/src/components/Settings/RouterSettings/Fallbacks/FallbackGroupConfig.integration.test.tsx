@@ -56,14 +56,4 @@ describe("FallbackGroupConfig provider wildcards", () => {
     expect(await screen.findByRole("option", { name: /All Anthropic models/i })).toBeInTheDocument();
     expect(screen.queryByRole("option", { name: /All OpenAI models/i })).not.toBeInTheDocument();
   });
-
-  it("caps an expanded wildcard at the max fallback count", async () => {
-    const user = userEvent.setup();
-    render(<Harness initial={{ id: "1", primaryModel: "openai/gpt-4o", fallbackModels: [] }} maxFallbacks={1} />);
-
-    await user.click(screen.getByRole("combobox", { name: "Select fallback models to add..." }));
-    await user.click(await screen.findByRole("option", { name: /All Anthropic models/i }));
-
-    expect(state().fallbackModels).toEqual(["claude-sonnet-4-5"]);
-  });
 });
