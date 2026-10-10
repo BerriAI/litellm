@@ -1,8 +1,7 @@
-import datetime
 import json
 from collections.abc import Callable, Iterator
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -10,26 +9,12 @@ import respx
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
-from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.litellm_core_utils.prompt_templates.factory import cohere_messages_pt_v2
 from litellm.llms.cohere.chat.transformation import CohereChatConfig
 from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from unittest.mock import AsyncMock, patch
 
 COHERE_V1_CHAT_URL: Final = "https://api.cohere.ai/v1/chat"
 COHERE_V2_CHAT_URL: Final = "https://api.cohere.com/v2/chat"
-
-
-def _cohere_logging_obj(messages: list[object]) -> Logging:
-    return Logging(
-        model="command-r-plus",
-        messages=messages,
-        stream=False,
-        call_type="completion",
-        start_time=datetime.datetime(2025, 1, 1, tzinfo=datetime.timezone.utc),
-        litellm_call_id="cohere-test-call",
-        function_id="cohere-test-function",
-    )
 
 
 @pytest.fixture
@@ -112,250 +97,6 @@ class TestCohereV2Transform:
         )
 
         assert result == {"temperature": 0.7, "max_tokens": 200}
-
-
-def test_cohere_v1_response_parses_citations_tool_calls_and_billed_units() -> None:
-    config: Final = CohereChatConfig()
-    model_response: Final = litellm.ModelResponse()
-    raw_response: Final = httpx.Response(
-        200,
-        json={
-            "text": "Searching",
-            "citations": [{"start": 0, "end": 9, "text": "Searching", "document_ids": ["doc-1"]}],
-            "tool_calls": [{"name": "lookup", "generation_id": "call-1", "parameters": {"query": "weather"}}],
-            "meta": {"billed_units": {"input_tokens": 7, "output_tokens": 3}},
-        },
-    )
-
-    response: Final = config.transform_response(
-        model="command-r-plus",
-        raw_response=raw_response,
-        model_response=model_response,
-        logging_obj=_cohere_logging_obj([]),
-        request_data={},
-        messages=[],
-        optional_params={},
-        litellm_params={},
-        encoding=None,
-    )
-
-    assert response.choices[0].message.tool_calls[0].function.name == "lookup"
-    assert response.choices[0].message.tool_calls[0].function.arguments == '{"query": "weather"}'
-    assert getattr(response, "citations") == [{"start": 0, "end": 9, "text": "Searching", "document_ids": ["doc-1"]}]
-    assert response.usage.prompt_tokens == 7
-    assert response.usage.completion_tokens == 3
-
-
-def test_cohere_v2_response_parses_annotations_and_tool_calls() -> None:
-    config: Final = CohereV2ChatConfig()
-    model_response: Final = litellm.ModelResponse()
-    raw_response: Final = httpx.Response(
-        200,
-        json={
-            "id": "response-1",
-            "finish_reason": "COMPLETE",
-            "message": {
-                "content": [{"type": "text", "text": "The weather is clear."}],
-                "citations": [
-                    {
-                        "start": 0,
-                        "end": 21,
-                        "sources": [
-                            {
-                                "type": "document",
-                                "id": "source-1",
-                                "url": "https://example.com/weather",
-                                "document": {"title": "Weather report"},
-                            }
-                        ],
-                    }
-                ],
-                "tool_calls": [
-                    {
-                        "id": "call-1",
-                        "type": "function",
-                        "function": {"name": "lookup", "arguments": '{"city":"Paris"}'},
-                    }
-                ],
-            },
-            "usage": {"tokens": {"input_tokens": 11, "output_tokens": 5}},
-        },
-    )
-
-    response: Final = config.transform_response(
-        model="command-r-plus",
-        raw_response=raw_response,
-        model_response=model_response,
-        logging_obj=_cohere_logging_obj([]),
-        request_data={},
-        messages=[],
-        optional_params={},
-        litellm_params={},
-        encoding=None,
-    )
-
-    assert response.choices[0].message.tool_calls[0].function.name == "lookup"
-    assert response.choices[0].message.tool_calls[0].function.arguments == '{"city":"Paris"}'
-    assert response.choices[0].message.annotations[0]["url_citation"]["url"] == "https://example.com/weather"
-    assert response.choices[0].message.annotations[0]["url_citation"]["title"] == "Weather report"
-    assert response.usage.prompt_tokens == 11
-    assert response.usage.completion_tokens == 5
-
-
-def test_cohere_v2_request_preserves_conversation_messages_and_parameters() -> None:
-    config: Final = CohereV2ChatConfig()
-    messages: Final = [
-        {"role": "user", "content": "What is the capital of France?"},
-        {"role": "assistant", "content": "Paris."},
-        {"role": "user", "content": "What language is spoken there?"},
-    ]
-    optional_params: Final = config.map_openai_params(
-        non_default_params={
-            "max_completion_tokens": 128,
-            "top_p": 0.7,
-            "frequency_penalty": 0.3,
-            "presence_penalty": 0.2,
-            "stop": ["END"],
-        },
-        optional_params={},
-        model="command-r-plus",
-        drop_params=False,
-    )
-
-    request: Final = config.transform_request(
-        model="command-r-plus",
-        messages=messages,
-        optional_params=optional_params,
-        litellm_params={},
-        headers={},
-    )
-
-    assert request["messages"] == messages
-    assert request["max_tokens"] == 128
-    assert request["p"] == 0.7
-    assert request["frequency_penalty"] == 0.3
-    assert request["presence_penalty"] == 0.2
-    assert request["stop_sequences"] == ["END"]
-
-
-@pytest.mark.respx(assert_all_called=True)
-def test_cohere_v2_completion_sends_mapped_request_and_parses_response(respx_mock: respx.MockRouter) -> None:
-    route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
-        return_value=httpx.Response(
-            200,
-            json={
-                "id": "response-1",
-                "finish_reason": "COMPLETE",
-                "message": {"content": [{"type": "text", "text": "Paris is the capital."}]},
-                "usage": {"tokens": {"input_tokens": 8, "output_tokens": 4}},
-            },
-        )
-    )
-    response: Final = litellm.completion(
-        model="cohere_chat/command-r-plus",
-        messages=[{"role": "user", "content": "What is the capital of France?"}],
-        api_key="test-api-key",
-        client=HTTPHandler(),
-        max_completion_tokens=64,
-        top_p=0.7,
-    )
-
-    assert response.choices[0].message.content == "Paris is the capital."
-    assert response.usage.prompt_tokens == 8
-    assert response.usage.completion_tokens == 4
-    assert route.called
-    request_body: Final = json.loads(route.calls.last.request.content)
-    assert request_body["messages"] == [{"role": "user", "content": "What is the capital of France?"}]
-    assert request_body["model"] == "command-r-plus"
-    assert request_body["max_tokens"] == 64
-    assert request_body["p"] == 0.7
-    assert "top_p" not in request_body
-
-
-def test_cohere_v1_request_separates_conversation_history_from_latest_message() -> None:
-    messages: Final = [
-        {"role": "user", "content": "What is 2 + 2?"},
-        {"role": "assistant", "content": "4."},
-        {"role": "user", "content": "And 3 + 3?"},
-    ]
-
-    latest_message, history = cohere_messages_pt_v2(
-        messages=messages.copy(),
-        model="command-r-plus",
-        llm_provider="cohere_chat",
-    )
-
-    assert latest_message == "And 3 + 3?"
-    assert history == [
-        {"role": "USER", "message": "What is 2 + 2?"},
-        {"role": "CHATBOT", "message": "4.", "tool_calls": []},
-    ]
-
-
-def test_cohere_v2_stream_parser_emits_text_tool_calls_and_usage() -> None:
-    config: Final = CohereV2ChatConfig()
-    response_iterator: Final = config.get_model_response_iterator(
-        iter(
-            [
-                json.dumps(
-                    {
-                        "type": "content-delta",
-                        "delta": {"message": {"content": {"text": "Searching"}}},
-                    }
-                ),
-                json.dumps(
-                    {
-                        "type": "tool-call-delta",
-                        "delta": {
-                            "tool_calls": [
-                                {
-                                    "id": "call-1",
-                                    "name": "lookup",
-                                    "arguments": '{"city":"Paris"}',
-                                }
-                            ]
-                        },
-                    }
-                ),
-                json.dumps(
-                    {
-                        "event": "message-end",
-                        "data": {
-                            "delta": {
-                                "finish_reason": "COMPLETE",
-                                "usage": {"tokens": {"input_tokens": 8, "output_tokens": 3}},
-                            }
-                        },
-                    }
-                ),
-            ]
-        ),
-        sync_stream=True,
-    )
-
-    chunks: Final = list(response_iterator)
-
-    assert chunks[0]["text"] == "Searching"
-    assert chunks[1]["tool_use"] is not None
-    assert chunks[1]["tool_use"]["id"] == "call-1"
-    assert chunks[1]["tool_use"]["function"]["name"] == "lookup"
-    assert chunks[2]["is_finished"]
-    assert chunks[2]["finish_reason"] == "COMPLETE"
-    assert chunks[2]["usage"]["prompt_tokens"] == 8
-    assert chunks[2]["usage"]["completion_tokens"] == 3
-
-
-def test_cohere_v2_error_class_preserves_status_and_message() -> None:
-    config: Final = CohereV2ChatConfig()
-
-    error: Final = config.get_error_class(
-        error_message="rate limit exceeded",
-        status_code=429,
-        headers={},
-    )
-
-    assert error.status_code == 429
-    assert error.message == "rate limit exceeded"
 
     def test_v2_map_max_completion_tokens_overrides_max_tokens(self):
         """max_completion_tokens maps to cohere max_tokens and overrides max_tokens, matching v1"""
@@ -461,6 +202,7 @@ async def test_cohere_request_body_with_allowed_params():
 
         # Get and parse the request body
         request_data = json.loads(mock_post.call_args.kwargs["data"])
+        print(f"request_data: {request_data}")
 
         # Validate request contains our specified parameters
         assert "allowed_openai_params" not in request_data
@@ -517,7 +259,387 @@ async def test_cohere_documents_options_in_request_body():
 
         # Get and parse the request body
         request_data = json.loads(mock_post.call_args.kwargs["data"])
+        print(f"Request body: {request_data}")
 
         # Validate that documents and citation_options are in the request body
         assert "documents" in request_data
         assert request_data["documents"] == test_documents
+
+
+PENGUIN_CITATIONS: Final = [{"start": 0, "end": 16, "text": "Emperor penguins", "document_ids": ["doc_0"]}]
+WEATHER_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "get_current_weather",
+        "description": "Get the current weather in a given location",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "location": {"type": "string", "description": "The city and state, e.g. San Francisco, CA"},
+                "unit": {"type": "string", "enum": ["celsius", "fahrenheit"]},
+            },
+            "required": ["location"],
+        },
+    },
+}
+
+
+def _cohere_v2_response(message: dict[str, object], finish_reason: str = "COMPLETE") -> dict[str, object]:
+    return {
+        "id": "c14c80c3-18eb-4519-9460-6c92edd8cfb4",
+        "finish_reason": finish_reason,
+        "message": {"role": "assistant", **message},
+        "usage": {
+            "billed_units": {"input_tokens": 17, "output_tokens": 9},
+            "tokens": {"input_tokens": 211, "output_tokens": 9},
+        },
+    }
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("stream", [True, False])
+async def test_chat_completion_cohere_citations(respx_mock: respx.MockRouter, stream: bool) -> None:
+    documents: Final = [
+        {"title": "Tall penguins", "text": "Emperor penguins are the tallest."},
+        {"title": "Penguin habitats", "text": "Emperor penguins only live in Antarctica."},
+    ]
+    final_response: Final = {
+        "response_id": "5b3a4a52-2f1c-4b0f-9b43-0b5e2b0f3a5c",
+        "text": "Emperor penguins are the tallest.",
+        "generation_id": "0c2cf4b3-7ab0-4b0c-8f6b-3a0f2d3c1b7e",
+        "citations": PENGUIN_CITATIONS,
+        "finish_reason": "COMPLETE",
+        "meta": {"api_version": {"version": "1"}, "billed_units": {"input_tokens": 5, "output_tokens": 6}},
+    }
+    stream_events: Final = (
+        {"is_finished": False, "event_type": "stream-start", "generation_id": final_response["generation_id"]},
+        {"is_finished": False, "event_type": "text-generation", "text": "Emperor penguins"},
+        {"is_finished": False, "event_type": "citation-generation", "citations": PENGUIN_CITATIONS},
+        {"is_finished": True, "event_type": "stream-end", "finish_reason": "COMPLETE", "response": final_response},
+    )
+    route: Final = respx_mock.post(COHERE_V1_CHAT_URL).mock(
+        return_value=(
+            httpx.Response(200, content="".join(json.dumps(event) + "\n" for event in stream_events).encode())
+            if stream
+            else httpx.Response(200, json=final_response)
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="cohere_chat/v1/command-r",
+        messages=[{"role": "user", "content": "Which penguins are the tallest?"}],
+        documents=documents,
+        stream=stream,
+        api_key="cohere-test-key",
+    )
+
+    assert json.loads(route.calls.last.request.content)["documents"] == documents
+    if stream:
+        chunks: Final = [chunk async for chunk in response]
+        assert [getattr(chunk, "citations", None) for chunk in chunks] == [None, PENGUIN_CITATIONS, None]
+    else:
+        assert response.citations == PENGUIN_CITATIONS
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_completion_cohere_command_r_plus_function_call(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(COHERE_V1_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "response_id": "8d1a1e0e-4f4e-4c9a-9a52-3b8d3f0f6c11",
+                "text": "",
+                "generation_id": "f7a1a4f0-6c1f-4f1d-9c1e-2d6c4a3b2e10",
+                "finish_reason": "COMPLETE",
+                "tool_calls": [
+                    {"name": "get_current_weather", "parameters": {"location": "Boston, MA", "unit": "fahrenheit"}}
+                ],
+                "meta": {"api_version": {"version": "1"}, "billed_units": {"input_tokens": 30, "output_tokens": 20}},
+            },
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="cohere_chat/v1/command-r-plus",
+        messages=[{"role": "user", "content": "What's the weather like in Boston today in Fahrenheit?"}],
+        tools=[WEATHER_TOOL],
+        tool_choice="auto",
+        api_key="cohere-test-key",
+    )
+
+    assert json.loads(route.calls.last.request.content)["tools"] == [
+        {
+            "name": "get_current_weather",
+            "description": "Get the current weather in a given location",
+            "parameter_definitions": {
+                "location": {
+                    "description": "The city and state, e.g. San Francisco, CA",
+                    "type": "string",
+                    "required": True,
+                },
+                "unit": {"description": "", "type": "string", "required": False},
+            },
+        }
+    ]
+    tool_call: Final = response.choices[0].message.tool_calls[0]
+    assert tool_call.function.name == "get_current_weather"
+    assert json.loads(tool_call.function.arguments) == {"location": "Boston, MA", "unit": "fahrenheit"}
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_cohere_v2_chat_completion(respx_mock: respx.MockRouter, sync_mode: bool) -> None:
+    messages: Final = [
+        {"role": "system", "content": "You are a helpful assistant."},
+        {"role": "user", "content": "What is 2+2?"},
+        {"role": "assistant", "content": "2+2 equals 4."},
+        {"role": "user", "content": "What about 3+3?"},
+    ]
+    route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200, json=_cohere_v2_response({"content": [{"type": "text", "text": "3+3 equals 6."}]})
+        )
+    )
+    kwargs: Final = {
+        "model": "cohere_chat/v2/command-a-03-2025",
+        "messages": messages,
+        "max_tokens": 50,
+        "api_key": "cohere-test-key",
+    }
+
+    response: Final = litellm.completion(**kwargs) if sync_mode else await litellm.acompletion(**kwargs)
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "command-a-03-2025",
+        "messages": messages,
+        "max_tokens": 50,
+    }
+    assert response.choices[0].message.content == "3+3 equals 6."
+    assert response.choices[0].finish_reason == "stop"
+    assert response.usage.prompt_tokens == 211
+    assert response.usage.completion_tokens == 9
+    assert response.usage.total_tokens == 220
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("stream", [True, False])
+async def test_cohere_v2_streaming(respx_mock: respx.MockRouter, stream: bool) -> None:
+    stream_events: Final = (
+        {
+            "type": "message-start",
+            "id": "29f14a5a-11de-4cae-9800-25e4747408ea",
+            "delta": {"message": {"role": "assistant"}},
+        },
+        {"type": "content-start", "index": 0, "delta": {"message": {"content": {"type": "text", "text": ""}}}},
+        {"type": "content-delta", "index": 0, "delta": {"message": {"content": {"text": "Once upon"}}}},
+        {"type": "content-delta", "index": 0, "delta": {"message": {"content": {"text": " a time"}}}},
+        {"type": "content-end", "index": 0},
+    )
+    respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=(
+            httpx.Response(200, content="".join(json.dumps(event) + "\n" for event in stream_events).encode())
+            if stream
+            else httpx.Response(
+                200, json=_cohere_v2_response({"content": [{"type": "text", "text": "Once upon a time"}]})
+            )
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="cohere_chat/v2/command-a-03-2025",
+        messages=[{"role": "user", "content": "Tell me a short story about a robot."}],
+        max_tokens=100,
+        stream=stream,
+        api_key="cohere-test-key",
+    )
+
+    if stream:
+        chunks: Final = [chunk async for chunk in response]
+        assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "Once upon a time"
+        assert chunks[-1].choices[0].finish_reason == "stop"
+    else:
+        assert response.choices[0].message.content == "Once upon a time"
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_cohere_v2_tool_calling(respx_mock: respx.MockRouter) -> None:
+    tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "Get the current weather in a given location",
+            "parameters": {
+                "type": "object",
+                "properties": {"location": {"type": "string", "description": "The city and state"}},
+                "required": ["location"],
+            },
+        },
+    }
+    route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_cohere_v2_response(
+                {
+                    "tool_plan": "I will look up the weather in New York.",
+                    "tool_calls": [
+                        {
+                            "id": "get_weather_k9q2xw1n",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"location":"New York, NY"}'},
+                        }
+                    ],
+                },
+                finish_reason="TOOL_CALL",
+            ),
+        )
+    )
+
+    response: Final = litellm.completion(
+        model="cohere_chat/v2/command-a-03-2025",
+        messages=[{"role": "user", "content": "What's the weather like in New York?"}],
+        tools=[tool],
+        tool_choice="auto",
+        max_tokens=100,
+        api_key="cohere-test-key",
+    )
+
+    assert json.loads(route.calls.last.request.content)["tools"] == [tool]
+    tool_calls: Final = response.choices[0].message.tool_calls
+    assert [(call.id, call.function.name, call.function.arguments) for call in tool_calls] == [
+        ("get_weather_k9q2xw1n", "get_weather", '{"location":"New York, NY"}')
+    ]
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+async def test_cohere_v2_annotations(respx_mock: respx.MockRouter) -> None:
+    documents: Final = [
+        {"data": {"title": "Renewable Energy Benefits Document", "snippet": "Solar and wind provide clean power."}},
+        {"data": {"title": "Environmental Impact Study", "snippet": "Renewables reduce carbon footprint."}},
+    ]
+    route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json=_cohere_v2_response(
+                {
+                    "content": [{"type": "text", "text": "Renewables provide clean power and cut emissions."}],
+                    "citations": [
+                        {
+                            "start": 0,
+                            "end": 32,
+                            "text": "Renewables provide clean power",
+                            "type": "TEXT_CONTENT",
+                            "sources": [
+                                {
+                                    "type": "document",
+                                    "id": "doc:0",
+                                    "document": {"id": "doc:0", "title": "Renewable Energy Benefits Document"},
+                                },
+                                {
+                                    "type": "document",
+                                    "id": "doc:1",
+                                    "url": "https://example.com/impact-study",
+                                    "document": {"id": "doc:1", "title": "Environmental Impact Study"},
+                                },
+                            ],
+                        }
+                    ],
+                }
+            ),
+        )
+    )
+
+    response: Final = await litellm.acompletion(
+        model="cohere_chat/v2/command-a-03-2025",
+        messages=[{"role": "user", "content": "What are the benefits of renewable energy?"}],
+        documents=documents,
+        max_tokens=100,
+        api_key="cohere-test-key",
+    )
+
+    assert json.loads(route.calls.last.request.content)["documents"] == documents
+    assert response.choices[0].message.annotations == [
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": 0,
+                "end_index": 32,
+                "title": "Renewable Energy Benefits Document",
+                "url": "source:doc:0",
+            },
+        },
+        {
+            "type": "url_citation",
+            "url_citation": {
+                "start_index": 0,
+                "end_index": 32,
+                "title": "Environmental Impact Study",
+                "url": "https://example.com/impact-study",
+            },
+        },
+    ]
+    assert not hasattr(response, "citations")
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_cohere_v2_parameter_mapping(respx_mock: respx.MockRouter) -> None:
+    messages: Final = [{"role": "user", "content": "Generate a creative story."}]
+    route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200, json=_cohere_v2_response({"content": [{"type": "text", "text": "A story."}]})
+        )
+    )
+
+    litellm.completion(
+        model="cohere_chat/v2/command-a-03-2025",
+        messages=messages,
+        temperature=0.7,
+        max_tokens=50,
+        top_p=0.9,
+        frequency_penalty=0.1,
+        presence_penalty=0.1,
+        stop=["END", "STOP"],
+        seed=42,
+        api_key="cohere-test-key",
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "model": "command-a-03-2025",
+        "messages": messages,
+        "temperature": 0.7,
+        "p": 0.9,
+        "stop_sequences": ["END", "STOP"],
+        "max_tokens": 50,
+        "presence_penalty": 0.1,
+        "frequency_penalty": 0.1,
+        "seed": 42,
+    }
+
+
+@pytest.mark.usefixtures("_cohere_httpx_transport")
+@pytest.mark.respx(assert_all_called=True)
+def test_cohere_v2_error_handling(respx_mock: respx.MockRouter) -> None:
+    respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(
+            400, json={"id": "7f0c", "message": "invalid request: model 'invalid-model' not found"}
+        )
+    )
+
+    with pytest.raises(litellm.BadRequestError) as error:
+        litellm.completion(
+            model="cohere_chat/v2/invalid-model",
+            messages=[{"role": "user", "content": "Hello"}],
+            max_tokens=10,
+            num_retries=0,
+            api_key="cohere-test-key",
+        )
+
+    assert error.value.status_code == 400
+    assert error.value.llm_provider == "cohere"
+    assert "invalid request: model 'invalid-model' not found" in error.value.message

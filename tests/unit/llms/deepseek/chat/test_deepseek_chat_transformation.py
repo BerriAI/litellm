@@ -122,7 +122,8 @@ def test_completion_cost_deepseek_reports_prompt_cache_usage(respx_mock: respx.M
     assert response.usage.prompt_cache_hit_tokens == 4
     assert response.usage.prompt_cache_miss_tokens == 6
     assert response.usage.prompt_tokens == 10
-    assert response.usage._cache_read_input_tokens == response.usage.prompt_cache_hit_tokens
+    assert response.usage.prompt_tokens_details.cached_tokens == 4
+    assert response.usage._cache_read_input_tokens == 4
 
 
 def _function_tool(name: str) -> dict:

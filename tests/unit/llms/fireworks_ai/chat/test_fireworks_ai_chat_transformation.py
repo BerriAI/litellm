@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils.get_supported_openai_params import get_supported_openai_params
@@ -2131,3 +2132,73 @@ def test_completion_forwards_litellm_user_id_when_streaming() -> None:
     request_body: Final = json.loads(client.post.call_args.kwargs["data"])
     assert request_body["user"] == "dev-alice"
     assert request_body["stream"] is True
+
+
+FIREWORKS_API_BASE: Final = "https://api.fireworks.ai/inference/v1"
+
+
+def _mock_fireworks_vision_completion(respx_mock: respx.MockRouter) -> respx.Route:
+    return respx_mock.post(f"{FIREWORKS_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "created": 1,
+                "model": VISION_MODEL,
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.parametrize("disable_add_transform_inline_image_block", [True, False])
+def test_document_inlining_example(
+    respx_mock: respx.MockRouter, disable_add_transform_inline_image_block: bool
+) -> None:
+    route: Final = _mock_fireworks_vision_completion(respx_mock)
+    content: Final = [
+        {
+            "type": "image_url",
+            "image_url": {"url": "https://storage.googleapis.com/fireworks-public/test/sample_resume.pdf"},
+        },
+        {"type": "text", "text": "What are the candidate's BA and MBA GPAs?"},
+    ]
+
+    litellm.completion(
+        model=f"fireworks_ai/{VISION_MODEL}",
+        messages=[{"role": "user", "content": json.loads(json.dumps(content))}],
+        disable_add_transform_inline_image_block=disable_add_transform_inline_image_block,
+        api_key="fireworks-test-key",
+        api_base=FIREWORKS_API_BASE,
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [{"role": "user", "content": content}]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_global_disable_flag_with_transform_messages_helper(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "disable_add_transform_inline_image_block", True)
+    route: Final = _mock_fireworks_vision_completion(respx_mock)
+    content: Final = [
+        {"type": "text", "text": "What's in this image?"},
+        {
+            "type": "image_url",
+            "image_url": {
+                "url": "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
+            },
+        },
+    ]
+
+    litellm.completion(
+        model=f"fireworks_ai/{VISION_MODEL}",
+        messages=[{"role": "user", "content": json.loads(json.dumps(content))}],
+        api_key="fireworks-test-key",
+        api_base=FIREWORKS_API_BASE,
+    )
+
+    assert json.loads(route.calls.last.request.content)["messages"] == [{"role": "user", "content": content}]
