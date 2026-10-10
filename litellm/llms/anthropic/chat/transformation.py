@@ -2740,12 +2740,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             map_finish_reason(completion_response["stop_reason"]),
         )
 
-        usage: Final = self.calculate_usage(
-            usage_object=completion_response["usage"],
-            reasoning_content=reasoning_content,
-            completion_response=completion_response,
-            speed=speed,
+        usage: Final = (
+            None
+            if "usage" not in completion_response or completion_response["usage"] is None
+            else self.calculate_usage(
+                usage_object=completion_response["usage"],
+                reasoning_content=reasoning_content,
+                completion_response=completion_response,
+                speed=speed,
+            )
         )
+        if usage is None:
+            # #44535: keep usage absent (None) instead of fabricating a 0/0
+            # usage object. Spend tracking and budgets must be able to tell
+            # "no usage reported" apart from a genuine zero, otherwise a
+            # response that omits usage would be recorded as free even though
+            # the upstream consumed tokens.
+            _hidden_params["usage_missing"] = True
         setattr(model_response, "usage", usage)
 
         model_response.created = int(time.time())

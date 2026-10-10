@@ -6804,6 +6804,54 @@ def test_chat_dummy_tool_result_for_an_orphaned_tool_call_replays_a_byte_identic
     assert requests[0]["messages"][2]["content"][0]["type"] == "tool_result"
 
 
+def test_transform_parsed_response_without_usage():
+    """#44535: a non-streaming Anthropic response without a usage object
+    must not raise KeyError. LiteLLM keeps the usage absent (None) instead
+    of fabricating a 0/0 usage, so spend tracking and budgets can tell "no
+    usage reported" apart from a genuine zero, and mark it in hidden params.
+
+    Regression for: KeyError: 'usage' in transform_parsed_response, which
+    the router mapped to APIConnectionError (HTTP 500), retried
+    num_retries times, and surfaced as a 500 to the client.
+    """
+    import httpx
+
+    from litellm.types.utils import ModelResponse
+
+    config = AnthropicConfig()
+
+    completion_response = {
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-6",
+        "content": [{"type": "text", "text": "Hello there"}],
+        "stop_reason": "end_turn",
+    }
+
+    for variant in ("missing", "none"):
+        response = copy.deepcopy(completion_response)
+        if variant == "none":
+            response["usage"] = None
+
+        raw_response = httpx.Response(status_code=200, headers={})
+        model_response = ModelResponse()
+
+        result = config.transform_parsed_response(
+            completion_response=response,
+            raw_response=raw_response,
+            model_response=model_response,
+            json_mode=False,
+            prefix_prompt=None,
+        )
+
+        # Usage stays absent (None), not a fabricated 0/0, and the response
+        # path is explicitly marked so cost tracking can distinguish "no
+        # usage reported" from a genuine zero.
+        assert result.usage is None
+        assert result._hidden_params.get("usage_missing") is True
+
+
 anthropic_chunk_list: Final = [
     {
         "type": "content_block_start",
