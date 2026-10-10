@@ -98,3 +98,28 @@ def test_transcription_errors_keep_the_provider_status() -> None:
             client=HTTPHandler(client=http_client),
         )
     assert error.value.status_code == 400
+
+
+@pytest.mark.parametrize("response_format", ["srt", "vtt", "verbose_json"])
+def test_unsupported_response_format_is_rejected_unless_dropped(response_format: str) -> None:
+    with httpx.Client(transport=_transport([AUDIO_MESSAGE], {"format": "wav"})) as http_client:
+        with pytest.raises(litellm.UnsupportedParamsError, match=response_format):
+            litellm.transcription(
+                model=f"alibaba_token_plan/{MODEL}",
+                file=("recording.wav", b"audio"),
+                response_format=response_format,
+                api_key="test-token-plan-key",
+                api_base=f"{GATEWAY}/compatible-mode/v1",
+                client=HTTPHandler(client=http_client),
+            )
+        response: Final = litellm.transcription(
+            model=f"alibaba_token_plan/{MODEL}",
+            file=("recording.wav", b"audio"),
+            response_format=response_format,
+            drop_params=True,
+            api_key="test-token-plan-key",
+            api_base=f"{GATEWAY}/compatible-mode/v1",
+            client=HTTPHandler(client=http_client),
+        )
+    assert isinstance(response, TranscriptionResponse)
+    _assert_full_transcript(response)

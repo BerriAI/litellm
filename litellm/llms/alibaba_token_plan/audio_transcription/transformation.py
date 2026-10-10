@@ -8,6 +8,8 @@ from typing import Final
 import httpx
 from pydantic import BaseModel, ValidationError
 
+import litellm
+from litellm.exceptions import UnsupportedParamsError
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.llms.alibaba_token_plan.common_utils import IMAGE_PATH, get_api_url, validate_headers
 from litellm.llms.base_llm.audio_transcription.transformation import (
@@ -17,6 +19,8 @@ from litellm.llms.base_llm.audio_transcription.transformation import (
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, OpenAIAudioTranscriptionOptionalParams
 from litellm.types.utils import FileTypes, TranscriptionResponse, TranscriptionUsageDurationObject
+
+SUPPORTED_RESPONSE_FORMATS: Final = ("json", "text")
 
 
 class _TranscriptionOutput(BaseModel, frozen=True):
@@ -49,6 +53,17 @@ class AlibabaTokenPlanAudioTranscriptionConfig(BaseAudioTranscriptionConfig):
         model: str,
         drop_params: bool,
     ) -> dict[str, object]:  # mutable-ok: the base config contract returns mutable request parameters
+        response_format: Final = non_default_params.get("response_format")
+        unsupported: Final = response_format is not None and response_format not in SUPPORTED_RESPONSE_FORMATS
+        if unsupported and not (drop_params or litellm.drop_params):
+            raise UnsupportedParamsError(
+                status_code=400,
+                message=(
+                    f"Alibaba Token Plan transcription does not support response_format={response_format!r}. "
+                    f"Supported values: {', '.join(SUPPORTED_RESPONSE_FORMATS)}. "
+                    "To drop unsupported openai params from the call, set `litellm.drop_params = True`"
+                ),
+            )
         return {**optional_params, **{k: v for k, v in non_default_params.items() if k in ("language", "prompt")}}
 
     def validate_environment(
