@@ -9,6 +9,7 @@
 
 import ast
 import hashlib
+import hmac
 import json
 import logging
 import time
@@ -633,7 +634,10 @@ class Cache:
                     "user_role": getattr(auth_object, "user_role", None),
                 }
                 identity = json.dumps(identity_fields, sort_keys=True, default=str, separators=(",", ":"))
-                authenticated_namespace = "caller:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+                caller_digest = hmac.new(
+                    b"litellm-cache-namespace-v1", identity.encode("utf-8"), hashlib.sha256
+                ).hexdigest()
+                authenticated_namespace = "caller:" + caller_digest[:32]
                 break
         requested_namespace_value: Final = dynamic_cache_control.get("namespace")
         requested_namespace: Final[str | None] = (
