@@ -4,7 +4,7 @@ import json
 import ssl
 from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from functools import lru_cache
+from functools import lru_cache, partial
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -1577,8 +1577,7 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
             headers=headers,
         )
-        signed_headers, signed_body = await sign_request_off_loop_if_aws(
-            provider_config,
+        sign: Final = partial(
             provider_config.sign_request,
             headers=outbound_headers,
             url=url,
@@ -1586,6 +1585,9 @@ class BaseLLMHTTPHandler:
             body=data,
             api_key=api_key,
             litellm_params=litellm_params,
+        )
+        signed_headers, signed_body = (
+            await run_aws_signing(sign) if provider_config.signs_with_aws(api_base) else sign()
         )
         async_httpx_client: Final = (
             client

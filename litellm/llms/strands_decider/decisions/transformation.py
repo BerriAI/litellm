@@ -15,7 +15,7 @@ from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import BaseDecisionsConfig
-from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS, sign_aws_json_post
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, sign_aws_json_post
 from litellm.types.decisions import DecisionsIRRequest, DecisionsIRResponse
 from litellm.types.llms.bedrock import AwsAuthParams
 
@@ -100,7 +100,7 @@ def _runtime_headers(
     }
 
 
-class StrandsDeciderDecisionsConfig(BaseDecisionsConfig, SignsRequestsWithAWS):
+class StrandsDeciderDecisionsConfig(BaseDecisionsConfig):
     api_key_env = ("STRANDS_DECIDER_API_KEY",)
     api_base_env = ("STRANDS_DECIDER_API_BASE",)
     api_key_required = False
@@ -111,6 +111,9 @@ class StrandsDeciderDecisionsConfig(BaseDecisionsConfig, SignsRequestsWithAWS):
     def get_complete_url(self, api_base: str, model: str) -> str:
         runtime: Final = agentcore_runtime(api_base)
         return super().get_complete_url(api_base, model) if runtime is None else runtime.invocations_url
+
+    def signs_with_aws(self, api_base: str) -> bool:
+        return agentcore_runtime(api_base) is not None
 
     def sign_request(
         self,

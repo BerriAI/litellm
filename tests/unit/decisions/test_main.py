@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+from concurrent.futures import wait
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -15,8 +17,10 @@ from botocore.credentials import Credentials
 
 import litellm
 from litellm.cost_calculator import get_response_cost_from_hidden_params
+from litellm.constants import AWS_SIGNING_MAX_THREADS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.bedrock.base_aws_llm import AWS_SIGNING_EXECUTOR
 from litellm.types.decisions import (
     ChoiceAnswer,
     DecisionsResponse,
@@ -683,6 +687,33 @@ async def test_strands_decider_without_key_preserves_response_extras(
     severity: Final = response.answers["severity"]
     assert isinstance(severity, ScoreAnswer)
     assert severity.legend == {"0": "none", "1": "low", "2": "high"}
+
+
+@pytest.mark.asyncio
+async def test_strands_decider_plain_api_base_answers_while_every_aws_signing_thread_is_busy(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    respx_mock.post("https://strands.example/v1/systemone").respond(json=_STRANDS_RESPONSE)
+    release: Final = threading.Event()
+    busy: Final = tuple(AWS_SIGNING_EXECUTOR.submit(release.wait) for _ in range(AWS_SIGNING_MAX_THREADS))
+
+    try:
+        response: Final = await asyncio.wait_for(
+            litellm.adecisions(
+                model="strands_decider/strands-decider-2B-hobson-v19",
+                state="review",
+                questions={"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+                api_base="https://strands.example",
+            ),
+            timeout=5,
+        )
+    finally:
+        release.set()
+        wait(busy)
+
+    assert isinstance(response.answers["severity"], ScoreAnswer)
 
 
 @pytest.mark.asyncio

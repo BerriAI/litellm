@@ -340,6 +340,9 @@ class BaseDecisionsConfig(ABC):
     def get_complete_url(self, api_base: str, model: str) -> str:
         return f"{api_base.rstrip('/').removesuffix('/v1')}{self.path}"
 
+    def signs_with_aws(self, api_base: str) -> bool:
+        return False
+
     def sign_request(
         self,
         headers: Mapping[str, str],
