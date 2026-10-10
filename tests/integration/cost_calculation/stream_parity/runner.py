@@ -1,11 +1,21 @@
+import time
+from collections import Counter
 from hashlib import sha256
 from typing import Final
 
 from integration._support.client import Gateway
 from integration.cost_calculation.assertions import assert_exact
-from integration.cost_calculation.conftest import poll_rows, register_scenario_deployment
+from integration.cost_calculation.conftest import CostRow, poll_rows, read_rows_now, register_scenario_deployment
 from integration.cost_calculation.cost_tracking_case import ExactExpected
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase
+
+SPEND_LOG_SETTLE_SECONDS: Final = 2.0
+
+
+def rows_after_settle(key: str, count: int) -> tuple[CostRow, ...]:
+    poll_rows(key, count)
+    time.sleep(SPEND_LOG_SETTLE_SECONDS)
+    return read_rows_now(key)
 
 
 def assert_stream_parity(case: StreamParityTestCase, gateway: Gateway) -> None:
@@ -26,7 +36,12 @@ def assert_stream_parity(case: StreamParityTestCase, gateway: Gateway) -> None:
         for leg in (case.plain, case.streamed):
             assert responses[leg.name].status_code == 200, (leg.name, responses[leg.name].text[:400])
 
-        rows: Final = poll_rows(key, 2)
+        rows: Final = rows_after_settle(key, 2)
+        rows_per_deployment: Final = Counter(row.model_id for row in rows)
+        assert rows_per_deployment == {deployments[leg.name].identity: 1 for leg in (case.plain, case.streamed)}, (
+            f"{case.id}: expected exactly one SpendLogs row per leg, got {dict(rows_per_deployment)}",
+            rows,
+        )
         billed: Final = {
             leg.name: next(row for row in rows if row.model_id == deployments[leg.name].identity)
             for leg in (case.plain, case.streamed)
