@@ -303,6 +303,10 @@ class McpChatTool(BaseModel):
     allowed_tools: list[str] | None = None
 
 
+class GeminiUrlContextTool(BaseModel, frozen=True):
+    urlContext: dict[str, JsonValue] = Field(default_factory=dict)
+
+
 class ToolCallFunction(BaseModel):
     name: str | None = None
     arguments: str | None = None
@@ -358,7 +362,7 @@ class ChatBody(BaseModel):
     thinking: ThinkingParam | None = None
     service_tier: str | None = None
     prompt_cache_key: str | None = None
-    tools: Sequence[ChatTool | McpChatTool] | None = None
+    tools: Sequence[ChatTool | McpChatTool | GeminiUrlContextTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
     include_guardrail_response: bool | None = None
@@ -485,6 +489,15 @@ class GuardrailInformationEntry(BaseModel):
     duration: float | None = None
 
 
+class GeminiUrlMetadata(BaseModel, frozen=True):
+    retrievedUrl: str
+    urlRetrievalStatus: str
+
+
+class GeminiUrlContextMetadata(BaseModel, frozen=True):
+    urlMetadata: Sequence[GeminiUrlMetadata]
+
+
 class ChatResponse(BaseModel):
     id: str | None = None
     object: str | None = None
@@ -493,6 +506,7 @@ class ChatResponse(BaseModel):
     usage: Usage | None = None
     service_tier: str | None = None
     guardrail_information: list[GuardrailInformationEntry] | None = None
+    vertex_ai_url_context_metadata: Sequence[GeminiUrlContextMetadata] | None = None
 
 
 # ---------- anthropic /v1/messages + count_tokens ----------

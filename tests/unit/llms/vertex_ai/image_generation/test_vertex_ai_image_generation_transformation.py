@@ -1,9 +1,14 @@
+import datetime
+import json
 from unittest.mock import MagicMock, patch
+from typing import Final
 
 import httpx
 import pytest
+from google.oauth2.credentials import Credentials
 from pydantic import ValidationError
 
+from litellm.litellm_core_utils.litellm_logging import Logging
 
 from litellm.llms.vertex_ai.image_generation import (
     get_vertex_ai_image_generation_config,
@@ -641,11 +646,20 @@ class TestVertexAIImageGenerationIntegration:
 
 
 def _transform_gemini_response(payload: object) -> ImageResponse:
+    logging_obj: Final = Logging(
+        model="gemini/gemini-2.5-flash-image",
+        messages=[{"role": "user", "content": "Draw a red square."}],
+        stream=False,
+        call_type="image_generation",
+        start_time=datetime.datetime(2024, 1, 1),
+        litellm_call_id="vertex-gemini-image-response",
+        function_id="vertex-gemini-image-response",
+    )
     return VertexAIGeminiImageGenerationConfig().transform_image_generation_response(
         model="gemini-2.5-flash-image",
         raw_response=httpx.Response(200, json=payload),
         model_response=ImageResponse(),
-        logging_obj=MagicMock(),
+        logging_obj=logging_obj,
         request_data={},
         optional_params={},
         litellm_params={},
@@ -654,7 +668,7 @@ def _transform_gemini_response(payload: object) -> ImageResponse:
 
 
 def test_gemini_image_generation_response_maps_usage_by_modality():
-    response = _transform_gemini_response(
+    response: Final = _transform_gemini_response(
         {
             "candidates": [{"content": {"parts": [{"inlineData": {"data": "aGVsbG8="}}]}}],
             "usageMetadata": {
@@ -679,7 +693,7 @@ def test_gemini_image_generation_response_maps_usage_by_modality():
 
 @pytest.mark.parametrize("usage_metadata", [None, {}, [], "", 0])
 def test_gemini_image_generation_response_with_falsy_usage_metadata_keeps_zeroed_usage(usage_metadata: object):
-    response = _transform_gemini_response(
+    response: Final = _transform_gemini_response(
         {
             "candidates": [{"content": {"parts": []}, "groundingMetadata": {"webSearchQueries": ["a"]}}],
             "usageMetadata": usage_metadata,
@@ -699,3 +713,59 @@ def test_gemini_image_generation_response_rejects_non_object_usage_metadata_with
         _transform_gemini_response({"candidates": [], "usageMetadata": usage_metadata})
 
     assert "input_value" not in str(exc_info.value)
+
+
+def test_gemini_image_generation_validation_uses_supplied_vertex_token() -> None:
+    config: Final = VertexAIGeminiImageGenerationConfig()
+    credentials_json: Final = json.dumps({"type": "authorized_user", "client_id": "test-client"})
+    cache_key: Final = (credentials_json, "test-project")
+    config._credentials_project_mapping[cache_key] = (
+        Credentials(token="test-access-token"),
+        "test-project",
+    )
+    try:
+        headers: Final = config.validate_environment(
+            headers={"X-Test": "preserved"},
+            model="gemini-2.5-flash-image",
+            messages=[],
+            optional_params={},
+            litellm_params={
+                "vertex_project": "test-project",
+                "vertex_location": "us-central1",
+                "vertex_credentials": credentials_json,
+            },
+        )
+    finally:
+        config._credentials_project_mapping.pop(cache_key, None)
+
+    assert headers == {
+        "Content-Type": "application/json",
+        "X-Test": "preserved",
+        "Authorization": "Bearer test-access-token",
+    }
+
+
+def test_imagen_image_generation_validation_uses_supplied_vertex_token() -> None:
+    config: Final = VertexAIImagenImageGenerationConfig()
+    credentials_json: Final = json.dumps({"type": "authorized_user", "client_id": "test-client"})
+    cache_key: Final = (credentials_json, "test-project")
+    config._credentials_project_mapping[cache_key] = (
+        Credentials(token="test-access-token"),
+        "test-project",
+    )
+    try:
+        headers: Final = config.validate_environment(
+            headers={},
+            model="imagen-3.0-generate-001",
+            messages=[],
+            optional_params={},
+            litellm_params={
+                "vertex_project": "test-project",
+                "vertex_location": "us-central1",
+                "vertex_credentials": credentials_json,
+            },
+        )
+    finally:
+        config._credentials_project_mapping.pop(cache_key, None)
+
+    assert headers == {"Content-Type": "application/json", "Authorization": "Bearer test-access-token"}
