@@ -192,7 +192,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
         </Card>
       </div>
 
-      <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2 [&>*]:min-w-0">
         <ProjectKeysSection projectId={projectId} />
 
         <Card className="h-full">
@@ -213,7 +213,12 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
                 return (
                   <div className="flex flex-col gap-3">
                     <div>
-                      <p className="text-base font-medium text-foreground">{teamInfo.team_alias || teamInfo.team_id}</p>
+                      <p
+                        className="truncate text-base font-medium text-foreground"
+                        title={teamInfo.team_alias || teamInfo.team_id}
+                      >
+                        {teamInfo.team_alias || teamInfo.team_id}
+                      </p>
                       <div className="flex items-center gap-1 text-xs text-muted-foreground">
                         <span>ID: {teamInfo.team_id}</span>
                         <CopyButton value={teamInfo.team_id} label="Copy team ID" />
