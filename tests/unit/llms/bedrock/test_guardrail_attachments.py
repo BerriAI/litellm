@@ -612,8 +612,20 @@ def test_converse_document_without_text_source_stays_unscannable(source):
         _converse(_converse_document(source)), CallTypes.allm_passthrough_route.value, False, False
     )
 
-    assert found.document_texts == ()
+    assert found.document_texts == ("notes",)
     assert found.unscannable == ("document",)
+
+
+def test_converse_binary_document_name_and_context_are_still_scanned_as_text():
+    data = _converse(
+        _converse_document({"bytes": PDF_B64}, context="SSN 123-45-6789"),
+        {"toolResult": {"toolUseId": "t1", "content": [_converse_document({"s3Location": {"uri": "s3://b/k.pdf"}})]}},
+    )
+
+    found = find_request_attachments(data, CallTypes.allm_passthrough_route.value, False, False)
+
+    assert found.document_texts == ("notes\nSSN 123-45-6789", "notes")
+    assert found.unscannable == ("document", "document")
 
 
 def test_converse_text_document_in_tool_result_follows_the_tool_scope():

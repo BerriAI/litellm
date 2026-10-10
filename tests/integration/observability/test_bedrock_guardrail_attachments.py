@@ -354,6 +354,18 @@ def test_skip_unscannable_attachments_still_blocks_a_threat_image(rig: _Rig, end
     assert _forwarded(rig.upstream) == []
 
 
+def test_skip_unscannable_attachments_still_scans_a_converse_pdf_name_and_context(rig: _Rig) -> None:
+    context: Final = f"Employee SSN {_SSN} {uuid.uuid4().hex}"
+    document: Final = {
+        "document": {"format": "pdf", "name": "record", "context": context, "source": {"bytes": _b64(_PDF)}}
+    }
+    response: Final = _send(rig.lenient, "converse", _text_block("converse", "summarize"), document)
+
+    assert response.status_code == 400, response.text
+    assert f"record\n{context}" in _text_scans(_scans(rig.policy))
+    assert _forwarded(rig.upstream) == []
+
+
 def test_a_streaming_chat_request_with_a_pdf_is_refused_before_streaming(rig: _Rig) -> None:
     response: Final = _send(rig.strict, "chat", _text_block("chat", "summarize"), _pdf_block("chat"), stream=True)
 

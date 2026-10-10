@@ -114,6 +114,9 @@ def _document_text(entry: _Block) -> str:
     if entry.document_depth > 0 and block.get("type") == "text":
         text: Final = block.get("text")
         return text if isinstance(text, str) else ""
+    converse_document: Final = block.get("document") if block.get("type") is None else None
+    if _is_mapping(converse_document):
+        return _converse_document_text(converse_document)
     if block.get("type") != "document":
         return ""
     source: Final = block.get("source")
@@ -288,25 +291,26 @@ def _classify_converse_block(block: Mapping[str, object]) -> _Classified:
         mime: Final = f"image/{image_format}" if isinstance(image_format, str) else None
         return _classify_base64(mime, encoded, "image")
     document: Final = block.get("document")
-    document_text: Final = _converse_document_text(document) if _is_mapping(document) else None
-    if document_text is not None:
-        return _DocumentText(document_text) if document_text else None
+    if _is_mapping(document) and _converse_text_parts(document) is not None:
+        return None
     for key in _CONVERSE_UNSCANNABLE_KEYS:
         if block.get(key) is not None:
             return _Unscannable(key)
     return None
 
 
-def _converse_document_text(document: Mapping[str, object]) -> str | None:
-    source: Final = document.get("source")
-    if not _is_mapping(source) or any(source.get(key) is not None for key in _CONVERSE_BINARY_SOURCE_KEYS):
-        return None
-    parts: Final = _converse_document_parts(source)
-    if parts is None:
-        return None
+def _converse_document_text(document: Mapping[str, object]) -> str:
+    parts: Final = _converse_text_parts(document) or ()
     return "\n".join(
         part for part in (document.get("name"), document.get("context"), *parts) if isinstance(part, str) and part
     )
+
+
+def _converse_text_parts(document: Mapping[str, object]) -> tuple[str, ...] | None:
+    source: Final = document.get("source")
+    if not _is_mapping(source) or any(source.get(key) is not None for key in _CONVERSE_BINARY_SOURCE_KEYS):
+        return None
+    return _converse_document_parts(source)
 
 
 def _converse_document_parts(source: Mapping[str, object]) -> tuple[str, ...] | None:
