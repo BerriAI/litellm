@@ -194,7 +194,9 @@ class SemanticToolFilterHook(CustomLogger):
             verbose_proxy_logger.debug("No user query found, skipping semantic filter on expanded MCP tools")
             return expanded_tools
 
-        return await self.filter.filter_tools(query=user_query, available_tools=expanded_tools)
+        return await self.filter.filter_tools(
+            query=user_query, available_tools=expanded_tools, reindex_changed_descriptions=True
+        )
 
     def _selected_tool_names(self, filtered_tools: Sequence[object]) -> list[str]:
         """Names of the semantically selected tools, as produced by the MCP expansion."""

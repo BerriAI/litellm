@@ -315,45 +315,53 @@ class SemanticMCPToolFilter:
             await asyncio.sleep(self._lock_poll_interval_s)
         return False
 
-    def _has_tools_missing_from_index(self, tools: Sequence[object]) -> bool:
+    def _has_tools_missing_from_index(self, tools: Sequence[object], *, reindex_changed_descriptions: bool) -> bool:
         """Allocation-free check for any named tool not yet in the semantic index."""
         return any(
-            name and (name not in self._tool_map or self.extract_tool_info(self._tool_map[name])[1] != description)
+            name
+            and (
+                name not in self._tool_map
+                or (reindex_changed_descriptions and self.extract_tool_info(self._tool_map[name])[1] != description)
+            )
             for name, description in (self.extract_tool_info(t) for t in tools)
         )
 
-    def _tools_missing_from_index(self, tools: Sequence[object]) -> Mapping[str, object]:
+    def _tools_missing_from_index(
+        self, tools: Sequence[object], *, reindex_changed_descriptions: bool
+    ) -> Mapping[str, object]:
         """Map name -> tool for every named tool not yet in the semantic index."""
         infos: Final = ((self.extract_tool_info(t), t) for t in tools)
         return {
             name: tool
             for (name, description), tool in infos
-            if name and (name not in self._tool_map or self.extract_tool_info(self._tool_map[name])[1] != description)
+            if name
+            and (
+                name not in self._tool_map
+                or (reindex_changed_descriptions and self.extract_tool_info(self._tool_map[name])[1] != description)
+            )
         }
 
-    async def _ensure_tools_indexed(self, available_tools: Sequence[object]) -> None:
+    async def _ensure_tools_indexed(
+        self, available_tools: Sequence[object], *, reindex_changed_descriptions: bool
+    ) -> None:
         """
-        Index request-time tools the startup build never saw.
+        Index request-time tools missing from the startup index.
 
-        The startup index lists every registered MCP server WITHOUT per-user
-        credentials, so servers requiring per-user auth (interactive OAuth
-        tokens, user-scoped env vars) contribute zero routes. Tools reaching
-        the filter came through an authenticated expansion; without indexing
-        them here they can never be selected, so requests either bypass
-        filtering entirely (N->N) or lose every tool to unrelated matches.
-
-        Runs async-only (no synchronous embedding on the request path) and
-        never writes shared error state: an embedding failure here raises and
-        is scoped to the requesting call, so one request's oversized tool
-        description cannot poison the filter for other users on the worker.
+        With ``reindex_changed_descriptions`` a tool whose description changed
+        also counts as missing: its old route is dropped before re-embedding so
+        a failed embed leaves it "missing" and the next request retries.
         """
         from semantic_router.routers import SemanticRouter
 
-        if not self._has_tools_missing_from_index(available_tools):
+        if not self._has_tools_missing_from_index(
+            available_tools, reindex_changed_descriptions=reindex_changed_descriptions
+        ):
             return
 
         async with self._index_sync_lock:
-            missing: Final = self._tools_missing_from_index(available_tools)
+            missing: Final = self._tools_missing_from_index(
+                available_tools, reindex_changed_descriptions=reindex_changed_descriptions
+            )
             if not missing:
                 return
 
@@ -371,6 +379,7 @@ class SemanticMCPToolFilter:
             else:
                 for name in (name for name in missing if name in self._tool_map):
                     await self.tool_router.adelete(name)  # pyright: ignore[reportUnknownMemberType]  # semantic_router ships no type stubs
+                    self._tool_map.pop(name)
                 await self.tool_router.aadd(list(routes))
 
             self._tool_map.update(missing)
@@ -383,6 +392,8 @@ class SemanticMCPToolFilter:
         query: str,
         available_tools: list[Any],
         top_k: int | None = None,
+        *,
+        reindex_changed_descriptions: bool = False,
     ) -> list[Any]:
         """
         Filter tools semantically based on query.
@@ -414,7 +425,7 @@ class SemanticMCPToolFilter:
 
         # Run semantic filtering
         try:
-            await self._ensure_tools_indexed(available_tools)
+            await self._ensure_tools_indexed(available_tools, reindex_changed_descriptions=reindex_changed_descriptions)
 
             if self.tool_router is None:
                 verbose_logger.warning("Semantic router could not be built from the request's tools")
