@@ -1,6 +1,6 @@
 import asyncio
 from collections.abc import Sequence
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -41,6 +41,49 @@ class _CatalogHookCapture(CustomLogger):
 
 async def _served_catalog_tool() -> str:
     return "ok"
+
+
+@pytest.mark.parametrize(
+    ("settings", "mcp_servers", "toolset_id", "auth_state", "raises"),
+    [
+        ({"mcp_require_explicit_server_scope": True}, None, None, None, True),
+        ({"mcp_require_explicit_server_scope": True}, None, None, "unscoped", True),
+        ({"mcp_require_explicit_server_scope": True}, ["alpha"], None, None, False),
+        ({"mcp_require_explicit_server_scope": True}, None, "toolset-id", None, False),
+        ({"mcp_require_explicit_server_scope": True}, None, None, "sealed", False),
+        ({"mcp_require_explicit_server_scope": False}, None, None, None, False),
+        ({}, None, None, None, False),
+    ],
+)
+def test_explicit_server_scope_setting_only_rejects_unscoped_aggregate_requests(
+    settings: dict[str, bool],
+    mcp_servers: list[str] | None,
+    toolset_id: str | None,
+    auth_state: Literal["unscoped", "sealed"] | None,
+    raises: bool,
+) -> None:
+    from fastapi import HTTPException
+
+    auth: Final[UserAPIKeyAuth | None] = (
+        None if auth_state is None else UserAPIKeyAuth(api_key=None, user_id="scope-test")
+    )
+    if auth_state == "sealed" and auth is not None:
+        auth.mcp_session_resource_server_ids = ("alpha-id",)
+
+    with patch("litellm.proxy.proxy_server.general_settings", settings):
+        if raises:
+            with pytest.raises(HTTPException) as exc_info:
+                operations.raise_if_unscoped_aggregate_request(mcp_servers, auth, toolset_id)
+            assert exc_info.value.status_code == 400
+            assert exc_info.value.detail == {
+                "error": "mcp_server_scope_required",
+                "message": (
+                    "This gateway requires an explicit MCP server scope: connect to /mcp/<server_name> "
+                    "or send the x-mcp-servers header."
+                ),
+            }
+        else:
+            operations.raise_if_unscoped_aggregate_request(mcp_servers, auth, toolset_id)
 
 
 @pytest.mark.asyncio

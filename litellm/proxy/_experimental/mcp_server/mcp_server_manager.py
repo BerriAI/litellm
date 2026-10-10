@@ -185,6 +185,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     normalize_server_name,
     openapi_tool_name,
     parse_admin_env_vars,
+    server_answers_to,
     strip_known_server_prefix,
     validate_mcp_server_name,
 )
@@ -3532,8 +3533,8 @@ class MCPServerManager:
         return open_ids
 
     @staticmethod
-    def _admitted_session_resource_scope(user_api_key_auth: UserAPIKeyAuth | None) -> str | None:
-        """The single server an admitted session subject's bearer was scoped to at authorize
+    def _admitted_session_resource_scope(user_api_key_auth: UserAPIKeyAuth | None) -> frozenset[str] | None:
+        """The servers an admitted session subject's bearer was scoped to at authorize
         time (RFC 8707 resource), or None for every other principal shape and for unscoped
         sessions. Read at every return path of :meth:`get_allowed_mcp_servers`, including
         the exception fallback, and applied AFTER every union (grants, operator-open,
@@ -3541,7 +3542,8 @@ class MCPServerManager:
         fault therefore never widens a scoped bearer to the allow-all set."""
         if user_api_key_auth is None or not is_mcp_admitted_user_subject(user_api_key_auth):
             return None
-        return user_api_key_auth.mcp_session_resource_server_id
+        resource_server_ids: Final = user_api_key_auth.mcp_session_resource_server_ids
+        return None if resource_server_ids is None else frozenset(resource_server_ids)
 
     async def get_allowed_mcp_servers(
         self,
@@ -3656,7 +3658,7 @@ class MCPServerManager:
             if len(combined_servers) == 0:
                 verbose_logger.debug("No allowed MCP Servers found for user api key auth.")
             scope = MCPServerManager._admitted_session_resource_scope(user_api_key_auth)
-            return [server_id for server_id in combined_servers if scope is None or server_id == scope]
+            return [server_id for server_id in combined_servers if scope is None or server_id in scope]
         except Exception:  # noqa: BLE001
             verbose_logger.exception(
                 "Failed to get allowed MCP servers; team-level object_permission "
@@ -3666,7 +3668,7 @@ class MCPServerManager:
             return [
                 server_id
                 for server_id in dict.fromkeys(allow_all_server_ids + submitted_server_ids)
-                if not explicit_grants_only and (scope is None or server_id == scope)
+                if not explicit_grants_only and (scope is None or server_id in scope)
             ]
 
     @with_service_target(MCP_SERVERS_TARGET)
@@ -7098,6 +7100,19 @@ class MCPServerManager:
                     return None
                 return server
         return None
+
+    def get_mcp_server_by_identifier(self, identifier: str, client_ip: str | None = None) -> MCPServer | None:
+        server: Final = self.get_mcp_server_by_name(identifier, client_ip)
+        if server is not None:
+            return server
+        return next(
+            (
+                server
+                for server in self.get_filtered_registry(client_ip).values()
+                if server_answers_to(server, identifier)
+            ),
+            None,
+        )
 
     def get_filtered_registry(self, client_ip: str | None = None) -> Mapping[str, MCPServer]:
         """

@@ -143,6 +143,9 @@ from litellm.proxy._experimental.mcp_server.utils import (
     split_server_prefix_from_name,
     strip_known_server_prefix,
 )
+from litellm.proxy._experimental.mcp_server.utils import (
+    server_answers_to as _server_answers_to,
+)
 from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
@@ -572,9 +575,36 @@ def _http_detail_message(detail: object) -> str:
     return str(detail.get("error")) if isinstance(detail, dict) and detail.get("error") else str(detail)
 
 
-def _server_answers_to(server: MCPServer, name: str) -> bool:
-    requested: Final = name.lower()
-    return any(requested == known.lower() for known in iter_known_server_prefixes(server) if known)
+_GENERAL_SETTINGS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def raise_if_unscoped_aggregate_request(
+    mcp_servers: Sequence[str] | None,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    toolset_id: str | None,
+) -> None:
+    from litellm.proxy import proxy_server  # noqa: PLC0415  # proxy import cycle
+
+    raw_settings: Final[object] = getattr(proxy_server, "general_settings", None)
+    if not raw_settings:
+        return
+    settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(raw_settings)
+    if not settings.get("mcp_require_explicit_server_scope", False):
+        return
+    if mcp_servers is not None or toolset_id is not None:
+        return
+    if user_api_key_auth is not None and user_api_key_auth.mcp_session_resource_server_ids is not None:
+        return
+    raise HTTPException(
+        status_code=400,
+        detail={
+            "error": "mcp_server_scope_required",
+            "message": (
+                "This gateway requires an explicit MCP server scope: connect to /mcp/<server_name> "
+                "or send the x-mcp-servers header."
+            ),
+        },
+    )
 
 
 async def raise_denied_scoped_mcp_access(

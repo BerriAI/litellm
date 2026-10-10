@@ -27,6 +27,7 @@ export function isLoopbackOrigin(origin: string | null): boolean {
 const copyFor = (flow: ConnectFlowStatus | undefined, failed: boolean): readonly [string, string] => {
   const clientLabel = flow?.client_origin ?? "the application";
   const serverLabel = flow?.server_name ?? "the requested MCP server";
+  const serverNames = flow?.servers?.map((server) => server.server_name).join(", ") ?? "";
   if (failed || flow === undefined || flow.state === "stale") {
     return [
       "The connection cannot continue",
@@ -37,6 +38,16 @@ const copyFor = (flow: ConnectFlowStatus | undefined, failed: boolean): readonly
     return [
       `Connect your MCP servers to ${clientLabel}`,
       `Authorize the servers you want to use below, then click Finish connecting to return to ${clientLabel}.`,
+    ];
+  }
+  if (flow.state === "multi") {
+    const allServersConnected =
+      flow.servers !== null && flow.servers.length > 0 && flow.servers.every((server) => server.connected);
+    return [
+      `Allow ${clientLabel} to use ${serverNames}`,
+      allServersConnected
+        ? `Click Finish connecting to give ${clientLabel} access to ${serverNames} as you.`
+        : `Authorize each requested server below to continue, or cancel to send ${clientLabel} away.`,
     ];
   }
   if (flow.state === "interactive" && !flow.connected) {
@@ -51,16 +62,33 @@ const copyFor = (flow: ConnectFlowStatus | undefined, failed: boolean): readonly
   ];
 };
 
+const canFinishConnectFlow = (state: ConnectFlowStatus["state"], flow: ConnectFlowStatus | undefined): boolean => {
+  if (state === "unscoped") return true;
+  if (state === "stale" || flow === undefined) return false;
+  if (state !== "multi") return flow.connected === true;
+  return flow.servers !== null && flow.servers.length > 0 && flow.servers.every((server) => server.connected);
+};
+
+const vendorServersFor = (
+  state: ConnectFlowStatus["state"],
+  flow: ConnectFlowStatus | undefined,
+): { server_id: string; server_name: string | null }[] => {
+  if (state === "multi") {
+    return (flow?.servers ?? [])
+      .filter((server) => !server.connected)
+      .map(({ server_id, server_name }) => ({ server_id, server_name }));
+  }
+  if (state !== "interactive" || flow?.connected !== false || flow.server_id === null) return [];
+  return [{ server_id: flow.server_id, server_name: flow.server_name }];
+};
+
 const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onConnected, failed }) => {
   const action = `${getProxyBaseUrl()}/authorize/complete`;
   const state = failed || flow === undefined ? "stale" : flow.state;
-  const canFinish = state === "unscoped" || (state !== "stale" && flow?.connected === true);
+  const canFinish = canFinishConnectFlow(state, flow);
   const canCancel = state !== "unscoped";
   const loopbackClient = isLoopbackOrigin(flow?.client_origin ?? null);
-  const vendorServer =
-    state === "interactive" && flow?.connected === false && flow.server_id !== null
-      ? { server_id: flow.server_id, server_name: flow.server_name }
-      : null;
+  const vendorServers = vendorServersFor(state, flow);
   const copy = copyFor(flow, failed);
 
   return (
@@ -74,15 +102,19 @@ const ConnectFlowBanner: React.FC<Props> = ({ flowHandle, flow, accessToken, onC
           </div>
         </div>
         <div className="flex shrink-0 gap-2">
-          {vendorServer !== null && (
+          {vendorServers.map((server) => (
             <OAuth2ConnectButton
-              server={vendorServer}
+              key={server.server_id}
+              server={server}
               accessToken={accessToken}
               onConnect={onConnected}
               variant="button"
-              autoStartKey={`litellm-mcp-autostart:${flowHandle}`}
+              buttonLabel={state === "multi" ? `Connect ${server.server_name ?? server.server_id}` : undefined}
+              {...(state === "multi"
+                ? {}
+                : { autoStartKey: `litellm-mcp-autostart:${flowHandle}:${server.server_id}` })}
             />
-          )}
+          ))}
           <form method="POST" action={action}>
             <input type="hidden" name="flow" value={flowHandle} />
             {canFinish && (

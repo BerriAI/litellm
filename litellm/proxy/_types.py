@@ -3203,6 +3203,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.",
     )
+    mcp_require_explicit_server_scope: bool = Field(
+        default=False,
+        description="Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.",
+    )
     mcp_client_id_header: str | None = Field(
         None,
         description="Request header whose value names the calling MCP client application (for example 'x-mcp-client') for callers that did not authenticate with a JWT, used only while mcp_allowed_clients is set. The client picks this value itself, so it is a policy control rather than a security boundary; prefer litellm_jwtauth.mcp_client_id_jwt_field where callers use JWTs.",
@@ -3503,13 +3507,13 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
     # key off. Server-only and stripped from validated input for the same reason as the marker
     # above: a forged entry would let a caller pick which team's rpm bucket it is charged against.
     mcp_source_team_rpm_limits: dict[str, dict[str, int]] | None = Field(default=None, exclude=True)
-    # The single MCP server_id a gateway session bearer was scoped to at authorize time (RFC 8707
+    # The MCP server_ids a gateway session bearer was scoped to at authorize time (RFC 8707
     # resource), or None for an aggregate-scope session. A RESTRICTION intersected against the live
     # grant resolution, never a grant. Server-only, set exclusively by the MCP gateway admission
     # path via post-construction assignment and stripped from validated input like the markers
     # above; a forged value could at most narrow, but the stripping keeps the field's provenance
     # single-owner so its meaning stays trustworthy.
-    mcp_session_resource_server_id: str | None = Field(default=None, exclude=True)
+    mcp_session_resource_server_ids: tuple[str, ...] | None = Field(default=None, exclude=True)
     mcp_toolset_id: str | None = Field(default=None, exclude=True)
     authenticated_by_custom_auth: bool = Field(default=False, exclude=True)
     via_virtual_key: bool = Field(
@@ -3570,7 +3574,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("requires_fresh_policy", None)
         values.pop("mcp_explicit_grants_only", None)
         values.pop("mcp_source_team_rpm_limits", None)
-        values.pop("mcp_session_resource_server_id", None)
+        values.pop("mcp_session_resource_server_ids", None)
         values.pop("mcp_toolset_id", None)
         values.pop("via_virtual_key", None)
         values.pop("authenticated_by_custom_auth", None)

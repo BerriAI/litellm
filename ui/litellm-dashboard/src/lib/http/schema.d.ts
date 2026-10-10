@@ -29656,6 +29656,12 @@ export interface components {
              */
             mcp_prefer_client_id_metadata_document?: boolean | null;
             /**
+             * Mcp Require Explicit Server Scope
+             * @description Require aggregate MCP requests to include x-mcp-servers unless a toolset or gateway OAuth session already scopes the server. Off by default.
+             * @default false
+             */
+            mcp_require_explicit_server_scope: boolean;
+            /**
              * Mcp Required Fields
              * @description List of MCP server fields that must be filled in for a submission to pass standards checks (e.g. ['description', 'source_url', 'alias']).
              */
@@ -51470,6 +51476,7 @@ export interface operations {
                 code_challenge_method?: string | null;
                 response_type?: string | null;
                 resource?: string | null;
+                scope?: string | null;
             };
             header?: never;
             path?: never;

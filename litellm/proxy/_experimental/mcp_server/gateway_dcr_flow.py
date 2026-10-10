@@ -37,12 +37,14 @@ egress by user id.
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import hmac
 import html
 import secrets
 from base64 import urlsafe_b64encode
-from collections.abc import Awaitable, Callable, Iterable, Mapping
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import MappingProxyType
 from typing import Final, Literal, Protocol, TypeVar
@@ -50,7 +52,8 @@ from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_serializer, model_validator
+from pydantic_core.core_schema import SerializerFunctionWrapHandler
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._internal_context import with_service_target
@@ -102,6 +105,8 @@ GATEWAY_DCR_CLIENT_ID_PREFIX: Final = "llm_dcrc_"
 """Marker prefix on every gateway-issued DCR client_id so the root authorize/token
 endpoints can route an aggregate-flow request without decrypting, and existing per-server
 flows (whose client_ids are upstream-issued) are never captured by the aggregate arm."""
+
+GATEWAY_SERVER_SCOPE_PREFIX: Final = "litellm:mcp_server:"
 
 GATEWAY_AUTH_CODE_PREFIX: Final = "llm_gcode_"
 """Marker prefix on the gateway-sealed authorization code, distinct from the bridge
@@ -294,13 +299,54 @@ class GatewayDcrClient(LiteLLMBaseModel):
     iat: int
 
 
-class _ConnectFlow(LiteLLMBaseModel):
+_SEALED_PAYLOAD_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+
+
+def _legacy_server_scope_payload(payload: object) -> object:
+    if not isinstance(payload, Mapping):
+        return payload
+    values: Final = _SEALED_PAYLOAD_ADAPTER.validate_python(payload)
+    if "resource_server_id" not in values:
+        return values
+    if "resource_server_ids" in values:
+        raise ValueError("sealed payload cannot contain both resource_server_id and resource_server_ids")
+    resource_server_id: Final = values["resource_server_id"]
+    return {key: value for key, value in values.items() if key != "resource_server_id"} | (
+        {"resource_server_ids": (resource_server_id,)} if resource_server_id is not None else {}
+    )
+
+
+def _server_scope_wire_payload(
+    payload: Mapping[str, object], resource_server_ids: tuple[str, ...] | None
+) -> Mapping[str, object]:
+    if resource_server_ids is None or len(resource_server_ids) != 1:
+        return payload
+    return {key: value for key, value in payload.items() if key != "resource_server_ids"} | {
+        "resource_server_id": resource_server_ids[0]
+    }
+
+
+class _ServerScopedSealedModel(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    resource_server_ids: tuple[str, ...] | None = Field(default=None, min_length=1)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_legacy_server_scope(cls, payload: object) -> object:
+        return _legacy_server_scope_payload(payload)
+
+    @model_serializer(mode="wrap")
+    def _serialize_server_scope(self, handler: SerializerFunctionWrapHandler) -> Mapping[str, object]:
+        payload: Final = _SEALED_PAYLOAD_ADAPTER.validate_python(handler(self))
+        return _server_scope_wire_payload(payload, self.resource_server_ids)
+
+
+class _ConnectFlow(_ServerScopedSealedModel):
     """One in-flight authorize: the SSO user it belongs to and the client parameters
     needed to mint the code at the finish step. Sealed into the per-flow cookie. ``jti``
     makes the flow single-use at complete; ``extra="forbid"`` rejects cross-type
     confusion."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
     redirect_uri: str = Field(min_length=1)
@@ -308,17 +354,15 @@ class _ConnectFlow(LiteLLMBaseModel):
     code_challenge: str = Field(min_length=1)
     jti: str = Field(min_length=1)
     exp: int
-    resource_server_id: str | None = None
     audience: SessionAudience | None = None
 
 
-class _GatewayAuthCode(LiteLLMBaseModel):
+class _GatewayAuthCode(_ServerScopedSealedModel):
     """The gateway-sealed authorization code: the user consent it represents and the
     bindings the token endpoint must verify (client, redirect URI, PKCE challenge),
     plus a ``jti`` for the single-use guard. ``extra="forbid"`` rejects cross-type
     confusion."""
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
     user_id: str = Field(min_length=1)
     client_id: str = Field(min_length=1)
     redirect_uri: str = Field(min_length=1)
@@ -326,7 +370,6 @@ class _GatewayAuthCode(LiteLLMBaseModel):
     jti: str = Field(min_length=1)
     iat: int
     exp: int
-    resource_server_id: str | None = None
     audience: SessionAudience | None = None
     team_id: str | None = None
 
@@ -507,6 +550,34 @@ def relative_request_url(request: Request) -> str:
     return f"{path}?{request.url.query}" if request.url.query else path
 
 
+def gateway_server_scope(server_name: str) -> str | None:
+    if not server_name or not all(
+        ord(character) == 0x21 or 0x23 <= ord(character) <= 0x5B or 0x5D <= ord(character) <= 0x7E
+        for character in server_name
+    ):
+        return None
+    return f"{GATEWAY_SERVER_SCOPE_PREFIX}{server_name}"
+
+
+def _is_aggregate_resource(request: Request, resource: str) -> bool:
+    canonical: Final = canonical_resource_uri(resource)
+    if canonical is None:
+        return False
+    base: Final = canonicalize_url_identity(get_request_base_url(request))
+    return canonical in (base, f"{base}/mcp")
+
+
+def _gateway_flow_server(name: str) -> MCPServer | None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # proxy import cycle
+        global_mcp_server_manager,
+    )
+
+    server: Final = global_mcp_server_manager.get_mcp_server_by_identifier(name)
+    if server is None or not (server.is_gateway_managed_oauth2 or server.advertises_gateway_authorization_server):
+        return None
+    return server
+
+
 def resolve_scoped_resource_server(request: Request, resource: str | None) -> MCPServer | None:
     """Resolve an RFC 8707 ``resource`` value to the single gateway-owned server it
     names, or ``None`` for every other shape: absent, the aggregate resource, a foreign
@@ -527,22 +598,43 @@ def resolve_scoped_resource_server(request: Request, resource: str | None) -> MC
     if canonical is None:
         return None
     base: Final = canonicalize_url_identity(get_request_base_url(request))
-    if canonical == f"{base}/mcp" or not canonical.startswith(f"{base}/"):
+    if _is_aggregate_resource(request, resource) or not canonical.startswith(f"{base}/"):
         return None
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (  # noqa: PLC0415  # proxy import cycle
         MCPRequestHandler,
-    )
-    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # proxy import cycle
-        global_mcp_server_manager,
     )
 
     names: Final = MCPRequestHandler.extract_target_server_names_from_path(canonical[len(base) :])
     if len(names) != 1:
         return None
-    server: Final = global_mcp_server_manager.get_mcp_server_by_name(names[0])
-    if server is None or not (server.is_gateway_managed_oauth2 or server.advertises_gateway_authorization_server):
+    return _gateway_flow_server(names[0])
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidGatewayScope:
+    pass
+
+
+def resolve_scoped_servers_from_scope(
+    scope: str | None,
+) -> tuple[MCPServer, ...] | InvalidGatewayScope | None:
+    if scope is None:
         return None
-    return server
+    prefixed_tokens: Final = tuple(token for token in scope.split() if token.startswith(GATEWAY_SERVER_SCOPE_PREFIX))
+    if not prefixed_tokens:
+        return None
+    server_names: Final = tuple(token[len(GATEWAY_SERVER_SCOPE_PREFIX) :] for token in prefixed_tokens)
+    if any(not name for name in server_names):
+        return InvalidGatewayScope()
+    resolved: Final = tuple(_gateway_flow_server(name) for name in server_names)
+    if any(server is None for server in resolved):
+        return InvalidGatewayScope()
+    servers: Final = tuple(server for server in resolved if server is not None)
+    return tuple(
+        server
+        for index, server in enumerate(servers)
+        if server.server_id not in frozenset(previous.server_id for previous in servers[:index])
+    )
 
 
 def aggregate_authorize(
@@ -555,31 +647,46 @@ def aggregate_authorize(
     response_type: str | None,
     session_user_id: str | None,
     resource: str | None = None,
+    scope: str | None = None,
 ) -> Response:
     """The aggregate authorize verb: validate the client, require S256 PKCE, interpose
     LiteLLM sign-in, and hand the browser to the connect page with the flow sealed into a
     per-flow cookie.
 
-    A per-server RFC 8707 ``resource`` naming a gateway-managed oauth2 server scopes the
-    flow to that one server: the scope is sealed into the flow, carried into the code, and
-    bound into the session token. The connect URL carries only the flow handle; the page
-    learns the client origin, the scoped server, and whether its vendor OAuth is done from
-    :func:`describe_connect_flow`, which reads the sealed flow, so nothing a link can carry
-    steers which server the page authorizes or names on the confirmation.
+    A per-server RFC 8707 ``resource`` or gateway-server scope tokens on an aggregate
+    request scope the flow to those servers. The scope is sealed into the flow, carried
+    into the code, and bound into the session token.
 
-    Validation failures respond directly with 400 and never redirect: per RFC 6749
-    section 4.1.2.1 an unvalidated redirect URI must not receive an error redirect, and
-    once the client is at fault there is no trusted place to send the browser.
+    Validation failures respond directly with 400, except for an unknown gateway scope,
+    which is redirected to the already-validated ``redirect_uri`` as ``invalid_scope`` per
+    RFC 6749 section 4.1.2.1.
     """
     rejected: Final = _rejected_authorize_request(
         client_id, redirect_uri, state, code_challenge, code_challenge_method, response_type
     )
     if rejected is not None:
         return rejected
+    resource_scoped_server: Final = resolve_scoped_resource_server(request, resource)
+    scope_fallback_allowed: Final = resource is None or _is_aggregate_resource(request, resource)
+    scope_resolution: Final = (
+        None
+        if resource_scoped_server is not None or not scope_fallback_allowed
+        else resolve_scoped_servers_from_scope(scope)
+    )
     base_url: Final = get_request_base_url(request)
     if session_user_id is None:
         return _login_redirect(base_url, request)
-    scoped_server: Final = resolve_scoped_resource_server(request, resource)
+    if isinstance(scope_resolution, InvalidGatewayScope):
+        invalid_scope_location: Final = _append_query_params(
+            redirect_uri,
+            (
+                ("error", "invalid_scope"),
+                ("error_description", "unknown or unsupported MCP server scope"),
+                *_state_param(state),
+            ),
+        )
+        return RedirectResponse(invalid_scope_location, status_code=303)
+    scoped_servers: Final = (resource_scoped_server,) if resource_scoped_server is not None else scope_resolution or ()
     handle: Final = secrets.token_urlsafe(24)
     flow: Final = _new_connect_flow(
         session_user_id=session_user_id,
@@ -587,7 +694,7 @@ def aggregate_authorize(
         redirect_uri=redirect_uri,
         state=state,
         code_challenge=code_challenge or "",
-        resource_server_id=scoped_server.server_id if scoped_server is not None else None,
+        resource_server_ids=tuple(server.server_id for server in scoped_servers) or None,
         audience=None,
     )
     connect_url: Final = _append_query_params(f"{base_url}/ui/connect", (("connect_flow", handle),))
@@ -634,7 +741,7 @@ async def native_client_authorize(
         redirect_uri=redirect_uri,
         state=state,
         code_challenge=code_challenge or "",
-        resource_server_id=None,
+        resource_server_ids=None,
         audience=PROXY_API_AUDIENCE,
     )
     page: Final = render_native_client_consent_page(
@@ -746,7 +853,7 @@ def _new_connect_flow(
     redirect_uri: str,
     state: str,
     code_challenge: str,
-    resource_server_id: str | None,
+    resource_server_ids: tuple[str, ...] | None,
     audience: SessionAudience | None,
 ) -> _ConnectFlow:
     now: Final = datetime.now(timezone.utc)
@@ -758,7 +865,7 @@ def _new_connect_flow(
         code_challenge=code_challenge,
         jti=secrets.token_urlsafe(24),
         exp=int(now.timestamp()) + CONNECT_FLOW_TTL_SECONDS,
-        resource_server_id=resource_server_id,
+        resource_server_ids=resource_server_ids,
         audience=audience,
     )
 
@@ -816,37 +923,72 @@ def _open_flow_for(
 @catalog_operation(global_manager)
 async def _flow_target(
     flow: _ConnectFlow, lookup_server_reachability: LookupServerReachability
-) -> tuple[Literal["unscoped", "interactive", "m2m", "stale"], MCPServer | None]:
-    if flow.resource_server_id is None:
-        return "unscoped", None
+) -> tuple[Literal["unscoped", "interactive", "m2m", "multi", "stale"], tuple[tuple[MCPServer, bool], ...]]:
+    if flow.resource_server_ids is None:
+        return "unscoped", ()
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # import cycle
         MCPServerManager,
         global_mcp_server_manager,
     )
 
-    server: Final = global_mcp_server_manager.get_mcp_server_by_id(flow.resource_server_id)
-    if (
-        server is None
-        or not (server.is_gateway_managed_oauth2 or server.advertises_gateway_authorization_server)
-        or not await lookup_server_reachability(flow.user_id, server.server_id)
-    ):
-        return "stale", None
-    state: Final = (
-        "interactive"
-        if server.is_gateway_managed_oauth2 and MCPServerManager.effective_oauth2_flow(server) != "client_credentials"
-        else "m2m"
+    async def reachable_server(server_id: str) -> tuple[MCPServer, bool] | None:
+        server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
+        if server is None or not (server.is_gateway_managed_oauth2 or server.advertises_gateway_authorization_server):
+            return None
+        reachable: Final = await lookup_server_reachability(flow.user_id, server.server_id)
+        if not reachable:
+            return None
+        interactive: Final = (
+            server.is_gateway_managed_oauth2 and MCPServerManager.effective_oauth2_flow(server) != "client_credentials"
+        )
+        return server, interactive
+
+    resolved: Final = tuple(
+        await asyncio.gather(*(reachable_server(server_id) for server_id in flow.resource_server_ids))
     )
-    return state, server
+    if any(server is None for server in resolved):
+        return "stale", ()
+    servers: Final = tuple(server for server in resolved if server is not None)
+    if len(servers) > 1:
+        return "multi", servers
+    single_server: Final = next(iter(servers), None)
+    if single_server is None:
+        return "stale", ()
+    return ("interactive" if single_server[1] else "m2m"), servers
+
+
+class ConnectFlowServer(TypedDict):
+    server_id: ReadOnly[str]
+    server_name: ReadOnly[str]
+    connected: ReadOnly[bool]
 
 
 class ConnectFlowDescription(TypedDict):
     """What the connect page is allowed to know about one in-flight flow."""
 
-    state: ReadOnly[Literal["unscoped", "interactive", "m2m", "stale"]]
+    state: ReadOnly[Literal["unscoped", "interactive", "m2m", "multi", "stale"]]
     client_origin: ReadOnly[str]
     server_id: ReadOnly[str | None]
     server_name: ReadOnly[str | None]
     connected: ReadOnly[bool | None]
+    servers: ReadOnly[Sequence[ConnectFlowServer] | None]
+
+
+async def _describe_connect_flow_server(
+    user_id: str,
+    server: MCPServer,
+    interactive: bool,
+    lookup_vendor_credential: LookupVendorCredential,
+) -> ConnectFlowServer | Response:
+    credential: Final = await lookup_vendor_credential(user_id, server.server_id) if interactive else "present"
+    if credential == "unavailable":
+        return _oauth_error(503, "temporarily_unavailable", _DB_UNAVAILABLE_DESCRIPTION)
+    connected: Final = credential == "present"
+    return {
+        "server_id": server.server_id,
+        "server_name": server.server_name or server.alias or server.name,
+        "connected": connected,
+    }
 
 
 async def _describe_opened_flow(
@@ -854,7 +996,31 @@ async def _describe_opened_flow(
     lookup_vendor_credential: LookupVendorCredential,
     lookup_server_reachability: LookupServerReachability,
 ) -> ConnectFlowDescription | Response:
-    state, server = await _flow_target(flow, lookup_server_reachability)
+    state, servers = await _flow_target(flow, lookup_server_reachability)
+    if state == "multi":
+        described_servers: Final = tuple(
+            await asyncio.gather(
+                *(
+                    _describe_connect_flow_server(flow.user_id, server, interactive, lookup_vendor_credential)
+                    for server, interactive in servers
+                )
+            )
+        )
+        unavailable: Final = next(
+            (description for description in described_servers if isinstance(description, Response)),
+            None,
+        )
+        if unavailable is not None:
+            return unavailable
+        return {
+            "state": "multi",
+            "client_origin": _origin_only(flow.redirect_uri),
+            "server_id": None,
+            "server_name": None,
+            "connected": None,
+            "servers": [description for description in described_servers if not isinstance(description, Response)],
+        }
+    server: Final = servers[0][0] if servers else None
     if state == "interactive" and server is not None:
         credential: Final = await lookup_vendor_credential(flow.user_id, server.server_id)
         if credential == "unavailable":
@@ -865,6 +1031,7 @@ async def _describe_opened_flow(
             "server_id": server.server_id,
             "server_name": server.server_name or server.alias or server.name,
             "connected": credential == "present",
+            "servers": None,
         }
         return interactive_description
     described: Final[ConnectFlowDescription] = {
@@ -873,6 +1040,7 @@ async def _describe_opened_flow(
         "server_id": None if server is None else server.server_id,
         "server_name": None if server is None else (server.server_name or server.alias or server.name),
         "connected": state == "m2m" or None,
+        "servers": None,
     }
     return described
 
@@ -926,6 +1094,8 @@ async def complete_connect_flow(
             return described
         if described["state"] == "stale":
             return _oauth_error(400, "invalid_request", "the requested MCP server is no longer available")
+        if described["state"] == "multi" and not all(server["connected"] for server in described["servers"] or ()):
+            return _oauth_error(400, "invalid_request", "authorize the requested MCP server before finishing")
         if described["connected"] is False:
             return _oauth_error(400, "invalid_request", "authorize the requested MCP server before finishing")
     flow_refusal: Final = _claim_refusal(
@@ -946,12 +1116,12 @@ async def complete_connect_flow(
     return response
 
 
-def _state_param(flow: _ConnectFlow) -> tuple[tuple[str, str], ...]:
-    return (("state", flow.state),) if flow.state else ()
+def _state_param(state: str) -> tuple[tuple[str, str], ...]:
+    return (("state", state),) if state else ()
 
 
 def _denied_flow_response(flow: _ConnectFlow) -> Response:
-    params: Final = (("error", "access_denied"), *_state_param(flow))
+    params: Final = (("error", "access_denied"), *_state_param(flow.state))
     return RedirectResponse(_append_query_params(flow.redirect_uri, params), status_code=303)
 
 
@@ -968,12 +1138,12 @@ def _approved_flow_response(flow: _ConnectFlow, delivery: str | None, team_id: s
             jti=secrets.token_urlsafe(24),
             iat=int(now.timestamp()),
             exp=int(now.timestamp()) + code_ttl,
-            resource_server_id=flow.resource_server_id,
+            resource_server_ids=flow.resource_server_ids,
             audience=flow.audience,
             team_id=(team_id or None) if flow.audience == PROXY_API_AUDIENCE else None,
         ),
     )
-    callback_url: Final = _append_query_params(flow.redirect_uri, (("code", code), *_state_param(flow)))
+    callback_url: Final = _append_query_params(flow.redirect_uri, (("code", code), *_state_param(flow.state)))
     if manual_delivery:
         return _manual_delivery_response(callback_url)
     return RedirectResponse(callback_url, status_code=303)
@@ -1233,17 +1403,19 @@ def _mint_failure_response(failure: ProxyCredentialMintFailure) -> Response:
 
 
 def _resource_conflicts_with_scope(
-    request: Request, resource: str | None, sealed_resource_server_id: str | None
+    request: Request, resource: str | None, sealed_resource_server_ids: tuple[str, ...] | None
 ) -> bool:
     """True when a scoped grant is being redeemed for a DIFFERENT resource than the one
     sealed into it (RFC 8707 section 2.2: reject with ``invalid_target``). An absent
-    ``resource`` never conflicts (the sealed scope still binds the minted session), and an
-    unscoped grant ignores the parameter entirely, exactly as the endpoint always has, so
-    no pre-existing client breaks."""
-    if sealed_resource_server_id is None or resource is None:
+    ``resource`` never conflicts (the sealed scope still binds the minted session), the
+    aggregate resource does not conflict with a single-server grant, and an unscoped grant
+    ignores the parameter entirely."""
+    if sealed_resource_server_ids is None or resource is None:
+        return False
+    if _is_aggregate_resource(request, resource):
         return False
     resolved: Final = resolve_scoped_resource_server(request, resource)
-    return resolved is None or resolved.server_id != sealed_resource_server_id
+    return resolved is None or sealed_resource_server_ids != (resolved.server_id,)
 
 
 async def aggregate_token(
@@ -1465,7 +1637,7 @@ async def _authorization_code_grant(
         return _oauth_error(400, "invalid_grant", "the authorization code has expired")
     if client_id != parsed.client_id or redirect_uri != parsed.redirect_uri:
         return _oauth_error(400, "invalid_grant", "the authorization code was issued to a different client")
-    if _resource_conflicts_with_scope(request, resource, parsed.resource_server_id):
+    if _resource_conflicts_with_scope(request, resource, parsed.resource_server_ids):
         return _oauth_error(400, "invalid_target", "resource does not match the scope this code was issued for")
     if not _pkce_verifier_matches(code_verifier, parsed.code_challenge):
         return _oauth_error(400, "invalid_grant", "PKCE verification failed")
@@ -1475,7 +1647,7 @@ async def _authorization_code_grant(
         SessionPrincipal(
             user_id=parsed.user_id,
             client_id=client_id,
-            resource_server_id=parsed.resource_server_id,
+            resource_server_ids=parsed.resource_server_ids,
             audience=parsed.audience,
             team_id=parsed.team_id,
         ),
@@ -1507,7 +1679,7 @@ async def _refresh_token_grant(
     opened: Final = _open_presented_refresh_token(refresh_token, client_id, signing)
     if isinstance(opened, Response):
         return opened
-    if _resource_conflicts_with_scope(request, resource, opened.principal.resource_server_id):
+    if _resource_conflicts_with_scope(request, resource, opened.principal.resource_server_ids):
         return _oauth_error(400, "invalid_target", "resource does not match the scope this token was issued for")
     # Refresh-token rotation (OAuth 2.0 Security BCP section 4.13): the presented refresh token is
     # single-use, so a captured or replayed refresh token cannot mint a second pair after the
@@ -1633,7 +1805,18 @@ def _active_introspection_response(opened: OpenedSessionToken) -> Response:
         for key, value in (
             ("token_type", "Bearer" if opened.kind == "session" else None),
             ("team_id", principal.team_id),
-            ("resource_server_id", principal.resource_server_id),
+            (
+                "resource_server_id",
+                principal.resource_server_ids[0]
+                if principal.resource_server_ids is not None and len(principal.resource_server_ids) == 1
+                else None,
+            ),
+            (
+                "resource_server_ids",
+                list(principal.resource_server_ids)
+                if principal.resource_server_ids is not None and len(principal.resource_server_ids) > 1
+                else None,
+            ),
             ("audience", principal.audience),
         )
         if value is not None

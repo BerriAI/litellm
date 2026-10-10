@@ -11362,6 +11362,63 @@ def _native_client_app(monkeypatch):
     return client, session_cookie, minted
 
 
+@pytest.mark.parametrize("authorize_path", ["/authorize/mcp-session", "/authorize"])
+def test_gateway_authorize_routes_forward_server_scope(
+    monkeypatch: pytest.MonkeyPatch, authorize_path: str
+) -> None:
+    from http.cookies import SimpleCookie
+    from urllib.parse import parse_qs, urlparse
+
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import CONNECT_FLOW_COOKIE_PREFIX
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+
+    monkeypatch.setattr(
+        global_mcp_server_manager,
+        "registry",
+        global_mcp_server_manager.registry.copy(),
+    )
+    client, session_cookie, _ = _native_client_app(monkeypatch)
+    server: Final = _create_oauth2_server(
+        server_id="scope-server-id",
+        name="alpha",
+        server_name="alpha",
+        alias="alpha",
+    )
+    monkeypatch.setitem(global_mcp_server_manager.registry, server.server_id, server)
+
+    redirect_uri: Final = "https://client.example/callback"
+    registration: Final = client.post("/register", json={"redirect_uris": [redirect_uri]})
+    assert registration.status_code == 201, registration.text
+    client_id: Final = registration.json()["client_id"]
+    response: Final = client.get(
+        authorize_path,
+        params={
+            "client_id": client_id,
+            "redirect_uri": redirect_uri,
+            "state": "scope-test-state",
+            "code_challenge": _s256("scope-test-verifier"),
+            "code_challenge_method": "S256",
+            "response_type": "code",
+            "resource": "http://testserver/mcp",
+            "scope": "litellm:mcp_server:alpha",
+        },
+        cookies={"token": session_cookie},
+        follow_redirects=False,
+    )
+    assert response.status_code == 303, response.text
+
+    flow: Final = parse_qs(urlparse(response.headers["location"]).query)["connect_flow"][0]
+    flow_cookies: Final = SimpleCookie()
+    flow_cookies.load(response.headers["set-cookie"])
+    sealed_flow: Final = flow_cookies[f"{CONNECT_FLOW_COOKIE_PREFIX}{flow}"].value
+    decoded_flow: Final = decrypt_value_helper(sealed_flow, "gateway_connect_flow", return_original_value=False)
+    assert isinstance(decoded_flow, str)
+    flow_payload: Final = json.loads(decoded_flow)
+    assert flow_payload["resource_server_id"] == "scope-server-id"
+    assert "resource_server_ids" not in flow_payload
+
+
 def _consent_flow_handle(page: str) -> str:
     import re
 

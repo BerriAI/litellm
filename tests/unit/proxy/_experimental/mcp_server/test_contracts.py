@@ -9,7 +9,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 def test_operation_context_isolates_nested_headers_and_caller_permissions():
     caller = UserAPIKeyAuth(user_id="alpha", models=["allowed"])
     caller.mcp_admitted_user_subject = True
-    caller.mcp_session_resource_server_id = "alpha-server"
+    caller.mcp_session_resource_server_ids = ("alpha-server",)
     caller.mcp_toolset_id = "toolset-alpha"
     caller.mcp_source_team_rpm_limits = {"team": {"alpha-server": 2}}
     headers = {"x-caller": "alpha"}
@@ -24,7 +24,7 @@ def test_operation_context_isolates_nested_headers_and_caller_permissions():
     assert captured is not None
     assert captured.models == ["allowed"]
     assert captured.mcp_admitted_user_subject is True
-    assert captured.mcp_session_resource_server_id == "alpha-server"
+    assert captured.mcp_session_resource_server_ids == ("alpha-server",)
     assert captured.mcp_toolset_id == "toolset-alpha"
     assert captured.mcp_source_team_rpm_limits == {"team": {"alpha-server": 2}}
     captured.models.append("also-forbidden")
