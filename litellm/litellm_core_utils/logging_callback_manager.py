@@ -363,13 +363,14 @@ class LoggingCallbackManager:
 
     _get_all_callbacks = get_all_callbacks
 
-    def remove_callback_from_all_lists(self, obj, require_self=False) -> None:
+    def remove_callback_from_all_lists(self, obj: object, require_self: bool = False) -> None:
         """
         Remove a callback object from every callback list it may have been
         promoted into, so a re-initialized callback leaves no stale instance behind.
         """
         for callback_list in (
             litellm.callbacks,
+            litellm.input_callback,
             litellm.success_callback,
             litellm.failure_callback,
             litellm._async_success_callback,

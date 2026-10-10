@@ -35,6 +35,7 @@ from collections.abc import (
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import lru_cache, partial
+from itertools import chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Optional, TypeAlias, TypeVar, Union, cast
 
@@ -1410,6 +1411,13 @@ class Router:
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.input_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.service_callback, self)
         litellm.logging_callback_manager.remove_callback_from_list_by_object(litellm.callbacks, self)
+        self._unregister_router_selectors(
+            (
+                *(getattr(self, attr, None) for attr in self._DEFAULT_SELECTOR_ATTR_BY_STRATEGY.values()),
+                *self._override_selectors.values(),
+                *chain.from_iterable(selectors.values() for selectors in self._group_selectors.values()),
+            )
+        )
 
         # Remove ForwardClientSideHeadersByModelGroup if it exists
         if self.optional_callbacks is not None:
@@ -1533,20 +1541,17 @@ class Router:
     def _unregister_router_selectors(self, selectors: Sequence[object]) -> None:
         """
         Drop router-owned strategy selectors from litellm's global callback
-        lists by identity. Used before re-init (`routing_strategy_init` /
-        `_init_routing_groups`) so repeated `update_settings` calls don't
-        accumulate dead selectors that keep receiving callback events.
+        lists. Used before re-init (`routing_strategy_init` /
+        `_init_routing_groups`) and by `discard` so dead selectors stop
+        receiving callback events. `function_setup` copies `litellm.callbacks`
+        into the per-event lists on every request, so those are purged too.
         """
         for selector in selectors:
+            if selector is None:
+                continue
             if isinstance(selector, BaseRoutingStrategy):
                 selector.retire()
-        selector_ids: Final = {id(s) for s in selectors if s is not None}
-        if not selector_ids:
-            return
-        if isinstance(litellm.callbacks, list):
-            litellm.callbacks = [c for c in litellm.callbacks if id(c) not in selector_ids]
-        if isinstance(litellm.input_callback, list):
-            litellm.input_callback = [c for c in litellm.input_callback if id(c) not in selector_ids]
+            litellm.logging_callback_manager.remove_callback_from_all_lists(selector)
 
     def _apply_updated_routing_strategy_args(self) -> None:
         """

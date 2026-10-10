@@ -145,6 +145,7 @@ def test_remove_callback_from_all_lists():
 
     obj = TestLogger()
     manager.add_litellm_callback(obj)
+    manager.add_litellm_input_callback(obj)
     manager.add_litellm_success_callback(obj)
     manager.add_litellm_failure_callback(obj)
     manager.add_litellm_async_success_callback(obj)
@@ -153,6 +154,7 @@ def test_remove_callback_from_all_lists():
     manager.remove_callback_from_all_lists(obj)
 
     assert obj not in litellm.callbacks
+    assert obj not in litellm.input_callback
     assert obj not in litellm.success_callback
     assert obj not in litellm.failure_callback
     assert obj not in litellm._async_success_callback
