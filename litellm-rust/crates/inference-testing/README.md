@@ -49,3 +49,13 @@ cargo test --manifest-path litellm-rust/Cargo.toml \
 ```
 
 For another route, reuse `LiveResources`, `model` and `within_deadline`. Keep payload construction and response assertions in that route's test file. Add only supported provider behaviors, and document any gap instead of substituting mocks or skipping failures. Run cases serially to keep spending and rate limits predictable
+
+### Bedrock Mantle Messages
+
+Set `AWS_BEARER_TOKEN_BEDROCK` or `BEDROCK_MANTLE_API_KEY`, or use AWS credentials for SigV4. Set `LITELLM_LIVE_MESSAGES_BEDROCK_MANTLE_MODEL` to a Claude model advertised by `/v1/models`, with the `bedrock_mantle/` prefix.
+
+```sh
+cargo test -p litellm-inference-messages --test live bedrock_mantle -- --ignored --nocapture
+```
+
+This covers completion, system prompts, streaming, and tool round trips on `/anthropic/v1/messages`.

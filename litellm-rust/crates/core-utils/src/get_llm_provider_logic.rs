@@ -16,6 +16,8 @@ pub enum LlmProviders {
     AzureAi,
     #[strum(serialize = "bedrock")]
     Bedrock,
+    #[strum(serialize = "bedrock_mantle")]
+    BedrockMantle,
     #[strum(serialize = "cohere")]
     Cohere,
     #[strum(serialize = "deepseek")]

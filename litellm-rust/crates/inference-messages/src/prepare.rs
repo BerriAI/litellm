@@ -76,6 +76,10 @@ fn prepare_provider_request(
         shaping,
         ..
     } = call;
+    let connection_params = litellm_router_types::LitellmParams {
+        api_base: api_base.clone().or(litellm_params.api_base.clone()),
+        ..litellm_params
+    };
     let config = provider.config();
     let env_lookup = |key: &str| secrets.get(key);
 
@@ -99,7 +103,7 @@ fn prepare_provider_request(
         forwarded,
         api_key.as_deref(),
         &transformed.model,
-        &litellm_params,
+        &connection_params,
         &env_lookup,
     )?;
     let environment = ValidatedEnvironment {
@@ -113,7 +117,7 @@ fn prepare_provider_request(
     let url = config.get_complete_url(
         api_base.as_deref(),
         &transformed.model,
-        &litellm_params,
+        &connection_params,
         transformed.params.stream == Some(true),
         &env_lookup,
     )?;
@@ -188,6 +192,34 @@ mod tests {
             ))
             .unwrap()
             .headers
+    }
+
+    #[rstest]
+    fn explicit_endpoint_region_is_used_for_signing(shaping: MessagesShaping) {
+        let prepared = prepare(MessagesCall {
+            body: body(
+                json!({"model": "bedrock_mantle/claude-test", "messages": [], "max_tokens": 16}),
+            ),
+            api_base: Some("https://bedrock-mantle.eu-west-1.api.aws/v1".into()),
+            litellm_params: litellm_router_types::LitellmParams {
+                api_base: Some("https://bedrock-mantle.us-east-1.api.aws".into()),
+                ..Default::default()
+            },
+            shaping,
+            api_key: None,
+            custom_llm_provider: None,
+            extra_headers: None,
+            provider_specific_header: None,
+            timeout: None,
+        })
+        .unwrap();
+        assert_eq!(
+            prepared.url,
+            "https://bedrock-mantle.eu-west-1.api.aws/anthropic/v1/messages"
+        );
+        assert!(
+            matches!(prepared.environment.auth, litellm_llms::base_llm::auth::AuthScheme::AwsSigV4 { region, service: "bedrock", .. } if region == "eu-west-1")
+        );
     }
 
     #[rstest]

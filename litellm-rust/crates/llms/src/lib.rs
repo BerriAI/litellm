@@ -3,6 +3,7 @@ pub mod aws_textract;
 pub mod azure_ai;
 pub mod base_llm;
 pub mod bedrock;
+pub mod bedrock_mantle;
 pub mod cohere;
 pub mod deepseek;
 pub mod edenai;

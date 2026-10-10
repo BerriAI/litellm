@@ -10,6 +10,7 @@ use rstest::rstest;
 use super::*;
 
 #[rstest]
+#[case::mantle_key("bedrock_mantle", Some("bedrock-key"), &[("X-Api-Key", "caller"), ("Authorization", "caller")], ("authorization", "Bearer bedrock-key"), &["x-api-key"])]
 #[case::anthropic_key("anthropic", Some("sk-ant"), &[], ("x-api-key", "sk-ant"), &["authorization"])]
 #[case::azure_key("azure_ai", Some("sk-azure"), &[], ("x-api-key", "sk-azure"), &["authorization"])]
 #[case::minimax_key("minimax", Some("sk-test"), &[], ("x-api-key", "sk-test"), &["authorization"])]
@@ -132,6 +133,9 @@ async fn a_call_without_credentials_fails_before_sending(
 }
 
 #[rstest]
+#[case::mantle(MODEL, Some("bedrock_mantle"), "/openai/v1", "/anthropic/v1/messages")]
+#[case::mantle_prefix("bedrock_mantle/claude-sonnet-4-5", None, "", "/anthropic/v1/messages")]
+#[case::mantle_alias("bedrock/mantle/claude-sonnet-4-5", None, "", "/anthropic/v1/messages")]
 #[case::anthropic(MODEL, Some("anthropic"), "", "/v1/messages")]
 #[case::anthropic_base_with_trailing_slash(MODEL, Some("anthropic"), "/", "/v1/messages")]
 #[case::anthropic_base_with_the_messages_path(
@@ -1145,4 +1149,40 @@ async fn unprojected_per_user_sessions_cannot_fall_back_to_shared_credentials(ca
         0
     );
     assert!(received(&upstream).await.is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn mantle_signs_the_native_messages_body_with_aws_credentials(call: MessagesCall) {
+    let upstream = upstream([message_response()]).await;
+    let params: LitellmParams = serde_json::from_value(json!({
+        "model": "claude-test", "aws_region_name": "eu-west-1",
+        "aws_access_key_id": "AKIDEXAMPLE", "aws_secret_access_key": "test-secret",
+        "aws_session_token": "test-session", "aws_bedrock_project_id": "project-test"
+    }))
+    .unwrap();
+    run_message(MessagesCall {
+        api_key: None,
+        api_base: Some(upstream.uri()),
+        custom_llm_provider: Some("bedrock_mantle".into()),
+        litellm_params: params,
+        extra_headers: headers([("Authorization", "Bearer stale"), ("X-Api-Key", "stale")]),
+        ..with_model(call, "bedrock_mantle/eu-west-1/anthropic.claude-test")
+    })
+    .await;
+    let request = only_request(&upstream).await;
+    assert_eq!(request.url.path(), "/anthropic/v1/messages");
+    assert_eq!(request.json()["model"], "anthropic.claude-test");
+    assert_eq!(
+        request.header("anthropic-workspace-id"),
+        Some("project-test")
+    );
+    assert_eq!(request.header("x-amz-security-token"), Some("test-session"));
+    assert!(
+        request
+            .header("authorization")
+            .unwrap()
+            .contains("/eu-west-1/bedrock/aws4_request")
+    );
+    assert_eq!(request.header("x-api-key"), None);
 }
