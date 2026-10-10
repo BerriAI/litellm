@@ -5313,6 +5313,24 @@ async def test_create_from_another_tenants_managed_file_is_denied(call_type: str
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("call_type", "file_field"), _INPUT_FILE_CREATE_CALLS)
+async def test_create_from_managed_file_id_with_no_db_row_is_404(call_type: str, file_field: str) -> None:
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    managed_files, _ = _managed_files_with_fake_prisma()
+
+    with pytest.raises(HTTPException) as exc_info:
+        await managed_files.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(user_id="user_a", team_id="team_a", parent_otel_span=MagicMock()),
+            cache=MagicMock(),
+            data={"model": "gpt-4o-mini", file_field: _tenant_a_input_file_id()},
+            call_type=call_type,
+        )
+
+    assert exc_info.value.status_code == 404, f"{call_type}.{file_field} dispatched a managed id with no owner row"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("call_type", "file_field"), _INPUT_FILE_CREATE_CALLS)
 @pytest.mark.parametrize(
     "caller_kwargs",
     [
