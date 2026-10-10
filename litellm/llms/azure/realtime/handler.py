@@ -22,7 +22,7 @@ from ....litellm_core_utils.realtime_streaming import (
     ScopedWebSocket,
     client_sent_openai_beta_realtime_header,
 )
-from ....llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
+from ....llms.custom_httpx.http_handler import realtime_ssl_for_url
 from ..azure import AzureChatCompletion
 
 # BACKEND_WS_URL = "ws://localhost:8080/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01"
@@ -88,7 +88,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         Construct Azure realtime WebSocket URL.
 
         Args:
-            api_base: Azure API base URL (will be converted from https:// to wss://)
+            api_base: Azure API base URL (https:// becomes wss://, http:// becomes ws://)
             model: Model deployment name
             api_version: Azure API version
             realtime_protocol: Protocol version to use:
@@ -105,7 +105,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         """
         from urllib.parse import urlencode
 
-        api_base = api_base.replace("https://", "wss://")
+        ws_base: Final = api_base.replace("https://", "wss://").replace("http://", "ws://")
 
         # Determine path based on realtime_protocol (case-insensitive)
         _is_ga: Final = realtime_protocol is not None and realtime_protocol.upper() in (
@@ -128,7 +128,7 @@ class AzureOpenAIRealtime(AzureChatCompletion):
             query_parts.append(urlencode({"intent": intent}))
 
         qs: Final = "&".join(query_parts)
-        return f"{api_base}{path}?{qs}" if qs else f"{api_base}{path}"
+        return f"{ws_base}{path}?{qs}" if qs else f"{ws_base}{path}"
 
     def construct_url(
         self,
@@ -176,12 +176,11 @@ class AzureOpenAIRealtime(AzureChatCompletion):
         auth_headers: Final = self.get_auth_headers(api_key=api_key, azure_ad_token=azure_ad_token)
 
         try:
-            ssl_context: Final = get_shared_realtime_ssl_context()
             async with websockets.connect(
                 url,
                 additional_headers=auth_headers,
                 max_size=REALTIME_WEBSOCKET_MAX_MESSAGE_SIZE_BYTES,
-                ssl=ssl_context,
+                ssl=realtime_ssl_for_url(url),
             ) as backend_ws:
                 realtime_streaming: Final = RealTimeStreaming(
                     websocket,

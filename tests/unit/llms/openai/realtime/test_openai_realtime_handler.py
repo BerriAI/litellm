@@ -526,3 +526,43 @@ async def test_realtime_query_params_preserve_missing_model(monkeypatch):
 
     called_kwargs = mock_async_realtime.call_args.kwargs
     assert called_kwargs["query_params"] == {"intent": "transcription"}
+
+
+@pytest.mark.asyncio
+async def test_async_realtime_wss_with_ssl_verify_off_dials_with_an_unverified_context(monkeypatch):
+    import ssl
+
+    from litellm.llms.openai.realtime.handler import OpenAIRealtime
+
+    monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._shared_realtime_ssl_context", False)
+
+    class DummyAsyncContextManager:
+        def __init__(self, value):
+            self.value = value
+
+        async def __aenter__(self):
+            return self.value
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+    with (
+        patch("websockets.connect", return_value=DummyAsyncContextManager(AsyncMock())) as mock_ws_connect,
+        patch("litellm.llms.openai.realtime.handler.RealTimeStreaming") as mock_realtime_streaming,
+    ):
+        mock_realtime_streaming.return_value.bidirectional_forward = AsyncMock()
+        await OpenAIRealtime().async_realtime(
+            model="gpt-realtime",
+            websocket=AsyncMock(),
+            logging_obj=MagicMock(),
+            api_base="https://127.0.0.1:8113",
+            api_key="test-key",
+            query_params={"model": "gpt-realtime"},
+        )
+
+    mock_ws_connect.assert_called_once()
+    assert mock_ws_connect.call_args[0][0].startswith("wss://127.0.0.1:8113/v1/realtime?")
+    dialed_ssl = mock_ws_connect.call_args[1]["ssl"]
+    assert isinstance(dialed_ssl, ssl.SSLContext)
+    assert dialed_ssl.verify_mode is ssl.CERT_NONE
+    assert dialed_ssl.check_hostname is False

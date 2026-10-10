@@ -2979,6 +2979,75 @@ def _wrapped_reasoning_item():
     }
 
 
+class TestNativeWebSocketDialSsl:
+    """The backend dial's ssl argument follows the resolved URL scheme: none for ws://, the shared
+    context for wss://, and an unverified context for wss:// when ssl_verify is off."""
+
+    @staticmethod
+    async def _dial(ws_url: str) -> dict:
+        from unittest.mock import AsyncMock, MagicMock, patch
+
+        from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
+
+        captured = {}
+
+        class FakeConnect:
+            def __init__(self, url, **kwargs):
+                captured.update(kwargs)
+
+            async def __aenter__(self):
+                raise Exception("stop")
+
+            async def __aexit__(self, *args):
+                pass
+
+        mock_config = MagicMock(spec=OpenAIResponsesAPIConfig)
+        mock_config.supports_native_websocket.return_value = True
+        mock_config.get_websocket_url.return_value = ws_url
+        mock_config.validate_environment.return_value = {}
+        mock_logging = MagicMock()
+        mock_logging.pre_call = MagicMock()
+        mock_ws = MagicMock()
+        mock_ws.close = AsyncMock()
+
+        with patch("websockets.connect", FakeConnect):
+            await BaseLLMHTTPHandler().async_responses_websocket(
+                model="gpt-5.6",
+                websocket=mock_ws,
+                logging_obj=mock_logging,
+                responses_api_provider_config=mock_config,
+                api_key="sk-test",
+            )
+        assert "ssl" in captured, "the backend dial never happened"
+        return captured
+
+    @pytest.mark.asyncio
+    async def test_ws_url_dials_without_ssl(self):
+        captured = await self._dial("ws://127.0.0.1:8113/v1/responses")
+
+        assert captured["ssl"] is None
+
+    @pytest.mark.asyncio
+    async def test_wss_url_dials_with_the_shared_context(self):
+        from litellm.llms.custom_httpx.http_handler import get_shared_realtime_ssl_context
+
+        captured = await self._dial("wss://127.0.0.1:8113/v1/responses")
+
+        assert captured["ssl"] is get_shared_realtime_ssl_context()
+
+    @pytest.mark.asyncio
+    async def test_wss_url_with_ssl_verify_off_dials_with_an_unverified_context(self, monkeypatch):
+        import ssl
+
+        monkeypatch.setattr("litellm.llms.custom_httpx.http_handler._shared_realtime_ssl_context", False)
+
+        captured = await self._dial("wss://127.0.0.1:8113/v1/responses")
+
+        assert isinstance(captured["ssl"], ssl.SSLContext)
+        assert captured["ssl"].verify_mode is ssl.CERT_NONE
+        assert captured["ssl"].check_hostname is False
+
+
 class TestNativeWebSocketEncryptedContentAffinity:
 
     @pytest.mark.asyncio

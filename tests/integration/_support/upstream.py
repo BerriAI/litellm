@@ -383,10 +383,9 @@ class Provider:
         self.interactions[interaction_id] = cancelled
         return JSONResponse(_interaction_body(interaction_id, cancelled))
 
-    async def realtime(self, websocket: WebSocket) -> None:
+    def _observed_upgrade(self, websocket: WebSocket) -> tuple[str, str, str]:
         authorization: Final = websocket.headers.get("authorization", "")
         api_key: Final = websocket.headers.get("api-key", "")
-        scenario_id: Final = authorization.removeprefix("Bearer ") if authorization else api_key
         self.observations.put(
             Observation(
                 websocket.url.path,
@@ -396,6 +395,10 @@ class Provider:
                 api_key,
             )
         )
+        return authorization.removeprefix("Bearer ") if authorization else api_key, authorization, api_key
+
+    async def realtime(self, websocket: WebSocket) -> None:
+        scenario_id, authorization, api_key = self._observed_upgrade(websocket)
         response: Final = self.scenario_store.get(scenario_id)
         if not isinstance(response, RealtimeResponse):
             await websocket.close(code=4404)
@@ -419,6 +422,21 @@ class Provider:
             if event is None:
                 continue
             await websocket.send_json(_rendered_realtime_event(event, scenario_id))
+
+    async def responses_websocket(self, websocket: WebSocket) -> None:
+        scenario_id, authorization, api_key = self._observed_upgrade(websocket)
+        response: Final = self.scenario_store.get(scenario_id)
+        if not isinstance(response, RealtimeResponse):
+            await websocket.close(code=4404)
+            return
+        await websocket.accept()
+        async for message in websocket.iter_json():
+            payload: Final = JSON_OBJECT.validate_python(message)
+            self.observations.put(Observation(websocket.url.path, authorization, payload, "WEBSOCKET_FRAME", api_key))
+            if payload.get("type") != "response.create":
+                continue
+            for event in response.events:
+                await websocket.send_json(_rendered_realtime_event(event, scenario_id))
 
     async def muse_realtime(self, websocket: WebSocket) -> None:
         await websocket.accept()
@@ -569,6 +587,8 @@ class Provider:
                 WebSocketRoute("/v1/realtime", self.realtime),
                 WebSocketRoute("/openai/v1/realtime", self.realtime),
                 WebSocketRoute("/openai/realtime", self.realtime),
+                WebSocketRoute("/v1/responses", self.responses_websocket),
+                WebSocketRoute("/openai/v1/responses", self.responses_websocket),
                 WebSocketRoute("/v1/asr/realtime", self.muse_realtime),
                 WebSocketRoute(GEMINI_LIVE_PATH, self.gemini_live),
             ]
