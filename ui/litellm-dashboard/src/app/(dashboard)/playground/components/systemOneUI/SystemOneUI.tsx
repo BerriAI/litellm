@@ -9,10 +9,10 @@ import { SearchSelect } from "@/components/shared/SearchSelect";
 import { DECISIONS_DOCS_URL } from "@/lib/decisionModels";
 import { uiHref } from "@/utils/uiHref";
 import { useMutation } from "@tanstack/react-query";
-import { Code, Info, LoaderCircle, RotateCcw, Send } from "lucide-react";
+import { Code, Eraser, Info, LoaderCircle, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { makePlaygroundDecisionRequest, type PlaygroundDecisionRequest } from "../../llm_calls/system_one";
-import { decisionsExample, openAIDecisionsExample } from "./lib/example";
+import { DECISION_PRESETS, emptyPayload, matchPreset, presetPayload, type DecisionPreset } from "./lib/example";
 import { payloadModel, withPayloadModel } from "./lib/payloadModel";
 import JsonEditor from "./JsonEditor";
 import QuestionBreakdown from "./QuestionBreakdown";
@@ -35,7 +35,35 @@ interface SystemOneSendVariables {
   signal: AbortSignal;
 }
 
+const CUSTOM_PRESET = "custom";
 const DECISION_MODELS_DISCUSSION_URL = "https://github.com/BerriAI/litellm/discussions/44231";
+
+interface PresetPickerProps {
+  activePreset: DecisionPreset | undefined;
+  onPick: (id: string | null) => void;
+}
+
+function PresetPicker({ activePreset, onPick }: PresetPickerProps) {
+  return (
+    <Select value={activePreset?.id ?? CUSTOM_PRESET} onValueChange={onPick}>
+      <SelectTrigger className="w-56" aria-label="Example">
+        <SelectValue>{activePreset?.label ?? "Custom"}</SelectValue>
+      </SelectTrigger>
+      <SelectContent>
+        {activePreset === undefined && (
+          <SelectItem value={CUSTOM_PRESET} disabled>
+            Custom
+          </SelectItem>
+        )}
+        {DECISION_PRESETS.map((preset) => (
+          <SelectItem key={preset.id} value={preset.id}>
+            {preset.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
 
 function getCustomProxyBaseUrl(): string | undefined {
   return typeof window === "undefined" ? undefined : window.sessionStorage.getItem("customProxyBaseUrl") || undefined;
@@ -53,9 +81,10 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   const [endpoint, setEndpoint] = useState<PlaygroundDecisionRequest["endpoint"]>("/v1/systemone");
   const [drafts, setDrafts] = useState<Partial<Record<PlaygroundDecisionRequest["endpoint"], string>>>({});
   const [view, setView] = useState<EditorView>("form");
-  const example = endpoint === "/v1/decisions" ? openAIDecisionsExample : decisionsExample;
-  const examplePayload = JSON.stringify(example(decisionModels[0]), null, 2);
-  const rawPayload = drafts[endpoint] ?? examplePayload;
+  const rawPayload = drafts[endpoint] ?? presetPayload(DECISION_PRESETS[0], endpoint, decisionModels[0]);
+  const draftModel = drafts[endpoint] === undefined ? decisionModels[0] : payloadModel(rawPayload);
+  const activePreset = matchPreset(endpoint, rawPayload);
+  const clearedPayload = emptyPayload(endpoint, draftModel);
   const activeController = useRef<AbortController | null>(null);
   const validated = useMemo(
     () =>
@@ -95,9 +124,11 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
     }
   }
 
-  function handleResetExample() {
-    clearRequestState();
-    setDrafts((current) => Object.fromEntries(Object.entries(current).filter(([key]) => key !== endpoint)));
+  function handlePresetPick(id: string | null) {
+    const preset = DECISION_PRESETS.find((candidate) => candidate.id === id);
+    if (preset !== undefined) {
+      handlePayloadChange(presetPayload(preset, endpoint, draftModel));
+    }
   }
 
   function handleModelPick(model: string | null) {
@@ -204,9 +235,14 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
             )}
           </div>
           <div className="ml-auto flex items-center gap-2">
-            <Button variant="outline" onClick={handleResetExample} disabled={rawPayload === examplePayload}>
-              <RotateCcw />
-              Reset example
+            <PresetPicker activePreset={activePreset} onPick={handlePresetPick} />
+            <Button
+              variant="outline"
+              onClick={() => handlePayloadChange(clearedPayload)}
+              disabled={rawPayload === clearedPayload}
+            >
+              <Eraser />
+              Clear
             </Button>
             {view === "json" && (
               <Button variant="outline" onClick={handleFormatJson} disabled={!rawPayload.trim() || hasSyntaxError}>
