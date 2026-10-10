@@ -205,6 +205,7 @@ export const buildKeyCreatePayload = (input: KeyCreateInput): KeyPayloadResult =
       ...(values.organization_id === null && { organization_id: undefined }),
       ...(values.project_id === null && { project_id: undefined }),
       ...(input.keyOwner === "you" && { user_id: input.userID }),
+      ...(input.keyOwner === "another_user" && { send_invite_email: true }),
       ...(input.keyOwner === "agent" && { agent_id: input.selectedAgentId }),
       ...(input.autoRotationEnabled && { auto_rotate: true, rotation_interval: input.rotationInterval }),
       duration: !duration || (duration as string).trim() === "" ? null : duration,
