@@ -2,7 +2,7 @@ from collections.abc import Coroutine, Mapping
 from typing import Final, cast
 
 import httpx
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from openai import DEFAULT_MAX_RETRIES, AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
 from openai.types.fine_tuning import FineTuningJob
 
 from litellm._logging import verbose_logger
@@ -75,25 +75,16 @@ class OpenAIFineTuningAPI:
         api_version: str | None = None,
         litellm_params: dict | None = None,
     ) -> OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None:
-        received_args: Final = locals()
-        openai_client: OpenAI | AsyncOpenAI | AzureOpenAI | AsyncAzureOpenAI | None = None
-        if client is None:
-            data: Final = {}
-            for k, v in received_args.items():
-                if k == "self" or k == "client" or k == "_is_async":
-                    pass
-                elif k == "api_base" and v is not None:
-                    data["base_url"] = v
-                elif v is not None:
-                    data[k] = v
-            if _is_async is True:
-                openai_client = AsyncOpenAI(**data)
-            else:
-                openai_client = OpenAI(**data)
-        else:
-            openai_client = client
-
-        return openai_client
+        if client is not None:
+            return client
+        openai_client_class: Final = AsyncOpenAI if _is_async else OpenAI
+        return openai_client_class(
+            api_key=api_key,
+            base_url=api_base,
+            timeout=timeout,
+            max_retries=DEFAULT_MAX_RETRIES if max_retries is None else max_retries,
+            organization=organization,
+        )
 
     async def acreate_fine_tuning_job(
         self,
