@@ -1100,6 +1100,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "DAHL",
+    "provider_display_name": "Gonka DAHL",
+    "litellm_provider": "dahl",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://inference.dahl.global/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "dahl/MiniMaxAI/MiniMax-M2.7"
+  },
+  {
     "provider": "Dashscope",
     "provider_display_name": "Dashscope",
     "litellm_provider": "dashscope",
