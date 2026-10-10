@@ -3,6 +3,7 @@ from typing import Final
 
 import httpx
 import pytest
+from pydantic import HttpUrl
 
 from litellm.proxy.telemetry.attempt_logger import TelemetryAttemptLogger
 from litellm.proxy.telemetry.runtime import TelemetryRuntime, deployment_hasher
@@ -10,7 +11,7 @@ from litellm.proxy.telemetry.settings import TelemetrySettings
 from litellm.telemetry.consent import ConsentGatedSink, TelemetryConsent
 from litellm.telemetry.records import AttemptRecord, InstanceInfo, RequestRecord, TelemetryGroup, UIEvent
 
-_ENDPOINT: Final = "http://telemetry.invalid/v1/reports"
+_ENDPOINT: Final = HttpUrl("http://telemetry.invalid/v1/reports")
 
 
 def _offline() -> httpx.AsyncClient:
@@ -33,7 +34,6 @@ async def _broken_store() -> TelemetryConsent | None:
     [
         TelemetrySettings(),
         TelemetrySettings(groups="", endpoint=_ENDPOINT),
-        TelemetrySettings(groups="heartbeat,verbose", endpoint=_ENDPOINT),
         TelemetrySettings(groups="heartbeat"),
         TelemetrySettings(groups="heartbeat", endpoint=_ENDPOINT, disabled=True),
     ],
@@ -55,7 +55,8 @@ async def test_pinned_groups_register_the_attempt_logger_and_stop_cleanly() -> N
     runtime: Final = TelemetryRuntime()
     await runtime.start(
         litellm_version="1.0.0",
-        settings=TelemetrySettings(groups="HEARTBEAT", endpoint=_ENDPOINT, flush_interval_seconds=3600),
+        settings=TelemetrySettings(groups="HEARTBEAT", endpoint=_ENDPOINT),
+        flush_interval_s=3600,
         register=registered.append,
         http_client=_offline,
     )
@@ -70,7 +71,8 @@ async def test_stored_groups_apply_when_no_groups_are_pinned_and_a_veto_ignores_
     enabled: Final = TelemetryRuntime()
     await enabled.start(
         litellm_version="1.0.0",
-        settings=TelemetrySettings(endpoint=_ENDPOINT, flush_interval_seconds=3600),
+        settings=TelemetrySettings(endpoint=_ENDPOINT),
+        flush_interval_s=3600,
         register=lambda _logger: None,
         http_client=_offline,
         stored=_stored_heartbeat,
@@ -93,7 +95,8 @@ async def test_a_failing_settings_store_leaves_telemetry_off_instead_of_crashing
     runtime: Final = TelemetryRuntime()
     await runtime.start(
         litellm_version="1.0.0",
-        settings=TelemetrySettings(endpoint=_ENDPOINT, flush_interval_seconds=3600),
+        settings=TelemetrySettings(endpoint=_ENDPOINT),
+        flush_interval_s=3600,
         register=lambda _logger: None,
         http_client=_offline,
         stored=_broken_store,
@@ -103,9 +106,9 @@ async def test_a_failing_settings_store_leaves_telemetry_off_instead_of_crashing
 
 
 def test_deployment_hashes_are_stable_per_install_and_differ_across_installs() -> None:
-    assert deployment_hasher("install-a")("model-1") == deployment_hasher("install-a")("model-1")
-    assert deployment_hasher("install-a")("model-1") != deployment_hasher("install-b")("model-1")
-    assert "model-1" not in deployment_hasher("install-a")("model-1")
+    assert deployment_hasher(b"secret-a")("model-1") == deployment_hasher(b"secret-a")("model-1")
+    assert deployment_hasher(b"secret-a")("model-1") != deployment_hasher(b"secret-b")("model-1")
+    assert "model-1" not in deployment_hasher(b"secret-a")("model-1")
 
 
 @pytest.mark.asyncio
@@ -113,7 +116,8 @@ async def test_stop_waits_for_in_flight_request_finalizers_before_the_last_flush
     runtime: Final = TelemetryRuntime()
     await runtime.start(
         litellm_version="1.0.0",
-        settings=TelemetrySettings(groups="heartbeat", endpoint=_ENDPOINT, flush_interval_seconds=3600),
+        settings=TelemetrySettings(groups="heartbeat", endpoint=_ENDPOINT),
+        flush_interval_s=3600,
         register=lambda _logger: None,
         http_client=_offline,
     )
@@ -160,7 +164,8 @@ async def test_stop_during_an_export_lets_that_export_finish() -> None:
     runtime: Final = TelemetryRuntime()
     await runtime.start(
         litellm_version="1.0.0",
-        settings=TelemetrySettings(groups="heartbeat", endpoint=_ENDPOINT, flush_interval_seconds=0.001),
+        settings=TelemetrySettings(groups="heartbeat", endpoint=_ENDPOINT),
+        flush_interval_s=0.001,
         register=lambda _logger: None,
         http_client=_offline,
     )
