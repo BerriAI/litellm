@@ -446,6 +446,36 @@ def test_extract_schema_follows_local_refs(config: ScaleDownChatConfig, wrapper:
     assert body["entities"] == {"address": {"city": "city name"}, "name": "name"}
 
 
+@pytest.mark.parametrize(
+    ("definition", "reference"),
+    [
+        ("Invoice/Details", "#/$defs/Invoice~1Details"),
+        ("Invoice~Details", "#/$defs/Invoice~0Details"),
+        ("Invoice~1 Details", "#/%24defs/Invoice~01%20Details"),
+    ],
+)
+def test_extract_preserves_fields_from_escaped_refs(
+    config: ScaleDownChatConfig, definition: str, reference: str
+) -> None:
+    schema: Final = {
+        "type": "object",
+        "$defs": {definition: {"type": "object", "properties": {"amount": {"type": "number"}}}},
+        "properties": {"invoice": {"$ref": reference}},
+    }
+
+    assert _extract_body(config, schema)["entities"] == {"invoice": {"amount": "amount"}}
+
+
+@pytest.mark.parametrize("reference", ["#/$defs/Missing", "https://example.com/schema", "#named-anchor", None, []])
+def test_extract_rejects_unresolvable_refs(config: ScaleDownChatConfig, reference: JsonValue) -> None:
+    schema: Final = {"type": "object", "properties": {"invoice": {"$ref": reference}}}
+
+    with pytest.raises(ScaleDownError, match=r"\$ref") as exc:
+        _extract_body(config, schema)
+
+    assert exc.value.status_code == 400
+
+
 @pytest.mark.parametrize("field_type", ["array", ["array", "null"]])
 def test_extract_nullable_array_keeps_item_fields(config: ScaleDownChatConfig, field_type: str | list[str]) -> None:
     schema: Final = {

@@ -4,6 +4,7 @@ import uuid
 from collections.abc import Mapping, Sequence
 from functools import reduce
 from typing import TYPE_CHECKING, Final, NoReturn
+from urllib.parse import unquote
 
 import httpx
 from pydantic import JsonValue, TypeAdapter
@@ -311,7 +312,7 @@ def _validate_labels(labels: JsonValue) -> None:
 
 
 def _child(node: JsonValue, key: str) -> JsonValue:
-    return node.get(key) if isinstance(node, Mapping) else None
+    return node.get(key.replace("~1", "/").replace("~0", "~")) if isinstance(node, Mapping) else None
 
 
 def _extend_ref_path(path: tuple[str, ...], ref: str) -> tuple[str, ...]:
@@ -356,15 +357,20 @@ def _deref(
         if nullable is not None:
             current = nullable
             continue
-        if not isinstance(ref, str) or not ref.startswith("#/"):
+        if "$ref" not in current:
             return current, followed, False
+        if not isinstance(ref, str) or not ref.startswith("#"):
+            _reject("ScaleDown extraction supports only local JSON Pointer $refs.")
+        pointer: Final = unquote(ref[1:])
+        if not pointer.startswith("/"):
+            _reject("ScaleDown extraction supports only local JSON Pointer $refs beginning with #/.")
         if any(key in current for key in ("properties", "items", "type")):
             _reject("ScaleDown extraction cannot combine $ref with sibling schema definitions.")
         if ref in followed:
             return current, followed, True
-        target: JsonValue = reduce(_child, ref[2:].split("/"), dict(root))
+        target: JsonValue = reduce(_child, pointer[1:].split("/"), dict(root))
         if not isinstance(target, Mapping):
-            return current, followed, False
+            _reject(f"ScaleDown extraction cannot resolve $ref '{ref}' to a schema object.")
         current, followed = target, _extend_ref_path(followed, ref)
     _reject(f"The response_format schema follows more than {MAX_REF_CHAIN} chained $refs or nullable branches.")
 
