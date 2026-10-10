@@ -287,7 +287,7 @@ def _worker_pids(proxy: OwnedProxy) -> tuple[int, ...]:
     )
 
 
-def test_worker_sigkill_mid_speech_burst_leaves_the_sibling_serving(gateway: Gateway, tmp_path: Path) -> None:
+async def test_worker_sigkill_mid_speech_burst_leaves_the_sibling_serving(gateway: Gateway, tmp_path: Path) -> None:
     release: Final = threading.Event()
     with wire_server(_held_peer(release)) as wire:
         config: Final = health_config(tmp_path)
@@ -296,21 +296,22 @@ def test_worker_sigkill_mid_speech_burst_leaves_the_sibling_serving(gateway: Gat
             url: Final = str(proxy.gateway.client.base_url)
             with proxy.gateway.scenario() as scenario:
                 model: Final = speech_deployment(scenario, wire.url)
-                loop: Final = asyncio.new_event_loop()
-                burst: Final = loop.run_in_executor(
-                    None, lambda: asyncio.run(_fire(url, proxy.gateway.key, model, tolerate_transport_errors=True))
-                )
-                try:
-                    eventually(lambda: wire.received.qsize(), lambda size: size >= BURST, 90)
-                    held_by: Final = MappingProxyType({pid: _held_connections(pid, wire.url) for pid in workers})
-                    victim: Final = max(workers, key=held_by.__getitem__)
-                    os.kill(victim, signal.SIGKILL)
-                finally:
-                    release.set()
-                served: Final = loop.run_until_complete(burst)
-                loop.close()
+                async with asyncio.TaskGroup() as tasks:
+                    burst: Final = tasks.create_task(
+                        _fire(url, proxy.gateway.key, model, tolerate_transport_errors=True)
+                    )
+                    try:
+                        await asyncio.to_thread(
+                            eventually, lambda: wire.received.qsize(), lambda size: size >= BURST, 90
+                        )
+                        held_by: Final = MappingProxyType({pid: _held_connections(pid, wire.url) for pid in workers})
+                        victim: Final = max(workers, key=held_by.__getitem__)
+                        os.kill(victim, signal.SIGKILL)
+                    finally:
+                        release.set()
+                    served: Final = await burst
                 during: Final = wire.drain()
-                after: Final = asyncio.run(_fire(url, proxy.gateway.key, model))
+                after: Final = await _fire(url, proxy.gateway.key, model)
                 after_received: Final = wire.drain()
     assert sum(held_by.values()) == BURST, held_by
     assert held_by[victim] > 0, held_by
@@ -321,7 +322,7 @@ def test_worker_sigkill_mid_speech_burst_leaves_the_sibling_serving(gateway: Gat
     _assert_served(after, after_received)
 
 
-def test_proxy_restart_mid_speech_burst_serves_the_next_burst_after_the_reboot(
+async def test_proxy_restart_mid_speech_burst_serves_the_next_burst_after_the_reboot(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     release: Final = threading.Event()
@@ -330,20 +331,17 @@ def test_proxy_restart_mid_speech_burst_serves_the_next_burst_after_the_reboot(
         model: Final = speech_deployment(scenario, wire.url)
         with owned_proxy_process(gateway, tmp_path, _overrides(wire.url), config=config, workers=2) as first:
             url: Final = str(first.gateway.client.base_url)
-            loop: Final = asyncio.new_event_loop()
-            burst: Final = loop.run_in_executor(
-                None, lambda: asyncio.run(_fire(url, first.gateway.key, model, tolerate_transport_errors=True))
-            )
-            try:
-                eventually(lambda: wire.received.qsize(), lambda size: size >= BURST, 90)
-                first.process.terminate()
-            finally:
-                release.set()
-            served: Final = loop.run_until_complete(burst)
-            loop.close()
+            async with asyncio.TaskGroup() as tasks:
+                burst: Final = tasks.create_task(_fire(url, first.gateway.key, model, tolerate_transport_errors=True))
+                try:
+                    await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= BURST, 90)
+                    first.process.terminate()
+                finally:
+                    release.set()
+                served: Final = await burst
             during: Final = wire.drain()
         with owned_proxy_process(gateway, tmp_path, _overrides(wire.url), config=config, workers=2) as second:
-            after: Final = asyncio.run(_fire(str(second.gateway.client.base_url), second.gateway.key, model))
+            after: Final = await _fire(str(second.gateway.client.base_url), second.gateway.key, model)
             after_received: Final = wire.drain()
     completed: Final = tuple(item for item in served if item.status == 200)
     assert all(len(requests) == 1 for requests in _by_text(during).values())

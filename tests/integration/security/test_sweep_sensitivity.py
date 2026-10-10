@@ -9,17 +9,25 @@ from __future__ import annotations
 
 import base64
 import gzip
+import json
 import uuid
+from collections import Counter
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
 
+import httpx
 import pytest
-from integration._support.client import eventually, string_value
+from redis import Redis
+from integration._support.client import Gateway, eventually, string_value
 from integration.security._canary import DECODE_BUDGET_BYTES, MARKER, SLOTS, DecodeBudgetExceeded, canary, find_canary
-from integration.security._sinks import CONFIG_MODEL, GENERIC_SINK, Rig, canary_rig, settle, team_caller
-from integration._support.wire import Request
+from integration.security._sinks import CONFIG_MODEL, GENERIC_SINK, Rig, canary_rig, chat_upstream, settle, team_caller
+from integration._support.wire import Reply, Request, wire_server
+from tests.integration._support.database import read_rows, write_rows
+from tests.integration._support.redis_process import owned_redis
+from tests.integration._support.tls import server_context, write_self_signed_cert
+from tests.integration._support.workers import worker_services
 from integration.security._sweeps import (
     ADMIN_ONLY_ALLOWANCES,
     ALLOWANCE_SLOT_FAMILIES,
@@ -32,6 +40,7 @@ from integration.security._sweeps import (
     scoped_queries,
     sweep_all,
     sweep_redis,
+    sweep_routes,
     sweep_sink,
 )
 
@@ -75,6 +84,42 @@ def test_rig_with_an_overridden_master_key_resolves_the_config_deployment(tmp_pa
         assert overridden.proxy.key == master_key
         assert overridden.model_id
         assert overridden.proxy.request("GET", "/model/info").status_code == 200
+
+
+def _skills_upstream(request: Request) -> Reply:
+    skill: Final = {
+        "id": "owned-skill",
+        "display_title": "Owned skill",
+        "source": "custom",
+        "created_at": "2026-01-01T00:00:00Z",
+        "updated_at": "2026-01-01T00:00:00Z",
+    }
+    if request.target.startswith("/v1/skills/"):
+        return Reply(body=json.dumps(skill).encode())
+    if request.target.startswith("/v1/skills"):
+        return Reply(body=json.dumps({"data": [skill], "has_more": False}).encode())
+    return chat_upstream(request)
+
+
+def test_skills_reads_use_the_owned_provider_despite_ambient_credentials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("ANTHROPIC_API_BASE", "https://ambient-provider.invalid")
+    monkeypatch.setenv("ANTHROPIC_BASE_URL", "https://ambient-provider.invalid")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "ambient-provider-key")
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "ambient-provider-token")
+    with canary_rig(tmp_path, upstream=_skills_upstream) as owned:
+        for path in ("/v1/skills", "/v1/skills/owned-skill"):
+            response: Final = owned.proxy.request("GET", path)
+            assert response.status_code == 200, response.text
+        requests: Final = owned.provider.requests()
+        assert tuple(request.target.split("?", 1)[0] for request in requests) == (
+            "/v1/skills",
+            "/v1/skills/owned-skill",
+        )
+        assert all(request.headers.get("x-api-key") == owned.canaries["B1"].value for request in requests)
+        assert all("authorization" not in request.headers for request in requests)
+        assert owned.egress() == ()
 
 
 def test_route_allowances_match_only_their_exact_route_and_caller() -> None:
@@ -178,3 +223,89 @@ def test_every_sweep_finds_the_stored_prompt_marker(rig: Rig, request: pytest.Fi
                 listed = rig.proxy.request("GET", route + query)
                 assert request_id in listed.text, f"{route}{query} does not list the scenario's row"
         assert report.credential_hits() == ()
+
+
+def test_security_worker_services_isolate_identical_database_and_cache_keys(tmp_path: Path) -> None:
+    with (
+        worker_services(tmp_path / "first") as first,
+        worker_services(tmp_path / "second") as second,
+    ):
+        for environment, marker in ((first, "first"), (second, "second")):
+            write_rows(
+                "CREATE TABLE IF NOT EXISTS isolation_probe (id text PRIMARY KEY, marker text NOT NULL)",
+                (),
+                database_url=environment["DATABASE_URL"],
+            )
+            write_rows(
+                "INSERT INTO isolation_probe VALUES (%s, %s) ON CONFLICT (id) DO UPDATE SET marker=EXCLUDED.marker",
+                ("same-id", marker),
+                database_url=environment["DATABASE_URL"],
+            )
+            with Redis(host=environment["REDIS_HOST"], port=int(environment["REDIS_PORT"])) as cache:
+                cache.set("same-key", marker)
+        for environment, marker in ((first, "first"), (second, "second")):
+            assert read_rows(
+                "SELECT marker FROM isolation_probe WHERE id=%s",
+                ("same-id",),
+                database_url=environment["DATABASE_URL"],
+            ) == [{"marker": marker}]
+            with Redis(
+                host=environment["REDIS_HOST"], port=int(environment["REDIS_PORT"]), decode_responses=True
+            ) as cache:
+                assert cache.get("same-key") == marker
+
+
+def test_route_sweep_keeps_connections_auth_and_response_cookies_isolated() -> None:
+    callers: Final = {"admin": "sk-sweep-admin", "internal_user": "sk-sweep-user"}
+    with wire_server(_response_with_cookie, keep_alive=True) as peer:
+        with httpx.Client(base_url=peer.url, trust_env=False) as client:
+            report: Final = sweep_routes(Gateway(client, callers["admin"], peer.url), (), {}, callers=callers)
+        requests: Final = peer.drain()
+        requested: Final = tuple(called.split(" ", 1) for called in report.called)
+        expected: Final = Counter((path, f"Bearer {callers[caller]}") for caller, path in requested)
+        assert report.called
+        assert len(requests) == len(report.called)
+        assert Counter((request.target, request.headers["authorization"]) for request in requests) == expected
+        assert all("cookie" not in request.headers for request in requests)
+        assert peer.connections() == len(requests)
+        assert report.errors == report.unreachable == ()
+
+
+def _response_with_cookie(_: Request) -> Reply:
+    return Reply(headers={"set-cookie": "session=another-caller; Path=/"})
+
+
+def test_route_sweep_rejects_an_untrusted_https_peer(tmp_path: Path) -> None:
+    cert, key = write_self_signed_cert(tmp_path)
+    with wire_server(_response_with_cookie, tls=server_context(cert, key), keep_alive=True) as peer:
+        with httpx.Client(base_url=peer.url, trust_env=False) as client:
+            report: Final = sweep_routes(Gateway(client, "sk-sweep-admin", peer.url), (), {})
+        assert report.called
+        assert len(report.unreachable) == len(report.called)
+        assert peer.drain() == ()
+
+
+def test_route_sweep_preserves_truncated_response_errors_separately(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest
+) -> None:
+    monkeypatch.setenv("INTEGRATION_RESULTS_DIR", str(tmp_path))
+    with (
+        owned_redis(tmp_path) as cache,
+        wire_server(lambda _: Reply(chunks=(b"first", b"missing"), abort_after=1)) as peer,
+    ):
+        monkeypatch.setenv("REDIS_HOST", cache.host)
+        monkeypatch.setenv("REDIS_PORT", str(cache.port))
+        with (
+            httpx.Client(base_url=peer.url, trust_env=False) as client,
+            pytest.raises(AssertionError, match="GET routes returned no response"),
+        ):
+            sweep_all(Gateway(client, "sk-sweep-admin", peer.url), (), responses=(), sinks={}, ids={})
+        received: Final = peer.drain()
+
+    saved: Final = json.loads((tmp_path / "security-route-sweep-failures.jsonl").read_text())
+    assert received
+    assert request.node.nodeid in saved["node"]
+    assert saved["called"] == len(received)
+    assert len(saved["unreachable"]) == len(received)
+    assert all(error.partition("RemoteProtocolError: ")[2] for error in saved["unreachable"])
+    assert not (tmp_path / "security-route-sweep.jsonl").exists()

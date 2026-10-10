@@ -3,7 +3,7 @@ from typing import Literal
 from pydantic import Field
 from typing_extensions import TypedDict
 
-from litellm.proxy._types import KeyManagementRoutes, LitellmUserRoles
+from litellm.types.proxy.auth.user_roles import KeyManagementRoutes, LitellmUserRoles
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
 

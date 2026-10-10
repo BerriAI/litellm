@@ -15,8 +15,13 @@ MAX_DECISION_QUESTIONS: Final = 128
 
 class NoulQuestion(LiteLLMPydanticObjectBase):
     type: Literal["noul"]
-    instructions: DecisionsJSON | None = None
-    criteria: NoulCriteria | None = None
+    instructions: Annotated[DecisionsJSON | None, Field(description="The yes/no question to ask about the state")] = (
+        None
+    )
+    criteria: Annotated[
+        NoulCriteria | None,
+        Field(description="Optional descriptions of what makes the answer true and what makes it false"),
+    ] = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
@@ -29,16 +34,24 @@ class NoulQuestion(LiteLLMPydanticObjectBase):
 
 class ChoiceQuestion(LiteLLMPydanticObjectBase):
     type: Literal["choice"]
-    instructions: DecisionsJSON | None = None
-    criteria: Annotated[Mapping[str, DecisionsJSON | None], Field(min_length=1, max_length=255)]
+    instructions: Annotated[DecisionsJSON | None, Field(description="The question to ask about the state")] = None
+    criteria: Annotated[
+        Mapping[str, DecisionsJSON | None],
+        Field(min_length=1, max_length=255, description="Candidate labels mapped to an optional description of each"),
+    ]
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class ScoreQuestion(LiteLLMPydanticObjectBase):
     type: Literal["score"]
-    instructions: DecisionsJSON | None = None
-    criteria: Annotated[Sequence[DecisionsJSON], Field(min_length=1, max_length=10)]
+    instructions: Annotated[DecisionsJSON | None, Field(description="The question to ask about the state")] = None
+    criteria: Annotated[
+        Sequence[DecisionsJSON],
+        Field(
+            min_length=1, max_length=10, description="Scale levels from lowest to highest. The score is a level index"
+        ),
+    ]
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
@@ -55,14 +68,20 @@ DecisionQuestionMap: TypeAlias = Annotated[
 
 
 class DecisionsRequestBody(LiteLLMPydanticObjectBase):
-    state: DecisionsJSON
-    questions: DecisionQuestionMap
+    state: Annotated[
+        DecisionsJSON,
+        Field(description="The thing being judged, such as a support ticket, a document or a chat transcript"),
+    ]
+    questions: Annotated[
+        DecisionQuestionMap,
+        Field(description="Named noul, choice and score questions. Each key becomes a key in the answers"),
+    ]
 
     model_config = ConfigDict(extra="allow", frozen=True)
 
 
 class DecisionsRequest(DecisionsRequestBody):
-    model: str
+    model: Annotated[str, Field(description="A decision model from the proxy model_list")]
 
 
 @with_config(ConfigDict(extra="allow"))
@@ -171,8 +190,8 @@ OpenAIDecisionInput: TypeAlias = str | Sequence[OpenAIDecisionInputMessage]
 
 class OpenAIPredicateQuestion(LiteLLMPydanticObjectBase):
     type: Literal["predicate"]
-    name: str | None = None
-    instructions: str
+    name: Annotated[str | None, Field(description="Echoed in the matching answer")] = None
+    instructions: Annotated[str, Field(description="The yes/no question to ask about the input")]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -192,9 +211,12 @@ def systemone_choice_key(value: str | bool) -> str:
 
 class OpenAIChoiceQuestion(LiteLLMPydanticObjectBase):
     type: Literal["choice"]
-    name: str | None = None
-    instructions: str
-    choices: Annotated[Sequence[OpenAIChoiceOption], Field(min_length=2, max_length=255)]
+    name: Annotated[str | None, Field(description="Echoed in the matching answer")] = None
+    instructions: Annotated[str, Field(description="The question to ask about the input")]
+    choices: Annotated[
+        Sequence[OpenAIChoiceOption],
+        Field(min_length=2, max_length=255, description="The options the model picks from. Values must be unique"),
+    ]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -215,9 +237,14 @@ class OpenAIScoreLevel(LiteLLMPydanticObjectBase):
 
 class OpenAIScoreQuestion(LiteLLMPydanticObjectBase):
     type: Literal["score"]
-    name: str | None = None
-    instructions: str
-    levels: Annotated[Sequence[OpenAIScoreLevel], Field(min_length=2, max_length=10)]
+    name: Annotated[str | None, Field(description="Echoed in the matching answer")] = None
+    instructions: Annotated[str, Field(description="The question to ask about the input")]
+    levels: Annotated[
+        Sequence[OpenAIScoreLevel],
+        Field(
+            min_length=2, max_length=10, description="Scale levels from lowest to highest. The score is a level index"
+        ),
+    ]
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -229,11 +256,30 @@ OpenAIDecisionQuestion: TypeAlias = Annotated[
 
 
 class OpenAIDecisionRequestBody(LiteLLMPydanticObjectBase):
-    input: OpenAIDecisionInput
-    questions: Annotated[Sequence[OpenAIDecisionQuestion], Field(min_length=1, max_length=MAX_DECISION_QUESTIONS)]
-    safety_identifier: str | None = None
+    input: Annotated[
+        OpenAIDecisionInput,
+        Field(
+            description="The text being judged, or user messages whose content mixes input_text and input_image parts"
+        ),
+    ]
+    questions: Annotated[
+        Sequence[OpenAIDecisionQuestion],
+        Field(
+            min_length=1,
+            max_length=MAX_DECISION_QUESTIONS,
+            description="Predicate, choice and score questions. Answers come back in the same order",
+        ),
+    ]
+    safety_identifier: Annotated[
+        str | None,
+        Field(description="A stable id for your end user. Sent to OpenAI and dropped for other providers"),
+    ] = None
 
     model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class OpenAIDecisionRequest(OpenAIDecisionRequestBody):
+    model: Annotated[str, Field(description="A decision model from the proxy model_list")]
 
 
 class OpenAIPredicateAnswer(LiteLLMPydanticObjectBase):

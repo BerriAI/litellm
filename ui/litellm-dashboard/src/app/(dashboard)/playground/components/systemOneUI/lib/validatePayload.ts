@@ -1,3 +1,5 @@
+import { z } from "zod";
+import { openAIDecisionsRequestSchema, type OpenAIDecisionsRequest } from "./openAIDecisions";
 import {
   decisionsRequestSchema,
   systemOneRequestSchema,
@@ -13,15 +15,17 @@ export interface SystemOnePayloadIssue {
   severity: "error" | "warning";
 }
 
-export interface SystemOnePayloadValidation {
+export interface PayloadValidation<T> {
   isValid: boolean;
-  payload?: PlaygroundRequest;
+  payload?: T;
   issues: SystemOnePayloadIssue[];
 }
 
-const invalid = (path: string, message: string): SystemOnePayloadValidation => ({
+export type SystemOnePayloadValidation = PayloadValidation<PlaygroundRequest>;
+
+const invalid = (path: string, message: string) => ({
   isValid: false,
-  issues: [{ path, message, severity: "error" }],
+  issues: [{ path, message, severity: "error" as const }],
 });
 
 export function parseJson(raw: string): { ok: true; value: unknown } | { ok: false; message: string } {
@@ -41,10 +45,7 @@ const scoreLevelWarnings = (payload: PlaygroundRequest): SystemOnePayloadIssue[]
       severity: "warning",
     }));
 
-export function validateSystemOnePayload(
-  raw: string,
-  endpoint: DecisionEndpoint = "/typesafe/v1/systemone",
-): SystemOnePayloadValidation {
+function validatePayload<T>(raw: string, schema: z.ZodType<T>): PayloadValidation<T> {
   if (!raw.trim()) {
     return invalid("root", "Payload cannot be empty.");
   }
@@ -54,7 +55,6 @@ export function validateSystemOnePayload(
     return invalid("syntax", `Invalid JSON syntax: ${json.message}`);
   }
 
-  const schema = endpoint === "/v1/systemone" ? decisionsRequestSchema : systemOneRequestSchema;
   const result = schema.safeParse(json.value);
   if (!result.success) {
     return {
@@ -67,5 +67,18 @@ export function validateSystemOnePayload(
     };
   }
 
-  return { isValid: true, payload: result.data, issues: scoreLevelWarnings(result.data) };
+  return { isValid: true, payload: result.data, issues: [] };
+}
+
+export function validateSystemOnePayload(
+  raw: string,
+  endpoint: DecisionEndpoint = "/typesafe/v1/systemone",
+): SystemOnePayloadValidation {
+  const schema = endpoint === "/v1/systemone" ? decisionsRequestSchema : systemOneRequestSchema;
+  const result = validatePayload<PlaygroundRequest>(raw, schema);
+  return result.payload ? { ...result, issues: scoreLevelWarnings(result.payload) } : result;
+}
+
+export function validateOpenAIDecisionsPayload(raw: string): PayloadValidation<OpenAIDecisionsRequest> {
+  return validatePayload(raw, openAIDecisionsRequestSchema);
 }

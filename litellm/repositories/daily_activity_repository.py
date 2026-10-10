@@ -10,8 +10,6 @@ from typing_extensions import assert_never
 
 from litellm import constants
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.db.db_span import db_span
-from litellm.proxy.db.prisma_query_span import sql_relation
 from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.daily_activity_sql import (
     ExportCursor,
@@ -24,6 +22,7 @@ from litellm.repositories.daily_activity_sql import (
     build_key_page_sql,
     build_key_search_sql,
     build_model_top_keys_sql,
+    build_user_page_sql,
 )
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.types.repositories.daily_activity import (
@@ -41,7 +40,16 @@ from litellm.types.repositories.daily_activity import (
     KeyPage,
     KeySpendRow,
     SpendLogsWindow,
+    UserMetadataRow,
+    UserPage,
+    UserSpendRow,
 )
+
+
+class _UserTableRow(Protocol):
+    user_id: str
+    user_email: str | None
+    user_alias: str | None
 
 
 class _VerificationTokenRow(Protocol):
@@ -62,6 +70,7 @@ class _QueryRaw(Protocol):
 
 class _DailyActivityDatabase(Protocol):
     query_raw: _QueryRaw
+    litellm_usertable: TableActions[_UserTableRow]
     litellm_verificationtoken: TableActions[_VerificationTokenRow]
     litellm_deletedverificationtoken: TableActions[_DeletedVerificationTokenRow]
 
@@ -93,6 +102,7 @@ _GROUPING_ADAPTER: Final = TypeAdapter(tuple[GroupingSetsRow, ...])
 _ENTITY_ADAPTER: Final = TypeAdapter(tuple[EntityRollupRow, ...])
 _KEY_SPEND_ADAPTER: Final = TypeAdapter(tuple[KeySpendRow, ...])
 _KEY_PAGE_TOTAL_ADAPTER: Final[TypeAdapter[int]] = TypeAdapter(int)
+_USER_SPEND_ADAPTER: Final = TypeAdapter(tuple[UserSpendRow, ...])
 _EXPORT_ADAPTER: Final = TypeAdapter(tuple[ExportRow, ...])
 _METADATA_TAGS_ADAPTER: Final = TypeAdapter(list[StrictStr])
 
@@ -146,6 +156,9 @@ class DailyActivityRepository:
         self._proxy_reads = proxy_reads
 
     async def _query(self, query: SqlQuery) -> tuple[Mapping[str, object], ...]:
+        from litellm.proxy.db.db_span import db_span
+        from litellm.proxy.db.prisma_query_span import sql_relation
+
         first_line: Final = query.sql.lstrip().splitlines()[0].lstrip("(").strip()
         verbose_proxy_logger.debug("DailyActivityRepository query: %s", first_line)
         async with db_span("daily_activity_query", sql_relation(query.sql)):
@@ -194,6 +207,30 @@ class DailyActivityRepository:
         )
         rows: Final = _KEY_SPEND_ADAPTER.validate_python(tuple(row for row in result if row.get("api_key") is not None))
         return KeyPage(rows=rows, total_api_keys=total_api_keys)
+
+    async def user_page(self, scope: DailyActivityScope, *, offset: int, limit: int) -> UserPage:
+        query: Final = build_user_page_sql(scope, offset=offset, limit=limit)
+        result: Final = await self._query(query)
+        total_users_value: Final = result[0].get("total_users") if result else 0
+        total_users: Final = (
+            _KEY_PAGE_TOTAL_ADAPTER.validate_python(total_users_value) if total_users_value is not None else 0
+        )
+        rows: Final = _USER_SPEND_ADAPTER.validate_python(
+            tuple(
+                {**row, "user_id": None} if row.get("user_id") in (None, "") else row
+                for row in result
+                if row.get("spend") is not None
+            )
+        )
+        return UserPage(rows=rows, total_users=total_users)
+
+    async def user_metadata(self, user_ids: frozenset[str]) -> Mapping[str, UserMetadataRow]:
+        if not user_ids:
+            return {}
+        rows: Final = await find_many_in(self._prisma_client.db.litellm_usertable, "user_id", tuple(user_ids))
+        return MappingProxyType(
+            {row.user_id: UserMetadataRow(user_email=row.user_email, user_alias=row.user_alias) for row in rows}
+        )
 
     async def model_top_keys(
         self, scope: DailyActivityScope, *, model_group: str, by_model_group: bool, limit: int

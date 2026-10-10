@@ -9,6 +9,8 @@ import sys
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import lru_cache
+from types import MappingProxyType
 from typing import Final
 
 import yaml
@@ -316,6 +318,7 @@ def _keyword_terms(
 def _slices() -> tuple[Slice, ...]:
     if not CIRCLECI_CONFIG.exists():
         return ()
+    test_files: Final = frozenset(_test_files())
     jobs: Final = yaml.safe_load(CIRCLECI_CONFIG.read_text()).get("jobs", {})
     return tuple(
         Slice(job=job, globs=globs, named=named, required=required, excluded=excluded, understood=understood)
@@ -323,7 +326,7 @@ def _slices() -> tuple[Slice, ...]:
         for text in ("\n".join(_strings(body)),)
         if "pytest" in text
         for globs in (tuple(GLOB_CALL_RE.findall(text)),)
-        for named in (frozenset(TEST_TOKEN_RE.findall(text)) & frozenset(_test_files()),)
+        for named in (frozenset(TEST_TOKEN_RE.findall(text)) & test_files,)
         for required, excluded, understood in (
             _keyword_terms(tuple(KEYWORD_RE.findall(text)), attributable=len(globs) < 2),
         )
@@ -363,6 +366,7 @@ def _workflow_named_tokens() -> frozenset[str]:
 
 
 def _deselected_everywhere(allowlist: Allowlist) -> tuple[Finding, ...]:
+    matchable_names: Final = lru_cache(maxsize=None)(_matchable_names)
     slices: Final = _slices()
     named_by_workflow: Final = _workflow_named_tokens()
     globbed: Final = tuple(
@@ -376,7 +380,7 @@ def _deselected_everywhere(allowlist: Allowlist) -> tuple[Finding, ...]:
         for path in globbed
         if not allowlist.covers_test(path)
         and not any(_token_covers(token, path) for token in named_by_workflow)
-        and not any(slice_.claims(path, _matchable_names(path)) for slice_ in slices)
+        and not any(slice_.claims(path, matchable_names(path)) for slice_ in slices)
     )
 
 
