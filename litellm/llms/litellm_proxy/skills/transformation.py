@@ -22,7 +22,7 @@ from litellm.types.utils import LlmProviders
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.models.skills import LiteLLM_SkillsTable
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 
 class LiteLLMSkillsTransformationHandler:

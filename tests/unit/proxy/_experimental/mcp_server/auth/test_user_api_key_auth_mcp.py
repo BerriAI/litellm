@@ -10794,12 +10794,12 @@ async def test_admission_request_body_serves_stashed_peek_callable():
     from litellm.constants import MCP_PEEKED_BODY_SCOPE_KEY
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import _admission_request
 
-    jsonrpc_body = b'{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+    admission_body: Final = b'{"method":"tools/list"}'
 
     async def peek() -> bytes:
-        return jsonrpc_body
+        return admission_body
 
-    with_peek = _admission_request(
+    with_peek: Final = _admission_request(
         {
             "type": "http",
             "method": "POST",
@@ -10808,7 +10808,9 @@ async def test_admission_request_body_serves_stashed_peek_callable():
             MCP_PEEKED_BODY_SCOPE_KEY: peek,
         }
     )
-    assert await with_peek.body() == jsonrpc_body
+    assert await with_peek.body() == admission_body
 
-    without_peek = _admission_request({"type": "http", "method": "POST", "path": "/mcp", "headers": []})
+    without_peek: Final = _admission_request(
+        {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+    )
     assert await without_peek.body() == b"{}"

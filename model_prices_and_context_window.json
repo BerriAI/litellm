@@ -71842,5 +71842,51 @@
             "image"
         ],
         "supports_embedding_image_input": true
+    },
+    "scaledown/extract": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_response_schema": false,
+        "supports_system_messages": false,
+        "supports_vision": false,
+        "supports_function_calling": false
+    },
+    "scaledown/summarize": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_vision": false,
+        "supports_function_calling": false
+    },
+    "scaledown/compress": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": false,
+        "supports_vision": false
+    },
+    "scaledown/classify": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_system_messages": false,
+        "supports_vision": false,
+        "supports_function_calling": false
+    },
+    "scaledown/decisions": {
+        "input_cost_per_token": 5e-08,
+        "output_cost_per_token": 0.0,
+        "litellm_provider": "scaledown",
+        "mode": "chat",
+        "supports_system_messages": false,
+        "supports_vision": false,
+        "supports_function_calling": false
     }
 }
