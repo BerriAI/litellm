@@ -3,6 +3,7 @@ import base64
 import copy
 import contextlib
 import contextvars
+import hashlib
 import io
 import json
 import logging
@@ -13,9 +14,10 @@ from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import PurePath
-from typing import Final, cast
+from typing import Final, Literal, cast
 from unittest import mock
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -5298,6 +5300,34 @@ async def test_wrapper_aresponses_reads_cache_once_and_replays_from_that_read(
     standard_logging_object: Final = success_kwargs["standard_logging_object"]
     assert isinstance(standard_logging_object, dict)
     assert standard_logging_object["cache_hit"] is True
+
+
+@pytest.mark.parametrize("call_type", [CallTypes.transcription, CallTypes.atranscription])
+@pytest.mark.parametrize("metadata_mode", ["omitted", "null", "empty", "tagged"])
+def test_function_setup_transcription_optional_metadata(
+    call_type: CallTypes,
+    metadata_mode: Literal["omitted", "null", "empty", "tagged"],
+) -> None:
+    audio: Final = b"audio contents"
+    supplied_metadata: Final = {"label": "transcription"} if metadata_mode == "tagged" else {}
+    expected_metadata: Final = {
+        **supplied_metadata,
+        "file_checksum": hashlib.sha256(audio).hexdigest(),
+    }
+    metadata_kwargs: Final = (
+        {} if metadata_mode == "omitted" else {"metadata": None if metadata_mode == "null" else supplied_metadata}
+    )
+    _, returned_kwargs = litellm.utils.function_setup(
+        original_function=call_type.value,
+        rules_obj=litellm.utils.Rules(),
+        start_time=datetime.now(timezone.utc),
+        model="whisper-1",
+        file=io.BytesIO(audio),
+        litellm_call_id=str(uuid4()),
+        **metadata_kwargs,
+    )
+
+    assert returned_kwargs["metadata"] == expected_metadata
 
 
 def test_function_setup_failure_after_logging_construction_restores_context(monkeypatch):
