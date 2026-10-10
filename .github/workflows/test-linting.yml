@@ -191,12 +191,9 @@ jobs:
           tests/e2e/claude_code/cron_vm/install_claude_code.sh "$CLAUDE_VERSION" "$RUNNER_TEMP/claude-cli"
           PATH="$RUNNER_TEMP/claude-cli:$PATH" uv run --no-sync pytest -q tests/e2e_harness
 
-      - name: Check for circular imports
+      - name: Check layer imports
         if: steps.changes.outputs.decision != 'skip'
-        run: |
-          cd litellm
-          uv run --no-sync python ../tests/documentation_tests/test_circular_imports.py
-          cd ..
+        run: uv run --no-sync python scripts/check_layer_imports.py
 
       - name: Check import safety
         if: steps.changes.outputs.decision != 'skip'
