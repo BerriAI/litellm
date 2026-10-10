@@ -98,7 +98,7 @@ def test_chat_completion_bad_model_with_spend_logs(gateway: Gateway) -> None:
             seconds=70,
         )
         logs: list[JsonValue] = list_value(logs_response.json())
-        assert len(logs) > 0
+        assert len(logs) == 1, logs
         log: dict[str, JsonValue] = object_value(logs[0])
         assert log["request_id"] == call_id
         assert log["model"] == "unknown-model"

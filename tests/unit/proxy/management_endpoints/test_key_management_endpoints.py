@@ -21339,7 +21339,8 @@ def test_personal_key_generation_check(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
 
-def test_prepare_metadata_fields() -> None:
+def test_prepare_metadata_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
     cases: Final[tuple[tuple[UpdateKeyRequest, dict[str, JsonValue], dict[str, JsonValue], dict[str, JsonValue]], ...]] = (
         (
             UpdateKeyRequest(key="sk-test", metadata={"test": "new"}),
@@ -21381,23 +21382,21 @@ def test_prepare_metadata_fields() -> None:
 
 
 @pytest.mark.asyncio
-async def test_key_generate_always_checks_the_database_for_teams(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_key_generate_reads_the_team_from_the_writer_database_not_the_cache(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from litellm.proxy import proxy_server
 
     cache: Final = UserApiKeyCache()
     cached_team: Final = LiteLLM_TeamTableCachedObj(team_id="1234", team_alias="cached-team")
-    await cache.async_set_cache(
-        key="team_id:1234",
-        value=cached_team,
-        model_type=LiteLLM_TeamTableCachedObj,
-        ttl=60,
-    )
-    prisma_client: Final = AsyncMock()
-    prisma_client.db.litellm_team.find_unique.return_value = None
+    await cache.async_set_cache(key="team_id:1234", value=cached_team, model_type=LiteLLM_TeamTableCachedObj, ttl=60)
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=cached_team)
+    prisma_client.writer_db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
     monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
 
-    with pytest.raises(HTTPException):
+    with pytest.raises(ProxyException) as raised:
         await generate_key_fn(
             data=GenerateKeyRequest(team_id="1234"),
             user_api_key_dict=UserAPIKeyAuth(
@@ -21407,4 +21406,4 @@ async def test_key_generate_always_checks_the_database_for_teams(monkeypatch: py
             ),
         )
 
-    prisma_client.db.litellm_team.find_unique.assert_awaited_once()
+    assert raised.value.message == "Team not found for team_id=1234. Non-admin users cannot create keys for non-existent teams."
