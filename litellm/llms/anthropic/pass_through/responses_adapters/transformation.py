@@ -128,19 +128,6 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
         return None
 
     @staticmethod
-    def _tool_result_content_part_text(part: object) -> str:
-        if not isinstance(part, dict):
-            return ""
-        mapping: Final = cast(dict[str, object], part)  # cast-ok: isinstance confirms a dict part
-        match mapping.get("type"):
-            case "text" if isinstance(text := mapping.get("text"), str):
-                return text
-            case "tool_reference" if isinstance(tool_name := mapping.get("tool_name"), str):
-                return tool_name
-            case _:
-                return ""
-
-    @staticmethod
     def _tool_result_output_value(
         output_text: str,
         file_parts: tuple[dict[str, str], ...],  # mutable-ok: json content parts
@@ -314,10 +301,9 @@ class LiteLLMAnthropicToResponsesAPIAdapter:
                             elif isinstance(inner, str):
                                 output_text = inner
                             elif isinstance(inner, list):
-                                inner_parts = cast(list[object], inner)  # cast-ok: untyped part list
-                                parts = tuple(
-                                    text for text in map(self._tool_result_content_part_text, inner_parts) if text
-                                )
+                                parts = [
+                                    c.get("text", "") for c in inner if isinstance(c, dict) and c.get("type") == "text"
+                                ]
                                 output_text = "\n".join(parts)
                                 image_candidates = tuple(
                                     self._translate_anthropic_image_source_to_url(c.get("source"))

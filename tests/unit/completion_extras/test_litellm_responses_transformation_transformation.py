@@ -80,7 +80,9 @@ def test_transform_request_with_response_format():
     """Test that transform_request correctly handles response_format parameter"""
     handler = LiteLLMResponsesTransformationHandler()
 
-    messages = [{"role": "user", "content": "Extract person info: John Doe, 30 years old"}]
+    messages = [
+        {"role": "user", "content": "Extract person info: John Doe, 30 years old"}
+    ]
 
     optional_params = {
         "response_format": {
@@ -249,36 +251,10 @@ def test_translate_responses_chunk_passthrough_chat_completion_chunk():
         ],
     }
 
-    result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(chat_chunk)
+    result = OpenAiResponsesToChatCompletionStreamIterator.translate_responses_chunk_to_openai_stream(
+        chat_chunk
+    )
 
     assert result.choices[0].delta.content == "Hi! How can I help?"
     assert result.choices[0].finish_reason is None
 
-
-def test_convert_content_tool_reference_only_becomes_input_text():
-    """Tool results of only tool_reference parts reach the Responses API as input_text."""
-    handler = LiteLLMResponsesTransformationHandler()
-
-    result = handler._convert_content_to_responses_format(
-        [{"type": "tool_reference", "tool_name": "WebSearch"}], "tool"
-    )
-
-    assert result == [{"type": "input_text", "text": "WebSearch"}]
-
-
-def test_convert_content_mixed_text_and_tool_reference_keeps_order():
-    """Text and tool_reference parts keep their order in the Responses input."""
-    handler = LiteLLMResponsesTransformationHandler()
-
-    result = handler._convert_content_to_responses_format(
-        [
-            {"type": "text", "text": "Loaded tools:"},
-            {"type": "tool_reference", "tool_name": "WebSearch"},
-        ],
-        "tool",
-    )
-
-    assert result == [
-        {"type": "input_text", "text": "Loaded tools:"},
-        {"type": "input_text", "text": "WebSearch"},
-    ]

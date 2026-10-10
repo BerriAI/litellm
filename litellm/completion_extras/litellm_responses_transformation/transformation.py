@@ -1308,17 +1308,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                             result.append(converted)
                             verbose_logger.debug("Chat provider:   file -> %s", converted)
                         elif item_type == "tool_reference":
-                            item_fields = cast(dict[str, object], item)  # cast-ok: untyped anthropic json
-                            tool_name = item_fields.get("tool_name")
-                            if isinstance(tool_name, str):
-                                converted = with_prompt_cache_breakpoint(
-                                    self._convert_content_str_to_input_text(tool_name, role),
-                                    _prompt_cache_breakpoint_for_wire(
-                                        item_fields.get("prompt_cache_breakpoint"), drop_params
-                                    ),
-                                )
-                                result.append(converted)
-                                verbose_logger.debug("Chat provider:   tool_reference -> %s", converted)
+                            verbose_logger.debug(
+                                "Chat provider:   tool_reference has no responses API equivalent; skipped"
+                            )
                         elif item_type in [
                             "input_text",
                             "input_image",

@@ -3966,7 +3966,7 @@ def test_a_stored_reasoning_item_without_an_id_is_replayed_without_inventing_one
 
 
 def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool_reference():
-    """Tool-search tool_reference blocks reach the Responses API as input_text carrying the tool name."""
+    """Tool-search tool_reference blocks have no Responses API equivalent: skip them, never stringify them."""
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
     )
@@ -3998,10 +3998,7 @@ def test_convert_chat_completion_messages_to_responses_api_tool_result_with_tool
     response, _ = handler.convert_chat_completion_messages_to_responses_api(messages)
 
     function_call_output = next(item for item in response if item.get("type") == "function_call_output")
-    assert function_call_output["output"] == [
-        {"type": "input_text", "text": "WebFetch"},
-        {"type": "input_text", "text": "1 tool found"},
-    ]
+    assert function_call_output["output"] == [{"type": "input_text", "text": "1 tool found"}]
 
 
 def _litellm_encoded_response_id(upstream_id: str) -> str:
