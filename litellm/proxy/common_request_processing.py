@@ -4013,6 +4013,9 @@ class ProxyBaseLLMRequestProcessing:
                 yield serialize_chunk(held_tail)
             stream_completed = True
         except (asyncio.CancelledError, GeneratorExit):
+            proxy_logging_obj.slack_alerting_instance.hanging_request_check.remove_request(
+                request_data.get("litellm_call_id", "")
+            )
             # Client disconnected mid-stream. CancelledError / GeneratorExit
             # are BaseException and bypass the success/failure logging
             # callbacks that release the pre-call max_parallel_requests +1.
