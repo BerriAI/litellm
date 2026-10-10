@@ -50,7 +50,7 @@ _SAFEGUARD_MESSAGES: Final = TypeAdapter(Sequence[Mapping[str, object]])
 
 
 def _bridges_to_responses_api(model: str, custom_llm_provider: str) -> bool:
-    from litellm.main import responses_api_bridge_check
+    from litellm.responses.bridge_check import responses_api_bridge_check
 
     model_info, _ = responses_api_bridge_check(model=model, custom_llm_provider=custom_llm_provider)
     return model_info.get("mode") == "responses"

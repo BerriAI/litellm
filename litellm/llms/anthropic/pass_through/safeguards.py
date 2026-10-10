@@ -26,8 +26,8 @@ from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.router import Router
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.utils import ModelResponse
 
 SAFEGUARDS_CLASSIFIER_MODEL_SETTING_KEY: Final = "safeguards_classifier_model"

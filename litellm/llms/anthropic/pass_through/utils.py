@@ -63,6 +63,7 @@ PROXY_SPEND_ATTRIBUTION_METADATA_KEYS: Final = (
     "user_api_key_model_max_budget",
     "user_api_key_team_model_max_budget",
     "user_api_key_user_model_max_budget",
+    "user_api_key_team_member_model_max_budget",
     "user_api_key_end_user_model_max_budget",
     "litellm_call_id",
     "litellm_parent_otel_span",

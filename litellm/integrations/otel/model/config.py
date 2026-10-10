@@ -16,17 +16,15 @@ from litellm.integrations.otel.model.baggage import (
 )
 from litellm.integrations.otel.model.spans import POSTGRESQL, db_system
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.utils import OtelSpanScope
+from litellm.types.utils import (
+    CAPTURE_MESSAGE_CONTENT_VALUES,
+    CaptureMessageContent,
+    OtelSpanScope,
+    captures_span_content,
+)
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
 OTEL_V2_ENV: Final = "LITELLM_OTEL_V2"
-
-
-class CaptureMessageContent(str):
-    NO_CONTENT = "no_content"
-    SPAN_ONLY = "span_only"
-    EVENT_ONLY = "event_only"
-    SPAN_AND_EVENT = "span_and_event"
 
 
 class ExporterOwner(str, Enum):
@@ -297,9 +295,7 @@ class OpenTelemetryV2Config(BaseSettings):
         here are lower_snake_case; normalizing at the boundary keeps both
         spellings working and lets every downstream comparison stay exact.
         """
-        if isinstance(value, str):
-            return value.lower()
-        return value
+        return _normalized_capture_message_content(value)
 
     @field_validator("langfuse_span_scope", mode="before")
     @classmethod
@@ -371,20 +367,37 @@ class OpenTelemetryV2Config(BaseSettings):
 
     @property
     def capture_span_content(self) -> bool:
-        """Whether prompt/response content may be stamped as span attributes.
-
-        Defaults off (``no_content``): an operator must opt in before message
-        bodies leave the process, so a user request can never force its prompt
-        or completion into the configured backend while capture is disabled.
-        """
-        return self.capture_message_content in (
-            CaptureMessageContent.SPAN_ONLY,
-            CaptureMessageContent.SPAN_AND_EVENT,
-        )
+        """Whether the global setting permits prompt/response span attributes."""
+        return captures_span_content(self.capture_message_content)
 
     @classmethod
     def from_env(cls) -> "OpenTelemetryV2Config":
         return cls()
+
+
+def _normalized_capture_message_content(value: object) -> object:
+    if isinstance(value, str):
+        return value.lower()
+    return value
+
+
+class _CaptureMessageContentSettings(BaseSettings):
+    model_config = SettingsConfigDict(extra="ignore", frozen=True)
+
+    capture_message_content: str = Field(
+        default=CaptureMessageContent.NO_CONTENT,
+        validation_alias=AliasChoices("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT"),
+    )
+
+    @field_validator("capture_message_content", mode="before")
+    @classmethod
+    def _normalize_capture_message_content(cls, value: object) -> object:
+        return _normalized_capture_message_content(value)
+
+
+def capture_message_content_from_env() -> str:
+    """The global capture mode, read without building a settings model that rereads every other env var"""
+    return _CaptureMessageContentSettings().capture_message_content
 
 
 _EXCLUDED_SERVICES_INPUT: Final[TypeAdapter[str | tuple[object, ...]]] = TypeAdapter(str | tuple[object, ...])
@@ -393,6 +406,10 @@ _EXCLUDED_SERVICES_INPUT: Final[TypeAdapter[str | tuple[object, ...]]] = TypeAda
 def excluded_db_systems_from(value: object) -> frozenset[str]:
     """Normalize a raw ``excluded_services`` value without building a settings model that rereads the env"""
     return _normalize_excluded_services(excluded_service_names(value))
+
+
+def parse_capture_message_content(value: object) -> str | None:
+    return value if isinstance(value, str) and value in CAPTURE_MESSAGE_CONTENT_VALUES else None
 
 
 def excluded_service_names(value: object) -> frozenset[str]:

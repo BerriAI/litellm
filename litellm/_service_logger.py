@@ -16,7 +16,7 @@ from .types.services import ServiceLoggerPayload, ServiceTypes
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
 
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
     Span = _Span | Any
     OTELClass = OpenTelemetry

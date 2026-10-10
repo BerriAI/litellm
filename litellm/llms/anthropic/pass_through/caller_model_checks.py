@@ -14,15 +14,25 @@ import litellm
 from litellm._logging import verbose_logger
 
 if TYPE_CHECKING:
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         RateLimitDescriptor,
         RateLimitDescriptorRateLimitObject,
         RateLimitResponse,
     )
     from litellm.router import Router
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _ScopeObject: Final = TypeVar("_ScopeObject")
+
+
+class _TeamMemberModelBudgetLimiter(Protocol):
+    async def is_team_member_within_model_budget(
+        self,
+        user_id: str,
+        team_id: str,
+        team_member_model_max_budget: Mapping[str, object],
+        model: str,
+    ) -> bool: ...
 
 
 class _CreateRateLimitDescriptors(Protocol):
@@ -287,9 +297,9 @@ async def caller_within_model_budget(
     per-model budget is configured.
 
     Every scope is checked because the sub-call's spend is charged to every
-    scope: the key, team, user and end-user budgets ride into the sub-call's
-    metadata, so skipping one of them would let the sub-call increment a
-    counter it can never be refused by.
+    scope: the key, team, user, team-member and end-user budgets ride into the
+    sub-call's metadata, so skipping one of them would let the sub-call
+    increment a counter it can never be refused by.
     """
     if user_api_key_auth is None:
         return True
@@ -376,6 +386,44 @@ async def caller_within_model_budget(
             )
             return False
 
+    return await _caller_within_team_member_model_budget(
+        user_api_key_auth=user_api_key_auth,
+        model_max_budget_limiter=model_max_budget_limiter,
+        model=model,
+    )
+
+
+async def _caller_within_team_member_model_budget(
+    user_api_key_auth: "UserAPIKeyAuth",
+    model_max_budget_limiter: _TeamMemberModelBudgetLimiter,
+    model: str,
+) -> bool:
+    team_member_model_max_budget: Final = user_api_key_auth.team_member_model_max_budget
+    user_id: Final = user_api_key_auth.user_id
+    team_id: Final = user_api_key_auth.team_id
+    if (
+        not isinstance(team_member_model_max_budget, Mapping)
+        or not team_member_model_max_budget
+        or not isinstance(user_id, str)
+        or not isinstance(team_id, str)
+    ):
+        return True
+    try:
+        await model_max_budget_limiter.is_team_member_within_model_budget(
+            user_id=user_id,
+            team_id=team_id,
+            team_member_model_max_budget=team_member_model_max_budget,
+            model=model,
+        )
+    except litellm.BudgetExceededError:
+        return False
+    except Exception as e:  # noqa: BLE001  # a budget gate denies on any failure, as the other scopes do
+        verbose_logger.warning(
+            "proxy sub-call: unexpected error during team member model-budget check for model=%s; denying: %s",
+            model,
+            e,
+        )
+        return False
     return True
 
 

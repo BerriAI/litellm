@@ -17,8 +17,8 @@ if TYPE_CHECKING:
     from litellm.llms.pass_through.guardrail_translation.handler import (
         PassThroughEndpointHandler,
     )
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _EVENT_STREAM_CONTENT_TYPE: Final = "vnd.amazon.eventstream"

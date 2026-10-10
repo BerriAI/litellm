@@ -5,10 +5,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { cn } from "@/lib/cva.config";
-import { Plus, Trash2 } from "lucide-react";
-import { useId, useMemo, useState, type ReactNode } from "react";
-import { IssueList, ValidationStatus } from "./JsonEditor";
+import { useId, useMemo, useState } from "react";
+import { AddButton, FormFrame, RemoveButton } from "./DecisionFormControls";
 import {
   blankQuestion,
   freeName,
@@ -29,7 +27,12 @@ import {
 import type { SystemOnePayloadValidation } from "./lib/validatePayload";
 
 const QUESTION_TYPES: readonly QuestionType[] = ["choice", "noul", "score"];
-const TYPE_LABELS: Record<QuestionType, string> = { choice: "Choice", noul: "Yes / no", score: "Score" };
+const TYPE_LABELS: Record<QuestionType, string> = { choice: "Choice", noul: "noul", score: "Score" };
+const TYPE_HELP: Record<QuestionType, string | undefined> = {
+  choice: undefined,
+  noul: "noul is a yes / no question",
+  score: undefined,
+};
 
 const isQuestionType = (value: unknown): value is QuestionType => QUESTION_TYPES.some((type) => type === value);
 
@@ -94,23 +97,6 @@ function KeyInput({ value, taken, onCommit, label, placeholder }: KeyInputProps)
         </p>
       )}
     </div>
-  );
-}
-
-function RemoveButton({ label, onClick }: { label: string; onClick: () => void }) {
-  return (
-    <Button variant="ghost" size="icon" aria-label={label} title={label} onClick={onClick}>
-      <Trash2 />
-    </Button>
-  );
-}
-
-function AddButton({ children, onClick }: { children: ReactNode; onClick: () => void }) {
-  return (
-    <Button variant="outline" size="sm" className="w-fit" onClick={onClick}>
-      <Plus />
-      {children}
-    </Button>
   );
 }
 
@@ -238,7 +224,7 @@ function QuestionCard({ name, question, taken, onChange, onRename, onRemove }: Q
           </SelectTrigger>
           <SelectContent>
             {QUESTION_TYPES.map((type) => (
-              <SelectItem key={type} value={type}>
+              <SelectItem key={type} value={type} title={TYPE_HELP[type]}>
                 {TYPE_LABELS[type]}
               </SelectItem>
             ))}
@@ -258,26 +244,6 @@ function QuestionCard({ name, question, taken, onChange, onRename, onRemove }: Q
       </div>
       <CriteriaEditor question={question} onChange={onChange} />
     </fieldset>
-  );
-}
-
-function FormFrame({ validation, children }: { validation: SystemOnePayloadValidation; children: ReactNode }) {
-  const issuesId = useId();
-
-  return (
-    <div
-      className={cn(
-        "flex min-h-96 flex-1 flex-col overflow-hidden rounded-md border bg-background",
-        !validation.isValid && "border-destructive/60",
-      )}
-    >
-      <div className="flex items-center gap-2 border-b px-3 py-2">
-        <span className="text-sm font-medium">Request form</span>
-        <ValidationStatus validation={validation} />
-      </div>
-      <div className="grid min-h-80 flex-1 content-start gap-4 overflow-auto p-3">{children}</div>
-      <IssueList id={issuesId} validation={validation} />
-    </div>
   );
 }
 
