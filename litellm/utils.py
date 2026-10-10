@@ -7416,7 +7416,7 @@ class TextCompletionStreamWrapper:
             if isinstance(chunk, Choices):  # chunk should always be of type StreamingChoices
                 raise Exception
             delta: Final = chunk["choices"][0]["delta"]
-            text_choices["text"] = delta["content"]
+            text_choices["text"] = delta["content"] or ""
             text_choices["reasoning_content"] = delta.get("reasoning_content")
             text_choices["index"] = chunk["choices"][0]["index"]
             text_choices["finish_reason"] = chunk["choices"][0]["finish_reason"]

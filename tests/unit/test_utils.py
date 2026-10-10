@@ -2203,6 +2203,23 @@ def test_reasoning_content_preserved_in_text_completion_wrapper():
     assert choice["reasoning_content"] == "Here's my chain of thought..."
 
 
+def test_text_completion_wrapper_sends_empty_text_on_finish_chunk():
+    finish_chunk: Final = ModelResponseStream(
+        id="test-id",
+        created=1234567890,
+        model="test-model",
+        object="chat.completion.chunk",
+        choices=[StreamingChoices(finish_reason="stop", index=0, delta=Delta(content=None, role=None))],
+    )
+    wrapper: Final = TextCompletionStreamWrapper(completion_stream=None, model="test-model", stream_options=None)
+
+    choice: Final = wrapper.convert_to_text_completion_object(finish_chunk)["choices"][0]
+
+    assert choice["text"] == ""
+    assert choice["finish_reason"] == "stop"
+    assert choice["index"] == 0
+
+
 def test_anthropic_claude_4_invoke_chat_provider_config():
     """Test that the Anthropic Claude 4 Invoke chat provider config is correct."""
     from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
