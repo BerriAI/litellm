@@ -1,5 +1,6 @@
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import MCPServerCard from "./MCPServerCard";
 import type { MCPServer } from "@/components/mcp_tools/types";
@@ -17,6 +18,19 @@ const baseServer: MCPServer = {
 function renderCard(overrides: Partial<MCPServer>) {
   render(<MCPServerCard server={{ ...baseServer, ...overrides } as MCPServer} onClick={vi.fn()} />);
 }
+
+describe("MCPServerCard health", () => {
+  it("explains that reachable does not verify authentication or tools", async () => {
+    const user = userEvent.setup();
+    renderCard({ status: "reachable", oauth2_flow: "authorization_code" });
+
+    await user.hover(screen.getByText("Reachable"));
+
+    expect(await screen.findByText("Server responded. Authentication and tools were not checked")).toBeInTheDocument();
+    expect(screen.queryByText("No health data")).not.toBeInTheDocument();
+    expect(screen.queryByText("Healthy")).not.toBeInTheDocument();
+  });
+});
 
 describe("MCPServerCard OAuth flow indicator", () => {
   it("shows the 'OAuth flow not set' badge for an oauth2 server with no oauth2_flow", () => {
@@ -110,5 +124,50 @@ describe("MCPServerCard per-user credentials", () => {
     expect(screen.queryByText("Per-user credentials")).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Update" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Set" })).not.toBeInTheDocument();
+  });
+});
+
+describe("MCPServerCard network access", () => {
+  it("shows effective network access without a hub listing badge", () => {
+    renderCard({
+      available_on_public_internet: false,
+      mcp_info: { server_name: "demo_server", is_public: true, is_public_explicit: true },
+    });
+
+    expect(screen.getByText("All Networks")).toBeInTheDocument();
+    expect(screen.queryByText(/^Hub:/)).not.toBeInTheDocument();
+  });
+});
+
+describe("MCPServerCard stdio availability", () => {
+  const stdioServer = { transport: "stdio", url: undefined, command: "python", args: ["server.py"], auth_type: "none" };
+
+  it("flags a stdio server with how to enable stdio when the proxy has it off", async () => {
+    const user = userEvent.setup();
+    render(
+      <MCPServerCard server={{ ...baseServer, ...stdioServer } as MCPServer} onClick={vi.fn()} stdioEnabled={false} />,
+    );
+
+    await user.hover(screen.getByText("stdio disabled"));
+
+    expect(
+      await screen.findByText(
+        "stdio MCP servers are disabled on this proxy. Set LITELLM_ENABLE_MCP_STDIO=true on the proxy and restart to enable them",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("does not flag a stdio server when the proxy has stdio on", () => {
+    render(<MCPServerCard server={{ ...baseServer, ...stdioServer } as MCPServer} onClick={vi.fn()} stdioEnabled />);
+
+    expect(screen.getByText("STDIO")).toBeInTheDocument();
+    expect(screen.queryByText("stdio disabled")).not.toBeInTheDocument();
+  });
+
+  it("does not flag a non-stdio server when the proxy has stdio off", () => {
+    render(<MCPServerCard server={baseServer} onClick={vi.fn()} stdioEnabled={false} />);
+
+    expect(screen.getByText("HTTP")).toBeInTheDocument();
+    expect(screen.queryByText("stdio disabled")).not.toBeInTheDocument();
   });
 });

@@ -27,7 +27,7 @@ router: Final = APIRouter(prefix=MANAGEMENT_V1_PREFIX)
 
 @router.post(
     "/users/bulk",
-    tags=["Internal User management"],  # mutable-ok: fastapi types tags as list[str | Enum]
+    tags=["Internal User management"],
     dependencies=(Depends(user_api_key_auth),),
     response_model=BulkNewUserResponse,
 )
@@ -55,7 +55,7 @@ async def bulk_create_users_route(
     ```
     curl -X POST "http://localhost:4000/management/v1/users/bulk" \\
     -H "Content-Type: application/json" \\
-    -H "Authorization: Bearer sk-1234" \\
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" \\
     -d '{
         "users": [
             {"user_email": "a@example.com", "user_role": "internal_user", "teams": ["team-1"]},
@@ -110,7 +110,7 @@ async def bulk_create_users_route(
 
 @router.post(
     "/users/bulk_delete",
-    tags=["Internal User management"],  # mutable-ok: FastAPI types `tags` as list[str], not Sequence
+    tags=["Internal User management"],
     dependencies=(Depends(user_api_key_auth), Depends(reject_unknown_query_params)),
     response_model=BulkDeleteUsersResponse,
 )
@@ -136,7 +136,7 @@ async def bulk_delete_users_action(
     Example curl:
     ```
     curl --location 'http://0.0.0.0:4000/management/v1/users/bulk_delete' \
-        --header 'Authorization: Bearer sk-1234' \
+        --header "Authorization: Bearer $LITELLM_MASTER_KEY" \
         --header 'Content-Type: application/json' \
         --data '{"user_ids": ["user-1", "user-2"]}'
     ```

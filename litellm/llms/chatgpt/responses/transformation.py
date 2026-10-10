@@ -1,12 +1,13 @@
 from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.core_helpers import process_response_headers
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _safe_convert_created_field,
+    safe_convert_created_field,
 )
 from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
@@ -35,11 +36,13 @@ from ..common_utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
+_CHATGPT_SERVICE_TIERS: Final = {"default": "default", "priority": "priority", "fast": "priority"}
+
 
 class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
-    def __init__(self) -> None:
+    def __init__(self, authenticator: Authenticator | None = None) -> None:
         super().__init__()
-        self.authenticator = Authenticator()
+        self.authenticator = authenticator if authenticator is not None else Authenticator()
 
     @property
     def custom_llm_provider(self) -> LlmProviders:
@@ -108,7 +111,11 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
             "truncation",
         }
 
-        return {k: v for k, v in request.items() if k in allowed_keys}
+        filtered: Final = {k: v for k, v in request.items() if k in allowed_keys}
+        service_tier: Final = _CHATGPT_SERVICE_TIERS.get(request.get("service_tier"))
+        if service_tier is not None:
+            filtered["service_tier"] = service_tier
+        return filtered
 
     def transform_response_api_response(
         self,
@@ -210,7 +217,7 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
         if not response_payload.get("output") and streamed_output_items:
             response_payload["output"] = [item for _, item in sorted(streamed_output_items.items())]
         if "created_at" in response_payload:
-            response_payload["created_at"] = _safe_convert_created_field(response_payload["created_at"])
+            response_payload["created_at"] = safe_convert_created_field(response_payload["created_at"])
         try:
             return ResponsesAPIResponse(**response_payload)
         except Exception:
@@ -231,10 +238,13 @@ class ChatGPTResponsesAPIConfig(OpenAIResponsesAPIConfig):
     ) -> None:
         raw_headers: Final = dict(raw_response.headers)
         processed_headers: Final = process_response_headers(raw_headers)
-        if not hasattr(completed_response, "_hidden_params"):
-            setattr(completed_response, "_hidden_params", {})
-        completed_response._hidden_params["additional_headers"] = processed_headers
-        completed_response._hidden_params["headers"] = raw_headers
+        if not hasattr(completed_response, HIDDEN_PARAMS_ATTR):
+            set_hidden_params(completed_response, {})
+        hidden_params: Final = cast(  # cast-ok: preserve dynamic mapping behavior
+            dict[str, object], getattr(completed_response, HIDDEN_PARAMS_ATTR)
+        )
+        hidden_params["additional_headers"] = processed_headers
+        hidden_params["headers"] = raw_headers
 
     def get_complete_url(
         self,

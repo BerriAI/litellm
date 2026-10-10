@@ -36,6 +36,7 @@ from __future__ import annotations
 import pytest
 from anthropic.types import WebSearchTool20250305Param
 from e2e_config import unique_marker
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
@@ -62,6 +63,16 @@ class TestBedrockWebSearchServerTool:
         "ephemeral stack ships the config in this module's docstring."
     )
     @pytest.mark.covers("llm.messages.bedrock_invoke.web_search_server_tool.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.BEDROCK,),
+            models=(BEDROCK_INVOKE_BACKEND,),
+            capabilities=(Capability.WEB_SEARCH,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_web_search_server_tool_is_served(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:

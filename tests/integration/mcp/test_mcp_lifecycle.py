@@ -1,7 +1,9 @@
 import functools
 import json
 import uuid
+from collections.abc import Mapping
 from contextlib import ExitStack
+from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
@@ -14,15 +16,27 @@ from integration._support.client import Gateway, eventually
 from integration._support.database import read_rows
 from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 from integration._support.mcp import (
+    JsonRpc,
     McpCaller,
     Outcome,
+    ScriptedTool,
     call_tool,
     mcp_peer,
     register_mcp,
+    scripted_peer,
+    text_result,
     tool_calls,
     tool_names,
 )
 from integration._support.process import owned_proxy
+from pydantic import TypeAdapter
+
+_SPEND_NONCES: Final = (
+    "SELECT status, metadata->'mcp_tool_call_metadata'->'arguments'->>'nonce' AS nonce"
+    ' FROM "LiteLLM_SpendLogs" WHERE api_key = %s AND call_type = %s'
+)
+_OBJECTS: Final = TypeAdapter(Mapping[str, object])
+_STRINGS: Final = TypeAdapter(Mapping[str, str])
 
 
 @pytest.mark.covers("mcp.call_tool.saved_headers.reach_actual_transport")
@@ -243,7 +257,7 @@ def test_same_url_server_grants_scope_discovery_and_direct_or_virtual_execution(
     gateway: Gateway, authenticated: bool
 ) -> None:
     with mcp_peer() as peer, gateway.scenario() as scenario:
-        aliases: Final = tuple("scope" + uuid.uuid4().hex for _ in range(2))
+        aliases: Final = tuple(f"scope{uuid.uuid4().int % 10**32:032d}" for _ in range(2))
         servers: Final = tuple(
             register_mcp(
                 scenario,
@@ -449,9 +463,130 @@ def test_key_grant_added_by_key_update_is_visible_to_mcp_tool_listing_before_the
         seen: Final = eventually(
             lambda: _granted_view(gateway, key), lambda view: view.tools != (), seconds=15, return_last_on_timeout=True
         )
-        if seen.tools == ():
-            pytest.skip(
-                "BUG: a server granted through POST /key/update is missing from /mcp tools/list until the 60s "
-                "key cache TTL expires; no invalidation is published"
-            )
         assert set(seen.tools) == {f"{alias}-add", f"{alias}-multiply", f"{alias}-fail"}, seen.raw
+
+
+def _update_tool_permissions(
+    gateway: Gateway, key: str, identity: str, permissions: dict[str, list[str]] | None
+) -> None:
+    updated: Final = gateway.request(
+        "POST",
+        "/key/update",
+        {"key": key, "object_permission": {"mcp_servers": [identity], "mcp_tool_permissions": permissions}},
+    )
+    assert updated.status_code == 200, updated.text
+
+
+def _listing_on_both(gateway: Gateway, peer: Gateway, key: str, expected: set[str]) -> None:
+    for worker in (gateway, peer):
+        listing: Final = eventually(
+            functools.partial(_granted_view, worker, key),
+            functools.partial(_matches_grants, expected),
+            seconds=15,
+            return_last_on_timeout=True,
+        )
+        assert set(listing.tools) == expected, (worker.client.base_url, listing.raw)
+
+
+def _multiply_outcome_on_both(gateway: Gateway, peer: Gateway, key: str, alias: str) -> tuple[Outcome, Outcome]:
+    return (
+        McpCaller(gateway, key, "mcp").call(f"{alias}-multiply", {"a": 2, "b": 3}),
+        McpCaller(peer, key, "mcp").call(f"{alias}-multiply", {"a": 2, "b": 3}),
+    )
+
+
+def test_key_update_tool_permission_widen_narrow_and_clear_apply_on_both_workers(
+    gateway: Gateway, peer: Gateway
+) -> None:
+    with mcp_peer() as upstream, gateway.scenario() as scenario:
+        alias: Final = "perm" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, upstream, alias)
+        key: Final = scenario.key(
+            object_permission={"mcp_servers": [identity], "mcp_tool_permissions": {identity: ["add"]}}
+        )
+        add_only: Final = {f"{alias}-add"}
+        all_tools: Final = {f"{alias}-add", f"{alias}-multiply", f"{alias}-fail"}
+        upstream.drain()
+
+        _listing_on_both(gateway, peer, key, add_only)
+        denied: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert all(call.error is not None and call.text != "6" for call in denied), [call.raw for call in denied]
+        assert tool_calls(upstream.drain()) == (), "a denied call reached the peer"
+
+        _update_tool_permissions(gateway, key, identity, {identity: ["add", "multiply"]})
+        _listing_on_both(gateway, peer, key, {f"{alias}-add", f"{alias}-multiply"})
+        widened: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert [call.text for call in widened] == ["6", "6"], [call.raw for call in widened]
+
+        _update_tool_permissions(gateway, key, identity, {identity: ["add"]})
+        _listing_on_both(gateway, peer, key, add_only)
+        upstream.drain()
+        narrowed: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert all(call.error is not None and call.text != "6" for call in narrowed), [call.raw for call in narrowed]
+        assert tool_calls(upstream.drain()) == (), "a revoked call reached the peer"
+
+        _update_tool_permissions(gateway, key, identity, {})
+        _listing_on_both(gateway, peer, key, all_tools)
+        cleared: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert [call.text for call in cleared] == ["6", "6"], [call.raw for call in cleared]
+
+        _update_tool_permissions(gateway, key, identity, {identity: ["add"]})
+        _listing_on_both(gateway, peer, key, add_only)
+
+        _update_tool_permissions(gateway, key, identity, None)
+        _listing_on_both(gateway, peer, key, all_tools)
+        nulled: Final = _multiply_outcome_on_both(gateway, peer, key, alias)
+        assert [call.text for call in nulled] == ["6", "6"], [call.raw for call in nulled]
+
+
+def _nonce_echo(params: JsonRpc) -> JsonRpc:
+    return text_result(_STRINGS.validate_python(params["arguments"])["nonce"])
+
+
+def _call_params(call: Mapping[str, object]) -> Mapping[str, object]:
+    return _OBJECTS.validate_python(_OBJECTS.validate_python(call["body"])["params"])
+
+
+def _listed(caller: McpCaller, name: str) -> None:
+    listing: Final = eventually(caller.list_tools, lambda outcome: name in outcome.tools, seconds=45)
+    assert listing.error is None, (caller.gateway.client.base_url, listing.raw)
+
+
+def test_tool_calls_on_both_workers_stay_base_compatible_after_each_worker_lists(
+    gateway: Gateway, peer: Gateway
+) -> None:
+    schema: Final = {"type": "object", "properties": {"nonce": {"type": "string"}}}
+    tool: Final = ScriptedTool("echo", _nonce_echo, description="Echo the nonce back", input_schema=schema)
+    with scripted_peer(tool) as upstream, gateway.scenario() as scenario:
+        alias: Final = "compat" + uuid.uuid4().hex[:8]
+        identity: Final = register_mcp(scenario, upstream, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+        name: Final = f"{alias}-echo"
+        first: Final = McpCaller(gateway, key, "mcp", alias)
+        second: Final = McpCaller(peer, key, "mcp", alias)
+        _listed(first, name)
+        _listed(second, name)
+        upstream.drain()
+        nonces: Final = (uuid.uuid4().hex, uuid.uuid4().hex)
+        outcomes: Final = (
+            first.call(name, {"nonce": nonces[0]}),
+            second.call(name, {"nonce": nonces[1]}),
+            first.call(name, {"nonce": nonces[0]}),
+        )
+        assert [outcome.text for outcome in outcomes] == [nonces[0], nonces[1], nonces[0]], [o.raw for o in outcomes]
+        params: Final = [_call_params(call) for call in tool_calls(upstream.drain())]
+        assert [set(entry) - {"_meta"} for entry in params] == [{"name", "arguments"}] * 3, params
+        assert [entry["name"] for entry in params] == ["echo"] * 3, params
+        assert [entry["arguments"] for entry in params] == [
+            {"nonce": nonces[0]},
+            {"nonce": nonces[1]},
+            {"nonce": nonces[0]},
+        ], params
+        rows: Final = eventually(
+            lambda: read_rows(_SPEND_NONCES, (sha256(key.encode()).hexdigest(), "call_mcp_tool")),
+            lambda found: len(found) >= 3,
+            seconds=70,
+        )
+        assert sorted((str(row["status"]), str(row["nonce"])) for row in rows) == sorted(
+            ("success", nonce) for nonce in (nonces[0], nonces[1], nonces[0])
+        ), rows

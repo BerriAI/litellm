@@ -5,6 +5,7 @@ use std::{
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use litellm_core_utils::settings::Lookup;
+use litellm_http::Client;
 use moka::future::Cache;
 use serde::Deserialize;
 
@@ -22,17 +23,22 @@ const OIDC_ALLOWED_CREDENTIAL_DIRS: &str = "LITELLM_OIDC_ALLOWED_CREDENTIAL_DIRS
 const DEFAULT_CREDENTIAL_DIRS: &str = "/var/run/secrets,/run/secrets";
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, strum::EnumString, strum::AsRefStr)]
-#[strum(serialize_all = "snake_case")]
 pub enum OidcProvider {
+    #[strum(serialize = "google")]
     Google,
     #[strum(serialize = "circleci")]
     CircleCi,
     #[strum(serialize = "circleci_v2")]
     CircleCiV2,
+    #[strum(serialize = "github")]
     Github,
+    #[strum(serialize = "azure")]
     Azure,
+    #[strum(serialize = "file")]
     File,
+    #[strum(serialize = "env")]
     Env,
+    #[strum(serialize = "env_path")]
     EnvPath,
 }
 
@@ -82,7 +88,7 @@ impl NumericDate {
 }
 
 pub struct OidcResolver {
-    client: reqwest::Client,
+    client: Client,
     google_identity_endpoint: reqwest::Url,
     cache: Cache<String, (SecretValue, SystemTime)>,
     clock: fn() -> SystemTime,
@@ -90,25 +96,17 @@ pub struct OidcResolver {
     azure_token_provider: std::sync::Arc<dyn litellm_secrets_azure::AzureTokenProvider>,
 }
 
-impl Default for OidcResolver {
-    fn default() -> Self {
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(600))
-            .connect_timeout(Duration::from_secs(5))
-            .build()
-            .expect("HTTP client configuration");
-        Self::new(
-            client,
-            reqwest::Url::parse("http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity").expect("static URL"),
-        )
-    }
-}
+const GOOGLE_IDENTITY_ENDPOINT: &str =
+    "http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity";
+
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(600);
 
 impl OidcResolver {
-    pub fn new(client: reqwest::Client, google_identity_endpoint: reqwest::Url) -> Self {
+    pub fn new(client: Client) -> Self {
         Self {
             client,
-            google_identity_endpoint,
+            google_identity_endpoint: reqwest::Url::parse(GOOGLE_IDENTITY_ENDPOINT)
+                .expect("static URL"),
             cache: Cache::builder()
                 .max_capacity(200)
                 .time_to_live(GOOGLE_TOKEN_MAX_TTL)
@@ -118,6 +116,13 @@ impl OidcResolver {
             azure_token_provider: std::sync::Arc::new(
                 litellm_secrets_azure::NativeAzureTokenProvider::default(),
             ),
+        }
+    }
+
+    pub fn with_google_identity_endpoint(self, google_identity_endpoint: reqwest::Url) -> Self {
+        Self {
+            google_identity_endpoint,
+            ..self
         }
     }
 
@@ -180,6 +185,7 @@ impl OidcResolver {
                 let response = self
                     .client
                     .get(url)
+                    .timeout(REQUEST_TIMEOUT)
                     .query(&[("audience", audience)])
                     .bearer_auth(authorization)
                     .header("Accept", "application/json; api-version=2.0")
@@ -214,6 +220,7 @@ impl OidcResolver {
                 let response = self
                     .client
                     .get(self.google_identity_endpoint.clone())
+                    .timeout(REQUEST_TIMEOUT)
                     .query(&[("audience", audience)])
                     .header("Metadata-Flavor", "Google")
                     .send()

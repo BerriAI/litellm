@@ -1,4 +1,4 @@
-name: "Unit Tests"
+name: unit
 
 on:
   pull_request:
@@ -17,238 +17,1383 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
-# One caller for every tests/test_litellm shard, replacing the nine thin workflow
-# files that each wrapped a single call to _test-unit-base.yml. Adding a shard is
-# now one matrix entry rather than a new file.
-#
-# `name` is the shard id and nothing else, so each check reports as
-# "<shard> / Run tests" exactly as it did when the shard had its own file. Those
-# strings are the branch ruleset's required contexts, so they are load-bearing:
-# renaming an entry renames a required check and the ruleset stops matching it.
-#
-# Every entry states its timeouts even when they equal the base workflow's
-# defaults. An absent matrix key renders as an empty string, which is not a
-# number, so a partially-specified entry would fail the call rather than fall
-# back to the default.
-#
-# tests/proxy_unit_tests keeps its own caller (test-unit-proxy-db.yml): it is
-# already a matrix and carries a shard-coverage guard that reads that file by
-# name. Folding it in here is a follow-up, together with generalising that guard
-# into assert_ci_coverage.py.
 jobs:
-  unit:
-    name: ${{ matrix.shard }}
+  rust-bridge:
+    name: rust-bridge
     permissions:
       contents: read
-      id-token: write
-      pull-requests: write
+      pull-requests: read
+    outputs:
+      artifact: ${{ steps.rust-bridge-artifact.outputs.name }}
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.12"
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955
+        with:
+          persist-credentials: false
+
+      - name: Detect relevant changes
+        id: changes
+        timeout-minutes: 2
+        uses: ./.github/actions/detect-changes
+
+      - name: Define editable Rust bridge cache key
+        id: rust-bridge-key
+        if: steps.changes.outputs.decision != 'skip'
+        env:
+          RUST_BRIDGE_CACHE_KEY: ${{ runner.os }}-rust-bridge-editable-${{ hashFiles('litellm-rust/Cargo.lock', 'litellm-rust/Cargo.toml', 'litellm-rust/crates/**', 'pyproject.toml') }}
+        run: echo "key=$RUST_BRIDGE_CACHE_KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Set up Python
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 3
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: ${{ env.UV_PYTHON }}
+
+      - name: Set up uv
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 3
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Restore editable Rust bridge
+        id: rust-bridge-cache
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 5
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: rust-bridge-dist
+          key: ${{ steps.rust-bridge-key.outputs.key }}
+
+      - name: Cache the Rust build
+        if: steps.changes.outputs.decision != 'skip' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 5
+        uses: ./.github/actions/cache-cargo-build
+
+      - name: Build editable Rust bridge
+        if: steps.changes.outputs.decision != 'skip' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 15
+        run: |
+          mkdir -p rust-bridge-dist
+          uv run --no-project --with maturin==1.15.0 python -c 'import maturin; maturin.build_editable("rust-bridge-dist")'
+          strip --strip-debug litellm/rust_bridge/_native.abi3.so
+          mkdir -p rust-bridge-dist/litellm/rust_bridge
+          cp litellm/rust_bridge/_native.abi3.so rust-bridge-dist/litellm/rust_bridge/_native.abi3.so
+
+      - name: Upload Rust bridge artifact
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 10
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1
+        with:
+          name: rust-bridge-${{ github.run_id }}-${{ github.run_attempt }}
+          path: rust-bridge-dist/
+          retention-days: 1
+
+      - name: Save editable Rust bridge
+        if: steps.changes.outputs.decision != 'skip' && github.ref == 'refs/heads/main' && steps.rust-bridge-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 10
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        with:
+          path: rust-bridge-dist
+          key: ${{ steps.rust-bridge-key.outputs.key }}
+
+      - name: Expose the Rust bridge artifact
+        id: rust-bridge-artifact
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 1
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+        run: echo "name=rust-bridge-${RUN_ID}-${RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+  assert-shard-coverage:
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+      - name: Assert every test directory and file is claimed by a shard
+        run: python3 .github/scripts/assert_ci_coverage.py --shards
+  unit:
+    name: ${{ matrix.shard }}
+    needs: [rust-bridge, assert-shard-coverage]
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ matrix.job-timeout-minutes }}
+    permissions:
+      contents: read
+      pull-requests: read
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
     strategy:
       fail-fast: false
       matrix:
         include:
-          - shard: mcp-integration
-            artifact-name: mcp-integration
-            test-path: "tests/mcp_tests tests/test_litellm/experimental_mcp_client"
+          - shard: core-utils
+            test-path: |-
+              tests/unit/batch_completion
+              tests/unit/decisions
+              tests/unit/litellm_core_utils
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: enterprise-routing
+            test-path: |-
+              tests/unit/google_genai
+              tests/unit/router_strategy
+              tests/unit/router_utils
+              tests/unit/proxy/common_utils/test_cache_aware_routing.py
+              tests/unit/enterprise/enterprise_callbacks/send_emails
+              tests/unit/enterprise/proxy/test_afile_retrieve_returns_unified_id.py
+              tests/unit/enterprise/proxy/test_batch_retrieve_input_file_id.py
+              tests/unit/enterprise/proxy/test_batch_retrieve_registers_missing_output_file_id.py
+              tests/unit/enterprise/proxy/test_batch_retrieve_returns_unified_input_file_id.py
+              tests/unit/enterprise/proxy/test_batch_update_db_managed_output_file_id.py
+              tests/unit/enterprise/proxy/test_deleted_file_returns_403_not_404.py
+              tests/unit/enterprise/proxy/test_enterprise_routes.py
+              tests/unit/enterprise/proxy/test_file_deletion_blocking.py
+              tests/unit/enterprise/proxy/test_managed_files_access_check.py
+              tests/unit/enterprise/proxy/test_managed_files_hook.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: integrations
+            test-path: |-
+              tests/test_litellm/integrations
+              tests/test_litellm/tracing
+              tests/unit/integrations
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: llms-vertex-ai
+            test-path: >-
+              tests/unit/llms/vertex_ai
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: llms-anthropic
+            test-path: >-
+              tests/unit/llms/anthropic
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: llms-bedrock
+            test-path: |-
+              tests/unit/llms/bedrock
+              tests/unit/llms/bedrock_mantle
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: llms-providers
+            test-path: |-
+              tests/unit/llms/test_cache_control_and_reasoning.py
+              tests/unit/llms/test_custom_llm.py
+              tests/unit/llms/test_file_content_block.py
+              tests/unit/llms/test_file_search_responses.py
+              tests/unit/llms/test_lifecycle_fix.py
+              tests/unit/llms/test_oss_decision.py
+              tests/unit/llms/test_polling_url_origin_match.py
+              tests/unit/llms/test_predibase_transformation.py
+              tests/unit/llms/a2a
+              tests/unit/llms/aiml
+              tests/unit/llms/aiohttp_openai
+              tests/unit/llms/apiserpent
+              tests/unit/llms/aws_polly
+              tests/unit/llms/azure
+              tests/unit/llms/azure_ai
+              tests/unit/llms/base_llm
+              tests/unit/llms/baseten
+              tests/unit/llms/black_forest_labs
+              tests/unit/llms/bytez
+              tests/unit/llms/cerebras
+              tests/unit/llms/chat
+              tests/unit/llms/chatgpt
+              tests/unit/llms/clarifai
+              tests/unit/llms/claude_code
+              tests/unit/llms/cloudflare
+              tests/unit/llms/codex
+              tests/unit/llms/cohere
+              tests/unit/llms/cometapi
+              tests/unit/llms/compactifai
+              tests/unit/llms/crusoe
+              tests/unit/llms/custom_httpx
+              tests/unit/llms/dashscope
+              tests/unit/llms/databricks
+              tests/unit/llms/dataforseo
+              tests/unit/llms/datarobot
+              tests/unit/llms/deepagents
+              tests/unit/llms/deepgram
+              tests/unit/llms/deepinfra
+              tests/unit/llms/deepseek
+              tests/unit/llms/docker_model_runner
+              tests/unit/llms/duckduckgo
+              tests/unit/llms/e2b
+              tests/unit/llms/edenai
+              tests/unit/llms/elevenlabs
+              tests/unit/llms/exa_ai
+              tests/unit/llms/fal_ai
+              tests/unit/llms/fastcrw
+              tests/unit/llms/featherless_ai
+              tests/unit/llms/firecrawl
+              tests/unit/llms/fireworks_ai
+              tests/unit/llms/gdc
+              tests/unit/llms/gemini
+              tests/unit/llms/gigachat
+              tests/unit/llms/github_copilot
+              tests/unit/llms/gradient_ai
+              tests/unit/llms/groq
+              tests/unit/llms/heroku
+              tests/unit/llms/hosted_vllm
+              tests/unit/llms/huggingface
+              tests/unit/llms/hyperbolic
+              tests/unit/llms/inception
+              tests/unit/llms/infinity
+              tests/unit/llms/jina_ai
+              tests/unit/llms/lambda_ai
+              tests/unit/llms/langflow
+              tests/unit/llms/langgraph
+              tests/unit/llms/laya
+              tests/unit/llms/lemonade
+              tests/unit/llms/linkup
+              tests/unit/llms/litellm_proxy
+              tests/unit/llms/llamafile
+              tests/unit/llms/lm_studio
+              tests/unit/llms/manus
+              tests/unit/llms/meta_llama
+              tests/unit/llms/microsoft_365_copilot
+              tests/unit/llms/minimax
+              tests/unit/llms/mistral
+              tests/unit/llms/modelscope
+              tests/unit/llms/mongodb
+              tests/unit/llms/moonshot
+              tests/unit/llms/nadir
+              tests/unit/llms/nebius
+              tests/unit/llms/neosantara
+              tests/unit/llms/nimble
+              tests/unit/llms/novita
+              tests/unit/llms/nscale
+              tests/unit/llms/nvidia_nim
+              tests/unit/llms/nvidia_riva
+              tests/unit/llms/oci
+              tests/unit/llms/ocr
+              tests/unit/llms/ollama
+              tests/unit/llms/oobabooga
+              tests/unit/llms/openai_like
+              tests/unit/llms/opencode
+              tests/unit/llms/openrouter
+              tests/unit/llms/ovhcloud
+              tests/unit/llms/parallel_ai
+              tests/unit/llms/parasail
+              tests/unit/llms/pass_through
+              tests/unit/llms/perplexity
+              tests/unit/llms/pg_vector
+              tests/unit/llms/publicai
+              tests/unit/llms/ragflow
+              tests/unit/llms/recraft
+              tests/unit/llms/reducto
+              tests/unit/llms/replicate
+              tests/unit/llms/runwayml
+              tests/unit/llms/s3_vectors
+              tests/unit/llms/sagemaker
+              tests/unit/llms/sail
+              tests/unit/llms/sambanova
+              tests/unit/llms/sap
+              tests/unit/llms/scaleway
+              tests/unit/llms/searchapi
+              tests/unit/llms/searxng
+              tests/unit/llms/serper
+              tests/unit/llms/snowflake
+              tests/unit/llms/soniox
+              tests/unit/llms/stability
+              tests/unit/llms/strands_decider
+              tests/unit/llms/tavily
+              tests/unit/llms/tencent
+              tests/unit/llms/tinyfish
+              tests/unit/llms/together_ai
+              tests/unit/llms/tool_loop
+              tests/unit/llms/triton
+              tests/unit/llms/v0
+              tests/unit/llms/valkey
+              tests/unit/llms/vercel_ai_gateway
+              tests/unit/llms/volcengine
+              tests/unit/llms/voyage
+              tests/unit/llms/wandb
+              tests/unit/llms/watsonx
+              tests/unit/llms/xai
+              tests/unit/llms/xinference
+              tests/unit/llms/you_com
+              tests/unit/llms/zai
+              --ignore=tests/unit/llms/base_llm/batches/base_batches_config_test.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: llms-openai-meta
+            test-path: >-
+              tests/unit/llms/openai
+              tests/unit/llms/meta
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: root
+            test-path: >-
+              tests/test_litellm/test_*.py
+              tests/unit/test_*.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: router
+            test-path: >-
+              tests/unit/test_router
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: router-unit-tests
+            test-path: >-
+              tests/router_unit_tests
+            python-version: "3.12"
+            workers: 0
+            reruns: 0
+            timeout-minutes: 10
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: endpoints
+            test-path: >-
+              tests/unit/a2a_protocol
+              tests/unit/anthropic_interface
+              tests/unit/batches
+              tests/unit/chat_completions
+              tests/unit/completion_extras
+              tests/unit/containers
+              tests/unit/embeddings
+              tests/unit/endpoints
+              tests/unit/files
+              tests/unit/images
+              tests/unit/interactions
+              tests/unit/messages
+              tests/unit/ocr
+              tests/unit/passthrough
+              tests/unit/rag
+              tests/unit/realtime_api
+              tests/unit/rerank_api
+              tests/unit/vector_stores
+              tests/unit/videos
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: rust-bridge-harness
+            test-path: >-
+              tests/unit/compression
+              tests/unit/harness
+              tests/unit/rust_bridge
+              tests/unit/sandbox
+              --ignore=tests/unit/rust_bridge/native_route_wheel_test.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: enterprise-repositories-secrets
+            test-path: >-
+              tests/unit/enterprise/enterprise_callbacks/test_callback_controls.py
+              tests/unit/enterprise/enterprise_callbacks/test_llm_guard.py
+              tests/unit/enterprise/enterprise_callbacks/test_secret_detection.py
+              tests/unit/integration_support
+              tests/unit/models
+              tests/unit/repositories
+              tests/unit/secret_managers
+              tests/unit/skills/test_skills_main.py
+              tests/unit/tracing
+            python-version: "3.12"
             workers: 2
             reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
-
-          - shard: core-utils
-            artifact-name: core-utils
-            test-path: "tests/test_litellm/litellm_core_utils"
-            workers: 2
-            reruns: 1
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-
-          - shard: enterprise-routing
-            artifact-name: enterprise-routing
-            test-path: >-
-              tests/test_litellm/enterprise
-              tests/test_litellm/google_genai
-              tests/test_litellm/router_utils
-              tests/test_litellm/router_strategy
-            workers: 2
-            reruns: 2
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-
-          - shard: integrations
-            artifact-name: integrations
-            test-path: "tests/test_litellm/integrations"
-            workers: 2
-            reruns: 3
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-
-          - shard: Vertex AI
-            artifact-name: llm-vertex-ai
-            test-path: "tests/test_litellm/llms/vertex_ai"
-            workers: 1
-            reruns: 2
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-
-          - shard: All Other Providers
-            artifact-name: llm-other-providers
-            test-path: "tests/test_litellm/llms --ignore=tests/test_litellm/llms/vertex_ai"
-            workers: 2
-            reruns: 2
-            timeout-minutes: 20
-            job-timeout-minutes: 60
-
-          - shard: misc
-            artifact-name: misc
-            test-path: >-
-              tests/test_litellm/batches
-              tests/test_litellm/secret_managers
-              tests/test_litellm/a2a_protocol
-              tests/test_litellm/chat_completions
-              tests/test_litellm/completion_extras
-              tests/test_litellm/containers
-              tests/test_litellm/endpoints
-              tests/test_litellm/images
-              tests/test_litellm/interactions
-              tests/test_litellm/messages
-              tests/test_litellm/embeddings
-              tests/test_litellm/ocr
-              tests/test_litellm/passthrough
-              tests/test_litellm/rag
-              tests/test_litellm/rerank_api
-              tests/test_litellm/rust_bridge
-              tests/test_litellm/vector_stores
-              tests/test_litellm/videos
-              tests/test_litellm/test_*.py
-            workers: 2
-            reruns: 2
-            timeout-minutes: 20
-            job-timeout-minutes: 60
+            dist: loadscope
 
           - shard: proxy-auth
-            artifact-name: proxy-auth
-            test-path: >-
-              tests/test_litellm/proxy/auth
-              tests/test_litellm/proxy/hooks
-              tests/test_litellm/proxy/policy_engine
-              tests/test_litellm/proxy/client
-            workers: 2
-            reruns: 2
+            test-path: |-
+              tests/unit/proxy/auth
+              --ignore=tests/unit/proxy/auth/test_auth_checks.py
+              --ignore=tests/unit/proxy/auth/test_user_api_key_auth.py
+              --ignore=tests/unit/proxy/auth/test_default_end_user_budget_simple.py
+              --ignore=tests/unit/proxy/auth/test_jwt.py
+              --ignore=tests/unit/proxy/auth/test_models_fallback_endpoint.py
+              --ignore=tests/unit/proxy/auth/test_multipart_bypass_repro.py
+              --ignore=tests/unit/proxy/auth/test_proxy_routes.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: proxy-hooks-client
+            test-path: |-
+              tests/unit/proxy/hooks
+              tests/unit/proxy/policy_engine
+              tests/unit/proxy/client
+              --ignore=tests/unit/proxy/hooks/test_banned_keyword_list.py
+              --ignore=tests/unit/proxy/hooks/test_unit_test_max_model_budget_limiter.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
 
           - shard: proxy-endpoints
-            artifact-name: proxy-endpoints
-            test-path: >-
-              tests/test_litellm/proxy/analytics_endpoints
-              tests/test_litellm/proxy/management_endpoints
-              tests/test_litellm/proxy/list_api
-              tests/test_litellm/proxy/memory
-              tests/test_litellm/proxy/guardrails
-              tests/test_litellm/proxy/management_helpers
-              tests/test_litellm/proxy/anthropic_endpoints
-              tests/test_litellm/proxy/google_endpoints
-              tests/test_litellm/proxy/openai_files_endpoint
-              tests/test_litellm/proxy/batches_endpoints
-              tests/test_litellm/proxy/container_endpoints
-              tests/test_litellm/proxy/fine_tuning_endpoints
-              tests/test_litellm/proxy/vector_store_files_endpoints
-              tests/test_litellm/proxy/video_endpoints
-              tests/test_litellm/proxy/response_api_endpoints
-              tests/test_litellm/proxy/image_endpoints
-              tests/test_litellm/proxy/ocr_endpoints
-              tests/test_litellm/proxy/vector_store_endpoints
-              tests/test_litellm/proxy/agent_endpoints
-              tests/test_litellm/proxy/a2a
-              tests/test_litellm/proxy/credential_endpoints
-              tests/test_litellm/proxy/discovery_endpoints
-              tests/test_litellm/proxy/health_endpoints
-              tests/test_litellm/proxy/shutdown
-              tests/test_litellm/proxy/public_endpoints
-              tests/test_litellm/proxy/prompts
-              tests/test_litellm/proxy/rag_endpoints
-              tests/test_litellm/proxy/rerank_endpoints
-              tests/test_litellm/proxy/realtime_endpoints
-              tests/test_litellm/proxy/ui_crud_endpoints
-              tests/test_litellm/proxy/config_resolvers
-              tests/test_litellm/proxy/utils
+            test-path: |-
+              tests/unit/proxy/management_endpoints
+              tests/unit/proxy/management_helpers
+              tests/unit/proxy/list_api
+              tests/unit/proxy/analytics_endpoints
+              tests/unit/proxy/decisions_endpoints
+              tests/unit/proxy/memory
+              tests/unit/proxy/agent_endpoints
+              tests/unit/proxy/openai_files_endpoint
+              tests/unit/proxy/health_endpoints
+              tests/unit/proxy/batches_endpoints
+              --ignore=tests/unit/proxy/management_endpoints/test_jwt_key_mapping.py
+              --ignore=tests/unit/proxy/management_endpoints/test_key_generate_prisma.py
+              --ignore=tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
+              --ignore=tests/unit/proxy/management_helpers/test_audit_logs_proxy.py
+            python-version: "3.12"
             workers: 4
-            reruns: 2
+            reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: proxy-feature-endpoints
+            test-path: |-
+              tests/unit/proxy/guardrails
+              --ignore=tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py
+              --ignore=tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py
+              --ignore=tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py
+              --ignore=tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py
+              tests/unit/proxy/anthropic_endpoints
+              tests/unit/proxy/google_endpoints
+              tests/unit/proxy/container_endpoints
+              tests/unit/proxy/fine_tuning_endpoints
+              tests/unit/proxy/vector_store_files_endpoints
+              tests/unit/proxy/video_endpoints
+              tests/unit/proxy/response_api_endpoints
+              tests/unit/proxy/image_endpoints
+              tests/unit/proxy/ocr_endpoints
+              tests/unit/proxy/search_endpoints
+              tests/unit/proxy/vector_store_endpoints
+              tests/unit/proxy/a2a
+              tests/unit/proxy/credential_endpoints
+              tests/unit/proxy/discovery_endpoints
+              tests/unit/proxy/shutdown
+              tests/unit/proxy/public_endpoints
+              tests/unit/proxy/prompts
+              tests/unit/proxy/rag_endpoints
+              tests/unit/proxy/rerank_endpoints
+              tests/unit/proxy/realtime_endpoints
+              tests/unit/proxy/ui_crud_endpoints
+              tests/unit/proxy/config_resolvers
+              tests/unit/proxy/utils
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
 
           - shard: proxy-server
-            artifact-name: proxy-server
-            test-path: "tests/test_litellm/proxy/proxy_server"
+            test-path: >-
+              tests/unit/proxy/proxy_server
+            python-version: "3.12"
             workers: 4
-            reruns: 2
+            reruns: 0
             timeout-minutes: 60
             job-timeout-minutes: 100
+            dist: loadscope
+
+          - shard: mcp-elicitation
+            test-path: |-
+              --override-ini=pythonpath=tests
+              tests/unit/experimental_mcp_client/test_mcp_client.py
+              tests/unit/proxy/_experimental/mcp_server/test_capabilities.py
+              tests/unit/proxy/_experimental/mcp_server/test_interactions.py
+              tests/unit/proxy/_experimental/mcp_server/test_mcp_elicitation_handler.py
+              tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
+              tests/unit/proxy/_experimental/mcp_server/test_mcp_server_tool_calls_and_headers.py
+              tests/unit/proxy/_experimental/mcp_server/test_operations.py
+              tests/integration/mcp/test_interactions.py
+            python-version: "3.12"
+            workers: 2
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
 
           - shard: proxy-infra
-            artifact-name: proxy-infra
-            test-path: >-
-              tests/test_litellm/proxy/db
-              tests/test_litellm/proxy/middleware
-              tests/test_litellm/proxy/spend_tracking
-              tests/test_litellm/proxy/pass_through_endpoints
-              tests/test_litellm/proxy/_experimental
-              tests/test_litellm/proxy/experimental
-              tests/test_litellm/proxy/common_utils
-              tests/test_litellm/proxy/enterprise_billing
-              tests/test_litellm/proxy/types_utils
-              tests/test_litellm/proxy/logging_endpoints
-              tests/test_litellm/proxy/test_*.py
-              tests/test_gateway
+            test-path: |-
+              tests/unit/proxy/db
+              --ignore=tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
+              --ignore=tests/unit/proxy/db/test_update_daily_tag_spend.py
+              tests/unit/proxy/middleware
+              --ignore=tests/unit/proxy/middleware/test_request_size_limit_middleware.py
+              tests/unit/proxy/spend_tracking
+              --ignore=tests/unit/proxy/spend_tracking/test_search_api_logging.py
+              tests/unit/proxy/pass_through_endpoints
+              tests/unit/proxy/experimental
+              tests/unit/proxy/common_utils
+              --ignore=tests/unit/proxy/common_utils/test_cache_aware_routing.py
+              --ignore=tests/unit/proxy/common_utils/test_check_batch_cost.py
+              --ignore=tests/unit/proxy/common_utils/test_check_responses_cost.py
+              --ignore=tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py
+              --ignore=tests/unit/proxy/common_utils/test_realtime_cache.py
+              tests/unit/proxy/enterprise_billing
+              tests/unit/proxy/types_utils
+              tests/unit/proxy/logging_endpoints
+              tests/unit/gateway
+              tests/unit/proxy/management
+              tests/unit/proxy/management_endpoints/test_roi_calculator_endpoints.py
+              tests/unit/proxy/roi_calculator
+            python-version: "3.12"
             workers: 4
-            reruns: 2
+            reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: proxy-infra-root
+            test-path: |-
+              tests/unit/proxy/test_*.py
+              --ignore=tests/unit/proxy/test_aproxy_startup.py
+              --ignore=tests/unit/proxy/test_credential_slot_registry.py
+              --ignore=tests/unit/proxy/test_custom_callback_input.py
+              --ignore=tests/unit/proxy/test_custom_logger_s3_gcs.py
+              --ignore=tests/unit/proxy/test_custom_tokenizer_bug.py
+              --ignore=tests/unit/proxy/test_db_schema_changes.py
+              --ignore=tests/unit/proxy/test_deprecated_key_grace_period.py
+              --ignore=tests/unit/proxy/test_get_favicon.py
+              --ignore=tests/unit/proxy/test_get_image.py
+              --ignore=tests/unit/proxy/test_prisma_client_backoff_retry.py
+              --ignore=tests/unit/proxy/test_prompt_test_endpoint.py
+              --ignore=tests/unit/proxy/test_proxy_config_unit_test.py
+              --ignore=tests/unit/proxy/test_proxy_custom_auth.py
+              --ignore=tests/unit/proxy/test_proxy_reject_logging.py
+              --ignore=tests/unit/proxy/test_proxy_server.py
+              --ignore=tests/unit/proxy/test_proxy_setting_guardrails.py
+              --ignore=tests/unit/proxy/test_proxy_token_counter.py
+              --ignore=tests/unit/proxy/test_proxy_utils.py
+              --ignore=tests/unit/proxy/test_reducto_ocr_route.py
+              --ignore=tests/unit/proxy/test_response_polling_pre_call_checks.py
+              --ignore=tests/unit/proxy/test_server_root_path.py
+              --ignore=tests/unit/proxy/test_ui_path_detection.py
+              --ignore=tests/unit/proxy/test_unit_test_proxy_hooks.py
+              --ignore=tests/unit/proxy/test_update_spend.py
+              --ignore=tests/unit/proxy/test_zero_cost_model_budget_bypass.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
 
           - shard: caching-local
-            artifact-name: caching-local
             test-path: >-
-              tests/local_testing/test_cache_preset_key.py
-              tests/local_testing/test_caching_handler.py
-              tests/local_testing/test_responses_stream_cache_keys.py
-              tests/local_testing/test_unit_test_caching.py
+              tests/unit/caching
+            python-version: "3.12"
             workers: 2
-            reruns: 2
+            reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
+            dist: loadscope
 
           - shard: proxy-extras
-            artifact-name: proxy-extras
-            test-path: "tests/litellm-proxy-extras"
+            test-path: >-
+              tests/unit/litellm_proxy_extras
+            python-version: "3.12"
             workers: 2
-            reruns: 2
+            reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
+            dist: loadscope
 
           - shard: enterprise-package
-            artifact-name: enterprise-package
-            test-path: "tests/enterprise"
+            test-path: |-
+              tests/unit/enterprise/integrations
+              tests/unit/enterprise/proxy/auth
+              tests/unit/enterprise/proxy/guardrails
+              tests/unit/enterprise/proxy/management_endpoints
+              tests/unit/enterprise/proxy/test_audit_logging_endpoints.py
+              tests/unit/enterprise/proxy/test_liteadmin.py
+              tests/unit/enterprise/enterprise_callbacks/test_prometheus_logging_callbacks.py
+            python-version: "3.12"
             workers: 4
-            reruns: 2
+            reruns: 0
             timeout-minutes: 20
             job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: enterprise-managed-files
+            test-path: >-
+              tests/unit/enterprise/proxy/hooks
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: load
 
           - shard: responses-caching-types
-            artifact-name: responses-caching-types
-            test-path: >-
-              tests/test_litellm/responses
-              tests/test_litellm/caching
-              tests/test_litellm/types
+            test-path: |-
+              tests/unit/responses/litellm_completion_transformation
+              tests/unit/responses/test_additional_tools.py
+              tests/unit/responses/test_custom_tool_call.py
+              tests/unit/responses/test_dispatch.py
+              tests/unit/responses/test_metadata_codex_callback.py
+              tests/unit/responses/test_no_duplicate_spend_logs.py
+              tests/unit/responses/test_null_test_fix.py
+              tests/unit/responses/test_responses_api_bridge_flag.py
+              tests/unit/responses/test_responses_api_lifecycle.py
+              tests/unit/responses/test_responses_api_request_body.py
+              tests/unit/responses/test_responses_prompt_management.py
+              tests/unit/responses/test_responses_router_cooldown.py
+              tests/unit/responses/test_responses_streaming_iterator.py
+              tests/unit/responses/test_responses_supported_endpoints_passthrough.py
+              tests/unit/responses/test_responses_utils.py
+              tests/unit/responses/test_responses_websocket_all_providers.py
+              tests/unit/responses/test_rust_bridge_websocket.py
+              tests/unit/responses/test_sse_output_recovery.py
+              tests/unit/responses/test_streaming_iterator.py
+              tests/unit/responses/test_streaming_iterator_error_events.py
+              tests/unit/responses/test_text_format_conversion.py
+              tests/unit/types
+            python-version: "3.12"
             workers: 2
+            reruns: 0
+            timeout-minutes: 20
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: key-generation
+            test-path: >-
+              tests/unit/proxy/management_endpoints/test_key_generate_prisma.py
+            python-version: "3.12"
+            workers: 0
             reruns: 2
             timeout-minutes: 20
             job-timeout-minutes: 60
-    uses: ./.github/workflows/_test-unit-base.yml
-    with:
-      test-path: ${{ matrix.test-path }}
-      workers: ${{ matrix.workers }}
-      reruns: ${{ matrix.reruns }}
-      timeout-minutes: ${{ matrix.timeout-minutes }}
-      job-timeout-minutes: ${{ matrix.job-timeout-minutes }}
-      artifact-name: ${{ matrix.artifact-name }}
-      legacy-mcp-peer: ${{ matrix.shard == 'mcp-integration' }}
+            dist: loadscope
+
+          - shard: auth-checks
+            test-path: |-
+              tests/unit/proxy/auth/test_auth_checks.py
+              tests/unit/proxy/auth/test_user_api_key_auth.py
+              tests/unit/proxy/test_credential_slot_registry.py
+              tests/unit/proxy/test_deprecated_key_grace_period.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: jwt-and-keys
+            test-path: |-
+              tests/unit/proxy/auth/test_jwt.py
+              tests/unit/proxy/management_endpoints/test_jwt_key_mapping.py
+              tests/unit/proxy/test_proxy_custom_auth.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: proxy-utils
+            test-path: >-
+              tests/unit/proxy/test_proxy_utils.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: worksteal
+
+          - shard: proxy-server-core
+            test-path: |-
+              tests/proxy_unit_tests/test_proxy_server_gemini_pass_through.py
+              tests/unit/proxy/test__lazy_features.py
+              tests/unit/proxy/test_aproxy_startup.py
+              tests/unit/proxy/test_proxy_server.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: proxy-runtime
+            test-path: |-
+              tests/unit/proxy/auth/test_multipart_bypass_repro.py
+              tests/unit/proxy/auth/test_proxy_routes.py
+              tests/unit/proxy/middleware/test_request_size_limit_middleware.py
+              tests/unit/proxy/test_proxy_config_unit_test.py
+              tests/unit/proxy/test_proxy_token_counter.py
+              tests/unit/proxy/test_server_root_path.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: mcp-oauth
+            test-path: |-
+              tests/unit/proxy/_experimental/mcp_server/test_discoverable_endpoints.py
+              tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
+              tests/unit/proxy/_experimental/mcp_server/test_db_credentials.py
+              tests/unit/proxy/_experimental/mcp_server/outbound_credentials
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: custom-logging
+            test-path: |-
+              tests/proxy_unit_tests/test_proxy_custom_logger.py
+              tests/unit/proxy/test_custom_callback_input.py
+              tests/unit/proxy/test_custom_logger_s3_gcs.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: logging-misc
+            test-path: |-
+              tests/unit/proxy/management_helpers/test_audit_logs_proxy.py
+              tests/unit/proxy/spend_tracking/test_search_api_logging.py
+              tests/unit/proxy/test_proxy_reject_logging.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: db-and-spend
+            test-path: |-
+              tests/unit/proxy/common_utils/test_proxy_encrypt_decrypt.py
+              tests/unit/proxy/db/db_transaction_queue/test_e2e_pod_lock_manager.py
+              tests/unit/proxy/db/test_update_daily_tag_spend.py
+              tests/unit/proxy/test_db_schema_changes.py
+              tests/unit/proxy/test_prisma_client_backoff_retry.py
+              tests/unit/proxy/test_update_spend.py
+              tests/unit/skills/test_skills_db.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: guardrails-hooks
+            test-path: |-
+              tests/unit/proxy/hooks/test_banned_keyword_list.py
+              tests/unit/proxy/test_proxy_setting_guardrails.py
+              tests/unit/proxy/test_unit_test_proxy_hooks.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: guardrails-tests
+            test-path: >-
+              tests/guardrails_tests
+              --deselect=tests/guardrails_tests/test_custom_guardrail.py::test_get_guardrail_dynamic_request_body_params
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: budgets
+            test-path: |-
+              tests/unit/proxy/auth/test_default_end_user_budget_simple.py
+              tests/unit/proxy/hooks/test_unit_test_max_model_budget_limiter.py
+              tests/unit/proxy/test_zero_cost_model_budget_bypass.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: endpoints-and-responses
+            test-path: |-
+              tests/proxy_unit_tests/test_proxy_exception_mapping.py
+              tests/unit/proxy/lens
+              tests/unit/proxy/auth/test_models_fallback_endpoint.py
+              tests/unit/proxy/common_utils/test_check_batch_cost.py
+              tests/unit/proxy/common_utils/test_check_responses_cost.py
+              tests/unit/proxy/common_utils/test_realtime_cache.py
+              tests/unit/proxy/google_endpoints/test_gemini_agents_endpoints.py
+              tests/unit/proxy/google_endpoints/test_google_endpoint_routing.py
+              tests/unit/proxy/google_endpoints/test_google_gemini_proxy_request.py
+              tests/unit/proxy/public_endpoints/test_blog_posts_endpoint.py
+              tests/unit/proxy/response_polling
+              tests/unit/proxy/test_custom_tokenizer_bug.py
+              tests/unit/proxy/test_get_favicon.py
+              tests/unit/proxy/test_get_image.py
+              tests/unit/proxy/test_prompt_test_endpoint.py
+              tests/unit/proxy/test_reducto_ocr_route.py
+              tests/unit/proxy/test_response_polling_pre_call_checks.py
+              tests/unit/proxy/test_ui_path_detection.py
+            python-version: "3.12"
+            workers: 4
+            reruns: 2
+            timeout-minutes: 15
+            job-timeout-minutes: 60
+            dist: loadscope
+
+          - shard: lens-python-310
+            test-path: >-
+              tests/unit/proxy/lens
+            python-version: "3.10"
+            workers: 0
+            reruns: 0
+            timeout-minutes: 5
+            job-timeout-minutes: 60
+            dist: loadscope
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        timeout-minutes: 3
+        with:
+          persist-credentials: false
+
+      - name: Detect relevant changes
+        id: changes
+        timeout-minutes: 2
+        uses: ./.github/actions/detect-changes
+
+      - name: Set up Python
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 3
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.UV_PYTHON }}
+
+      - name: Set up uv
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 3
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Cache uv dependencies
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 5
+        uses: ./.github/actions/cache-uv-downloads
+
+      - name: Set up the Rust build
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 5
+        uses: ./.github/actions/rust-bridge
+        with:
+          artifact: ${{ needs.rust-bridge.outputs.artifact }}
+
+      - name: Install dependencies
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 8
+        env:
+          RUST_BRIDGE_ARTIFACT: ${{ needs.rust-bridge.outputs.artifact }}
+        run: |
+          diff -u model_prices_and_context_window.json litellm/model_prices_and_context_window_backup.json
+          if [ -z "$RUST_BRIDGE_ARTIFACT" ]; then
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils
+          else
+            .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router --extra saml --extra caching --extra extra_proxy --extra proxy-runtime --extra utils --no-install-project
+            uv pip install --no-deps --python .venv/bin/python rust-bridge-dist/*.whl
+            cp rust-bridge-dist/litellm/rust_bridge/_native.abi3.so litellm/rust_bridge/_native.abi3.so
+            uv run --no-sync python -c "import importlib.metadata; import litellm.rust_bridge._native; print(importlib.metadata.version('litellm'))"
+          fi
+          uv run --no-sync python -c 'import os, sys; print(sys.version); assert f"{sys.version_info.major}.{sys.version_info.minor}" == os.environ["UV_PYTHON"]'
+
+      - name: Cache Prisma binaries
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 3
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Generate Prisma client
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: 3
+        run: |
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Run tests
+        id: tests
+        if: steps.changes.outputs.decision != 'skip'
+        timeout-minutes: ${{ matrix.timeout-minutes }}
+        env:
+          TEST_PATH: ${{ matrix.test-path }}
+          MAX_FAILURES: "10"
+          WORKERS: ${{ matrix.workers }}
+          RERUNS: ${{ matrix.reruns }}
+          TEST_TIMEOUT_SECONDS: "120"
+          DIST: ${{ matrix.dist }}
+          COVERAGE_CORE: sysmon
+        run: |
+          echo "has-coverage=false" >> "$GITHUB_OUTPUT"
+          selection="${TEST_PATH}"
+          if [ -z "${selection// /}" ]; then
+            echo "shard selection is empty; nothing to run"
+            exit 0
+          fi
+          pytest_args=()
+          existing_paths=0
+          for token in ${selection}; do
+            case "${token}" in
+              -*) pytest_args+=("${token}") ;;
+              *)
+                if [ -e "${token%%::*}" ]; then
+                  pytest_args+=("${token}")
+                  existing_paths=$((existing_paths + 1))
+                else
+                  echo "::warning::${token} does not exist; drop it from this shard's test-path"
+                fi
+                ;;
+            esac
+          done
+          if [ "${existing_paths}" -eq 0 ]; then
+            echo "No path in the selection exists (${selection}); nothing to run"
+            exit 0
+          fi
+          xdist_args=()
+          if [ "${WORKERS}" != "0" ]; then
+            xdist_args=(-n "${WORKERS}" --dist="${DIST}")
+          fi
+          set +e
+          uv run --no-sync pytest "${pytest_args[@]}" \
+            --tb=short -vv \
+            --maxfail="${MAX_FAILURES}" \
+            "${xdist_args[@]}" \
+            --reruns "${RERUNS}" \
+            --reruns-delay 1 \
+            --timeout="${TEST_TIMEOUT_SECONDS}" \
+            --rerun-except "from pytest-timeout" \
+            --durations=20 \
+            --cov=./litellm --cov=./enterprise/litellm_enterprise \
+            --cov-report=xml:coverage.xml \
+            --cov-config=pyproject.toml
+          status=$?
+          set -e
+          if [ -f coverage.xml ]; then
+            echo "has-coverage=true" >> "$GITHUB_OUTPUT"
+          fi
+          if [ "$status" -eq 5 ]; then
+            echo "pytest collected no tests from ${selection}; passing"
+            exit 0
+          fi
+          exit "$status"
+
+      - name: Save coverage report
+        if: always() && steps.changes.outputs.decision != 'skip'
+        uses: actions/upload-artifact@4cec3d8aa04e39d1a68397de0c4cd6fb9dce8ec1 # v4.6.1
+        with:
+          name: coverage-${{ matrix.shard }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: coverage.xml
+          retention-days: 1
+  ui-unit:
+    name: ui-unit
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest-16-cores
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: ui/litellm-dashboard
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Detect relevant changes
+        id: changes
+        uses: ./.github/actions/detect-changes
+        with:
+          category: ui
+
+      - name: Setup Node.js
+        if: steps.changes.outputs.decision != 'skip'
+        uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version-file: ui/litellm-dashboard/.nvmrc
+          cache: "npm"
+          cache-dependency-path: ui/litellm-dashboard/package-lock.json
+
+      - name: Install dependencies
+        if: steps.changes.outputs.decision != 'skip'
+        run: npm ci
+
+      - name: Check UI production source types
+        if: steps.changes.outputs.decision != 'skip'
+        run: npm run typecheck
+
+      - name: Run UI type tests (Vitest)
+        if: steps.changes.outputs.decision != 'skip'
+        env:
+          CI: "true"
+        run: npm run test:types
+
+      - name: Run UI unit tests (Vitest)
+        if: steps.changes.outputs.decision != 'skip'
+        env:
+          CI: "true"
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          full_suite() { npm run test -- --run --pool forks --maxWorkers=14; }
+
+          if [ -z "$BASE_SHA" ]; then
+            echo "Push to $GITHUB_REF_NAME: running the full suite"
+            full_suite
+            exit 0
+          fi
+
+          merge_base=$(gh api "repos/${{ github.repository }}/compare/${BASE_SHA}...${HEAD_SHA}?per_page=1" --jq '.merge_base_commit.sha')
+          test -n "$merge_base"
+          git fetch --no-tags --depth=1 origin "$merge_base" "$HEAD_SHA"
+          changed_files=()
+          while IFS= read -r f; do
+            changed_files+=("$f")
+          done < <(git diff --name-only --relative "$merge_base" "$HEAD_SHA" -- .)
+          if [ ${#changed_files[@]} -eq 0 ]; then
+            echo "No UI files changed in this PR; skipping unit tests."
+            exit 0
+          fi
+
+          scope=$(printf '%s\n' "${changed_files[@]}" | bash "$GITHUB_WORKSPACE/.github/scripts/select_ui_test_scope.sh")
+          if [ "$scope" != related ]; then
+            echo "Pull request: ${#changed_files[@]} changed UI files reach outside src/, so related would miss their dependents; running the full suite"
+            full_suite
+            exit 0
+          fi
+
+          echo "Pull request: running tests related to ${#changed_files[@]} changed UI files"
+          npm run test -- related "${changed_files[@]}" --run --passWithNoTests \
+            --pool forks --maxWorkers=14
+  docs:
+    name: docs
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Detect relevant changes
+        id: changes
+        uses: ./.github/actions/detect-changes
+
+      - name: Checkout litellm-docs into docs/my-website (for documentation_tests)
+        if: steps.changes.outputs.decision != 'skip'
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          repository: BerriAI/litellm-docs
+          path: docs/my-website
+          persist-credentials: false
+
+      - name: Set up Python
+        if: steps.changes.outputs.decision != 'skip'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.12"
+
+      - name: Set up uv
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Cache uv dependencies
+        if: steps.changes.outputs.decision != 'skip' && github.ref == 'refs/heads/main'
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Cache uv dependencies
+        if: steps.changes.outputs.decision != 'skip' && github.ref != 'refs/heads/main'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: |
+            ~/.cache/uv
+            .venv
+          key: ${{ runner.os }}-uv-${{ hashFiles('uv.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
+
+      - name: Cache the Rust build
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/cache-cargo-build
+
+      - name: Install dependencies
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen --group ci --group proxy-dev --extra google --extra proxy --extra semantic-router
+
+      - name: Cache Prisma binaries
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Generate Prisma client
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+
+      - name: Run documentation validation tests
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          uv run --no-sync python ./tests/documentation_tests/test_env_keys.py
+          uv run --no-sync python ./tests/documentation_tests/test_router_settings.py
+          uv run --no-sync python ./tests/documentation_tests/test_api_docs.py
+          uv run --no-sync python ./tests/documentation_tests/test_circular_imports.py
+  helm:
+    name: helm
+    permissions:
+      contents: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Helm 3.11.1
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: "3.11.1"
+
+      - name: Download and verify Helm Unit Test Plugin
+        run: |
+          curl -fsSLo "$RUNNER_TEMP/helm-unittest.tgz" https://github.com/helm-unittest/helm-unittest/releases/download/v0.8.2/helm-unittest-linux-amd64-0.8.2.tgz
+          echo "56ab3091e6fa52a7c92ee951def9bed957f295d9ce98483aed404e748d7b3a94  $RUNNER_TEMP/helm-unittest.tgz" | sha256sum -c -
+
+      - name: Install Helm Unit Test Plugin
+        run: |
+          PLUGIN_DIR="$(helm env HELM_PLUGINS)/helm-unittest"
+          mkdir -p "$PLUGIN_DIR"
+          tar -xzf "$RUNNER_TEMP/helm-unittest.tgz" -C "$PLUGIN_DIR"
+          helm plugin list
+
+      - name: Run unit tests
+        run: |
+          for chart in helm/litellm-helm helm/litellm; do
+            declared="$(grep -h '^suite:' "$chart"/tests/*.yaml | wc -l | tr -d '[:space:]')"
+            output="$(mktemp)"
+            helm unittest -f 'tests/*.yaml' "$chart" | tee "$output"
+            executed="$(sed -n 's/^Test Suites:.*[[:space:]]\([0-9][0-9]*\) total$/\1/p' "$output")"
+            if [ "$declared" != "$executed" ]; then
+              echo "::error::$chart declares $declared test suites but helm-unittest ran $executed. Suites are being skipped silently, so their assertions never execute."
+              exit 1
+            fi
+            echo "$chart: all $declared declared test suites ran"
+          done
+  openai-sdk-compat:
+    name: OpenAI ${{ matrix.openai-version }} compatibility
+    permissions:
+      contents: read
+      pull-requests: read
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        openai-version: ["2.20.0", "3.0.0", "3.25.0"]
+    env:
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+      PYTHONPATH: ${{ github.workspace }}
+      UV_PYTHON: "3.10"
+      OPENAI_VERSION: ${{ matrix.openai-version }}
+    steps:
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Detect relevant changes
+        id: changes
+        timeout-minutes: 2
+        uses: ./.github/actions/detect-changes
+
+      - name: Set up Python
+        if: steps.changes.outputs.decision != 'skip'
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: ${{ env.UV_PYTHON }}
+
+      - name: Set up uv
+        if: steps.changes.outputs.decision != 'skip'
+        uses: ./.github/actions/setup-uv-with-retries
+        with:
+          version: "0.10.9"
+
+      - name: Install dependencies
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          .github/scripts/uv_sync_with_retries.sh --frozen --group dev --group proxy-dev --extra proxy --no-install-workspace
+          uv pip install "openai==${OPENAI_VERSION:?}" --exclude-newer-package openai=2026-10-07T00:00:00Z
+          uv run --no-sync python -c 'import os, openai; assert openai.__version__ == os.environ["OPENAI_VERSION"], openai.__version__'
+
+      - name: Run OpenAI SDK compatibility tests
+        if: steps.changes.outputs.decision != 'skip'
+        run: |
+          uv run --no-sync pytest \
+            tests/unit/llms/openai/test_openai.py \
+            tests/unit/llms/openai/test_openai_common_utils.py \
+            tests/unit/llms/openai/test_openai_file_content_streaming.py \
+            tests/unit/test_openai_embedding_encoding_format_default.py \
+            tests/unit/llms/inception/test_inception_completion_transformation.py::test_inception_fim_targets_fim_endpoint \
+            tests/unit/llms/inception/test_inception_completion_transformation.py::test_inception_fim_async \
+            tests/unit/llms/azure/test_azure_exception_mapping.py \
+            tests/unit/test_completion_timeout_resolution.py \
+            tests/unit/types/test_router.py \
+            tests/unit/test_exception_header_preservation.py \
+            tests/unit/integrations/otel/test_otel_v2_sources_of_truth.py::test_speech_binary_response_still_streaming_reports_the_bytes_downloaded_so_far \
+            --tb=short -q
+
+      - name: Run workload identity tests with SDK 3
+        if: steps.changes.outputs.decision != 'skip' && startsWith(matrix.openai-version, '3.')
+        run: uv run --no-sync pytest tests/unit/llms/openai/test_openai_workload_identity.py --tb=short -q
+
+      - name: Check consumer types with the installed SDK
+        if: steps.changes.outputs.decision != 'skip'
+        run: uv run --no-sync basedpyright --pythonpath .venv/bin/python --project tests/typing/pyrightconfig.json
+  coverage:
+    name: coverage
+    needs: unit
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Download coverage report
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          pattern: coverage-*-${{ github.run_id }}-*
+          path: coverage-reports
+          merge-multiple: false
+
+      - name: Upload to Codecov
+        id: codecov-upload
+        continue-on-error: true
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          use_oidc: true
+          directory: coverage-reports
+          root_dir: ${{ github.workspace }}
+          flags: unit
+          fail_ci_if_error: false
+
+      - name: Upload to Codecov (retry)
+        if: steps.codecov-upload.outcome == 'failure'
+        continue-on-error: true
+        uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
+        with:
+          use_oidc: true
+          directory: coverage-reports
+          root_dir: ${{ github.workspace }}
+          flags: unit
+          fail_ci_if_error: false
+  unit-passed:
+    name: unit passed
+    permissions: {}
+    needs: [rust-bridge, assert-shard-coverage, unit, ui-unit, docs, helm, openai-sdk-compat]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Require every unit job to succeed
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        run: |
+          jq -r 'to_entries[] | "\(.key): \(.value.result)"' <<< "$NEEDS"
+          jq -e 'all(.[]; .result == "success")' <<< "$NEEDS" > /dev/null

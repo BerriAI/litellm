@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { renderWithProviders } from "../../tests/test-utils";
 import Sidebar, { menuGroups, getBreadcrumb } from "./leftnav";
@@ -13,7 +13,7 @@ vi.mock("../utils/roles", async (importOriginal) => {
     rolesWithWriteAccess: ["admin", "internal"],
     rolesAllowedToViewWriteScopedPages: ["admin", "internal", "admin_viewer"],
     isAdminRole: (role: string) => role === "admin" || role === "admin_viewer",
-    isUserTeamAdminForAnyTeam: () => false,
+    isUserTeamAdminForAnyTeam: actual.isUserTeamAdminForAnyTeam,
   };
 });
 
@@ -24,7 +24,7 @@ vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn() }),
 }));
 
-const { mockUseAuthorized, mockUseOrganizations } = vi.hoisted(() => {
+const { mockUseAuthorized, mockUseOrganizations, mockUseTeams } = vi.hoisted(() => {
   const mockUseAuthorized = vi.fn(() => ({
     userId: "test-user-id",
     accessToken: "test-access-token",
@@ -43,7 +43,13 @@ const { mockUseAuthorized, mockUseOrganizations } = vi.hoisted(() => {
     error: null,
   }));
 
-  return { mockUseAuthorized, mockUseOrganizations };
+  const mockUseTeams = vi.fn(() => ({
+    data: [] as Array<{ members_with_roles: Array<{ user_id: string; role: string }> }>,
+    isLoading: false,
+    error: null,
+  }));
+
+  return { mockUseAuthorized, mockUseOrganizations, mockUseTeams };
 });
 
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
@@ -55,7 +61,7 @@ vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
-  useTeams: () => ({ data: [], isLoading: false, error: null }),
+  useTeams: mockUseTeams,
 }));
 
 vi.mock("@/app/(dashboard)/hooks/uiConfig/useUIConfig", () => {
@@ -103,6 +109,30 @@ const placementsOf = (page: string): string[] =>
     ),
   ]);
 
+const teamAdminAuthorization = {
+  userId: "team-admin-user-id",
+  accessToken: "test-access-token",
+  userRole: "internal",
+  isViewOnly: false,
+  token: "test-token",
+  userEmail: "teamadmin@example.com",
+  premiumUser: false,
+  disabledPersonalKeyCreation: false,
+  showSSOBanner: false,
+};
+
+const teamMemberAuthorization = {
+  userId: "team-member-user-id",
+  accessToken: "test-access-token",
+  userRole: "internal",
+  isViewOnly: false,
+  token: "test-token",
+  userEmail: "teamuser@example.com",
+  premiumUser: false,
+  disabledPersonalKeyCreation: false,
+  showSSOBanner: false,
+};
+
 describe("Sidebar (leftnav)", () => {
   const defaultProps = {
     collapsed: false,
@@ -111,6 +141,12 @@ describe("Sidebar (leftnav)", () => {
   afterEach(() => {
     mockUseAuthorized.mockReset();
     mockUseOrganizations.mockReset();
+    mockUseTeams.mockReset();
+    mockUseTeams.mockReturnValue({
+      data: [],
+      isLoading: false,
+      error: null,
+    });
     mockUseThemeImpl = unbrandedTheme;
     navState.pathname = "/ui/api-keys";
   });
@@ -134,6 +170,37 @@ describe("Sidebar (leftnav)", () => {
     expect(classesOf(light).has("hidden")).toBe(false);
     expect(classesOf(dark).has("hidden")).toBe(true);
     expect(classesOf(dark).has("dark:block")).toBe(true);
+  });
+
+  const collapsedLogos = () => {
+    const home = within(screen.getByRole("link", { name: /litellm home/i }));
+    return {
+      light: home.getByRole("img", { name: "LiteLLM" }),
+      dark: home.getByRole("presentation", { hidden: true }),
+    };
+  };
+
+  it("requests the bundled monogram for both themes when collapsed", () => {
+    renderWithProviders(<Sidebar collapsed />);
+
+    const { light, dark } = collapsedLogos();
+
+    expect(light).toHaveAttribute("src", expect.stringMatching(/\/get_image\?variant=monogram$/));
+    expect(dark).toHaveAttribute("src", expect.stringMatching(/\/get_image\?theme=dark&variant=monogram$/));
+  });
+
+  it("keeps a configured custom logo when collapsed instead of the LiteLLM monogram", () => {
+    mockUseThemeImpl = () => ({
+      ...unbrandedTheme(),
+      logoUrl: "https://cdn.example.com/logo.png",
+      logoUrlDark: "https://cdn.example.com/logo-dark.png",
+    });
+    renderWithProviders(<Sidebar collapsed />);
+
+    const { light, dark } = collapsedLogos();
+
+    expect(light).toHaveAttribute("src", "https://cdn.example.com/logo.png");
+    expect(dark).toHaveAttribute("src", "https://cdn.example.com/logo-dark.png");
   });
 
   it("prefers a configured dark logo over the light one in dark mode", () => {
@@ -465,6 +532,7 @@ describe("Sidebar (leftnav)", () => {
 
       expect(screen.queryByText("Guardrails Monitor")).not.toBeInTheDocument();
       expect(screen.getByText("Usage")).toBeInTheDocument();
+      expect(screen.getByRole("link", { name: "Lens Beta" })).toHaveAttribute("href", "/ui/lens");
       expect(screen.getByText("Cost Optimization")).toBeInTheDocument();
     });
 
@@ -513,6 +581,76 @@ describe("Sidebar (leftnav)", () => {
     renderWithProviders(<Sidebar {...defaultProps} />);
 
     expect(screen.getByText("Organizations")).toBeInTheDocument();
+  });
+
+  it("shows Projects to an internal user who administers a team", () => {
+    mockUseAuthorized.mockReturnValue(teamAdminAuthorization);
+    mockUseTeams.mockReturnValue({
+      data: [
+        {
+          members_with_roles: [{ user_id: "team-admin-user-id", role: "admin" }],
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+
+    expect(screen.getByRole("link", { name: /Projects/ })).toBeInTheDocument();
+  });
+
+  it("hides Projects when the feature flag is disabled for a team admin", () => {
+    mockUseAuthorized.mockReturnValue(teamAdminAuthorization);
+    mockUseTeams.mockReturnValue({
+      data: [
+        {
+          members_with_roles: [{ user_id: "team-admin-user-id", role: "admin" }],
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI={false} />);
+
+    expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
+  });
+
+  it("hides Projects from an internal user who is not a team admin", () => {
+    mockUseAuthorized.mockReturnValue(teamMemberAuthorization);
+
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+
+    expect(screen.queryByRole("link", { name: /Projects/ })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    { allowlist: ["teams"], visible: false },
+    { allowlist: ["teams", "projects"], visible: true },
+  ])("applies the internal-user page allowlist $allowlist to Projects for team admins", ({ allowlist, visible }) => {
+    mockUseAuthorized.mockReturnValue(teamAdminAuthorization);
+    mockUseTeams.mockReturnValue({
+      data: [
+        {
+          members_with_roles: [{ user_id: "team-admin-user-id", role: "admin" }],
+        },
+      ],
+      isLoading: false,
+      error: null,
+    });
+
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI enabledPagesInternalUsers={allowlist} />);
+
+    expect(screen.queryByRole("link", { name: /Projects/ }) !== null).toBe(visible);
+  });
+
+  it("shows Projects to a user whose global role is org admin", () => {
+    mockUseAuthorized.mockReturnValue({ ...teamMemberAuthorization, userRole: "Org Admin" });
+
+    renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI />);
+
+    expect(screen.getByRole("link", { name: /Projects/ })).toHaveAttribute("href", "/ui/projects");
   });
 
   it("marks the nav item for the current route active", () => {
@@ -576,13 +714,13 @@ describe("Sidebar (leftnav)", () => {
     expect(label).toHaveClass("group-data-[collapsed=true]/sidebar:hidden");
   });
 
-  it("shows Cost Optimization with a Beta badge and no feature-flag gate", () => {
+  it("shows Cost Optimization without a Beta badge and no feature-flag gate", () => {
     const { container } = renderWithProviders(<Sidebar {...defaultProps} enableProjectsUI={false} />);
 
     const costOptimization = container.querySelector('a[href*="cost-optimization"]');
     expect(costOptimization).not.toBeNull();
-    expect(costOptimization!).toHaveTextContent(/Cost Optimization/);
-    expect(costOptimization!).toHaveTextContent(/Beta/);
+    expect(costOptimization!).toHaveTextContent("Cost Optimization");
+    expect(costOptimization!).not.toHaveTextContent("Beta");
 
     expect(container.querySelector('a[href*="projects"]')).toBeNull();
   });

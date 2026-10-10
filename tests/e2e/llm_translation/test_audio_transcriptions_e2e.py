@@ -17,11 +17,12 @@ from typing import Final
 
 import pytest
 from e2e_config import unique_marker
-from e2e_http import UnknownApiError
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
+from e2e_http import UnknownApiError, unwrap
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
 from proxy_client import ProxyClient
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sdk_clients import SdkClients
 
 pytestmark = pytest.mark.e2e
@@ -30,6 +31,8 @@ WEATHER_WAV = (
     Path(__file__).resolve().parent / "realtime" / "fixtures" / "weather_question_24k.wav"
 )
 
+OPENAI_TRANSCRIBE_MODEL: Final = "openai/gpt-4o-mini-transcribe"
+OPENAI_WHISPER_MODEL: Final = "openai/whisper-1"
 MISSING_MODEL_PHRASES: Final = ("model=none", "invalid model", "model is required")
 
 
@@ -47,7 +50,7 @@ def _register(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str]
     model_id = proxy.create_model(
         model,
         LiteLLMParamsBody(
-            model="openai/gpt-4o-mini-transcribe", api_key="os.environ/OPENAI_API_KEY"
+            model=OPENAI_TRANSCRIBE_MODEL, api_key="os.environ/OPENAI_API_KEY"
         ),
     )
     resources.defer(lambda: proxy.delete_model(model_id))
@@ -56,6 +59,15 @@ def _register(proxy: ProxyClient, resources: ResourceManager) -> tuple[str, str]
 
 class TestAudioTranscriptions:
     @pytest.mark.covers("llm.audio_transcriptions.openai.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.AUDIO,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_TRANSCRIBE_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_audio_transcriptions_returns_text(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
@@ -72,6 +84,15 @@ class TestAudioTranscriptions:
         )
 
     @pytest.mark.covers("llm.audio_transcriptions.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.AUDIO,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_TRANSCRIBE_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_missing_file_returns_error(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
@@ -98,6 +119,12 @@ class TestAudioTranscriptions:
                 pytest.fail(f"empty audio expected a file-specific 400, got {other!r}")
 
     @pytest.mark.covers("llm.audio_transcriptions.openai.input_validation.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.AUDIO,
+        )
+    )
     def test_missing_model_returns_error(
         self, proxy: ProxyClient, resources: ResourceManager
     ) -> None:
@@ -119,3 +146,78 @@ class TestAudioTranscriptions:
                 )
             case other:
                 pytest.fail(f"missing model expected a model-specific 400, got {other!r}")
+
+
+class _WhisperForm(BaseModel):
+    model: str
+    response_format: str
+    timestamp_granularities: str | None = Field(default=None, serialization_alias="timestamp_granularities[]")
+
+
+class _TranscriptWord(BaseModel):
+    word: str
+    start: float
+    end: float
+
+
+class _VerboseTranscription(BaseModel):
+    text: str
+    words: list[_TranscriptWord] = []
+
+
+class TestWhisperTranscriptionFormats:
+    def _upload[R: BaseModel](
+        self, proxy: ProxyClient, resources: ResourceManager, form: _WhisperForm, response_type: type[R]
+    ) -> R:
+        model_id = proxy.create_model(
+            form.model, LiteLLMParamsBody(model=OPENAI_WHISPER_MODEL, api_key="os.environ/OPENAI_API_KEY")
+        )
+        resources.defer(lambda: proxy.delete_model(model_id))
+        return unwrap(
+            proxy.transport.upload(
+                "/v1/audio/transcriptions",
+                headers=proxy.transport.bearer(resources.key()),
+                form=form,
+                filename=WEATHER_WAV.name,
+                content=WEATHER_WAV.read_bytes(),
+                file_content_type="audio/wav",
+                response_type=response_type,
+            )
+        )
+
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.AUDIO,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_WHISPER_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_vtt_format_returns_webvtt_transcript(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+        form = _WhisperForm(model=f"e2e-whisper-vtt-{unique_marker()}", response_format="vtt")
+        transcript = self._upload(proxy, resources, form, _TranscriptionResult)
+        assert transcript.text.lstrip().startswith("WEBVTT"), f"vtt transcript is not WebVTT: {transcript.text[:200]!r}"
+        assert "weather" in transcript.text.lower(), f"vtt transcript lost the spoken words: {transcript.text!r}"
+
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.AUDIO,
+            providers=(Provider.OPENAI,),
+            models=(OPENAI_WHISPER_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_verbose_json_returns_word_timestamps(self, proxy: ProxyClient, resources: ResourceManager) -> None:
+        form = _WhisperForm(
+            model=f"e2e-whisper-verbose-{unique_marker()}",
+            response_format="verbose_json",
+            timestamp_granularities="word",
+        )
+        transcript = self._upload(proxy, resources, form, _VerboseTranscription)
+        assert "weather" in transcript.text.lower(), f"verbose transcript lost the spoken words: {transcript.text!r}"
+        assert transcript.words, f"word timestamps were requested but none came back: {transcript!r}"
+        assert all(word.start <= word.end for word in transcript.words), (
+            f"word timings out of order: {transcript.words}"
+        )

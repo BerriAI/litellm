@@ -7,10 +7,12 @@ import json
 import re
 import time
 import types
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from itertools import chain
 from typing import TYPE_CHECKING, Final, Literal, cast, overload
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -26,13 +28,21 @@ from litellm.litellm_core_utils.core_helpers import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _parse_content_for_reasoning,
+    drop_lookaround_regex_patterns,
+    parse_content_for_reasoning,
+    tool_with_sanitized_parameters,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockConverseMessagesProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
     make_valid_bedrock_tool_name,
+)
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    CONVERTED_SYSTEM_NOTE,
+    is_system_message,
+    message_field,
+    parts_of,
 )
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING,
@@ -42,6 +52,8 @@ from litellm.llms.anthropic.chat.transformation import (
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
+from litellm.llms.bedrock.chat.tool_result_images import place_tool_result_images
+from litellm.llms.bedrock.common_utils import bedrock_model_supports_regex_lookaround
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     bedrock_request_metadata_is_owned,
@@ -55,9 +67,11 @@ from litellm.types.llms.openai import (
     ChatCompletionAnnotation,
     ChatCompletionAssistantMessage,
     ChatCompletionAssistantToolCall,
+    ChatCompletionCachedContent,
     ChatCompletionRedactedThinkingBlock,
     ChatCompletionResponseMessage,
     ChatCompletionSystemMessage,
+    ChatCompletionTextObject,
     ChatCompletionThinkingBlock,
     ChatCompletionToolCallChunk,
     ChatCompletionToolCallFunctionChunk,
@@ -91,6 +105,8 @@ from ..common_utils import (
     BedrockModelInfo,
     bedrock_converse_supports_parallel_tool_use_config,
     bedrock_model_accepts_cache_points,
+    bedrock_reasoning_effort_disabled,
+    bedrock_rejects_stop_sequences,
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_bedrock_application_inference_profile_arn,
@@ -119,6 +135,17 @@ UNSUPPORTED_BEDROCK_CONVERSE_BETA_PATTERNS: Final = [
 ]
 
 
+_TOOLS_AS_SENT: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+def _tools_the_model_accepts(
+    tools: Sequence[Mapping[str, object]], model: str, litellm_params: Mapping[str, object] | None
+) -> list[Mapping[str, object]]:
+    if bedrock_model_supports_regex_lookaround(model, litellm_params):
+        return list(tools)
+    return [tool_with_sanitized_parameters(tool, drop_lookaround_regex_patterns) for tool in tools]
+
+
 class AmazonConverseConfig(BaseConfig):
     """
     Reference - https://docs.aws.amazon.com/bedrock/latest/APIReference/API_runtime_Converse.html
@@ -139,7 +166,7 @@ class AmazonConverseConfig(BaseConfig):
         topP: int | None = None,
         topK: int | None = None,
     ) -> None:
-        locals_: Final = locals().copy()
+        locals_: Final[Mapping[str, object]] = dict(locals())
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)
@@ -527,7 +554,7 @@ class AmazonConverseConfig(BaseConfig):
             reasoning_config: Final = self._transform_reasoning_effort_to_reasoning_config(reasoning_effort)
             optional_params.update(reasoning_config)
         else:
-            mapped_thinking: Final = AnthropicConfig._map_reasoning_effort(
+            mapped_thinking: Final = AnthropicConfig.map_reasoning_effort(
                 reasoning_effort=reasoning_effort,
                 model=model,
                 custom_llm_provider="bedrock",
@@ -538,10 +565,10 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params.pop("output_config", None)
             else:
                 optional_params["thinking"] = mapped_thinking
-                if AnthropicConfig._is_adaptive_thinking_model(model, "bedrock"):
+                if AnthropicConfig.is_adaptive_thinking_model(model, "bedrock"):
                     mapped_effort = REASONING_EFFORT_TO_OUTPUT_CONFIG_EFFORT.get(reasoning_effort)
                     if mapped_effort is None:
-                        AnthropicConfig._raise_invalid_reasoning_effort(
+                        AnthropicConfig.raise_invalid_reasoning_effort(
                             model=model,
                             value=reasoning_effort,
                             llm_provider="bedrock_converse",
@@ -573,7 +600,7 @@ class AmazonConverseConfig(BaseConfig):
                 model=model,
                 llm_provider="bedrock_converse",
             )
-        error = AnthropicConfig._validate_effort_for_model(model=model, effort=effort, custom_llm_provider="bedrock")
+        error = AnthropicConfig.validate_effort_for_model(model=model, effort=effort, custom_llm_provider="bedrock")
         if error is not None:
             raise litellm.exceptions.BadRequestError(
                 message=error,
@@ -1029,7 +1056,7 @@ class AmazonConverseConfig(BaseConfig):
                 )
             if param == "stream":
                 optional_params["stream"] = value
-            if param == "stop":
+            if param == "stop" and not bedrock_rejects_stop_sequences(model):
                 if isinstance(value, str):
                     if len(value) == 0:  # converse raises error for empty strings
                         continue
@@ -1037,7 +1064,7 @@ class AmazonConverseConfig(BaseConfig):
                 optional_params["stopSequences"] = value
             if param == "temperature" or param == "top_p":
                 if base_model.startswith("anthropic"):
-                    AnthropicConfig._apply_sampling_param(
+                    AnthropicConfig.apply_sampling_param(
                         optional_params=optional_params,
                         model=model,
                         param=param,
@@ -1084,10 +1111,10 @@ class AmazonConverseConfig(BaseConfig):
                 if (
                     isinstance(value, dict)
                     and value.get("type") == "adaptive"
-                    and not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock")
+                    and not AnthropicConfig.is_adaptive_thinking_model(model, "bedrock")
                 ):
                     max_tokens = non_default_params.get("max_completion_tokens") or non_default_params.get("max_tokens")
-                    legacy_thinking = AnthropicConfig._map_reasoning_effort(
+                    legacy_thinking = AnthropicConfig.map_reasoning_effort(
                         reasoning_effort="medium",
                         model=model,
                         custom_llm_provider="bedrock",
@@ -1109,6 +1136,25 @@ class AmazonConverseConfig(BaseConfig):
             elif param == "reasoning_effort" and isinstance(value, str) and drop_reasoning_effort_param:
                 verbose_logger.debug(
                     "Dropping unsupported `reasoning_effort` param for Bedrock model=%s; it always reasons and rejects it.",
+                    model,
+                )
+            elif (
+                param == "reasoning_effort"
+                and isinstance(value, str)
+                and self._is_openai_gpt_reasoning_model(model)
+                and bedrock_reasoning_effort_disabled(model=model, effort=value)
+            ):
+                if not (litellm.drop_params or drop_params):
+                    raise litellm.utils.UnsupportedParamsError(
+                        message=(
+                            f"{model} does not support reasoning_effort={value}. "
+                            "To drop unsupported params, set `litellm.drop_params = True`."
+                        ),
+                        status_code=400,
+                    )
+                verbose_logger.debug(
+                    "Dropping unsupported `reasoning_effort=%s` for Bedrock model=%s.",
+                    value,
                     model,
                 )
             elif param == "reasoning_effort" and isinstance(value, str):
@@ -1343,30 +1389,158 @@ class AmazonConverseConfig(BaseConfig):
                 cache_point["ttl"] = ttl
         return cache_point
 
+    @staticmethod
+    def _assistant_has_tool_calls(message: object) -> bool:
+        return message_field(message, "role") == "assistant" and bool(message_field(message, "tool_calls"))
+
+    @staticmethod
+    def _opens_with_tool_result(message: object) -> bool:
+        """Whether the message starts a tool-result turn on Converse.
+
+        ``_bedrock_converse_messages_pt`` builds ``toolResult`` blocks from ``tool``
+        messages only, so a ``function`` message never opens one."""
+        role: Final = message_field(message, "role")
+        if role == "tool":
+            return True
+        if role != "user":
+            return False
+        first_part: Final = next(iter(parts_of(message_field(message, "content"))), None)
+        return message_field(first_part, "type") == "tool_result"
+
+    def _system_run_before(self, messages: Sequence[AllMessageValues], index: int) -> Sequence[AllMessageValues]:
+        start: Final = next(
+            (j + 1 for j in range(index - 1, -1, -1) if not is_system_message(messages[j])),
+            0,
+        )
+        return messages[start:index]
+
+    def _system_run_end(self, messages: Sequence[AllMessageValues], index: int) -> int:
+        return next(
+            (j for j in range(index, len(messages)) if not is_system_message(messages[j])),
+            len(messages),
+        )
+
+    def _reordered_around_tool_results(
+        self, messages: Sequence[AllMessageValues], index: int
+    ) -> tuple[AllMessageValues, ...]:
+        """Move a system run wedged between an assistant tool-call turn and its
+        tool-result turn(s) to after the tool results.
+
+        A converted system entry becomes a user turn, and a user turn between
+        a tool call and its result would split them. Everything else stays in
+        place so the cached prefix stays byte-identical."""
+        message: Final = messages[index]
+        if self._opens_with_tool_result(message):
+            if index + 1 < len(messages) and self._opens_with_tool_result(messages[index + 1]):
+                return (message,)
+            tool_run_start: Final = next(
+                (j + 1 for j in range(index, -1, -1) if not self._opens_with_tool_result(messages[j])),
+                0,
+            )
+            run: Final = self._system_run_before(messages, tool_run_start)
+            prev_idx: Final = tool_run_start - len(run) - 1
+            if run and prev_idx >= 0 and self._assistant_has_tool_calls(messages[prev_idx]):
+                return (message, *run)
+            return (message,)
+        if not is_system_message(message):
+            return (message,)
+        run_start: Final = next(
+            (j + 1 for j in range(index - 1, -1, -1) if not is_system_message(messages[j])),
+            0,
+        )
+        run_end: Final = self._system_run_end(messages, index)
+        follower: Final = messages[run_end] if run_end < len(messages) else None
+        if (
+            follower is not None
+            and self._opens_with_tool_result(follower)
+            and run_start > 0
+            and self._assistant_has_tool_calls(messages[run_start - 1])
+        ):
+            return ()
+        return (message,)
+
+    def _system_role_message_as_user(self, message: ChatCompletionSystemMessage) -> ChatCompletionUserMessage | None:
+        """Convert a mid-conversation system entry to a user turn, in place.
+
+        The Converse API only accepts user/assistant roles in ``messages``,
+        so keeping the role is not an option. Hoisting it to the top-level
+        ``system`` block would mutate the system prefix and collapse implicit
+        prompt caching; converting in place keeps everything before the entry
+        byte-identical. An entry that carries no text becomes ``None``."""
+        text_blocks: Final = self._converted_text_blocks(message)
+        if not text_blocks:
+            return None
+        note: Final = ChatCompletionTextObject(type="text", text=CONVERTED_SYSTEM_NOTE)
+        body: Final = [
+            note,
+            *text_blocks,
+        ]
+        return ChatCompletionUserMessage(role="user", content=body)
+
+    def _converted_or_kept(self, message: AllMessageValues) -> AllMessageValues | None:
+        if not is_system_message(message):
+            return message
+        return self._system_role_message_as_user(
+            cast(ChatCompletionSystemMessage, message)  # cast-ok: the role is checked on the line above
+        )
+
+    def _converted_text_blocks(self, message: ChatCompletionSystemMessage) -> tuple[ChatCompletionTextObject, ...]:
+        content: Final = message.get("content")
+        if isinstance(content, str):
+            return (self._converted_text_block(content, message.get("cache_control")),) if content else ()
+        parts: Final[Sequence[object]] = content or ()
+        return tuple(
+            self._converted_text_block(part["text"], part.get("cache_control"))
+            for part in map(self._text_part, parts)
+            if part is not None
+        )
+
+    @staticmethod
+    def _text_part(part: object) -> ChatCompletionTextObject | None:
+        if not isinstance(part, dict) or part.get("type") != "text" or not part.get("text"):
+            return None
+        return cast(ChatCompletionTextObject, part)  # cast-ok: the shape is checked on the line above
+
+    @staticmethod
+    def _converted_text_block(text: str, cache_control: ChatCompletionCachedContent | None) -> ChatCompletionTextObject:
+        if cache_control is None:
+            return ChatCompletionTextObject(type="text", text=text)
+        return ChatCompletionTextObject(type="text", text=text, cache_control=cache_control)
+
     def _transform_system_message(
         self, messages: list[AllMessageValues], model: str | None = None
     ) -> tuple[list[AllMessageValues], list[SystemContentBlock]]:
-        system_prompt_indices: Final = []
+        leading_count: Final = next(
+            (i for i, m in enumerate(messages) if not is_system_message(m)),
+            len(messages),
+        )
+        hoisted: Final = messages[:leading_count]
+        remaining: Final = messages[leading_count:]
         system_content_blocks: Final[list[SystemContentBlock]] = []
-        for idx, message in enumerate(messages):
-            if message["role"] == "system":
-                system_prompt_indices.append(idx)
-                if isinstance(message["content"], str) and message["content"]:
-                    system_content_blocks.append(SystemContentBlock(text=message["content"]))
-                    cache_block = self.get_cache_point_block(message, block_type="system", model=model)
-                    if cache_block:
-                        system_content_blocks.append(cache_block)
-                elif isinstance(message["content"], list):
-                    for m in message["content"]:
-                        if m.get("type") == "text" and m.get("text"):
-                            system_content_blocks.append(SystemContentBlock(text=m["text"]))
-                            cache_block = self.get_cache_point_block(m, block_type="system", model=model)
-                            if cache_block:
-                                system_content_blocks.append(cache_block)
-        if len(system_prompt_indices) > 0:
-            for idx in reversed(system_prompt_indices):
-                messages.pop(idx)
-        return messages, system_content_blocks
+        for message in hoisted:
+            if message["role"] != "system":
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and content:
+                system_content_blocks.append(SystemContentBlock(text=content))
+                cache_block = self.get_cache_point_block(message, block_type="system", model=model)
+                if cache_block:
+                    system_content_blocks.append(cache_block)
+            elif isinstance(content, list):
+                for m in content:
+                    if m.get("type") == "text" and m.get("text"):
+                        system_content_blocks.append(SystemContentBlock(text=m["text"]))
+                        cache_block = self.get_cache_point_block(m, block_type="system", model=model)
+                        if cache_block:
+                            system_content_blocks.append(cache_block)
+        reordered: Final = tuple(
+            chain.from_iterable(
+                self._reordered_around_tool_results(remaining, index) for index in range(len(remaining))
+            )
+        )
+        converted: Final = tuple(self._converted_or_kept(message) for message in reordered)
+        kept: Final = [message for message in converted if message is not None]
+        return kept, system_content_blocks
 
     def _transform_inference_params(self, inference_params: dict) -> InferenceConfig:
         if "top_k" in inference_params:
@@ -1385,7 +1559,7 @@ class AmazonConverseConfig(BaseConfig):
         if val_top_k is not None:
             if base_model.startswith("anthropic"):
                 top_k_params: Final[dict] = {}
-                AnthropicConfig._apply_sampling_param(
+                AnthropicConfig.apply_sampling_param(
                     optional_params=top_k_params,
                     model=model,
                     param="top_k",
@@ -1523,7 +1697,7 @@ class AmazonConverseConfig(BaseConfig):
             if is_bedrock_application_inference_profile_arn(model):
                 additional_request_params["output_config"] = anthropic_output_config
             elif base_model.startswith("anthropic"):
-                if litellm.drop_params is True and not AnthropicConfig._model_supports_effort_param(model, "bedrock"):
+                if litellm.drop_params is True and not AnthropicConfig.model_supports_effort_param(model, "bedrock"):
                     litellm.verbose_logger.warning(
                         DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
                         model,
@@ -1552,6 +1726,7 @@ class AmazonConverseConfig(BaseConfig):
         model: str,
         headers: dict | None,
         additional_request_params: dict,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> tuple[list[ToolBlock], list]:
         """Process tools and collect anthropic_beta values."""
         bedrock_tools: list[ToolBlock] = []
@@ -1592,7 +1767,9 @@ class AmazonConverseConfig(BaseConfig):
             computer_use_tools, regular_tools = self._separate_computer_use_tools(filtered_tools, model)
 
             # Process regular function tools using existing logic
-            bedrock_tools = _bedrock_tools_pt(regular_tools, model=model)
+            bedrock_tools = _bedrock_tools_pt(
+                _tools_the_model_accepts(regular_tools, model, litellm_params), model=model
+            )
 
             # Add computer use tools and anthropic_beta if needed (only when computer use tools are present)
             if computer_use_tools:
@@ -1656,7 +1833,10 @@ class AmazonConverseConfig(BaseConfig):
                 additional_request_params["tools"] = transformed_computer_tools
         else:
             # No computer use tools, process all tools as regular tools
-            bedrock_tools = _bedrock_tools_pt(filtered_tools, model=model)
+            bedrock_tools = _bedrock_tools_pt(
+                _tools_the_model_accepts(_TOOLS_AS_SENT.validate_python(filtered_tools), model, litellm_params),
+                model=model,
+            )
 
         # Append pre-formatted tools (systemTool etc.) after transformation
         bedrock_tools.extend(pre_formatted_tools)
@@ -1668,7 +1848,7 @@ class AmazonConverseConfig(BaseConfig):
             if (
                 isinstance(output_config, dict)
                 and output_config.get("effort") is not None
-                and not AnthropicConfig._is_adaptive_thinking_model(model, "bedrock")
+                and not AnthropicConfig.is_adaptive_thinking_model(model, "bedrock")
             ):
                 from litellm.types.llms.anthropic import (
                     ANTHROPIC_EFFORT_BETA_HEADER,
@@ -1695,7 +1875,7 @@ class AmazonConverseConfig(BaseConfig):
         anthropic_beta_list: list,
     ) -> None:
         """Keep only compact_20260112 edits for Bedrock; add beta header or drop field."""
-        from litellm.llms.anthropic.experimental_pass_through.context_management.constants import (
+        from litellm.llms.anthropic.pass_through.context_management.constants import (
             COMPACT_EDIT_TYPE,
         )
         from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES
@@ -1768,7 +1948,7 @@ class AmazonConverseConfig(BaseConfig):
 
         # Process tools and collect beta values
         bedrock_tools, anthropic_beta_list = self._process_tools_and_beta(
-            original_tools, model, headers, additional_request_params
+            original_tools, model, headers, additional_request_params, litellm_params
         )
 
         # Append cachePoint to tools if cache_control_injection_points has tool_config
@@ -1858,11 +2038,16 @@ class AmazonConverseConfig(BaseConfig):
             litellm_params=litellm_params,
         )
 
-        bedrock_messages: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
-            messages=messages,
-            model=model,
-            llm_provider="bedrock_converse",
-            user_continue_message=litellm_params.pop("user_continue_message", None),
+        bedrock_messages: Final = list(
+            place_tool_result_images(
+                await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+                    messages=messages,
+                    model=model,
+                    llm_provider="bedrock_converse",
+                    user_continue_message=litellm_params.pop("user_continue_message", None),
+                ),
+                model,
+            )
         )
 
         request_metadata: Final = resolve_bedrock_request_metadata(
@@ -1921,11 +2106,16 @@ class AmazonConverseConfig(BaseConfig):
         )
 
         ## TRANSFORMATION ##
-        bedrock_messages: Final[list[MessageBlock]] = _bedrock_converse_messages_pt(
-            messages=messages,
-            model=model,
-            llm_provider="bedrock_converse",
-            user_continue_message=litellm_params.pop("user_continue_message", None),
+        bedrock_messages: Final[list[MessageBlock]] = list(
+            place_tool_result_images(
+                _bedrock_converse_messages_pt(
+                    messages=messages,
+                    model=model,
+                    llm_provider="bedrock_converse",
+                    user_continue_message=litellm_params.pop("user_continue_message", None),
+                ),
+                model,
+            )
         )
 
         request_metadata: Final = resolve_bedrock_request_metadata(
@@ -2209,7 +2399,7 @@ class AmazonConverseConfig(BaseConfig):
                 (
                     extracted_reasoning_content_str,
                     _content_str,
-                ) = _parse_content_for_reasoning(content["text"])
+                ) = parse_content_for_reasoning(content["text"])
                 if _content_str is not None:
                     content_str += _content_str
             if "toolUse" in content:
@@ -2523,13 +2713,13 @@ class AmazonConverseConfig(BaseConfig):
 
         ## HANDLE TOOL CALLS
         _message: Final = Message(**chat_completion_message)
-        initial_finish_reason = map_finish_reason(completion_response["stopReason"])
+        mapped_finish_reason: Final = map_finish_reason(completion_response["stopReason"])
 
-        # When json_mode filtered out all synthetic tool calls the response
-        # is plain content, not a pending tool invocation. Fix finish_reason
-        # so callers (e.g. OpenAI SDK) don't misinterpret it.
-        if resolved_json_mode and not filtered_tools and tools:
-            initial_finish_reason = "stop"
+        initial_finish_reason: Final = (
+            "stop"
+            if resolved_json_mode and not filtered_tools and tools and mapped_finish_reason == "tool_calls"
+            else mapped_finish_reason
+        )
 
         (
             returned_message,

@@ -18,6 +18,7 @@ import {
 } from "@/components/ui/alert-dialog";
 import React, { useEffect, useState, useMemo, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useQueryState } from "nuqs";
 import { useMCPServers } from "@/app/(dashboard)/hooks/mcpServers/useMCPServers";
 import { useMCPServerHealth } from "@/app/(dashboard)/hooks/mcpServers/useMCPServerHealth";
 import { toast } from "@/lib/toast";
@@ -29,6 +30,7 @@ import CreateMCPServer from "./CreateMCPServer";
 import ImportMCPServers from "./ImportMCPServers";
 import MCPConnect from "./mcp_connect";
 import MCPServerCard from "./MCPServerCard";
+import { useMcpStdioEnabled } from "./StdioAvailability";
 import { MCPServerView } from "./mcp_server_view";
 import type {
   DiscoverableMCPServer,
@@ -61,7 +63,8 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
 const HEALTH_RANK: Record<string, number> = {
   unhealthy: 0,
   unknown: 1,
-  healthy: 2,
+  reachable: 2,
+  healthy: 3,
 };
 
 const compareByName = (a: MCPServer, b: MCPServer): number => {
@@ -191,7 +194,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
       const healthStatus = healthMap.get(server.server_id);
       return {
         ...server,
-        status: healthStatus ? (healthStatus as "healthy" | "unhealthy" | "unknown") : server.status,
+        status: healthStatus ? (healthStatus as MCPServer["status"]) : server.status,
       };
     });
   }, [mcpServers, healthStatuses]);
@@ -215,14 +218,15 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
   const [prefillData, setPrefillData] = useState<DiscoverableMCPServer | null>(null);
   const [isDeletingServer, setIsDeletingServer] = useState(false);
   const [byokModalServer, setByokModalServer] = useState<MCPServer | null>(null);
+  const [fillEnvVarsParam, setFillEnvVarsParam] = useQueryState("fill_env_vars");
   // Per-user env-var fill modal target + deep-link source captured once from the URL.
   const [envVarsModalServer, setEnvVarsModalServer] = useState<MCPServer | null>(null);
-  const [deepLinkServerId, setDeepLinkServerId] = useState<string | null>(() =>
-    typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("fill_env_vars"),
-  );
+  const [deepLinkServerId, setDeepLinkServerId] = useState<string | null>(() => fillEnvVarsParam);
   const [searchQuery, setSearchQuery] = useState<string>("");
   const [sortKey, setSortKey] = useState<SortKey>("created_desc");
   const isInternalUser = userRole === "Internal User";
+
+  const stdioEnabled = useMcpStdioEnabled();
 
   // Single bulk fetch of this user's per-server env-var status. Drives the
   // red "N user fields missing" footer on each card with no per-row request.
@@ -247,19 +251,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
     [envVarStatuses],
   );
 
-  // Deep-link via ?fill_env_vars=<server_id> — the link users follow from the
-  // friendly error the proxy returns when a per-user var is missing. The id is
-  // captured into state above and resolved to a server below; here we only strip
-  // the param so a refresh doesn't reopen the modal.
   useEffect(() => {
-    if (!deepLinkServerId || typeof window === "undefined") return;
-    const params = new URLSearchParams(window.location.search);
-    if (!params.has("fill_env_vars")) return;
-    params.delete("fill_env_vars");
-    const newSearch = params.toString();
-    const newUrl = window.location.pathname + (newSearch ? `?${newSearch}` : "") + window.location.hash;
-    window.history.replaceState({}, "", newUrl);
-  }, [deepLinkServerId]);
+    if (fillEnvVarsParam !== null) setFillEnvVarsParam(null);
+  }, [fillEnvVarsParam, setFillEnvVarsParam]);
 
   const deepLinkServer = useMemo(
     () => (deepLinkServerId ? serversWithHealth.find((s) => s.server_id === deepLinkServerId) ?? null : null),
@@ -497,7 +491,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           isModalVisible={isModalVisible}
           setModalVisible={setModalVisible}
           availableAccessGroups={uniqueMcpAccessGroups}
+          existingServers={mcpServers}
           prefillData={prefillData}
+          stdioEnabled={stdioEnabled}
           onBackToDiscovery={() => {
             setModalVisible(false);
             setPrefillData(null);
@@ -610,7 +606,9 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                 userRole={userRole}
                 isViewOnly={isViewOnly}
                 availableAccessGroups={uniqueMcpAccessGroups}
+                existingServers={mcpServers}
                 initialTabIndex={selectedServerId === toolsTabServerId ? 1 : 0}
+                stdioEnabled={stdioEnabled}
               />
             ) : (
               <div className="w-full h-full">
@@ -749,6 +747,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                           onByokConnect={server.is_byok ? () => setByokModalServer(server) : undefined}
                           onOpenFillFields={() => setEnvVarsModalServer(server)}
                           onDelete={isAdminRole(userRole) ? () => handleDelete(server.server_id) : undefined}
+                          stdioEnabled={stdioEnabled}
                         />
                       ))}
                     </div>

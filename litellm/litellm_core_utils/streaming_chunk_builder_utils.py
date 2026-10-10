@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, Union, cast
 from typing_extensions import ReadOnly, Required
 
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.types.llms.openai import (
     ChatCompletionAssistantContentValue,
     ChatCompletionAudioDelta,
@@ -109,6 +110,7 @@ class _BaseChunk(TypedDict, total=False):
     created: ReadOnly[int]
     model: ReadOnly[str]
     system_fingerprint: ReadOnly[str | None]
+    service_tier: ReadOnly[str | None]
     choices: ReadOnly[Required[Sequence[StreamingChoices]]]
     _hidden_params: ReadOnly[_ChunkHiddenParams]
 
@@ -264,7 +266,11 @@ class ChunkProcessor:
             return model_response
         # set hidden params from chunk to model_response
         if model_response is not None and hasattr(model_response, "_hidden_params"):
-            model_response._hidden_params = chunk.get("_hidden_params", {})
+            chunk_hidden_params: Final = chunk.get("_hidden_params", {})
+            if isinstance(chunk_hidden_params, dict):
+                set_hidden_params(model_response, chunk_hidden_params)
+            else:
+                setattr(model_response, HIDDEN_PARAMS_ATTR, chunk_hidden_params)
         return model_response
 
     @staticmethod
@@ -369,6 +375,13 @@ class ChunkProcessor:
         # Fall back to first chunk's model if no different model found
         return first_chunk_model
 
+    @staticmethod
+    def _get_service_tier_from_chunks(chunks: Sequence["_BaseChunk"]) -> str | None:
+        return next(
+            (tier for chunk in reversed(chunks) if isinstance(tier := chunk.get("service_tier"), str) and tier),
+            None,
+        )
+
     def build_base_response(self, chunks: Sequence["_BaseChunk"]) -> ModelResponse:
         chunk = self.first_chunk
         id: Final = ChunkProcessor._get_chunk_id(chunks)
@@ -378,6 +391,7 @@ class ChunkProcessor:
         # Get the actual model - for Azure Model Router, this finds the real model from later chunks
         model: Final = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
         system_fingerprint: Final = chunk.get("system_fingerprint", None)
+        service_tier: Final = ChunkProcessor._get_service_tier_from_chunks(chunks)
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason = "stop"
@@ -399,6 +413,11 @@ class ChunkProcessor:
                 "created": created,
                 "model": model,
                 "system_fingerprint": system_fingerprint,
+                **(
+                    MappingProxyType({"service_tier": service_tier})
+                    if service_tier is not None
+                    else MappingProxyType({})
+                ),
                 "choices": [
                     {
                         "index": 0,
@@ -475,12 +494,8 @@ class ChunkProcessor:
 
     def get_combined_tool_content(
         self, tool_call_chunks: Sequence["_ToolCallChunk"]
-    ) -> list[
-        ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
-    ]:  # mutable-ok: assigned verbatim to Message.tool_calls, a list field
-        tool_calls_list: list[
-            ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
-        ] = []  # mutable-ok: see return type
+    ) -> list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall]:
+        tool_calls_list: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] = []
         tool_call_map: Final[dict[_ToolCallKey, dict[str, Any]]] = {}
 
         for chunk in tool_call_chunks:
@@ -687,7 +702,7 @@ class ChunkProcessor:
 
         def _flush_thinking_block() -> None:
             nonlocal current_thinking_text_parts, current_signature
-            if len(current_thinking_text_parts) > 0 and current_signature:
+            if current_signature:
                 thinking_blocks.append(
                     ChatCompletionThinkingBlock(
                         type="thinking",
@@ -831,7 +846,7 @@ class ChunkProcessor:
         elif (isinstance(chunk, ModelResponse) or isinstance(chunk, ModelResponseStream)) and hasattr(
             chunk, "_hidden_params"
         ):
-            usage_chunk = chunk._hidden_params.get("usage", None)
+            usage_chunk = chunk.hidden_params.get("usage", None)
 
         if isinstance(usage_chunk, dict):
             return Usage(**usage_chunk)

@@ -12,6 +12,9 @@ parameters:
   migration_source_sha:
     type: string
     default: ""
+  routing_parity_base:
+    type: string
+    default: ""
 orbs:
   codecov: codecov/codecov@4.0.1
   node: circleci/node@5.1.0 # Add this line to declare the node orb
@@ -35,7 +38,7 @@ commands:
     parameters:
       category:
         type: enum
-        enum: ["backend", "client", "provider-harness"]
+        enum: ["backend", "client", "provider-harness", "redis-compat"]
         default: "backend"
     steps:
       - run:
@@ -138,7 +141,7 @@ commands:
             node --version
             npm --version
   install_rust:
-    description: "Install pinned rustup (1.28.2) and Rust toolchain (1.98.0) with checksum verification. Adds ~/.cargo/bin to PATH. Run this before any `uv sync` or `uv build` of the workspace: the root package builds litellm-rust through maturin, and on an image without cargo maturin fetches an unpinned rustup and a floating toolchain by itself."
+    description: "Install pinned rustup (1.28.2) and Rust toolchain (1.98.0) with checksum verification. Adds ~/.cargo/bin to PATH. Run this before any `uv sync` or `uv build` of the workspace: the root package builds litellm-rust through maturin, and on an image without cargo maturin fetches an unpinned rustup and a floating toolchain by itself. Also restores the dev-profile cargo cache that save_cargo_target writes on main, minus the workspace crates' fingerprints so those always rebuild from the checked-out source."
     steps:
       - run:
           name: Install Rust (rustup 1.28.2, toolchain 1.98.0)
@@ -164,9 +167,29 @@ commands:
             /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.98.0
             rm -f /tmp/rustup-init
             echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$BASH_ENV"
+            echo 'export CARGO_INCREMENTAL=0' >> "$BASH_ENV"
             export PATH="$HOME/.cargo/bin:$PATH"
             rustc --version
             cargo --version
+            { rustc -vV; cc --version; cat /etc/os-release; } > /tmp/cargo-build-env
+      - restore_cache:
+          keys:
+            - v1-cargo-dev-{{ checksum "/tmp/cargo-build-env" }}-{{ checksum "litellm-rust/Cargo.lock" }}
+            - v1-cargo-dev-{{ checksum "/tmp/cargo-build-env" }}-
+      - run:
+          name: Force a rebuild of the workspace crates restored from the cargo cache
+          command: rm -rf litellm-rust/target/debug/.fingerprint/litellm-*
+  save_cargo_target:
+    steps:
+      - when:
+          condition:
+            equal: [main, << pipeline.git.branch >>]
+          steps:
+            - save_cache:
+                key: v1-cargo-dev-{{ checksum "/tmp/cargo-build-env" }}-{{ checksum "litellm-rust/Cargo.lock" }}
+                paths:
+                  - ~/.cargo/registry
+                  - ~/project/litellm-rust/target/debug
   start_postgres:
     description: "Start a postgres-db container on port 5432 and wait until it accepts connections."
     parameters:
@@ -176,6 +199,9 @@ commands:
       image:
         type: string
         default: postgres:14@sha256:6a70deda415ec296f977890e11aba04a0db9f632a362e3fce45e845e3db74f26
+      server_args:
+        type: string
+        default: ""
     steps:
       - run:
           name: Start PostgreSQL
@@ -186,7 +212,7 @@ commands:
               -e POSTGRES_PASSWORD=postgres \
               -e POSTGRES_DB=<< parameters.db_name >> \
               -p 5432:5432 \
-              << parameters.image >>
+              << parameters.image >> << parameters.server_args >>
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "60"
@@ -203,6 +229,19 @@ commands:
       - wait_for_service:
           url: tcp://localhost:6379
           timeout: "60"
+  install_codecov_cli:
+    steps:
+      - run:
+          name: Install Codecov CLI (pinned v11.3.1)
+          when: always
+          command: |
+            curl -sSLf -o /tmp/codecov https://cli.codecov.io/v11.3.1/linux/codecov
+            curl -sSLf -o /tmp/codecov.SHA256SUM https://cli.codecov.io/v11.3.1/linux/codecov.SHA256SUM
+            [ "$(cat /tmp/codecov.SHA256SUM)" = "ca1d64196d2d34771084afe76ea657d581bf628e31d993ff8e52ea09cc88a56d  codecov" ]
+            (cd /tmp && sha256sum -c codecov.SHA256SUM)
+            chmod +x /tmp/codecov
+            mkdir -p "$HOME/.local/bin"
+            mv /tmp/codecov "$HOME/.local/bin/codecov"
   start_openai_record_replay_proxy:
     description: "Start the record/replay proxy (tests/_openai_record_replay_proxy.py) on host port 8090 and wait until healthy. Models whose api_base points here replay recorded provider responses, so the E2E run neither pays for nor depends on the live provider. The default upstream is OpenAI; a non-OpenAI model must point its api_base at /__recorder_upstream/<host>/ so the recorder forwards there instead of defaulting to OpenAI. Run after uv deps are synced."
     steps:
@@ -275,50 +314,11 @@ commands:
             # `uv sync --package litellm-enterprise` here — that overwrites the
             # shared .venv and strips out dev/test deps (pytest, prisma, etc.).
             uv run --no-sync python -c "import litellm_enterprise; print('litellm-enterprise OK:', litellm_enterprise.__file__)"
-  setup_litellm_test_deps:
+  install_windows_toolchain:
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - restore_cache:
-          keys:
-            - v3-integration-uv-cache-{{ checksum "uv.lock" }}
       - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v3-integration-uv-cache-{{ checksum "uv.lock" }}
-
-jobs:
-  # Add Windows testing job
-  using_litellm_on_windows:
-    executor:
-      name: win/default
-      shell: powershell.exe
-    working_directory: ~/project
-    environment:
-      UV_PYTHON: "3.11"
-      CARGO_HTTP_MULTIPLEXING: "false"
-      CARGO_NET_RETRY: "5"
-    steps:
-      - checkout
-      - run:
-          name: Install Python
-          command: |
-            choco install python --version=3.11.0 -y --no-progress --force
-            refreshenv
-            python --version
-          environment:
-            CHOCOLATEY_CONFIRM_ALL: "true"
-      - run:
-          name: Install Dependencies
-          environment:
-            UV_HTTP_TIMEOUT: "300"
+          name: Install Rust and uv
+          no_output_timeout: 30m
           command: |
             $rustupInit = Join-Path $env:TEMP "rustup-init.exe"
             $rustupVersion = "1.28.2"
@@ -358,31 +358,88 @@ jobs:
             if (-not (Select-String -Path $PROFILE -SimpleMatch $cargoBin -Quiet)) {
               Add-Content -Path $PROFILE -Value "`$env:Path = `"$cargoBin;`$env:Path`""
             }
-            for ($attempt = 1; $attempt -le 5; $attempt++) {
-              Write-Host "uv sync attempt $attempt/5"
-              uv sync --frozen --group dev --python 3.11
-              if ($LASTEXITCODE -eq 0) {
-                break
-              }
-              if ($attempt -eq 5) {
-                exit $LASTEXITCODE
-              }
-              Start-Sleep -Seconds 15
+  setup_litellm_test_deps:
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - install_rust
+      - restore_cache:
+          keys:
+            - v3-integration-uv-cache-{{ checksum "uv.lock" }}
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_enterprise_pip
+      - save_cache:
+          paths:
+            - ~/.cache/uv
+          key: v3-integration-uv-cache-{{ checksum "uv.lock" }}
+      - save_cargo_target
+
+jobs:
+  windows_release_wheel:
+    executor:
+      name: win/default
+      shell: powershell.exe
+      size: xlarge
+    working_directory: ~/project
+    environment:
+      UV_PYTHON: "3.11"
+      CARGO_HTTP_MULTIPLEXING: "false"
+      CARGO_NET_RETRY: "5"
+    steps:
+      - checkout
+      - run:
+          name: Skip job when no windows-release-relevant files changed
+          shell: bash.exe
+          command: bash .circleci/scripts/path_filter.sh windows-release
+      - run:
+          name: Install Python
+          command: |
+            choco install python --version=3.11.0 -y --no-progress --force
+            refreshenv
+            python --version
+          environment:
+            CHOCOLATEY_CONFIRM_ALL: "true"
+      - install_windows_toolchain
+      - run:
+          name: Record the Rust build environment for the release cargo cache key
+          command: |
+            & "$HOME\.cargo\bin\rustc.exe" -vV | Out-File -Encoding ascii .cargo-build-env
+      - restore_cache:
+          keys:
+            - v1-cargo-release-windows-{{ checksum ".cargo-build-env" }}-{{ checksum "litellm-rust/Cargo.lock" }}
+            - v1-cargo-release-windows-{{ checksum ".cargo-build-env" }}-
+      - run:
+          name: Force a rebuild of the workspace crates restored from the cargo cache
+          command: |
+            $fingerprints = "litellm-rust/target/release/.fingerprint"
+            if (Test-Path $fingerprints) {
+              Get-ChildItem -Path $fingerprints -Filter "litellm-*" | Remove-Item -Recurse -Force
             }
       - run:
-          name: Run Windows-specific test
-          command: |
-            uv run --no-sync python -m pytest tests/windows_tests/ -v
-      - run:
-          name: Guard against MAX_PATH-busting packaged wheel paths
+          name: Build the release wheel and install it under a worst-case MAX_PATH prefix
+          no_output_timeout: 30m
           environment:
             UV_HTTP_TIMEOUT: "300"
           command: |
             $env:Path = "$HOME\.cargo\bin;$HOME\.local\bin;$env:Path"
-            cargo --version
-            Get-ChildItem -Path "litellm\rust_bridge" -Filter "_native*" -File -ErrorAction SilentlyContinue | Remove-Item -Force
             uv build --wheel --out-dir dist
-            uv run --no-sync python tests/windows_tests/check_windows_wheel_install.py
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+            python tests/windows_tests/check_windows_wheel_install.py
+      - when:
+          condition:
+            equal: [main, << pipeline.git.branch >>]
+          steps:
+            - save_cache:
+                key: v1-cargo-release-windows-{{ checksum ".cargo-build-env" }}-{{ checksum "litellm-rust/Cargo.lock" }}
+                paths:
+                  - ~/.cargo/registry
+                  - ~/project/litellm-rust/target/release
 
   base_sdk_install:
     docker:
@@ -398,6 +455,7 @@ jobs:
       - install_rust
       - run:
           name: Build the wheel
+          no_output_timeout: 30m
           environment:
             UV_HTTP_TIMEOUT: "300"
           command: |
@@ -410,6 +468,10 @@ jobs:
             uv venv /tmp/base-sdk --python 3.12
             VIRTUAL_ENV=/tmp/base-sdk uv pip install dist/*.whl
             /tmp/base-sdk/bin/python tests/base_sdk_tests/check_base_sdk_install.py
+      - run:
+          name: Guard against MAX_PATH-busting packaged wheel paths
+          command: |
+            python3 tests/windows_tests/check_windows_wheel_install.py --lengths-only
 
   local_testing_part1:
     docker:
@@ -418,7 +480,15 @@ jobs:
         auth:
           username: ${DOCKERHUB_USERNAME}
           password: ${DOCKERHUB_PASSWORD}
+      - &postgres16_sidecar
+        image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
+        environment:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: litellm_test
     working_directory: ~/project
+    environment: &sidecar_database_url
+      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
     parallelism: 4
     steps:
       - checkout
@@ -438,6 +508,10 @@ jobs:
           paths:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
+      - save_cargo_target
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -457,7 +531,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -vv \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise \
                 --cov-report=xml \
@@ -492,7 +566,9 @@ jobs:
   local_testing_part2:
     docker:
       - *python312_image
+      - *postgres16_sidecar
     working_directory: ~/project
+    environment: *sidecar_database_url
     parallelism: 4
     steps:
       - checkout
@@ -512,6 +588,9 @@ jobs:
           paths:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -531,7 +610,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -vv \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise \
                 --cov-report=xml \
@@ -566,7 +645,9 @@ jobs:
   langfuse_logging_unit_tests:
     docker:
       - *python312_image
+      - *postgres16_sidecar
     working_directory: ~/project
+    environment: *sidecar_database_url
     resource_class: medium
 
     steps:
@@ -587,6 +668,9 @@ jobs:
           paths:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
+      - wait_for_service:
+          url: tcp://localhost:5432
+          timeout: "60"
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -603,7 +687,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -v \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
@@ -615,14 +699,9 @@ jobs:
   auth_ui_unit_tests:
     docker:
       - *python312_image
-      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
-        environment:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: litellm_test
+      - *postgres16_sidecar
     working_directory: ~/project
-    environment:
-      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
+    environment: *sidecar_database_url
 
     steps:
       - checkout
@@ -658,7 +737,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/proxy_admin_ui_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -v \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
@@ -685,7 +764,7 @@ jobs:
       - *python312_image
     working_directory: ~/project
     resource_class: large
-    parallelism: 4
+    parallelism: 1
     environment:
       FAKE_OPENAI_API_BASE: http://127.0.0.1:8190
     steps:
@@ -721,7 +800,7 @@ jobs:
             echo "$TEST_FILES" | circleci tests run \
               --split-by=timings \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -v \
                 -k 'router' \
                 -n 4 \
@@ -733,92 +812,6 @@ jobs:
       - store_test_results:
           path: test-results
 
-  litellm_router_unit_testing: # Runs all tests with the "router" keyword
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: large
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      # Run pytest and generate JUnit XML report
-      - setup_litellm_enterprise_pip
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/router_unit_tests/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -n 4"
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml router_unit_tests_coverage.xml
-            mv .coverage router_unit_tests_coverage
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - router_unit_tests_coverage.xml
-            - router_unit_tests_coverage
-  litellm_assistants_api_testing: # Runs all tests with the "assistants" keyword
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: medium
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      # Run pytest and generate JUnit XML report
-      - setup_litellm_enterprise_pip
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -k \"assistants\""
-          no_output_timeout: 15m
-      # Store test results
-      - store_test_results:
-          path: test-results
   llm_translation_testing:
     docker:
       - *python312_image
@@ -854,7 +847,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/llm_translation/**/test_*.py" | grep -v "^tests/llm_translation/realtime/")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -v \
                 --junitxml=test-results/junit.xml \
                 --durations=20 \
@@ -892,7 +885,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/llm_translation/realtime/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -vv \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
@@ -914,49 +907,6 @@ jobs:
           paths:
             - realtime_translation_coverage.xml
             - realtime_translation_coverage
-  agent_testing:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/agent_tests/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -s \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=5"
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml agent_coverage.xml
-            mv .coverage agent_coverage
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - agent_coverage.xml
-            - agent_coverage
   guardrails_testing:
     docker:
       - *python312_image
@@ -978,16 +928,13 @@ jobs:
           command: |
             mkdir -p test-results
             export LITELLM_LOG=WARNING
-            TEST_FILES=$(circleci tests glob "tests/guardrails_tests/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -n 2 \
-                --timeout=120 --timeout_method=thread"
+            uv run --no-sync python -m pytest --tb=short \
+              -vv \
+              --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
+              --junitxml=test-results/junit.xml \
+              --durations=5 \
+              --timeout=120 --timeout_method=thread \
+              "tests/guardrails_tests/test_custom_guardrail.py::test_get_guardrail_dynamic_request_body_params"
           no_output_timeout: 15m
       - run:
           name: Rename the coverage files
@@ -1027,7 +974,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/unified_google_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -vv -s \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
@@ -1049,50 +996,6 @@ jobs:
             - google_generate_content_endpoint_coverage.xml
             - google_generate_content_endpoint_coverage
 
-  llm_responses_api_testing:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: large
-    environment:
-      REQUEST_TIMEOUT: "180"
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/llm_responses_api_testing/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -v \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -n 8 \
-                --reruns 1 --only-rerun Timeout"
-          no_output_timeout: 15m
-
-      # Store test results
-      - store_test_results:
-          path: test-results
   ocr_testing:
     docker:
       - *python312_image
@@ -1116,7 +1019,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/ocr_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -vv \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
@@ -1160,7 +1063,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/search_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -vv \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
@@ -1204,7 +1107,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/batches_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -vv -s \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
@@ -1248,7 +1151,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/litellm_utils_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -vv -s \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
@@ -1293,7 +1196,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/pass_through_unit_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -vv \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
@@ -1338,7 +1241,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/image_gen_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -v \
                 --junitxml=test-results/junit.xml \
                 --durations=5 \
@@ -1372,7 +1275,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/logging_callback_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -vv \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 -n 4 \
@@ -1417,7 +1320,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/audio_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -vv -s \
                 --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
                 --junitxml=test-results/junit.xml \
@@ -1437,139 +1340,6 @@ jobs:
           paths:
             - audio_coverage.xml
             - audio_coverage
-  redis_caching_unit_tests:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(printf "%s\n" \
-              tests/local_testing/test_dual_cache.py \
-              tests/local_testing/test_redis_batch_optimizations.py \
-              tests/local_testing/test_redis_increment_with_floor.py \
-              tests/local_testing/test_router_utils.py)
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv -s \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=5 -n 2 \
-                --reruns 2 --reruns-delay 1"
-          no_output_timeout: 20m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml redis_caching_coverage.xml
-            mv .coverage redis_caching_coverage
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - redis_caching_coverage.xml
-            - redis_caching_coverage
-  installing_litellm_on_python:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - run:
-          name: Run tests
-          command: |
-            uv run --no-sync python -m pytest -vv tests/local_testing/test_basic_python_version.py -k "not legacy_resolver"
-
-  installing_litellm_on_python_3_13:
-    docker:
-      - image: cimg/python:3.13.1@sha256:87b243ae80d154db75ce5e58af16c72c5dd4b1e23e5c7264a816e85e0c440c13
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
-    resource_class: medium
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.13
-      - run:
-          name: Run tests
-          command: |
-            uv run --no-sync python -m pytest -v tests/local_testing/test_basic_python_version.py -k "not legacy_resolver"
-
-  installing_litellm_on_python_v2_migration_resolver:
-    docker:
-      - *python312_image
-      - image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
-        environment:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: litellm_test
-    working_directory: ~/project
-    environment:
-      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
-      - run:
-          name: Run both migration resolvers against Postgres
-          command: |
-            uv run --no-sync python -m pytest -vv \
-              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings \
-              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings_legacy_resolver
-
   helm_chart_testing:
     machine:
       image: ubuntu-2204:2024.04.1 # Use machine executor instead of docker
@@ -1654,6 +1424,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -1677,9 +1452,8 @@ jobs:
           command: |
             docker run -d \
               -p 4001:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL="postgresql://postgres:postgres@host.docker.internal:5432/litellm_test" \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               --name schema-seed \
               --add-host=host.docker.internal:host-gateway \
               -v $(pwd)/litellm/proxy/example_config_yaml/simple_config.yaml:/app/config.yaml \
@@ -1735,7 +1509,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/basic_proxy_startup_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -v \
                 --junitxml=test-results/junit-2.xml \
                 --durations=5"
@@ -1750,6 +1524,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - attach_workspace:
           at: ~/project
@@ -1773,9 +1552,8 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e USE_PRISMA_MIGRATE=True \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e AZURE_API_KEY=$AZURE_API_KEY \
@@ -1820,7 +1598,7 @@ jobs:
           name: Seed the routing strategy through /config/update
           command: |
             curl --noproxy '*' -sSf -X POST http://localhost:4000/config/update \
-              -H 'Authorization: Bearer sk-1234' -H 'Content-Type: application/json' \
+              -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
               -d '{"router_settings": {"routing_strategy": "usage-based-routing-v2"}}'
       - run:
           name: Run tests
@@ -1832,7 +1610,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -s -v \
                 --junitxml=test-results/junit.xml \
                 -n 4 \
@@ -1849,6 +1627,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -1870,9 +1653,8 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e AZURE_API_KEY=$AZURE_API_KEY \
               -e AZURE_API_BASE=$AZURE_API_BASE \
               -e AZURE_API_VERSION="2024-05-01-preview" \
@@ -1919,7 +1701,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/openai_endpoints_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -s -vv \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
@@ -1935,6 +1717,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -1960,12 +1747,11 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
@@ -2002,7 +1788,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/otel_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -v \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
@@ -2021,12 +1807,11 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE="bad-license" \
@@ -2054,7 +1839,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/basic_proxy_startup_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -v \
                 --junitxml=test-results/junit-2.xml \
                 --durations=5"
@@ -2063,94 +1848,6 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-  proxy_spend_accuracy_tests:
-    machine:
-      image: ubuntu-2204:2024.04.1
-    resource_class: large
-    working_directory: ~/project
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - start_postgres
-      - start_redis
-      - start_fake_openai_endpoint
-      - attach_workspace:
-          at: ~/project
-      - run:
-          name: Load Docker Database Image
-          command: |
-            zstd -d litellm-docker-database.tar.zst --stdout | docker load
-            docker images | grep litellm-docker-database
-      - run:
-          name: Run Docker container
-          # Point the proxy at the job-local Redis (start_redis) instead of the
-          # shared remote Redis. The Redis transaction buffer uses a single
-          # global pod-lock key (cronjob_lock:db_spend_update_job) and a single
-          # global buffer list (litellm_spend_update_buffer); sharing those
-          # across concurrent CI pipelines causes spend flushes to stall or
-          # land in the wrong DB, which is what makes this test flaky.
-          command: |
-            docker run -d \
-              -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e REDIS_HOST=host.docker.internal \
-              -e REDIS_PORT=6379 \
-              -e LITELLM_MASTER_KEY="sk-1234" \
-              -e OPENAI_API_KEY=$OPENAI_API_KEY \
-              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
-              -e LITELLM_LICENSE=$LITELLM_LICENSE \
-              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-              -e USE_DDTRACE=True \
-              -e DD_API_KEY=$DD_API_KEY \
-              -e DD_SITE=$DD_SITE \
-              -e AWS_REGION_NAME=$AWS_REGION_NAME \
-              -e PROXY_BATCH_WRITE_AT=2 \
-              -e LITELLM_LOG=ERROR \
-              --add-host host.docker.internal:host-gateway \
-              --name my-app \
-              -v $(pwd)/litellm/proxy/example_config_yaml/spend_tracking_config.yaml:/app/config.yaml \
-              litellm-docker-database:ci \
-              --config /app/config.yaml \
-              --port 4000
-      - run:
-          name: Start outputting logs
-          command: docker logs -f my-app
-          background: true
-      - wait_for_service:
-          url: http://localhost:4000
-          timeout: "300"
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/spend_tracking_tests/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv \
-                --junitxml=test-results/junit.xml \
-                --durations=5"
-          no_output_timeout: 15m
-      - store_test_results:
-          path: test-results
-      - run:
-          name: Stop and remove first container
-          when: always
-          command: |
-            docker stop my-app
-            docker rm my-app
-            docker stop redis-cache
-            docker rm redis-cache
-
   proxy_multi_instance_tests:
     machine:
       image: ubuntu-2204:2024.04.1
@@ -2158,6 +1855,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -2182,12 +1884,11 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e USE_DDTRACE=True \
@@ -2205,12 +1906,11 @@ jobs:
           command: |
             docker run -d \
               -p 4001:4001 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e REDIS_HOST=$REDIS_HOST \
               -e REDIS_PASSWORD=$REDIS_PASSWORD \
               -e REDIS_PORT=$REDIS_PORT \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
               -e USE_DDTRACE=True \
@@ -2240,7 +1940,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/multi_instance_e2e_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -vv \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
@@ -2257,6 +1957,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -2283,10 +1988,9 @@ jobs:
             docker run -d \
               --restart on-failure \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
               -e STORE_MODEL_IN_DB="True" \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
               -e TEAM_METADATA_VALIDATION_SERVICE_URL=http://host.docker.internal:9414/validate \
               -e LITELLM_LICENSE=$LITELLM_LICENSE \
@@ -2312,7 +2016,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/store_model_in_db_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -vv \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
@@ -2328,91 +2032,6 @@ jobs:
       - store_test_results:
           path: test-results
 
-  proxy_build_from_pip_tests:
-    # Change from docker to machine executor
-    machine:
-      image: ubuntu-2204:2024.04.1
-    resource_class: large
-    working_directory: ~/project
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      # Remove Docker CLI installation since it's already available in machine executor
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - run:
-          name: Build Docker image
-          command: |
-            docker build -t my-app:latest -f docker/build_from_pip/Dockerfile.build_from_pip .
-      - start_postgres
-      - start_fake_openai_endpoint
-      - run:
-          name: Run Docker container
-          # intentionally give bad redis credentials here
-          # the OTEL test - should get this as a trace
-          command: |
-            docker run -d \
-              -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e REDIS_HOST=$REDIS_HOST \
-              -e REDIS_PASSWORD=$REDIS_PASSWORD \
-              -e REDIS_PORT=$REDIS_PORT \
-              -e LITELLM_MASTER_KEY="sk-1234" \
-              -e OPENAI_API_KEY=$OPENAI_API_KEY \
-              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
-              -e LITELLM_LICENSE=$LITELLM_LICENSE \
-              -e OTEL_EXPORTER="in_memory" \
-              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-              -e AWS_REGION_NAME=$AWS_REGION_NAME \
-              -e COHERE_API_KEY=$COHERE_API_KEY \
-              -e USE_DDTRACE=True \
-              -e DD_API_KEY=$DD_API_KEY \
-              -e DD_SITE=$DD_SITE \
-              -e GCS_FLUSH_INTERVAL="1" \
-              -e LITELLM_LOG=ERROR \
-              --add-host host.docker.internal:host-gateway \
-              --name my-app \
-              -v $(pwd)/docker/build_from_pip/litellm_config.yaml:/app/config.yaml \
-              my-app:latest \
-              --config /app/config.yaml \
-              --port 4000
-      - run:
-          name: Start outputting logs
-          command: docker logs -f my-app
-          background: true
-      - wait_for_service:
-          url: http://localhost:4000
-          timeout: "300"
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/basic_proxy_startup_tests/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
-                -vv \
-                --junitxml=test-results/junit-2.xml \
-                --durations=5"
-          no_output_timeout: 15m
-            # Clean up first container
-      - store_test_results:
-          path: test-results
-      - run:
-          name: Stop and remove first container
-          command: |
-            docker stop my-app || true
-            docker rm my-app || true
-            docker stop postgres-db || true
-            docker rm postgres-db || true
-          when: always
   proxy_pass_through_endpoint_tests:
     machine:
       image: ubuntu-2204:2024.04.1
@@ -2420,6 +2039,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -2441,9 +2065,8 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e OPENAI_API_KEY=$OPENAI_API_KEY \
               -e GEMINI_API_KEY=$GEMINI_API_KEY \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
@@ -2494,7 +2117,7 @@ jobs:
             TEST_FILES=$(circleci tests glob "tests/pass_through_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -v \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
@@ -2511,6 +2134,11 @@ jobs:
     working_directory: ~/project
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes
       - setup_google_dns
       - install_uv
@@ -2533,9 +2161,8 @@ jobs:
           command: |
             docker run -d \
               -p 4000:4000 \
-              -e LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY=true \
               -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e LITELLM_MASTER_KEY="sk-1234" \
+              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
               -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
               -e RECORDER_ANTHROPIC_BASE_URL=http://host.docker.internal:8090/__recorder_upstream/api.anthropic.com \
               -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
@@ -2561,11 +2188,11 @@ jobs:
           command: |
             mkdir -p test-results
             export LITELLM_PROXY_URL="http://localhost:4000"
-            export LITELLM_API_KEY="sk-1234"
+            export LITELLM_API_KEY="$LITELLM_MASTER_KEY"
             TEST_FILES=$(circleci tests glob "tests/proxy_e2e_anthropic_messages_tests/**/test_*.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest \
+              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
                 -vv -s \
                 --junitxml=test-results/junit.xml \
                 --durations=5"
@@ -2595,7 +2222,7 @@ jobs:
       - run:
           name: Combine Coverage
           command: |
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage guardrails_coverage redis_caching_coverage agent_coverage google_generate_content_endpoint_coverage litellm_utils_coverage router_unit_tests_coverage auth_ui_unit_tests_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage google_generate_content_endpoint_coverage litellm_utils_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -2624,6 +2251,11 @@ jobs:
       PROXY_LOGOUT_URL: "https://www.example.com"
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes:
           category: client
       - setup_google_dns
@@ -2714,8 +2346,6 @@ jobs:
       - run:
           name: Start LiteLLM proxy
           environment:
-            LITELLM_MASTER_KEY: "sk-1234"
-            LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY: "true"
             MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
             DISABLE_SCHEMA_UPDATE: "true"
             SERVER_ROOT_PATH: ""
@@ -2735,7 +2365,7 @@ jobs:
           name: Wait for proxy to be ready
           command: |
             for i in $(seq 1 60); do
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4000/health -H "Authorization: Bearer sk-1234" 2>/dev/null || true)
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://127.0.0.1:4000/health -H "Authorization: Bearer $LITELLM_MASTER_KEY" 2>/dev/null || true)
               if [ "$HTTP_CODE" = "200" ]; then
                 echo "Proxy is ready"
                 exit 0
@@ -2782,6 +2412,11 @@ jobs:
       SERVER_ROOT_PATH: "/litellm"
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes:
           category: client
       - setup_google_dns
@@ -2858,8 +2493,6 @@ jobs:
       - run:
           name: Start LiteLLM proxy under a server root path
           environment:
-            LITELLM_MASTER_KEY: "sk-1234"
-            LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY: "true"
             MOCK_LLM_URL: "http://127.0.0.1:8090/v1"
             DISABLE_SCHEMA_UPDATE: "true"
           # Output flows to this step's own log, so a boot crash is visible here
@@ -2874,7 +2507,7 @@ jobs:
           name: Wait for prefixed proxy to be ready
           command: |
             for i in $(seq 1 60); do
-              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer sk-1234" http://127.0.0.1:4000/litellm/health 2>/dev/null || true)
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" --max-time 5 -H "Authorization: Bearer $LITELLM_MASTER_KEY" http://127.0.0.1:4000/litellm/health 2>/dev/null || true)
               if [ "$HTTP_CODE" = "200" ]; then
                 echo "Prefixed proxy is ready"
                 exit 0
@@ -2967,6 +2600,11 @@ jobs:
       PYTHONPATH: tests/e2e
     steps:
       - checkout_migration_source
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - install_uv
       - install_rust
       - restore_cache:
@@ -3086,6 +2724,11 @@ jobs:
       E2E_FIXTURE_MODE: live
     steps:
       - checkout
+      - run:
+          name: Generate LiteLLM master key
+          command: |
+            key="$(openssl rand -hex 16)"
+            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes:
           category: provider-harness
       - setup_litellm_test_deps
@@ -3095,10 +2738,10 @@ jobs:
           name: Test provider capture and replay harness
           command: |
             mkdir -p test-results/provider-replay-harness
-            uv run --no-sync pytest -q --noconftest -o addopts= -o pythonpath=tests/e2e -p no:rerunfailures \
+            uv run --no-sync pytest --tb=short -q --noconftest -o addopts= -o "pythonpath=tests/e2e tests/e2e_harness" -p no:rerunfailures \
               --junitxml=test-results/provider-replay-harness/junit.xml \
-              tests/e2e/test_provider_edge.py tests/e2e/test_fixture_bundle.py \
-              tests/e2e/test_fixture_canonical.py tests/e2e/test_fixture_mode.py \
+              tests/e2e_harness/test_provider_edge.py tests/e2e_harness/test_fixture_bundle.py \
+              tests/e2e_harness/test_fixture_canonical.py tests/e2e_harness/test_fixture_mode.py \
               tests/code_coverage_tests/test_provider_replay_harness.py \
               tests/code_coverage_tests/test_provider_cache.py
       - store_test_results:
@@ -3108,10 +2751,22 @@ jobs:
     parameters:
       suite:
         type: string
+      mode:
+        type: enum
+        enum: [standard, replica]
+        default: standard
+      parallelism:
+        type: integer
+        default: 1
+      resource_class:
+        type: enum
+        enum: [large, xlarge]
+        default: large
     machine:
       image: ubuntu-2204:2024.04.1
-    resource_class: large
+    resource_class: << parameters.resource_class >>
     working_directory: ~/project
+    parallelism: << parameters.parallelism >>
     steps:
       - setup_litellm_test_deps
       - when:
@@ -3142,18 +2797,19 @@ jobs:
                 command: cd ui/litellm-dashboard && NEXT_TELEMETRY_DISABLED=1 npm run build
       - start_postgres:
           image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+          server_args: "-c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000"
       - start_redis
       - run:
           name: Run owned integration contracts
-          command: bash .circleci/scripts/run_integration.sh << parameters.suite >>
+          command: bash .circleci/scripts/run_integration.sh << parameters.suite >> << parameters.mode >>
           no_output_timeout: 15m
       - run:
           name: Stop owned database and Redis
           when: always
           command: |
-            mkdir -p test-results/integration-<< parameters.suite >>
-            docker logs postgres-db > test-results/integration-<< parameters.suite >>/postgres.log 2>&1 || true
-            docker logs redis-cache > test-results/integration-<< parameters.suite >>/redis.log 2>&1 || true
+            mkdir -p test-results/services-<< parameters.suite >>-<< parameters.mode >>
+            docker logs postgres-db > test-results/services-<< parameters.suite >>-<< parameters.mode >>/postgres.log 2>&1 || true
+            docker logs redis-cache > test-results/services-<< parameters.suite >>-<< parameters.mode >>/redis.log 2>&1 || true
             docker rm -f postgres-db redis-cache
             test -z "$(docker ps -aq --filter name=postgres-db --filter name=redis-cache)"
       - store_test_results:
@@ -3161,7 +2817,10 @@ jobs:
       - store_artifacts:
           path: test-results
 
-  unit:
+  routing_parity:
+    parameters:
+      suite:
+        type: string
     machine:
       image: ubuntu-2204:2024.04.1
     resource_class: large
@@ -3169,20 +2828,223 @@ jobs:
     steps:
       - setup_litellm_test_deps
       - run:
+          name: Check out base product code
+          environment:
+            ROUTING_PARITY_BASE: << pipeline.parameters.routing_parity_base >>
+          command: |
+            [[ "$ROUTING_PARITY_BASE" =~ ^[0-9a-f]{40}$ ]] || exit 1
+            git fetch --depth 1 origin "$ROUTING_PARITY_BASE"
+            git rm -r -f --quiet litellm enterprise litellm-proxy-extras
+            git checkout "$ROUTING_PARITY_BASE" -- litellm enterprise litellm-proxy-extras
+            git reset --quiet
+            test -f litellm/rust_bridge/_native.abi3.so
+      - start_postgres:
+          image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+          server_args: "-c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000"
+      - start_redis
+      - run:
+          name: Run base side
+          command: bash .circleci/scripts/run_integration.sh << parameters.suite >> parity base
+          no_output_timeout: 15m
+      - run:
+          name: Stop base database and Redis
+          when: always
+          command: |
+            mkdir -p test-results/services-<< parameters.suite >>-parity-base
+            docker logs postgres-db > test-results/services-<< parameters.suite >>-parity-base/postgres.log 2>&1 || true
+            docker logs redis-cache > test-results/services-<< parameters.suite >>-parity-base/redis.log 2>&1 || true
+            docker rm -f postgres-db redis-cache
+            test -z "$(docker ps -aq --filter name=postgres-db --filter name=redis-cache)"
+      - run:
+          name: Check out head product code
+          command: |
+            git rm -r -f --quiet litellm enterprise litellm-proxy-extras
+            git checkout "$CIRCLE_SHA1" -- litellm enterprise litellm-proxy-extras
+            git reset --quiet
+            test -f litellm/rust_bridge/_native.abi3.so
+      - start_postgres:
+          image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+          server_args: "-c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000"
+      - start_redis
+      - run:
+          name: Run head side
+          command: bash .circleci/scripts/run_integration.sh << parameters.suite >> parity head
+          no_output_timeout: 15m
+      - run:
+          name: Stop head database and Redis
+          when: always
+          command: |
+            mkdir -p test-results/services-<< parameters.suite >>-parity-head
+            docker logs postgres-db > test-results/services-<< parameters.suite >>-parity-head/postgres.log 2>&1 || true
+            docker logs redis-cache > test-results/services-<< parameters.suite >>-parity-head/redis.log 2>&1 || true
+            docker rm -f postgres-db redis-cache
+            test -z "$(docker ps -aq --filter name=postgres-db --filter name=redis-cache)"
+      - run:
+          name: Compare routing parity
+          command: PYTHONPATH="$PWD/tests" .venv/bin/python -m integration._support.routing check test-results/parity-<< parameters.suite >>/base test-results/parity-<< parameters.suite >>/head
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
+
+  postgres_suite:
+    parameters:
+      test_path:
+        type: string
+      seed:
+        type: boolean
+      coverage_flag:
+        type: string
+        default: ""
+      timeout_minutes:
+        type: integer
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    environment:
+      DATABASE_URL: postgresql://postgres:postgres@localhost:5432/litellm_test
+    steps:
+      - checkout
+      - skip_if_unrelated_changes
+      - setup_litellm_test_deps
+      - start_postgres:
+          db_name: litellm_test
+          image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
+      - run:
+          name: Generate Prisma client
+          command: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
+      - when:
+          condition: << parameters.seed >>
+          steps:
+            - run:
+                name: Seed database schema
+                command: uv run --no-sync prisma db push --schema litellm/proxy/schema.prisma --accept-data-loss
+      - run:
+          name: Run << parameters.test_path >>
+          command: |
+            mkdir -p test-results
+            coverage_args=()
+            if [ -n "<< parameters.coverage_flag >>" ]; then
+              coverage_args=(--cov=./litellm --cov-report=xml:coverage.xml)
+            fi
+            timeout --signal=TERM << parameters.timeout_minutes >>m uv run --no-sync pytest \
+              << parameters.test_path >> -vv --tb=short --durations=10 -o junit_family=xunit1 \
+              --junitxml=test-results/junit.xml "${coverage_args[@]}"
+      - when:
+          condition: << parameters.coverage_flag >>
+          steps:
+            - install_codecov_cli
+            - run:
+                name: Upload coverage
+                when: always
+                command: |
+                  [ -f coverage.xml ] || { echo "no coverage.xml produced"; exit 1; }
+                  codecov upload-process --disable-search --fail-on-error -f coverage.xml \
+                    -F << parameters.coverage_flag >> -C "$CIRCLE_SHA1" \
+                    -n "<< parameters.coverage_flag >>-${CIRCLE_BUILD_NUM}" --git-service github
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
+
+  mcp_integration:
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    environment:
+      COVERAGE_CORE: sysmon
+      LITELLM_LOCAL_MODEL_COST_MAP: "True"
+    steps:
+      - checkout
+      - skip_if_unrelated_changes
+      - setup_litellm_test_deps
+      - run:
           name: Generate Prisma client
           command: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
       - run:
-          name: Run unit tests
+          name: Install MCP SDK1 peer
           command: |
-            mkdir -p test-results/unit
-            mapfile -t files < <(find tests/unit -name 'test_*.py' | sort)
-            if [ "${#files[@]}" -eq 0 ]; then echo "tests/unit holds no test_*.py files; nothing to run"; exit 0; fi
-            set +e
-            LITELLM_LOCAL_MODEL_COST_MAP=True uv run --no-sync pytest "${files[@]}" -p no:rerunfailures -p no:pytest-retry --timeout=90 -n 4 --dist=loadscope --tb=short --junitxml=test-results/unit/junit.xml
-            status=$?
-            set -e
-            if [ "$status" -eq 5 ]; then echo "pytest collected no tests from tests/unit; passing"; exit 0; fi
-            exit "$status"
+            uv venv --python 3.12 .venv-mcp-peer
+            uv pip install --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
+            echo "export MCP_TEST_PEER_PYTHON=$PWD/.venv-mcp-peer/bin/python" >> "$BASH_ENV"
+      - run:
+          name: Run MCP integration tests
+          command: |
+            mkdir -p test-results
+            env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY \
+              timeout --signal=TERM 20m uv run --no-sync pytest \
+              tests/mcp_tests tests/unit/experimental_mcp_client tests/unit/proxy/_experimental/mcp_server \
+              tests/unit/responses/mcp --tb=short -vv --maxfail=10 -n 2 --dist=loadscope --reruns 0 \
+              --reruns-delay 1 --timeout=120 --rerun-except "from pytest-timeout" --durations=20 \
+              --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml:coverage.xml \
+              --cov-config=pyproject.toml -o junit_family=xunit1 --junitxml=test-results/junit.xml
+      - install_codecov_cli
+      - run:
+          name: Upload MCP integration coverage
+          when: always
+          command: |
+            [ -f coverage.xml ] || { echo "no coverage.xml produced"; exit 1; }
+            codecov upload-process --disable-search --fail-on-error -f coverage.xml \
+              -F mcp-integration -C "$CIRCLE_SHA1" \
+              -n "mcp-integration-${CIRCLE_BUILD_NUM}" --git-service github
+      - store_test_results:
+          path: test-results
+      - store_artifacts:
+          path: test-results
+
+  redis_compat:
+    parameters:
+      redis_py:
+        type: string
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: large
+    working_directory: ~/project
+    steps:
+      - checkout
+      - skip_if_unrelated_changes:
+          category: redis-compat
+      - setup_litellm_test_deps
+      - run:
+          name: Pin redis-py version
+          command: |
+            uv pip install "redis==<< parameters.redis_py >>"
+            uv run --no-sync python -c "import redis; assert redis.__version__ == '<< parameters.redis_py >>', redis.__version__; print('redis-py', redis.__version__)"
+      - run:
+          name: Install redis-server 7.2.16
+          command: |
+            mkdir -p "$HOME/.local/bin"
+            cid="$(docker create redis:7.2.16@sha256:0637954999d01b7c9ce9167db2da50656e2590d3b884f1c600c5f63bb6e6773c)"
+            docker cp "${cid}":/usr/local/bin/redis-server "$HOME/.local/bin/redis-server"
+            docker rm "$cid"
+            redis-server --version | grep -q 'v=7.2.16'
+      - run:
+          name: Run Redis compatibility tests
+          command: |
+            mkdir -p test-results
+            env -u CASSETTE_REDIS_URL -u AZURE_CLIENT_ID -u AZURE_CLIENT_SECRET -u AZURE_TENANT_ID \
+              timeout --signal=TERM 15m uv run --no-sync pytest \
+              tests/unit/test_redis.py tests/unit/caching/test_redis_connection_pool.py \
+              tests/unit/caching/test_redis_cluster_cache.py tests/unit/caching/test_evicted_client_closer.py \
+              tests/integration/sdk/test_redis_cluster_iam_auth.py::test_sync_cluster_authenticates_with_azure_credentials \
+              tests/integration/sdk/test_redis_cluster_iam_auth.py::test_sync_cluster_authenticates_with_gcp_credentials \
+              --tb=short -vv --reruns 2 --reruns-delay 1 --durations=20 --cov=./litellm \
+              --cov-report=xml:coverage.xml -o junit_family=xunit1 --junitxml=test-results/junit.xml
+      - when:
+          condition:
+            equal: ["5.3.1", << parameters.redis_py >>]
+          steps:
+            - install_codecov_cli
+            - run:
+                name: Upload Redis compatibility coverage
+                when: always
+                command: |
+                  [ -f coverage.xml ] || { echo "no coverage.xml produced"; exit 1; }
+                  codecov upload-process --disable-search --fail-on-error -f coverage.xml \
+                    -F redis-compat -C "$CIRCLE_SHA1" \
+                    -n "redis-compat-${CIRCLE_BUILD_NUM}" --git-service github
       - store_test_results:
           path: test-results
       - store_artifacts:
@@ -3224,123 +3086,130 @@ workflows:
             branches:
               only: main
     jobs: *migration_jobs
+  routing_parity:
+    when:
+      not:
+        equal: ["", << pipeline.parameters.routing_parity_base >>]
+    jobs:
+      - routing_parity:
+          name: routing-parity-<< matrix.suite >>
+          matrix:
+            parameters:
+              suite: [management, accounting, database, providers, extensions, cost, mcp]
   integration:
-    unless: << pipeline.parameters.run_migration_tests >>
+    unless:
+      or:
+        - << pipeline.parameters.run_migration_tests >>
+        - not:
+            equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
       - integration_contracts:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, extensions, mcp, sdk, cost, browser]
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+              suite: [management, accounting, database, providers, sdk, cost, security, browser]
+      - integration_contracts:
+          name: integration-mcp
+          suite: mcp
+          resource_class: xlarge
+      - integration_contracts:
+          name: integration-extensions
+          suite: extensions
+          parallelism: 4
+      - integration_contracts:
+          name: integration-<< matrix.suite >>-replica
+          matrix:
+            parameters:
+              suite: [management, database]
+              mode: [replica]
+      - postgres_suite:
+          name: proxy-behavior
+          test_path: tests/proxy_behavior
+          seed: true
+          coverage_flag: lens-postgres
+          timeout_minutes: 25
+      - postgres_suite:
+          name: proxy-security
+          test_path: tests/proxy_security_tests
+          seed: true
+          timeout_minutes: 15
+      - postgres_suite:
+          name: schema-migration
+          test_path: tests/proxy_migration_tests
+          seed: false
+          timeout_minutes: 20
+      - postgres_suite:
+          name: roi-database
+          test_path: tests/integration/database/test_roi_observed.py
+          seed: false
+          coverage_flag: roi-postgres
+          timeout_minutes: 10
+      - mcp_integration:
+          name: mcp-integration
+      - redis_compat:
+          name: redis-compat-<< matrix.redis_py >>
+          matrix:
+            parameters:
+              redis_py:
+                - "5.3.1"
+                - "6.4.0"
+                - "7.4.1"
+                - "8.0.1"
+      - windows_release_wheel
+      - base_sdk_install
   build_and_test:
-    unless: << pipeline.parameters.run_migration_tests >>
+    unless:
+      or:
+        - << pipeline.parameters.run_migration_tests >>
+        - not:
+            equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
-      - using_litellm_on_windows:
-          filters: &main_branches
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - unit:
-          filters: *main_branches
       - provider_replay_harness
-      - base_sdk_install:
-          filters: *main_branches
-      - local_testing_part1:
-          filters: *main_branches
-      - local_testing_part2:
-          filters: *main_branches
-      - langfuse_logging_unit_tests:
-          filters: *main_branches
-      - litellm_assistants_api_testing:
-          filters: *main_branches
-      - litellm_router_testing:
-          filters: *main_branches
-      - litellm_router_unit_testing:
-          filters: *main_branches
-      - auth_ui_unit_tests:
-          filters: *main_branches
-      - build_docker_database_image:
-          filters: *main_branches
-      - e2e_ui_testing:
-          filters: *main_branches
-      - e2e_ui_testing_server_root_path:
-          filters: *main_branches
+      - local_testing_part1
+      - local_testing_part2
+      - langfuse_logging_unit_tests
+      - litellm_router_testing
+      - auth_ui_unit_tests
+      - build_docker_database_image
+      - e2e_ui_testing
+      - e2e_ui_testing_server_root_path
       - build_and_test:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - e2e_openai_endpoints:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - proxy_logging_guardrails_model_info_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
-      - proxy_spend_accuracy_tests:
-          requires:
-            - build_docker_database_image
-          filters: *main_branches
       - proxy_multi_instance_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - proxy_store_model_in_db_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
-      - proxy_build_from_pip_tests:
-          filters: *main_branches
       - proxy_pass_through_endpoint_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - proxy_e2e_anthropic_messages_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
-      - llm_translation_testing:
-          filters: *main_branches
-      - realtime_translation_testing:
-          filters: *main_branches
-      - agent_testing:
-          filters: *main_branches
-      - guardrails_testing:
-          filters: *main_branches
-      - google_generate_content_endpoint_testing:
-          filters: *main_branches
-      - llm_responses_api_testing:
-          filters: *main_branches
-      - ocr_testing:
-          filters: *main_branches
-      - search_testing:
-          filters: *main_branches
-      - batches_testing:
-          filters: *main_branches
-      - litellm_utils_testing:
-          filters: *main_branches
-      - pass_through_unit_testing:
-          filters: *main_branches
-      - image_gen_testing:
-          filters: *main_branches
-      - logging_testing:
-          filters: *main_branches
-      - audio_testing:
-          filters: *main_branches
-      - redis_caching_unit_tests:
-          filters: *main_branches
+      - llm_translation_testing
+      - realtime_translation_testing
+      - guardrails_testing
+      - google_generate_content_endpoint_testing
+      - ocr_testing
+      - search_testing
+      - batches_testing
+      - litellm_utils_testing
+      - pass_through_unit_testing
+      - image_gen_testing
+      - logging_testing
+      - audio_testing
       - upload-coverage:
           requires:
             - realtime_translation_testing
-            - agent_testing
             - google_generate_content_endpoint_testing
-            - guardrails_testing
             - ocr_testing
             - search_testing
             - batches_testing
@@ -3349,28 +3218,15 @@ workflows:
             - image_gen_testing
             - logging_testing
             - audio_testing
-            - redis_caching_unit_tests
             - langfuse_logging_unit_tests
             - local_testing_part1
             - local_testing_part2
-            - litellm_assistants_api_testing
-            - litellm_router_unit_testing
-            - auth_ui_unit_tests
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
-          filters: *main_branches
-      - installing_litellm_on_python:
-          filters: *main_branches
-      - installing_litellm_on_python_3_13:
-          filters: *main_branches
-      - installing_litellm_on_python_v2_migration_resolver:
-          filters: *main_branches
       - helm_chart_testing:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - test_bad_database_url:
           requires:
             - build_docker_database_image
-          filters: *main_branches

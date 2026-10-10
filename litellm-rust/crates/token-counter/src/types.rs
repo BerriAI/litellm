@@ -202,12 +202,12 @@ pub(crate) enum MessageContent {
 #[serde(untagged)]
 pub(crate) enum ContentItem {
     Text(String),
-    Block(ContentBlock),
+    Block(CountableContentBlock),
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 #[serde(tag = "type")]
-pub(crate) enum ContentBlock {
+pub(crate) enum CountableContentBlock {
     #[serde(rename = "text")]
     Text { text: String },
     #[serde(rename = "thinking")]

@@ -54,15 +54,6 @@ export interface KeyMetadata {
   tags?: { tag: string; usage: number }[];
 }
 
-export interface TopApiKeyData {
-  api_key: string;
-  key_alias: string | null;
-  team_id: string | null;
-  spend: number;
-  requests: number;
-  tokens: number;
-}
-
 export interface TopModelData {
   model: string;
   spend: number;
@@ -86,7 +77,6 @@ export interface ModelActivityData {
   total_spend: number;
   total_response_time_ms?: number;
   total_timed_requests?: number;
-  top_api_keys: TopApiKeyData[];
   top_models: TopModelData[];
   daily_data: {
     date: string;

@@ -4,7 +4,12 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Final
 
-from litellm.types.utils import OTEL_SPAN_SCOPES, TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
+from litellm.types.utils import (
+    ARIZE_OTLP_PROTOCOLS,
+    OTEL_SPAN_SCOPES,
+    TRUSTED_CALLBACK_VARS_FIELD,
+    StandardCallbackDynamicParams,
+)
 
 _CLIENT_CALLBACK_METADATA_SLOTS: Final[tuple[str, ...]] = ("litellm_metadata", "metadata")
 _inherited_message_logging_disabled: Final[ContextVar[bool]] = ContextVar(
@@ -81,6 +86,11 @@ def validate_langfuse_span_scope_value(value: str) -> None:
         raise ValueError(f"Invalid langfuse_span_scope {value!r}: must be one of {sorted(OTEL_SPAN_SCOPES)}")
 
 
+def validate_arize_otlp_protocol_value(value: str) -> None:
+    if value not in ARIZE_OTLP_PROTOCOLS:
+        raise ValueError(f"Invalid arize_otlp_protocol {value!r}: must be one of {sorted(ARIZE_OTLP_PROTOCOLS)}")
+
+
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict
 _supported_callback_params: Final[tuple[str, ...]] = (
     "langfuse_public_key",
@@ -113,6 +123,8 @@ _supported_callback_params: Final[tuple[str, ...]] = (
     "dd_agent_port",
     "newrelic_api_key",
     "newrelic_region",
+    "signoz_ingestion_endpoint",
+    "signoz_ingestion_key",
     "turn_off_message_logging",
 )
 
@@ -126,6 +138,8 @@ _request_blocked_callback_params: Final = frozenset(
         "dd_agent_port",
         "newrelic_api_key",
         "newrelic_region",
+        "signoz_ingestion_endpoint",
+        "signoz_ingestion_key",
     }
 )
 
@@ -138,11 +152,13 @@ _trusted_overlay_callback_params: Final = frozenset(
     {
         "newrelic_api_key",
         "newrelic_region",
+        "signoz_ingestion_endpoint",
+        "signoz_ingestion_key",
     }
 )
 
 
-def get_trusted_callback_params(kwargs: Mapping[str, Any] | None) -> tuple[tuple[str, str], ...]:
+def get_trusted_callback_params(kwargs: Mapping[str, object] | None) -> tuple[tuple[str, str], ...]:
     """
     Read callback params the proxy itself stamped from admin-configured team/key callback settings.
 

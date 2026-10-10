@@ -16,7 +16,7 @@ import httpx
 import pytest
 
 PROXY_BASE_URL = os.getenv("PROXY_BASE_URL", "http://localhost:4000")
-MASTER_KEY = os.getenv("LITELLM_MASTER_KEY", "sk-1234")
+MASTER_KEY = os.environ["LITELLM_MASTER_KEY"]
 HEADERS = {"Authorization": f"Bearer {MASTER_KEY}", "Content-Type": "application/json"}
 
 UNAVAILABLE_MESSAGE = "Cost center validation is unavailable right now; the team was not saved. Contact FinOps."

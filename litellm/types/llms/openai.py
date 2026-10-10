@@ -1,13 +1,15 @@
+import builtins
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Final, Literal, Optional, TypeAlias, Union
+from typing import IO, Any, Final, Generic, Literal, Optional, TypeAlias, Union
 
 import httpx
 from openai import Omit
 from openai._legacy_response import (
     HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
 )
+from openai._types import Response as SDKResponse
 from openai.lib.streaming._assistants import (
     AssistantEventHandler,
     AssistantStreamManager,
@@ -63,7 +65,6 @@ from openai.types.responses.response_create_params import (
 from openai.types.responses.response_function_tool_call import ResponseFunctionToolCall
 from openai.types.responses.response_function_web_search import ResponseFunctionWebSearch
 from pydantic import (
-    BaseModel,
     ConfigDict,
     Discriminator,
     Field,
@@ -79,10 +80,11 @@ from typing_extensions import (
     ReadOnly,
     Required,
     TypedDict,
+    TypeVar,
     override,
 )
 
-from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject
+from litellm.types.llms.base import BaseLiteLLMOpenAIResponseObject, LiteLLMBaseModel
 from litellm.types.responses.main import (
     CustomToolCallOutputItem,
     GenericResponseOutputItem,
@@ -118,25 +120,43 @@ class BinaryResponseSummary(TypedDict):
     num_bytes: ReadOnly[int]
 
 
-class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
-    _hidden_params: dict
+_ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=httpx.Response)
 
-    def __init__(self, response: httpx.Response) -> None:
-        super().__init__(response)
-        self._hidden_params = {}  # mutable-ok: mutable-dict contract shared with ModelResponse logging consumers
+
+class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT]):
+    _hidden_params: dict
+    response: _ResponseT  # pyright: ignore[reportIncompatibleVariableOverride]  # SDK accepts both backends at runtime
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
+    def __init__(self, response: _ResponseT) -> None:
+        super().__init__(response)  # pyright: ignore[reportArgumentType]  # SDK accepts both backends at runtime
+        self._hidden_params = {}
+
+    @property
+    def content_type(self) -> str | None:
+        headers: Final[Mapping[str, str]] = self.response.headers
+        return headers.get("content-type")
 
     def logging_summary(self) -> BinaryResponseSummary:
         return {
             "object": "binary",
-            "content_type": self.response.headers.get("content-type"),
+            "content_type": self.content_type,
             "num_bytes": self._num_bytes(),
         }
 
     def _num_bytes(self) -> int:
         try:
-            return len(self.response.content)
-        except httpx.ResponseNotRead:
+            content: Final = self.response.content
+        except RuntimeError:
             return self.response.num_bytes_downloaded
+        return len(content)
 
     def set_response_cost(self, response_cost: float | None) -> None:
         if response_cost is None:
@@ -283,7 +303,7 @@ class MessageData(TypedDict):
     metadata: dict | None
 
 
-class Thread(BaseModel):
+class Thread(LiteLLMBaseModel):
     id: str
     """The identifier, which can be referenced in API endpoints."""
 
@@ -318,7 +338,7 @@ OpenAIFilesPurpose = Literal[
 ]
 
 
-class BatchGuardrailRecord(BaseModel):
+class BatchGuardrailRecord(LiteLLMBaseModel):
     """One batch input record a guardrail acted on."""
 
     line: int
@@ -342,7 +362,7 @@ class BatchGuardrailRecord(BaseModel):
     """
 
 
-class BatchGuardrailReport(BaseModel):
+class BatchGuardrailReport(LiteLLMBaseModel):
     """What guardrails did to a batch input file, per record."""
 
     submitted_records: int
@@ -357,9 +377,10 @@ _JsonValue: TypeAlias = object
 
 
 BATCH_GUARDRAIL_RESPONSE_FIELD: Final = "litellm_batch_guardrail"
+LITELLM_DETAILS_FALLBACK_RESPONSE_FIELD: Final = "litellm_details_fallback"
 
 
-class OpenAIFileObject(BaseModel):
+class OpenAIFileObject(LiteLLMBaseModel):
     id: str
     """The file identifier, which can be referenced in the API endpoints."""
 
@@ -405,18 +426,33 @@ class OpenAIFileObject(BaseModel):
     Absent on every other upload, so OpenAI-shaped clients see an unchanged response.
     """
 
-    _hidden_params: dict = {"response_cost": 0.0}  # no cost for writing a file
+    litellm_details_fallback: bool | None = None
+    """Set by the LiteLLM proxy on a saved batch output file entry built without provider metadata; stripped from API responses."""
+
+    _hidden_params: dict = PrivateAttr(default={"response_cost": 0.0})  # no cost for writing a file
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     @model_serializer(mode="wrap")
-    def _omit_absent_batch_guardrail(  # noqa: ANN202  # annotating it replaces the model's serialization schema
+    def _omit_absent_proxy_only_fields(  # noqa: ANN202  # annotating it replaces the model's serialization schema
         self, handler: SerializerFunctionWrapHandler
     ):
         serialized: Final[Mapping[str, object]] = handler(self)
-        if self.litellm_batch_guardrail is not None:
-            return serialized
-        return {  # mutable-ok: pydantic's json serializer rejects a mapping that is not a dict
-            key: value for key, value in serialized.items() if key != BATCH_GUARDRAIL_RESPONSE_FIELD
-        }
+        fields_to_omit: Final = tuple(
+            field_name
+            for field_name, value in (
+                (BATCH_GUARDRAIL_RESPONSE_FIELD, self.litellm_batch_guardrail),
+                (LITELLM_DETAILS_FALLBACK_RESPONSE_FIELD, self.litellm_details_fallback),
+            )
+            if value is None
+        )
+        return {key: value for key, value in serialized.items() if key not in fields_to_omit}
 
     def __contains__(self, key) -> bool:
         # Define custom behavior for the 'in' operator
@@ -438,7 +474,7 @@ class OpenAIFileObject(BaseModel):
             return self.dict()
 
 
-class FileListPage(BaseModel):
+class FileListPage(LiteLLMBaseModel):
     """A page of files, as `GET /v1/files` returns it.
 
     Post-call hooks and logging callbacks are handed the listing response, and
@@ -522,7 +558,19 @@ class CreateBatchRequest(TypedDict, total=False):
     """
 
     completion_window: Literal["24h"]
-    endpoint: Literal["/v1/chat/completions", "/v1/embeddings", "/v1/completions", "/v1/responses", "/v1/ocr"]
+    endpoint: Literal[
+        "/v1/chat/completions",
+        "/v1/embeddings",
+        "/v1/completions",
+        "/v1/responses",
+        "/v1/ocr",
+        "/v1/images/generations",
+        "/v1/images/edits",
+        "/v1/videos/generations",
+        "/v1/videos",
+        "/v1/videos/edits",
+        "/v1/videos/extensions",
+    ]
     input_file_id: str
     metadata: dict[str, str] | None
     output_expires_after: FileExpiresAfter
@@ -626,6 +674,7 @@ class ChatCompletionCachedContent(TypedDict):
 
 class PromptCacheBreakpoint(TypedDict):
     mode: ReadOnly[Literal["explicit"]]
+    ttl: NotRequired[ReadOnly[Literal["30m"]]]
 
 
 class PromptCacheOptions(TypedDict, total=False):
@@ -1105,7 +1154,7 @@ class OpenAIChatCompletionChunk(ChatCompletionChunk):
         super().__init__(**kwargs)
 
 
-class Hyperparameters(BaseModel):
+class Hyperparameters(LiteLLMBaseModel):
     batch_size: str | int | None = None  # "Number of examples in each batch."
     learning_rate_multiplier: str | float | None = None  # Scaling factor for the learning rate
     n_epochs: str | int | None = None  # "The number of epochs to train the model for"
@@ -1113,7 +1162,7 @@ class Hyperparameters(BaseModel):
     model_config = {"extra": "allow"}
 
 
-class FineTuningJobCreate(BaseModel):
+class FineTuningJobCreate(LiteLLMBaseModel):
     """
     FineTuningJobCreate - Create a fine-tuning job
 
@@ -1147,7 +1196,7 @@ class FineTuningJobCreate(BaseModel):
 class LiteLLMFineTuningJobCreate(FineTuningJobCreate):
     custom_llm_provider: Literal["openai", "azure", "vertex_ai"] | None = None
 
-    model_config = {"extra": "allow"}  # This allows the model to accept additional fields
+    model_config = ConfigDict(extra="allow")  # This allows the model to accept additional fields
 
 
 AllEmbeddingInputValues = str | list[str] | list[int] | list[list[int]]
@@ -1301,8 +1350,8 @@ class ResponsesAPIOptionalRequestParams(TypedDict, total=False):
 class ResponsesAPIRequestParams(ResponsesAPIOptionalRequestParams, total=False):
     """TypedDict for request parameters supported by the responses API."""
 
-    input: str | ResponseInputParam
-    model: str
+    input: Required[ReadOnly[str | ResponseInputParam]]
+    model: Required[ReadOnly[str]]
 
 
 class OutputTokensDetails(BaseLiteLLMOpenAIResponseObject):
@@ -1353,16 +1402,16 @@ class ResponseAPIUsage(BaseLiteLLMOpenAIResponseObject):
             return v.get("total_cost")
         return v
 
-    model_config = {"extra": "allow"}
+    model_config = ConfigDict(extra="allow")
 
 
-class WebSearchToolUsage(BaseModel):
+class WebSearchToolUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     num_requests: NonNegativeInt
 
 
-class ResponsesToolUsage(BaseModel):
+class ResponsesToolUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     web_search: WebSearchToolUsage | None = None
@@ -1412,6 +1461,14 @@ class ResponsesAPIResponse(BaseLiteLLMOpenAIResponseObject):
     store: bool | None = None
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, builtins.object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, builtins.object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     @field_validator("reasoning", mode="before")
     @classmethod
@@ -1587,6 +1644,14 @@ class ResponseCompletedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_COMPLETED]
     response: ResponsesAPIResponse
     _hidden_params: dict = PrivateAttr(default_factory=dict)
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
 
 class ResponseFailedEvent(BaseLiteLLMOpenAIResponseObject):
@@ -2388,6 +2453,14 @@ class OpenAIModerationResponse(BaseLiteLLMOpenAIResponseObject):
     # Define private attributes using PrivateAttr
     _hidden_params: dict = PrivateAttr(default_factory=dict)
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
 
 class OpenAIChatCompletionLogprobs(TypedDict, total=False):
     content: list[OpenAIChatCompletionLogprobsContent]
@@ -2509,7 +2582,7 @@ class CreateVideoRequest(TypedDict, total=False):
     timeout: float | None
 
 
-class OpenAIVideoObject(BaseModel):
+class OpenAIVideoObject(LiteLLMBaseModel):
     """OpenAI Video Object representing a video generation job."""
 
     id: str
@@ -2548,7 +2621,15 @@ class OpenAIVideoObject(BaseModel):
     model: str | None = None
     """The video generation model that produced the job."""
 
-    _hidden_params: dict[str, _JsonValue] = {}
+    _hidden_params: dict[str, _JsonValue] = PrivateAttr(default={})
+
+    @property
+    def hidden_params(self) -> dict[str, _JsonValue]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, _JsonValue]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __contains__(self, key) -> bool:
         return hasattr(self, key)
