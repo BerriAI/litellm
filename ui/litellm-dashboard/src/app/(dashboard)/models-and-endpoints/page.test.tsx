@@ -21,7 +21,17 @@ vi.mock("./detailNavigation", () => ({
   useModelDetailRouting: () => ({ ...detailState, close: vi.fn(), openModel: vi.fn(), openTeam: vi.fn() }),
 }));
 
-vi.mock("@/components/molecules/cost_optimization_feedback_banner", () => ({ default: () => null }));
+vi.mock("@/components/molecules/DecisionModelsBanner", () => ({
+  default: ({ onAddModel }: { onAddModel?: () => void }) => (
+    <section aria-label="Decision models">
+      {onAddModel && (
+        <button type="button" onClick={onAddModel}>
+          Add a decision model
+        </button>
+      )}
+    </section>
+  ),
+}));
 vi.mock("@/components/model_info_view", () => ({
   default: ({ modelId }: { modelId: string }) => <div data-testid="model-info">model:{modelId}</div>,
 }));
@@ -95,6 +105,27 @@ describe("ModelsAndEndpointsPage", () => {
     await user.click(screen.getByRole("tab", { name: "Health Status" }));
     expect(screen.getByTestId("panel-health")).toBeInTheDocument();
     expect(screen.queryByTestId("panel-all-models")).not.toBeInTheDocument();
+  });
+
+  it("opens the Add Model tab from the decision models banner", async () => {
+    const user = userEvent.setup();
+    renderPage();
+    await user.click(screen.getByRole("button", { name: "Add a decision model" }));
+    expect(screen.getByTestId("panel-add")).toBeInTheDocument();
+    expect(screen.queryByTestId("panel-all-models")).not.toBeInTheDocument();
+  });
+
+  it("does not offer the banner's Add a decision model to a session that cannot add models", () => {
+    mockUseAuthorized.mockReturnValue(NON_ADMIN);
+    renderPage();
+    expect(screen.getByRole("region", { name: "Decision models" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add a decision model" })).not.toBeInTheDocument();
+  });
+
+  it("does not show a view-only session the decision models banner, whose Playground it cannot open", () => {
+    mockUseAuthorized.mockReturnValue(VIEW_ONLY_ADMIN);
+    renderPage();
+    expect(screen.queryByRole("region", { name: "Decision models" })).not.toBeInTheDocument();
   });
 
   it("renders the model detail overlay from the ?model drill-in and hides the tabs", () => {

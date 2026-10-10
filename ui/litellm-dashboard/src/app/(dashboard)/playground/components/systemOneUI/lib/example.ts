@@ -37,7 +37,6 @@ export const SYSTEM_ONE_EXAMPLE = {
   },
 } satisfies SystemOneRequest;
 
-export const DECISIONS_EXAMPLE: DecisionRequest = {
-  ...SYSTEM_ONE_EXAMPLE,
-  model: "your-decision-model",
-};
+export const PLACEHOLDER_DECISION_MODEL = "your-decision-model";
+
+export const decisionsExample = (model: string): DecisionRequest => ({ ...SYSTEM_ONE_EXAMPLE, model });

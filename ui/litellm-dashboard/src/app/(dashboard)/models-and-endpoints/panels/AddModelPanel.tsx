@@ -15,6 +15,7 @@ import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap"
 import { useCredentials } from "@/app/(dashboard)/hooks/credentials/useCredentials";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { buildDecisionCatalog } from "@/lib/decisionModels";
 
 const INITIAL_VALUES: MountedFormValues = { litellm_credential_name: null };
 
@@ -32,6 +33,7 @@ export default function AddModelPanel() {
     () => (typeof pickedProvider === "string" ? getProviderModels(pickedProvider, modelCostMapData) : []),
     [pickedProvider, modelCostMapData],
   );
+  const decisionCatalog = useMemo(() => buildDecisionCatalog(modelCostMapData), [modelCostMapData]);
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
 
   const refresh = () => queryClient.invalidateQueries({ queryKey: ["models", "list"] });
@@ -66,6 +68,7 @@ export default function AddModelPanel() {
       setShowAdvancedSettings={setShowAdvancedSettings}
       teams={teams ?? null}
       credentials={credentialsResponse?.credentials || []}
+      decisionCatalog={decisionCatalog}
     />
   );
 }
