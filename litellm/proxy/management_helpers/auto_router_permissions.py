@@ -38,9 +38,9 @@ from litellm.router_strategy.complexity_router.config import (
     ComplexityRouterConfigWrite,
     resolve_complexity_router_config_write,
 )
+from litellm.router_strategy.complexity_router.request_models import RequestComplexityRouterConfig
 from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model, strategy_router_dependencies
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
 from litellm.types.router import Deployment, updateDeployment
 
 if TYPE_CHECKING:
