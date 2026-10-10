@@ -294,8 +294,20 @@ async def test_langfuse_logging_with_non_serializable_metadata(
         ({"a": {"nested_a": 1}, "b": {"nested_b": 2}}, "nested_metadata.json"),
         ({"a": [1, 2, 3], "b": {4, 5, 6}}, "simple_metadata2.json"),
         ({"a": (1, 2), "b": frozenset({3, 4}), "c": {"d": [5, 6]}}, "simple_metadata3.json"),
-        ({"lock": "non-copyable"}, "metadata_with_lock.json"),
-        ({"func": "callable"}, "metadata_with_function.json"),
+        ({"lock": threading.Lock()}, "metadata_with_lock.json"),
+        ({"func": lambda x: x + 1}, "metadata_with_function.json"),
+        (
+            {
+                "int": 42,
+                "str": "hello",
+                "list": [1, 2, 3],
+                "set": {4, 5},
+                "dict": {"nested": "value"},
+                "non_copyable": threading.Lock(),
+                "function": print,
+            },
+            "complex_metadata.json",
+        ),
         ({"list": ["list", "not", "a", "dict"]}, "complex_metadata_2.json"),
         ({}, "empty_metadata.json"),
     ],
@@ -456,7 +468,7 @@ async def test_langfuse_logging_with_router(langfuse_export: tuple[respx.Route, 
 @pytest.mark.asyncio
 async def test_langfuse_e2e_sync(langfuse_export: tuple[respx.Route, str]) -> None:
     route, trace_id = langfuse_export
-    await litellm.acompletion(
+    litellm.completion(
         model="gpt-3.5-turbo",
         messages=[{"role": "user", "content": "sync callback route"}],
         mock_response="Hello from litellm",

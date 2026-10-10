@@ -1,4 +1,5 @@
 import base64
+import contextlib
 import json
 import uuid
 from collections.abc import Iterator, Mapping
@@ -93,6 +94,11 @@ def _sign_in(gateway: Gateway, subject: str) -> httpx.Response:
         return browser.get(at_idp.headers["location"])
 
 
+def _delete_user(gateway: Gateway, subject: str) -> None:
+    response: Final = gateway.request("POST", "/user/delete", {"user_ids": [subject]})
+    assert response.status_code == 200, response.text
+
+
 def _signed_in_user(subject: str) -> list[dict[str, JsonValue]]:
     return read_rows('SELECT user_email, user_role, metadata FROM "LiteLLM_UserTable" WHERE user_id = %s', (subject,))
 
@@ -109,7 +115,8 @@ def test_a_first_sso_sign_in_creates_the_user_with_the_default_role(
     tmp_path: Path, litellm_settings: Mapping[str, JsonValue], expected_role: str
 ) -> None:
     subject: Final = f"sso-new-user-{uuid.uuid4().hex[:12]}"
-    with _sso_gateway(tmp_path, litellm_settings) as gateway:
+    with _sso_gateway(tmp_path, litellm_settings) as gateway, contextlib.ExitStack() as cleanups:
+        cleanups.callback(_delete_user, gateway, subject)
         callback: Final = _sign_in(gateway, subject)
 
         assert callback.status_code == 303, f"{callback.status_code} {callback.text}"

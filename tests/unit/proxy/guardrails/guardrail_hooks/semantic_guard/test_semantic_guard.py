@@ -459,6 +459,29 @@ class TestContentFilterPromptInjectionTemplate:
         )
         assert result is None or result["texts"][0] == sentence
 
+    NO_MATCH_CASES = [
+        ("summarize our Q3 financial results", "no match: normal business query"),
+        ("help me draft an email to a customer", "no match: normal business query"),
+        ("what is the capital of the UAE?", "no match: general knowledge"),
+        ("write a Python function to sort a list", "no match: coding help"),
+        ("how does a firewall work?", "no match: security education"),
+    ]
+
+    @pytest.mark.parametrize(
+        "sentence,reason",
+        NO_MATCH_CASES,
+        ids=[f"no_match_{i}" for i in range(len(NO_MATCH_CASES))],
+    )
+    @pytest.mark.asyncio
+    async def test_no_match_allowed(self, content_filter_guardrail, sentence, reason):
+        request_data = {"messages": [{"role": "user", "content": sentence}]}
+        result = await content_filter_guardrail.apply_guardrail(
+            inputs={"texts": [sentence]},
+            request_data=request_data,
+            input_type="request",
+        )
+        assert result is None or result["texts"][0] == sentence
+
 
 def test_build_routes_empty() -> None:
     routes: Final = SemanticGuardRouteLoader.build_routes(
@@ -538,26 +561,3 @@ def test_empty_routes_raises() -> None:
             route_templates=None,
             custom_routes=None,
         )
-
-    NO_MATCH_CASES = [
-        ("summarize our Q3 financial results", "no match: normal business query"),
-        ("help me draft an email to a customer", "no match: normal business query"),
-        ("what is the capital of the UAE?", "no match: general knowledge"),
-        ("write a Python function to sort a list", "no match: coding help"),
-        ("how does a firewall work?", "no match: security education"),
-    ]
-
-    @pytest.mark.parametrize(
-        "sentence,reason",
-        NO_MATCH_CASES,
-        ids=[f"no_match_{i}" for i in range(len(NO_MATCH_CASES))],
-    )
-    @pytest.mark.asyncio
-    async def test_no_match_allowed(self, content_filter_guardrail, sentence, reason):
-        request_data = {"messages": [{"role": "user", "content": sentence}]}
-        result = await content_filter_guardrail.apply_guardrail(
-            inputs={"texts": [sentence]},
-            request_data=request_data,
-            input_type="request",
-        )
-        assert result is None or result["texts"][0] == sentence

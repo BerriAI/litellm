@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import datetime
 import json
@@ -16,6 +17,7 @@ import respx
 
 import litellm
 from pydantic import TypeAdapter
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import StandardLoggingPayload
 
 
@@ -200,6 +202,11 @@ def _without_volatile_gcs_payload_fields(value: object, path: str = "") -> objec
     return value
 
 
+def _with_decoded_metadata(payload: Mapping[str, object]) -> dict[str, object]:
+    metadata: Final = payload["metadata"]
+    return {**payload, "metadata": json.loads(metadata) if isinstance(metadata, str) else metadata}
+
+
 @pytest.mark.asyncio
 async def test_v1_success_event_publishes_the_spend_log_fixture(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, tmp_path: Path
@@ -217,40 +224,25 @@ async def test_v1_success_event_publishes_the_spend_log_fixture(
         topic_id=topic_id,
         credentials_path=_authorized_user_credentials(monkeypatch, tmp_path, project_id),
     )
-    standard_logging_payload: Final = cast(
-        StandardLoggingPayload,
-        {
-            "model": "gpt-4o",
-            "prompt_tokens": 1,
-            "completion_tokens": 1,
-            "total_tokens": 2,
-            "metadata": {},
-            "hidden_params": {},
-            "model_map_information": None,
-        },
+    monkeypatch.setattr(litellm, "callbacks", [logger])
+    await litellm.acompletion(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "Hello, world!"}],
+        mock_response="hi",
     )
-    response_obj: Final = {
-        "id": "unit-response",
-        "model": "gpt-4o",
-        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
-        "choices": [{"message": {"content": "hi"}}],
-    }
-    await logger.async_log_success_event(
-        kwargs={"model": "gpt-4o", "standard_logging_object": standard_logging_payload},
-        response_obj=response_obj,
-        start_time=datetime.datetime(2025, 1, 1),
-        end_time=datetime.datetime(2025, 1, 1, 0, 0, 1),
-    )
+    await asyncio.sleep(0)
+    await GLOBAL_LOGGING_WORKER.flush()
     await logger.async_send_batch()
 
     request_json: Final = TypeAdapter(dict[str, list[dict[str, str]]]).validate_json(route.calls.last.request.content)
     decoded_payload: Final = TypeAdapter(dict[str, object]).validate_json(
         base64.b64decode(request_json["messages"][0]["data"])
     )
-
+    expected_payload: Final = TypeAdapter(dict[str, object]).validate_json(
+        Path(__file__).with_name("spend_logs_payload.json").read_text()
+    )
     assert route.call_count == 1
     assert route.calls.last.request.url == url
-    assert decoded_payload["model"] == "gpt-4o"
-    assert decoded_payload["prompt_tokens"] == 1
-    assert decoded_payload["completion_tokens"] == 1
-    assert decoded_payload["total_tokens"] == 2
+    assert _without_volatile_gcs_payload_fields(_with_decoded_metadata(decoded_payload)) == (
+        _without_volatile_gcs_payload_fields(_with_decoded_metadata(expected_payload))
+    )

@@ -13,6 +13,7 @@ from types import MappingProxyType
 from typing import Final, Literal, Protocol, cast
 
 import pytest
+from e2e_metadata import Domain, Route, Subject, meta
 from pydantic import TypeAdapter
 
 import litellm
@@ -310,6 +311,7 @@ def _assert_logged(logged: LoggedCall, response: OCRResponse, model: str, logged
     assert response_cost > 0
 
 
+@meta(Subject(domain=Domain.LLM_TRANSLATION, route=Route.OCR))
 @pytest.mark.parametrize("case", CASES, ids=[case.id for case in CASES])
 async def test_ocr(
     case: Case,
