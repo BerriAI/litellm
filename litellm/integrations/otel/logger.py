@@ -236,7 +236,10 @@ class OpenTelemetryV2(CustomLogger):
             return None
         provider: Final = resolve_meter_provider(self.config, meter_provider)
         meter: Final = get_meter(provider, LITELLM_TRACER_NAME)
-        return GenAIMetricRecorder(create_genai_metrics(meter), self.callback_name)
+        return GenAIMetricRecorder(
+            create_genai_metrics(meter, semconv_buckets=self.config.semconv_histogram_buckets),
+            self.callback_name,
+        )
 
     def _init_events(self, logger_provider: LoggerProvider | None) -> "GenAIEventRecorder | None":
         """Create the GenAI event recorder when events are enabled, else ``None``.

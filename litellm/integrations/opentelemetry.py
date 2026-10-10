@@ -9,6 +9,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypedDict, cast
 
 from pydantic import ConfigDict, TypeAdapter
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm._logging import verbose_logger
@@ -30,7 +31,8 @@ from litellm.integrations.otel.mappers.utils import drop_none
 from litellm.integrations.otel.model.baggage import promoted_metadata
 from litellm.integrations.otel.model.db_endpoint import db_span_attributes
 from litellm.integrations.otel.model.metadata import flatten_metadata
-from litellm.integrations.otel.model.semconv import LiteLLM, Metric
+from litellm.integrations.otel.model.semconv import LiteLLM, Metric, MetricBuckets
+from litellm.integrations.otel.plumbing.histograms import create_histogram
 from litellm.integrations.otel.plumbing.otlp_tls import resolve_otlp_http_tls
 from litellm.integrations.otel.routing import routing_decision_attributes
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
@@ -95,6 +97,7 @@ class _StartSpanKwargs(_StartSpanRequiredKwargs, total=False):
 
 class _UsageCompletionTokensView(TypedDict, total=False):
     completion_tokens: int
+    prompt_tokens: ReadOnly[int]
 
 
 class _ResponseWithUsageView(TypedDict, total=False):
@@ -309,6 +312,9 @@ class OpenTelemetryConfig:
     headers: str | None = None
     enable_metrics: bool = False
     enable_events: bool = False
+    semconv_histogram_buckets: bool = field(
+        default_factory=lambda: os.getenv("LITELLM_OTEL_SEMCONV_HISTOGRAM_BUCKETS", "false").lower() == "true"
+    )
     service_name: str | None = None
     deployment_environment: str | None = None
     model_id: str | None = None
@@ -708,37 +714,53 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         )
         self._meter_provider = meter_provider
 
-        meter: Final = meter_provider.get_meter(__name__)
+        meter: Final = metrics.get_meter(__name__, meter_provider=meter_provider)
 
-        self._operation_duration_histogram = meter.create_histogram(
+        semconv_buckets: Final = self.config.semconv_histogram_buckets
+
+        def buckets(boundaries: tuple[float, ...]) -> tuple[float, ...] | None:
+            return boundaries if semconv_buckets else None
+
+        self._operation_duration_histogram = create_histogram(
+            meter,
             name=Metric.OPERATION_DURATION,
             description="GenAI operation duration",
             unit="s",
+            boundaries=buckets(MetricBuckets.OPERATION_DURATION),
         )
-        self._token_usage_histogram = meter.create_histogram(
+        self._token_usage_histogram = create_histogram(
+            meter,
             name=Metric.TOKEN_USAGE,
             description="GenAI token usage",
             unit="{token}",
+            boundaries=buckets(MetricBuckets.TOKEN_USAGE),
         )
-        self._cost_histogram = meter.create_histogram(
+        self._cost_histogram = create_histogram(
+            meter,
             name=Metric.TOKEN_COST,
             description="GenAI request cost",
             unit="USD",
         )
-        self._time_to_first_token_histogram = meter.create_histogram(
+        self._time_to_first_token_histogram = create_histogram(
+            meter,
             name=Metric.TIME_TO_FIRST_TOKEN,
             description="Time to first token for streaming requests",
             unit="s",
+            boundaries=buckets(MetricBuckets.TIME_TO_FIRST_TOKEN),
         )
-        self._time_per_output_token_histogram = meter.create_histogram(
+        self._time_per_output_token_histogram = create_histogram(
+            meter,
             name=Metric.TIME_PER_OUTPUT_TOKEN,
             description="Average time per output token (generation time / completion tokens)",
             unit="s",
+            boundaries=buckets(MetricBuckets.TIME_PER_OUTPUT_TOKEN),
         )
-        self._response_duration_histogram = meter.create_histogram(
+        self._response_duration_histogram = create_histogram(
+            meter,
             name=Metric.RESPONSE_DURATION,
             description="Total LLM API generation time (excludes LiteLLM overhead)",
             unit="s",
+            boundaries=buckets(MetricBuckets.RESPONSE_DURATION),
         )
 
     def _init_logs(self, logger_provider):
@@ -1668,7 +1690,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             return key not in self._metric_attr_exclude
         return True
 
-    def _record_metrics(self, kwargs, response_obj, start_time, end_time):
+    def _record_metrics(
+        self, kwargs, response_obj: "_ResponseWithUsageView | None", start_time: datetime, end_time: datetime
+    ):
         duration_s: Final = (end_time - start_time).total_seconds()
         params: Final = kwargs.get("litellm_params") or {}
         provider: Final = _provider_label(params.get("custom_llm_provider"))
@@ -1714,7 +1738,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 self._token_usage_histogram.record(usage.get("completion_tokens", 0), attributes=out_attrs)
 
         cost: Final = kwargs.get("response_cost")
-        if self._cost_histogram and cost:
+        if self._cost_histogram and isinstance(cost, (int, float)) and cost:
             self._cost_histogram.record(cost, attributes=common_attrs)
 
         # Record latency metrics (TTFT, TPOT, and Total Generation Time)
@@ -1742,7 +1766,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
             except ValueError:
                 return None
 
-    def _record_time_to_first_token_metric(self, kwargs: dict, common_attrs: dict):
+    def _record_time_to_first_token_metric(self, kwargs: dict, common_attrs: Mapping[str, str]):
         """Record Time to First Token (TTFT) metric for streaming requests."""
         optional_params: Final = kwargs.get("optional_params", {})
         is_streaming: Final = optional_params.get("stream", False)
@@ -1772,7 +1796,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         response_obj: "_ResponseWithUsageView | None",
         end_time: datetime,
         duration_s: float,
-        common_attrs: dict,
+        common_attrs: Mapping[str, str],
     ):
         """Record Time Per Output Token (TPOT) metric.
 
@@ -1839,7 +1863,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         self,
         kwargs: dict,
         end_time: datetime | float,
-        common_attrs: dict,
+        common_attrs: Mapping[str, str],
     ):
         """Record Total Generation Time (response duration) metric.
 

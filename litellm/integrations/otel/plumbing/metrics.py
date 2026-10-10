@@ -29,10 +29,12 @@ from litellm.integrations.otel.model.semconv import (
     Error,
     GenAI,
     Metric,
+    MetricBuckets,
     resolve_operation,
     resolve_provider,
 )
 from litellm.integrations.otel.model.utils import to_seconds
+from litellm.integrations.otel.plumbing.histograms import create_histogram
 from litellm.litellm_core_utils.internal_call_metadata import is_unbilled_non_inference_call_from_params
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
@@ -64,37 +66,51 @@ class GenAIMetrics:
     response_duration: Histogram
 
 
-def create_genai_metrics(meter: Meter) -> GenAIMetrics:
+def create_genai_metrics(meter: Meter, *, semconv_buckets: bool = False) -> GenAIMetrics:
+    def buckets(boundaries: tuple[float, ...]) -> tuple[float, ...] | None:
+        return boundaries if semconv_buckets else None
+
     return GenAIMetrics(
-        operation_duration=meter.create_histogram(
+        operation_duration=create_histogram(
+            meter,
             name=Metric.OPERATION_DURATION,
             unit="s",
             description="GenAI operation duration",
+            boundaries=buckets(MetricBuckets.OPERATION_DURATION),
         ),
-        token_usage=meter.create_histogram(
+        token_usage=create_histogram(
+            meter,
             name=Metric.TOKEN_USAGE,
             unit="{token}",
             description="GenAI token usage",
+            boundaries=buckets(MetricBuckets.TOKEN_USAGE),
         ),
-        token_cost=meter.create_histogram(
+        token_cost=create_histogram(
+            meter,
             name=Metric.TOKEN_COST,
             unit="USD",
             description="GenAI request cost",
         ),
-        time_to_first_token=meter.create_histogram(
+        time_to_first_token=create_histogram(
+            meter,
             name=Metric.TIME_TO_FIRST_TOKEN,
             unit="s",
             description="Time to first token for streaming requests",
+            boundaries=buckets(MetricBuckets.TIME_TO_FIRST_TOKEN),
         ),
-        time_per_output_token=meter.create_histogram(
+        time_per_output_token=create_histogram(
+            meter,
             name=Metric.TIME_PER_OUTPUT_TOKEN,
             unit="s",
             description="Average time per output token (generation time / completion tokens)",
+            boundaries=buckets(MetricBuckets.TIME_PER_OUTPUT_TOKEN),
         ),
-        response_duration=meter.create_histogram(
+        response_duration=create_histogram(
+            meter,
             name=Metric.RESPONSE_DURATION,
             unit="s",
             description="Total LLM API generation time (excludes LiteLLM overhead)",
+            boundaries=buckets(MetricBuckets.RESPONSE_DURATION),
         ),
     )
 
