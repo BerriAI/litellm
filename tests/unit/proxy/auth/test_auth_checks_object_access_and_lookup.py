@@ -10930,6 +10930,61 @@ def test_can_object_call_model_allows_listed_model_for_key():
     assert result is True
 
 
+def _router_serving(model_names: list[str]) -> "Router":
+    from litellm import Router
+
+    return Router(
+        model_list=[
+            {"model_name": name, "litellm_params": {"model": f"openai/{name}", "api_key": "sk-test"}}
+            for name in model_names
+        ]
+    )
+
+
+def test_can_project_access_model_expands_all_team_models_sentinel():
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+    from litellm.proxy.auth.auth_checks import can_project_access_model
+
+    project: Final = LiteLLM_ProjectTableCachedObj(project_id="p-1", team_id="t-1", models=["all-team-models"])
+    result: Final = can_project_access_model(
+        model="gpt-5.6-sol",
+        project_object=project,
+        llm_router=_router_serving(["gpt-5.6-sol"]),
+    )
+
+    assert result is True
+
+
+def test_can_project_access_model_denies_model_outside_router_names():
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+    from litellm.proxy.auth.auth_checks import can_project_access_model
+
+    project: Final = LiteLLM_ProjectTableCachedObj(project_id="p-1", team_id="t-1", models=["all-team-models"])
+    with pytest.raises(ProxyException) as exc_info:
+        can_project_access_model(
+            model="gpt-5.6-sol-eu",
+            project_object=project,
+            llm_router=_router_serving(["gpt-5.6-sol"]),
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.project_model_access_denied
+
+
+def test_can_project_access_model_keeps_sentinel_denied_without_team_id():
+    from litellm.proxy._types import LiteLLM_ProjectTableCachedObj
+    from litellm.proxy.auth.auth_checks import can_project_access_model
+
+    project: Final = LiteLLM_ProjectTableCachedObj(project_id="p-1", team_id=None, models=["all-team-models"])
+    with pytest.raises(ProxyException) as exc_info:
+        can_project_access_model(
+            model="gpt-5.6-sol",
+            project_object=project,
+            llm_router=_router_serving(["gpt-5.6-sol"]),
+        )
+
+    assert exc_info.value.type == ProxyErrorTypes.project_model_access_denied
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("allowed", [True, False])
 async def test_authoritative_access_group_reads_writer_despite_stale_allow_cache(allowed: bool) -> None:
