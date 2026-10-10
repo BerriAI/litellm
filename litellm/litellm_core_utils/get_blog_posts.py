@@ -22,6 +22,7 @@ from litellm import verbose_logger
 from litellm.types.llms.base import LiteLLMBaseModel
 
 BLOG_POSTS_TTL_SECONDS: Final[int] = 3600  # 1 hour
+BLOG_POSTS_MAX: Final[int] = 6
 
 
 class BlogPost(LiteLLMBaseModel):
@@ -40,7 +41,7 @@ class GetBlogPosts:
     Fetches, validates, and caches LiteLLM blog posts.
 
     - Fetches RSS feed from docs site with a 5-second timeout
-    - Parses the XML and extracts the latest blog post
+    - Parses the XML and extracts the latest BLOG_POSTS_MAX blog posts
     - Caches the result in-process for BLOG_POSTS_TTL_SECONDS (1 hour)
     - Falls back to the bundled local backup on any failure
     """
@@ -66,7 +67,7 @@ class GetBlogPosts:
         return response.text
 
     @staticmethod
-    def parse_rss_to_posts(xml_text: str, max_posts: int = 1) -> list[dict[str, str]]:
+    def parse_rss_to_posts(xml_text: str, max_posts: int = BLOG_POSTS_MAX) -> list[dict[str, str]]:
         """
         Parse RSS XML and return a list of blog post dicts.
 
