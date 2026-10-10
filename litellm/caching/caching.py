@@ -391,13 +391,13 @@ class Cache:
             return value if isinstance(value, Mapping) else {}
 
         litellm_params: Final = as_mapping(kwargs.get("litellm_params"))
-        metadata_sources: Final = tuple(  # comprehension-ok: flatten trusted metadata containers
+        metadata_sources: Final[tuple[Mapping[str, object], ...]] = tuple(  # comprehension-ok: flatten trusted metadata containers
             as_mapping(source.get(key))
             for source in (kwargs, litellm_params)
             for key in ("metadata", "litellm_metadata")
         )
 
-        scope_values: Final = tuple(
+        scope_values: Final[tuple[tuple[str, object | None], ...]] = tuple(
             (
                 field,
                 next((source[field] for source in metadata_sources if source.get(field) is not None), None),
