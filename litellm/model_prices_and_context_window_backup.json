@@ -1,4 +1,26 @@
 {
+    "acedatacloud/gpt-6-luna": {
+        "cache_creation_input_token_cost": 4.5991575e-08,
+        "cache_creation_input_token_cost_above_272k_tokens": 9.198315e-08,
+        "cache_read_input_token_cost": 3.679375e-09,
+        "cache_read_input_token_cost_above_272k_tokens": 7.358575e-09,
+        "input_cost_per_token": 3.6793225e-08,
+        "input_cost_per_token_above_272k_tokens": 7.3586625e-08,
+        "litellm_provider": "acedatacloud",
+        "mode": "chat",
+        "output_cost_per_token": 1.83966475e-07,
+        "output_cost_per_token_above_272k_tokens": 2.75949625e-07,
+        "source": "https://platform.acedata.cloud/api/v1/models/catalog/",
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_none_reasoning_effort": true,
+        "supports_minimal_reasoning_effort": false,
+        "supports_tool_choice": true
+    },
     "sample_spec": {
         "code_interpreter_cost_per_session": 0.0,
         "computer_use_input_cost_per_1k_tokens": 0.0,

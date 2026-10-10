@@ -28,6 +28,7 @@ from litellm.types.utils import (
     ModelResponse,
     ModelResponseStream,
     TextCompletionResponse,
+    Usage,
     all_litellm_params,
     text_tokens_without_nested_reasoning,
 )
@@ -39,6 +40,26 @@ class _DictHiddenParamsAccessor(Protocol):
 
     @hidden_params.setter
     def hidden_params(self, hidden_params: dict[str, object]) -> None: ...
+
+
+@pytest.mark.parametrize("cost", [0.0, 0.25, 2])
+def test_usage_preserves_numeric_cost(cost: float) -> None:
+    usage: Final = Usage(prompt_tokens=11, completion_tokens=5, total_tokens=16, cost=cost)
+    assert usage.model_dump(warnings="error")["cost"] == cost
+
+
+def test_usage_ignores_structured_credit_cost_when_serializing() -> None:
+    usage: Final = Usage.model_validate(
+        {
+            "prompt_tokens": 11,
+            "completion_tokens": 5,
+            "total_tokens": 16,
+            "cost": {"currency": "credit", "amount": 7},
+        }
+    )
+    serialized: Final = usage.model_dump(warnings="error")
+    assert "cost" not in serialized
+    assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (11, 5, 16)
 
 
 def test_rust_is_a_known_litellm_param():
@@ -184,15 +205,11 @@ def test_prompt_tokens_details_maps_nested_cache_creation_input_tokens():
     overriding an explicitly provided canonical value."""
     from litellm.types.utils import PromptTokensDetailsWrapper
 
-    nested: Final = PromptTokensDetailsWrapper(
-        cached_tokens=0, text_tokens=2059, cache_creation_input_tokens=2048
-    )
+    nested: Final = PromptTokensDetailsWrapper(cached_tokens=0, text_tokens=2059, cache_creation_input_tokens=2048)
     assert nested.cache_write_tokens == 2048
     assert nested.cache_creation_tokens == 2048
 
-    explicit: Final = PromptTokensDetailsWrapper(
-        cache_write_tokens=100, cache_creation_input_tokens=2048
-    )
+    explicit: Final = PromptTokensDetailsWrapper(cache_write_tokens=100, cache_creation_input_tokens=2048)
     assert explicit.cache_write_tokens == 100
     assert explicit.cache_creation_tokens == 100
 
@@ -329,9 +346,7 @@ def test_chat_completion_token_logprob_valid_top_logprobs():
         bytes=[72, 101, 108, 108, 111],
         logprob=-0.31725305,
         top_logprobs=[
-            TopLogprob(
-                token="Hello", logprob=-0.31725305, bytes=[72, 101, 108, 108, 111]
-            ),
+            TopLogprob(token="Hello", logprob=-0.31725305, bytes=[72, 101, 108, 108, 111]),
             TopLogprob(token="Hi", logprob=-1.3190403, bytes=[72, 105]),
         ],
     )
@@ -424,9 +439,7 @@ class TestNativeFinishReason:
         )
         assert choice.finish_reason == "length"
         assert choice.provider_specific_fields["native_finish_reason"] == "max_tokens"
-        assert choice.provider_specific_fields["citations"] == [
-            {"url": "http://example.com"}
-        ]
+        assert choice.provider_specific_fields["citations"] == [{"url": "http://example.com"}]
 
     def test_gemini_safety_reason_exposed(self):
         from litellm.types.utils import Choices
@@ -462,9 +475,7 @@ def test_delta_maps_reasoning_to_reasoning_content():
     # When provider sends 'reasoning' (e.g., Cerebras gpt-oss streaming)
     delta = Delta(content=None, role="assistant", reasoning="thinking step by step")
     assert delta.reasoning_content == "thinking step by step"
-    assert not hasattr(
-        delta, "reasoning"
-    ), "reasoning should not leak as an extra attribute"
+    assert not hasattr(delta, "reasoning"), "reasoning should not leak as an extra attribute"
 
     # When provider sends 'reasoning_content' directly (e.g., NIM), it still works
     delta2 = Delta(content="hello", reasoning_content="direct reasoning")
@@ -487,13 +498,9 @@ def test_message_accepts_thinking_block_with_null_signature():
     """
     from litellm.types.utils import Choices, Message
 
-    thinking_blocks = [
-        {"type": "thinking", "thinking": "step by step reasoning", "signature": None}
-    ]
+    thinking_blocks = [{"type": "thinking", "thinking": "step by step reasoning", "signature": None}]
 
-    message = Message(
-        content="the answer is 4", role="assistant", thinking_blocks=thinking_blocks
-    )
+    message = Message(content="the answer is 4", role="assistant", thinking_blocks=thinking_blocks)
     assert message.thinking_blocks is not None
     assert message.thinking_blocks[0]["signature"] is None
     assert message.thinking_blocks[0]["thinking"] == "step by step reasoning"
@@ -576,11 +583,7 @@ def test_delta_serialization_contract():
     for kwargs, expected_extra in [
         ({"reasoning_content": "t"}, "reasoning_content"),
         (
-            {
-                "thinking_blocks": [
-                    {"type": "thinking", "thinking": "a", "signature": "s"}
-                ]
-            },
+            {"thinking_blocks": [{"type": "thinking", "thinking": "a", "signature": "s"}]},
             "thinking_blocks",
         ),
         ({"reasoning_items": []}, "reasoning_items"),
@@ -612,9 +615,7 @@ def test_delta_serialization_contract():
         assert not hasattr(absent, expected_extra)
 
     # tool_calls dicts are coerced and back-filled with index/type
-    tc_delta = Delta(
-        tool_calls=[{"id": "1", "function": {"name": "f", "arguments": "{}"}}]
-    )
+    tc_delta = Delta(tool_calls=[{"id": "1", "function": {"name": "f", "arguments": "{}"}}])
     dumped = tc_delta.model_dump(exclude_unset=True)["tool_calls"]
     assert dumped == [
         {
@@ -732,6 +733,8 @@ def test_delattr_fast_path_missing_attribute_is_noop():
 
     del racy.x
     del racy.x
+
+
 def test_chat_completion_tool_call_from_dict_custom():
     from litellm.types.utils import (
         ChatCompletionMessageCustomToolCall,

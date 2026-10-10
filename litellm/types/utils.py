@@ -1870,6 +1870,10 @@ class ServerToolUse(LiteLLMBaseModel):
         return getattr(self, key)
 
 
+def _is_credit_cost(value: object) -> bool:
+    return isinstance(value, dict) and value.get("currency") == "credit"
+
+
 class Usage(SafeAttributeModel, CompletionUsage):
     _cache_creation_input_tokens: int = PrivateAttr(
         0
@@ -1983,7 +1987,7 @@ class Usage(SafeAttributeModel, CompletionUsage):
         else:  # maintain openai compatibility in usage object if possible
             del self.server_tool_use
 
-        if cost is not None:
+        if cost is not None and not _is_credit_cost(cost):
             self.cost = cost
         else:
             del self.cost
@@ -4120,6 +4124,7 @@ GenericBudgetConfigType = dict[str, BudgetConfig]
 
 
 class LlmProviders(str, Enum):
+    ACEDATACLOUD = "acedatacloud"
     OPENAI = "openai"
     CHATGPT = "chatgpt"
     OPENAI_LIKE = "openai_like"  # embedding only

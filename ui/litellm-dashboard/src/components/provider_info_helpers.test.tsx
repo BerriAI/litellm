@@ -33,6 +33,13 @@ describe("provider_info_helpers", () => {
   });
 
   describe("getProviderLogoAndName", () => {
+    it.each(["acedatacloud", "ACEDATACLOUD"])("resolves Ace Data Cloud branding for %s", (provider) => {
+      const result = getProviderLogoAndName(provider);
+      expect(result.displayName).toBe("Ace Data Cloud");
+      expect(result.logo).toContain("acedatacloud");
+      expect(getPlaceholder("ACEDATACLOUD")).toBe("acedatacloud/gpt-6-luna");
+    });
+
     it("should return empty logo and dash display name when providerValue is empty", () => {
       const result = getProviderLogoAndName("");
       expect(result).toEqual({ logo: "", displayName: "-" });

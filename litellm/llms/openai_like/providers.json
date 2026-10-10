@@ -1,4 +1,9 @@
 {
+  "acedatacloud": {
+    "base_url": "https://api.acedata.cloud/openai",
+    "api_key_env": "ACEDATACLOUD_API_KEY",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses"]
+  },
   "publicai": {
     "base_url": "https://api.publicai.co/v1",
     "api_key_env": "PUBLICAI_API_KEY",
