@@ -47,6 +47,7 @@ _OPENAI_FAMILY_MODEL_RE: Final = re.compile(r"(^|[./])openai\.")
 _OPENAI_GPT_VERSION_RE: Final = re.compile(r"(^|[./])openai\.gpt-(\d{1,3})(?!\d)(?:\.(\d{1,3})(?!\d))?")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_DEFAULT_SINCE: Final = (5, 6)
 _XAI_GROK_MODEL_RE: Final = re.compile(r"(^|[./])xai\.grok-")
+_CONVERSE_NESTED_TOOL_RESULT_IMAGE_RE: Final = re.compile(r"(^|[./])(anthropic\.claude|amazon\.nova)-")
 _BEDROCK_RUNTIME_CHAT_COMPLETIONS_ENDPOINT: Final = "/v1/chat/completions"
 BedrockRoute = Literal[
     "converse",
@@ -926,14 +927,19 @@ def bedrock_runtime_chat_completions_enforces_response_format(model: str) -> boo
 def bedrock_converse_supports_tool_result_images(model: str) -> bool:
     """Whether Converse accepts an image nested in ``toolResult.content``.
 
-    Missing means yes, which is what Claude accepts. A price-map row sets
-    ``supports_bedrock_converse_tool_result_images`` to false when Bedrock
-    rejects that image and it has to sit beside the tool result instead.
+    AWS documents that for Claude and Nova only (ToolResultContentBlock API reference, checked 2026-10-09),
+    so every other model gets the image beside the tool result. The price-map flag
+    ``supports_bedrock_converse_tool_result_images`` overrides that in either direction.
     """
-    entries: Final = tuple(entry for entry in _bedrock_price_map_entries(model) if entry is not None)
-    if not entries:
-        return True
-    return all(entry.get("supports_bedrock_converse_tool_result_images") is not False for entry in entries)
+    flags: Final = tuple(
+        entry.get("supports_bedrock_converse_tool_result_images")
+        for entry in _bedrock_price_map_entries(model)
+        if entry is not None
+    )
+    explicit: Final = tuple(flag for flag in flags if isinstance(flag, bool))
+    if explicit:
+        return all(explicit)
+    return _CONVERSE_NESTED_TOOL_RESULT_IMAGE_RE.search(model) is not None
 
 
 def bedrock_model_is_openai_gpt(model: str) -> bool:
