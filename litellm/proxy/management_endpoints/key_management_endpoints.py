@@ -4459,6 +4459,13 @@ async def info_key_fn(
 
         # default to using Auth token if no key is passed in
         key = key or user_api_key_dict.api_key
+        if not key:
+            raise ProxyException(
+                message="No key passed in. Pass ?key= or authenticate with a virtual key.",
+                type=ProxyErrorTypes.bad_request_error,
+                param="key",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
         hashed_key: str | None = key
         if key is not None:
             hashed_key = hash_token_if_needed(token=key)  # rebind-ok: pre-existing rebinding on a rename-only line
