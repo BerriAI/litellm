@@ -923,6 +923,19 @@ def bedrock_runtime_chat_completions_enforces_response_format(model: str) -> boo
     return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions_response_format")
 
 
+def bedrock_converse_supports_tool_result_images(model: str) -> bool:
+    """Whether Converse accepts an image nested in ``toolResult.content``.
+
+    Missing means yes, which is what Claude accepts. A price-map row sets
+    ``supports_bedrock_converse_tool_result_images`` to false when Bedrock
+    rejects that image and it has to sit beside the tool result instead.
+    """
+    entries: Final = tuple(entry for entry in _bedrock_price_map_entries(model) if entry is not None)
+    if not entries:
+        return True
+    return all(entry.get("supports_bedrock_converse_tool_result_images") is not False for entry in entries)
+
+
 def bedrock_model_is_openai_gpt(model: str) -> bool:
     """A GPT-5.x or GPT-6.x id, never GPT-OSS: the families whose sampling params AWS ties to reasoning being off."""
     return _openai_gpt_version(model) is not None
