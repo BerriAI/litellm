@@ -164,7 +164,7 @@ func resourceLiteLLMUser() *schema.Resource {
 				Type:        schema.TypeBool,
 				Optional:    true,
 				Default:     false,
-				Description: "Whether the user is blocked from making requests",
+				Description: "Whether to block the key auto-created with the user. Only sent on creation; use litellm_key_block to change it afterwards",
 			},
 			"key": {
 				Type:        schema.TypeString,
@@ -195,6 +195,7 @@ func resourceLiteLLMUserCreate(d *schema.ResourceData, m interface{}) error {
 	}
 	userData["auto_create_key"] = d.Get("auto_create_key").(bool)
 	userData["send_invite_email"] = d.Get("send_invite_email").(bool)
+	userData["blocked"] = d.Get("blocked").(bool)
 
 	log.Printf("[DEBUG] Create user request payload: %+v", userData)
 
@@ -337,9 +338,7 @@ func resourceLiteLLMUserDelete(d *schema.ResourceData, m interface{}) error {
 }
 
 func buildUserData(d *schema.ResourceData) map[string]interface{} {
-	userData := map[string]interface{}{
-		"blocked": d.Get("blocked").(bool),
-	}
+	userData := map[string]interface{}{}
 
 	for _, key := range []string{
 		"user_email", "user_alias", "user_role", "teams", "models", "max_budget",
