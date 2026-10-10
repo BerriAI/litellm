@@ -52,3 +52,5 @@ class DecisionModelGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
     @staticmethod
     def ui_friendly_name() -> str:
         return "Decision Model"
+
+    model_config = ConfigDict(frozen=True)
