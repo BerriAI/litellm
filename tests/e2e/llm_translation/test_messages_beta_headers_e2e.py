@@ -1,4 +1,4 @@
-from pathlib import Path
+from importlib.resources import files
 from typing import Final
 
 import pytest
@@ -13,7 +13,7 @@ from sdk_clients import NO_PROXY_CACHE, SdkClients
 
 pytestmark = pytest.mark.e2e
 
-_BETA_CONFIG: Final = Path(__file__).resolve().parents[3] / "litellm" / "anthropic_beta_headers_config.json"
+_BETA_CONFIG: Final = files("litellm").joinpath("anthropic_beta_headers_config.json")
 _ANTHROPIC_MODEL: Final = "anthropic/claude-sonnet-5-5"
 _BEDROCK_MODEL_ID: Final = "us.anthropic.claude-fable-5-1"
 _BETA_CONFIG_FILE: Final = TypeAdapter(dict[str, JsonValue])

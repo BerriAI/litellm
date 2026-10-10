@@ -82,7 +82,7 @@ class TestBedrockGuardrail:
             lambda: client.chat(
                 scoped_key,
                 MODEL,
-                "Hello do you like coffee?",
+                BLOCKED_PROMPT,
                 guardrails=[name],
             )
         )
