@@ -7,15 +7,18 @@ tests for credential encryption, merge-on-update, and build_from_table.
 """
 
 import json
-
-import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
+from datetime import datetime, timedelta, timezone
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx2
-
-from litellm.experimental_mcp_client.client import MCPSigV4Auth, MCPClient
-from litellm.types.mcp import MCPAuth, MCPTransport
+import pytest
 from prisma import models
+
+from litellm.experimental_mcp_client.client import MCPClient, MCPSigV4Auth
+from litellm.types.mcp import MCPAuth, MCPTransport
+
+_FUTURE_EXPIRATION: Final = datetime.now(timezone.utc) + timedelta(hours=1)
 
 
 def _updated_row() -> models.LiteLLM_MCPServerTable:
@@ -178,7 +181,7 @@ class TestMCPSigV4AssumeRole:
                 "AccessKeyId": "ASSUMED_KEY",
                 "SecretAccessKey": "ASSUMED_SECRET",
                 "SessionToken": "ASSUMED_TOKEN",
-                "Expiration": "2026-03-30T12:00:00Z",
+                "Expiration": _FUTURE_EXPIRATION,
             }
         }
 
@@ -197,6 +200,39 @@ class TestMCPSigV4AssumeRole:
         assert auth.credentials.secret_key == "ASSUMED_SECRET"
         assert auth.credentials.token == "ASSUMED_TOKEN"
 
+    def test_assume_role_signer_refreshes_expired_credentials(self):
+        """A retained signer re-assumes the role once the STS credentials expire."""
+        mock_sts = MagicMock()
+        mock_sts.assume_role.side_effect = [
+            {
+                "Credentials": {
+                    "AccessKeyId": "ASSUMED_KEY_EXPIRED",
+                    "SecretAccessKey": "ASSUMED_SECRET",
+                    "SessionToken": "ASSUMED_TOKEN",
+                    "Expiration": datetime.now(timezone.utc) - timedelta(minutes=1),
+                }
+            },
+            {
+                "Credentials": {
+                    "AccessKeyId": "ASSUMED_KEY_FRESH",
+                    "SecretAccessKey": "ASSUMED_SECRET",
+                    "SessionToken": "ASSUMED_TOKEN",
+                    "Expiration": _FUTURE_EXPIRATION,
+                }
+            },
+        ]
+
+        with patch("boto3.client", return_value=mock_sts):
+            auth = MCPSigV4Auth(
+                aws_role_name="arn:aws:iam::123456789012:role/TestRole",
+                aws_region_name="us-east-1",
+            )
+        request = httpx2.Request("POST", "https://example.com/mcp", content=b"{}")
+        signed = next(auth.auth_flow(request))
+
+        assert "Credential=ASSUMED_KEY_FRESH/" in signed.headers["Authorization"]
+        assert mock_sts.assume_role.call_count == 2
+
     def test_assume_role_with_explicit_source_credentials(self):
         """When aws_role_name + explicit keys are provided, keys are used as STS source identity."""
         mock_sts = MagicMock()
@@ -205,7 +241,7 @@ class TestMCPSigV4AssumeRole:
                 "AccessKeyId": "ASSUMED_KEY",
                 "SecretAccessKey": "ASSUMED_SECRET",
                 "SessionToken": "ASSUMED_TOKEN",
-                "Expiration": "2026-03-30T12:00:00Z",
+                "Expiration": _FUTURE_EXPIRATION,
             }
         }
 
@@ -233,7 +269,7 @@ class TestMCPSigV4AssumeRole:
                 "AccessKeyId": "ASSUMED_KEY",
                 "SecretAccessKey": "ASSUMED_SECRET",
                 "SessionToken": "ASSUMED_TOKEN",
-                "Expiration": "2026-03-30T12:00:00Z",
+                "Expiration": _FUTURE_EXPIRATION,
             }
         }
 
@@ -254,7 +290,7 @@ class TestMCPSigV4AssumeRole:
                 "AccessKeyId": "AKIAIOSFODNN7EXAMPLE",
                 "SecretAccessKey": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
                 "SessionToken": "STS_SESSION_TOKEN",
-                "Expiration": "2026-03-30T12:00:00Z",
+                "Expiration": _FUTURE_EXPIRATION,
             }
         }
 
@@ -285,7 +321,7 @@ class TestMCPSigV4AssumeRole:
                 "AccessKeyId": "ASSUMED_KEY",
                 "SecretAccessKey": "ASSUMED_SECRET",
                 "SessionToken": "ASSUMED_TOKEN",
-                "Expiration": "2026-03-30T12:00:00Z",
+                "Expiration": _FUTURE_EXPIRATION,
             }
         }
 
@@ -382,9 +418,6 @@ class TestMCPServerManagerSigV4:
     @pytest.mark.asyncio
     async def test_load_config_with_aws_sigv4(self, config_only_mcp_manager_factory):
         """Config loading correctly parses aws_sigv4 auth type and AWS fields."""
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            MCPServerManager,
-        )
 
         config = {
             "agentcore_tools": {
@@ -497,7 +530,7 @@ class TestMCPServerManagerSigV4:
                 "AccessKeyId": "ASSUMED_KEY",
                 "SecretAccessKey": "ASSUMED_SECRET",
                 "SessionToken": "ASSUMED_TOKEN",
-                "Expiration": "2026-03-30T12:00:00Z",
+                "Expiration": _FUTURE_EXPIRATION,
             }
         }
 
@@ -1120,10 +1153,10 @@ class TestInheritCredentials:
 
     def test_inherits_sigv4_credentials(self):
         """SigV4 fields are copied from existing server to inherited credentials."""
+        from litellm.proxy._types import NewMCPServerRequest
         from litellm.proxy.management_endpoints.mcp_management_endpoints import (
             inherit_credentials_from_existing_server,
         )
-        from litellm.proxy._types import NewMCPServerRequest
         from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
         existing = MCPServer(

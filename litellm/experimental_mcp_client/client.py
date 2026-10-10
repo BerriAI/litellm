@@ -8,12 +8,12 @@ import hashlib
 import json
 import os
 import time
-from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Sequence
-from contextlib import AbstractAsyncContextManager
+from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Mapping, Sequence
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, nullcontext
 from functools import partial
 from importlib.metadata import version
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, TypeAlias, TypeVar, cast
+from typing import TYPE_CHECKING, Final, Literal, TypeAlias, TypeVar, cast, overload
 
 import anyio
 import httpx2
@@ -21,26 +21,42 @@ from httpx2._client import UseClientDefault
 from httpx2._types import AuthTypes
 from mcp import ClientSession, MCPError, ReadResourceResult, Resource, StdioServerParameters
 from mcp.client._input_required import run_input_required_driver
+from mcp.client.session import ClientRequestContext, ElicitationFnT, LoggingFnT, SamplingFnT
 from mcp.client.sse import sse_client
 from mcp.client.stdio import stdio_client
 from mcp.client.streamable_http import streamable_http_client
 from mcp.shared._stream_protocols import ReadStream, WriteStream
 from mcp.shared.message import SessionMessage
+from typing_extensions import ReadOnly, TypedDict, assert_never
 
 _TransportStreams: TypeAlias = tuple[
     ReadStream[SessionMessage | Exception],
     WriteStream[SessionMessage],
 ]
 _TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
+_SessionCallbackName: TypeAlias = Literal["sampling_callback", "elicitation_callback", "logging_callback"]
+
+
+class _SessionCallbackMap(TypedDict):
+    sampling_callback: ReadOnly[SamplingFnT | None]
+    elicitation_callback: ReadOnly[ElicitationFnT | None]
+    logging_callback: ReadOnly[LoggingFnT | None]
 
 
 from mcp.types import (
+    CONNECTION_CLOSED,
     METHOD_NOT_FOUND,
     REQUEST_TIMEOUT,
     CacheableResult,
     ClientCapabilities,
+    CreateMessageRequestParams,
+    CreateMessageResult,
+    CreateMessageResultWithTools,
     DiscoverResult,
     ElicitationCapability,
+    ElicitRequestParams,
+    ElicitResult,
+    ErrorData,
     FormElicitationCapability,
     GetPromptRequestParams,
     GetPromptResult,
@@ -58,6 +74,7 @@ from mcp.types import (
     ListResourceTemplatesResult,
     ListToolsRequest,
     ListToolsResult,
+    LoggingMessageNotificationParams,
     PaginatedRequestParams,
     Prompt,
     ResourceTemplate,
@@ -302,6 +319,12 @@ class MCPSigV4Auth(httpx2.Auth):
             raise ImportError("Missing botocore to use AWS SigV4 authentication. Run 'pip install boto3'.")
         self.service_name = aws_service_name or "bedrock-agentcore"
         self.region_name = aws_region_name or "us-east-1"
+        self.identity: Final[tuple[str, str, str | None, str | None]] = (
+            self.service_name,
+            self.region_name,
+            aws_role_name,
+            aws_access_key_id,
+        )
         # Note: os.environ/ prefixed values are already resolved by
         # ProxyConfig._check_for_os_environ_vars() at config load time.
         # Values arrive here as plain strings.
@@ -346,7 +369,7 @@ class MCPSigV4Auth(httpx2.Auth):
         import time
 
         import boto3
-        from botocore.credentials import Credentials
+        from botocore.credentials import RefreshableCredentials
 
         session_name: Final = aws_session_name or f"litellm-mcp-{int(time.time())}"
         sts_kwargs: Final[dict] = {"region_name": aws_region_name}
@@ -356,15 +379,23 @@ class MCPSigV4Auth(httpx2.Auth):
             if aws_session_token:
                 sts_kwargs["aws_session_token"] = aws_session_token
         sts_client: Final = boto3.client("sts", **sts_kwargs)
-        sts_response: Final = sts_client.assume_role(
-            RoleArn=aws_role_name,
-            RoleSessionName=session_name,
-        )
-        sts_creds: Final = sts_response["Credentials"]
-        return Credentials(
-            access_key=sts_creds["AccessKeyId"],
-            secret_key=sts_creds["SecretAccessKey"],
-            token=sts_creds["SessionToken"],
+
+        def assume() -> Mapping[str, str]:
+            sts_creds: Final = sts_client.assume_role(
+                RoleArn=aws_role_name,
+                RoleSessionName=session_name,
+            )["Credentials"]
+            return MappingProxyType(
+                {
+                    "access_key": sts_creds["AccessKeyId"],
+                    "secret_key": sts_creds["SecretAccessKey"],
+                    "token": sts_creds["SessionToken"],
+                    "expiry_time": sts_creds["Expiration"].isoformat(),
+                }
+            )
+
+        return RefreshableCredentials.create_from_metadata(
+            metadata=dict(assume()), refresh_using=assume, method="sts-assume-role"
         )
 
     def auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response, None]:
@@ -388,6 +419,19 @@ class MCPSigV4Auth(httpx2.Auth):
         for header_name, header_value in aws_request.headers.items():
             request.headers[header_name] = header_value
         yield request
+
+
+def _notify_stream_error(
+    callback: Callable[[asyncio.Future[Exception]], None] | None,
+    stream_error: asyncio.Future[Exception],
+) -> None:
+    if callback is not None:
+        callback(stream_error)
+
+
+def _notify_cleanup(callback: Callable[[], None] | None) -> None:
+    if callback is not None:
+        callback()
 
 
 class MCPClient:
@@ -443,12 +487,37 @@ class MCPClient:
         self._sampling_callback: Callable | None = sampling_callback
         self._elicitation_callback: ElicitationCallback | None = elicitation_callback
         self._logging_callback: Callable | None = logging_callback
+        self._session_callbacks_override: _SessionCallbackMap | None = None
         # handle the basic auth value if provided
         if auth_value:
             self.update_auth_value(auth_value)
 
+    def session_callbacks(self) -> _SessionCallbackMap:
+        return {
+            "sampling_callback": self._sampling_callback,
+            "elicitation_callback": self._elicitation_callback,
+            "logging_callback": self._logging_callback,
+        }
+
+    def session_settings(self) -> tuple[MCPTransport, MCPUpstreamProtocol, float, bool, bool, bool]:
+        callbacks: Final = self.session_callbacks()
+        return (
+            self.transport_type,
+            self.protocol_version,
+            self.timeout,
+            callbacks["sampling_callback"] is not None,
+            callbacks["elicitation_callback"] is not None,
+            callbacks["logging_callback"] is not None,
+        )
+
+    def route_session_callbacks(self, callbacks: _SessionCallbackMap) -> None:
+        self._session_callbacks_override = callbacks
+
     async def discovery_auth_fingerprint(self) -> str:
-        return self._hash_discovery_auth(await self.prepare_request_auth())
+        return self._hash_discovery_auth(await self.prepare_request_auth(), self._aws_identity())
+
+    def _aws_identity(self) -> tuple[str, str, str | None, str | None] | None:
+        return self._aws_auth.identity if isinstance(self._aws_auth, MCPSigV4Auth) else None
 
     async def prepare_request_auth(self) -> httpx2.Request:
         """Preview the authenticated request without sending it, closing the auth flow afterwards."""
@@ -465,8 +534,10 @@ class MCPClient:
             await flow.aclose()
 
     @staticmethod
-    def _hash_discovery_auth(request: httpx2.Request) -> str:
-        material: Final = json.dumps((str(request.url), tuple(sorted(request.headers.multi_items()))))
+    def _hash_discovery_auth(
+        request: httpx2.Request, aws_identity: tuple[str, str, str | None, str | None] | None
+    ) -> str:
+        material: Final = json.dumps((str(request.url), tuple(sorted(request.headers.multi_items())), aws_identity))
         return hashlib.sha256(material.encode()).hexdigest()
 
     def _create_transport_context(
@@ -605,6 +676,9 @@ class MCPClient:
         transport_ctx: _TransportContext,
         operation: Callable[[ClientSession], Awaitable[TSessionResult]],
         http_client: httpx2.AsyncClient | None = None,
+        *,
+        on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
+        on_cleanup: Callable[[], None] | None = None,
     ) -> TSessionResult:
         """
         Execute an operation within a transport and session context.
@@ -623,6 +697,7 @@ class MCPClient:
                     read_stream: Final = transport[0]
                     write_stream: Final = transport[1]
                     stream_error: Final[asyncio.Future[Exception]] = asyncio.get_running_loop().create_future()
+                    _notify_stream_error(on_stream_error, stream_error)
 
                     async def receive_message(
                         message: ServerNotification | Exception,
@@ -634,6 +709,11 @@ class MCPClient:
                         # The SDK closes pending requests when its message handler raises.
                         raise RuntimeError("MCP response stream failed")
 
+                    session_kwargs: Final = (
+                        self._session_callbacks_override
+                        if self._session_callbacks_override is not None
+                        else self.session_callbacks()
+                    )
                     # The SDK drops a response stream that ends without a JSON-RPC reply, so nothing else
                     # ever fails the request.
                     session_ctx: Final = ClientSession(
@@ -641,9 +721,7 @@ class MCPClient:
                         write_stream,
                         read_timeout_seconds=self.timeout,
                         message_handler=receive_message,
-                        sampling_callback=self._sampling_callback,
-                        elicitation_callback=self._elicitation_callback,
-                        logging_callback=self._logging_callback,
+                        **session_kwargs,
                     )
                     session: Final = await session_ctx.__aenter__()
                     try:
@@ -659,6 +737,7 @@ class MCPClient:
                             raise stream_error.result()
                         raise
                     finally:
+                        _notify_cleanup(on_cleanup)
                         cleanup_scope.shield = True
                         cleanup_scope.deadline = anyio.current_time() + 5
                         try:
@@ -671,6 +750,7 @@ class MCPClient:
                     in_flight_error = e
                     raise
                 finally:
+                    _notify_cleanup(on_cleanup)
                     cleanup_scope.shield = True
                     cleanup_scope.deadline = min(cleanup_scope.deadline, anyio.current_time() + 5)
                     try:
@@ -703,6 +783,8 @@ class MCPClient:
         operation: Callable[[ClientSession], Awaitable[TSessionResult]],
         *,
         quiet_on_error: bool = False,
+        on_stream_error: Callable[[asyncio.Future[Exception]], None] | None = None,
+        on_cleanup: Callable[[], None] | None = None,
     ) -> TSessionResult:
         """Open a session, run the provided coroutine, and clean up.
 
@@ -714,7 +796,18 @@ class MCPClient:
         try:
             self._last_initialize_instructions = None
             transport_ctx, http_client = self._create_transport_context()
-            result: Final = await self._execute_session_operation(transport_ctx, operation, http_client=http_client)
+            execution: Final = (
+                self._execute_session_operation(
+                    transport_ctx,
+                    operation,
+                    http_client=http_client,
+                    on_stream_error=on_stream_error,
+                    on_cleanup=on_cleanup,
+                )
+                if on_stream_error is not None or on_cleanup is not None
+                else self._execute_session_operation(transport_ctx, operation, http_client=http_client)
+            )
+            result: Final = await execution
         except Exception as e:
             read_timeout: Final = as_mcp_read_timeout(e)
             if read_timeout is not None:
@@ -740,6 +833,12 @@ class MCPClient:
             raise close_cancellation
         await anyio.lowlevel.checkpoint_if_cancelled()
         return result
+
+    def open_persistent_session(
+        self,
+        admission: Callable[[], AbstractAsyncContextManager[None]] | None = None,
+    ) -> "PersistentMCPSession":
+        return PersistentMCPSession(self, admission)
 
     def update_auth_value(self, mcp_auth_value: str | dict[str, str]) -> None:
         """
@@ -972,9 +1071,14 @@ class MCPClient:
         host_progress_callback: Callable | None = None,
         raise_on_error: bool = False,
         allow_input_required: bool = False,
+        persistent_session: "PersistentMCPSession | None" = None,
     ) -> MCPCallToolResult | InputRequiredResult:
         """
         Call an MCP Tool.
+
+        persistent_session runs the call inside an already-open upstream session (one
+        upstream mcp-session-id shared by every call of a stateful gateway session) instead of
+        the per-call initialize + teardown that run_with_session performs.
 
         Args:
             raise_on_error: When True, re-raise the underlying exception instead of returning an
@@ -1030,7 +1134,15 @@ class MCPClient:
             )
 
         try:
-            tool_result: Final = await self.run_with_session(_call_tool_operation, quiet_on_error=raise_on_error)
+            tool_result: Final = (
+                await self.run_with_session(_call_tool_operation, quiet_on_error=raise_on_error)
+                if persistent_session is None
+                else await persistent_session.run(
+                    _call_tool_operation,
+                    quiet_on_error=raise_on_error,
+                    callbacks=self.session_callbacks(),
+                )
+            )
             verbose_logger.info("MCP client tool call '%s' completed successfully", call_tool_request_params.name)
             return tool_result
         except asyncio.CancelledError:
@@ -1395,3 +1507,256 @@ class MCPClient:
                     "the MCP server may have crashed, disconnected, or timed out."
                 )
             raise
+
+
+_PendingOperation: TypeAlias = tuple[
+    Callable[[ClientSession], Awaitable[object]],
+    asyncio.Future[object],
+    _SessionCallbackMap | None,
+]
+_MAX_PENDING_OPERATIONS: Final = 64
+
+
+def _ends_session(outcome: BaseException) -> bool:
+    if isinstance(
+        outcome,
+        (httpx2.HTTPError, OSError, anyio.BrokenResourceError, anyio.ClosedResourceError, anyio.EndOfStream),
+    ):
+        return True
+    return isinstance(outcome, MCPError) and outcome.error.code == CONNECTION_CLOSED
+
+
+def _deliver_persistent_outcome(
+    future: asyncio.Future[object],
+    outcome: object,
+    stream_error: asyncio.Future[Exception] | None,
+) -> bool:
+    mapped_outcome: Final = (
+        stream_error.result()
+        if isinstance(outcome, MCPError) and stream_error is not None and stream_error.done()
+        else outcome
+    )
+    if not future.done():
+        if isinstance(mapped_outcome, Exception):
+            future.set_exception(mapped_outcome)
+        elif isinstance(mapped_outcome, BaseException):
+            future.set_exception(RuntimeError("upstream MCP operation was cancelled"))
+        else:
+            future.set_result(mapped_outcome)
+    return (
+        isinstance(outcome, BaseException)
+        and _ends_session(outcome)
+        or isinstance(mapped_outcome, BaseException)
+        and _ends_session(mapped_outcome)
+        or stream_error is not None
+        and stream_error.done()
+    )
+
+
+class UpstreamSessionClosedError(RuntimeError):
+    def __init__(self) -> None:
+        super().__init__("upstream MCP session closed")
+
+
+class PersistentMCPSession:
+    """One upstream MCP session kept open across operations.
+
+    The SDK transport owns anyio cancel scopes that must be entered and exited by the same
+    task, so a dedicated task holds the session open and serves queued operations in order.
+    """
+
+    def __init__(
+        self,
+        client: MCPClient,
+        admission: Callable[[], AbstractAsyncContextManager[None]] | None = None,
+    ) -> None:
+        loop: Final = asyncio.get_running_loop()
+        self._client: Final = client
+        self._admission: Final = admission
+        self._queue: Final[asyncio.Queue[_PendingOperation]] = asyncio.Queue(maxsize=_MAX_PENDING_OPERATIONS)
+        self._ready: Final[asyncio.Future[None]] = loop.create_future()
+        self._active: asyncio.Future[object] | None = None
+        self._stream_error: asyncio.Future[Exception] | None = None
+        self._retiring: bool = False
+        self._ended: bool = False
+        self._initial_callbacks: Final[_SessionCallbackMap] = client.session_callbacks()
+        self._current_callbacks: _SessionCallbackMap = self._initial_callbacks
+        delegated_callbacks: Final[_SessionCallbackMap] = {
+            "sampling_callback": (
+                self._delegate("sampling_callback")
+                if self._initial_callbacks["sampling_callback"] is not None
+                else None
+            ),
+            "elicitation_callback": (
+                self._delegate("elicitation_callback")
+                if self._initial_callbacks["elicitation_callback"] is not None
+                else None
+            ),
+            "logging_callback": (
+                self._delegate("logging_callback") if self._initial_callbacks["logging_callback"] is not None else None
+            ),
+        }
+        client.route_session_callbacks(delegated_callbacks)
+        self._task: Final = loop.create_task(self._serve())
+
+    @overload
+    def _delegate(self, name: Literal["sampling_callback"]) -> SamplingFnT: ...
+
+    @overload
+    def _delegate(self, name: Literal["elicitation_callback"]) -> ElicitationFnT: ...
+
+    @overload
+    def _delegate(self, name: Literal["logging_callback"]) -> LoggingFnT: ...
+
+    def _delegate(self, name: _SessionCallbackName) -> SamplingFnT | ElicitationFnT | LoggingFnT:
+        match name:
+            case "sampling_callback":
+
+                async def sampling_callback(
+                    context: ClientRequestContext, params: CreateMessageRequestParams
+                ) -> CreateMessageResult | CreateMessageResultWithTools | ErrorData:
+                    current_callback: Final = self._current_callbacks.get(name)
+                    initial_callback: Final = self._initial_callbacks.get(name)
+                    callback: Final = current_callback if current_callback is not None else initial_callback
+                    if callback is None:
+                        raise RuntimeError("sampling callback is unavailable")
+                    return await callback(context, params)
+
+                return sampling_callback
+            case "elicitation_callback":
+
+                async def elicitation_callback(
+                    context: ClientRequestContext, params: ElicitRequestParams
+                ) -> ElicitResult | ErrorData:
+                    current_callback: Final = self._current_callbacks.get(name)
+                    initial_callback: Final = self._initial_callbacks.get(name)
+                    callback: Final = current_callback if current_callback is not None else initial_callback
+                    if callback is None:
+                        raise RuntimeError("elicitation callback is unavailable")
+                    return await callback(context, params)
+
+                return elicitation_callback
+            case "logging_callback":
+
+                async def logging_callback(params: LoggingMessageNotificationParams) -> None:
+                    current_callback: Final = self._current_callbacks.get(name)
+                    initial_callback: Final = self._initial_callbacks.get(name)
+                    callback: Final = current_callback if current_callback is not None else initial_callback
+                    if callback is None:
+                        raise RuntimeError("logging callback is unavailable")
+                    await callback(params)
+
+                return logging_callback
+        assert_never(name)
+
+    @property
+    def closed(self) -> bool:
+        return self._task.done()
+
+    @property
+    def reusable(self) -> bool:
+        return not self._ended and not self._retiring and not self._task.done()
+
+    def _record_stream_error(self, stream_error: asyncio.Future[Exception]) -> None:
+        self._stream_error = stream_error
+
+    def _mark_ended(self) -> None:
+        self._ended = True
+
+    async def _serve(self) -> None:
+        admission_stack: Final = AsyncExitStack()
+
+        async def drain(session: ClientSession) -> None:
+            await admission_stack.aclose()
+            self._ready.set_result(None)
+            while True:
+                operation, future, callbacks = await self._queue.get()
+                if not future.done():
+                    self._active = future
+                    if callbacks is not None:
+                        self._current_callbacks = callbacks
+                    async with self._admission() if self._admission is not None else nullcontext():
+                        if not future.done():
+                            (outcome,) = await asyncio.gather(operation(session), return_exceptions=True)
+                            if _deliver_persistent_outcome(future, outcome, self._stream_error):
+                                self._active = None
+                                self._ended = True
+                                return
+                    self._active = None
+                if self._retiring and self._queue.empty():
+                    return
+
+        try:
+            if self._admission is not None:
+                await admission_stack.enter_async_context(self._admission())
+            (ended,) = await asyncio.gather(
+                self._client.run_with_session(
+                    drain,
+                    quiet_on_error=True,
+                    on_stream_error=self._record_stream_error,
+                    on_cleanup=self._mark_ended,
+                ),
+                return_exceptions=True,
+            )
+            self._ended = True
+        except asyncio.CancelledError:
+            self._ended = True
+            self._fail_waiters(None)
+            raise
+        finally:
+            await admission_stack.aclose()
+        self._fail_waiters(ended if isinstance(ended, Exception) else None)
+
+    def _fail_waiters(self, cause: Exception | None) -> None:
+        pending: Final = (self._ready, self._active, *(future for _, future, _ in self._drained()))
+        for future in pending:
+            if future is not None and not future.done():
+                future.set_exception(UpstreamSessionClosedError() if cause is None else cause)
+
+    def _drained(self) -> tuple[_PendingOperation, ...]:
+        return tuple(self._queue.get_nowait() for _ in range(self._queue.qsize()))
+
+    async def run(
+        self,
+        operation: Callable[[ClientSession], Awaitable[TSessionResult]],
+        *,
+        quiet_on_error: bool = False,
+        callbacks: _SessionCallbackMap | None = None,
+    ) -> TSessionResult:
+        if self.closed:
+            await asyncio.shield(self._ready)
+            raise UpstreamSessionClosedError()
+        future: Final[asyncio.Future[object]] = asyncio.get_running_loop().create_future()
+        await self._queue.put((operation, future, callbacks))
+        try:
+            _ = await asyncio.wait((future, self._task), return_when=asyncio.FIRST_COMPLETED)
+        except asyncio.CancelledError:
+            _ = future.cancel()
+            raise
+        if not future.done():
+            raise UpstreamSessionClosedError()
+        return cast(TSessionResult, future.result())  # cast-ok: one queue serves operations of every result type
+
+    def close(self) -> None:
+        _ = self._task.cancel()
+
+    def retire(self) -> None:
+        if self._retiring:
+            return
+        self._retiring = True
+        if self.closed:
+            return
+
+        async def retired_operation(_: ClientSession) -> None:
+            return None
+
+        loop: Final = asyncio.get_running_loop()
+        future: Final[asyncio.Future[object]] = loop.create_future()
+        future.set_result(None)
+        try:
+            self._queue.put_nowait((retired_operation, future, None))
+        except asyncio.QueueFull:
+            return
+
+    async def wait_closed(self) -> None:
+        await asyncio.gather(self._task, return_exceptions=True)
