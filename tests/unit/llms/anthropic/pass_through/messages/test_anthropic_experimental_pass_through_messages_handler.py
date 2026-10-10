@@ -2056,3 +2056,47 @@ async def test_anthropic_messages_bedrock_dynamic_region():
         mock_get_credentials.assert_called_once()
         credentials_args = mock_get_credentials.call_args.kwargs
         assert credentials_args.get("aws_region_name") == test_region
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("client_marker", [False, True])
+async def test_messages_bridge_keeps_tool_result_cache_control_on_tool_result(monkeypatch, client_marker):
+    from litellm.llms.anthropic.pass_through.adapters.handler import (
+        LiteLLMMessagesToCompletionTransformationHandler,
+    )
+
+    monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+    captured = {}
+
+    async def fake_send(self, request, **kwargs):
+        captured["body"] = json.loads(request.content)
+        raise httpx.ConnectError("cut at the wire", request=request)
+
+    tool_result: dict[str, Any] = {
+        "type": "tool_result",
+        "tool_use_id": "toolu_01",
+        "content": [{"type": "text", "text": "file1"}, {"type": "text", "text": "file2"}],
+    }
+    if client_marker:
+        tool_result["cache_control"] = {"type": "ephemeral"}
+
+    with (
+        patch.object(httpx.AsyncClient, "send", fake_send),
+        pytest.raises(litellm.exceptions.InternalServerError),
+    ):
+        await LiteLLMMessagesToCompletionTransformationHandler.async_anthropic_messages_handler(
+            max_tokens=8,
+            messages=[
+                {"role": "user", "content": [{"type": "text", "text": "list files"}]},
+                {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_01", "name": "ls", "input": {}}]},
+                {"role": "user", "content": [tool_result]},
+            ],
+            model="anthropic/claude-sonnet-4-5",
+            tools=[{"name": "ls", "description": "list", "input_schema": {"type": "object", "properties": {}}}],
+            api_key="test-api-key",
+        )
+
+    sent_tool_result = captured["body"]["messages"][-1]["content"][0]
+    assert sent_tool_result["type"] == "tool_result"
+    assert sent_tool_result["cache_control"] == {"type": "ephemeral"}
+    assert all("cache_control" not in block for block in sent_tool_result["content"])

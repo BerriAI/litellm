@@ -1878,9 +1878,8 @@ def test_bedrock_tools_pt_keeps_anthropic_input_schema_tools():
 
 def test_convert_to_anthropic_tool_result_image_with_cache_control():
     """
-    Test that cache_control is properly applied to image content in tool results.
-    This tests the functionality added in the uncommitted changes where
-    add_cache_control_to_content is called for image_url content types.
+    A cache_control on an image inside a tool message lands on the tool_result block,
+    since Anthropic rejects cache_control within tool_result.content.
     """
     from litellm.litellm_core_utils.prompt_templates.factory import (
         convert_to_anthropic_tool_result,
@@ -1915,12 +1914,11 @@ def test_convert_to_anthropic_tool_result_image_with_cache_control():
     assert result["content"][0]["type"] == "text"
     assert result["content"][0]["text"] == "Here is the image you requested:"
 
-    # Verify image content with cache_control
     assert result["content"][1]["type"] == "image"
     assert result["content"][1]["source"]["type"] == "base64"
     assert result["content"][1]["source"]["media_type"] == "image/jpeg"
-    assert "cache_control" in result["content"][1]
-    assert result["content"][1]["cache_control"]["type"] == "ephemeral"
+    assert result["cache_control"] == {"type": "ephemeral"}
+    assert all("cache_control" not in block for block in result["content"])
 
 
 def test_convert_to_anthropic_tool_result_image_without_cache_control():
@@ -1994,23 +1992,75 @@ def test_convert_to_anthropic_tool_result_mixed_content_with_cache_control():
 
     assert result["type"] == "tool_result"
     assert isinstance(result["content"], list)
-    assert len(result["content"]) == 4
+    assert [block["type"] for block in result["content"]] == ["text", "image", "text", "image"]
+    assert result["cache_control"] == {"type": "ephemeral"}
+    assert all("cache_control" not in block for block in result["content"])
 
-    # First text with cache_control
-    assert result["content"][0]["type"] == "text"
-    assert result["content"][0]["cache_control"]["type"] == "ephemeral"
 
-    # First image with cache_control
-    assert result["content"][1]["type"] == "image"
-    assert result["content"][1]["cache_control"]["type"] == "ephemeral"
+def test_convert_to_anthropic_tool_result_last_block_marker_wins():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
 
-    # Second text without cache_control (cache_control will be None if not set)
-    assert result["content"][2]["type"] == "text"
-    assert result["content"][2].get("cache_control") is None
+    message = {
+        "role": "tool",
+        "tool_call_id": "call_ttl",
+        "content": [
+            {"type": "text", "text": "older", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            {"type": "text", "text": "newest", "cache_control": {"type": "ephemeral"}},
+        ],
+    }
 
-    # Second image without cache_control (cache_control will be None if not set)
-    assert result["content"][3]["type"] == "image"
-    assert result["content"][3].get("cache_control") is None
+    result = convert_to_anthropic_tool_result(message)
+
+    assert result["cache_control"] == {"type": "ephemeral"}
+    assert all("cache_control" not in block for block in result["content"])
+
+
+def test_convert_to_anthropic_tool_result_message_marker_wins_over_block_marker():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_result,
+    )
+
+    message = {
+        "role": "tool",
+        "tool_call_id": "call_msg",
+        "cache_control": {"type": "ephemeral", "ttl": "1h"},
+        "content": [{"type": "text", "text": "out", "cache_control": {"type": "ephemeral"}}],
+    }
+
+    result = convert_to_anthropic_tool_result(message)
+
+    assert result["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert "cache_control" not in result["content"][0]
+
+
+def test_anthropic_messages_pt_tool_text_block_marker_stays_out_of_tool_result_content():
+    from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
+
+    messages = [
+        {"role": "user", "content": "list files"},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [{"id": "toolu_01", "type": "function", "function": {"name": "ls", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "toolu_01",
+            "content": [
+                {"type": "text", "text": "file1"},
+                {"type": "text", "text": "file2", "cache_control": {"type": "ephemeral"}},
+            ],
+        },
+    ]
+
+    anthropic_messages = anthropic_messages_pt(model="claude-sonnet-4-5", messages=messages, llm_provider="anthropic")
+
+    tool_result = anthropic_messages[-1]["content"][0]
+    assert tool_result["type"] == "tool_result"
+    assert tool_result["cache_control"] == {"type": "ephemeral"}
+    assert all("cache_control" not in block for block in tool_result["content"])
 
 
 def test_convert_to_anthropic_tool_result_image_url_as_http():
@@ -2035,11 +2085,11 @@ def test_convert_to_anthropic_tool_result_image_url_as_http():
 
     result = convert_to_anthropic_tool_result(message)
 
-    # Verify image is passed as URL reference with cache_control
     assert result["content"][0]["type"] == "image"
     assert result["content"][0]["source"]["type"] == "url"
     assert result["content"][0]["source"]["url"] == "https://example.com/image.jpg"
-    assert result["content"][0]["cache_control"]["type"] == "ephemeral"
+    assert result["cache_control"] == {"type": "ephemeral"}
+    assert "cache_control" not in result["content"][0]
 
 
 def test_anthropic_messages_pt_server_tool_use_passthrough():
@@ -4382,7 +4432,9 @@ def test_bedrock_converse_messages_pt_user_message_without_content_adds_no_block
 
     assert _bedrock_converse_messages_pt(
         messages=with_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock"
-    ) == _bedrock_converse_messages_pt(messages=without_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock")
+    ) == _bedrock_converse_messages_pt(
+        messages=without_message, model="anthropic.claude-haiku-4-5", llm_provider="bedrock"
+    )
 
 
 @pytest.mark.asyncio

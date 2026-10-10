@@ -6,7 +6,7 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Container, Iterator, Mapping, Sequence
+from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
@@ -1649,6 +1649,19 @@ def _is_anthropic_document_data_uri(url: str) -> bool:
     return match.group(1) in _ANTHROPIC_DOCUMENT_BASE64_MEDIA_TYPES
 
 
+def _last_block_cache_control(
+    content: str | Iterable[Mapping[str, object]] | None,
+) -> ChatCompletionCachedContent | None:
+    if not isinstance(content, list):
+        return None
+    markers: Final = tuple(
+        cast(ChatCompletionCachedContent, marker)
+        for block in content
+        if isinstance(marker := block.get("cache_control"), dict)
+    )
+    return markers[-1] if markers else None
+
+
 def convert_to_anthropic_tool_result(
     message: ChatCompletionToolMessage | ChatCompletionFunctionMessage,
     force_base64: bool = False,
@@ -1705,15 +1718,10 @@ def convert_to_anthropic_tool_result(
         ] = []
         for content in content_list:
             if content["type"] == "text":
-                # Only include cache_control if explicitly set and not None
-                # to avoid sending "cache_control": null which breaks some API channels
                 text_content: AnthropicMessagesToolResultContent = {
                     "type": "text",
                     "text": content["text"],
                 }
-                cache_control_value = content.get("cache_control")
-                if cache_control_value is not None:
-                    text_content["cache_control"] = cache_control_value
                 anthropic_content_list.append(text_content)
             elif content["type"] == "image_url":
                 image_url_value = content["image_url"]
@@ -1728,10 +1736,6 @@ def convert_to_anthropic_tool_result(
                         "file": {"file_data": url_str},
                     }
                     _document_block = anthropic_process_openai_file_message(synth_file_message)
-                    _document_block = add_cache_control_to_content(
-                        anthropic_content_element=cast(AnthropicMessagesDocumentParam, _document_block),
-                        original_content_element=content,
-                    )
                     anthropic_content_list.append(cast(AnthropicMessagesDocumentParam, _document_block))
                 else:
                     _anthropic_image_param = create_anthropic_image_param(
@@ -1739,26 +1743,19 @@ def convert_to_anthropic_tool_result(
                         format=format,
                         is_bedrock_invoke=force_base64,
                     )
-                    _anthropic_image_param = add_cache_control_to_content(
-                        anthropic_content_element=_anthropic_image_param,
-                        original_content_element=content,
-                    )
-                    anthropic_content_list.append(cast(AnthropicMessagesImageParam, _anthropic_image_param))
+                    anthropic_content_list.append(_anthropic_image_param)
             elif content["type"] == "tool_reference":
                 anthropic_content_list.append(ToolReference(type="tool_reference", tool_name=content["tool_name"]))
             elif content["type"] == "file":
                 file_content = cast(ChatCompletionFileObject, content)
                 _file_block = anthropic_process_openai_file_message(file_content)
-                _file_block = add_cache_control_to_content(
-                    anthropic_content_element=cast(AnthropicMessagesDocumentParam, _file_block),
-                    original_content_element=content,
-                )
-                anthropic_content_list.append(_file_block)
+                anthropic_content_list.append(cast(AnthropicMessagesDocumentParam, _file_block))
 
         anthropic_content = anthropic_content_list
     anthropic_tool_result: AnthropicMessagesToolResultParam | None = None
     ## PROMPT CACHING CHECK ##
-    cache_control: Final = message.get("cache_control", None)
+    # Anthropic rejects cache_control inside tool_result.content, so block-level markers move onto the tool_result
+    cache_control: Final = message.get("cache_control") or _last_block_cache_control(message["content"])
     if message["role"] == "tool":
         tool_message: Final[ChatCompletionToolMessage] = message
         tool_call_id: str = tool_message["tool_call_id"]
