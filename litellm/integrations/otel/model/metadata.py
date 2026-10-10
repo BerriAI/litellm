@@ -39,6 +39,7 @@ from __future__ import annotations
 from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
+from math import isfinite
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast, get_args
 
@@ -322,19 +323,31 @@ def caller_session_id(kwargs: Mapping[str, object], trace: TraceControls) -> str
     return (None if echoes_trace_id else explicit) or trace.session_id or None
 
 
+def _resolved_bool(value: object) -> bool | None:
+    """``value`` as a real bool; never truthifies a string like "false"."""
+    return value if isinstance(value, bool) else None
+
+
+def _resolved_stream_flag(kwargs: Mapping[str, object]) -> bool:
+    """Top-level ``kwargs["stream"]`` wins when resolved; else ``optional_params["stream"]``."""
+    top_level: Final = _resolved_bool(kwargs.get("stream"))
+    if top_level is not None:
+        return top_level
+    optional_params: Final = as_str_mapping(kwargs.get("optional_params"))
+    return optional_params is not None and optional_params.get("stream") is True
+
+
 def time_to_first_chunk_seconds(kwargs: Mapping[str, Any]) -> float | None:
-    """Seconds from the upstream request being issued (``api_call_start_time``)
-    to the first streamed chunk (``completion_start_time``); ``None`` for
-    non-streaming calls, where ``completion_start_time`` is backfilled with the
-    end time and would not measure first-chunk latency."""
-    optional_params: Final = cast(Mapping[str, object], kwargs.get("optional_params") or {})
-    if not optional_params.get("stream"):
+    """Seconds from ``api_call_start_time`` to ``completion_start_time``;
+    ``None`` for non-streaming calls or a non-finite/negative elapsed value."""
+    if not _resolved_stream_flag(kwargs):
         return None
     api_call_start: Final = to_seconds(kwargs.get("api_call_start_time"))
     completion_start: Final = to_seconds(kwargs.get("completion_start_time"))
     if api_call_start is None or completion_start is None:
         return None
-    return completion_start - api_call_start
+    elapsed: Final = completion_start - api_call_start
+    return elapsed if isfinite(elapsed) and elapsed >= 0 else None
 
 
 def auth_metadata(payload: StandardLoggingPayload | None, kwargs: Mapping[str, object]) -> Mapping[str, str] | None:

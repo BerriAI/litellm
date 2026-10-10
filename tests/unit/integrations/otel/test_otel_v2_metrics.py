@@ -40,6 +40,7 @@ from litellm.integrations.otel.logger import OpenTelemetryV2  # noqa: E402
 from litellm.integrations.otel.model.config import (  # noqa: E402
     OpenTelemetryV2Config,
 )
+from litellm.integrations.otel.model.metadata import time_to_first_chunk_seconds  # noqa: E402
 from litellm.integrations.otel.plumbing.metrics import (  # noqa: E402
     GenAIMetricRecorder,
     create_genai_metrics,
@@ -199,6 +200,98 @@ def test_time_to_first_token_is_streaming_only():
     names = set(_metrics_by_name(reader).keys())
     assert TIME_TO_FIRST_TOKEN not in names
     assert names == set(ALL_METRICS) - {TIME_TO_FIRST_TOKEN}
+
+
+def test_time_to_first_token_recorded_from_top_level_stream_when_optional_params_empty():
+    """optional_params={} but top-level stream=True still records TTFT."""
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    kwargs, response_obj, start, end = _build_call(stream=True)
+    kwargs["optional_params"] = {}
+    kwargs["stream"] = True
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    points = _metrics_by_name(reader)[TIME_TO_FIRST_TOKEN]
+    assert len(points) == 1
+    assert points[0].sum == pytest.approx(0.4)
+
+
+def test_time_to_first_token_recorded_from_optional_params_when_top_level_absent():
+    """No top-level stream key: optional_params["stream"]=True still records TTFT."""
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    kwargs, response_obj, start, end = _build_call(stream=True)
+    kwargs.pop("stream", None)
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    points = _metrics_by_name(reader)[TIME_TO_FIRST_TOKEN]
+    assert len(points) == 1
+    assert points[0].sum == pytest.approx(0.4)
+
+
+def test_time_to_first_token_top_level_false_wins_over_contradictory_optional_params_true():
+    """Resolved top-level stream=False wins over a contradictory optional_params["stream"]=True."""
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    kwargs, response_obj, start, end = _build_call(stream=True)
+    kwargs["stream"] = False
+    assert time_to_first_chunk_seconds(kwargs) is None
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    assert TIME_TO_FIRST_TOKEN not in _metrics_by_name(reader)
+
+
+def test_time_to_first_token_string_false_is_not_truthy():
+    """A string "false" optional_params["stream"] value is not streaming."""
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    kwargs, response_obj, start, end = _build_call(stream=True)
+    kwargs["optional_params"] = {"stream": "false"}
+    assert time_to_first_chunk_seconds(kwargs) is None
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    assert TIME_TO_FIRST_TOKEN not in _metrics_by_name(reader)
+
+
+def test_time_to_first_token_absent_when_timestamps_missing():
+    """Streaming call with no timestamps records nothing."""
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    kwargs, response_obj, start, end = _build_call(stream=True)
+    kwargs.pop("api_call_start_time")
+    kwargs.pop("completion_start_time")
+    assert time_to_first_chunk_seconds(kwargs) is None
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    assert TIME_TO_FIRST_TOKEN not in _metrics_by_name(reader)
+
+
+def test_time_to_first_token_absent_when_completion_start_precedes_api_call_start():
+    """A negative elapsed (completion_start_time before api_call_start_time) records nothing."""
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    kwargs, response_obj, start, end = _build_call(stream=True)
+    kwargs["api_call_start_time"], kwargs["completion_start_time"] = (
+        kwargs["completion_start_time"],
+        kwargs["api_call_start_time"],
+    )
+    assert time_to_first_chunk_seconds(kwargs) is None
+    asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    assert TIME_TO_FIRST_TOKEN not in _metrics_by_name(reader)
+
+
+def test_time_to_first_token_absent_when_elapsed_is_non_finite():
+    """inf/NaN elapsed values record nothing rather than a bogus metric point."""
+    reader = InMemoryMetricReader()
+    logger = _logger(reader, enable_metrics=True)
+    for bad_completion_start in (float("inf"), float("nan")):
+        kwargs, response_obj, start, end = _build_call(stream=True)
+        kwargs["completion_start_time"] = bad_completion_start
+        assert time_to_first_chunk_seconds(kwargs) is None
+        asyncio.run(logger.async_log_success_event(kwargs, response_obj, start, end))
+
+    assert TIME_TO_FIRST_TOKEN not in _metrics_by_name(reader)
 
 
 def test_response_read_does_not_replay_the_generation_usage():
