@@ -700,6 +700,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     use_chat_completions_api: bool | None
     ## PASS-THROUGH ENDPOINTS ##
     use_in_pass_through: bool | None
+    kubernetes_pod_discovery: ReadOnly[bool | None]
     litellm_credential_name: str | None
     ## UNIFIED PROJECT/REGION ##
     region_name: str | None

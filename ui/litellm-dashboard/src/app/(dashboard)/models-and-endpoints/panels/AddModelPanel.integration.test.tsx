@@ -131,6 +131,7 @@ const alwaysMounted = {
 
 const advancedOpenExtras = {
   guardrails: undefined,
+  kubernetes_pod_discovery: undefined,
   tags: undefined,
   use_in_pass_through: undefined,
   vector_store_ids: undefined,
@@ -299,6 +300,24 @@ describe("AddModelPanel submit payload contract", () => {
     expect(lastCreatedModel()).toStrictEqual({
       model_name: "gpt-4o",
       litellm_params: { ...alwaysMounted, ...advancedOpenExtras, rpm: 7 },
+      model_info: { ...baseModelInfo },
+    });
+  });
+
+  it("submits Kubernetes pod discovery in litellm_params", async () => {
+    const { user, openAdvanced, fillRequired, submit } = await setup();
+    await fillRequired();
+    await openAdvanced();
+    await user.click(screen.getByRole("switch", { name: "Kubernetes pod discovery" }));
+    await submit();
+
+    expect(lastCreatedModel()).toStrictEqual({
+      model_name: "gpt-4o",
+      litellm_params: {
+        ...alwaysMounted,
+        ...advancedOpenExtras,
+        kubernetes_pod_discovery: true,
+      },
       model_info: { ...baseModelInfo },
     });
   });
