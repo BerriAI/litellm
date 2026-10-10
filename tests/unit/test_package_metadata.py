@@ -17,6 +17,7 @@ LOCK: Final = tomllib.loads((PROJECT_ROOT / "uv.lock").read_text())
 OPTIONAL_DEPENDENCIES: Final = PYPROJECT["project"]["optional-dependencies"]
 AIOHTTP_POOL_POISONING_RANGE: Final = SpecifierSet(">=3.14.0,<3.14.2")
 AIOHTTP_POOL_POISONING_RELEASES: Final = ("3.14.0", "3.14.1")
+AIOHTTP_POOL_POISONING_SOURCE: Final = "aio-libs/aiohttp#12953, fixed in aiohttp 3.14.2"
 CLI_RUNTIME_DEPENDENCIES: Final = frozenset({"rich", "pyyaml", "requests"})
 PROXY_SERVER_ONLY_DEPENDENCIES: Final = frozenset(
     {
@@ -63,6 +64,8 @@ def test_every_declared_extra_is_locked_with_its_requirements() -> None:
         for extra, entries in locked["optional-dependencies"].items()
     }
     provided: Final = frozenset(canonicalize_name(extra) for extra in locked["metadata"]["provides-extras"])
+    assert declared
+    assert all(declared.values())
     assert frozenset(declared) == provided
     assert declared == locked_extras
 
@@ -82,10 +85,10 @@ def test_declared_aiohttp_floor_excludes_pool_poisoning_releases() -> None:
     assert len(declared) == 1
     assert (
         tuple(release for release in AIOHTTP_POOL_POISONING_RELEASES if declared[0].specifier.contains(release)) == ()
-    )
+    ), AIOHTTP_POOL_POISONING_SOURCE
 
 
 def test_locked_aiohttp_version_is_not_pool_poisoning() -> None:
     locked: Final = _locked_package("aiohttp")["version"]
     assert isinstance(locked, str)
-    assert not AIOHTTP_POOL_POISONING_RANGE.contains(locked)
+    assert not AIOHTTP_POOL_POISONING_RANGE.contains(locked), AIOHTTP_POOL_POISONING_SOURCE

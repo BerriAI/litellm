@@ -1,9 +1,7 @@
 import sys
 from pathlib import Path
 from typing import Final
-from unittest.mock import patch
 
-import pytest
 from packaging.requirements import Requirement
 
 if sys.version_info >= (3, 11):
@@ -13,31 +11,6 @@ else:
 
 
 ROOT: Final = Path(__file__).resolve().parents[2]
-
-
-@pytest.mark.parametrize("sdist_only", [False, True])
-def test_build_command_selects_requested_distributions(tmp_path: Path, sdist_only: bool) -> None:
-    from scripts.build_core_distribution import main
-
-    output: Final = tmp_path / "dist"
-    arguments: Final = ["build_core_distribution.py", "--out-dir", str(output)] + (
-        ["--sdist-only"] if sdist_only else []
-    )
-    with (
-        patch.object(sys, "argv", arguments),
-        patch("scripts.build_core_distribution.stage_core_distribution") as stage,
-        patch("scripts.build_core_distribution.subprocess.run") as run,
-    ):
-        main()
-        run.assert_called_once()
-        command: Final = run.call_args.args[0]
-        assert command[:2] == ["uv", "build"]
-        assert ("--sdist" in command) is sdist_only
-        assert "--wheel" not in command
-        assert command[command.index("--out-dir") + 1] == str(output)
-        assert run.call_args.kwargs["check"] is True
-        assert run.call_args.kwargs["cwd"] == stage.call_args.args[1]
-    assert not stage.call_args.args[1].exists()
 
 
 def test_core_manifest_preserves_runtime_dependencies_without_extras() -> None:

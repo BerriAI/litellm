@@ -52,7 +52,6 @@ def _serves_a_completion_through_a_stored_key(proxy: Gateway, database_url: str)
         },
     )
     key: Final = string_value(proxy.post("/key/generate", {"models": [model]})["key"])
-    _upstream_requests(proxy)
     reply: Final = proxy.chat(model, key=key, text=prompt)
     message: Final = object_value(object_value(list_value(reply["choices"])[0])["message"])
     assert string_value(message["content"]) == CANNED_REPLY
@@ -77,7 +76,7 @@ def _serves_a_completion_through_a_stored_key(proxy: Gateway, database_url: str)
     ) == [{"model_name": model}]
 
 
-def test_proxy_extra_boots_without_general_settings_and_serves_a_stored_key(gateway: Gateway, tmp_path: Path) -> None:
+def test_db_push_boots_without_general_settings_and_serves_a_stored_key(gateway: Gateway, tmp_path: Path) -> None:
     with (
         scratch_database() as database_url,
         owned_proxy_process(
