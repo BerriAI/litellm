@@ -4,7 +4,7 @@ from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import click
 import fastapi
@@ -37,6 +37,13 @@ def fork_reservation():
 
 @pytest.mark.xdist_group("proxy_cli")
 class TestProxyInitializationHelpers:
+    def test_drop_script_dir_from_sys_path(self) -> None:
+        script_dir: Final = os.path.dirname(os.path.abspath(proxy_cli.__file__))
+        with patch.object(sys, "path", [script_dir, "outside"]):
+            proxy_cli._drop_script_dir_from_sys_path()
+
+            assert sys.path == ["outside"]
+
     @patch("importlib.metadata.version")
     @patch("click.echo")
     def test_echo_litellm_version(self, mock_echo, mock_version):
@@ -69,39 +76,35 @@ class TestProxyInitializationHelpers:
         mock_dumps.assert_called_once_with({"status": "healthy"}, indent=4)
 
     @patch("openai.OpenAI")
-    @patch("click.echo")
-    @patch("builtins.print")
-    def test_run_test_chat_completion(self, mock_print, mock_echo, mock_openai):
-        # Setup
-        mock_client = MagicMock()
+    def test_run_test_chat_completion(
+        self, mock_openai: MagicMock, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        mock_client: Final = MagicMock()
         mock_openai.return_value = mock_client
-
-        mock_response = MagicMock()
-        mock_client.chat.completions.create.return_value = mock_response
-
-        mock_stream_response = MagicMock()
-        mock_stream_response.__iter__.return_value = [MagicMock(), MagicMock()]
-        mock_client.chat.completions.create.side_effect = [
+        mock_response: Final = MagicMock()
+        stream_chunks: Final = ("first chunk", "second chunk")
+        mock_client.chat.completions.create.side_effect = (
             mock_response,
-            mock_stream_response,
+            stream_chunks,
+            mock_response,
+            stream_chunks,
+        )
+        mock_client.completions.create.return_value = mock_response
+
+        ProxyInitializationHelpers._run_test_chat_completion("localhost", 8000, "test-model", True)
+        ProxyInitializationHelpers._run_test_chat_completion("localhost", 8000, "test-model", "http://test-url")
+
+        assert mock_openai.call_args_list == [
+            call(api_key="My API Key", base_url="http://localhost:8000"),
+            call(api_key="My API Key", base_url="http://test-url"),
         ]
-
-        # Execute
-        with pytest.raises(ValueError, match="Invalid test value"):
-            ProxyInitializationHelpers._run_test_chat_completion(
-                "localhost", 8000, "gpt-3.5-turbo", True
-            )
-
-        # Test with valid string test value
-        ProxyInitializationHelpers._run_test_chat_completion(
-            "localhost", 8000, "gpt-3.5-turbo", "http://test-url"
-        )
-
-        # Assert
-        mock_openai.assert_called_once_with(
-            api_key="My API Key", base_url="http://test-url"
-        )
-        mock_client.chat.completions.create.assert_called()
+        assert [
+            request.kwargs.get("stream", False) for request in mock_client.chat.completions.create.call_args_list
+        ] == [False, True, False, True]
+        assert mock_client.completions.create.call_count == 2
+        output: Final = capsys.readouterr().out
+        for chunk in stream_chunks:
+            assert output.count(f"LiteLLM: streaming response from proxy {chunk}\n") == 2
 
     def test_get_default_unvicorn_init_args(self):
         # Test without log_config

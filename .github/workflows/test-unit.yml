@@ -785,6 +785,7 @@ jobs:
 
           - shard: proxy-runtime
             test-path: |-
+              tests/unit/proxy/test_proxy_cli.py
               tests/unit/proxy/auth/test_multipart_bypass_repro.py
               tests/unit/proxy/auth/test_proxy_routes.py
               tests/unit/proxy/middleware/test_request_size_limit_middleware.py
