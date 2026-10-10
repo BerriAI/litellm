@@ -1,7 +1,9 @@
 import asyncio
 import re
+import sys
 import time
 from collections.abc import Mapping, Sequence
+from types import ModuleType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1480,8 +1482,13 @@ async def test_find_team_with_model_access_v1_messages_default_routes(monkeypatc
     [
         ("/v1/messages", True),
         ("/v1/messages/count_tokens", True),
+        ("/rag/ingest", True),
+        ("/v1/rag/ingest", True),
+        ("/rag/query", True),
+        ("/v1/rag/query", True),
         ("/v1/skills", False),
         ("/v1/skills/skill_abc123", False),
+        ("/lens", False),
     ],
 )
 def test_default_team_allowed_routes_cover_messages_but_not_skills(route, expected):
@@ -1494,6 +1501,40 @@ def test_default_team_allowed_routes_cover_messages_but_not_skills(route, expect
             litellm_proxy_roles=LiteLLM_JWTAuth(),
         )
         is expected
+    )
+
+
+@pytest.mark.asyncio
+async def test_find_team_with_model_access_reports_team_route_allowlist_denial():
+    jwt_handler: Final = JWTHandler()
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(team_allowed_routes=["/chat/completions"])
+    team: Final = LiteLLM_TeamTable(team_id="team-route-denied", models=["gpt-4o-mini"])
+    user_api_key_cache: Final = DualCache()
+    user_api_key_cache.set_cache(key="team_id:team-route-denied", value=team)
+    prisma_client: Final = MagicMock()
+    prisma_team_table: Final = prisma_client.db.litellm_teamtable
+    prisma_team_table.find_unique = AsyncMock()
+    proxy_server_module: Final = ModuleType("proxy_server")
+    proxy_server_module.llm_router = None
+
+    with patch.dict(sys.modules, {"litellm.proxy.proxy_server": proxy_server_module}):
+        with pytest.raises(HTTPException) as exc_info:
+            await JWTAuthManager.find_team_with_model_access(
+                team_ids={"team-route-denied"},
+                requested_model="gpt-4o-mini",
+                route="/rag/query",
+                jwt_handler=jwt_handler,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=None,
+                proxy_logging_obj=MagicMock(),
+            )
+
+    prisma_team_table.find_unique.assert_not_awaited()
+    assert exc_info.value.status_code == 403
+    assert (
+        exc_info.value.detail == "Team team-route-denied can access model gpt-4o-mini but route /rag/query "
+        "is not in litellm_jwtauth.team_allowed_routes"
     )
 
 

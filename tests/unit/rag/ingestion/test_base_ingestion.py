@@ -6,6 +6,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.rag.ingestion.base_ingestion import BaseRAGIngestion
 from litellm.rag.ingestion.gemini_ingestion import GeminiRAGIngestion
 from litellm.types.utils import CredentialItem
 
@@ -15,6 +16,27 @@ _STORED_CREDENTIAL: Final = CredentialItem(
     credential_info={},
     credential_values={"api_key": "stored-key"},
 )
+
+
+class _UnauthorizedIngestionError(Exception):
+    status_code: Final = 401
+
+
+class _FailingStoreIngestion(BaseRAGIngestion):
+    def __init__(self, failure: Exception) -> None:
+        super().__init__(ingest_options={"vector_store": {}})
+        self._failure = failure
+
+    async def store(
+        self,
+        file_content: bytes | None,
+        filename: str | None,
+        content_type: str | None,
+        chunks: list[str],
+        embeddings: list[list[float]] | None,
+        existing_file_id: str | None = None,
+    ) -> tuple[str | None, str | None]:
+        raise self._failure
 
 
 def _vector_store_options(litellm_credential_name: object) -> dict[str, object]:
@@ -99,3 +121,22 @@ async def test_upload_from_a_url_takes_the_content_type_from_the_response_header
     uploaded: Final = await ingestion.upload(file_url=_FILE_URL)
 
     assert uploaded == ("report.pdf", b"%PDF-1.7", expected_content_type, None)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "expected_status_code"),
+    [
+        (_UnauthorizedIngestionError("unauthorized"), 401),
+        (RuntimeError("ingestion failed"), None),
+    ],
+)
+async def test_ingest_response_preserves_integer_exception_status_code(
+    failure: Exception,
+    expected_status_code: int | None,
+) -> None:
+    response: Final = await _FailingStoreIngestion(failure).ingest(
+        file_data=("report.txt", b"plain text", "text/plain")
+    )
+
+    assert response["error_status_code"] == expected_status_code

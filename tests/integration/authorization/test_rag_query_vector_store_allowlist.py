@@ -313,6 +313,32 @@ def test_deny_by_default_searches_explicitly_granted_store(strict_gateway: Stric
         assert marker in str(object_value(searches[0]["body"])["query"]), searches
 
 
+def test_jwt_team_route_outside_operator_allowed_routes_is_denied_before_search(
+    strict_gateway: StrictGateway,
+) -> None:
+    with strict_gateway.gateway.scenario() as scenario:
+        model: Final = scenario.model()
+        store_id: Final = f"vs_unregistered_{uuid.uuid4().hex}"
+        team: Final = scenario.team(models=_json_array(model), object_permission=_permission_for_stores(store_id))
+        member: Final = scenario.member(team)
+        marker: Final = f"lit9370 alias {uuid.uuid4().hex}"
+
+        response: Final = _rag_query(
+            strict_gateway.gateway,
+            model,
+            marker,
+            strict_gateway.jwt(member, (team,)),
+            store_id=store_id,
+            path="/rag/query",
+        )
+
+        assert response.status_code == 403, response.text
+        assert (
+            f"Team {team} can access model {model} but route /rag/query is not in litellm_jwtauth.team_allowed_routes"
+        ) in response.text, response.text
+        assert _searches_for_marker(strict_gateway.upstream, marker, store_id) == ()
+
+
 @pytest.mark.parametrize(
     ("scope", "error_type"),
     (("key", "key_vector_store_access_denied"), ("team", "team_vector_store_access_denied")),

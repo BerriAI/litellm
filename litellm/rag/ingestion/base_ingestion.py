@@ -364,10 +364,12 @@ class BaseRAGIngestion(ABC):
 
         except Exception as e:
             verbose_logger.exception("RAG Pipeline failed: %s", e)
+            error_status_code: Final[object] = getattr(e, "status_code", None)
             return RAGIngestResponse(
                 id=self.ingest_id,
                 status="failed",
                 vector_store_id="",
                 file_id=None,
                 error=str(e),
+                error_status_code=error_status_code if isinstance(error_status_code, int) else None,
             )
