@@ -3128,6 +3128,27 @@ class TestPatchEdgeBranches:
             *trailing,
         ]
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "system_content",
+        ["Answer from the memo only.", [{"type": "input_text", "text": "Answer from the memo only."}]],
+    )
+    async def test_fallback_leaving_only_the_system_message_keeps_it_an_input_item(self, system_content):
+        """The Responses API rejects an empty input, so a rebuild left holding only the system
+        message sends it as a system item rather than as instructions over an empty input."""
+        handler = OpenAIResponsesHandler()
+        data = {
+            "model": "gpt-5.6",
+            "input": [{"role": "system", "content": system_content}, {"role": "user", "content": "memo " * 400}],
+        }
+
+        result = await handler.process_input_messages(data, DroppingRewriteGuardrail())
+
+        assert "instructions" not in result
+        assert result["input"] == [
+            {"type": "message", "role": "system", "content": [{"type": "input_text", "text": "Answer from the memo only."}]}
+        ]
+
     def test_item_rewrite_field_ignores_non_string_type(self):
         from litellm.llms.openai.responses.guardrail_translation.handler import _item_rewrite_field
 

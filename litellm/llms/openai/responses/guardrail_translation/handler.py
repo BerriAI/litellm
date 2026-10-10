@@ -505,6 +505,15 @@ def _patch_or_convert_request_fields(
     input_items, converted_instructions = (
         LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(structured_messages)
     )
+    if not input_items and converted_instructions is not None:
+        # The Responses API rejects an empty input, so a lone system message stays a system item, as the chat
+        # bridge sends a system-only request.
+        system_item: Final = {
+            "type": "message",
+            "role": "system",
+            "content": [{"type": "input_text", "text": converted_instructions}],
+        }
+        return _RequestFields(input=(system_item,), instructions=None)
     return _RequestFields(input=tuple(input_items), instructions=converted_instructions)
 
 
