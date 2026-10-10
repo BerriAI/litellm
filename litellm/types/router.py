@@ -4,19 +4,33 @@ litellm.Router Types - includes RouterConfig, UpdateRouterConfig, ModelInfo etc
 
 import datetime
 import enum
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Annotated, Any, ClassVar, Final, Generic, Literal, TypeVar, get_type_hints
+from collections.abc import Container, Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    ClassVar,
+    Final,
+    Generic,
+    Literal,
+    TypeAlias,
+    TypeVar,
+    get_type_hints,
+)
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from openai import Timeout as SDKTimeout
+from pydantic import ConfigDict, Field, JsonValue, field_validator, model_validator
 from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_checkable
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.provider_affinity import validate_provider_affinity_header_name
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.router_weights import RouterWeights
 
 if TYPE_CHECKING:
@@ -34,6 +48,12 @@ from .utils import (
     ModelResponse,
     StandardLoggingRoutingDecision,
 )
+from .utils import (
+    # private alias: `from .types.router import *` would rebind a public Final in litellm/__init__.py
+    server_owned_wif_litellm_params as _server_owned_wif_litellm_params,
+)
+
+AllowedModelRegion: TypeAlias = Literal["eu", "us"]
 
 
 class ConfigurableClientsideParamsCustomAuth(TypedDict):
@@ -43,7 +63,7 @@ class ConfigurableClientsideParamsCustomAuth(TypedDict):
 CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = list[str | ConfigurableClientsideParamsCustomAuth] | None
 
 
-class ModelConfig(BaseModel):
+class ModelConfig(LiteLLMBaseModel):
     model_name: str
     litellm_params: CompletionRequest | EmbeddingRequest
     tpm: int
@@ -52,7 +72,7 @@ class ModelConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class RoutingGroup(BaseModel):
+class RoutingGroup(LiteLLMBaseModel):
     """
     A group of models that share a routing strategy.
     """
@@ -84,7 +104,7 @@ class RoutingGroup(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class RouterConfig(BaseModel):
+class RouterConfig(LiteLLMBaseModel):
     model_list: list[ModelConfig]
 
     redis_url: str | None = None
@@ -93,17 +113,17 @@ class RouterConfig(BaseModel):
     redis_password: str | None = None
 
     cache_responses: bool | None = False
-    cache_kwargs: dict | None = {}
+    cache_kwargs: dict | None = Field(default={})
     caching_groups: list[tuple[str, list[str]]] | None = None
     client_ttl: int | None = 3600
     num_retries: int | None = 0
     timeout: float | None = None
-    default_litellm_params: dict[str, str] | None = {}
+    default_litellm_params: dict[str, str] | None = Field(default={})
     set_verbose: bool | None = False
-    fallbacks: list | None = []
+    fallbacks: list | None = Field(default=[])
     allowed_fails: int | None = None
-    context_window_fallbacks: list | None = []
-    model_group_alias: dict[str, list[str]] | None = {}
+    context_window_fallbacks: list | None = Field(default=[])
+    model_group_alias: dict[str, list[str]] | None = Field(default={})
     retry_after: int | None = 0
     routing_strategy: RoutingStrategyName = "simple-shuffle"
     routing_groups: list[RoutingGroup] | None = None
@@ -111,7 +131,7 @@ class RouterConfig(BaseModel):
     model_config = ConfigDict(protected_namespaces=())
 
 
-class RetryPolicy(BaseModel):
+class RetryPolicy(LiteLLMBaseModel):
     """
     Use this to set a custom number of retries per exception type
     If RateLimitErrorRetries = 3, then 3 retries will be made for RateLimitError
@@ -144,7 +164,7 @@ OptionalPreCallChecks = list[
 ]
 
 
-class UpdateRouterConfig(BaseModel):
+class UpdateRouterConfig(LiteLLMBaseModel):
     """
     Set of params that you can modify via `router.update_settings()`.
     """
@@ -163,7 +183,7 @@ class UpdateRouterConfig(BaseModel):
     retry_after: float | None = None
     fallbacks: list[dict] | None = None
     context_window_fallbacks: list[dict] | None = None
-    model_group_alias: dict[str, str | dict] | None = {}
+    model_group_alias: dict[str, str | dict] | None = Field(default={})
     enable_tag_filtering: bool | None = None
     weights: RouterWeights | None = None
     tag_routing_prefix: str | None = None
@@ -180,7 +200,7 @@ def _as_utc(value: datetime.datetime | None) -> datetime.datetime | None:
     return value.astimezone(datetime.timezone.utc)
 
 
-class ModelAccessWindow(BaseModel):
+class ModelAccessWindow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     start: datetime.time
@@ -319,7 +339,11 @@ class ModelInfo(MirroredPricingParams):
         setattr(self, key, value)
 
 
-class CredentialLiteLLMParams(BaseModel):
+class CredentialLiteLLMParams(LiteLLMBaseModel):
+    if TYPE_CHECKING:
+
+        def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: credential fields vary by provider
+
     api_key: str | None = None
     api_base: str | None = None
     api_version: str | None = None
@@ -374,6 +398,73 @@ class CredentialLiteLLMParams(BaseModel):
     ## IBM WATSONX ##
     watsonx_region_name: str | None = None
 
+    ## ANTHROPIC WORKLOAD IDENTITY FEDERATION ##
+    # Without these, get_deployment_credentials_with_provider silently drops a
+    # litellm_params-configured WIF setup before files/batches/passthrough callers see
+    # it, the same #30235-shaped gap azure_ad_token above was added to close.
+    anthropic_federation_rule_id: str | None = None
+    anthropic_organization_id: str | None = None
+    anthropic_service_account_id: str | None = None
+    anthropic_federation_workspace_id: str | None = None
+    anthropic_identity_token_file: str | None = None
+    anthropic_identity_token: str | None = None
+    anthropic_identity_source: str | None = None
+    anthropic_issuer_url: str | None = None
+    anthropic_issuer_subject: str | None = None
+    anthropic_issuer_audience: str | None = None
+    anthropic_issuer_ttl_seconds: int | None = None
+    anthropic_issuer_signing_key_ref: str | None = None
+    anthropic_keycloak_token_url: str | None = None
+    anthropic_keycloak_client_id: str | None = None
+    anthropic_keycloak_auth_method: str | None = None
+    anthropic_keycloak_client_secret_ref: str | None = None
+    anthropic_keycloak_scope: str | None = None
+    # Server-set when a client redirects api_base. Declared so it survives the strict dump the
+    # other federation fields above are declared for, rather than being rebuilt away in transit.
+    anthropic_disable_workload_identity_federation: bool | None = None
+
+    ## OPENAI WORKLOAD IDENTITY FEDERATION ##
+    openai_identity_provider_id: str | None = None
+    openai_service_account_id: str | None = None
+    openai_identity_token_file: str | None = None
+    token_exchange_endpoint: str | None = None
+    token_exchange_profile: str | None = None
+    token_exchange_scope: str | None = None
+    token_exchange_audience: str | None = None
+
+
+def server_owned_wif_fields_present(fields: Mapping[str, object]) -> tuple[str, ...]:
+    """Server-owned federation or OAuth token-exchange field names set in ``fields``.
+
+    ``fields`` is a ``litellm_params`` dict (or a credential's ``credential_values`` mapping,
+    which feeds the same resolution when referenced by name). Derived from
+    ``server_owned_wif_litellm_params`` rather than hand-copied, so a persistence gate built on
+    this stays correct when a server-owned field is added there.
+    """
+    return tuple(name for name in _server_owned_wif_litellm_params if fields.get(name) is not None)
+
+
+def server_owned_wif_fields_named(keys: Container[str]) -> tuple[str, ...]:
+    """Server-owned federation or OAuth token-exchange field names appearing in ``keys``, whatever
+    value they carry.
+
+    The write gates on credentials need this key-based sibling of ``server_owned_wif_fields_present``:
+    ``get_litellm_params`` forwards a server-owned field on key presence, so a persisted
+    ``{"anthropic_issuer_url": None}`` can wedge every deployment that references the credential
+    even though no value is set. Pass a mapping (its keys are tested) or a plain collection of key
+    names.
+    """
+    return tuple(name for name in _server_owned_wif_litellm_params if name in keys)
+
+
+_WIF_POINTER_FIELDS: Final = frozenset(name for name in _server_owned_wif_litellm_params if name.endswith("_ref"))
+
+
+def holds_secret_pointer(param_name: str) -> bool:
+    """A ``*_ref`` federation field is a secret POINTER the identity source dereferences at use
+    time, so a loader expanding ``os.environ/`` values must leave it as written."""
+    return param_name in _WIF_POINTER_FIELDS
+
 
 _RESERVED_INIT_KEYS: Final = frozenset({"self", "params", "__class__"})
 
@@ -383,12 +474,16 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     LiteLLM Params without 'model' arg (used across completion / assistants api)
     """
 
+    if TYPE_CHECKING:
+
+        def __init__(self, /, **data: object) -> None: ...  # kwargs-ok: provider parameters vary by deployment
+
     custom_llm_provider: str | None = None
     tpm: int | None = None
     rpm: int | None = None
     itpm: int | None = None
     otpm: int | None = None
-    timeout: float | str | httpx.Timeout | None = None  # if str, pass in as os.environ/
+    timeout: float | str | httpx.Timeout | SDKTimeout | None = None  # if str, pass in as os.environ/
     stream_timeout: float | str | None = None  # timeout when making stream=True calls, if str, pass in as os.environ/
     max_retries: int | None = None
     drop_params: bool | str | None = None
@@ -422,6 +517,10 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     use_xai_oauth: bool | None = Field(
         default=False,
         description="Use stored xAI OAuth credentials when no xAI API key is configured.",
+    )
+    fireworks_forward_user_id: bool | None = Field(
+        default=None,
+        description="Send the LiteLLM user id of the calling key as the `user` field on Fireworks AI chat, responses and messages requests.",
     )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
     merge_reasoning_content_in_choices: bool | None = False
@@ -466,6 +565,13 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     valkey_ssl: bool | None = None
     valkey_text_field: str | None = None
     valkey_embedding_field: str | None = None
+
+    @field_validator("timeout")
+    @classmethod
+    def normalize_timeout(
+        cls, value: float | str | httpx.Timeout | SDKTimeout | None
+    ) -> float | str | httpx.Timeout | None:
+        return CompletionTimeout.normalize(value) if isinstance(value, (httpx.Timeout, SDKTimeout)) else value
 
     @field_validator("provider_affinity_header")
     @classmethod
@@ -524,6 +630,10 @@ class LiteLLM_Params(GenericLiteLLMParams):
     LiteLLM Params with 'model' requirement - used for completions
     """
 
+    if TYPE_CHECKING:
+
+        def __init__(self, *, model: str, **data: object) -> None: ...  # kwargs-ok: provider fields vary by model
+
     model: str
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
 
@@ -547,10 +657,14 @@ class LiteLLM_Params(GenericLiteLLMParams):
 class updateLiteLLMParams(GenericLiteLLMParams):
     # This class is used to update the LiteLLM_Params
     # only differece is model is optional
+    if TYPE_CHECKING:
+
+        def __init__(self, *, model: str | None = None, **data: object) -> None: ...  # kwargs-ok: per-provider
+
     model: str | None = None
 
 
-class updateDeployment(BaseModel):
+class updateDeployment(LiteLLMBaseModel):
     model_name: str | None = None
     litellm_params: updateLiteLLMParams | None = None
     model_info: ModelInfo | None = None
@@ -572,7 +686,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     api_key: str | None
     api_base: str | None
     api_version: str | None
-    timeout: float | str | httpx.Timeout | None
+    timeout: float | str | httpx.Timeout | SDKTimeout | None  # writable-ok: preserve timeout updates
     stream_timeout: float | str | None
     max_retries: int | None
     organization: list | str | None  # for openai orgs
@@ -606,6 +720,7 @@ class LiteLLMParamsTypedDict(TypedDict, total=False):
     ## CUSTOM PRICING ##
     input_cost_per_token: float | None
     output_cost_per_token: float | None
+    cost_per_second: ReadOnly[float | None]
     input_cost_per_second: float | None
     output_cost_per_second: float | None
     output_cost_per_second_480p: ReadOnly[float | None]
@@ -643,10 +758,13 @@ class DeploymentTypedDict(TypedDict, total=False):
 SPECIAL_MODEL_INFO_PARAMS = tuple(MirroredPricingParams.model_fields)
 
 
-class Deployment(BaseModel):
+class Deployment(LiteLLMBaseModel):
     model_name: str
     litellm_params: LiteLLM_Params
     model_info: ModelInfo
+    # admin-toggled pause flag; mirrors LiteLLM_ProxyModelTable.blocked. None means "don't set it
+    # on create" -- the Prisma column defaults to False -- rather than "explicitly unblocked".
+    blocked: bool | None = None
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
@@ -740,7 +858,7 @@ class RouterErrors(enum.Enum):
     )
 
 
-class AllowedFailsPolicy(BaseModel):
+class AllowedFailsPolicy(LiteLLMBaseModel):
     """
     Use this to set a custom number of allowed fails/minute before cooling down a deployment
     If `AuthenticationErrorAllowedFails = 1000`, then 1000 AuthenticationError will be allowed before cooling down a deployment
@@ -760,7 +878,7 @@ class AllowedFailsPolicy(BaseModel):
     NotFoundErrorAllowedFails: int | None = None
 
 
-class AlertingConfig(BaseModel):
+class AlertingConfig(LiteLLMBaseModel):
     """
     Use this configure alerting for the router. Receive alerts on the following events
     - LLM API Exceptions
@@ -781,7 +899,7 @@ def _resolved_annotations(model_class: type[object]) -> Mapping[str, object]:
     return get_type_hints(model_class)
 
 
-class ModelGroupInfo(BaseModel):
+class ModelGroupInfo(LiteLLMBaseModel):
     model_group: str
     providers: list[str]
     max_input_tokens: float | None = None
@@ -882,7 +1000,7 @@ class GuardrailTypedDict(TypedDict, total=False):
     id: str | None  # Unique identifier for the guardrail deployment
 
 
-class FineTuningConfig(BaseModel):
+class FineTuningConfig(LiteLLMBaseModel):
     custom_llm_provider: Literal["azure", "openai"]
 
 
@@ -934,7 +1052,7 @@ class CustomRoutingStrategyBase:
         """
 
 
-class RouterGeneralSettings(BaseModel):
+class RouterGeneralSettings(LiteLLMBaseModel):
     async_only_mode: bool = Field(default=False)  # this will only initialize async clients. Good for memory utils
     pass_through_all_models: bool = Field(
         default=False
@@ -1025,7 +1143,7 @@ class RouterCacheEnum(enum.Enum):
     OTPM = "global_router:{id}:{model}:otpm:{current_minute}"
 
 
-class GenericBudgetWindowDetails(BaseModel):
+class GenericBudgetWindowDetails(LiteLLMBaseModel):
     """Details about a provider's budget window"""
 
     budget_start: float
@@ -1100,11 +1218,11 @@ class MockRouterTestingParams:
         )
 
 
-class ModelGroupSettings(BaseModel):
+class ModelGroupSettings(LiteLLMBaseModel):
     forward_client_headers_to_llm_api: list[str] | None = None
 
 
-class PreRoutingHookResponse(BaseModel):
+class PreRoutingHookResponse(LiteLLMBaseModel):
     """
     Response object from the pre-routing hook.
 
@@ -1129,6 +1247,8 @@ class TaggedPreRoutingStrategy(Generic[_PreRoutingStrategyT_co]):
 
     tags: tuple[str, ...]
     strategy: _PreRoutingStrategyT_co
+    definition_fingerprint: str | None = None
+    deployment: Deployment | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -1136,6 +1256,7 @@ class BaselineRouteStamp:
     router_name: str
     baseline_model: str
     baseline_deployment_id: str
+    request_parameters: Mapping[str, JsonValue] | None = field(default=None, repr=False)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1160,7 +1281,7 @@ class PreRoutingStrategy(Protocol):
     ) -> "PreRoutingHookResponse | None": ...
 
 
-class RoutingContext(BaseModel):
+class RoutingContext(LiteLLMBaseModel):
     """
     Passed through a Router's `plugins` pipeline before the routing decision is made.
 
@@ -1217,7 +1338,7 @@ class RequestType(str, enum.Enum):
     GENERAL = "general"
 
 
-class AdaptiveRouterWeights(BaseModel):
+class AdaptiveRouterWeights(LiteLLMBaseModel):
     quality: float = Field(default=0.7, ge=0.0, le=1.0)
     cost: float = Field(default=0.3, ge=0.0, le=1.0)
 
@@ -1230,15 +1351,36 @@ class AdaptiveRouterWeights(BaseModel):
         return v
 
 
-class AdaptiveRouterConfig(BaseModel):
+class AdaptiveRouterConfig(LiteLLMBaseModel):
     available_models: list[str]
     weights: AdaptiveRouterWeights = Field(default_factory=AdaptiveRouterWeights)
 
 
-class AdaptiveRouterPreferences(BaseModel):
+class AdaptiveRouterPreferences(LiteLLMBaseModel):
     """model_info.adaptive_router_preferences — declared by each model."""
 
     model_config = ConfigDict(use_enum_values=False)
 
     quality_tier: int = Field(ge=1, le=3)
     strengths: list[RequestType] = Field(default_factory=list)
+
+
+def reject_server_owned_wif_params(body: Mapping[str, object]) -> None:
+    """Raise ``ValueError`` if a mapping that did not come from deployment config carries a
+    server-owned workload identity federation or OAuth token-exchange field.
+
+    These are never settable inline on a client surface, with or without a client-side credential
+    opt-in. Naming a stored credential that already holds them is the other way in and has its own
+    gate: ``_check_banned_params`` resolves ``litellm_credential_name`` and refuses a credential
+    carrying one of these server-owned fields.
+    This lives here rather than under ``litellm.proxy`` so the router can call it on a
+    post-authentication merge without core importing from the proxy package.
+    """
+    for param in _server_owned_wif_litellm_params:
+        if param in body:
+            raise ValueError(
+                f"Rejected Request: {param} is a server-owned workload identity federation or OAuth token exchange "
+                "parameter "
+                "and cannot be set in a request body. A proxy admin configures it on the deployment "
+                "or on a stored credential."
+            )

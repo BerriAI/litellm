@@ -34,7 +34,7 @@ from litellm._logging import (
     _parse_json_logs_env,
     _plain_log_format,
     _stdout_truncation_marker,
-    _turn_on_json,
+    turn_on_json,
     format_base64_size,
     session_id_var,
     set_session_id,
@@ -63,7 +63,7 @@ class CacheHitCustomLogger(CustomLogger):
 
 def test_json_mode_emits_one_record_per_logger(capfd):
     # Turn on JSON logging
-    _turn_on_json()
+    turn_on_json()
     # Make sure our loggers will emit INFO-level records
     for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
         lg.setLevel(logging.INFO)
@@ -812,7 +812,7 @@ def test_secret_filter_keeps_truncated_traceback(monkeypatch):
     traceback instead of reformatting the full one from exc_info."""
     monkeypatch.setenv("MAX_STRING_LENGTH_STDOUT_LOG", "500")
     try:
-        raise ValueError("sk-1234567890abcdefghij payload " + _OVERSIZED_TEXT)
+        raise ValueError("sk-9876567890abcdefghij payload " + _OVERSIZED_TEXT)
     except ValueError:
         exc_info = sys.exc_info()
     record = _make_record(logging.ERROR, "Exception occured", exc_info=exc_info)
@@ -822,7 +822,7 @@ def test_secret_filter_keeps_truncated_traceback(monkeypatch):
 
     assert record.exc_text is not None
     assert len(record.exc_text) <= 500
-    assert "sk-1234567890abcdefghij" not in record.exc_text
+    assert "sk-9876567890abcdefghij" not in record.exc_text
 
 
 @pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
@@ -896,7 +896,7 @@ def test_disabled_diagnostic_call_does_not_render_arguments(caplog):
 
 def test_truncation_filter_survives_json_reconfiguration():
     """The cap lives on the loggers, so swapping handlers (JSON mode) can't drop it."""
-    _turn_on_json()
+    turn_on_json()
 
     for lg in (verbose_logger, verbose_router_logger, verbose_proxy_logger):
         assert any(isinstance(f, StdoutLogTruncationFilter) for f in lg.filters), f"{lg.name} lost stdout truncation"
@@ -1093,11 +1093,11 @@ def test_caller_supplied_stamp_never_skips_the_scrub(monkeypatch):
     monkeypatch.setenv("LITELLM_RUST", "0")
     monkeypatch.setattr(secret_redaction, "_SECRET_RE", counting)
     monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
-    record = _make_record(logging.DEBUG, "api_key=sk-1234567890abcdefghij")
+    record = _make_record(logging.DEBUG, "api_key=sk-9876567890abcdefghij")
     record.litellm_redacted = True
 
     assert SecretRedactionFilter().filter(record) is True
-    assert "sk-1234567890abcdefghij" not in record.getMessage()
+    assert "sk-9876567890abcdefghij" not in record.getMessage()
     assert counting.calls == 1
 
     assert SecretRedactionFilter().filter(record) is True
@@ -1107,12 +1107,12 @@ def test_caller_supplied_stamp_never_skips_the_scrub(monkeypatch):
 def test_stack_info_is_scrubbed_before_the_plain_formatter(monkeypatch):
     monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
     record = _make_record(logging.INFO, "call failed")
-    record.stack_info = "Stack (most recent call last):\n  api_key=sk-1234567890abcdefghij"
+    record.stack_info = "Stack (most recent call last):\n  api_key=sk-9876567890abcdefghij"
 
     assert SecretRedactionFilter().filter(record) is True
     rendered = CorrelationPlainFormatter(_PLAIN_LOG_FORMAT).format(record)
 
-    assert "sk-1234567890abcdefghij" not in rendered
+    assert "sk-9876567890abcdefghij" not in rendered
     assert "Stack (most recent call last):" in rendered
 
 
@@ -1182,9 +1182,9 @@ def test_secret_free_extra_keeps_its_original_object(monkeypatch, extra):
 @pytest.mark.parametrize(
     "extra,scrubbed",
     (
-        (("gpt-4o", "sk-1234567890abcdefghij"), ("gpt-4o", "REDACTED")),
-        ({"gpt-4o", "sk-1234567890abcdefghij"}, ["REDACTED", "gpt-4o"]),
-        ({"model": "gpt-4o", "key": "sk-1234567890abcdefghij"}, {"model": "gpt-4o", "key": "REDACTED"}),
+        (("gpt-4o", "sk-9876567890abcdefghij"), ("gpt-4o", "REDACTED")),
+        ({"gpt-4o", "sk-9876567890abcdefghij"}, ["REDACTED", "gpt-4o"]),
+        ({"model": "gpt-4o", "key": "sk-9876567890abcdefghij"}, {"model": "gpt-4o", "key": "REDACTED"}),
     ),
     ids=("tuple", "set", "dict"),
 )
@@ -1198,7 +1198,7 @@ def test_extra_that_carried_a_secret_comes_back_scrubbed(monkeypatch, extra, scr
 
     assert record.payload == scrubbed
     assert type(record.payload) is type(scrubbed)
-    assert "sk-1234567890abcdefghij" not in rendered
+    assert "sk-9876567890abcdefghij" not in rendered
     assert "REDACTED" in rendered
 
 
@@ -1231,11 +1231,11 @@ def test_extra_whose_equality_raises_still_comes_back_scrubbed(monkeypatch, extr
 @pytest.mark.parametrize(
     "extra",
     (
-        {1: "sk-1234567890abcdefghij"},
-        {"model": {1: "sk-1234567890abcdefghij"}},
-        _nest("sk-1234567890abcdefghij", 101),
-        _RequestExtra(model="gpt-4o", attempt=2, api_key="sk-1234567890abcdefghij"),
-        {"gpt-4o", "sk-1234567890abcdefghij", 1},
+        {1: "sk-9876567890abcdefghij"},
+        {"model": {1: "sk-9876567890abcdefghij"}},
+        _nest("sk-9876567890abcdefghij", 101),
+        _RequestExtra(model="gpt-4o", attempt=2, api_key="sk-9876567890abcdefghij"),
+        {"gpt-4o", "sk-9876567890abcdefghij", 1},
     ),
     ids=("int_key", "nested_int_key", "deeper_than_safe_dumps", "dataclass_hidden_field", "unsortable_set"),
 )
@@ -1250,8 +1250,8 @@ def test_extra_the_filter_cannot_fully_inspect_never_keeps_its_secret(monkeypatc
     rendered = JsonFormatter().format(record)
 
     assert record.payload is not extra
-    assert "sk-1234567890abcdefghij" not in str(record.payload)
-    assert "sk-1234567890abcdefghij" not in rendered
+    assert "sk-9876567890abcdefghij" not in str(record.payload)
+    assert "sk-9876567890abcdefghij" not in rendered
 
 
 def test_secret_free_set_comes_back_as_its_json_shape(monkeypatch):
@@ -1269,10 +1269,10 @@ def test_unscrubbed_record_is_still_redacted_by_the_formatter(monkeypatch):
     """Records that never met SecretRedactionFilter (uvicorn's, in JSON mode) keep
     their formatter-side redaction."""
     monkeypatch.setattr("litellm._logging._ENABLE_SECRET_REDACTION", True)
-    record = _make_record(logging.INFO, "key sk-1234567890abcdefghij")
+    record = _make_record(logging.INFO, "key sk-9876567890abcdefghij")
 
-    assert "sk-1234567890abcdefghij" not in JsonFormatter().format(record)
-    assert "sk-1234567890abcdefghij" not in CorrelationPlainFormatter(_PLAIN_LOG_FORMAT).format(record)
+    assert "sk-9876567890abcdefghij" not in JsonFormatter().format(record)
+    assert "sk-9876567890abcdefghij" not in CorrelationPlainFormatter(_PLAIN_LOG_FORMAT).format(record)
 
 
 def test_set_session_id_bounds_length():
@@ -1766,3 +1766,27 @@ def test_diagnostic_filter_redacts_a_non_string_message_object(monkeypatch, nati
     assert DiagnosticProcessingFilter().filter(record) is True
 
     assert secret not in record.getMessage()
+
+
+class _StrCountingValue:
+    str_calls = 0
+
+    def __str__(self) -> str:
+        _StrCountingValue.str_calls += 1
+        return "cached-vector"
+
+
+def test_print_verbose_formats_args_only_when_set_verbose_is_on(monkeypatch, capsys):
+    import litellm._logging as logging_module
+
+    _StrCountingValue.str_calls = 0
+
+    monkeypatch.setattr(logging_module, "set_verbose", False)
+    logging_module.print_verbose("key %s value %s", "k1", _StrCountingValue())
+    assert _StrCountingValue.str_calls == 0
+    assert capsys.readouterr().out == ""
+
+    monkeypatch.setattr(logging_module, "set_verbose", True)
+    logging_module.print_verbose("key %s value %s", "k1", _StrCountingValue())
+    assert _StrCountingValue.str_calls == 1
+    assert capsys.readouterr().out == "key k1 value cached-vector\n"

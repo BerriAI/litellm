@@ -24,7 +24,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_str_from_messages,
+    get_semantic_cache_prompt_from_messages,
 )
 from litellm.types.utils import EmbeddingResponse
 
@@ -68,8 +68,8 @@ class QdrantSemanticCache(BaseCache):
         embedding_timeout: float | None = None,
     ):
         from litellm.llms.custom_httpx.http_handler import (
-            _get_httpx_client,
             get_async_httpx_client,
+            get_httpx_client,
             httpxSpecialProvider,
         )
         from litellm.secret_managers.main import get_secret_str
@@ -112,7 +112,7 @@ class QdrantSemanticCache(BaseCache):
 
         self.headers = headers
 
-        self.sync_client = _get_httpx_client()
+        self.sync_client = get_httpx_client()
         self.async_client = get_async_httpx_client(llm_provider=httpxSpecialProvider.Caching)
 
         if quantization_config is None:
@@ -286,7 +286,7 @@ class QdrantSemanticCache(BaseCache):
 
         # get the prompt
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         # create an embedding for prompt
         embedding_response: Final = cast(
@@ -325,7 +325,7 @@ class QdrantSemanticCache(BaseCache):
 
         # get the messages
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         # convert to embedding
         embedding_response: Final = cast(
@@ -400,7 +400,7 @@ class QdrantSemanticCache(BaseCache):
 
         # get the prompt
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
         embedding_response: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 
         # get the embedding
@@ -435,7 +435,7 @@ class QdrantSemanticCache(BaseCache):
 
         # get the messages
         messages: Final = kwargs["messages"]
-        prompt: Final = get_str_from_messages(messages)
+        prompt: Final = get_semantic_cache_prompt_from_messages(messages)
 
         embedding_response: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
 

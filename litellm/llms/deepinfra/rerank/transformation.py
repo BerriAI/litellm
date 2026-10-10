@@ -213,7 +213,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
             rerank_response = RerankResponse(id=request_id or str(uuid.uuid4()), results=results, meta=meta)
 
             # Store additional information in hidden params
-            rerank_response._hidden_params = {
+            rerank_response.hidden_params = {
                 "status": status,
                 "runtime_ms": runtime_ms,
                 "cost": cost,
@@ -237,7 +237,7 @@ class DeepinfraRerankConfig(BaseRerankConfig):
                 litellm_params=litellm_params,
             )
 
-            rerank_response._hidden_params["model"] = model
+            rerank_response.hidden_params["model"] = model
             return rerank_response
 
     def get_supported_cohere_rerank_params(self, model: str) -> list:

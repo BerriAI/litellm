@@ -15,6 +15,7 @@ from pydantic import JsonValue, TypeAdapter
 from tests.integration._support.database import read_rows
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+GATEWAY_LIMITS: Final = httpx.Limits(keepalive_expiry=2)
 T = TypeVar("T")
 
 
@@ -24,6 +25,11 @@ def object_value(value: JsonValue) -> dict[str, JsonValue]:
 
 def string_value(value: JsonValue) -> str:
     assert isinstance(value, str), f"Expected a string, received {type(value).__name__}"
+    return value
+
+
+def list_value(value: JsonValue) -> Sequence[JsonValue]:
+    assert isinstance(value, list), f"Expected a list, received {type(value).__name__}"
     return value
 
 
@@ -49,6 +55,28 @@ def eventually(
             return observed
         assert time.monotonic() < deadline, f"State did not converge: {observed!r}"
         time.sleep(0.1)
+
+
+def held(read: Callable[[], T], satisfied: Callable[[T], bool], *, holding: float, seconds: float = 10) -> T:
+    """`eventually`, and then `satisfied` must hold on every read for `holding` more seconds; a miss restarts the hold."""
+    deadline: Final = time.monotonic() + seconds
+    while True:
+        converged: Final = eventually(read, satisfied, seconds=max(deadline - time.monotonic(), 0.0))
+        misses: Final = _misses_within(read, satisfied, holding)
+        if not misses:
+            return converged
+        assert time.monotonic() < deadline, f"State did not hold: {misses[0]!r}"
+        time.sleep(0.1)
+
+
+def _misses_within(read: Callable[[], T], satisfied: Callable[[T], bool], holding: float) -> tuple[T, ...]:
+    until: Final = time.monotonic() + holding
+    while time.monotonic() < until:
+        time.sleep(0.1)
+        observed: Final = read()
+        if not satisfied(observed):
+            return (observed,)
+    return ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -161,6 +189,31 @@ class Scenario:
         self.gateway.post("/budget/delete", {"id": identity})
         assert read_rows('SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = %s', (identity,)) == []
 
+    def organization(self, **fields: JsonValue) -> str:
+        created: Final = self.gateway.post(
+            "/organization/new", {"organization_alias": f"integration-{uuid.uuid4().hex}", **fields}
+        )
+        identity: Final = string_value(created["organization_id"])
+        self.cleanups.callback(self.delete_organization, identity, string_value(created["budget_id"]))
+        return identity
+
+    def delete_organization(self, identity: str, budget_id: str) -> None:
+        response: Final = self.gateway.request("DELETE", "/organization/delete", {"organization_ids": [identity]})
+        assert response.status_code == 200, response.text
+        assert (
+            read_rows('SELECT organization_id FROM "LiteLLM_OrganizationTable" WHERE organization_id = %s', (identity,))
+            == []
+        )
+        self.delete_budget(budget_id)
+
+    def org_member(self, organization_id: str, role: str) -> str:
+        user_id: Final = self.user(user_role="internal_user")
+        self.gateway.post(
+            "/organization/member_add",
+            {"organization_id": organization_id, "member": {"role": role, "user_id": user_id}},
+        )
+        return user_id
+
     def user(self, **fields: JsonValue) -> str:
         created: Final = self.gateway.post(
             "/user/new", {"user_id": f"integration-{uuid.uuid4().hex}", "auto_create_key": False, **fields}
@@ -218,7 +271,7 @@ class Scenario:
 def gateway_from_environment() -> Iterator[Gateway]:
     url: Final = os.environ["INTEGRATION_PROXY_URL"]
     upstream: Final = os.environ["INTEGRATION_UPSTREAM_URL"]
-    with httpx.Client(base_url=url, timeout=15, trust_env=False) as client:
+    with httpx.Client(base_url=url, timeout=15, trust_env=False, limits=GATEWAY_LIMITS) as client:
         yield Gateway(client, os.environ["INTEGRATION_MASTER_KEY"], upstream)
 
 

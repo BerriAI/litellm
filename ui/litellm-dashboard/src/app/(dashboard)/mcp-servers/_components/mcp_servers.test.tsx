@@ -1,8 +1,10 @@
 import React from "react";
-import { render, waitFor, screen, act, within } from "@testing-library/react";
+import { render as renderWithoutNuqs, waitFor, screen, act, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { NuqsAdapter } from "nuqs/adapters/react";
+import { renderWithProviders as render } from "@/../tests/test-utils";
 import MCPServers, { compareServers, type SortKey } from "./mcp_servers";
 import type { MCPServer } from "@/components/mcp_tools/types";
 import * as networking from "@/components/networking";
@@ -17,10 +19,24 @@ vi.mock("@/components/networking", () => ({
   getGeneralSettingsCall: vi.fn().mockResolvedValue([]),
   updateConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
   deleteConfigFieldSetting: vi.fn().mockResolvedValue(undefined),
+  modelHubCall: vi.fn().mockResolvedValue({ data: [] }),
+  getMCPUserEnvVars: vi.fn((_accessToken: string, serverId: string) =>
+    Promise.resolve({
+      server_id: serverId,
+      required: [{ name: "API_KEY", description: "API key", is_set: false }],
+      missing_count: 1,
+    }),
+  ),
+  storeMCPUserEnvVars: vi.fn(),
+  clearMCPUserEnvVars: vi.fn(),
   listMCPUserEnvVarStatus: vi.fn().mockResolvedValue([]),
   fetchMCPGatewaySessions: vi.fn(),
   terminateMCPGatewaySessions: vi.fn(),
+  getUiConfig: vi.fn().mockResolvedValue({}),
 }));
+
+const stubUiConfig = (config: object) =>
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => new Response(JSON.stringify(config), { status: 200 }));
 
 const createQueryClient = () =>
   new QueryClient({
@@ -135,6 +151,12 @@ describe("MCPServers", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    stubUiConfig({});
+    window.history.replaceState(null, "", "/");
+  });
+
+  afterEach(() => {
+    window.history.replaceState(null, "", "/");
   });
 
   it("should render the MCPServers component with title", async () => {
@@ -155,6 +177,41 @@ describe("MCPServers", () => {
 
     // Verify the title is rendered
     expect(screen.getByText("MCP Servers")).toBeInTheDocument();
+  });
+
+  it("opens the user env vars modal from a deep link and removes only that query parameter", async () => {
+    const server: MCPServer = {
+      server_id: "deep-link-server",
+      server_name: "Deep Link Server",
+      alias: "deep-link-server",
+      url: "https://example.com/mcp",
+      created_at: "",
+      updated_at: "",
+      created_by: "user",
+      updated_by: "user",
+    };
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([server]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([{ server_id: server.server_id, status: "healthy" }]);
+    vi.mocked(networking.listMCPUserEnvVarStatus).mockResolvedValue([
+      {
+        server_id: server.server_id,
+        server_name: server.server_name,
+        required: [{ name: "API_KEY", description: "API key", is_set: false }],
+        missing_count: 1,
+      },
+    ]);
+    window.history.replaceState(null, "", "/?fill_env_vars=deep-link-server&other=1");
+    renderWithoutNuqs(
+      <NuqsAdapter>
+        <QueryClientProvider client={createQueryClient()}>
+          <MCPServers {...defaultProps} />
+        </QueryClientProvider>
+      </NuqsAdapter>,
+    );
+
+    expect(await screen.findByRole("heading", { name: "Set your credentials" })).toBeVisible();
+    expect(within(screen.getByRole("dialog")).getByText("Deep Link Server")).toBeVisible();
+    await waitFor(() => expect(window.location.search).toBe("?other=1"));
   });
 
   it.each(["Admin", "Internal User"])("links a %s to their MCP connections page", async (userRole) => {
@@ -297,6 +354,90 @@ describe("MCPServers", () => {
     await userEvent.type(search, "no-match");
     expect(screen.queryByTestId("mcp-servers-grid")).not.toBeInTheDocument();
     expect(screen.getByText("No servers match the current filters or search.")).toBeVisible();
+  });
+
+  it.each([
+    [false, true],
+    [true, false],
+  ])("marks stdio servers as disabled only when the proxy reports stdio off (enabled=%s)", async (enabled, flagged) => {
+    stubUiConfig({ mcp_stdio_enabled: enabled });
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      {
+        server_id: "stdio-1",
+        server_name: "local_tools",
+        alias: "local_tools",
+        transport: "stdio",
+        command: "python",
+        args: ["server.py"],
+        created_by: "user",
+        updated_by: "user",
+      } as MCPServer,
+    ]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+
+    const grid = await screen.findByTestId("mcp-servers-grid");
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+    await waitFor(() => expect(within(grid).queryByText("stdio disabled") !== null).toBe(flagged));
+    expect(within(grid).getByText("STDIO")).toBeInTheDocument();
+  });
+
+  const stdioServer = {
+    server_id: "stdio-1",
+    server_name: "local_tools",
+    alias: "local_tools",
+    transport: "stdio",
+    command: "python",
+    args: ["server.py"],
+    created_by: "user",
+    updated_by: "user",
+  } as MCPServer;
+
+  it("greys out stdio in the create form when the proxy reports stdio off", async () => {
+    stubUiConfig({ mcp_stdio_enabled: false });
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} userRole="Internal User" />
+      </QueryClientProvider>,
+    );
+    await waitFor(() => expect(globalThis.fetch).toHaveBeenCalled());
+
+    await user.click(await screen.findByRole("button", { name: "+ Submit MCP Server" }));
+    await user.click(await screen.findByRole("combobox", { name: /Transport Type/ }));
+
+    expect(await screen.findByRole("option", { name: /Standard Input\/Output \(stdio\)/ })).toHaveAttribute(
+      "data-disabled",
+    );
+    expect(screen.getByRole("option", { name: /Streamable HTTP/ })).not.toHaveAttribute("data-disabled");
+
+    await user.keyboard("{Escape}");
+    await waitFor(() => expect(screen.queryByRole("listbox")).not.toBeInTheDocument());
+  });
+
+  it("explains on the edit page why an existing stdio server cannot run when the proxy reports stdio off", async () => {
+    stubUiConfig({ mcp_stdio_enabled: false });
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([stdioServer]);
+    vi.mocked(networking.fetchMCPServerHealth).mockResolvedValue([]);
+    const user = userEvent.setup();
+    render(
+      <QueryClientProvider client={createQueryClient()}>
+        <MCPServers {...defaultProps} />
+      </QueryClientProvider>,
+    );
+    const grid = await screen.findByTestId("mcp-servers-grid");
+    await waitFor(() => expect(within(grid).getByText("stdio disabled")).toBeInTheDocument());
+
+    await user.click(within(grid).getAllByText("local_tools")[0]);
+    await user.click(await screen.findByRole("tab", { name: "Settings" }));
+
+    expect(await screen.findByText("stdio is disabled on this proxy")).toBeInTheDocument();
   });
 
   it("should render mocked MCP servers data in the table", async () => {

@@ -1,7 +1,13 @@
 import { describe, expect, it } from "vitest";
 
 import { Team } from "@/components/networking";
-import { canCreateModels, canEditAutoRouter, canModifyModel, modelCreationScope } from "./modelPermissions";
+import {
+  autoRouterCreationScope,
+  canCreateModels,
+  canEditAutoRouter,
+  canModifyModel,
+  modelCreationScope,
+} from "./modelPermissions";
 
 const teamWhere = (userId: string, role: string, teamId = "team-1"): Team[] =>
   [{ team_id: teamId, members_with_roles: [{ user_id: userId, user_email: "t@test.com", role }] }] as unknown as Team[];
@@ -13,6 +19,25 @@ const MEMBER = { userRole: "Internal User", userID: "u-member", isViewOnly: fals
 const VIEW_ONLY_ADMIN = { userRole: "Admin", userID: "u-viewer", isViewOnly: true };
 
 const noLimits = { disabledForInternalUsers: false };
+
+describe("autoRouterCreationScope", () => {
+  it("lets the global creation prohibition override the member grant without revoking edit access", () => {
+    const teams = teamWhere("u-member", "user").map((team) => ({
+      ...team,
+      team_member_permissions: ["/auto_router/manage"],
+    }));
+    expect(autoRouterCreationScope(MEMBER, { teams, disabledForInternalUsers: true })).toBe("forbidden");
+    expect(autoRouterCreationScope(MEMBER, { teams, disabledForInternalUsers: false })).toBe("team-required");
+    expect(autoRouterCreationScope(PROXY_ADMIN, { teams, disabledForInternalUsers: true })).toBe("unscoped-ok");
+    const origin = {
+      teamId: "team-1",
+      isDbModel: true,
+      createdBy: "u-member",
+      model: "auto_router/complexity_router",
+    };
+    expect(canEditAutoRouter(MEMBER, teams, origin)).toBe(true);
+  });
+});
 
 describe("modelCreationScope", () => {
   it("lets a proxy admin create without naming a team", () => {

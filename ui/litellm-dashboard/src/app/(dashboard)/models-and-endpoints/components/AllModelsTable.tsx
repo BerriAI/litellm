@@ -31,6 +31,7 @@ export const ALL_MODEL_GROUPS_VALUE = "all";
 export const WILDCARD_MODEL_GROUP_VALUE = "wildcard";
 
 const MODEL_TABLE_BODY_HEIGHT = 600;
+const ALL_PROXY_MODELS_LABEL = "All Proxy Models";
 
 const FILTER_LABELS: Record<string, string> = {
   [MODEL_NAME_COLUMN_ID]: "Public Model Name",
@@ -39,7 +40,7 @@ const FILTER_LABELS: Record<string, string> = {
 
 const VIEW_MODE_LABELS: Record<ModelViewMode, string> = {
   current_team: "Current Team Models",
-  all: "All Available Models",
+  all: ALL_PROXY_MODELS_LABEL,
 };
 
 export interface ModelsTableTeamOption {
@@ -79,6 +80,7 @@ interface AllModelsTableProps {
   onDeleteClick: (modelId: string) => void;
   onTogglePauseClick: (modelId: string, blocked: boolean) => void | Promise<void>;
   pausingModelId: string | null;
+  credentialLabels?: ReadonlyMap<string, string>;
 }
 
 function EmptyState() {
@@ -127,6 +129,7 @@ export function AllModelsTable({
   onDeleteClick,
   onTogglePauseClick,
   pausingModelId,
+  credentialLabels,
 }: AllModelsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
 
@@ -140,13 +143,24 @@ export function AllModelsTable({
       onDeleteClick,
       onTogglePauseClick,
       pausingModelId,
+      credentialLabels,
     };
     return getModelsTableColumns(columnDeps);
-  }, [userRole, userID, isViewOnly, onModelIdClick, onTeamIdClick, onDeleteClick, onTogglePauseClick, pausingModelId]);
+  }, [
+    userRole,
+    userID,
+    isViewOnly,
+    onModelIdClick,
+    onTeamIdClick,
+    onDeleteClick,
+    onTogglePauseClick,
+    pausingModelId,
+    credentialLabels,
+  ]);
 
   const modelGroupOptions = useMemo(
     () => [
-      { label: "All Models", value: ALL_MODEL_GROUPS_VALUE },
+      { label: ALL_PROXY_MODELS_LABEL, value: ALL_MODEL_GROUPS_VALUE },
       { label: "Wildcard Models (*)", value: WILDCARD_MODEL_GROUP_VALUE },
       ...availableModelGroups.map((group) => ({ label: group, value: group })),
     ],

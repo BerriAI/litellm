@@ -9,6 +9,7 @@ from typing import Final
 from openai.types import Batch
 
 import litellm
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
@@ -240,9 +241,10 @@ async def build_model_max_budget_usage(
     }
 
 
+@with_service_target("model_budgets")
 async def _current_window_spends(cache: DualCache, spend_keys: Sequence[str]) -> tuple[float, ...]:
     """Redis holds the window total across replicas; the in-memory copy is one replica's share."""
-    keys: Final = list(spend_keys)  # mutable-ok: both batch readers annotate their key argument as list
+    keys: Final = list(spend_keys)
     redis_cache: Final = cache.redis_cache
     if redis_cache is not None:
         shared: Final = await redis_cache.async_batch_get_cache(key_list=keys)
@@ -292,7 +294,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     """
     Handles budgets for model + virtual key
 
-    Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
+    Example: key=$LITELLM_API_KEY, model=gpt-4o, max_budget=100, time_period=1d
     """
 
     def __init__(self, dual_cache: DualCache):
@@ -303,6 +305,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         self._detached_increment_operations = None
         self.deployment_budget_config = None
 
+    @with_service_target("model_budgets")
     async def is_key_within_model_budget(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -325,6 +328,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             ),
         )
 
+    @with_service_target("model_budgets")
     async def get_fallback_model_within_budget(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -339,6 +343,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 continue
         return None
 
+    @with_service_target("model_budgets")
     async def is_user_within_model_budget(
         self,
         user_id: str,
@@ -359,6 +364,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             exceeded_message=f"LiteLLM User: {user_id}, exceeded budget for model={model}",
         )
 
+    @with_service_target("model_budgets")
     async def is_end_user_within_model_budget(
         self,
         end_user_id: str,
@@ -379,6 +385,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             exceeded_message=f"LiteLLM End User: {end_user_id}, exceeded budget for model={model}",
         )
 
+    @with_service_target("model_budgets")
     async def is_team_within_model_budget(
         self,
         team_id: str,
@@ -474,6 +481,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return await self.dual_cache.async_get_cache(key=spend_key)
         return await redis_cache.async_get_cache(key=spend_key)
 
+    @with_service_target("model_budgets")
     async def async_filter_deployments(
         self,
         model: str,
@@ -484,11 +492,12 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     ) -> list[dict]:
         return healthy_deployments
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    @with_service_target("model_budgets")
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         Track spend for virtual key + model in DualCache
 
-        Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
+        Example: key=$LITELLM_API_KEY, model=gpt-4o, max_budget=100, time_period=1d
         """
         verbose_proxy_logger.debug("in RouterBudgetLimiting.async_log_success_event")
         standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
@@ -618,3 +627,6 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             key=marker_key, value=1, ttl=ttl_seconds, refresh_ttl=True
         )
         return polls == 1
+
+
+PROXY_VirtualKeyModelMaxBudgetLimiter = _PROXY_VirtualKeyModelMaxBudgetLimiter

@@ -12,6 +12,7 @@ from litellm._internal_context import is_internal_call
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.rust_bridge import callbacks_legacy_python as legacy
 from litellm.rust_bridge.callbacks_legacy_python import failure_handler, setup
+from litellm.types.utils import ModelResponse
 
 _OCR_KWARGS: Final = MappingProxyType(
     {
@@ -33,12 +34,48 @@ def _supplied_logger() -> Logging:
     )
 
 
+def test_native_stream_headers_reach_spend_callbacks() -> None:
+    logger: Final = _supplied_logger()
+    legacy.stream_opened(logger, {"additional_headers": {"llm_provider-request-id": "req_native"}})
+
+    assert logger.stream is True
+    assert logger.model_call_details["response_headers"] == {"llm_provider-request-id": "req_native"}
+
+
 def test_setup_reuses_a_supplied_logger() -> None:
     supplied: Final = _supplied_logger()
     result: Final = setup(
         "aocr", (), {**_OCR_KWARGS, "litellm_logging_obj": supplied}, datetime.datetime.now(), asynchronous=True
     )
     assert result.logger is supplied
+
+
+@pytest.mark.parametrize("explicit_provider", (None, "openai"))
+def test_cache_hit_finalization_preserves_execution_provider_attribution(explicit_provider: str | None) -> None:
+    now: Final = datetime.datetime.now()
+    kwargs: Final = {
+        "model": "openai/cache-test-model",
+        "messages": [{"role": "user", "content": "hello"}],
+        "custom_llm_provider": explicit_provider,
+        "metadata": {"user_api_key": "key-hash"},
+    }
+    prepared: Final = setup("acompletion", (), kwargs, now, asynchronous=True)
+    legacy.update_logging(
+        prepared.logger,
+        prepared.kwargs,
+        "resolved-cache-model",
+        {},
+        {**prepared.logger.litellm_params, "custom_llm_provider": "azure"},
+        "azure",
+    )
+    prepared.logger.model_call_details.update({"cache_hit": True, "cache_key": "cached-response"})
+    response: Final = ModelResponse(model="cache-test-model")
+    legacy.finalize(response, prepared.logger, prepared.kwargs, now, now)
+    assert prepared.logger.model_call_details["custom_llm_provider"] == "azure"
+    assert prepared.logger.model_call_details["model"] == "resolved-cache-model"
+    assert prepared.logger.litellm_params["metadata"]["user_api_key"] == "key-hash"
+    assert response._hidden_params["cache_key"] == "cached-response"
+    assert response._hidden_params["response_cost"] == 0
 
 
 @pytest.mark.parametrize(
@@ -130,9 +167,7 @@ def test_failure_handler_of_an_internal_call_leaves_the_outer_budget_reservation
     pending.close()
 
 
-CONTRACT_PATH: Final = (
-    Path(__file__).parents[3] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"
-)
+CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"
 
 
 def test_the_rust_contract_matches_the_shim_signatures() -> None:

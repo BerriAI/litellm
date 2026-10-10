@@ -406,7 +406,7 @@ class VertexChirpRealtimeConfig(BaseRealtimeConfig):
         realtime_response_transform_input: RealtimeResponseTransformInput,
     ) -> RealtimeResponseTypedDict:
         frame: Final = _STREAMING_EVENT_ADAPTER.validate_json(message)
-        events: Final = list(self._transformer.transform(frame))  # mutable-ok: response field is a list
+        events: Final = list(self._transformer.transform(frame))
         result: Final[RealtimeResponseTypedDict] = {
             "response": events,
             "current_output_item_id": realtime_response_transform_input.get("current_output_item_id"),

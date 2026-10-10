@@ -12,14 +12,34 @@
 
 # Read-only analytics and spend reporting; observability, not Terraform-managed state
 GET /agent/daily/activity
+GET /agent/daily/activity/aggregated
+GET /agent/daily/activity/aggregated/keys
+GET /agent/daily/activity/aggregated/model_top_keys
+GET /agent/daily/activity/aggregated/search
+GET /agent/daily/activity/export
 GET /customer/daily/activity
+GET /customer/daily/activity/aggregated
+GET /customer/daily/activity/aggregated/keys
+GET /customer/daily/activity/aggregated/model_top_keys
+GET /customer/daily/activity/aggregated/search
+GET /customer/daily/activity/export
 GET /guardrails/usage/detail/{guardrail_id}
 GET /guardrails/usage/logs
 GET /guardrails/usage/overview
 GET /key/spend/report
 GET /organization/daily/activity
+GET /organization/daily/activity/aggregated
+GET /organization/daily/activity/aggregated/keys
+GET /organization/daily/activity/aggregated/model_top_keys
+GET /organization/daily/activity/aggregated/search
+GET /organization/daily/activity/export
 GET /organization/spend/report
 GET /tag/daily/activity
+GET /tag/daily/activity/aggregated
+GET /tag/daily/activity/aggregated/keys
+GET /tag/daily/activity/aggregated/model_top_keys
+GET /tag/daily/activity/aggregated/search
+GET /tag/daily/activity/export
 GET /tag/dau
 GET /tag/distinct
 GET /tag/mau
@@ -28,17 +48,24 @@ GET /tag/user-agent/per-user-analytics
 GET /tag/wau
 GET /team/daily/activity
 GET /team/daily/activity/aggregated
-GET /team/daily/activity/export
+GET /team/daily/activity/aggregated/keys
+GET /team/daily/activity/aggregated/model_top_keys
 GET /team/daily/activity/aggregated/search
+GET /team/daily/activity/export
 GET /team/spend/by_user
 GET /team/spend/report
 GET /user/daily/activity
 GET /user/daily/activity/aggregated
+GET /user/daily/activity/aggregated/keys
+GET /user/daily/activity/aggregated/cache_leakage_keys
+GET /user/daily/activity/aggregated/model_top_keys
 GET /user/daily/activity/aggregated/search
+GET /user/daily/activity/export
 GET /user/spend/report
 
 # Admin UI helper endpoints; serve UI forms and caller-scoped views, not desired state
 GET /budget/settings
+GET /credentials/{credential_name}/jwks
 GET /router/fields
 GET /guardrails/ui/add_guardrail_settings
 GET /guardrails/ui/category_yaml/{category_name}
@@ -101,6 +128,13 @@ PATCH /prompts/{prompt_id}
 PATCH /team/{team_id}
 POST /team/model/add
 POST /team/model/delete
+
+# Per-user OAuth connections managed by the calling user through the dashboard
+# device flow; caller-scoped tokens, not Terraform-managed state
+GET /credentials/user_connections
+POST /credentials/{credential_name}/user_connection/start
+POST /credentials/{credential_name}/user_connection/poll
+DELETE /credentials/{credential_name}/user_connection
 
 # Known gaps awaiting a resource or data source; remove the entry when it lands
 GET /credentials                                  # known gap: plural credentials data source

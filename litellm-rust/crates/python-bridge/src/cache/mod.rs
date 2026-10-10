@@ -1,24 +1,16 @@
-mod activation;
-mod binding;
-mod callback;
-mod config;
-mod embedder;
-mod facade;
-mod future;
-mod handle;
-mod identity;
 mod native;
-mod request;
-mod resolver;
-mod semantic;
+mod python;
+mod selection;
+
+pub(crate) use native::NativeCacheHandle;
+pub(crate) use python::{CacheCall, PythonCache};
+pub(crate) use selection::{Cached, Selection, admit_native, configure, configured_native};
 
 use litellm_cache::Error;
 use pyo3::{
     exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError},
     prelude::*,
 };
-
-pub(crate) use self::{binding::ResolvedCache, handle::CacheTestHandle, resolver::CacheResolver};
 
 fn cache_error(error: Error) -> PyErr {
     match error {

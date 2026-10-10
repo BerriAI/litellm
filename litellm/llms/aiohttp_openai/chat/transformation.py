@@ -7,9 +7,11 @@ https://github.com/BerriAI/litellm/issues/6592
 New config to ensure we introduce this without causing breaking changes for users
 """
 
+from collections.abc import Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 from aiohttp import ClientResponse
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.types.llms.openai import AllMessageValues
@@ -22,6 +24,10 @@ if TYPE_CHECKING:
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECTS: Final = TypeAdapter(
+    Iterable[Mapping[str, object]], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 
 
 class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
@@ -73,7 +79,9 @@ class AiohttpOpenAIChatConfig(OpenAILikeChatConfig):
     ) -> ModelResponse:
         _json_response: Final = await raw_response.json()
         model_response.id = _json_response.get("id")
-        model_response.choices = [Choices(**choice) for choice in _json_response.get("choices")]
+        model_response.choices = [
+            Choices.model_validate(choice) for choice in _JSON_OBJECTS.validate_python(_json_response.get("choices"))
+        ]
         model_response.created = _json_response.get("created")
         model_response.model = _json_response.get("model")
         model_response.object = _json_response.get("object")

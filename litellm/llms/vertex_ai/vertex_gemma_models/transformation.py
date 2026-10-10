@@ -18,7 +18,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     HTTPHandler,
-    _get_httpx_client,
+    get_httpx_client,
 )
 from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.vertex_ai.common_utils import VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS
@@ -51,7 +51,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
         super().__init__()
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        return [  # mutable-ok: get_optional_params extends the returned list with allowed_openai_params
+        return [
             param
             for param in super().get_supported_openai_params(model=model)
             if param not in VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS
@@ -143,7 +143,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
     def _unwrap_predictions_response(
         self,
         response_json: dict[str, Any],
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Unwrap the Vertex Gemma predictions format to OpenAI format.
 
@@ -192,7 +192,7 @@ class VertexGemmaConfig(OpenAIGPTConfig):
                 json=request_data,
                 timeout=timeout,
             )
-        return _get_httpx_client().post(
+        return get_httpx_client().post(
             url=api_base,
             headers=headers,
             json=request_data,

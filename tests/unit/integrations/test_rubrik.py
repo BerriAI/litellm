@@ -302,6 +302,24 @@ class TestBatchLogging:
         handler.async_httpx_client.post.assert_called_once()
         assert len(handler.log_queue) == 0
 
+    async def test_flush_queue_does_not_inherit_guardrail_timeout(self, mock_env):
+        with patch("asyncio.create_task", Mock()):
+            handler = RubrikLogger(timeout=0.5)
+        handler.log_queue = [{"msg": "a"}]
+        sent: list[dict] = []
+
+        async def capture(**kwargs):
+            sent.append(kwargs)
+            return Mock()
+
+        handler.async_httpx_client = AsyncMock()
+        handler.async_httpx_client.post = capture
+
+        await handler.flush_queue()
+
+        assert handler.timeout == 0.5
+        assert [call.get("timeout") for call in sent] == [None], sent
+
     async def test_flush_queue_preserves_events_added_during_send(self, handler):
         handler.log_queue = [{"msg": "a"}, {"msg": "b"}]
 

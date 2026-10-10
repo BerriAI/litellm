@@ -1,7 +1,9 @@
 """Status-code matrix for every management route that admits a team admin today.
 
 Each route is called as a proxy admin, an admin of the target team, a plain member, an admin of another team
-and a teamless user. The expected codes pin current behaviour so the shared team-admin gate can prove parity.
+and a teamless user. It is called again on a team that belongs to an organization, as an admin of that
+organization and as an admin of another organization. The expected codes pin current behaviour so the shared
+team-admin gate can prove parity.
 """
 
 from __future__ import annotations
@@ -28,8 +30,17 @@ from tests.integration._support.client import (
 )
 from tests.integration._support.database import read_rows
 
-Caller = Literal["proxy_admin", "team_admin", "member", "other_team_admin", "outsider"]
-CALLERS: Final[tuple[Caller, ...]] = ("proxy_admin", "team_admin", "member", "other_team_admin", "outsider")
+Caller = Literal["proxy_admin", "team_admin", "member", "other_team_admin", "outsider", "org_admin", "other_org_admin"]
+CALLERS: Final[tuple[Caller, ...]] = (
+    "proxy_admin",
+    "team_admin",
+    "member",
+    "other_team_admin",
+    "outsider",
+    "org_admin",
+    "other_org_admin",
+)
+ORG_CALLERS: Final[frozenset[Caller]] = frozenset({"org_admin", "other_org_admin"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -45,7 +56,6 @@ class TeamScenario:
 
     scenario: Scenario
     team_id: str
-    other_team_id: str
     keys: Mapping[Caller, str]
     request_id: str
     since: datetime
@@ -104,7 +114,9 @@ class Route:
     member: int | None = None
     other_team_admin: int | None = None
     outsider: int | None = None
-    permission: str = ""
+    org_admin: int | None = None
+    other_org_admin: int | None = None
+    permission: tuple[str, ...] = ()
     cleanup: Callable[[TeamScenario, dict[str, JsonValue]], None] | None = None
 
     def expected(self, caller: Caller) -> int | None:
@@ -119,6 +131,10 @@ class Route:
                 return self.others if self.other_team_admin is None else self.other_team_admin
             case "outsider":
                 return self.others if self.outsider is None else self.outsider
+            case "org_admin":
+                return self.others if self.org_admin is None else self.org_admin
+            case "other_org_admin":
+                return self.others if self.other_org_admin is None else self.other_org_admin
             case _:
                 assert_never(caller)
 
@@ -186,48 +202,48 @@ def _delete_model(s: TeamScenario, created: dict[str, JsonValue]) -> None:
 ROUTES: Final[tuple[Route, ...]] = (
     Route("member_add_user",
           lambda s: Call("POST", "/team/member_add", {"team_id": s.team_id, "member": {"role": "user", "user_id": s.user()}}),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("member_add_admin",
           lambda s: Call("POST", "/team/member_add", {"team_id": s.team_id, "member": {"role": "admin", "user_id": s.user()}}),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("member_update_budget",
           lambda s: Call("POST", "/team/member_update", {"team_id": s.team_id, "user_id": s.member(), "max_budget_in_team": 5}),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("member_update_role_admin",
           lambda s: Call("POST", "/team/member_update", {"team_id": s.team_id, "user_id": s.member(), "role": "admin"}),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("member_delete",
           lambda s: Call("POST", "/team/member_delete", {"team_id": s.team_id, "user_id": s.member()}),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("members_bulk_delete",
           lambda s: Call("POST", f"/management/v1/teams/{s.team_id}/members/bulk_delete", {"members": [{"user_id": s.member()}]}),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("members_bulk_update",
           lambda s: Call("POST", f"/management/v1/teams/{s.team_id}/members/bulk_update",
                          {"members": [{"user_id": s.member(), "max_budget_in_team": 10}]}),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("member_reset_spend",
           lambda s: Call("POST", f"/team/{s.team_id}/member/{s.member()}/reset_spend", {"reset_to": 0}),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("member_reset_budget",
           lambda s: Call("POST", f"/team/{s.team_id}/member/{s.member()}/reset_budget"),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("invitation_new",
           lambda s: Call("POST", "/invitation/new", {"user_id": s.member()}),
           team_admin=200, others=400),
     Route("invitation_delete",
           lambda s: Call("POST", "/invitation/delete", {"invitation_id": s.invitation()}),
-          team_admin=200, others=400, other_team_admin=403),
+          team_admin=200, others=400, other_team_admin=403, org_admin=403, other_org_admin=403),
     Route("user_info_v2",
           lambda s: Call("GET", f"/v2/user/info?user_id={s.member()}"),
           team_admin=200, others=404),
     Route("permissions_update",
           lambda s: Call("POST", "/team/permissions_update",
                          {"team_id": s.team_id, "team_member_permissions": ["/key/info", "/key/health"]}),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("permissions_list",
           lambda s: Call("GET", f"/team/permissions_list?team_id={s.team_id}"),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("key_generate_team",
           lambda s: Call("POST", "/key/generate", {"team_id": s.team_id}),
           team_admin=200, others=400, member=401, cleanup=_delete_key),
@@ -242,7 +258,7 @@ ROUTES: Final[tuple[Route, ...]] = (
           team_admin=403, others=403),
     Route("key_update_member_key_permitted",
           lambda s: Call("POST", "/key/update", {"key": s.member_key(), "max_budget": 5}),
-          team_admin=200, others=403, permission="member_key_budgets"),
+          team_admin=200, others=403, permission=("member_key_budgets",)),
     Route("team_key_bulk_update",
           lambda s: Call("POST", "/team/key/bulk_update",
                          {"team_id": s.team_id, "all_keys_in_team": True, "update_fields": {"max_budget": 5}}),
@@ -258,10 +274,10 @@ ROUTES: Final[tuple[Route, ...]] = (
           team_admin=200, others=403),
     Route("key_block",
           lambda s: Call("POST", "/key/block", {"key": s.member_key()}),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("key_unblock",
           lambda s: Call("POST", "/key/unblock", {"key": s.member_key()}),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("key_list_team",
           lambda s: Call("GET", f"/key/list?team_id={s.team_id}&include_team_keys=true&return_full_object=true"),
           team_admin=200, others=403, member=200),
@@ -291,31 +307,37 @@ ROUTES: Final[tuple[Route, ...]] = (
           team_admin=200, others=403),
     Route("callback_add",
           lambda s: Call("POST", f"/team/{s.team_id}/callback", _callback_body(s.callback_name())),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("callback_get",
           lambda s: Call("GET", f"/team/{s.team_id}/callback"),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("callback_delete",
           lambda s: Call("DELETE", f"/team/{s.team_id}/callback/{s.callback()}"),
-          team_admin=200, others=403),
+          team_admin=200, others=403, org_admin=200),
     Route("disable_logging",
           lambda s: Call("POST", f"/team/{s.team_id}/disable_logging"),
           team_admin=401, others=401),
     Route("team_info",
           lambda s: Call("GET", f"/team/info?team_id={s.team_id}"),
-          team_admin=200, others=403, member=200),
+          team_admin=200, others=403, member=200, org_admin=200),
     Route("team_update_budget",
           lambda s: Call("POST", "/team/update", {"team_id": s.team_id, "max_budget": 5}),
-          team_admin=403, others=403),
+          team_admin=403, others=403, org_admin=200),
     Route("team_update_budget_permitted",
-          lambda s: Call("POST", "/team/update", {"team_id": s.team_id, "max_budget": 7}),
-          team_admin=200, others=403, permission="max_budget"),
+          lambda s: Call("POST", "/team/update", {"team_id": s.team_id, "max_budget": 4}),
+          team_admin=200, others=403, org_admin=200, permission=("max_budget",)),
+    Route("team_update_budget_raise",
+          lambda s: Call("POST", "/team/update", {"team_id": s.team_id, "max_budget": 6}),
+          team_admin=403, others=403, org_admin=200, permission=("max_budget",)),
+    Route("team_update_budget_raise_permitted",
+          lambda s: Call("POST", "/team/update", {"team_id": s.team_id, "max_budget": 6}),
+          team_admin=200, others=403, org_admin=200, permission=("max_budget", "raise_max_budget")),
     Route("project_new",
           lambda s: Call("POST", "/project/new", {"team_id": s.team_id, "project_alias": f"matrix-{uuid.uuid4().hex}"}),
           team_admin=403, others=403, cleanup=_delete_project),
     Route("project_new_permitted",
           lambda s: Call("POST", "/project/new", {"team_id": s.team_id, "project_alias": f"matrix-{uuid.uuid4().hex}"}),
-          team_admin=200, others=403, permission="projects", cleanup=_delete_project),
+          team_admin=200, others=403, permission=("projects",), cleanup=_delete_project),
     Route("team_delete",
           lambda s: Call("POST", "/team/delete", {"team_ids": [s.team_id]}),
           team_admin=401, others=401, proxy_admin=None),
@@ -336,6 +358,23 @@ def _cases() -> Iterator[tuple[Route, Caller]]:
 CASES: Final = tuple(_cases())
 
 
+def _team_scenario(scenario: Scenario, team_id: str, keys: Mapping[Caller, str]) -> TeamScenario:
+    since: Final = datetime.now(timezone.utc) - timedelta(days=1)
+    until: Final = since + timedelta(days=2)
+    scenario.gateway.chat(scenario.model(), key=keys["team_admin"])
+    rows: Final = eventually(
+        lambda: _spend_rows(scenario.gateway, team_id, since, until), lambda found: len(found) > 0, seconds=30
+    )
+    return TeamScenario(
+        scenario=scenario,
+        team_id=team_id,
+        keys=keys,
+        request_id=string_value(object_value(rows[0])["request_id"]),
+        since=since,
+        until=until,
+    )
+
+
 @pytest.fixture(scope="module")
 def shared() -> Iterator[TeamScenario]:
     with gateway_from_environment() as gateway, gateway.scenario() as scenario:
@@ -354,33 +393,55 @@ def shared() -> Iterator[TeamScenario]:
                 "outsider": scenario.key(user_id=outsider),
             }
         )
-        since: Final = datetime.now(timezone.utc) - timedelta(days=1)
-        until: Final = since + timedelta(days=2)
-        gateway.chat(scenario.model(), key=keys["team_admin"])
-        rows: Final = eventually(
-            lambda: _spend_rows(gateway, team_id, since, until), lambda found: len(found) > 0, seconds=30
+        yield _team_scenario(scenario, team_id, keys)
+
+
+@pytest.fixture(scope="module")
+def org_team() -> Iterator[TeamScenario]:
+    with gateway_from_environment() as gateway, gateway.scenario() as scenario:
+        organization_id: Final = scenario.organization()
+        other_organization_id: Final = scenario.organization()
+        team_id: Final = scenario.team(organization_id=organization_id)
+        team_admin: Final = scenario.member(team_id, role="admin")
+        org_admin: Final = scenario.org_member(organization_id, role="org_admin")
+        other_org_admin: Final = scenario.org_member(other_organization_id, role="org_admin")
+        keys: Final[Mapping[Caller, str]] = MappingProxyType(
+            {
+                "team_admin": scenario.key(user_id=team_admin, team_id=team_id),
+                "org_admin": scenario.key(user_id=org_admin),
+                "other_org_admin": scenario.key(user_id=other_org_admin),
+            }
         )
-        yield TeamScenario(
-            scenario=scenario,
-            team_id=team_id,
-            other_team_id=other_team_id,
-            keys=keys,
-            request_id=string_value(object_value(rows[0])["request_id"]),
-            since=since,
-            until=until,
-        )
+        yield _team_scenario(scenario, team_id, keys)
+
+
+_BUDGET_BEFORE: Final = 5.0
+_BUDGET_ROUTES: Final[Mapping[str, float]] = MappingProxyType(
+    {
+        "team_update_budget_permitted": 4.0,
+        "team_update_budget_raise": 6.0,
+        "team_update_budget_raise_permitted": 6.0,
+    }
+)
 
 
 @pytest.mark.parametrize(("route", "caller"), CASES, ids=tuple(f"{route.name}[{caller}]" for route, caller in CASES))
-def test_status_code(shared: TeamScenario, route: Route, caller: Caller) -> None:
-    with shared.gateway.scenario() as scenario:
-        s: Final = replace(shared, scenario=scenario)
+def test_status_code(shared: TeamScenario, org_team: TeamScenario, route: Route, caller: Caller) -> None:
+    team: Final = org_team if caller in ORG_CALLERS else shared
+    with team.gateway.scenario() as scenario:
+        s: Final = replace(team, scenario=scenario)
+        if route.name in _BUDGET_ROUTES:
+            s.gateway.post("/team/update", {"team_id": s.team_id, "max_budget": _BUDGET_BEFORE})
         if route.permission:
-            scenario.cleanups.enter_context(team_admin_permissions(s.gateway, (route.permission,)))
+            scenario.cleanups.enter_context(team_admin_permissions(s.gateway, route.permission))
         call: Final = route.call(s)
         response: Final = s.gateway.request(call.method, call.path, call.body, key=s.keys[caller])
         assert response.status_code == route.expected(caller), (
             f"{caller} {call.method} {call.path}: {response.status_code} {response.text}"
         )
+        if route.name in _BUDGET_ROUTES:
+            assert read_rows(
+                'SELECT max_budget FROM "LiteLLM_TeamTable" WHERE team_id = %s', (s.team_id,)
+            ) == [{"max_budget": _BUDGET_ROUTES[route.name] if response.status_code == 200 else _BUDGET_BEFORE}]
         if response.status_code == 200 and route.cleanup is not None:
             route.cleanup(s, object_value(response.json()))

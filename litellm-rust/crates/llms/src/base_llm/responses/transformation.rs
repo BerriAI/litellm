@@ -1,7 +1,40 @@
-use litellm_types::responses::streaming_websocket::ResponsesWsEvent;
+use litellm_llms_types::formats::responses::{
+    ResponsesApiResponse, streaming_websocket::ResponsesWsEvent,
+};
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
-use crate::Error;
+use crate::{Error, base_llm::auth::ValidatedEnvironment};
+
+pub trait BaseResponsesApiConfig: Sync {
+    fn secret_names(
+        &self,
+        api_key: Option<&str>,
+        api_base: Option<&str>,
+    ) -> &'static [&'static str];
+
+    fn validate_environment(
+        &self,
+        headers: Vec<(String, String)>,
+        api_key: Option<&str>,
+        lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<ValidatedEnvironment, Error>;
+
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> String;
+
+    fn transform_responses_api_request(
+        &self,
+        model: &str,
+        input: Value,
+        params: Map<String, Value>,
+    ) -> Result<Value, Error>;
+
+    fn transform_response_api_response(&self, body: Value) -> Result<ResponsesApiResponse, Error>;
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ResponsesWsTransformResult {

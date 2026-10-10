@@ -3,7 +3,48 @@ use std::fmt;
 use litellm_auth_types::SecretValue;
 use serde::Deserialize;
 
-use crate::{AdditionalFields, Flag, NumberOrString, Object, OneOrMany, Value};
+use crate::{AdditionalFields, Object, Spelled, Value, value::one_or_many};
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TracingStoreKind {
+    Clickhouse,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClickHouseStoreSettings {
+    #[serde(rename = "type")]
+    pub kind: TracingStoreKind,
+    pub url: Option<SecretValue>,
+    pub database: Option<String>,
+    pub retention_days: Option<Spelled<f64>>,
+}
+
+impl fmt::Debug for ClickHouseStoreSettings {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("ClickHouseStoreSettings")
+            .field("kind", &self.kind)
+            .field("database", &self.database)
+            .field("retention_days", &self.retention_days)
+            .finish()
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(untagged)]
+pub enum TracingStoreSettings {
+    ClickHouse(ClickHouseStoreSettings),
+}
+
+#[derive(Clone, Default, Debug, Deserialize)]
+#[serde(default)]
+pub struct TracingSettings {
+    pub store: Option<TracingStoreSettings>,
+    #[serde(flatten)]
+    pub additional_fields: AdditionalFields,
+}
 
 #[derive(Clone, Deserialize)]
 #[serde(default)]
@@ -14,6 +55,7 @@ pub struct GeneralSettings {
     pub admission_queue_timeout_seconds: f64,
     pub master_key: Option<SecretValue>,
     pub database_url: Option<SecretValue>,
+    pub tracing: Option<TracingSettings>,
     pub database_connection_pool_limit: Option<u64>,
     pub database_connection_timeout: Option<f64>,
     pub database_connect_timeout: Option<f64>,
@@ -35,6 +77,8 @@ pub struct GeneralSettings {
     pub dangerously_permit_weak_or_unset_master_key: Option<bool>,
     pub plugins: Option<Box<[Object]>>,
     pub coordination_redis: Option<Object>,
+    pub mcp_allowed_hosts: Option<Box<[String]>>,
+    pub mcp_allowed_origins: Box<[String]>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }
@@ -48,6 +92,7 @@ impl Default for GeneralSettings {
             admission_queue_timeout_seconds: 1.0,
             master_key: None,
             database_url: None,
+            tracing: None,
             database_connection_pool_limit: Some(10),
             database_connection_timeout: Some(60.0),
             database_connect_timeout: None,
@@ -69,6 +114,8 @@ impl Default for GeneralSettings {
             dangerously_permit_weak_or_unset_master_key: None,
             plugins: None,
             coordination_redis: None,
+            mcp_allowed_hosts: None,
+            mcp_allowed_origins: Box::default(),
             additional_fields: AdditionalFields::new(),
         }
     }
@@ -93,6 +140,7 @@ impl fmt::Debug for GeneralSettings {
             )
             .field("master_key", &self.master_key)
             .field("database_url", &self.database_url)
+            .field("tracing", &self.tracing)
             .field("store_model_in_db", &self.store_model_in_db)
             .field("additional_fields", &self.additional_fields.keys())
             .finish_non_exhaustive()
@@ -159,7 +207,7 @@ impl fmt::Debug for RouterSettings {
 #[derive(Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct LiteLlmSettings {
-    pub ssl_verify: Option<Flag>,
+    pub ssl_verify: Option<Spelled<bool>>,
     pub ssl_certificate: Option<String>,
     pub ssl_security_level: Option<String>,
     pub ssl_ecdh_curve: Option<String>,
@@ -168,14 +216,17 @@ pub struct LiteLlmSettings {
     pub aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_trust_env: Option<bool>,
     pub disable_aiohttp_transport: Option<bool>,
-    pub drop_params: Option<Flag>,
-    pub request_timeout: Option<NumberOrString>,
+    pub drop_params: Option<Spelled<bool>>,
+    pub request_timeout: Option<Spelled<f64>>,
     pub num_retries: Option<u64>,
     pub cache: Option<bool>,
     pub cache_params: Option<Object>,
-    pub callbacks: Option<OneOrMany<Value>>,
-    pub success_callback: Option<OneOrMany<Value>>,
-    pub failure_callback: Option<OneOrMany<Value>>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub callbacks: Option<Vec<Value>>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub success_callback: Option<Vec<Value>>,
+    #[serde(deserialize_with = "one_or_many")]
+    pub failure_callback: Option<Vec<Value>>,
     pub json_logs: Option<bool>,
     pub set_verbose: Option<bool>,
     #[serde(flatten)]

@@ -1,9 +1,11 @@
+import json
 from datetime import datetime
 from typing import Annotated, Any, Final, Literal
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, Field, TypeAdapter, field_validator, model_validator
+from pydantic import AfterValidator, ConfigDict, Field, TypeAdapter, field_validator, model_validator
 from typing_extensions import Self
 
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
     MCPAuth,
@@ -12,20 +14,21 @@ from litellm.types.mcp import (
     MCPTransportType,
     MCPUpstreamProtocol,
     normalize_upstream_header_name,
+    validate_mcp_protocol_transport,
 )
 
 
 # MCPInfo now allows arbitrary additional fields for custom metadata
 def _validate_mcp_protocol_metadata(value: dict[str, object]) -> dict[str, object]:
     if "protocol_version" in value:
-        TypeAdapter(MCPUpstreamProtocol).validate_python(value["protocol_version"])
+        TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(value["protocol_version"])
     return value
 
 
 MCPInfo = Annotated[dict[str, Any], AfterValidator(_validate_mcp_protocol_metadata)]
 
 
-class MCPOAuthMetadata(BaseModel):
+class MCPOAuthMetadata(LiteLLMBaseModel):
     scopes: list[str] | None = None
     """Resource-driven scopes for the authorization request: the RFC 9728 protected-resource
     ``scopes_supported``, or the ``scope`` from the WWW-Authenticate 401 challenge when the resource
@@ -36,6 +39,8 @@ class MCPOAuthMetadata(BaseModel):
     authorization_url: str | None = None
     token_url: str | None = None
     registration_url: str | None = None
+    client_id_metadata_document_supported: bool | None = None
+    authorization_response_iss_parameter_supported: bool = False
     discovered_issuer: str | None = None
     """The ``issuer`` the authorization-server metadata document self-attests (RFC 8414). Persisted
     trust-on-first-use as the server's ``issuer`` when none is configured, so that later rebuilds
@@ -47,7 +52,7 @@ class MCPOAuthMetadata(BaseModel):
     usable in memory but must never be persisted as configuration."""
 
 
-class MCPOAuthIdentityBinding(BaseModel):
+class MCPOAuthIdentityBinding(LiteLLMBaseModel):
     """Per-server policy binding stored per-user OAuth credentials to the authenticated LiteLLM caller.
 
     When enabled for an interactive oauth2 server, the token relay validates the upstream OIDC
@@ -67,7 +72,24 @@ class MCPOAuthIdentityBinding(BaseModel):
     require_email_verified: bool = True
 
 
-class MCPServer(BaseModel):
+class PinnedMCPTool(LiteLLMBaseModel):
+    """One tool of an admin-pinned catalog: the description and input schema tools/list keeps serving."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    description: str = ""
+    input_schema: dict[str, object] = Field(default_factory=dict)
+
+
+_PINNED_TOOLS: Final[TypeAdapter[dict[str, PinnedMCPTool] | None]] = TypeAdapter(dict[str, PinnedMCPTool] | None)
+
+
+def parse_pinned_tools(value: object) -> dict[str, PinnedMCPTool] | None:
+    decoded: Final = json.loads(value) if isinstance(value, str) and value else value
+    return _PINNED_TOOLS.validate_python(decoded or None)
+
+
+class MCPServer(LiteLLMBaseModel):
     server_id: str
     name: str
     alias: str | None = None
@@ -87,6 +109,7 @@ class MCPServer(BaseModel):
     disallowed_tools: list[str] | None = None
     tool_name_to_display_name: dict[str, str] | None = None
     tool_name_to_description: dict[str, str] | None = None
+    pinned_tools: dict[str, PinnedMCPTool] | None = None
     allowed_params: dict[str, list[str]] | None = None  # map of tool names to allowed parameter lists
     static_headers: dict[str, str] | None = None  # static headers to forward to the MCP server
     # Admin-configured env vars. Each entry is {name, value, scope, description}.
@@ -98,6 +121,10 @@ class MCPServer(BaseModel):
     client_secret: str | None = None
     issuer: str | None = None
     issuer_is_anchored: bool = False
+    client_id_metadata_document_supported: bool | None = None
+    authorization_response_iss_parameter_supported: bool = False
+    dcr_issuer: str | None = None
+    dcr_server_url: str | None = None
     scopes: list[str] | None = None
     authorization_url: str | None = None
     token_url: str | None = None
@@ -189,7 +216,7 @@ class MCPServer(BaseModel):
     dcr_bridge: bool | None = None
     per_server_oauth_discovery: bool = False
     is_byok: bool = False
-    byok_description: list[str] = []
+    byok_description: list[str] = Field(default=[])
     byok_api_key_help_url: str | None = None
     source_url: str | None = None
     created_at: datetime | None = None
@@ -212,8 +239,9 @@ class MCPServer(BaseModel):
     # Max concurrent outbound tool calls to this server; excess calls queue.
     # None or a value <= 0 means unlimited.
     max_concurrent_requests: int | None = None
+    rpm: int | None = None
     # Resolved short-ID tool prefix when LITELLM_USE_SHORT_MCP_TOOL_PREFIX is
-    # enabled.  Set by ``MCPServerManager._assign_unique_short_prefix`` at
+    # enabled.  Set by ``MCPServerManager.assign_unique_short_prefix`` at
     # registration time so that natural-hash collisions between two
     # different ``server_id`` values are bumped deterministically.  Left
     # ``None`` in default-prefix mode.
@@ -258,9 +286,10 @@ class MCPServer(BaseModel):
     @model_validator(mode="after")
     def resolve_protocol_version(self) -> Self:
         if "protocol_version" not in self.model_fields_set and self.mcp_info is not None:
-            self.protocol_version = TypeAdapter(MCPUpstreamProtocol).validate_python(
+            self.protocol_version = TypeAdapter[MCPUpstreamProtocol](MCPUpstreamProtocol).validate_python(
                 self.mcp_info.get("protocol_version", "auto")
             )
+        validate_mcp_protocol_transport(self.protocol_version, self.transport)
         return self
 
     @model_validator(mode="after")

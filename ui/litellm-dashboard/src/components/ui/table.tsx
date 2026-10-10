@@ -4,6 +4,8 @@ import * as React from "react";
 
 import { cn } from "@/lib/cva.config";
 
+const NUMERIC_CELL_CLASS = "text-right tabular-nums";
+
 const Table = React.forwardRef<HTMLTableElement, React.ComponentPropsWithoutRef<"table">>(
   ({ className, ...props }, ref) => (
     <div data-slot="table-container" className="relative w-full overflow-x-auto">
@@ -96,4 +98,4 @@ const TableCaption = React.forwardRef<HTMLTableCaptionElement, React.ComponentPr
 );
 TableCaption.displayName = "TableCaption";
 
-export { Table, TableHeader, TableBody, TableFooter, TableHead, TableRow, TableCell, TableCaption };
+export { NUMERIC_CELL_CLASS, Table, TableHeader, TableBody, TableFooter, TableHead, TableRow, TableCell, TableCaption };
