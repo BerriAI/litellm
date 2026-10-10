@@ -6553,7 +6553,7 @@ def embedding(
     )
 
     if mock_response is not None:
-        return mock_embedding(model=model, mock_response=mock_response)
+        return mock_embedding(model=model, embedding_input=input, mock_response=mock_response)
     try:
         response: EmbeddingResponse | Coroutine[object, object, EmbeddingResponse] | None = None
 
