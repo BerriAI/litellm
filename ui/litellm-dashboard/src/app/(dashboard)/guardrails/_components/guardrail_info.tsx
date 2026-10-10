@@ -32,6 +32,7 @@ import {
 } from "./GuardrailFormField";
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
 import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
+import DecisionModelDetails from "./decision_model/DecisionModelDetails";
 import {
   formatGuardrailMode,
   getGuardrailLogoAndName,
@@ -866,6 +867,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                         {guardrailData.litellm_params?.default_on ? "Yes" : "No"}
                       </Badge>
                     </div>
+                    <DecisionModelDetails litellmParams={guardrailData.litellm_params} />
 
                     {guardrailData.litellm_params?.pii_entities_config &&
                       Object.keys(guardrailData.litellm_params.pii_entities_config).length > 0 && (
