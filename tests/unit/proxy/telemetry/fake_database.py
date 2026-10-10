@@ -7,17 +7,18 @@ from typing_extensions import LiteralString
 
 @dataclass
 class SettingsDatabase:
-    """In-memory ``LiteLLM_Config`` holding the telemetry instance id and stored groups"""
+    """In-memory ``LiteLLM_Config`` holding the telemetry instance id, hash secret and stored groups"""
 
     stored_groups: str | None = None
     fail_reads: bool = False
     instance_id: str = "persisted-install"
+    hash_secret: str = "persisted-secret"
 
     async def query_raw(self, query: LiteralString, *args: object) -> object:
         if self.fail_reads:
             raise OSError("db down")
-        if "AS instance_id" in query:
-            return ({"instance_id": self.instance_id},)
+        if "AS value" in query:
+            return ({"value": self.instance_id if args[0] == "telemetry_instance_id" else self.hash_secret},)
         stored: Final = self.stored_groups
         return () if stored is None else ({"param_value": json.loads(stored)},)
 
