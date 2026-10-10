@@ -129,6 +129,36 @@ def _breakpoint_of(part: object) -> object:
     return content_part.get("prompt_cache_breakpoint")
 
 
+def _foldable_system_text(block: object) -> str | None:
+    if isinstance(block, str):
+        return block
+    if not isinstance(block, dict):
+        return None
+    text_block: Final = cast(dict[str, object], block)  # cast-ok: isinstance confirms a content block mapping
+    text: Final = text_block.get("text")
+    if text_block.get("type") != "text" or not isinstance(text, str) or _breakpoint_of(text_block) is not None:
+        return None
+    return text
+
+
+def _system_text_for_instructions(message: Mapping[str, object]) -> str | None:
+    """A leading system message's text for ``instructions``, or None to keep it a positioned input item.
+
+    List content folds when every block is plain text, the shape a client attaching cache_control sends.
+    A non-text block (an image, say) would be lost in a string, and a prompt_cache_breakpoint only rides
+    on an input item's content block, so either keeps the message an input item.
+    """
+    content: Final = message.get("content", "")
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return None
+    blocks: Final = cast(list[object], content)  # cast-ok: isinstance confirms a list of content blocks
+    texts: Final = tuple(text for text in map(_foldable_system_text, blocks) if text is not None)
+    # Newline-joined, empty blocks dropped, as the Anthropic-to-Responses adapter joins the same shape.
+    return "\n".join(filter(None, texts)) if len(texts) == len(blocks) else None
+
+
 def _pending_audio_breakpoint(pending: object, part: object) -> object:
     if not _is_audio_input_part(part):
         return None
@@ -536,13 +566,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             tool_call_id = msg.get("tool_call_id")
 
             if role == "system":
-                # Extract system message as instructions
-                if isinstance(content, str) and index < leading_system_count:
+                # Only the leading run of system messages folds into instructions: a later one stays
+                # a positioned input item so its bytes don't unsettle the cached prefix (#40269).
+                extracted_instructions = _system_text_for_instructions(msg) if index < leading_system_count else None
+                if extracted_instructions is not None:
                     if instructions:
                         # Concatenate multiple system prompts with a space
-                        instructions = f"{instructions} {content}"
+                        instructions = f"{instructions} {extracted_instructions}"
                     else:
-                        instructions = content
+                        instructions = extracted_instructions
                 else:
                     input_items.append(
                         {
@@ -760,8 +792,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         )
         # OpenAI's Responses API rejects an empty input. For a system-only
         # request, carry the system message as a system-role input item instead
-        # of instructions, mirroring how non-string system content is already
-        # handled in convert_chat_completion_messages_to_responses_api.
+        # of instructions.
         is_system_only_request: Final = not converted_input_items and converted_instructions is not None
         target_input_items: Final = (
             _without_audio_input_parts(converted_input_items)

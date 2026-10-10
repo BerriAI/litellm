@@ -3105,6 +3105,50 @@ class TestPatchEdgeBranches:
         user_items = [item for item in result["input"] if item.get("role") == "user"]
         assert _texts(user_items[0]) == [COMPRESSED_MARKER]
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("trailing", [[{"role": "user", "content": "What is the codename?"}], []])
+    async def test_list_content_system_item_rewrite_patches_in_place(self, trailing):
+        """A rewritten list-content system item stays an input item, never moved into instructions."""
+        handler = OpenAIResponsesHandler()
+        data = {
+            "model": "gpt-5.6",
+            "input": [
+                {"role": "system", "content": [{"type": "input_text", "text": "Answer from the memo only."}]},
+                *trailing,
+            ],
+        }
+
+        result = await handler.process_input_messages(
+            data, SystemRewriteGuardrail(rewritten_content=[{"type": "text", "text": COMPRESSED_MARKER}])
+        )
+
+        assert "instructions" not in result
+        assert result["input"] == [
+            {"role": "system", "content": [{"type": "input_text", "text": COMPRESSED_MARKER}]},
+            *trailing,
+        ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "system_content",
+        ["Answer from the memo only.", [{"type": "input_text", "text": "Answer from the memo only."}]],
+    )
+    async def test_fallback_leaving_only_the_system_message_keeps_it_an_input_item(self, system_content):
+        """The Responses API rejects an empty input, so a rebuild left holding only the system
+        message sends it as a system item rather than as instructions over an empty input."""
+        handler = OpenAIResponsesHandler()
+        data = {
+            "model": "gpt-5.6",
+            "input": [{"role": "system", "content": system_content}, {"role": "user", "content": "memo " * 400}],
+        }
+
+        result = await handler.process_input_messages(data, DroppingRewriteGuardrail())
+
+        assert "instructions" not in result
+        assert result["input"] == [
+            {"type": "message", "role": "system", "content": [{"type": "input_text", "text": "Answer from the memo only."}]}
+        ]
+
     def test_item_rewrite_field_ignores_non_string_type(self):
         from litellm.llms.openai.responses.guardrail_translation.handler import _item_rewrite_field
 

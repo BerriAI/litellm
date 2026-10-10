@@ -265,7 +265,12 @@ def _rewritten_input_item(item: Mapping[str, object], rewritten: object) -> Mapp
     rewritten_content: Final = rewritten.get("content")
     if isinstance(item.get(field), str) and isinstance(rewritten_content, str):
         return {**item, field: rewritten_content}
-    rewritten_row: Final = cast("AllMessageValues", rewritten)  # cast-ok: guardrails hand back chat-shaped rows
+    # A lone system row with content would fold into `instructions` and leave no item to patch; as a developer
+    # row its content converts to the same input parts and stays an item.
+    row: Final = cast("Mapping[str, object]", rewritten)  # cast-ok: isinstance confirms a mapping, keyed by field name
+    folds: Final = row.get("role") == "system" and row.get("content") is not None
+    chat_row: Final = {**row, "role": "developer"} if folds else row
+    rewritten_row: Final = cast("AllMessageValues", chat_row)  # cast-ok: guardrails hand back chat-shaped rows
     converted_items, _ = LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(
         [rewritten_row]
     )
@@ -500,6 +505,15 @@ def _patch_or_convert_request_fields(
     input_items, converted_instructions = (
         LiteLLMResponsesTransformationHandler().convert_chat_completion_messages_to_responses_api(structured_messages)
     )
+    if not input_items and converted_instructions is not None:
+        # The Responses API rejects an empty input, so a lone system message stays a system item, as the chat
+        # bridge sends a system-only request.
+        system_item: Final = {
+            "type": "message",
+            "role": "system",
+            "content": [{"type": "input_text", "text": converted_instructions}],
+        }
+        return _RequestFields(input=(system_item,), instructions=None)
     return _RequestFields(input=tuple(input_items), instructions=converted_instructions)
 
 
