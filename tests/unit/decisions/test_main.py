@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
+from concurrent.futures import wait
 from collections.abc import Mapping
 from types import MappingProxyType
 from typing import Final
@@ -9,11 +11,16 @@ from typing import Final
 import httpx
 import pytest
 import respx
+from botocore.auth import SigV4Auth
+from botocore.awsrequest import AWSRequest
+from botocore.credentials import Credentials
 
 import litellm
 from litellm.cost_calculator import get_response_cost_from_hidden_params
+from litellm.constants import AWS_SIGNING_MAX_THREADS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.llms.bedrock.base_aws_llm import AWS_SIGNING_EXECUTOR
 from litellm.types.decisions import (
     ChoiceAnswer,
     DecisionsResponse,
@@ -699,6 +706,33 @@ async def test_strands_decider_without_key_preserves_response_extras(
 
 
 @pytest.mark.asyncio
+async def test_strands_decider_plain_api_base_answers_while_every_aws_signing_thread_is_busy(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    respx_mock.post("https://strands.example/v1/systemone").respond(json=_STRANDS_RESPONSE)
+    release: Final = threading.Event()
+    busy: Final = tuple(AWS_SIGNING_EXECUTOR.submit(release.wait) for _ in range(AWS_SIGNING_MAX_THREADS))
+
+    try:
+        response: Final = await asyncio.wait_for(
+            litellm.adecisions(
+                model="strands_decider/strands-decider-2B-hobson-v19",
+                state="review",
+                questions={"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+                api_base="https://strands.example",
+            ),
+            timeout=5,
+        )
+    finally:
+        release.set()
+        wait(busy)
+
+    assert isinstance(response.answers["severity"], ScoreAnswer)
+
+
+@pytest.mark.asyncio
 async def test_strands_decider_uses_key_from_matching_environment_base(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
@@ -748,6 +782,172 @@ async def test_strands_decider_provider_resolution_and_router_dispatch(
     assert provider_resolution[:2] == ("strands-decider-2B-hobson-v19", "strands_decider")
     assert route.called
     assert response.model == _STRANDS_RESPONSE["model"]
+
+
+_RUNTIME_ARN: Final = "arn:aws:bedrock-agentcore:us-east-1:123456789012:runtime/qa_decider-AbC123xyz0"
+_RUNTIME_URL: Final = (
+    "https://bedrock-agentcore.us-east-1.amazonaws.com/runtimes/"
+    "arn%3Aaws%3Abedrock-agentcore%3Aus-east-1%3A123456789012%3Aruntime%2Fqa_decider-AbC123xyz0/invocations"
+)
+_RUNTIME_CREDENTIALS: Final = Credentials(access_key="AKIDEXAMPLE", secret_key="example-secret")
+_SESSION_HEADER: Final = "x-amzn-bedrock-agentcore-runtime-session-id"
+
+
+def _sigv4_verifies(request: httpx.Request) -> bool:
+    authorization: Final = request.headers["authorization"]
+    signed_names: Final = authorization.split("SignedHeaders=")[1].split(",")[0].split(";")
+    replayed: Final = AWSRequest(
+        method=request.method,
+        url=str(request.url),
+        data=request.content,
+        headers={name: request.headers[name] for name in signed_names},
+    )
+    replayed.context["timestamp"] = request.headers["x-amz-date"]
+    auth: Final = SigV4Auth(_RUNTIME_CREDENTIALS, "bedrock-agentcore", "us-east-1")
+    string_to_sign: Final = auth.string_to_sign(replayed, auth.canonical_request(replayed))
+    return authorization.endswith(f"Signature={auth.signature(string_to_sign, replayed)}")
+
+
+@pytest.mark.parametrize("use_async", [True, False])
+@pytest.mark.asyncio
+async def test_strands_decider_runtime_arn_sends_a_sigv4_signed_invoke_agent_runtime_call(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    use_async: bool,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
+    route: Final = respx_mock.post(_RUNTIME_URL).respond(json=_STRANDS_RESPONSE)
+    call_args: Final[Mapping[str, object]] = {
+        "model": "strands_decider/strands-decider-2B-hobson-v19",
+        "state": "review",
+        "questions": {"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+        "api_base": _RUNTIME_ARN,
+        "aws_access_key_id": _RUNTIME_CREDENTIALS.access_key,
+        "aws_secret_access_key": _RUNTIME_CREDENTIALS.secret_key,
+    }
+
+    response: Final = await litellm.adecisions(**call_args) if use_async else litellm.decisions(**call_args)
+
+    assert route.call_count == 1
+    sent: Final = route.calls[0].request
+    assert _sigv4_verifies(sent)
+    assert json.loads(sent.content)["model"] == "strands-decider-2B-hobson-v19"
+    assert sent.headers[_SESSION_HEADER].startswith("litellm-decider-")
+    assert response.model == _STRANDS_RESPONSE["model"]
+
+
+@pytest.mark.asyncio
+async def test_strands_decider_runtime_arn_router_deployment_answers_openai_format_calls(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "strands",
+                "litellm_params": {
+                    "model": "strands_decider/strands-decider-2B-hobson-v19",
+                    "api_base": _RUNTIME_ARN,
+                    "aws_access_key_id": _RUNTIME_CREDENTIALS.access_key,
+                    "aws_secret_access_key": _RUNTIME_CREDENTIALS.secret_key,
+                    "aws_region_name": "eu-west-1",
+                    "agentcore_runtime_session_id": "pooled-session-0123456789abcdef0123456",
+                },
+            }
+        ]
+    )
+    route: Final = respx_mock.post(_RUNTIME_URL).respond(json=_STRANDS_RESPONSE)
+
+    response: Final = await router.adecisions(
+        model="strands",
+        input="review",
+        extra_headers={_SESSION_HEADER: "caller-session-0123456789abcdef01234567"},
+        questions=[
+            {
+                "type": "score",
+                "name": "severity",
+                "instructions": "How bad?",
+                "levels": [{"label": "none"}, {"label": "low"}, {"label": "high"}],
+            }
+        ],
+    )
+
+    sent: Final = route.calls[0].request
+    assert _sigv4_verifies(sent)
+    assert sent.headers[_SESSION_HEADER] == "pooled-session-0123456789abcdef0123456"
+    assert isinstance(response, OpenAIDecisionResponse)
+
+
+@pytest.mark.asyncio
+async def test_strands_decider_runtime_arn_with_api_key_sends_the_bearer_token_unsigned(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    route: Final = respx_mock.post(_RUNTIME_URL).respond(json=_STRANDS_RESPONSE)
+
+    await litellm.adecisions(
+        model="strands_decider/strands-decider-2B-hobson-v19",
+        state="review",
+        questions={"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+        api_base=_RUNTIME_ARN,
+        api_key="runtime-jwt",
+    )
+
+    sent: Final = route.calls[0].request
+    assert sent.headers["authorization"] == "Bearer runtime-jwt"
+    assert "x-amz-date" not in sent.headers
+    assert _SESSION_HEADER in sent.headers
+
+
+@pytest.mark.parametrize(
+    ("code", "error_class"),
+    [
+        ("bad_request", litellm.BadRequestError),
+        ("loading", litellm.ServiceUnavailableError),
+        ("inference_error", litellm.InternalServerError),
+    ],
+)
+@pytest.mark.asyncio
+async def test_strands_decider_runtime_error_envelope_raises_instead_of_answering(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    code: str,
+    error_class: type[Exception],
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    respx_mock.post(_RUNTIME_URL).respond(json={"error": {"code": code, "message": "at most 16 questions"}})
+
+    with pytest.raises(error_class, match="at most 16 questions"):
+        await litellm.adecisions(
+            model="strands_decider/strands-decider-2B-hobson-v19",
+            state="review",
+            questions={"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+            api_base=_RUNTIME_ARN,
+            aws_access_key_id=_RUNTIME_CREDENTIALS.access_key,
+            aws_secret_access_key=_RUNTIME_CREDENTIALS.secret_key,
+        )
+
+
+@pytest.mark.asyncio
+async def test_strands_decider_plain_api_base_error_envelope_stays_an_unexpected_response(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("STRANDS_DECIDER_API_KEY", raising=False)
+    respx_mock.post("https://strands.example/v1/systemone").respond(
+        json={"error": {"code": "bad_request", "message": "at most 16 questions"}}
+    )
+
+    with pytest.raises(litellm.InternalServerError, match="returned an unexpected response"):
+        await litellm.adecisions(
+            model="strands_decider/strands-decider-2B-hobson-v19",
+            state="review",
+            questions={"severity": {"type": "score", "criteria": ["none", "low", "high"]}},
+            api_base="https://strands.example",
+        )
 
 
 _VLLM_RESPONSE: Final[Mapping[str, object]] = {
