@@ -13,7 +13,7 @@ from fastapi import HTTPException, Request
 
 import litellm
 from litellm._uuid import uuid
-from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse
+from litellm.proxy._types import LiteLLM_UserTable, NewUserResponse, ProxyException, SSOUserDefinedValues
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.management_endpoints.sso import CustomMicrosoftSSO
 from litellm.proxy.management_endpoints.types import CustomOpenID
@@ -21,6 +21,7 @@ from litellm.proxy.management_endpoints.ui_sso import (
     GoogleSSOHandler,
     MicrosoftSSOHandler,
     SSOAuthenticationHandler,
+    _insert_sso_user_or_adopt_concurrent_insert,
     _setup_team_mappings,
     _sync_user_role_from_jwt_role_map,
     normalize_email,
@@ -1179,6 +1180,125 @@ async def test_insert_sso_user_sets_user_alias_from_display_name():
     assert new_user_request.user_id == "S-1-5-21-adfs-user"
     assert new_user_request.user_email == "jane.doe@example.com"
     assert new_user_request.user_alias == "Doe, Jane"
+
+
+RACE_SUBJECT = "sso-race-subject"
+RACE_VALUES: SSOUserDefinedValues = {
+    "models": [],
+    "user_id": RACE_SUBJECT,
+    "user_email": "sso-race-subject@example.com",
+    "max_budget": None,
+    "user_role": "internal_user",
+    "budget_duration": None,
+}
+
+
+class _UniqueViolation(Exception):
+    code = "P2002"
+
+
+def _caused_by(error: ProxyException, cause: Exception) -> ProxyException:
+    error.__cause__ = cause
+    return error
+
+
+def _writer_with_row(row: dict | None) -> MagicMock:
+    prisma = MagicMock()
+    prisma.writer_db.litellm_usertable.find_unique = AsyncMock(return_value=row)
+    return prisma
+
+
+def _failing_insert(error: Exception):
+    async def insert() -> NewUserResponse:
+        raise error
+
+    return insert
+
+
+DUPLICATE_ID = ProxyException(
+    message="User with id sso-race-subject already exists", type="bad_request", param="user_id", code=409
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "conflict",
+    (
+        DUPLICATE_ID,
+        _caused_by(
+            ProxyException(message="insert failed", type="internal_server_error", param=None, code=500),
+            _UniqueViolation("Unique constraint failed on the fields: (`user_id`)"),
+        ),
+    ),
+    ids=("duplicate-id-409", "unique-violation"),
+)
+async def test_concurrent_first_sso_login_adopts_the_row_the_winning_login_inserted(conflict: ProxyException):
+    prisma = _writer_with_row({"user_id": RACE_SUBJECT, "sso_user_id": RACE_SUBJECT, "user_role": "internal_user"})
+
+    user = await _insert_sso_user_or_adopt_concurrent_insert(
+        user_defined_values=RACE_VALUES, prisma_client=prisma, insert=_failing_insert(conflict)
+    )
+
+    assert isinstance(user, LiteLLM_UserTable), user
+    assert (user.user_id, user.sso_user_id, user.user_role) == (RACE_SUBJECT, RACE_SUBJECT, "internal_user")
+    prisma.writer_db.litellm_usertable.find_unique.assert_awaited_once_with(where={"user_id": RACE_SUBJECT})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "row",
+    (
+        None,
+        {"user_id": RACE_SUBJECT, "sso_user_id": "another-sso-subject"},
+        {"user_id": RACE_SUBJECT, "sso_user_id": None},
+    ),
+    ids=("only-the-email-is-taken", "row-bound-to-another-identity", "row-not-bound-to-sso"),
+)
+async def test_concurrent_first_sso_login_refuses_a_conflicting_row_of_another_identity(row: dict | None):
+    conflict = ProxyException(
+        message="User with email already exists", type="bad_request", param="user_email", code=409
+    )
+    prisma = _writer_with_row(row)
+
+    with pytest.raises(ProxyException) as raised:
+        await _insert_sso_user_or_adopt_concurrent_insert(
+            user_defined_values=RACE_VALUES, prisma_client=prisma, insert=_failing_insert(conflict)
+        )
+
+    assert raised.value is conflict
+
+
+@pytest.mark.asyncio
+async def test_first_sso_login_reraises_an_unrelated_database_failure_without_readback():
+    failure = _caused_by(
+        ProxyException(message="insert failed", type="internal_server_error", param=None, code=500),
+        ConnectionError("server closed the connection unexpectedly"),
+    )
+    prisma = _writer_with_row({"user_id": RACE_SUBJECT, "sso_user_id": RACE_SUBJECT})
+
+    with pytest.raises(ProxyException) as raised:
+        await _insert_sso_user_or_adopt_concurrent_insert(
+            user_defined_values=RACE_VALUES, prisma_client=prisma, insert=_failing_insert(failure)
+        )
+
+    assert raised.value is failure
+    prisma.writer_db.litellm_usertable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_first_sso_login_returns_the_inserted_user_without_readback():
+    created = NewUserResponse(user_id=RACE_SUBJECT, key="sk-created", teams=None)
+    prisma = _writer_with_row(None)
+
+    async def insert() -> NewUserResponse:
+        return created
+
+    user = await _insert_sso_user_or_adopt_concurrent_insert(
+        user_defined_values=RACE_VALUES, prisma_client=prisma, insert=insert
+    )
+
+    assert user is created
+    prisma.writer_db.litellm_usertable.find_unique.assert_not_awaited()
 
 
 @pytest.mark.asyncio

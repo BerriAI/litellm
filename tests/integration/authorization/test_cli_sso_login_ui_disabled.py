@@ -32,6 +32,7 @@ from tests.integration._support.client import (
     string_value,
 )
 from tests.integration._support.database import read_rows
+from tests.integration._support.database_relay import HeldStatementRelay, held_statement_relay
 from tests.integration._support.process import OwnedProxy, group_members, owned_proxy_process
 from tests.integration._support.provider import SharedProvider
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
@@ -49,6 +50,9 @@ CLI_SUCCESS_PAGE_TITLE: Final = "<title>CLI Authentication Successful - LiteLLM<
 SESSION_GONE: Final = "CLI login session not found or expired"
 SUBJECT: Final = "cli-sso-audit-subject"
 SUBJECT_EMAIL: Final = "cli-sso-audit-subject@example.com"
+DUPLICATE_USER_ID_CHECK: Final = (
+    b'FROM "public"."LiteLLM_UserTable" WHERE "public"."LiteLLM_UserTable"."user_id" = $1 LIMIT'
+)
 CLIENT_ID: Final = "integration-oidc-client"
 CLIENT_SECRET: Final = "integration-oidc-secret"
 MESSAGE_MODEL: Final = "anthropic/claude-haiku-4-5"
@@ -296,8 +300,11 @@ def _send_message(proxy: Gateway, provider: SharedProvider, key: str) -> str:
     return message_id
 
 
-def _user_rows() -> Sequence[Mapping[str, JsonValue]]:
-    return read_rows('SELECT user_id, user_email FROM "LiteLLM_UserTable" WHERE user_id = %s', (SUBJECT,))
+def _user_rows(subject: str = SUBJECT) -> Sequence[Mapping[str, JsonValue]]:
+    return read_rows(
+        'SELECT user_id, user_email FROM "LiteLLM_UserTable" WHERE user_id = %s OR user_email = %s',
+        (subject, f"{subject}@example.com"),
+    )
 
 
 def _worker_pids(root_pid: int) -> frozenset[int]:
@@ -461,8 +468,32 @@ def test_cli_link_is_reentrant_until_the_poll_consumes_the_session(ui_disabled: 
     assert consumed.status_code == 400 and SESSION_GONE in consumed.text, f"{consumed.status_code} {consumed.text}"
 
 
-def test_burst_of_logins_recovers_from_an_idp_token_outage(ui_disabled: OwnedProxy, idp: Idp) -> None:
-    proxy: Final = ui_disabled.gateway
+def test_burst_of_logins_recovers_from_an_idp_token_outage(idp: Idp, provider: SharedProvider, tmp_path: Path) -> None:
+    subject: Final = f"cli-sso-burst-{uuid.uuid4().hex[:12]}"
+    writer_url: Final = os.environ.get("INTEGRATION_PROXY_DATABASE_URL") or os.environ["DATABASE_URL"]
+    with (
+        held_statement_relay(writer_url, DUPLICATE_USER_ID_CHECK) as (relay, relayed_url),
+        gateway_from_environment() as rig,
+        owned_proxy_process(
+            rig,
+            tmp_path,
+            {
+                "DISABLE_ADMIN_UI": "true",
+                "DATABASE_URL": relayed_url,
+                "PRISMA_HEALTH_WATCHDOG_ENABLED": "false",
+                **_sso_environment(idp.wire.url),
+            },
+            config=_gateway_enabled_config(tmp_path),
+            remove_environment=("PROXY_BASE_URL",),
+            workers=2,
+        ) as owned,
+    ):
+        _burst_of_logins_after_an_idp_token_outage(owned.gateway, idp, provider, relay, subject)
+
+
+def _burst_of_logins_after_an_idp_token_outage(
+    proxy: Gateway, idp: Idp, provider: SharedProvider, relay: HeldStatementRelay, subject: str
+) -> None:
     sessions: Final = tuple(_start_lite_login(proxy) for _ in range(BURST))
 
     def failed_exchange(session: CliSession) -> httpx.Response:
@@ -492,16 +523,25 @@ def test_burst_of_logins_recovers_from_an_idp_token_outage(ui_disabled: OwnedPro
 
     def recovered_login(session: CliSession) -> str:
         with _browser() as browser:
-            _sign_in(proxy, idp, browser, session)
-        return _ready_key(proxy, session)
+            _sign_in(proxy, idp, browser, session, subject=subject)
+        return _ready_key(proxy, session, subject=subject)
 
     with ThreadPoolExecutor(max_workers=BURST) as pool:
-        keys: Final = tuple(pool.map(recovered_login, sessions))
+        logins: Final = tuple(pool.submit(recovered_login, session) for session in sessions)
+        try:
+            assert relay.held.wait(60), "no first-time login reached the duplicate user id check"
+            eventually(lambda: _user_rows(subject), bool)
+        finally:
+            relay.release()
+        keys: Final = tuple(login.result() for login in logins)
     assert len(set(keys)) == BURST, keys
     for session in sessions:
         again: Final = _poll(proxy, session)
         assert again.status_code == 400 and SESSION_GONE in again.text, f"{again.status_code} {again.text}"
-    assert [row["user_id"] for row in _user_rows()] == [SUBJECT]
+    users: Final = _user_rows(subject)
+    assert [(row["user_id"], row["user_email"]) for row in users] == [(subject, f"{subject}@example.com")], users
+    for key in keys:
+        _send_message(proxy, provider, key)
 
 
 def test_login_survives_a_worker_kill(idp: Idp, tmp_path: Path) -> None:
