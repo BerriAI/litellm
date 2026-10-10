@@ -1699,7 +1699,7 @@ class TestGatewayPrompt:
             )
         return result, captured
 
-    def test_terminal_user_without_a_gateway_is_asked_once_and_it_is_saved(self):
+    def test_terminal_user_without_a_gateway_is_asked_once_and_it_is_saved(self) -> None:
         from litellm.proxy.client.cli.commands.config import get_config_value
 
         first, first_launch = self._launch_claude(
@@ -1715,13 +1715,13 @@ class TestGatewayPrompt:
         assert "LiteLLM gateway URL" not in second.output
         assert second_launch["base_url"] == "https://gateway.example.com"
 
-    def test_pressing_enter_keeps_localhost(self):
+    def test_pressing_enter_keeps_localhost(self) -> None:
         result, launched = self._launch_claude(["--api-key", "sk-key"], interactive=True, input="\n")
 
         assert result.exit_code == 0, result.output
         assert launched["base_url"] == "http://localhost:4000"
 
-    def test_invalid_url_is_asked_again(self):
+    def test_invalid_url_is_asked_again(self) -> None:
         result, launched = self._launch_claude(
             ["--api-key", "sk-key"], interactive=True, input="gateway.example.com\nhttps://gateway.example.com\n"
         )
@@ -1765,14 +1765,14 @@ class TestGatewayPrompt:
             (["--api-key", "sk-key"], {"LITELLM_PROXY_URL": "https://flag.example.com"}),
         ],
     )
-    def test_explicit_gateway_is_not_asked_for(self, args, env):
+    def test_explicit_gateway_is_not_asked_for(self, args: list[str], env: dict[str, str] | None) -> None:
         result, launched = self._launch_claude(args, interactive=True, env=env)
 
         assert result.exit_code == 0, result.output
         assert "LiteLLM gateway URL" not in result.output
         assert launched["base_url"] == "https://flag.example.com"
 
-    def test_non_interactive_run_keeps_the_localhost_default(self):
+    def test_non_interactive_run_keeps_the_localhost_default(self) -> None:
         from litellm.proxy.client.cli.commands.config import get_config_value
 
         result, launched = self._launch_claude(["--api-key", "sk-key"], interactive=False)
