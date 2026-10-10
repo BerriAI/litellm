@@ -390,19 +390,19 @@ class Cache:
         def as_mapping(value: object) -> Mapping[str, object]:
             return value if isinstance(value, Mapping) else {}
 
-        litellm_params: Final = as_mapping(kwargs.get("litellm_params"))
+        litellm_params: Final = as_mapping(kwargs.get("litellm_params"))  # pyright: ignore[reportArgumentType, reportUnknownArgumentType]  # proxy kwargs are dynamically typed
         metadata_sources: Final[tuple[Mapping[str, object], ...]] = (
             tuple(  # comprehension-ok: flatten trusted metadata containers
-                as_mapping(source.get(key))
+                as_mapping(source.get(key))  # pyright: ignore[reportArgumentType, reportUnknownArgumentType]  # metadata containers are runtime mappings
                 for source in (kwargs, litellm_params)
                 for key in ("metadata", "litellm_metadata")
             )
         )
 
-        scope_values: Final[tuple[tuple[str, object | None], ...]] = tuple(
+        scope_values: Final[tuple[tuple[str, object | None], ...]] = tuple(  # pyright: ignore[reportAssignmentType, reportUnknownVariableType]  # explicit cache scope tuple
             (
                 field,
-                next((source[field] for source in metadata_sources if source.get(field) is not None), None),
+                next((source[field] for source in metadata_sources if source.get(field) is not None), None),  # pyright: ignore[reportUnknownVariableType]  # guarded mapping lookup
             )
             for field in self._PROXY_CACHE_SCOPE_FIELDS
         )
