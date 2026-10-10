@@ -382,7 +382,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
         return None
 
     @staticmethod
-    def _normalize_session_payload_for_mapping(session: dict) -> dict:
+    def _normalize_session_payload_for_mapping(session: dict) -> dict[str, object]:
         """Normalize GA-remapped session fields back to their beta keys.
 
         ``map_openai_params`` only recognises the flat OpenAI-beta key names
@@ -463,6 +463,39 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 )
         return setup
 
+    def _warn_session_update_dropped(self, session_payload: Mapping[str, object], *, provider: str) -> None:
+        """Report, once per session, that a later ``session.update`` reached nothing.
+
+        Live accepts ``setup`` as the first-and-only client message, so a second one
+        closes the socket with 1007 and the update has to be dropped. That is
+        unavoidable; being quiet about it is not. This used to log at debug, which on
+        a proxy means the fields never arrive and nothing says so -- the caller sees
+        the model running on provider defaults and no instructions, voice or persona
+        of theirs (#44825).
+
+        Warned once because a GA client sends several ``session.update`` messages
+        while configuring; later drops stay at debug.
+        """
+        dropped: Final = sorted(key for key in session_payload if key != "type")
+        if getattr(self, "_session_update_drop_warned", False):
+            verbose_logger.debug(
+                "%s: dropping a further session.update (setup already sent): %s",
+                provider,
+                dropped,
+            )
+            return
+        self._session_update_drop_warned = True
+        verbose_logger.warning(
+            "%s: dropping session.update because setup was already sent, so these "
+            "fields do not reach the model: %s. Live accepts setup as the "
+            "first-and-only client message. To have the client's first "
+            "session.update carry them instead, set litellm.gemini_live_defer_setup "
+            "= True (env LITELLM_GEMINI_LIVE_DEFER_SETUP=true), which defers setup "
+            "until that update arrives. Further drops in this session log at debug.",
+            provider,
+            dropped,
+        )
+
     def _handle_session_update(
         self,
         json_message: _OpenAIRealtimeClientEvent,
@@ -518,7 +551,7 @@ class GeminiRealtimeConfig(BaseRealtimeConfig):
                 "suppress the model's auto-response mid-session."
             )
         else:
-            verbose_logger.debug("Gemini Realtime: Ignoring session.update (setup already sent)")
+            self._warn_session_update_dropped(session_payload, provider="Gemini Realtime")
         return []
 
     def _handle_conversation_item(self, json_message: _OpenAIRealtimeClientEvent) -> list[str]:
