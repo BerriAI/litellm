@@ -9,6 +9,7 @@ from fastapi import HTTPException, status
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
+from litellm.integrations.custom_prompt_management import CustomPromptManagement
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.router_utils.common_utils import is_proxy_admin_request
 from litellm.router_utils.fallback_event_handlers import (
@@ -403,9 +404,13 @@ def _wildcard_forwards_missing_model(llm_router: LitellmRouter, data: Mapping[st
     (`openai/*`), so the provider would get a made-up or empty model instead of a fixed one
     like `openai/gpt-4o`. An empty one must not reach a provider: key and team model checks
     skip it, and some servers (vLLM) answer it with their default model. A null model with a
-    `prompt_id` is left to the prompt manager, which may pick the model."""
+    `prompt_id` is left to a registered prompt manager, which may pick the model."""
     model: Final = data.get("model")
-    if model is None and data.get("prompt_id"):
+    if (
+        model is None
+        and data.get("prompt_id")
+        and litellm.logging_callback_manager.callback_is_active(CustomPromptManagement)
+    ):
         return False
     matched: Final = _MATCHED_DEPLOYMENTS_ADAPTER.validate_python(
         llm_router.pattern_router.get_deployments_by_pattern(model=model if isinstance(model, str) else None)  # pyright: ignore[reportArgumentType, reportUnknownMemberType, reportUnknownArgumentType]  # mirrors the router's own lookup for this model; it returns untyped dicts

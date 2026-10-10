@@ -2135,7 +2135,16 @@ async def test_null_model_matching_a_forwarding_wildcard_is_not_routed_next_to_a
         )
 
 
+@pytest.fixture
+def registered_prompt_manager(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.integrations.custom_prompt_management import CustomPromptManagement
+
+    monkeypatch.setattr(litellm, "callbacks", [CustomPromptManagement()])
+
+
 @pytest.mark.asyncio
+@pytest.mark.usefixtures("registered_prompt_manager")
 async def test_null_model_with_a_prompt_id_is_left_to_the_prompt_manager() -> None:
     response: Final = await (
         await route_request(
@@ -2155,6 +2164,18 @@ async def test_null_model_with_a_prompt_id_is_left_to_the_prompt_manager() -> No
 
 
 @pytest.mark.asyncio
+async def test_null_model_with_a_prompt_id_but_no_prompt_manager_is_not_routed_to_a_forwarding_wildcard() -> None:
+    with pytest.raises(ProxyModelNotFoundError):
+        await route_request(
+            {"model": None, "prompt_id": "greet", "messages": [{"role": "user", "content": "hi"}]},
+            _router_with_defaults({}, wildcard_target="openai/*"),
+            None,
+            "acompletion",
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("registered_prompt_manager")
 async def test_empty_model_with_a_prompt_id_is_still_not_routed_to_a_forwarding_wildcard() -> None:
     with pytest.raises(ProxyModelNotFoundError):
         await route_request(

@@ -148,6 +148,17 @@ def test_forwarding_wildcard_rejects_a_model_less_request_from_a_key_limited_to_
 
 @pytest.mark.parametrize("wildcard", ("forwarding",), indirect=True)
 @pytest.mark.parametrize("endpoint", tuple(ENDPOINT_PATHS))
+def test_forwarding_wildcard_rejects_a_null_model_with_a_prompt_id_when_no_prompt_manager_is_registered(
+    wildcard: _Wildcard, endpoint: str
+) -> None:
+    invalid_request(
+        post(wildcard.gateway, ENDPOINT_PATHS[endpoint], {**_body(endpoint, "null", stream=False), "prompt_id": "x"})
+    )
+    assert_no_provider_call(wildcard.gateway, wildcard.identity)
+
+
+@pytest.mark.parametrize("wildcard", ("forwarding",), indirect=True)
+@pytest.mark.parametrize("endpoint", tuple(ENDPOINT_PATHS))
 def test_forwarding_wildcard_without_a_model_and_without_a_key_is_401(wildcard: _Wildcard, endpoint: str) -> None:
     response: Final = post(
         wildcard.gateway, ENDPOINT_PATHS[endpoint], _body(endpoint, "missing", stream=False), key="sk-audit-bad"
