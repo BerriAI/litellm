@@ -1,3 +1,6 @@
+import json
+from typing import Final
+
 import httpx
 import pytest
 
@@ -5,6 +8,10 @@ from litellm.llms.openai.vector_store_files.transformation import (
     OpenAIVectorStoreFilesConfig,
 )
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.vector_store_files import (
+    VectorStoreFileCreateRequest,
+    VectorStoreFileUpdateRequest,
+)
 
 
 @pytest.fixture()
@@ -41,10 +48,7 @@ def test_get_complete_url_encodes_vector_store_id(
         litellm_params={},
     )
 
-    assert (
-        url
-        == "https://api.example.com/v1/vector_stores/..%2Fvs_123%3Fx%3D1%23frag/files"
-    )
+    assert url == "https://api.example.com/v1/vector_stores/..%2Fvs_123%3Fx%3D1%23frag/files"
 
 
 def test_transform_create_request(config: OpenAIVectorStoreFilesConfig):
@@ -61,6 +65,84 @@ def test_transform_create_request(config: OpenAIVectorStoreFilesConfig):
     assert url == api_base
     assert payload["file_id"] == "file-abc"
     assert payload["attributes"]["key"] == "value"
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    [
+        {
+            "category": "manual",
+            "year": 2024,
+            "score": 0.75,
+            "published": True,
+            "archived": False,
+            "count": 0,
+            "weight": 0.0,
+            "label": "",
+        },
+        {"year": 2024, "archived": False},
+        {},
+    ],
+    ids=["mixed-types", "no-strings", "empty"],
+)
+def test_create_request_preserves_attribute_types(
+    config: OpenAIVectorStoreFilesConfig,
+    attributes: dict[str, str | int | float | bool],
+) -> None:
+    api_base: Final = "https://api.example.com/v1/vector_stores/vs_123/files"
+    create_request: Final[VectorStoreFileCreateRequest] = {
+        "file_id": "file-abc",
+        "attributes": attributes,
+    }
+    expected_json: Final = json.dumps(create_request, sort_keys=True)
+
+    url, payload = config.transform_create_vector_store_file_request(
+        vector_store_id="vs_123",
+        create_request=create_request,
+        api_base=api_base,
+    )
+
+    assert url == api_base
+    assert json.dumps(payload, sort_keys=True) == expected_json
+    assert json.dumps(create_request, sort_keys=True) == expected_json
+
+
+@pytest.mark.parametrize(
+    "attributes",
+    [
+        {
+            "category": "manual",
+            "year": 2024,
+            "score": 0.75,
+            "published": True,
+            "archived": False,
+            "count": 0,
+            "weight": 0.0,
+            "label": "",
+        },
+        {"year": 2024, "archived": False},
+        {},
+    ],
+    ids=["mixed-types", "no-strings", "empty"],
+)
+def test_update_request_preserves_attribute_types(
+    config: OpenAIVectorStoreFilesConfig,
+    attributes: dict[str, str | int | float | bool],
+) -> None:
+    api_base: Final = "https://api.example.com/v1/vector_stores/vs_123/files"
+    update_request: Final[VectorStoreFileUpdateRequest] = {"attributes": attributes}
+    expected_json: Final = json.dumps(update_request, sort_keys=True)
+
+    url, payload = config.transform_update_vector_store_file_request(
+        vector_store_id="vs_123",
+        file_id="file-abc",
+        update_request=update_request,
+        api_base=api_base,
+    )
+
+    assert url == f"{api_base}/file-abc"
+    assert json.dumps(payload, sort_keys=True) == expected_json
+    assert json.dumps(update_request, sort_keys=True) == expected_json
 
 
 def test_transform_list_request(config: OpenAIVectorStoreFilesConfig):
@@ -84,10 +166,7 @@ def test_transform_file_request_encodes_file_id(config: OpenAIVectorStoreFilesCo
         api_base=api_base,
     )
 
-    assert (
-        url
-        == "https://api.example.com/v1/vector_stores/vs_123/files/..%2F..%2Ffiles%3Fx%3D1%23frag/content"
-    )
+    assert url == "https://api.example.com/v1/vector_stores/vs_123/files/..%2F..%2Ffiles%3Fx%3D1%23frag/content"
     assert params == {}
 
 
