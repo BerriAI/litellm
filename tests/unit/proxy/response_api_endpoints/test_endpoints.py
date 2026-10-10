@@ -255,6 +255,79 @@ async def test_responses_api_background_polling_accepts_input_from_prompt_templa
     assert request_data["input"] == "hello from prompt"
 
 
+@pytest.mark.asyncio
+async def test_responses_api_background_create_persists_the_creating_keys_attribution():
+    """The cost poll bills a background job off its managed object row, so the create must persist
+    the key hash and tags the poll bills against, the way the batch create does."""
+    from fastapi import Response as FastAPIResponse
+    from starlette.requests import Request
+
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.response_api_endpoints.endpoints import responses_api
+
+    queued = ResponsesAPIResponse(
+        id="resp_background", object="response", status="queued", created_at=1, output=[], usage=None
+    )
+    queued._hidden_params = {"model_id": "deployment-1"}
+    processor = MagicMock()
+    processor.data = {
+        "model": "gpt-4o",
+        "input": "hello",
+        "background": True,
+        "litellm_metadata": {"tags": ["env:prod"]},
+    }
+    processor.base_process_llm_request = AsyncMock(return_value=queued)
+    managed_files = MagicMock()
+    managed_files.store_unified_object_id = AsyncMock()
+    proxy_logging = MagicMock()
+    proxy_logging.get_proxy_hook = MagicMock(return_value=managed_files)
+
+    async def receive():
+        return {
+            "type": "http.request",
+            "body": b'{"model":"gpt-4o","input":"hello","background":true}',
+            "more_body": False,
+        }
+
+    request = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/responses",
+            "headers": [(b"content-type", b"application/json")],
+        },
+        receive,
+    )
+
+    with (
+        patch(  # test-quality-ok: endpoint constructs the processor directly
+            "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing",
+            return_value=processor,
+        ),
+        patch(  # test-quality-ok: polling decision is imported inside the endpoint
+            "litellm.proxy.response_polling.polling_handler.should_use_polling_for_request",
+            return_value=False,
+        ),
+        patch(  # test-quality-ok: the endpoint reads the proxy singletons at call time
+            "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging
+        ),
+        patch(  # test-quality-ok: the endpoint reads the proxy singletons at call time
+            "litellm.proxy.proxy_server.llm_router", MagicMock()
+        ),
+    ):
+        result = await responses_api(
+            request=request,
+            fastapi_response=FastAPIResponse(),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert result is queued
+    store_kwargs = managed_files.store_unified_object_id.await_args.kwargs
+    assert store_kwargs["file_purpose"] == "response"
+    assert store_kwargs["persist_attribution"] is True
+    assert store_kwargs["request_tags"] == ("env:prod",)
+
+
 class TestResponsesAPIEndpoints(unittest.TestCase):
     @pytest.mark.asyncio
     @patch("litellm.proxy.proxy_server.llm_router")

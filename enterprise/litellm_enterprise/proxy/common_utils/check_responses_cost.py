@@ -1,12 +1,18 @@
 """
 Polls LiteLLM_ManagedObjectTable to check if the response is complete.
 Cost tracking is handled by the get-responses call, which prices normally only because the
-poll stamps itself with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN; user-facing reads of the
-same route are non-inference and free.
+poll stamps itself with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN and carries the creating
+key's attribution read off the managed object row; user-facing reads of the same route are
+non-inference and free.
 """
 
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Dict, Final, Protocol, cast
+from typing import TYPE_CHECKING, Final, cast
+
+from litellm_enterprise.proxy.common_utils.managed_object_attribution import (
+    ManagedObjectCreatorAttribution,
+    ManagedObjectRow,
+)
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -29,21 +35,7 @@ if TYPE_CHECKING:
 TERMINAL_RESPONSE_STATUSES = frozenset({"completed", "failed", "cancelled", "incomplete"})
 
 
-class _ManagedObjectRow(Protocol):
-    @property
-    def id(self) -> str: ...
-
-    @property
-    def unified_object_id(self) -> str: ...
-
-    @property
-    def created_by(self) -> str | None: ...
-
-    @property
-    def file_object(self) -> object: ...
-
-
-def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[_ManagedObjectRow]":
+def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[ManagedObjectRow]":
     return ManagedObjectRepository(prisma_client).table
 
 
@@ -64,6 +56,7 @@ class CheckResponsesCost:
         self.proxy_logging_obj: ProxyLogging = proxy_logging_obj
         self.prisma_client: PrismaClient = prisma_client
         self.llm_router: Router = llm_router
+        self._creator_attribution: Final = ManagedObjectCreatorAttribution(prisma_client, "CheckResponsesCost")
 
     def _resolve_deployment(self, response_id: str) -> bool:
         model_id: str | None = ResponsesAPIRequestUtils.get_model_id_from_response_id(response_id)
@@ -72,7 +65,7 @@ class CheckResponsesCost:
     async def _get_response(
         self,
         response_id: str,
-        litellm_metadata: Dict[str, str],
+        litellm_metadata: dict[str, object],
         via_router: bool,
     ) -> ResponsesAPIResponse:
         """Fetch the upstream response, using deployment credentials when available.
@@ -168,8 +161,8 @@ class CheckResponsesCost:
         )
         
         verbose_proxy_logger.debug(f"Found {len(jobs)} response jobs to check")
-        completed_jobs: Final[list[_ManagedObjectRow]] = []
-        expired_jobs: Final[list[_ManagedObjectRow]] = []
+        completed_jobs: Final[list[ManagedObjectRow]] = []
+        expired_jobs: Final[list[ManagedObjectRow]] = []
 
         for job in jobs:
             unified_object_id = job.unified_object_id
@@ -186,16 +179,12 @@ class CheckResponsesCost:
                 # Decrypt the response ID
                 responses_id_security, _, _ = ResponsesIDSecurity()._decrypt_response_id(unified_object_id)
 
-                # Prepare metadata with model information for cost tracking
-                litellm_metadata = {
-                    "user_api_key_user_id": job.created_by or "default-user-id",
+                litellm_metadata: dict[str, object] = {
+                    **(await self._creator_attribution.build(job, unified_object_id)),
                     INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN,
+                    **({"model": model_name, "model_group": model_name} if model_name else {}),
                 }
 
-                # Add model information if available
-                if model_name:
-                    litellm_metadata["model"] = model_name
-                    litellm_metadata["model_group"] = model_name  # Use same value for model_group
                 via_router = self._resolve_deployment(responses_id_security)
             except Exception as e:
                 verbose_proxy_logger.warning(

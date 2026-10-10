@@ -3,9 +3,11 @@
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.litellm_core_utils.internal_call_metadata import (
     forwarded_internal_call_metadata,
+    is_unbilled_non_inference_call,
+    is_unbilled_non_inference_call_from_params,
     sanitized_forwardable_call_metadata,
 )
-from litellm.types.utils import SHADOW_EVAL_ROUTER_CALL_ORIGIN
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN, SHADOW_EVAL_ROUTER_CALL_ORIGIN
 
 PARENT = {
     "user_api_key": "sk-hash",
@@ -119,3 +121,29 @@ class TestSubCallMetadataSanitization:
         assert sanitized_auth.team_id == "team-1"
         assert sanitized_auth.api_key == auth.api_key
         assert auth.budget_reservation == {"reserved_cost": 1.0}
+
+
+class TestNonInferenceCallBilling:
+    """A read of a stored object replays the usage of the call that created it. A background create
+    returns no usage, so the cost poll's stamped read is the one read that bills the job; every user
+    read of the same job, before or after that poll, is free."""
+
+    POLL_METADATA = {INTERNAL_CALL_ORIGIN_METADATA_KEY: BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN}
+
+    def test_user_read_is_unbilled_whatever_metadata_it_carries(self):
+        assert is_unbilled_non_inference_call("aget_responses", None) is True
+        assert is_unbilled_non_inference_call("aget_responses", {"user_api_key": "sk-hash"}) is True
+        assert is_unbilled_non_inference_call(
+            "aget_responses", {INTERNAL_CALL_ORIGIN_METADATA_KEY: SHADOW_EVAL_ROUTER_CALL_ORIGIN}
+        ) is True
+
+    def test_only_the_cost_poll_read_is_billed(self):
+        assert is_unbilled_non_inference_call("aget_responses", self.POLL_METADATA) is False
+        assert is_unbilled_non_inference_call_from_params(
+            "aget_responses", {"litellm_metadata": self.POLL_METADATA}
+        ) is False
+        assert is_unbilled_non_inference_call_from_params("aget_responses", {}) is True
+
+    def test_inference_calls_are_always_billed(self):
+        assert is_unbilled_non_inference_call("aresponses", None) is False
+        assert is_unbilled_non_inference_call_from_params("acompletion", None) is False

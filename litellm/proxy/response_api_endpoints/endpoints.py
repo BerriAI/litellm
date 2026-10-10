@@ -36,6 +36,9 @@ from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # leg
     read_request_body,
     safe_set_request_parsed_body,
 )
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.batch_attribution import (
+    request_tags_from_request_data,
+)
 from litellm.proxy.route_llm_request import raise_if_required_body_param_missing
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
@@ -421,6 +424,8 @@ async def responses_api(
                             model_object_id=response.id,
                             file_purpose="response",
                             user_api_key_dict=user_api_key_dict,
+                            request_tags=request_tags_from_request_data(processor.data),
+                            persist_attribution=True,
                         )
 
                         verbose_proxy_logger.info(

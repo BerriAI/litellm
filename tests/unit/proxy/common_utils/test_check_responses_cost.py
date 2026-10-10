@@ -1060,7 +1060,53 @@ class TestCheckResponsesCost:
             await check_responses_cost_instance.check_responses_cost()
 
         metadata = mock_aget.call_args[1]["litellm_metadata"]
-        foreground_read = {"background": False}
         assert metadata[INTERNAL_CALL_ORIGIN_METADATA_KEY] == "background_response_cost_poll"
-        assert is_unbilled_non_inference_call("aget_responses", metadata, foreground_read) is False
-        assert is_unbilled_non_inference_call("aget_responses", None, foreground_read) is True
+        assert is_unbilled_non_inference_call("aget_responses", metadata) is False
+        assert is_unbilled_non_inference_call("aget_responses", None) is True
+
+    @pytest.mark.asyncio
+    async def test_poll_bills_the_read_to_the_creating_key_team_org_and_tags(
+        self, check_responses_cost_instance, mock_prisma_client
+    ):
+        """The poll's read is the one billed read of a background job, so its spend row must name
+        the key, team, org, user, and tags of the create it settles, read off the managed object row,
+        never the poller itself."""
+        from types import SimpleNamespace
+
+        mock_job = MagicMock()
+        mock_job.unified_object_id = "resp_test_attributed"
+        mock_job.id = "job-attributed"
+        mock_job.created_by = "alice"
+        mock_job.api_key = "hash-alice"
+        mock_job.team_id = "team-alpha"
+        mock_job.org_id = "org-1"
+        mock_job.request_tags = ["env:prod"]
+        mock_job.file_object = {"model": "gpt-5", "id": "resp_test_attributed"}
+
+        mock_prisma_client.db.litellm_managedobjecttable.find_many = AsyncMock(return_value=[mock_job])
+        mock_prisma_client.db.litellm_managedobjecttable.update_many = AsyncMock(return_value=0)
+        mock_prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(
+            return_value=SimpleNamespace(key_alias="prod-key", organization_id=None)
+        )
+        mock_prisma_client.db.litellm_teamtable.find_unique = AsyncMock(
+            return_value=SimpleNamespace(team_alias="Team Alpha", organization_id=None)
+        )
+        mock_prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+            return_value=SimpleNamespace(user_email="alice@example.com", user_alias=None)
+        )
+
+        with patch("litellm.aget_responses", new_callable=AsyncMock) as mock_aget:
+            mock_aget.return_value = MagicMock(status="completed")
+            await check_responses_cost_instance.check_responses_cost()
+
+        metadata = mock_aget.call_args[1]["litellm_metadata"]
+        assert metadata["user_api_key"] == "hash-alice"
+        assert metadata["user_api_key_hash"] == "hash-alice"
+        assert metadata["user_api_key_user_id"] == "alice"
+        assert metadata["user_api_key_user_email"] == "alice@example.com"
+        assert metadata["user_api_key_team_id"] == "team-alpha"
+        assert metadata["user_api_key_org_id"] == "org-1"
+        assert metadata["user_api_key_alias"] == "prod-key"
+        assert metadata["user_api_key_team_alias"] == "Team Alpha"
+        assert metadata["tags"] == ["env:prod"]
+        assert metadata["model_group"] == "gpt-5"
