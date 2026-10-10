@@ -693,7 +693,8 @@ describe("CreateKey", () => {
         await userEvent.click(screen.getByRole("option", { name: /Administered Team/ }));
 
         await userEvent.click(await screen.findByLabelText(/^User ID/));
-        await userEvent.click(await screen.findByRole("option", { name: "member@example.com (member-1)" }));
+        expect(await screen.findAllByRole("option")).toHaveLength(1);
+        await userEvent.click(screen.getByRole("option", { name: "member@example.com (member-1)" }));
         await submit();
 
         expect(await createdPayload()).toMatchObject({ user_id: "member-1", team_id: "team-admin-of" });

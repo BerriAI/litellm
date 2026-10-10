@@ -7,6 +7,7 @@ import {
   effectiveKeyOwner,
   isTeamMemberOwner,
   teamMemberOwnerOptions,
+  teamMemberOwnerPlaceholder,
   type TeamMembers,
 } from "./createKeyOwnerAccess";
 
@@ -110,18 +111,19 @@ describe("administersTeam", () => {
 });
 
 describe("teamMemberOwnerOptions", () => {
-  it("lists exactly the selected team's members, labelled by email when the team has one", () => {
+  it("lists the selected team's other members, labelled by email when the team has one", () => {
     expect(teamMemberOwnerOptions(administered, VIEWER)).toStrictEqual([
-      { value: VIEWER, label: VIEWER },
       { value: "alice", label: "alice@example.com (alice)" },
       { value: "bob", label: "bob" },
     ]);
   });
 
   it("skips a member row that has no user id", () => {
-    const team = { members_with_roles: [member(VIEWER, "admin"), member(null, "user", "pending@example.com")] };
+    const team = {
+      members_with_roles: [member(VIEWER, "admin"), member(null, "user", "pending@example.com"), member("bob", "user")],
+    };
 
-    expect(teamMemberOwnerOptions(team, VIEWER)).toStrictEqual([{ value: VIEWER, label: VIEWER }]);
+    expect(teamMemberOwnerOptions(team, VIEWER)).toStrictEqual([{ value: "bob", label: "bob" }]);
   });
 
   it.each([
@@ -130,6 +132,18 @@ describe("teamMemberOwnerOptions", () => {
     ["the selected team is one the viewer is not in", foreign],
   ])("offers nobody when %s", (_label, team) => {
     expect(teamMemberOwnerOptions(team, VIEWER)).toStrictEqual([]);
+  });
+});
+
+describe("teamMemberOwnerPlaceholder", () => {
+  const soloTeam = { members_with_roles: [member(VIEWER, "admin")] };
+
+  it.each([
+    ["asks for a team before one is selected", null, "Select a team first"],
+    ["says so when the viewer is the team's only member", soloTeam, "This team has no other members"],
+    ["asks for a member once the team has someone to pick", administered, "Select a member of the team"],
+  ])("%s", (_label, team, expected) => {
+    expect(teamMemberOwnerPlaceholder(teamMemberOwnerOptions(team, VIEWER), team)).toBe(expected);
   });
 });
 
@@ -142,6 +156,7 @@ describe("isTeamMemberOwner", () => {
     ["is in another team only", "carol", administered],
     ["was picked before the team was cleared", "alice", null],
     ["belongs to a team the viewer does not administer", "carol", joined],
+    ["is the viewer, who already has the You option", VIEWER, administered],
     ["is not set", null, administered],
   ])("rejects an owner who %s", (_label, ownerId, team) => {
     expect(isTeamMemberOwner(ownerId, team, VIEWER)).toBe(false);

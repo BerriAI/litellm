@@ -87,6 +87,7 @@ import {
   effectiveKeyOwner,
   isTeamMemberOwner,
   teamMemberOwnerOptions,
+  teamMemberOwnerPlaceholder,
 } from "./createKeyOwnerAccess";
 import { buildKeyCreatePayload, type KeyCreateInput } from "./createKeyPayload";
 import { simplifyKeyGenerateError } from "./utils";
@@ -676,6 +677,68 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     }
   };
 
+  const memberOwnerPlaceholder = teamMemberOwnerPlaceholder(memberOwnerOptions, selectedCreateKeyTeam);
+  const requiredTeamHelp = ownerLimitedToTeamMembers
+    ? "required, the key's owner must be a member of this team"
+    : "required";
+  const teamFieldHelp = ownerRequiresTeam ? requiredTeamHelp : "";
+  const ownerField = keyOwner === "another_user" && (
+    <MountedFormField
+      label={
+        <span>
+          User ID{" "}
+          <SimpleTooltip content="The user who will own this key and be responsible for its usage">
+            <Info className="ml-1 inline size-3.5 align-text-bottom" />
+          </SimpleTooltip>
+        </span>
+      }
+      name="user_id"
+      className="mt-4"
+      required
+      rules={requiredRule(
+        keyOwner === "another_user",
+        `Please input the user ID of the user you are assigning the key to`,
+      )}
+    >
+      {(control) =>
+        ownerLimitedToTeamMembers ? (
+          <SearchSelect
+            inputId={control.id}
+            options={memberOwnerOptions}
+            value={typeof control.value === "string" ? control.value : null}
+            onValueChange={control.onChange}
+            disabled={memberOwnerOptions.length === 0}
+            placeholder={memberOwnerPlaceholder}
+            emptyText="No team members found"
+          />
+        ) : (
+          <div>
+            <div className="mb-2 flex">
+              <PaginatedSearchSelect
+                options={userOptions}
+                value={typeof control.value === "string" ? control.value : undefined}
+                onValueChange={control.onChange}
+                onSearchChange={fetchUsers}
+                isLoading={userSearchLoading}
+                placeholder="Type email or user ID to search for users"
+                emptyText="No users found"
+                loadingText="Searching..."
+                inputId={control.id}
+                aria-required={control["aria-required"] === "true" ? true : undefined}
+                aria-invalid={control["aria-invalid"] === "true" ? true : undefined}
+                aria-describedby={control["aria-describedby"]}
+              />
+              <Button variant="outline" className="ml-2" onClick={() => setIsCreateUserModalVisible(true)}>
+                Create User
+              </Button>
+            </div>
+            <div className="text-xs text-muted-foreground">Search by email or user ID to find users</div>
+          </div>
+        )
+      }
+    </MountedFormField>
+  );
+
   return (
     <div>
       {userRole && rolesWithWriteAccess.includes(userRole) && (
@@ -728,70 +791,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                   </RadioGroup>
                 </Field>
 
-                {keyOwner === "another_user" && (
-                  <MountedFormField
-                    label={
-                      <span>
-                        User ID{" "}
-                        <SimpleTooltip content="The user who will own this key and be responsible for its usage">
-                          <Info className="ml-1 inline size-3.5 align-text-bottom" />
-                        </SimpleTooltip>
-                      </span>
-                    }
-                    name="user_id"
-                    className="mt-4"
-                    required
-                    rules={requiredRule(
-                      keyOwner === "another_user",
-                      `Please input the user ID of the user you are assigning the key to`,
-                    )}
-                  >
-                    {(control) =>
-                      ownerLimitedToTeamMembers ? (
-                        <SearchSelect
-                          inputId={control.id}
-                          options={memberOwnerOptions}
-                          value={typeof control.value === "string" ? control.value : null}
-                          onValueChange={control.onChange}
-                          disabled={memberOwnerOptions.length === 0}
-                          placeholder={
-                            memberOwnerOptions.length === 0
-                              ? "Select a team you administer first"
-                              : "Select a member of the team"
-                          }
-                          emptyText="No team members found"
-                        />
-                      ) : (
-                        <div>
-                          <div className="mb-2 flex">
-                            <PaginatedSearchSelect
-                              options={userOptions}
-                              value={typeof control.value === "string" ? control.value : undefined}
-                              onValueChange={control.onChange}
-                              onSearchChange={fetchUsers}
-                              isLoading={userSearchLoading}
-                              placeholder="Type email or user ID to search for users"
-                              emptyText="No users found"
-                              loadingText="Searching..."
-                              inputId={control.id}
-                              aria-required={control["aria-required"] === "true" ? true : undefined}
-                              aria-invalid={control["aria-invalid"] === "true" ? true : undefined}
-                              aria-describedby={control["aria-describedby"]}
-                            />
-                            <Button
-                              variant="outline"
-                              className="ml-2"
-                              onClick={() => setIsCreateUserModalVisible(true)}
-                            >
-                              Create User
-                            </Button>
-                          </div>
-                          <div className="text-xs text-muted-foreground">Search by email or user ID to find users</div>
-                        </div>
-                      )
-                    }
-                  </MountedFormField>
-                )}
+                {!ownerLimitedToTeamMembers && ownerField}
                 {keyOwner === "agent" && (
                   <div className="mt-4 p-4 bg-purple-50 border border-purple-200 rounded-md dark:bg-purple-950 dark:border-purple-800">
                     <div className="mb-3">
@@ -856,7 +856,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                       ? "Please select the team the key's owner belongs to"
                       : "Please select a team for the service account",
                   )}
-                  help={ownerRequiresTeam ? "required" : ""}
+                  help={teamFieldHelp}
                 >
                   {(control) => (
                     <TeamDropdown
@@ -870,6 +870,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                     />
                   )}
                 </MountedFormField>
+                {ownerLimitedToTeamMembers && ownerField}
                 {enableProjectsUI && (
                   <MountedFormField
                     label={

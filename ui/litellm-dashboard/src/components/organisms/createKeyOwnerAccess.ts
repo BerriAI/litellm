@@ -36,7 +36,7 @@ export const effectiveKeyOwner = (requestedOwner: string, scope: AnotherUserScop
 export const teamMemberOwnerOptions = (team: TeamMembers | null, viewerId: string | null): SearchSelectOption[] => {
   if (!administersTeam(team, viewerId)) return [];
   return (team?.members_with_roles ?? []).flatMap((member) =>
-    member.user_id
+    member.user_id && member.user_id !== viewerId
       ? [
           {
             value: member.user_id,
@@ -45,6 +45,14 @@ export const teamMemberOwnerOptions = (team: TeamMembers | null, viewerId: strin
         ]
       : [],
   );
+};
+
+export const teamMemberOwnerPlaceholder = (
+  options: readonly SearchSelectOption[],
+  team: TeamMembers | null,
+): string => {
+  if (options.length > 0) return "Select a member of the team";
+  return team ? "This team has no other members" : "Select a team first";
 };
 
 export const isTeamMemberOwner = (ownerId: unknown, team: TeamMembers | null, viewerId: string | null): boolean =>
