@@ -178,12 +178,13 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
 
       {selectedProvider && decisionModels.length === 0 && (
         <p className="text-sm text-muted-foreground">
-          No decision models for this provider. Add one on the Models page.
+          No decision models for this provider. Set model_info.mode: evaluation on a deployment to list it here.
         </p>
       )}
 
       <FieldLabel>Questions</FieldLabel>
 
+      {checks.length > 0 && (
       <div className="overflow-hidden rounded-lg border border-border">
         <div className="flex border-b border-border bg-muted/40 px-5 py-3">
           <span className="flex-1 font-semibold">Question</span>
@@ -263,6 +264,7 @@ const DecisionModelFields: React.FC<DecisionModelFieldsProps> = ({
           })}
         </div>
       </div>
+      )}
 
       <Field>
         <FieldLabel>Add a question</FieldLabel>

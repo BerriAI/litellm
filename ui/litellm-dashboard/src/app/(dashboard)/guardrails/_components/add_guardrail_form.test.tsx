@@ -90,8 +90,8 @@ describe("AddGuardrailForm decision model questions", () => {
     });
     vi.mocked(modelHubCall).mockResolvedValue({
       data: [
-        { model_group: "jev-latest", providers: ["typesafe"] },
-        { model_group: "gpt-5", providers: ["openai"] },
+        { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
+        { model_group: "gpt-5", providers: ["openai"], mode: "evaluation" },
       ],
     });
   });
@@ -135,6 +135,22 @@ describe("AddGuardrailForm decision model questions", () => {
 
     const modelInput = screen.getByLabelText("Decision Model");
     expect(modelInput).not.toHaveValue("jev-latest");
+  });
+
+  it("hides the questions table until the first question is added", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    await renderDecisionModel(user);
+    await pickTypesafeModel(user);
+
+    expect(screen.queryByText("Action")).not.toBeInTheDocument();
+    expect(screen.getByText("Add a question")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText("Question name"), { target: { value: "invoice_policy" } });
+    fireEvent.change(screen.getByLabelText("Question"), { target: { value: "Is this about invoices?" } });
+    fireEvent.click(screen.getByRole("button", { name: "Add question" }));
+
+    expect(await screen.findByText("Action")).toBeInTheDocument();
+    expect(screen.getByText("Threshold")).toBeInTheDocument();
   });
 
   it("adds a question with the chosen action and threshold and submits its instructions", async () => {
