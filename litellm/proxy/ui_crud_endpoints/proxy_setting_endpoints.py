@@ -39,6 +39,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
     TEAM_ADMIN_RAISE_MAX_BUDGET_PERMISSION,
 )
+from litellm.proxy.management_helpers.audit_logs import track_audit_task
 from litellm.proxy.spend_tracking.ptu_feature_flag import (
     PTU_COST_ATTRIBUTION_ENV_VAR,
     is_ptu_cost_attribution_enabled,
@@ -693,13 +694,15 @@ async def add_allowed_ip(
 
     await proxy_config.save_config(new_config=config)
 
-    asyncio.create_task(
-        create_config_audit_log(
-            param_name="general_settings",
-            action="updated",
-            before_value={"allowed_ips": before_allowed_ips},
-            after_value={"allowed_ips": config["general_settings"]["allowed_ips"]},
-            user_api_key_dict=user_api_key_dict,
+    track_audit_task(
+        asyncio.create_task(
+            create_config_audit_log(
+                param_name="general_settings",
+                action="updated",
+                before_value={"allowed_ips": before_allowed_ips},
+                after_value={"allowed_ips": config["general_settings"]["allowed_ips"]},
+                user_api_key_dict=user_api_key_dict,
+            )
         )
     )
 
@@ -744,13 +747,15 @@ async def delete_allowed_ip(
 
     await proxy_config.save_config(new_config=config)
 
-    asyncio.create_task(
-        create_config_audit_log(
-            param_name="general_settings",
-            action="deleted",
-            before_value={"allowed_ips": before_allowed_ips},
-            after_value={"allowed_ips": config["general_settings"]["allowed_ips"]},
-            user_api_key_dict=user_api_key_dict,
+    track_audit_task(
+        asyncio.create_task(
+            create_config_audit_log(
+                param_name="general_settings",
+                action="deleted",
+                before_value={"allowed_ips": before_allowed_ips},
+                after_value={"allowed_ips": config["general_settings"]["allowed_ips"]},
+                user_api_key_dict=user_api_key_dict,
+            )
         )
     )
 
@@ -1092,13 +1097,15 @@ async def _update_litellm_setting(
     # never surfaces as a 500 after save_config has already committed,
     # matching the create_object_audit_log pattern used elsewhere
     # (e.g. model_management_endpoints).
-    asyncio.create_task(
-        create_config_audit_log(
-            param_name=settings_key,
-            action="updated",
-            before_value=before_value,
-            after_value=in_memory_var,
-            user_api_key_dict=user_api_key_dict,
+    track_audit_task(
+        asyncio.create_task(
+            create_config_audit_log(
+                param_name=settings_key,
+                action="updated",
+                before_value=before_value,
+                after_value=in_memory_var,
+                user_api_key_dict=user_api_key_dict,
+            )
         )
     )
 
@@ -1309,14 +1316,16 @@ async def update_sso_settings(
         },
     )
 
-    asyncio.create_task(
-        create_config_audit_log(
-            param_name="sso_config",
-            action="updated",
-            before_value=before_sso_data,
-            after_value=sso_data,
-            user_api_key_dict=user_api_key_dict,
-            table_name=LitellmTableNames.SSO_CONFIG_TABLE_NAME,
+    track_audit_task(
+        asyncio.create_task(
+            create_config_audit_log(
+                param_name="sso_config",
+                action="updated",
+                before_value=before_sso_data,
+                after_value=sso_data,
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.SSO_CONFIG_TABLE_NAME,
+            )
         )
     )
 
@@ -1485,13 +1494,15 @@ async def update_ui_theme_settings(
     # Persist only the two owned env vars, merged against the existing DB row.
     await proxy_config.save_environment_variables(env_updates)
 
-    asyncio.create_task(
-        create_config_audit_log(
-            param_name="ui_theme_config",
-            action="updated",
-            before_value=before_theme,
-            after_value=theme_data,
-            user_api_key_dict=user_api_key_dict,
+    track_audit_task(
+        asyncio.create_task(
+            create_config_audit_log(
+                param_name="ui_theme_config",
+                action="updated",
+                before_value=before_theme,
+                after_value=theme_data,
+                user_api_key_dict=user_api_key_dict,
+            )
         )
     )
 
@@ -2004,14 +2015,16 @@ async def update_ui_settings(
     sanitized: Final = {k: v for k, v in ui_settings.items() if k in ALLOWED_UI_SETTINGS_FIELDS}
     await user_api_key_cache.async_set_cache(key=UI_SETTINGS_CACHE_KEY, value=sanitized, ttl=UI_SETTINGS_CACHE_TTL)
 
-    asyncio.create_task(
-        create_config_audit_log(
-            param_name="ui_settings",
-            action="updated",
-            before_value=existing,
-            after_value=ui_settings,
-            user_api_key_dict=user_api_key_dict,
-            table_name=LitellmTableNames.UI_SETTINGS_TABLE_NAME,
+    track_audit_task(
+        asyncio.create_task(
+            create_config_audit_log(
+                param_name="ui_settings",
+                action="updated",
+                before_value=existing,
+                after_value=ui_settings,
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.UI_SETTINGS_TABLE_NAME,
+            )
         )
     )
 

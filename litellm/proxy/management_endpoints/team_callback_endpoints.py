@@ -203,6 +203,7 @@ async def _emit_team_callback_audit_log(
     from litellm.proxy.management_helpers.audit_logs import (
         create_audit_log_for_update,
         is_audit_logging_enabled,
+        track_audit_task,
     )
     from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
@@ -212,18 +213,20 @@ async def _emit_team_callback_audit_log(
     redacted_before: Final = _redact_callback_secrets(before_metadata)
     redacted_after: Final = _redact_callback_secrets(after_metadata)
 
-    task: Final = asyncio.create_task(
-        create_audit_log_for_update(
-            request_data=LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
-                changed_by_api_key=user_api_key_dict.api_key,
-                table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                object_id=team_id,
-                action="updated",
-                updated_values=json.dumps({"metadata": redacted_after}, default=str),
-                before_value=json.dumps({"metadata": redacted_before}, default=str),
+    task: Final = track_audit_task(
+        asyncio.create_task(
+            create_audit_log_for_update(
+                request_data=LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=litellm_changed_by or user_api_key_dict.user_id or litellm_proxy_admin_name,
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                    object_id=team_id,
+                    action="updated",
+                    updated_values=json.dumps({"metadata": redacted_after}, default=str),
+                    before_value=json.dumps({"metadata": redacted_before}, default=str),
+                )
             )
         )
     )

@@ -5,7 +5,7 @@ Functions to create audit logs for LiteLLM Proxy
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Final
+from typing import Final, TypeVar
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -134,6 +134,48 @@ def _audit_log_task_done_callback(task: asyncio.Task) -> None:
         verbose_proxy_logger.error("Audit log callback task failed: %s", exc, exc_info=exc)
 
 
+_T: Final = TypeVar("_T")
+
+
+class AuditTaskRegistry:
+    __slots__ = ("_pending_tasks",)
+
+    def __init__(self) -> None:
+        self._pending_tasks: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: background task tracking
+
+    def track(self, task: asyncio.Task[_T]) -> asyncio.Task[_T]:
+        if task.done() or task in self._pending_tasks:
+            return task
+        self._pending_tasks.add(task)
+        task.add_done_callback(self._on_task_done)
+        return task
+
+    def _on_task_done(self, task: asyncio.Task[object]) -> None:
+        self._pending_tasks.discard(task)
+        _audit_log_task_done_callback(task)
+
+    async def drain(self, timeout: float = 5.0) -> None:
+        loop: Final = asyncio.get_running_loop()
+        deadline: Final = loop.time() + timeout
+        while self._pending_tasks:
+            _, pending = await asyncio.wait(tuple(self._pending_tasks), timeout=max(deadline - loop.time(), 0))
+            if pending:
+                self._pending_tasks.difference_update(pending)
+                verbose_proxy_logger.warning("Timed out draining %d audit tasks on shutdown", len(pending))
+                return
+
+
+_audit_task_registry: Final = AuditTaskRegistry()
+
+
+def track_audit_task(task: asyncio.Task[_T]) -> asyncio.Task[_T]:
+    return _audit_task_registry.track(task)
+
+
+async def drain_audit_tasks(timeout: float = 5.0) -> None:
+    await _audit_task_registry.drain(timeout=timeout)
+
+
 async def _dispatch_audit_log_to_callbacks(
     request_data: LiteLLM_AuditLogs,
 ) -> None:
@@ -153,8 +195,7 @@ async def _dispatch_audit_log_to_callbacks(
                     continue
 
             if isinstance(resolved, CustomLogger):
-                task = asyncio.create_task(resolved.async_log_audit_log_event(payload))
-                task.add_done_callback(_audit_log_task_done_callback)
+                track_audit_task(asyncio.create_task(resolved.async_log_audit_log_event(payload)))
         except Exception as e:
             verbose_proxy_logger.error("Failed dispatching audit log to callback: %s", e)
 
@@ -205,11 +246,12 @@ async def create_object_audit_log(
 
 
 async def create_audit_log_for_update(request_data: LiteLLM_AuditLogs):
-    """
-    Create an audit log for an object.
-    """
     if not is_audit_logging_enabled():
         return
+
+    current_task: Final = asyncio.current_task()
+    if current_task is not None:
+        track_audit_task(current_task)
 
     from litellm.proxy.proxy_server import premium_user, prisma_client
 

@@ -91,7 +91,7 @@ from litellm.proxy.management_helpers.access_group_model_sync import (
     sync_access_groups_for_deleted_model,
     sync_access_groups_for_renamed_model,
 )
-from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
+from litellm.proxy.management_helpers.audit_logs import create_object_audit_log, track_audit_task
 from litellm.proxy.management_helpers.auto_router_permissions import (
     MemberAutoRouterWrite,
     StoredAutoRouterIdentity,
@@ -1340,16 +1340,18 @@ async def patch_model(
         reload_outcome: Final = await clear_cache()
 
         ## CREATE AUDIT LOG ##
-        asyncio.create_task(
-            create_object_audit_log(
-                object_id=model_id,
-                action="updated",
-                user_api_key_dict=user_api_key_dict,
-                table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
-                before_value=db_model.model_dump_json(exclude_none=True),
-                after_value=updated_model.model_dump_json(exclude_none=True),
-                litellm_changed_by=user_api_key_dict.user_id,
-                litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+        track_audit_task(
+            asyncio.create_task(
+                create_object_audit_log(
+                    object_id=model_id,
+                    action="updated",
+                    user_api_key_dict=user_api_key_dict,
+                    table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                    before_value=db_model.model_dump_json(exclude_none=True),
+                    after_value=updated_model.model_dump_json(exclude_none=True),
+                    litellm_changed_by=user_api_key_dict.user_id,
+                    litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+                )
             )
         )
 
@@ -1446,18 +1448,22 @@ async def _set_model_blocked_status(
         live_before_reload: Final = live_model_ids_snapshot()
         reload_outcome: Final = await clear_cache()
 
-        asyncio.create_task(
-            create_object_audit_log(
-                object_id=data.model_id,
-                action=action,
-                user_api_key_dict=user_api_key_dict,
-                table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
-                before_value=db_model.model_dump_json(exclude_none=True),
-                after_value=(
-                    updated_model.model_dump_json(exclude_none=True) if isinstance(updated_model, BaseModel) else None
-                ),
-                litellm_changed_by=litellm_changed_by,
-                litellm_proxy_admin_name=litellm_proxy_admin_name,
+        track_audit_task(
+            asyncio.create_task(
+                create_object_audit_log(
+                    object_id=data.model_id,
+                    action=action,
+                    user_api_key_dict=user_api_key_dict,
+                    table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                    before_value=db_model.model_dump_json(exclude_none=True),
+                    after_value=(
+                        updated_model.model_dump_json(exclude_none=True)
+                        if isinstance(updated_model, BaseModel)
+                        else None
+                    ),
+                    litellm_changed_by=litellm_changed_by,
+                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+                )
             )
         )
 
@@ -2398,16 +2404,20 @@ async def delete_model(
             )
 
             ## CREATE AUDIT LOG ##
-            asyncio.create_task(
-                create_object_audit_log(
-                    object_id=model_info.id,
-                    action="deleted",
-                    user_api_key_dict=user_api_key_dict,
-                    table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
-                    before_value=result.model_dump_json(exclude_none=True),
-                    after_value=None,
-                    litellm_changed_by=user_api_key_dict.user_id,
-                    litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+            track_audit_task(
+                asyncio.create_task(
+                    create_object_audit_log(
+                        object_id=model_info.id,
+                        action="deleted",
+                        user_api_key_dict=user_api_key_dict,
+                        table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                        before_value=(
+                            result.model_dump_json(exclude_none=True) if isinstance(result, BaseModel) else None
+                        ),
+                        after_value=None,
+                        litellm_changed_by=user_api_key_dict.user_id,
+                        litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+                    )
                 )
             )
             return {"message": f"Model: {result.model_id} deleted successfully"}
@@ -2654,18 +2664,22 @@ async def add_new_model(
             )
 
         ## CREATE AUDIT LOG ##
-        asyncio.create_task(
-            create_object_audit_log(
-                object_id=model_response.model_id,
-                action="created",
-                user_api_key_dict=user_api_key_dict,
-                table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
-                before_value=None,
-                after_value=(
-                    model_response.model_dump_json(exclude_none=True) if isinstance(model_response, BaseModel) else None
-                ),
-                litellm_changed_by=user_api_key_dict.user_id,
-                litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+        track_audit_task(
+            asyncio.create_task(
+                create_object_audit_log(
+                    object_id=model_response.model_id,
+                    action="created",
+                    user_api_key_dict=user_api_key_dict,
+                    table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                    before_value=None,
+                    after_value=(
+                        model_response.model_dump_json(exclude_none=True)
+                        if isinstance(model_response, BaseModel)
+                        else None
+                    ),
+                    litellm_changed_by=user_api_key_dict.user_id,
+                    litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+                )
             )
         )
 
@@ -2873,24 +2887,26 @@ async def update_model(
             live_before_reload: Final = live_model_ids_snapshot()
             reload_outcome: Final = await clear_cache()
             ## CREATE AUDIT LOG ##
-            asyncio.create_task(
-                create_object_audit_log(
-                    object_id=_model_id,
-                    action="updated",
-                    user_api_key_dict=user_api_key_dict,
-                    table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
-                    before_value=(
-                        existing_model_row.model_dump_json(exclude_none=True)
-                        if isinstance(existing_model_row, BaseModel)
-                        else None
-                    ),
-                    after_value=(
-                        model_response.model_dump_json(exclude_none=True)
-                        if isinstance(model_response, BaseModel)
-                        else None
-                    ),
-                    litellm_changed_by=user_api_key_dict.user_id,
-                    litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+            track_audit_task(
+                asyncio.create_task(
+                    create_object_audit_log(
+                        object_id=_model_id,
+                        action="updated",
+                        user_api_key_dict=user_api_key_dict,
+                        table_name=LitellmTableNames.PROXY_MODEL_TABLE_NAME,
+                        before_value=(
+                            existing_model_row.model_dump_json(exclude_none=True)
+                            if isinstance(existing_model_row, BaseModel)
+                            else None
+                        ),
+                        after_value=(
+                            model_response.model_dump_json(exclude_none=True)
+                            if isinstance(model_response, BaseModel)
+                            else None
+                        ),
+                        litellm_changed_by=user_api_key_dict.user_id,
+                        litellm_proxy_admin_name=LITELLM_PROXY_ADMIN_NAME,
+                    )
                 )
             )
 

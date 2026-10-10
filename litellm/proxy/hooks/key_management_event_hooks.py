@@ -54,6 +54,7 @@ class KeyManagementEventHooks:
             create_audit_log_for_update,
             get_audit_log_changed_by,
             is_audit_logging_enabled,
+            track_audit_task,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
@@ -66,22 +67,24 @@ class KeyManagementEventHooks:
 
         if is_audit_logging_enabled():
             _updated_values: Final = response.model_dump_json(exclude_none=True)
-            asyncio.create_task(
-                create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        ),
-                        changed_by_api_key=user_api_key_dict.api_key,
-                        table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=response.token_id or "",
-                        action="created",
-                        updated_values=_updated_values,
-                        before_value=None,
+            track_audit_task(
+                asyncio.create_task(
+                    create_audit_log_for_update(
+                        request_data=LiteLLM_AuditLogs(
+                            id=str(uuid.uuid4()),
+                            updated_at=datetime.now(timezone.utc),
+                            changed_by=get_audit_log_changed_by(
+                                litellm_changed_by=litellm_changed_by,
+                                user_api_key_dict=user_api_key_dict,
+                                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                            ),
+                            changed_by_api_key=user_api_key_dict.api_key,
+                            table_name=LitellmTableNames.KEY_TABLE_NAME,
+                            object_id=response.token_id or "",
+                            action="created",
+                            updated_values=_updated_values,
+                            before_value=None,
+                        )
                     )
                 )
             )
@@ -115,6 +118,7 @@ class KeyManagementEventHooks:
             create_audit_log_for_update,
             get_audit_log_changed_by,
             is_audit_logging_enabled,
+            track_audit_task,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
@@ -154,7 +158,7 @@ class KeyManagementEventHooks:
                 if "project_id" in data.model_fields_set and data.project_id is None
                 else audit_log
             )
-            asyncio.create_task(create_audit_log_for_update(request_data=request_data))
+            track_audit_task(asyncio.create_task(create_audit_log_for_update(request_data=request_data)))
 
     @staticmethod
     async def async_key_rotated_hook(
@@ -168,6 +172,7 @@ class KeyManagementEventHooks:
             create_audit_log_for_update,
             get_audit_log_changed_by,
             is_audit_logging_enabled,
+            track_audit_task,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
@@ -206,22 +211,24 @@ class KeyManagementEventHooks:
 
         # store the audit log
         if is_audit_logging_enabled() and existing_key_row.token is not None:
-            asyncio.create_task(
-                create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        ),
-                        changed_by_api_key=user_api_key_dict.token,
-                        table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=existing_key_row.token,
-                        action="rotated",
-                        updated_values=response.model_dump_json(exclude_none=True),
-                        before_value=existing_key_row.model_dump_json(exclude_none=True),
+            track_audit_task(
+                asyncio.create_task(
+                    create_audit_log_for_update(
+                        request_data=LiteLLM_AuditLogs(
+                            id=str(uuid.uuid4()),
+                            updated_at=datetime.now(timezone.utc),
+                            changed_by=get_audit_log_changed_by(
+                                litellm_changed_by=litellm_changed_by,
+                                user_api_key_dict=user_api_key_dict,
+                                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                            ),
+                            changed_by_api_key=user_api_key_dict.token,
+                            table_name=LitellmTableNames.KEY_TABLE_NAME,
+                            object_id=existing_key_row.token,
+                            action="rotated",
+                            updated_values=response.model_dump_json(exclude_none=True),
+                            before_value=existing_key_row.model_dump_json(exclude_none=True),
+                        )
                     )
                 )
             )
@@ -257,6 +264,7 @@ class KeyManagementEventHooks:
             create_audit_log_for_update,
             get_audit_log_changed_by,
             is_audit_logging_enabled,
+            track_audit_task,
         )
         from litellm.proxy.proxy_server import litellm_proxy_admin_name
 
@@ -268,22 +276,24 @@ class KeyManagementEventHooks:
                 continue
             _key_row = key_row.model_dump_json(exclude_none=True)
 
-            asyncio.create_task(
-                create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        ),
-                        changed_by_api_key=user_api_key_dict.token,
-                        table_name=LitellmTableNames.KEY_TABLE_NAME,
-                        object_id=key_row.token,
-                        action="deleted",
-                        updated_values="{}",
-                        before_value=_key_row,
+            track_audit_task(
+                asyncio.create_task(
+                    create_audit_log_for_update(
+                        request_data=LiteLLM_AuditLogs(
+                            id=str(uuid.uuid4()),
+                            updated_at=datetime.now(timezone.utc),
+                            changed_by=get_audit_log_changed_by(
+                                litellm_changed_by=litellm_changed_by,
+                                user_api_key_dict=user_api_key_dict,
+                                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                            ),
+                            changed_by_api_key=user_api_key_dict.token,
+                            table_name=LitellmTableNames.KEY_TABLE_NAME,
+                            object_id=key_row.token,
+                            action="deleted",
+                            updated_values="{}",
+                            before_value=_key_row,
+                        )
                     )
                 )
             )

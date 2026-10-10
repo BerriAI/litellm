@@ -724,6 +724,7 @@ from litellm.proxy.management_endpoints.workflow_management_endpoints import (
 from litellm.proxy.management_helpers.audit_logs import (
     create_audit_log_for_update,
     create_object_audit_log,
+    track_audit_task,
 )
 from litellm.proxy.management_helpers.team_metadata_validation import (
     TEAM_METADATA_SCHEMA_REGISTRY,
@@ -1183,6 +1184,12 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if worker_heartbeat is not None and prisma_client:
         await worker_heartbeat.deregister()
+    try:
+        from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
+
+        await drain_audit_tasks()
+    except Exception as e:  # noqa: BLE001  # shutdown must continue even if the drain fails
+        verbose_proxy_logger.exception("Error draining audit tasks on shutdown: %s", e)
     if prisma_client:
         # Drain the SGR fold first: it lives in memory, so an un-drained interval
         # is lost, and a write attempted after disconnect raises
@@ -18278,9 +18285,11 @@ async def update_config(
                         existing["alerting"].append("slack")
                 existing[k] = v
             await _upsert_section("general_settings", existing)
-            asyncio.create_task(
-                create_config_audit_log(
-                    "general_settings", "updated", before_general_settings, existing, user_api_key_dict
+            track_audit_task(
+                asyncio.create_task(
+                    create_config_audit_log(
+                        "general_settings", "updated", before_general_settings, existing, user_api_key_dict
+                    )
                 )
             )
 
@@ -18296,9 +18305,11 @@ async def update_config(
                 proxy_config.encrypt_env_variables_for_db(environment_variables=config_info.environment_variables)
             )
             await _upsert_section("environment_variables", existing)
-            asyncio.create_task(
-                create_config_audit_log(
-                    "environment_variables", "updated", before_environment_variables, existing, user_api_key_dict
+            track_audit_task(
+                asyncio.create_task(
+                    create_config_audit_log(
+                        "environment_variables", "updated", before_environment_variables, existing, user_api_key_dict
+                    )
                 )
             )
 
@@ -18328,9 +18339,11 @@ async def update_config(
                     merged["success_callback"] = list(set(incoming_cb))
 
             await _upsert_section("litellm_settings", merged)
-            asyncio.create_task(
-                create_config_audit_log(
-                    "litellm_settings", "updated", before_litellm_settings, merged, user_api_key_dict
+            track_audit_task(
+                asyncio.create_task(
+                    create_config_audit_log(
+                        "litellm_settings", "updated", before_litellm_settings, merged, user_api_key_dict
+                    )
                 )
             )
 
@@ -18340,9 +18353,11 @@ async def update_config(
             before_router_settings: Final = copy.deepcopy(existing)
             new_router_settings: Final = {**existing, **router_settings_updates}
             await _upsert_section("router_settings", new_router_settings)
-            asyncio.create_task(
-                create_config_audit_log(
-                    "router_settings", "updated", before_router_settings, new_router_settings, user_api_key_dict
+            track_audit_task(
+                asyncio.create_task(
+                    create_config_audit_log(
+                        "router_settings", "updated", before_router_settings, new_router_settings, user_api_key_dict
+                    )
                 )
             )
 
@@ -18560,9 +18575,11 @@ async def update_config_general_settings(
     if is_resource_list("general_settings", data.field_name):
         stored_endpoints: Final = general_settings.get("pass_through_endpoints")
         await proxy_config.serve_pass_through_endpoints(stored_endpoints if isinstance(stored_endpoints, list) else ())
-    asyncio.create_task(
-        create_config_audit_log(
-            "general_settings", "updated", before_general_settings, general_settings, user_api_key_dict
+    track_audit_task(
+        asyncio.create_task(
+            create_config_audit_log(
+                "general_settings", "updated", before_general_settings, general_settings, user_api_key_dict
+            )
         )
     )
 
@@ -18911,7 +18928,9 @@ async def _persist_general_settings_ui_litellm_field(
         config["litellm_settings"] = {}
     config["litellm_settings"][field_name] = validated
     await proxy_config.save_config(new_config=config)
-    asyncio.create_task(create_config_audit_log(field_name, "updated", before_value, validated, user_api_key_dict))
+    track_audit_task(
+        asyncio.create_task(create_config_audit_log(field_name, "updated", before_value, validated, user_api_key_dict))
+    )
     return {"message": f"Field {field_name} updated", "status": "success"}
 
 
@@ -18924,7 +18943,11 @@ async def _reset_general_settings_ui_litellm_field(field_name: str, user_api_key
     if "litellm_settings" in config:
         config["litellm_settings"].pop(field_name, None)
     await proxy_config.save_config(new_config=config)
-    asyncio.create_task(create_config_audit_log(field_name, "deleted", before_value, default_value, user_api_key_dict))
+    track_audit_task(
+        asyncio.create_task(
+            create_config_audit_log(field_name, "deleted", before_value, default_value, user_api_key_dict)
+        )
+    )
     return {"message": f"Field {field_name} reset", "status": "success"}
 
 
@@ -19182,9 +19205,11 @@ async def delete_config_general_settings(
     if is_resource_list("general_settings", data.field_name):
         stored_endpoints: Final = general_settings.get("pass_through_endpoints")
         await proxy_config.serve_pass_through_endpoints(stored_endpoints if isinstance(stored_endpoints, list) else ())
-    asyncio.create_task(
-        create_config_audit_log(
-            "general_settings", "deleted", before_general_settings, general_settings, user_api_key_dict
+    track_audit_task(
+        asyncio.create_task(
+            create_config_audit_log(
+                "general_settings", "deleted", before_general_settings, general_settings, user_api_key_dict
+            )
         )
     )
 
@@ -19248,13 +19273,15 @@ async def delete_callback(
         # Save the updated configuration
         await proxy_config.save_config(new_config=config)
 
-        asyncio.create_task(
-            create_config_audit_log(
-                "litellm_settings",
-                "deleted",
-                {"success_callback": before_success_callbacks},
-                {"success_callback": success_callbacks},
-                user_api_key_dict,
+        track_audit_task(
+            asyncio.create_task(
+                create_config_audit_log(
+                    "litellm_settings",
+                    "deleted",
+                    {"success_callback": before_success_callbacks},
+                    {"success_callback": success_callbacks},
+                    user_api_key_dict,
+                )
             )
         )
 

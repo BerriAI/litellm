@@ -8,6 +8,7 @@ from pydantic import Field, ValidationError, model_validator
 from litellm._uuid import uuid4
 from litellm.proxy._types import LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management_helpers.audit_logs import track_audit_task
 from litellm.repositories.user_banner_repository import USER_BANNER_ROW_ID, UserBannerRepository
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -117,14 +118,16 @@ async def update_user_banner(
 
     await repository.upsert_settings(json.dumps(banner.model_dump()))
 
-    asyncio.create_task(
-        create_config_audit_log(
-            param_name=USER_BANNER_ROW_ID,
-            action="updated",
-            before_value=before.model_dump(),
-            after_value=banner.model_dump(),
-            user_api_key_dict=user_api_key_dict,
-            table_name=LitellmTableNames.UI_SETTINGS_TABLE_NAME,
+    track_audit_task(
+        asyncio.create_task(
+            create_config_audit_log(
+                param_name=USER_BANNER_ROW_ID,
+                action="updated",
+                before_value=before.model_dump(),
+                after_value=banner.model_dump(),
+                user_api_key_dict=user_api_key_dict,
+                table_name=LitellmTableNames.UI_SETTINGS_TABLE_NAME,
+            )
         )
     )
 

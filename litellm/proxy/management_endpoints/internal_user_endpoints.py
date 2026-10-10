@@ -75,6 +75,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (  # noq
     generate_key_helper_fn,
     prepare_metadata_fields,
 )
+from litellm.proxy.management_helpers.audit_logs import track_audit_task
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     handle_update_object_permission_common,
@@ -670,11 +671,13 @@ async def new_user(
         #########################################################
         ########## USER CREATED HOOK ################
         #########################################################
-        asyncio.create_task(
-            UserManagementEventHooks.async_user_created_hook(
-                data=data,
-                response=new_user_response,
-                user_api_key_dict=user_api_key_dict,
+        track_audit_task(
+            asyncio.create_task(
+                UserManagementEventHooks.async_user_created_hook(
+                    data=data,
+                    response=new_user_response,
+                    user_api_key_dict=user_api_key_dict,
+                )
             )
         )
         #########################################################
@@ -1373,15 +1376,19 @@ async def _schedule_user_update_audit_log(
         updated_user_row: Final = await _user_table(prisma_client).find_first(where={"user_id": response["user_id"]})
         if updated_user_row:
             user_row_typed: Final = LiteLLM_UserTable.model_validate(updated_user_row.model_dump(exclude_none=True))
-            asyncio.create_task(
-                UserManagementEventHooks.create_internal_user_audit_log(
-                    user_id=user_row_typed.user_id,
-                    action="updated",
-                    litellm_changed_by=litellm_changed_by or user_api_key_dict.user_id,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_proxy_admin_name=litellm_proxy_admin_name,
-                    before_value=(existing_user_row.model_dump_json(exclude_none=True) if existing_user_row else None),
-                    after_value=user_row_typed.model_dump_json(exclude_none=True),
+            track_audit_task(
+                asyncio.create_task(
+                    UserManagementEventHooks.create_internal_user_audit_log(
+                        user_id=user_row_typed.user_id,
+                        action="updated",
+                        litellm_changed_by=litellm_changed_by or user_api_key_dict.user_id,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        before_value=(
+                            existing_user_row.model_dump_json(exclude_none=True) if existing_user_row else None
+                        ),
+                        after_value=user_row_typed.model_dump_json(exclude_none=True),
+                    )
                 )
             )
     except Exception as audit_error:
@@ -2015,15 +2022,17 @@ async def bulk_user_update(
 
             # Create single audit log entry for bulk operation
             try:
-                asyncio.create_task(
-                    UserManagementEventHooks.create_internal_user_audit_log(
-                        user_id=user_api_key_dict.user_id or "",
-                        action="updated",
-                        litellm_changed_by=litellm_changed_by or user_api_key_dict.user_id,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        before_value=f"Updated {len(all_users_in_db)} users",
-                        after_value=json.dumps(non_default_values),
+                track_audit_task(
+                    asyncio.create_task(
+                        UserManagementEventHooks.create_internal_user_audit_log(
+                            user_id=user_api_key_dict.user_id or "",
+                            action="updated",
+                            litellm_changed_by=litellm_changed_by or user_api_key_dict.user_id,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                            before_value=f"Updated {len(all_users_in_db)} users",
+                            after_value=json.dumps(non_default_values),
+                        )
                     )
                 )
             except Exception as audit_error:
@@ -2525,22 +2534,24 @@ async def delete_user(
             # make an audit log for each team deleted
             _user_row = user_row.model_dump_json(exclude_none=True)
 
-            asyncio.create_task(
-                create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        ),
-                        changed_by_api_key=user_api_key_dict.api_key,
-                        table_name=LitellmTableNames.USER_TABLE_NAME,
-                        object_id=user_id,
-                        action="deleted",
-                        updated_values="{}",
-                        before_value=_user_row,
+            track_audit_task(
+                asyncio.create_task(
+                    create_audit_log_for_update(
+                        request_data=LiteLLM_AuditLogs(
+                            id=str(uuid.uuid4()),
+                            updated_at=datetime.now(timezone.utc),
+                            changed_by=get_audit_log_changed_by(
+                                litellm_changed_by=litellm_changed_by,
+                                user_api_key_dict=user_api_key_dict,
+                                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                            ),
+                            changed_by_api_key=user_api_key_dict.api_key,
+                            table_name=LitellmTableNames.USER_TABLE_NAME,
+                            object_id=user_id,
+                            action="deleted",
+                            updated_values="{}",
+                            before_value=_user_row,
+                        )
                     )
                 )
             )

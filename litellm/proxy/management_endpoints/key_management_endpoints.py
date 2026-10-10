@@ -121,6 +121,7 @@ from litellm.proxy.management_helpers.access_group_key_sync import (
     sync_key_regeneration_access_group_membership,
     sync_key_update_access_group_membership,
 )
+from litellm.proxy.management_helpers.audit_logs import track_audit_task
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     ObjectPermissionUpsert,
@@ -1622,12 +1623,14 @@ async def _common_key_generation_helper(
 
     response.token = response.token_id  # remap token to use the hash, and leave the key in the `key` field [TODO]: clean up generate_key_helper_fn to do this
 
-    asyncio.create_task(
-        KeyManagementEventHooks.async_key_generated_hook(
-            data=data,
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
+    track_audit_task(
+        asyncio.create_task(
+            KeyManagementEventHooks.async_key_generated_hook(
+                data=data,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
         )
     )
 
@@ -3097,13 +3100,15 @@ async def _process_single_key_update(
     )
 
     # Trigger async hook
-    asyncio.create_task(
-        KeyManagementEventHooks.async_key_updated_hook(
-            data=key_request,
-            existing_key_row=existing_key_row,
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
+    track_audit_task(
+        asyncio.create_task(
+            KeyManagementEventHooks.async_key_updated_hook(
+                data=key_request,
+                existing_key_row=existing_key_row,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
         )
     )
 
@@ -3815,13 +3820,15 @@ async def update_key_fn(
                         redis_err,
                     )
 
-        asyncio.create_task(
-            KeyManagementEventHooks.async_key_updated_hook(
-                data=data,
-                existing_key_row=existing_key_row,
-                response=response,
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=litellm_changed_by,
+        track_audit_task(
+            asyncio.create_task(
+                KeyManagementEventHooks.async_key_updated_hook(
+                    data=data,
+                    existing_key_row=existing_key_row,
+                    response=response,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=litellm_changed_by,
+                )
             )
         )
 
@@ -4391,13 +4398,15 @@ async def delete_key_fn(
             "/keys/delete - cache after delete: %s", user_api_key_cache.key_object_cache.in_memory_cache.cache_dict
         )
 
-        asyncio.create_task(
-            KeyManagementEventHooks.async_key_deleted_hook(
-                data=data,
-                keys_being_deleted=_keys_being_deleted,
-                user_api_key_dict=user_api_key_dict,
-                litellm_changed_by=litellm_changed_by,
-                response=number_deleted_keys,
+        track_audit_task(
+            asyncio.create_task(
+                KeyManagementEventHooks.async_key_deleted_hook(
+                    data=data,
+                    keys_being_deleted=_keys_being_deleted,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_changed_by=litellm_changed_by,
+                    response=number_deleted_keys,
+                )
             )
         )
 
@@ -5967,13 +5976,15 @@ async def _execute_virtual_key_regeneration(
     )
 
     response: Final = GenerateKeyResponse.model_validate(updated_token_dict)
-    asyncio.create_task(
-        KeyManagementEventHooks.async_key_rotated_hook(
-            data=data,
-            existing_key_row=key_in_db,
-            response=response,
-            user_api_key_dict=user_api_key_dict,
-            litellm_changed_by=litellm_changed_by,
+    track_audit_task(
+        asyncio.create_task(
+            KeyManagementEventHooks.async_key_rotated_hook(
+                data=data,
+                existing_key_row=key_in_db,
+                response=response,
+                user_api_key_dict=user_api_key_dict,
+                litellm_changed_by=litellm_changed_by,
+            )
         )
     )
     return response
@@ -7604,6 +7615,7 @@ async def block_key(
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
         is_audit_logging_enabled,
+        track_audit_task,
     )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -7650,31 +7662,33 @@ async def block_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
-    if is_audit_logging_enabled():
-        asyncio.create_task(
-            create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=get_audit_log_changed_by(
-                        litellm_changed_by=litellm_changed_by,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
-                    ),
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.KEY_TABLE_NAME,
-                    object_id=hashed_token,
-                    action="blocked",
-                    updated_values="{}",
-                    before_value=existing_record.model_dump_json(),
-                )
-            )
-        )
-
     record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
         where={"token": hashed_token},
         data=with_settings_updated_at({"blocked": True}),
     )
+
+    if is_audit_logging_enabled():
+        track_audit_task(
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=hashed_token,
+                        action="blocked",
+                        updated_values="{}",
+                        before_value=existing_record.model_dump_json(),
+                    )
+                )
+            )
+        )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
     await delete_cache_key_object(
@@ -7718,6 +7732,7 @@ async def unblock_key(
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
         is_audit_logging_enabled,
+        track_audit_task,
     )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -7764,31 +7779,33 @@ async def unblock_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
-    if is_audit_logging_enabled():
-        asyncio.create_task(
-            create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=get_audit_log_changed_by(
-                        litellm_changed_by=litellm_changed_by,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
-                    ),
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.KEY_TABLE_NAME,
-                    object_id=hashed_token,
-                    action="unblocked",
-                    updated_values="{}",
-                    before_value=existing_record.model_dump_json(),
-                )
-            )
-        )
-
     record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
         where={"token": hashed_token},
         data=with_settings_updated_at({"blocked": False}),
     )
+
+    if is_audit_logging_enabled():
+        track_audit_task(
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=hashed_token,
+                        action="unblocked",
+                        updated_values="{}",
+                        before_value=existing_record.model_dump_json(),
+                    )
+                )
+            )
+        )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
     await delete_cache_key_object(
