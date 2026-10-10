@@ -60,8 +60,8 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=int(os.environ.get("INTEGRATION_WORKERS", "1")))
     parser.add_argument("--shards", type=int, default=int(os.environ.get("INTEGRATION_CASE_SHARDS", "1")))
     parser.add_argument("--shard-index", type=int, default=int(os.environ.get("INTEGRATION_CASE_SHARD_INDEX", "0")))
-    parser.add_argument("--timings", type=Path)
-    parser.add_argument("--list", action="store_true", help="print the group's test files and exit")
+    parser.add_argument("--shard-files", type=Path)
+    parser.add_argument("--list", action="store_true", help="print selected candidate files and exit")
     parser.add_argument("files", nargs="*", help="run only these files, or pytest node ids inside them, of the group")
     options: Final = parser.parse_intermixed_args()
     root: Final = Path(__file__).resolve().parents[2]
@@ -71,14 +71,14 @@ def main() -> int:
         for path in sorted((root / "tests/integration" / folder).rglob("test_*.py"))
         if str(path.relative_to(root)) not in GITHUB_FILES
     )
-    if options.list:
-        sys.stdout.write("\n".join(group_files) + "\n")
-        return 0
     selection: Final = select(tuple(options.files), group_files)
     if selection.foreign:
         parser.error(f"Not in the {options.group} group: {', '.join(selection.foreign)}")
     if not selection.nodes:
         parser.error(f"No integration test files selected for {options.group}")
+    if options.list:
+        sys.stdout.write("\n".join(sorted({file_of(node) for node in selection.nodes})) + "\n")
+        return 0
     output: Final = options.results.resolve()
     output.mkdir(parents=True, exist_ok=True)
     environment: Final = {
@@ -109,7 +109,7 @@ def main() -> int:
             f"--integration-order-seed={options.order_seed}",
             f"--integration-shard-count={options.shards}",
             f"--integration-shard-index={options.shard_index}",
-            *(("--integration-timings", str(options.timings)) if options.timings is not None else ()),
+            *(("--integration-shard-files", str(options.shard_files)) if options.shard_files is not None else ()),
             f"--junitxml={output / 'junit.xml'}",
             "-o",
             "junit_family=xunit1",

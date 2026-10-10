@@ -16,7 +16,7 @@ from redis import Redis
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
-from tests.integration._support.ordering import CaseTiming, case_shards, collected_case, fixture_groups, parse_timings
+from tests.integration._support.ordering import collected_case, fixture_groups
 from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
 from tests.integration.run import GITHUB_FILES
@@ -25,7 +25,8 @@ COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
 INVENTORY: Final = pytest.StashKey[tuple[str, ...]]()
 REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
 WORKER_INVENTORY: Final = TypeAdapter(tuple[str, ...])
-TIMING_PATH: Final[TypeAdapter[Path | None]] = TypeAdapter(Path | None)
+SHARD_PATH: Final[TypeAdapter[Path | None]] = TypeAdapter(Path | None)
+SHARD_FILES: Final = pytest.StashKey[frozenset[str] | None]()
 INTEGER_OPTION: Final = TypeAdapter(int)
 
 
@@ -48,13 +49,14 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--integration-order-seed", type=int, default=0)
     parser.addoption("--integration-shard-count", type=int, default=1)
     parser.addoption("--integration-shard-index", type=int, default=0)
-    parser.addoption("--integration-timings", type=Path)
+    parser.addoption("--integration-shard-files", type=Path)
 
 
 def pytest_configure(config: pytest.Config) -> None:
     config.addinivalue_line("markers", "integration: owned real-service integration contracts")
     config.addinivalue_line("markers", "covers(*ids): legacy contract IDs kept for existing tests, not enforced")
     config.stash[REPORTS] = []
+    config.stash[SHARD_FILES] = _shard_files(SHARD_PATH.validate_python(config.getoption("integration_shard_files")))
     config.pluginmanager.register(IntegrationReportPlugin(config))
     if os.environ.get("INTEGRATION_ROUTING"):
         config.pluginmanager.register(RoutingPlugin(config))
@@ -100,13 +102,16 @@ def _order_key(seed: int, nodeid: str, group: str = "") -> tuple[bytes, bytes, b
     return _digest(seed, nodeid.split("::", 1)[0]), _digest(seed, group or nodeid), _digest(seed, nodeid)
 
 
-def _timing_content(path: Path | None) -> str:
+def _shard_files(path: Path | None) -> frozenset[str] | None:
     if path is None:
-        return "[]"
+        return None
     try:
-        return path.read_text()
-    except (OSError, UnicodeError):
-        return "[]"
+        files: Final = tuple(path.read_text().splitlines())
+    except (OSError, UnicodeError) as error:
+        raise pytest.UsageError(f"Cannot read integration shard selection: {error}") from error
+    if len(frozenset(files)) != len(files) or any(not file for file in files):
+        raise pytest.UsageError("Integration shard selection contains duplicate or blank files")
+    return frozenset(files)
 
 
 @pytest.hookimpl(wrapper=True)
@@ -134,13 +139,15 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
     index: Final = INTEGER_OPTION.validate_python(config.getoption("integration_shard_index"))
     if count < 1 or not 0 <= index < count:
         raise pytest.UsageError("Integration shard index must be within the positive shard count")
-    if count > 1:
-        timing_path: Final = TIMING_PATH.validate_python(config.getoption("integration_timings"))
-        shards: Final = case_shards(
-            tuple(collected_case(item) for item in owned), count, parse_timings(_timing_content(timing_path))
-        )
-        selected: Final = tuple(item for item in items if item not in owned or item.nodeid in shards[index])
-        deselected: Final = tuple(item for item in owned if item.nodeid not in shards[index])
+    files: Final = config.stash[SHARD_FILES]
+    if count > 1 and files is None:
+        raise pytest.UsageError("Parallel integration runs require CircleCI's shard file selection")
+    if files is not None:
+        available: Final = frozenset(item.nodeid.split("::", 1)[0] for item in owned)
+        if files - available:
+            raise pytest.UsageError(f"Integration shard selected uncollected files: {sorted(files - available)}")
+        selected: Final = tuple(item for item in items if item not in owned or item.nodeid.split("::", 1)[0] in files)
+        deselected: Final = tuple(item for item in owned if item.nodeid.split("::", 1)[0] not in files)
         config.hook.pytest_deselected(items=deselected)
         items[:] = selected
     config.stash[COLLECTED] = tuple(item.nodeid for item in items if item in owned)
@@ -154,15 +161,13 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         return
     collected: Final = session.config.stash.get(COLLECTED, ())
     reports: Final = tuple(report for report in session.config.stash[REPORTS] if report.nodeid in collected)
-    timings: Final = tuple(
-        CaseTiming(nodeid=nodeid, seconds=sum(report.duration for report in reports if report.nodeid == nodeid))
-        for nodeid in collected
-    )
+    inventory: Final = session.config.stash.get(INVENTORY, collected)
+    empty_shard: Final = session.config.stash[SHARD_FILES] == frozenset() and bool(inventory)
     passed: Final = tuple(report.nodeid for report in reports if report.when == "call" and report.passed)
     skipped: Final = tuple(report.nodeid for report in reports if report.skipped)
     complete: Final = (
-        exitstatus == 0
-        and bool(collected)
+        (exitstatus == 0 or (empty_shard and exitstatus == pytest.ExitCode.NO_TESTS_COLLECTED))
+        and (bool(collected) or empty_shard)
         and sorted(collected) == sorted(passed + skipped)
         and not any(report.failed for report in reports)
     )
@@ -172,14 +177,13 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
         json.dumps(
             {
                 "collected": collected,
-                "inventory": session.config.stash.get(INVENTORY, collected),
+                "inventory": inventory,
                 "shard_count": session.config.getoption("integration_shard_count"),
                 "shard_index": session.config.getoption("integration_shard_index"),
                 "passed": passed,
                 "skipped": skipped,
-                "timings": tuple({"nodeid": timing.nodeid, "seconds": timing.seconds} for timing in timings),
                 "complete": complete,
-                "exitstatus": exitstatus,
+                "exitstatus": 0 if complete else exitstatus,
                 "hypothesis_version": version("hypothesis"),
                 "hypothesis_seed": session.config.getoption("hypothesis_seed"),
                 "order_seed": session.config.getoption("integration_order_seed"),
@@ -196,6 +200,8 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
     )
     if not complete and exitstatus == 0:
         session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    if complete and empty_shard:
+        session.exitstatus = pytest.ExitCode.OK
 
 
 @pytest.fixture
