@@ -113,23 +113,84 @@ describe("AddGuardrailForm decision model questions", () => {
     expect(screen.getByLabelText("Decision Model")).toHaveAttribute("placeholder", "No decision models yet");
   });
 
-  it("lists only the garden card's provider models when opened from a card", async () => {
+  const renderFromCard = (visible: boolean, accessToken = "test-token") => (
+    <AddGuardrailForm
+      visible={visible}
+      onClose={vi.fn()}
+      accessToken={accessToken}
+      onSuccess={vi.fn()}
+      preset={GUARDRAIL_PRESETS.dm_typesafe_jev}
+    />
+  );
+
+  it("prefills the garden card's provider model and lists only that provider's models", async () => {
     const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
-    renderWithProviders(
-      <AddGuardrailForm
-        visible={true}
-        onClose={vi.fn()}
-        accessToken="test-token"
-        onSuccess={vi.fn()}
-        preset={GUARDRAIL_PRESETS.dm_typesafe_jev}
-      />,
-    );
+    vi.mocked(modelHubCall).mockResolvedValue({
+      data: [
+        { model_group: "jev-preview", providers: ["typesafe"], mode: "evaluation" },
+        { model_group: "gpt-5", providers: ["openai"], mode: "evaluation" },
+        { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
+      ],
+    });
+    renderWithProviders(renderFromCard(true));
     await waitFor(() => expect(screen.getByLabelText("Guardrail Name")).toHaveValue("TypeSafe Jev"));
     await user.click(screen.getByRole("button", { name: "Next" }));
 
-    await user.click(await screen.findByLabelText("Decision Model"));
-    expect(await screen.findByTitle("jev-latest")).toBeInTheDocument();
+    expect(await screen.findByLabelText("Decision Model")).toHaveValue("jev-latest");
+    await user.click(screen.getByLabelText("Decision Model"));
+    expect(await screen.findByTitle("jev-preview")).toBeInTheDocument();
     expect(screen.queryByTitle("gpt-5")).not.toBeInTheDocument();
+  });
+
+  it("prefills the card's provider model again after the form is closed and reopened", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    const { rerender } = renderWithProviders(renderFromCard(true));
+    await waitFor(() => expect(screen.getByLabelText("Guardrail Name")).toHaveValue("TypeSafe Jev"));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByLabelText("Decision Model")).toHaveValue("jev-latest");
+
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+    rerender(renderFromCard(false));
+    rerender(renderFromCard(true));
+    await waitFor(() => expect(screen.getByLabelText("Guardrail Name")).toHaveValue("TypeSafe Jev"));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+
+    expect(await screen.findByLabelText("Decision Model")).toHaveValue("jev-latest");
+  });
+
+  it("keeps a model the user picked when the model list reloads", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    vi.mocked(modelHubCall).mockResolvedValue({
+      data: [
+        { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
+        { model_group: "jev-preview", providers: ["typesafe"], mode: "evaluation" },
+      ],
+    });
+    const { rerender } = renderWithProviders(renderFromCard(true));
+    await waitFor(() => expect(screen.getByLabelText("Guardrail Name")).toHaveValue("TypeSafe Jev"));
+    await user.click(screen.getByRole("button", { name: "Next" }));
+    expect(await screen.findByLabelText("Decision Model")).toHaveValue("jev-latest");
+    await user.click(screen.getByLabelText("Decision Model"));
+    await user.click(await screen.findByTitle("jev-preview"));
+
+    vi.mocked(modelHubCall).mockResolvedValue({
+      data: [
+        { model_group: "jev-1.13.0", providers: ["typesafe"], mode: "evaluation" },
+        { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
+        { model_group: "jev-preview", providers: ["typesafe"], mode: "evaluation" },
+      ],
+    });
+    rerender(renderFromCard(true, "refreshed-token"));
+    await user.click(screen.getByLabelText("Decision Model"));
+    expect(await screen.findByTitle("jev-1.13.0")).toBeInTheDocument();
+    expect(screen.getByLabelText("Decision Model")).toHaveValue("jev-preview");
+  });
+
+  it("leaves the model empty when the form is not opened from a card", async () => {
+    const user = userEvent.setup({ delay: null, pointerEventsCheck: 0 });
+    await renderDecisionModel(user);
+
+    expect(await screen.findByLabelText("Decision Model")).toHaveValue("");
   });
 
   it("names the card's provider when it has no decision models", async () => {

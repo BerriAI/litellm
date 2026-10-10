@@ -361,6 +361,12 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     }
   }, [preset, visible, guardrailSettings, form]);
 
+  useEffect(() => {
+    if (!visible || !decisionProvider || form.getValues("decision_model")) return;
+    const firstModel = decisionModels[0]?.model;
+    if (firstModel) form.setValue("decision_model", firstModel);
+  }, [visible, decisionProvider, decisionModels, form]);
+
   const handleProviderChange = (value: string) => {
     setSelectedProvider(value);
     // Reset form fields that are provider-specific
