@@ -33,6 +33,7 @@ import {
 } from "./GuardrailFormField";
 import ContentFilterManager, { formatContentFilterDataForAPI } from "./content_filter/ContentFilterManager";
 import CustomCodeModal, { EditGuardrailData } from "./custom_code/CustomCodeModal";
+import { GuardrailSettingsActions } from "./GuardrailSettingsActions";
 import { GuardrailModeCard } from "./GuardrailModeDisplay";
 import { GuardrailReadOnlyDetails } from "./GuardrailReadOnlyDetails";
 import {
@@ -72,11 +73,12 @@ const SectionHeading: React.FC<{ children: React.ReactNode }> = ({ children }) =
 export interface GuardrailInfoProps {
   guardrailId: string;
   onClose: () => void;
+  onDeleted: () => void;
   accessToken: string | null;
   isAdmin: boolean;
 }
 
-const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose, accessToken, isAdmin }) => {
+const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose, onDeleted, accessToken, isAdmin }) => {
   const [guardrailData, setGuardrailData] = useState<any>(null);
   const [guardrailProviderSpecificParams, setGuardrailProviderSpecificParams] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -686,25 +688,21 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
           {isAdmin && (
             <TabsContent value="settings" keepMounted>
               <Card className="block p-6">
-                <div className="flex justify-between items-center mb-4">
-                  <h3 className="text-lg font-medium">Guardrail Settings</h3>
+                <div className="flex items-center gap-2 mb-4">
+                  <h3 className="mr-auto text-lg font-medium">Guardrail Settings</h3>
                   {isConfigGuardrail && (
                     <SimpleTooltip content="Guardrail is defined in the config file and cannot be edited.">
                       <Info role="img" aria-label="Config guardrail details" className="size-4 text-muted-foreground" />
                     </SimpleTooltip>
                   )}
-                  {!isEditing &&
-                    !isConfigGuardrail &&
-                    (guardrailData.litellm_params?.guardrail === "custom_code" ? (
-                      <Button variant="outline" onClick={() => setCustomCodeModalVisible(true)}>
-                        <Code />
-                        Edit Code
-                      </Button>
-                    ) : (
-                      <Button variant="outline" onClick={() => setIsEditing(true)}>
-                        Edit Settings
-                      </Button>
-                    ))}
+                  <GuardrailSettingsActions
+                    guardrail={guardrailData}
+                    isEditing={isEditing}
+                    onEdit={() => setIsEditing(true)}
+                    onEditCode={() => setCustomCodeModalVisible(true)}
+                    accessToken={accessToken}
+                    onDeleted={onDeleted}
+                  />
                 </div>
 
                 {isEditing ? (

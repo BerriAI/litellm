@@ -184,6 +184,10 @@ const GuardrailsPanel: React.FC<GuardrailsPanelProps> = ({ accessToken, userRole
                 <GuardrailInfoView
                   guardrailId={selectedGuardrailId}
                   onClose={closeGuardrailDetail}
+                  onDeleted={() => {
+                    closeGuardrailDetail();
+                    fetchGuardrails();
+                  }}
                   accessToken={accessToken}
                   isAdmin={isAdmin}
                 />
