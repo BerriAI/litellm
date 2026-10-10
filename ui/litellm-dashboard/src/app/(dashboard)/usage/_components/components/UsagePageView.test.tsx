@@ -131,10 +131,25 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
       React.createElement("option", { value: "agent" }, "Agent Usage"),
       React.createElement("option", { value: "user" }, "User Usage"),
       React.createElement("option", { value: "user-agent-activity" }, "User Agent Activity"),
+      React.createElement("option", { value: "builders" }, "Builder Insights"),
     );
   };
   UsageViewSelect.displayName = "UsageViewSelect";
   return { UsageViewSelect };
+});
+
+vi.mock("./builders/BuilderInsights", async () => {
+  const React = await import("react");
+  const MockBuilderInsights = ({ onClose }: { onClose: () => void }) => {
+    return React.createElement(
+      "div",
+      { "data-testid": "builder-insights-view" },
+      React.createElement("button", { onClick: onClose }, "Close builder"),
+    );
+  };
+  return {
+    default: MockBuilderInsights,
+  };
 });
 
 vi.mock("@/components/shared/advanced_date_picker", async () => {
@@ -766,6 +781,33 @@ describe("UsagePage", () => {
       const entityUsageElements = screen.getAllByText("Entity Usage");
       expect(entityUsageElements.length).toBeGreaterThan(0);
     });
+  });
+
+  it("opens Builder Insights for a builder deep link", async () => {
+    renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?builder=hiro" });
+
+    expect(await screen.findByTestId("builder-insights-view")).toBeInTheDocument();
+    expect(screen.getByTestId("usage-view-select")).toHaveValue("builders");
+  });
+
+  it("keeps Builder Insights selected when closing a deep link", async () => {
+    renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?builder=hiro" });
+    await screen.findByTestId("builder-insights-view");
+
+    fireEvent.click(screen.getByRole("button", { name: "Close builder" }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId("usage-view-select")).toHaveValue("builders");
+    });
+  });
+
+  it("does not open Builder Insights for a non-admin builder deep link", () => {
+    const authorizedSession = mockUseAuthorized();
+    mockUseAuthorized.mockReturnValue({ ...authorizedSession, userRole: "Internal User" });
+    renderWithProviders(<UsagePage {...defaultProps} />, { searchParams: "?builder=hiro" });
+
+    expect(screen.queryByTestId("builder-insights-view")).not.toBeInTheDocument();
+    expect(screen.getByTestId("usage-view-select")).toHaveValue("global");
   });
 
   it("should withhold the tag list until it resolves so no empty state is shown while loading", async () => {

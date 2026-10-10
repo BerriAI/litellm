@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { DailyData } from "@/components/UsagePage/types";
-import { bucketSeries, bucketTotals, labelForDate, rollUpBreakdown, seriesBy } from "./overviewData";
+import {
+  bucketSeries,
+  bucketTotals,
+  formatCompactUsdTick,
+  labelForDate,
+  rollUpBreakdown,
+  seriesBy,
+} from "./overviewData";
 
 const metrics = (spend: number) => ({
   spend,
@@ -32,6 +39,12 @@ const day = (date: string, total: number, models: Record<string, number>): Daily
       entities: {},
     },
   }) as unknown as DailyData;
+
+describe("formatCompactUsdTick", () => {
+  it("uses whole-dollar compact labels for chart axes", () => {
+    expect([35, 70, 1000, 8000].map(formatCompactUsdTick)).toEqual(["$35", "$70", "$1K", "$8K"]);
+  });
+});
 
 describe("seriesBy", () => {
   it("keeps a model named date, label or Other from overwriting the day's own fields or the remainder", () => {

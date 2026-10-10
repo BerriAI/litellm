@@ -210,6 +210,32 @@ export const userAgentProduct = (tag: string): string => {
 const familyFor = (product: string): AgentFamily | null =>
   FAMILIES.find((family) => family.match.test(product)) ?? null;
 
+const BUILDER_AGENT_LABELS: Readonly<Record<string, string>> = {
+  browser: "Browser",
+  unlabeled: "Unlabeled",
+};
+
+const BUILDER_AGENT_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  browser: "Browser traffic",
+  unlabeled: "Requests without a User-Agent",
+};
+
+export const agentRowFor = (id: string): AgentRow => {
+  const family = FAMILIES.find((candidate) => candidate.id === id);
+  return {
+    id,
+    label: family?.label ?? BUILDER_AGENT_LABELS[id] ?? id,
+    description: family?.description ?? BUILDER_AGENT_DESCRIPTIONS[id] ?? "Custom client",
+    kind: family?.kind ?? "sdk",
+    logo: family?.logo ?? null,
+    spend: 0,
+    tokens: 0,
+    requests: 0,
+    users: 0,
+    tags: [],
+  };
+};
+
 const isBareTag = (row: TagSummaryRow, product: string) =>
   row.tag.trim().replace(USER_AGENT_PREFIX, "").trim() === product;
 
