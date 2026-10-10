@@ -261,7 +261,7 @@ from litellm.repositories.verification_token_repository import (
 from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.integrations.slack_alerting import DEFAULT_ALERT_TYPES
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ChatCompletionReasoningSummaryTextBlock, ResponsesAPIResponse
 from litellm.types.mcp import (
     MCPDuringCallResponseObject,
     MCPPreCallRequestObject,
@@ -269,7 +269,12 @@ from litellm.types.mcp import (
 )
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.proxy.policy_engine.pipeline_types import PipelineExecutionResult
-from litellm.types.utils import LLMResponseTypes, LoggedLiteLLMParams
+from litellm.types.utils import (
+    ChatCompletionDeltaToolCall,
+    Delta,
+    LLMResponseTypes,
+    LoggedLiteLLMParams,
+)
 from litellm.utils import (
     add_custom_logger_callback_to_specific_event,
 )
@@ -1128,6 +1133,198 @@ def _call_type_for_route(route: str | None) -> str | None:
         return None
     operations: Final = frozenset(call_type.value.removeprefix("a") for call_type in call_types)
     return call_types[0].value if len(operations) == 1 else None
+
+
+StreamingHookResponse: TypeAlias = str | ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream
+
+
+class _StreamingHookResponseText(str):
+    """Marks the exact text object passed to a per-chunk streaming hook."""
+
+
+class _StructuredStreamingGuardrailText(_StreamingHookResponseText):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamingToolCallFragment:
+    choice_index: int
+    tool_index: int
+    name: str
+    arguments: str
+
+    @property
+    def key(self) -> tuple[int, int]:
+        return self.choice_index, self.tool_index
+
+
+StreamingToolCallState: TypeAlias = tuple[_StreamingToolCallFragment, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class _StreamingReasoningFragment:
+    choice_index: int
+    text: str
+
+
+StreamingReasoningState: TypeAlias = tuple[_StreamingReasoningFragment, ...]
+
+
+def _streaming_reasoning_text(delta: Delta) -> str:
+    reasoning: Final = delta.reasoning_content if hasattr(delta, "reasoning_content") else None
+    thinking_blocks: Final = delta.thinking_blocks if hasattr(delta, "thinking_blocks") else None
+    reasoning_items: Final = delta.reasoning_items if hasattr(delta, "reasoning_items") else None
+    thinking: Final = tuple(
+        _thinking_block_text(block) for block in thinking_blocks or () if block["type"] == "thinking"
+    )
+    summaries: Final = tuple(_reasoning_summary_text(item.get("summary") or ()) for item in reasoning_items or ())
+    return "".join((reasoning or "", *thinking, *summaries))
+
+
+def _thinking_block_text(block: Mapping[str, object]) -> str:
+    text: Final = block.get("thinking")
+    return text if isinstance(text, str) else ""
+
+
+def _streaming_reasoning_fragments(response: ModelResponseStream) -> Iterator[_StreamingReasoningFragment]:
+    for choice in response.choices:
+        if text := _streaming_reasoning_text(choice.delta):
+            yield _StreamingReasoningFragment(choice_index=choice.index, text=text)
+
+
+def _reasoning_summary_text(summary: Sequence[ChatCompletionReasoningSummaryTextBlock]) -> str:
+    return "".join(block.get("text", "") for block in summary)
+
+
+def streaming_reasoning_with_response(
+    reasoning: Sequence[_StreamingReasoningFragment], response: object
+) -> StreamingReasoningState:
+    if not isinstance(response, ModelResponseStream):
+        return tuple(reasoning)
+    fragments: Final = (*reasoning, *_streaming_reasoning_fragments(response))
+    indices: Final = tuple(dict.fromkeys(fragment.choice_index for fragment in fragments))
+    return tuple(
+        _StreamingReasoningFragment(
+            choice_index=index,
+            text="".join(fragment.text for fragment in fragments if fragment.choice_index == index),
+        )
+        for index in indices
+    )
+
+
+def _streaming_hook_response_text(*, response_str: str, str_so_far: str | None, response: object) -> str:
+    complete_response: Final = str_so_far + response_str if str_so_far is not None else response_str
+    if complete_response == "" and isinstance(response, (ModelResponse, ModelResponseStream)):
+        return _StreamingHookResponseText(complete_response)
+    return complete_response
+
+
+def _streaming_tool_call_fragments(response: ModelResponseStream) -> Iterator[_StreamingToolCallFragment]:
+    for choice in response.choices:
+        for tool_call in choice.delta.tool_calls or ():
+            if isinstance(tool_call, ChatCompletionDeltaToolCall):
+                yield _StreamingToolCallFragment(
+                    choice_index=choice.index,
+                    tool_index=tool_call.index,
+                    name=tool_call.function.name or "",
+                    arguments=tool_call.function.arguments or "",
+                )
+            else:
+                yield _StreamingToolCallFragment(
+                    choice_index=choice.index,
+                    tool_index=tool_call.index,
+                    name=tool_call.custom.name or "",
+                    arguments=tool_call.custom.input or "",
+                )
+        if choice.delta.function_call is not None:
+            yield _StreamingToolCallFragment(
+                choice_index=choice.index,
+                tool_index=-1,
+                name=choice.delta.function_call.name or "",
+                arguments=choice.delta.function_call.arguments or "",
+            )
+
+
+def _assembled_streaming_tool_calls(
+    fragments: Sequence[_StreamingToolCallFragment],
+) -> StreamingToolCallState:
+    keys: Final = tuple(
+        fragment.key
+        for position, fragment in enumerate(fragments)
+        if fragment.key not in tuple(previous.key for previous in fragments[:position])
+    )
+    return tuple(
+        _StreamingToolCallFragment(
+            choice_index=key[0],
+            tool_index=key[1],
+            name="".join(fragment.name for fragment in fragments if fragment.key == key),
+            arguments="".join(fragment.arguments for fragment in fragments if fragment.key == key),
+        )
+        for key in keys
+    )
+
+
+def streaming_tool_calls_with_response(
+    tool_calls: Sequence[_StreamingToolCallFragment], response: object
+) -> StreamingToolCallState:
+    if not isinstance(response, ModelResponseStream):
+        return tuple(tool_calls)
+    fragments: Final = _streaming_tool_call_fragments(response)
+    return _assembled_streaming_tool_calls((*tool_calls, *fragments))
+
+
+def _streaming_guardrail_response_text(
+    *,
+    complete_response: str,
+    response: object,
+    streaming_tool_calls_so_far: Sequence[_StreamingToolCallFragment],
+    streaming_reasoning_so_far: Sequence[_StreamingReasoningFragment],
+) -> str:
+    if not isinstance(response, ModelResponseStream):
+        return complete_response
+    tool_calls: Final = streaming_tool_calls_with_response(streaming_tool_calls_so_far, response)
+    tool_fields: Final = tuple(
+        "tool_call:"
+        + json.dumps(
+            (tool_call.choice_index, tool_call.tool_index, tool_call.name, tool_call.arguments),
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+        for tool_call in tool_calls
+    )
+    reasoning: Final = streaming_reasoning_with_response(streaming_reasoning_so_far, response)
+    reasoning_fields: Final = tuple(
+        "reasoning:" + json.dumps((fragment.choice_index, fragment.text), ensure_ascii=False, separators=(",", ":"))
+        for fragment in reasoning
+    )
+    structured_fields: Final = (*tool_fields, *reasoning_fields)
+    if not structured_fields:
+        return complete_response
+    return _StructuredStreamingGuardrailText("\n".join((str(complete_response), *structured_fields)))
+
+
+def _is_unchanged_structured_streaming_hook_response(
+    *, callback_response: object, complete_response: str, response_str: str, response: object
+) -> bool:
+    if not isinstance(response, (ModelResponse, ModelResponseStream)):
+        return False
+    if isinstance(complete_response, _StructuredStreamingGuardrailText):
+        return callback_response == complete_response
+    if isinstance(complete_response, _StreamingHookResponseText):
+        return callback_response is complete_response
+    if response_str != "" and not (
+        isinstance(response, ModelResponseStream)
+        and any(
+            choice.delta.tool_calls
+            or choice.delta.function_call is not None
+            or getattr(choice.delta, "reasoning_content", None)
+            or getattr(choice.delta, "thinking_blocks", None)
+            or getattr(choice.delta, "reasoning_items", None)
+            for choice in response.choices
+        )
+    ):
+        return False
+    return callback_response == complete_response
 
 
 _PROXY_ONLY_LLM_API_ERRORS: Final = (HTTPException, ProxyException, GuardrailRaisedException)
@@ -3914,6 +4111,8 @@ class ProxyLogging:
         response: ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream,
         user_api_key_dict: UserAPIKeyAuth,
         str_so_far: str | None = None,
+        streaming_tool_calls_so_far: Sequence[_StreamingToolCallFragment] = (),
+        streaming_reasoning_so_far: Sequence[_StreamingReasoningFragment] = (),
     ):
         """
         Allow user to modify outgoing streaming data -> per chunk
@@ -3933,6 +4132,7 @@ class ProxyLogging:
 
         from litellm.proxy.proxy_server import llm_router
 
+        hook_response: StreamingHookResponse = response  # rebind-ok: each callback may replace the chunk
         response_str: str | None = None
         if isinstance(response, (ModelResponse, ModelResponseStream)):
             response_str = litellm.get_response_string(response_obj=response)
@@ -3980,22 +4180,35 @@ class ProxyLogging:
                     else:
                         _callback = callback
                     if _callback is not None and isinstance(_callback, CustomLogger):
-                        if str_so_far is not None:
-                            complete_response = str_so_far + response_str
-                        else:
-                            complete_response = response_str
+                        complete_response = _streaming_hook_response_text(
+                            response_str=response_str,
+                            str_so_far=str_so_far,
+                            response=hook_response,
+                        )
+                        if isinstance(_callback, CustomGuardrail):
+                            complete_response = _streaming_guardrail_response_text(
+                                complete_response=complete_response,
+                                response=hook_response,
+                                streaming_tool_calls_so_far=streaming_tool_calls_so_far,
+                                streaming_reasoning_so_far=streaming_reasoning_so_far,
+                            )
                         callback_response: (
-                            ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
+                            str | ModelResponse | EmbeddingResponse | ImageResponse | ModelResponseStream | None
                         )
                         callback_response = await _callback.async_post_call_streaming_hook(
                             user_api_key_dict=user_api_key_dict,
                             response=complete_response,
                         )
-                        if callback_response is not None:
-                            response = callback_response
+                        if callback_response is not None and not _is_unchanged_structured_streaming_hook_response(
+                            callback_response=callback_response,
+                            complete_response=complete_response,
+                            response_str=response_str,
+                            response=hook_response,
+                        ):
+                            hook_response = callback_response
                 except Exception as e:
                     raise e
-        return response
+        return hook_response
 
     async def async_post_call_streaming_iterator_hook(
         self,
