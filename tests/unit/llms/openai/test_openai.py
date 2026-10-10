@@ -27,7 +27,14 @@ from litellm.llms.openai.openai import (
     SyncCursorPage,
     Thread,
 )
-from litellm.types.utils import Delta, ImageResponse, ModelResponse, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    Delta,
+    ImageResponse,
+    ModelResponse,
+    ModelResponseStream,
+    PromptTokensDetails,
+    StreamingChoices,
+)
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from openai.types.beta.assistant import Assistant
@@ -129,6 +136,59 @@ async def test_acompletion_returns_json_reply_over_injected_transport():
         assert response.choices[0].message.content == "smoke-json-reply"
         assert response.choices[0].finish_reason == "stop"
         assert response.usage.total_tokens == 15
+
+
+@pytest.mark.asyncio
+async def test_acompletion_returns_prompt_cache_details_over_injected_transport():
+    outbound: Final = asyncio.Queue()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        outbound.put_nowait(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-cache",
+                "object": "chat.completion",
+                "created": 0,
+                "model": "gpt-5.6",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "cached reply"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 4,
+                    "total_tokens": 16,
+                    "prompt_tokens_details": {"cached_tokens": 7},
+                },
+            },
+        )
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        client: Final = AsyncOpenAI(api_key="transport-only", http_client=http_client)
+        response: Final = await asyncio.wait_for(
+            litellm.acompletion(
+                model="openai/gpt-5.6",
+                api_key="transport-only",
+                client=client,
+                messages=[{"role": "user", "content": "cached prompt"}],
+                num_retries=0,
+                max_retries=0,
+            ),
+            timeout=10,
+        )
+
+    request_body: Final = await asyncio.wait_for(outbound.get(), timeout=10)
+    assert request_body == {
+        "messages": [{"role": "user", "content": "cached prompt"}],
+        "model": "gpt-5.6",
+    }
+    prompt_tokens_details: Final = response.usage.prompt_tokens_details
+    assert isinstance(prompt_tokens_details, PromptTokensDetails)
+    assert prompt_tokens_details.cached_tokens == 7
 
 
 @pytest.mark.asyncio

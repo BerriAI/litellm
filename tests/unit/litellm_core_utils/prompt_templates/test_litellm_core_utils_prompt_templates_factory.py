@@ -45,6 +45,7 @@ from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outco
 from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_pt,
     claude_2_1_pt,
+    convert_generic_image_chunk_to_openai_image_obj,
     convert_to_anthropic_image_obj,
     convert_to_anthropic_tool_invoke,
     convert_url_to_base64,
@@ -5368,6 +5369,18 @@ def test_convert_url(monkeypatch):
     expected = "data:image/png;base64," + base64.b64encode(image_bytes).decode("utf-8")
     assert result == expected
     mock_client.get.assert_called_once()
+
+
+def test_convert_generic_image_chunk_to_openai_image_obj_preserves_data_uri():
+    image_chunk: Final = {
+        "type": "base64",
+        "media_type": "image/jpeg",
+        "data": "/9j/4AAQSkZJRg==",
+    }
+
+    converted: Final = convert_generic_image_chunk_to_openai_image_obj(image_chunk)
+
+    assert converted == "data:image/jpeg;base64,/9j/4AAQSkZJRg=="
 
 
 def test_azure_tool_call_invoke_helper():

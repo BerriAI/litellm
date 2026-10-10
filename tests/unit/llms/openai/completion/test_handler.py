@@ -1,8 +1,12 @@
 import asyncio
 import importlib
+import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.types.utils import TextCompletionResponse
@@ -60,6 +64,59 @@ def test_convert_dict_to_text_completion_response():
     assert response.choices[0].logprobs.token_logprobs == [None, -12.203847]
     assert response.choices[0].logprobs.tokens == ["hello", " crisp"]
     assert response.choices[0].logprobs.top_logprobs == [None, {",": -2.1568563}]
+
+
+def test_text_completion_include_usage_returns_final_usage_chunk(respx_mock: respx.MockRouter):
+    model: Final = "gpt-5.6"
+    usage: Final = {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5}
+    events: Final = (
+        {
+            "id": "chatcmpl-text",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": model,
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "reply"}, "finish_reason": None}],
+        },
+        {
+            "id": "chatcmpl-text",
+            "object": "chat.completion.chunk",
+            "created": 0,
+            "model": model,
+            "choices": [{"index": 0, "delta": {"content": ""}, "finish_reason": "stop"}],
+            "usage": usage,
+        },
+    )
+    stream_body: Final = b"".join(f"data: {json.dumps(event)}\n\n".encode() for event in events) + b"data: [DONE]\n\n"
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            content=stream_body,
+            headers={"content-type": "text/event-stream"},
+        )
+    )
+
+    chunks: Final = list(
+        litellm.text_completion(
+            model=f"openai/{model}",
+            prompt="Hello, world!",
+            api_key="offline",
+            stream=True,
+            stream_options={"include_usage": True},
+            num_retries=0,
+            max_retries=0,
+        )
+    )
+
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert request_body == {
+        "messages": [{"role": "user", "content": "Hello, world!"}],
+        "model": model,
+        "stream": True,
+        "stream_options": {"include_usage": True},
+    }
+    assert chunks[-1].usage.prompt_tokens == 3
+    assert chunks[-1].usage.completion_tokens == 2
+    assert chunks[-1].usage.total_tokens == 5
 
 
 @pytest.mark.asyncio
