@@ -7755,7 +7755,6 @@ def test_streaming_openai_usage_includes_test_owned_cost(
             "mode": "chat",
         },
     )
-    monkeypatch.setattr(litellm, "include_cost_in_streaming_usage", True)
     chunks: Final = (
         {
             "id": "chatcmpl-cost",
