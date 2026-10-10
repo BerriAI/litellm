@@ -2,6 +2,8 @@
 Unit tests for prometheus metric labels configuration
 """
 
+from typing import Final, Literal
+
 import pytest
 
 from litellm.types.integrations.prometheus import (
@@ -611,7 +613,16 @@ def test_prometheus_label_value_sanitization_non_string_types():
 
 
 @pytest.mark.asyncio
-async def test_success_hook_emits_api_provider_value_on_token_metric():
+@pytest.mark.parametrize("metadata_bucket", ("metadata", "litellm_metadata"))
+@pytest.mark.parametrize("populate_other_bucket", (False, True))
+@pytest.mark.parametrize("original_model_group", (None, "", 123, "requested-source"))
+@pytest.mark.parametrize("stream", (False, True))
+async def test_success_hook_preserves_requested_model_and_deployment_labels(
+    metadata_bucket: Literal["metadata", "litellm_metadata"],
+    populate_other_bucket: bool,
+    original_model_group: str | int | None,
+    stream: bool,
+) -> None:
     """
     End-to-end emit wiring for the success path.
 
@@ -627,11 +638,12 @@ async def test_success_hook_emits_api_provider_value_on_token_metric():
 
     from litellm.integrations.prometheus import PrometheusLogger
 
-    payload = {
+    payload: Final = {
         "id": "t",
         "call_type": "completion",
         "response_cost": 0.001,
         "status": "success",
+        "stream": stream,
         "total_tokens": 30,
         "prompt_tokens": 20,
         "completion_tokens": 10,
@@ -661,26 +673,52 @@ async def test_success_hook_emits_api_provider_value_on_token_metric():
         "hidden_params": {"litellm_overhead_time_ms": None, "additional_headers": None},
     }
 
+    other_bucket: Final = "litellm_metadata" if metadata_bucket == "metadata" else "metadata"
+    litellm_params: Final = {
+        metadata_bucket: {
+            "request_tag": "router",
+            **({"original_model_group": original_model_group} if original_model_group is not None else {}),
+        },
+        **({other_bucket: {"request_tag": "client"}} if populate_other_bucket else {}),
+    }
     _clear_prometheus_registry()
     try:
-        logger = PrometheusLogger()
-        now = datetime.datetime.now()
+        logger: Final = PrometheusLogger()
+        now: Final = datetime.datetime.fromtimestamp(1, tz=datetime.timezone.utc)
         await logger.async_log_success_event(
             {
                 "model": "gpt-4o-mini",
-                "litellm_params": {"metadata": {}},
+                "litellm_params": litellm_params,
                 "standard_logging_object": payload,
             },
             None,
             now,
             now,
         )
-        samples = _collected_samples("litellm_total_tokens_metric_total")
+        request_samples: Final = _collected_samples("litellm_proxy_total_requests_metric_total")
+        assert len(request_samples) == 1
+        assert request_samples[0].value == 1
+        expected_requested_model: Final = (
+            original_model_group
+            if isinstance(original_model_group, str) and original_model_group
+            else payload["model_group"]
+        )
+        assert request_samples[0].labels["requested_model"] == expected_requested_model
+        assert request_samples[0].labels["model_id"] == payload["model_id"]
+        assert request_samples[0].labels["api_provider"] == payload["custom_llm_provider"]
+        assert request_samples[0].labels["status_code"] == "200"
+        samples: Final = _collected_samples("litellm_total_tokens_metric_total")
         assert samples, "expected litellm_total_tokens_metric to be emitted"
         assert all(s.labels.get("api_provider") == "openai" for s in samples), (
             "collected token metric must carry api_provider=openai, got "
             f"{[s.labels.get('api_provider') for s in samples]}"
         )
+        assert all(sample.labels["requested_model"] == payload["model_group"] for sample in samples)
+        spend_samples: Final = _collected_samples("litellm_spend_metric_total")
+        assert len(spend_samples) == 1
+        assert spend_samples[0].value == payload["response_cost"]
+        assert spend_samples[0].labels["requested_model"] == payload["model_group"]
+        assert spend_samples[0].labels["model"] == payload["model"]
     finally:
         _clear_prometheus_registry()
 

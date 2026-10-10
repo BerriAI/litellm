@@ -256,6 +256,7 @@ class _LabeledMetric:
 _MetricLike: TypeAlias = "NoOpMetric | _LabeledMetric | MetricWrapperBase"
 
 _SeriesLimitT: Final = TypeVar("_SeriesLimitT", int, float)
+_REQUEST_METADATA_ADAPTER: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _POSITIVE_SERIES_CAP: Final[TypeAdapter[int]] = TypeAdapter(Annotated[int, Field(gt=0)])
 _POSITIVE_SERIES_TTL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(gt=0)])
 _SERIES_CLEANUP_INTERVAL: Final[TypeAdapter[float]] = TypeAdapter(Annotated[float, Field(ge=0)])
@@ -1716,12 +1717,25 @@ class PrometheusLogger(CustomLogger):
         # increment litellm_proxy_total_requests_metric for all successful requests
         # (both streaming and non-streaming) in this single location to prevent
         # double-counting that occurs when async_post_call_success_hook also increments
+        request_metadata: Final = {
+            **_REQUEST_METADATA_ADAPTER.validate_python(get_litellm_metadata_from_kwargs(kwargs)),
+            **_REQUEST_METADATA_ADAPTER.validate_python(_metadata),
+        }
+        original_model_group: Final = request_metadata.get("original_model_group")
+        request_enum_values: Final = replace(
+            enum_values,
+            requested_model=(
+                original_model_group
+                if isinstance(original_model_group, str) and original_model_group
+                else standard_logging_payload["model_group"]
+            ),
+        )
         PrometheusLogger._inc_labeled_counter(
             self,
             self.litellm_proxy_total_requests_metric,
             "litellm_proxy_total_requests_metric",
-            enum_values,
-            label_context=label_context,
+            request_enum_values,
+            label_context=PrometheusLabelFactoryContext(request_enum_values),
         )
 
     def _increment_token_metrics(
