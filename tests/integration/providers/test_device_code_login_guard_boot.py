@@ -370,8 +370,9 @@ async def _held_on_every_worker(
     control_port: int,
     held_markers: SimpleQueue[str],
     bursts: _Bursts,
+    tasks: asyncio.TaskGroup,
 ) -> tuple[_Bursts, Mapping[int, int]]:
-    started: Final = (*bursts, asyncio.create_task(_burst(_base_url(owned), key, (_CONTROL,) * _HELD_PER_BURST)))
+    started: Final = (*bursts, tasks.create_task(_burst(_base_url(owned), key, (_CONTROL,) * _HELD_PER_BURST)))
     expected: Final = _HELD_PER_BURST * len(started)
     await asyncio.to_thread(eventually, held_markers.qsize, lambda size: size == expected, 60)
     held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, control_port) for pid in workers})
@@ -379,7 +380,7 @@ async def _held_on_every_worker(
     if min(held_by.values()) >= _HELD_PER_WORKER:
         return started, held_by
     assert len(started) < _MOST_BURSTS, held_by
-    return await _held_on_every_worker(owned, key, workers, control_port, held_markers, started)
+    return await _held_on_every_worker(owned, key, workers, control_port, held_markers, started, tasks)
 
 
 async def test_worker_sigkill_mid_burst_leaves_the_sibling_refusing_logins_and_serving_the_control(
@@ -412,13 +413,18 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_refusing_logins_and_s
         control_port: Final = int(control_api.url.rsplit(":", 1)[1])
         with owned.gateway.scenario() as scenario:
             key: Final = scenario.key()
-            bursts, held_by = await _held_on_every_worker(owned, key, workers, control_port, held_markers, ())
-            victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            answers: Final = await asyncio.gather(*bursts)
+            async with asyncio.TaskGroup() as tasks:
+                try:
+                    bursts, held_by = await _held_on_every_worker(
+                        owned, key, workers, control_port, held_markers, (), tasks
+                    )
+                    victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
+                    victim: Final = psutil.Process(victim_pid)
+                    victim.suspend()
+                    victim.send_signal(signal.SIGKILL)
+                finally:
+                    release.set()
+                answers: Final = await asyncio.gather(*bursts)
             served: Final = tuple(item for item in itertools.chain.from_iterable(answers) if item is not None)
             assert len(served) == held_by[survivor_pid], (held_by, len(served))
             for item in served:

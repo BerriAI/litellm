@@ -33,13 +33,20 @@ def _slow_worker_environment(directory: Path) -> dict[str, str]:
 
 @pytest.mark.timeout(2 * graceful_stop_seconds() + 60)
 def test_owned_proxy_workers_outlast_the_deployments_healthcheck_default(gateway: Gateway, tmp_path: Path) -> None:
-    with owned_proxy_process(gateway, tmp_path, _slow_worker_environment(tmp_path), workers=WORKERS) as owned:
+    with owned_proxy_process(
+        gateway,
+        tmp_path,
+        _slow_worker_environment(tmp_path),
+        workers=WORKERS,
+        extra_arguments=("--timeout_worker_healthcheck", str(int(graceful_stop_seconds()))),
+    ) as owned:
         started: Final = eventually(
             lambda: STARTED_WORKER.findall(owned.log.read_text()),
             lambda pids: len(pids) >= WORKERS,
             seconds=graceful_stop_seconds(),
         )
-        assert owned.gateway.request("GET", "/health/readiness").status_code == 200
+        response: Final = owned.gateway.request("GET", "/health/readiness")
+        assert response.status_code == 200, response.text
         log: Final = owned.log.read_text()
     assert len(started) == WORKERS, log
     assert DIED_WORKER.findall(log) == [], log
