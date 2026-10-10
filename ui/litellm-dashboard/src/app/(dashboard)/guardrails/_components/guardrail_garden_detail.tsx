@@ -7,6 +7,12 @@ import { Logo } from "@/components/molecules/logo/Logo";
 import { GUARDRAIL_PRESETS } from "./guardrail_garden_configs";
 import { GuardrailCardInfo } from "./guardrail_garden_data";
 
+const CATEGORY_LABELS: Record<GuardrailCardInfo["category"], { provider: string; type: string }> = {
+  litellm: { provider: "LiteLLM Content Filter", type: "Content Filter" },
+  decision_model: { provider: "Decision Model", type: "Decision Model" },
+  partner: { provider: "Partner Guardrail", type: "Partner" },
+};
+
 interface GuardrailDetailViewProps {
   card: GuardrailCardInfo;
   onBack: () => void;
@@ -19,8 +25,11 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
   const [activeTab, setActiveTab] = useState("overview");
 
   const detailRows = [
-    { property: "Provider", value: card.category === "litellm" ? "LiteLLM Content Filter" : "Partner Guardrail" },
+    { property: "Provider", value: CATEGORY_LABELS[card.category].provider },
     ...(card.subcategory ? [{ property: "Subcategory", value: card.subcategory }] : []),
+    ...(card.category === "decision_model"
+      ? [{ property: "Cost", value: "Billed per call by the decision model provider" }]
+      : []),
     ...(card.category === "litellm" ? [{ property: "Cost", value: "$0 / request" }] : []),
     ...(card.category === "litellm" ? [{ property: "External Dependencies", value: "None" }] : []),
     ...(card.category === "litellm" ? [{ property: "Latency", value: card.eval?.latency || "<1ms" }] : []),
@@ -126,9 +135,7 @@ const GuardrailDetailView: React.FC<GuardrailDetailViewProps> = ({ card, onBack,
             {/* Type */}
             <div className="mb-7">
               <div className="mb-1 text-xs text-muted-foreground">Type</div>
-              <div className="text-[13px] text-foreground">
-                {card.category === "litellm" ? "Content Filter" : "Partner"}
-              </div>
+              <div className="text-[13px] text-foreground">{CATEGORY_LABELS[card.category].type}</div>
             </div>
 
             {/* Tags — pill style like Vertex */}

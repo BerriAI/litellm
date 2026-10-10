@@ -18,6 +18,7 @@ from integration._support.mcp import (
     McpPeer,
     ScriptedTool,
     mcp_peer,
+    official_client_outcomes,
     register_mcp,
     scripted_peer,
     text_result,
@@ -26,10 +27,35 @@ from integration._support.mcp import (
 from integration._support.mcp_grants import create_toolset
 from integration._support.process import owned_proxy
 from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.workers import worker_services
 from openai import AsyncOpenAI, OpenAI
 from openai.types.chat import ChatCompletionMessageParam
 from openai.types.responses.tool_param import Mcp
 from pydantic import JsonValue, TypeAdapter
+
+
+pytestmark: Final = pytest.mark.xdist_group("mcp_llm_private_gateway")
+
+
+@pytest.fixture(scope="session")
+def _llm_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, Mapping[str, str]]]:
+    directory: Final = tmp_path_factory.mktemp("mcp-llm-gateway")
+    with (
+        worker_services(directory) as services,
+        gateway_from_environment() as shared,
+        owned_proxy(shared, directory, services) as private,
+    ):
+        yield private, services
+
+
+@pytest.fixture
+def gateway(_llm_gateway: tuple[Gateway, Mapping[str, str]]) -> Iterator[Gateway]:
+    private, services = _llm_gateway
+    with pytest.MonkeyPatch.context() as environment:
+        for name, value in services.items():
+            environment.setenv(name, value)
+        yield private
+
 
 Surface = Literal["chat", "responses", "messages", "messages_bridge"]
 SURFACES: Final[tuple[Surface, ...]] = ("chat", "responses", "messages", "messages_bridge")
@@ -489,6 +515,33 @@ def test_toolset_gateway_url_gives_a_key_of_an_ungranted_team_no_tools_and_never
         assert _peer_add_calls(rig.peer) == (), "denied caller reached the peer"
         assert all(rig.tool not in names for names in rig.upstream_tools()), rig.upstream_tools()
         assert response.status_code in (200, 400, 401, 403), response.text
+
+
+def test_an_open_server_in_another_gateway_cannot_widen_this_gateways_tools(gateway: Gateway) -> None:
+    with gateway_from_environment() as shared:
+        with (
+            mcp_peer() as foreign,
+            shared.scenario() as foreign_scenario,
+            mcp_peer() as local,
+            gateway.scenario() as scenario,
+        ):
+            foreign_alias: Final = "foreign" + uuid.uuid4().hex[:8]
+            foreign_id: Final = register_mcp(foreign_scenario, foreign, foreign_alias)
+            created: Final = shared.post("/key/generate", {"object_permission": {"mcp_servers": [foreign_id]}})
+            key: Final = created["key"]
+            assert isinstance(key, str)
+            foreign_scenario.cleanups.callback(shared.post, "/key/delete", {"keys": [key]})
+            register_mcp(scenario, local, "open" + uuid.uuid4().hex[:8], allow_all_keys=True)
+            listed, called = official_client_outcomes(shared, key, "/mcp", f"{foreign_alias}-add", ADD)
+            assert set(listed.tools) == {
+                f"{foreign_alias}-add", f"{foreign_alias}-multiply", f"{foreign_alias}-fail"
+            }, listed.tools
+            assert called.ok and called.text == str(ADD["a"] + ADD["b"]), called
+            assert [call["body"]["params"]["name"] for call in _peer_add_calls(foreign)] == ["add"]
+            assert _peer_add_calls(local) == ()
+        deleted: Final = shared.request("GET", "/key/info", params={"key": key})
+        assert deleted.status_code == 200, deleted.text
+        assert deleted.json()["info"]["status"] == "deleted", deleted.text
 
 
 Bridge = Literal["chat", "responses", "messages"]
