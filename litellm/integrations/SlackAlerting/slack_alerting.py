@@ -38,20 +38,20 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._types import (
-    CallInfo,
-    InvitationModel,
-    InvitationNew,
-    Litellm_EntityType,
-    UserAPIKeyAuth,
-    VirtualKeyEvent,
-    WebhookEvent,
-)
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.repositories.table_repositories import InvitationLinkRepository
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.integrations.slack_alerting import *
-from litellm.types.integrations.slack_alerting import AlertType
+from litellm.types.integrations.slack_alerting import (
+    AlertType,
+    CallInfo,
+    InvitationModel,
+    InvitationNew,
+    Litellm_EntityType,
+    VirtualKeyEvent,
+    WebhookEvent,
+)
 from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_CHECK_INTERVAL_SECONDS,
     DEPRECATION_IDLE_POLL_SECONDS,

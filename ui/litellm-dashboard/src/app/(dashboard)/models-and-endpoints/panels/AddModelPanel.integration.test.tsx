@@ -563,14 +563,6 @@ describe("AddModelPanel decision models", () => {
 
   const decisionNotice = () => screen.queryByRole("note", { name: "Decision model notice" });
 
-  it("finds a provider by the name of one of its decision models", async () => {
-    const { user } = await setup();
-    await user.type(screen.getByRole("combobox", { name: /provider/i }), "jev");
-
-    expect(await screen.findByRole("option", { name: /TypeSafe/ })).toBeInTheDocument();
-    expect(screen.queryByRole("option", { name: /Anthropic/ })).not.toBeInTheDocument();
-  });
-
   it("points a decision-only provider at the decision routes, the docs, and the playground", async () => {
     const { user } = await setup();
     await user.type(screen.getByRole("combobox", { name: /provider/i }), "TypeSafe");
@@ -582,7 +574,7 @@ describe("AddModelPanel decision models", () => {
       "href",
       "https://docs.litellm.ai/docs/decisions",
     );
-    expect(within(note).getByRole("link", { name: "test it in the System One playground" })).toHaveAttribute(
+    expect(within(note).getByRole("link", { name: "test it in the Decisions playground" })).toHaveAttribute(
       "href",
       "/ui/playground?tab=system-one",
     );

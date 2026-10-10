@@ -2508,6 +2508,9 @@ async def add_litellm_data_to_request(
     data[_metadata_variable_name]["user_api_key_user_max_budget"] = user_api_key_dict.user_max_budget
     user_model_budget: Final = user_api_key_dict.user_model_max_budget
     data[_metadata_variable_name]["user_api_key_user_model_max_budget"] = user_model_budget  # rebind-ok: out-param
+    data[_metadata_variable_name][  # rebind-ok: adds member budget for spend tracking
+        "user_api_key_team_member_model_max_budget"
+    ] = user_api_key_dict.team_member_model_max_budget
     data[_metadata_variable_name].update(carried_budget_metadata(user_api_key_dict))
 
     data[_metadata_variable_name]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)

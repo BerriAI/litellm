@@ -60,6 +60,7 @@ GET /user/daily/activity/aggregated/keys
 GET /user/daily/activity/aggregated/cache_leakage_keys
 GET /user/daily/activity/aggregated/model_top_keys
 GET /user/daily/activity/aggregated/search
+GET /user/daily/activity/aggregated/users
 GET /user/daily/activity/export
 GET /user/spend/report
 

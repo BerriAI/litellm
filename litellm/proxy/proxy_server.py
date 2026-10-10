@@ -359,7 +359,7 @@ from litellm.proxy.auth.auth_utils import (
     log_once_if_budget_reservation_disabled,
     warn_once_if_custom_auth_skips_common_checks,
 )
-from litellm.proxy.auth.fallback_budget import router_fallback_budget_check
+from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck, router_fallback_budget_check
 from litellm.proxy.auth.fallback_model_access import router_fallback_access_check
 from litellm.proxy.auth.handle_jwt import JWTHandler
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY, LicenseCheck
@@ -7196,7 +7196,10 @@ class ProxyConfig:
             ),
             ignore_invalid_deployments=True,  # don't raise an error if a deployment is invalid
             fallback_access_check=router_fallback_access_check,
-            fallback_budget_check=router_fallback_budget_check,
+            fallback_budget_check=RouterFallbackBudgetCheck(
+                is_enforced=router_fallback_budget_check.is_enforced,
+                team_member_model_budget_limiter=model_max_budget_limiter,
+            ),
             auto_router_capability_limit=_license_check.auto_router_capability_limit,
         )
 
@@ -7691,7 +7694,10 @@ class ProxyConfig:
                         search_tools=search_tools,
                         ignore_invalid_deployments=True,
                         fallback_access_check=router_fallback_access_check,
-                        fallback_budget_check=router_fallback_budget_check,
+                        fallback_budget_check=RouterFallbackBudgetCheck(
+                            is_enforced=router_fallback_budget_check.is_enforced,
+                            team_member_model_budget_limiter=model_max_budget_limiter,
+                        ),
                         auto_router_capability_limit=_license_check.auto_router_capability_limit,
                     )
                     verbose_proxy_logger.debug("updated llm_router: %s", llm_router)
@@ -18399,6 +18405,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "pass_through_endpoints": "PydanticModel",
         "store_model_in_db": "Boolean",
         "store_prompts_in_spend_logs": "Boolean",
+        "disable_fallbacks_on_per_model_rate_limits": "Boolean",
         "maximum_spend_logs_retention_period": "String",
         "maximum_health_check_retention_period": "String",
         "maximum_daily_tag_spend_retention_period": "String",
