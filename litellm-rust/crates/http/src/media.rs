@@ -623,14 +623,19 @@ mod tests {
         }
     }
 
-    #[test]
-    fn blocks_everything_the_python_policy_blocks() {
-        let fixture: BlockedIpFixture = serde_json::from_str(include_str!(concat!(
+    #[rstest::fixture]
+    #[once]
+    fn python_verdicts() -> BlockedIpFixture {
+        serde_json::from_str(include_str!(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/generated/blocked_ips.json"
         )))
-        .expect("blocked_ips.json matches the fixture schema");
-        let verdicts: Vec<(IpAddr, bool, bool)> = fixture
+        .expect("blocked_ips.json matches the fixture schema")
+    }
+
+    #[rstest::rstest]
+    fn blocks_everything_the_python_policy_blocks(python_verdicts: &BlockedIpFixture) {
+        let verdicts: Vec<(IpAddr, bool, bool)> = python_verdicts
             .rows
             .iter()
             .map(|row| (row.address, row.blocked, is_blocked_ip(row.address)))
