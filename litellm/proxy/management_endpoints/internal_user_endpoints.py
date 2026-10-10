@@ -3075,9 +3075,7 @@ async def get_user_daily_activity_aggregated(
     api_key_filter: Final = (
         api_key
         if requested_user_id is None
-        else list(
-            await get_user_api_key_filter(typed_prisma_client, requested_user_id, api_key)
-        )
+        else list(await get_user_api_key_filter(typed_prisma_client, requested_user_id, api_key))
     )
     repository: Final = daily_activity_repository(typed_prisma_client)
     scope: Final = daily_activity_scope(
