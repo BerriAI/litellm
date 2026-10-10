@@ -210,16 +210,17 @@ async def test_unrotated_refresh_token_is_carried_forward():
 
 
 @pytest.mark.asyncio
-async def test_unrecorded_scope_is_carried_forward():
+@pytest.mark.parametrize("prior_scopes", [(), ("read", "write")])
+async def test_unrecorded_scope_is_carried_forward(prior_scopes):
     persisted = []
     refresher = _refresher(body={"access_token": "new-at"}, persist_sink=persisted)
     token = await refresher.refresh(
-        "a", "s", OAuthToken("old", refresh_token="rt", scopes=("read", "write"))
+        "a", "s", OAuthToken("old", refresh_token="rt", scopes=prior_scopes)
     )
     assert token is not None
     # response omitted "scope" -> the user's recorded grant is preserved, not dropped
-    assert token.scopes == ("read", "write")
-    assert persisted[0][5] == ("read", "write")
+    assert token.scopes == prior_scopes
+    assert persisted[0][5] == prior_scopes
 
 
 @pytest.mark.asyncio
@@ -257,18 +258,19 @@ async def test_refresh_omits_resource_when_unset():
 
 
 @pytest.mark.asyncio
-async def test_returned_scope_overrides_prior_when_present():
+@pytest.mark.parametrize("scope, expected", [("read", ("read",)), ("", ()), ("   ", ())])
+async def test_returned_scope_overrides_prior_when_present(scope, expected):
     persisted = []
     refresher = _refresher(
-        body={"access_token": "new-at", "scope": "read"},
+        body={"access_token": "new-at", "scope": scope},
         persist_sink=persisted,
     )
     token = await refresher.refresh(
         "a", "s", OAuthToken("old", refresh_token="rt", scopes=("read", "write"))
     )
     assert token is not None
-    assert token.scopes == ("read",)  # a present scope replaces the prior grant
-    assert persisted[0][5] == ("read",)
+    assert token.scopes == expected
+    assert persisted[0][5] == expected
 
 
 @pytest.mark.asyncio
@@ -366,7 +368,7 @@ async def test_cimd_refresh_on_fresh_replica_preserves_user_and_client_identity(
             {},
         )
     ]
-    assert persisted == [("alice", "srv", "new-at", "old-rt", 3600, None)]
+    assert persisted == [("alice", "srv", "new-at", "old-rt", 3600, ())]
     assert server.client_id is None
 
 

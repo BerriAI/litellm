@@ -65,7 +65,7 @@ def _parse_expires_in(raw: object) -> int | None:
 
 
 def _parse_scopes(raw: object) -> tuple[str, ...] | None:
-    return tuple(raw.split()) if isinstance(raw, str) and raw else None
+    return tuple(raw.split()) if isinstance(raw, str) else None
 
 
 class AuthorizationCodeRefresher:
@@ -156,7 +156,8 @@ class AuthorizationCodeRefresher:
         rotated: Final = body.get("refresh_token")
         new_refresh: Final = rotated if isinstance(rotated, str) and rotated else token.refresh_token
         expires_in: Final = _parse_expires_in(body.get("expires_in"))
-        scopes: Final = _parse_scopes(body.get("scope")) or token.scopes
+        granted_scopes: Final = _parse_scopes(body.get("scope"))
+        scopes: Final = granted_scopes if granted_scopes is not None else token.scopes
 
         await self._persist(
             user_id,
@@ -164,7 +165,7 @@ class AuthorizationCodeRefresher:
             access_token,
             new_refresh,
             expires_in,
-            scopes or None,
+            scopes,
             **({"identity_binding_proof": binding_proof} if binding_proof is not None else {}),
             **({"cimd_client_id": cimd_client_id} if cimd_client_id is not None else {}),
         )
