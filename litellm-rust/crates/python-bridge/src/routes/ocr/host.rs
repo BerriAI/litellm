@@ -15,7 +15,7 @@ use super::{
     errors::to_pyerr as ocr_error_to_pyerr,
     project::{OcrHostHandles, SETTINGS_ERROR_MARKER, project_request},
 };
-use crate::marshal::public_response;
+use crate::{marshal::public_response, routes::RequestView};
 
 enum OcrHostData {
     Unprojected,
@@ -27,14 +27,14 @@ enum OcrHostData {
 /// document as it goes), acquires Azure AD tokens, and builds the public response and
 /// exception.
 pub(super) struct OcrPythonHost {
-    request: Py<PyDict>,
+    view: RequestView,
     data: OcrHostData,
 }
 
 impl OcrPythonHost {
-    pub(super) fn new(request: Py<PyDict>) -> Self {
+    pub(super) fn new(view: RequestView) -> Self {
         Self {
-            request,
+            view,
             data: OcrHostData::Unprojected,
         }
     }
@@ -58,7 +58,8 @@ impl OcrPythonHost {
         let OcrHostData::Unprojected = self.data else {
             return Err(missing_state());
         };
-        let (request, handles) = project_request(self.request.bind(py), arguments)?;
+        self.view.resolve(py, arguments)?;
+        let (request, handles) = project_request(self.view.request(py)?, arguments)?;
         let caller_token = handles.azure_ad_token_provider.is_some();
         self.data = OcrHostData::Projected(Box::new(handles));
         Ok(OcrCall {
@@ -78,7 +79,7 @@ impl OcrPythonHost {
         let mapped = py
             .import("litellm.rust_bridge.ocr.route_host")
             .and_then(|module| module.getattr("map_failure"))
-            .and_then(|map| map.call1((error.value(py), self.request.bind(py), provider)))
+            .and_then(|map| map.call1((error.value(py), self.view.request(py)?, provider)))
             .and_then(|mapped| mapped.extract::<Py<PyBaseException>>().map_err(PyErr::from));
         match mapped {
             Ok(mapped) => PyErr::from_value(mapped.into_bound(py).into_any()),
@@ -160,10 +161,11 @@ impl PythonHostCalls<Ocr> for OcrPythonHost {
 
 impl PythonOwned for OcrPythonHost {
     fn close(&mut self, _: Python<'_>) {
+        self.view.close();
         self.data = OcrHostData::Released;
     }
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.request)?;
+        self.view.traverse(visit)?;
         if let OcrHostData::Projected(handles) = &self.data
             && let Some(provider) = &handles.azure_ad_token_provider
         {
@@ -218,7 +220,8 @@ del provider
                 .unwrap()
                 .cast_into::<PyDict>()
                 .unwrap();
-            let mut host = OcrPythonHost::new(PyDict::new(py).unbind());
+            let empty = PyDict::new(py);
+            let mut host = OcrPythonHost::new(RequestView::new(&empty, &empty).unwrap());
             assert!(host.decode_request(py, &kwargs).unwrap().caller_token);
             locals.del_item("kwargs").unwrap();
             drop(kwargs);
