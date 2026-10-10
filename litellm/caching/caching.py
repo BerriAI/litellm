@@ -9,6 +9,7 @@
 
 import ast
 import hashlib
+import hmac
 import json
 import logging
 import time
@@ -713,7 +714,10 @@ class Cache:
                 "user_role": getattr(auth_object, "user_role", None),
             }
             identity = json.dumps(identity_fields, sort_keys=True, default=str, separators=(",", ":"))
-            return True, "caller:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
+            namespace_digest = hmac.new(
+                b"litellm-cache-namespace-v1", identity.encode("utf-8"), hashlib.sha256
+            ).hexdigest()[:32]
+            return True, "caller:" + namespace_digest
         return False, None
 
     def _prepare_explicit_cache_key(
