@@ -1,6 +1,6 @@
 import re
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -17,7 +17,7 @@ from typing_extensions import assert_never
 import litellm
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
-from litellm.constants import MCP_ALL_TOOLS_WILDCARD
+from litellm.constants import MCP_ALL_TOOLS_WILDCARD, MCP_PEEKED_BODY_SCOPE_KEY
 from litellm.experimental_mcp_client.client import strip_auth_scheme
 from litellm.proxy._experimental.mcp_server.catalog import global_manager
 from litellm.proxy._experimental.mcp_server.oauth_utils import (
@@ -92,6 +92,22 @@ OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None
 
 def _normalize_caller_admission_credential(value: str) -> str:
     return _get_bearer_token_or_received_api_key(strip_auth_scheme(value, "Bearer")).strip()
+
+
+def _admission_request(scope: Scope) -> Request:
+    """Request whose ``body()`` serves the routing layer's lazily peeked JSON-RPC
+    bytes (``b"{}"`` when no peek callable was stashed) instead of the ASGI
+    receive channel."""
+    request: Final = Request(scope=scope)
+    peeked_body: Final[Callable[[], Awaitable[bytes]] | None] = scope.get(MCP_PEEKED_BODY_SCOPE_KEY)
+
+    async def mock_body() -> bytes:
+        if peeked_body is None:
+            return b"{}"
+        return await peeked_body()
+
+    request.body = mock_body
+    return request
 
 
 def _as_list(values: Sequence[str] | None) -> list[str] | None:  # mutable-ok: resolver returns a list
@@ -505,12 +521,7 @@ class MCPRequestHandler:
                 if mcp_servers_header == "" or (mcp_servers is not None and len(mcp_servers) == 0):
                     mcp_servers = []
             # Create a proper Request object with mock body method to avoid ASGI receive channel issues
-            request: Final = Request(scope=scope)
-
-            async def mock_body():
-                return b"{}"
-
-            request.body = mock_body
+            request: Final = _admission_request(scope)
             # Inline import — auth_utils participates in a proxy import cycle.
             from litellm.proxy.auth.auth_utils import (  # noqa: PLC0415
                 get_request_route,
@@ -1614,7 +1625,7 @@ class MCPRequestHandler:
         )
         litellm_api_key: Final = (
             headers.get(custom_key_header_name)
-            if custom_key_header_name is not None
+            if custom_key_header_name is not None and custom_key_header_name in headers
             else next(
                 (header_value for header_name in admission_header_names if (header_value := headers.get(header_name))),
                 None,

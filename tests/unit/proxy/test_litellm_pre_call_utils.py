@@ -2016,6 +2016,8 @@ async def test_add_litellm_data_to_request_user_spend_and_budget():
         api_key="hashed-key",
         metadata={},
         team_metadata={},
+        team_id="team-1",
+        team_member_model_max_budget={"gpt-3.5-turbo": {"max_budget": 15.0, "budget_duration": "1d"}},
         user_spend=150.0,
         user_max_budget=500.0,
     )
@@ -2032,6 +2034,9 @@ async def test_add_litellm_data_to_request_user_spend_and_budget():
     metadata = updated_data.get("metadata", {})
     assert metadata["user_api_key_user_spend"] == 150.0
     assert metadata["user_api_key_user_max_budget"] == 500.0
+    assert metadata["user_api_key_team_member_model_max_budget"] == {
+        "gpt-3.5-turbo": {"max_budget": 15.0, "budget_duration": "1d"}
+    }
 
 
 @pytest.mark.asyncio

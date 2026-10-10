@@ -4,11 +4,14 @@ Simple unit tests for CustomOpenAPISpec class.
 Tests basic functionality of OpenAPI schema generation.
 """
 
-from unittest.mock import Mock, patch
+import json
+from typing import Annotated, Literal
+from unittest.mock import patch
 
 import pytest
+from pydantic import BaseModel, ConfigDict, Field
 
-from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec
+from litellm.proxy.common_utils.custom_openapi_spec import CustomOpenAPISpec, inline_request_body
 
 
 class TestCustomOpenAPISpec:
@@ -27,19 +30,13 @@ class TestCustomOpenAPISpec:
             },
         }
 
-    @patch(
-        "litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_request_schema"
-    )
-    def test_add_chat_completion_request_schema(
-        self, mock_add_schema, base_openapi_schema
-    ):
+    @patch("litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_request_schema")
+    def test_add_chat_completion_request_schema(self, mock_add_schema, base_openapi_schema):
         """Test that chat completion schema is added correctly."""
         mock_add_schema.return_value = base_openapi_schema
 
         with patch("litellm.proxy._types.ProxyChatCompletionRequest") as mock_model:
-            result = CustomOpenAPISpec.add_chat_completion_request_schema(
-                base_openapi_schema
-            )
+            result = CustomOpenAPISpec.add_chat_completion_request_schema(base_openapi_schema)
 
             mock_add_schema.assert_called_once_with(
                 openapi_schema=base_openapi_schema,
@@ -50,9 +47,7 @@ class TestCustomOpenAPISpec:
             )
             assert result == base_openapi_schema
 
-    @patch(
-        "litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_request_schema"
-    )
+    @patch("litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_request_schema")
     def test_add_embedding_request_schema(self, mock_add_schema, base_openapi_schema):
         """Test that embedding schema is added correctly."""
         mock_add_schema.return_value = base_openapi_schema
@@ -69,19 +64,13 @@ class TestCustomOpenAPISpec:
             )
             assert result == base_openapi_schema
 
-    @patch(
-        "litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_request_schema"
-    )
-    def test_add_responses_api_request_schema(
-        self, mock_add_schema, base_openapi_schema
-    ):
+    @patch("litellm.proxy.common_utils.custom_openapi_spec.CustomOpenAPISpec.add_request_schema")
+    def test_add_responses_api_request_schema(self, mock_add_schema, base_openapi_schema):
         """Test that responses API schema is added correctly."""
         mock_add_schema.return_value = base_openapi_schema
 
         with patch("litellm.types.llms.openai.ResponsesAPIRequestParams") as mock_model:
-            result = CustomOpenAPISpec.add_responses_api_request_schema(
-                base_openapi_schema
-            )
+            result = CustomOpenAPISpec.add_responses_api_request_schema(base_openapi_schema)
 
             mock_add_schema.assert_called_once_with(
                 openapi_schema=base_openapi_schema,
@@ -123,15 +112,11 @@ def test_defs_rewritten_in_add_schema_to_components():
     )
     assert "$defs" not in openapi_schema
     assert (
-        openapi_schema["components"]["schemas"]["SchemaName"]["properties"]["messages"][
-            "items"
-        ]["anyOf"][0]["$ref"]
+        openapi_schema["components"]["schemas"]["SchemaName"]["properties"]["messages"]["items"]["anyOf"][0]["$ref"]
         == "#/components/schemas/UserMessage"
     )
     assert (
-        openapi_schema["components"]["schemas"]["SchemaName"]["properties"]["messages"][
-            "items"
-        ]["anyOf"][1]["$ref"]
+        openapi_schema["components"]["schemas"]["SchemaName"]["properties"]["messages"]["items"]["anyOf"][1]["$ref"]
         == "#/components/schemas/AssistantMessage"
     )
 
@@ -188,14 +173,8 @@ def test_rewrite_defs_refs():
     rewritten = CustomOpenAPISpec._rewrite_defs_refs(schema=schema, renames={})
 
     assert "$defs" not in rewritten
-    assert (
-        rewritten["properties"]["messages"]["items"]["anyOf"][0]["$ref"]
-        == "#/components/schemas/UserMessage"
-    )
-    assert (
-        rewritten["properties"]["messages"]["items"]["anyOf"][1]["$ref"]
-        == "#/components/schemas/AssistantMessage"
-    )
+    assert rewritten["properties"]["messages"]["items"]["anyOf"][0]["$ref"] == "#/components/schemas/UserMessage"
+    assert rewritten["properties"]["messages"]["items"]["anyOf"][1]["$ref"] == "#/components/schemas/AssistantMessage"
 
 
 def test_get_pydantic_schema_generates_schema_for_responses_request_typed_dict():
@@ -390,3 +369,42 @@ def test_add_schema_to_components_renames_def_with_different_required_set():
     assert schemas["Block"]["required"] == ["type", "x", "y"]
     assert schemas["Req_Block"]["required"] == ["keys", "type", "x", "y"]
     assert schemas["Req"]["properties"]["b"]["$ref"] == "#/components/schemas/Req_Block"
+
+
+class _Cat(BaseModel):
+    kind: Literal["cat"]
+    lives: int = 9
+
+    model_config = ConfigDict(frozen=True)
+
+
+class _Dog(BaseModel):
+    kind: Literal["dog"]
+    good: bool = True
+
+    model_config = ConfigDict(frozen=True)
+
+
+class _Shelter(BaseModel):
+    pets: dict[str, Annotated[_Cat | _Dog, Field(discriminator="kind")]]
+    favorite: _Cat | None = None
+
+    model_config = ConfigDict(frozen=True)
+
+
+def test_inline_request_body_expands_every_ref_so_the_operation_stands_alone():
+    body = inline_request_body(_Shelter, {"pets": {"tom": {"kind": "cat"}}})
+
+    media = body["content"]["application/json"]
+    assert body["required"] is True
+    assert media["example"] == {"pets": {"tom": {"kind": "cat"}}}
+    assert "$ref" not in json.dumps(media["schema"])
+    assert "$defs" not in media["schema"]
+    pet_schema = media["schema"]["properties"]["pets"]["additionalProperties"]
+    variants = {variant["properties"]["kind"]["const"]: variant for variant in pet_schema["oneOf"]}
+    assert variants["cat"]["properties"]["lives"]["default"] == 9
+    assert variants["dog"]["properties"]["good"]["type"] == "boolean"
+    assert pet_schema["discriminator"] == {"propertyName": "kind"}
+    favorite = media["schema"]["properties"]["favorite"]
+    assert favorite["default"] is None
+    assert any(option.get("properties", {}).get("lives") for option in favorite["anyOf"])

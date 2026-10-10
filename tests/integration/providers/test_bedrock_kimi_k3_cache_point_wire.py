@@ -752,11 +752,15 @@ def _async_openai_client(rig: _Rig) -> openai.AsyncOpenAI:
 
 
 def _anthropic_client(rig: _Rig) -> anthropic.Anthropic:
-    return anthropic.Anthropic(base_url=_proxy_url(rig.gateway), api_key=rig.gateway.key, max_retries=0)
+    return anthropic.Anthropic(
+        base_url=_proxy_url(rig.gateway), api_key=rig.gateway.key, auth_token=rig.gateway.key, max_retries=0
+    )
 
 
 def _async_anthropic_client(rig: _Rig) -> anthropic.AsyncAnthropic:
-    return anthropic.AsyncAnthropic(base_url=_proxy_url(rig.gateway), api_key=rig.gateway.key, max_retries=0)
+    return anthropic.AsyncAnthropic(
+        base_url=_proxy_url(rig.gateway), api_key=rig.gateway.key, auth_token=rig.gateway.key, max_retries=0
+    )
 
 
 def _proxy_url(gateway: Gateway) -> str:
@@ -812,18 +816,23 @@ _ANTHROPIC_SDK_TARGETS: Final = (("kimi-us", _KIMI_US), ("arn-yaml-flagged", _YA
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(("name", "model_id"), _ANTHROPIC_SDK_TARGETS, ids=("k03-kimi", "k03-flagged-arn"))
 def test_k03_anthropic_sdk_sync_messages_reaches_the_model_without_a_cache_point(
-    rig: _Rig, name: str, model_id: str
+    rig: _Rig, name: str, model_id: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "synthetic-unwanted-ambient-token")
     rig.wire.drain()
-    message: Final = _anthropic_client(rig).messages.create(
-        model=name,
-        max_tokens=16,
-        system=[{"type": "text", "text": _SYSTEM_TEXT, "cache_control": {"type": "ephemeral"}}],
-        messages=[
-            {"role": "user", "content": [{"type": "text", "text": _prompt(), "cache_control": {"type": "ephemeral"}}]}
-        ],
-        extra_body=_EXTRA,
-    )
+    with _anthropic_client(rig) as client:
+        message: Final = client.messages.create(
+            model=name,
+            max_tokens=16,
+            system=[{"type": "text", "text": _SYSTEM_TEXT, "cache_control": {"type": "ephemeral"}}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": _prompt(), "cache_control": {"type": "ephemeral"}}],
+                }
+            ],
+            extra_body=_EXTRA,
+        )
     assert "".join(block.text for block in message.content if block.type == "text") == _ANSWER, message
     received: Final = _only_received(rig.wire)
     assert received.model == model_id and not received.streaming, received
@@ -834,19 +843,24 @@ def test_k03_anthropic_sdk_sync_messages_reaches_the_model_without_a_cache_point
 @pytest.mark.timeout(600)
 @pytest.mark.parametrize(("name", "model_id"), _ANTHROPIC_SDK_TARGETS, ids=("k04-kimi", "k04-flagged-arn"))
 async def test_k04_anthropic_sdk_async_stream_reaches_the_model_without_a_cache_point(
-    rig: _Rig, name: str, model_id: str
+    rig: _Rig, name: str, model_id: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    monkeypatch.setenv("ANTHROPIC_AUTH_TOKEN", "synthetic-unwanted-ambient-token")
     rig.wire.drain()
-    async with _async_anthropic_client(rig).messages.stream(
-        model=name,
-        max_tokens=16,
-        system=[{"type": "text", "text": _SYSTEM_TEXT, "cache_control": {"type": "ephemeral"}}],
-        messages=[
-            {"role": "user", "content": [{"type": "text", "text": _prompt(), "cache_control": {"type": "ephemeral"}}]}
-        ],
-        extra_body=_EXTRA,
-    ) as stream:
-        final: Final = await stream.get_final_message()
+    async with _async_anthropic_client(rig) as client:
+        async with client.messages.stream(
+            model=name,
+            max_tokens=16,
+            system=[{"type": "text", "text": _SYSTEM_TEXT, "cache_control": {"type": "ephemeral"}}],
+            messages=[
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": _prompt(), "cache_control": {"type": "ephemeral"}}],
+                }
+            ],
+            extra_body=_EXTRA,
+        ) as stream:
+            final: Final = await stream.get_final_message()
     assert "".join(block.text for block in final.content if block.type == "text") == _ANSWER, final
     received: Final = _only_received(rig.wire)
     assert received.model == model_id and received.streaming, received

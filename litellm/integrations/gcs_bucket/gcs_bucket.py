@@ -26,8 +26,8 @@ else:
 
 class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
     def __init__(self, bucket_name: str | None = None) -> None:
-        from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import premium_user
+        from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 
         self.batch_size = int(os.getenv("GCS_BATCH_SIZE", GCS_DEFAULT_BATCH_SIZE))
         self.flush_interval = int(os.getenv("GCS_FLUSH_INTERVAL", GCS_DEFAULT_FLUSH_INTERVAL_SECONDS))
@@ -52,8 +52,8 @@ class GCSBucketLogger(GCSBucketBase, AdditionalLoggingUtils):
 
     #### ASYNC ####
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        from litellm.proxy._types import CommonProxyErrors
         from litellm.proxy.proxy_server import premium_user
+        from litellm.types.proxy.common_proxy_errors import CommonProxyErrors
 
         if premium_user is not True:
             raise ValueError(

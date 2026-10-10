@@ -1,69 +1,27 @@
 from __future__ import annotations
 
-import asyncio
 import time
 from collections.abc import Callable, Mapping
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
-from pydantic import ConfigDict, Field, TypeAdapter, ValidationError
+from pydantic import ConfigDict, Field, ValidationError
 
 from litellm._internal_context import with_service_target
-from litellm.caching.dual_cache import DualCache
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.anthropic.prompt_cache_prediction import PromptPrefix, parse_observed_cache
+from litellm.llms.anthropic.prompt_cache_prediction import (
+    _RETENTION_SECONDS,  # pyright: ignore[reportPrivateUsage]  # moved to the SDK layer, still shared with this hook
+    CacheObservation,
+    _cache_key,  # pyright: ignore[reportPrivateUsage]  # moved to the SDK layer, still shared with this hook
+    _read_exact,  # pyright: ignore[reportPrivateUsage]  # moved to the SDK layer, still shared with this hook
+    parse_observed_cache,
+)
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import ModelResponse
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import InternalUsageCache
-
-_RETENTION_SECONDS: Final = 86_400
-
-
-class CacheObservation(LiteLLMBaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
-
-    fingerprint: str = Field(pattern=r"^[0-9a-f]{64}$")
-    cached_tokens: int = Field(gt=0)
-    observed_at: float = Field(ge=0, allow_inf_nan=False)
-    expires_at: float = Field(ge=0, allow_inf_nan=False)
-
-
-_CACHE_ENTRY: Final[TypeAdapter[CacheObservation | str | None]] = TypeAdapter(CacheObservation | str | None)
-
-
-def _cache_key(scope: str, fingerprint: str) -> str:
-    return f"prompt-cache-observation:{scope}:{fingerprint}"
-
-
-async def lookup(
-    cache: DualCache, scope: str, prefix: PromptPrefix, now: float | None = None
-) -> CacheObservation | None:
-    checked_at: Final = time.time() if now is None else now
-    exact: Final = await _read_exact(cache, scope, prefix.fingerprint)
-    if exact is not None and exact.expires_at > checked_at:
-        return exact
-    older: Final = await asyncio.gather(
-        *(_read_exact(cache, scope, fingerprint) for fingerprint in prefix.fingerprints[1:])
-    )
-    observations: Final = tuple(observation for observation in (exact, *older) if observation is not None)
-    return next(
-        (observation for observation in observations if observation.expires_at > checked_at),
-        next(iter(observations), None),
-    )
-
-
-async def _read_exact(cache: DualCache, scope: str, fingerprint: str) -> CacheObservation | None:
-    try:
-        value: Final = _CACHE_ENTRY.validate_python(await cache.async_get_cache(_cache_key(scope, fingerprint), ttl=1))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # validate the legacy cache's untyped result at the I/O boundary
-        if value is None:
-            return None
-        observation: Final = CacheObservation.model_validate_json(value) if isinstance(value, str) else value
-    except ValidationError:
-        return None
-    return observation if observation.fingerprint == fingerprint else None
 
 
 class _Metadata(LiteLLMBaseModel):
