@@ -19,7 +19,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict
 
 from e2e_config import provider_edge_base, unique_marker
-from e2e_http import assert_client_error, unwrap
+from e2e_http import assert_client_error
 from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody
@@ -45,13 +45,6 @@ TOKENS: Final = (791, 4062, 14198, 39935, 35308, 927, 279, 16053, 5679)
 class _OptionalEmbeddingsBody(BaseModel):
     model: str | None = None
     input: str | list[str] | None = None
-
-
-class CohereImageEmbeddingBody(BaseModel):
-    model_config = ConfigDict(frozen=True)
-
-    model: str
-    input: tuple[str, ...]
 
 
 class CohereImageTokenDetails(BaseModel):
@@ -213,6 +206,7 @@ class TestEmbeddingsEndpoint:
         self,
         proxy: ProxyClient,
         resources: ResourceManager,
+        sdk: SdkClients,
         input_values: tuple[str, ...],
         token_type: Literal["image_tokens", "text_tokens"],
     ) -> None:
@@ -223,14 +217,10 @@ class TestEmbeddingsEndpoint:
         )
         resources.defer(lambda: proxy.delete_model(model_id))
         key: Final = resources.key()
-        response: Final = unwrap(
-            proxy.transport.post(
-                "/embeddings",
-                headers=proxy.transport.bearer(key),
-                json=CohereImageEmbeddingBody(model=model, input=input_values),
-                response_type=CohereImageEmbeddingResponse,
-            )
+        embeddings: Final = sdk.openai(key).embeddings.create(
+            model=model, input=list(input_values), extra_body=NO_PROXY_CACHE
         )
+        response: Final = CohereImageEmbeddingResponse.model_validate(embeddings.model_dump())
         details: Final = response.usage.prompt_tokens_details if response.usage else None
         assert details is not None, f"{model}: /embeddings returned no prompt_tokens_details: {response}"
         reported: Final = details.image_tokens if token_type == "image_tokens" else details.text_tokens

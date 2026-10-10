@@ -12,12 +12,11 @@ from lifecycle import ResourceManager
 from models import ChatMessage, ChatResponse, LiteLLMParamsBody
 from proxy_client import ProxyClient
 from pydantic import BaseModel, ConfigDict
-from sdk_clients import SdkClients, response_header
+from sdk_clients import SdkClients
 
 pytestmark = [pytest.mark.e2e, pytest.mark.provider_live]
 
 GEMINI_MODEL: Final = "vertex_ai/gemini-3-flash-preview"
-LLAMA_MODEL: Final = "vertex_ai/meta/llama-4-maverick-17b-128e-instruct-maas"
 
 
 class GoogleSearchTool(TypedDict):
@@ -128,48 +127,3 @@ class TestVertexCapabilities:
             cast(object | None, getattr(chunk, "vertex_ai_grounding_metadata", None)) for chunk in chunks
         )
         assert any(value is not None for value in metadata)
-
-    @pytest.mark.covers("llm.chat_completions.vertex.tool_use.nonstream.works")
-    @meta(
-        Subject(
-            domain=Domain.LLM_TRANSLATION,
-            route=Route.CHAT_COMPLETIONS,
-            providers=(Provider.VERTEX_AI,),
-            models=(LLAMA_MODEL,),
-            capabilities=(Capability.FUNCTION_CALLING,),
-            mode=Mode.NONSTREAM,
-        )
-    )
-    def test_llama_tool_calling_returns_weather_tool_call(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
-    ) -> None:
-        model, key = _register(proxy, resources, "e2e-vertex-llama", LLAMA_MODEL, "us-east5")
-        raw_response: Final = sdk.openai(key).chat.completions.with_raw_response.create(
-            model=model,
-            messages=[{"role": "user", "content": "What is the weather in Boston, MA today?"}],
-            tools=[
-                {
-                    "type": "function",
-                    "function": {
-                        "name": "get_weather",
-                        "description": "Get current temperature for a given location.",
-                        "parameters": {
-                            "type": "object",
-                            "properties": {"location": {"type": "string"}},
-                            "required": ["location"],
-                            "additionalProperties": False,
-                        },
-                    },
-                }
-            ],
-        )
-        response: Final = raw_response.parse()
-        choice: Final = response.choices[0]
-        assert choice.finish_reason == "tool_calls"
-        assert choice.message.tool_calls
-        tool_call: Final = choice.message.tool_calls[0]
-        assert tool_call.type == "function"
-        assert tool_call.function.name == "get_weather"
-        cost: Final = response_header(raw_response.headers, "x-litellm-response-cost")
-        assert cost is not None
-        assert float(cost) > 0

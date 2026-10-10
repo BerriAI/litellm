@@ -315,12 +315,11 @@ def test_mistral_completion_cost_is_priced_from_the_returned_usage(respx_mock, m
         messages=[{"role": "user", "content": "Hey, how's it going?"}],
         max_tokens=5,
         seed=10,
+        input_cost_per_token=4e-07,
+        output_cost_per_token=2e-06,
     )
 
-    rates: Final = litellm.model_cost["mistral/mistral-medium-latest"]
     body: Final = json.loads(route.calls.last.request.content)
     assert (body["random_seed"], body["max_tokens"]) == (10, 5)
     assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (10, 15)
-    assert response._hidden_params["response_cost"] == pytest.approx(
-        10 * rates["input_cost_per_token"] + 15 * rates["output_cost_per_token"]
-    )
+    assert response._hidden_params["response_cost"] == pytest.approx(10 * 4e-07 + 15 * 2e-06)

@@ -325,13 +325,13 @@ async def test_async_text_completion_chat_model_stream_builds_chat_chunks(monkey
     )
     chunks: Final = [chunk async for chunk in stream]
     response: Final = litellm.stream_chunk_builder(chunks=chunks)
-    rates: Final = litellm.model_cost["gpt-3.5-turbo"]
 
     assert response.choices[0].text == "hello"
     assert (response.usage.prompt_tokens, response.usage.completion_tokens) == (0, 1)
-    assert litellm.completion_cost(completion_response=response) == pytest.approx(
-        response.usage.completion_tokens * rates["output_cost_per_token"]
-    )
+    assert litellm.completion_cost(
+        completion_response=response,
+        custom_cost_per_token={"input_cost_per_token": 5e-07, "output_cost_per_token": 1.5e-06},
+    ) == pytest.approx(1 * 1.5e-06)
     assert tuple(
         chunk.choices[0].finish_reason
         for chunk in chunks
