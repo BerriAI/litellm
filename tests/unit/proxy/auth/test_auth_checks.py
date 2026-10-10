@@ -7,13 +7,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
+from copy import deepcopy
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest, litellm
 import httpx
+from fastapi import Request, status
 from prisma import Prisma
 from litellm._service_logger import ServiceTypes
 from litellm.proxy._types import LiteLLM_OrganizationTable, UserAPIKeyAuth
@@ -28,6 +30,8 @@ from litellm.proxy._types import (
     LiteLLM_UserTable,
     LiteLLM_TeamTable,
     Litellm_EntityType,
+    LitellmUserRoles,
+    ProxyException,
 )
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
@@ -35,9 +39,406 @@ from litellm.proxy.auth.auth_checks import (
     is_model_cost_zero,
     virtual_key_soft_budget_check,
     _team_soft_budget_check,
+    common_checks,
 )
 from litellm.proxy.utils import ProxyLogging
 from litellm.proxy.utils import CallInfo
+from litellm.types.passthrough_endpoints.pass_through_endpoints import LITELLM_PASS_THROUGH_ENDPOINT_MARKER
+
+
+async def _run_team_trace_id_check(
+    *,
+    route: str,
+    method: str = "POST",
+    request_body: dict[str, object] | None = None,
+    headers: Mapping[str, str] | None = None,
+    team_metadata: Mapping[str, object] | None = None,
+    team_object: LiteLLM_TeamTable | None = None,
+    registered_pass_through_endpoint: bool = False,
+) -> bool:
+    request_payload: Final[dict[str, object]] = {} if request_body is None else request_body
+    raw_headers: Final = tuple(
+        (name.lower().encode("latin-1"), value.encode("latin-1"))
+        for name, value in (() if headers is None else headers.items())
+    )
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": method,
+            "path": route,
+            "headers": raw_headers,
+            "query_string": b"",
+        }
+    )
+    if registered_pass_through_endpoint:
+        endpoint: Final = SimpleNamespace()
+        setattr(endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, True)
+        request.scope["endpoint"] = endpoint
+    team: Final = (
+        team_object
+        if team_object is not None
+        else LiteLLM_TeamTable(
+            team_id="trace-id-team",
+            metadata=None if team_metadata is None else dict(team_metadata),
+        )
+    )
+    valid_token: Final = UserAPIKeyAuth(token="test-token", team_id=team.team_id)
+    user: Final = LiteLLM_UserTable(user_id="trace-id-admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    return await common_checks(
+        request_body=request_payload,
+        team_object=team,
+        user_object=user,
+        end_user_object=None,
+        global_proxy_spend=None,
+        general_settings={},
+        route=route,
+        llm_router=None,
+        proxy_logging_obj=MagicMock(spec=ProxyLogging),
+        valid_token=valid_token,
+        request=request,
+        skip_budget_checks=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["/chat/completions", "/v1/messages", "/mcp/", "/a2a/my-agent"],
+)
+@pytest.mark.asyncio
+async def test_team_require_trace_id_rejects_llm_mcp_and_agent_requests(route: str) -> None:
+    request_body: Final[dict[str, object]] = {"metadata": {"source": "unit-test"}}
+    original_body: Final = deepcopy(request_body)
+    exc_info: Final[pytest.ExceptionInfo[ProxyException]]
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_team_trace_id_check(
+            route=route,
+            request_body=request_body,
+            team_metadata={"require_trace_id": True},
+        )
+    assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+    assert exc_info.value.param == "trace_id"
+    assert exc_info.value.message == (
+        "Team 'trace-id-team' requires a trace ID on every LLM, MCP and agent request. "
+        "Send an x-litellm-trace-id header. "
+        "LLM requests can also send a W3C traceparent header or set metadata.trace_id in the body."
+    )
+    assert request_body == original_body
+
+
+@pytest.mark.parametrize(
+    ("headers", "request_body"),
+    [
+        ({"x-litellm-trace-id": "trace-123"}, {}),
+        ({"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"}, {}),
+        ({}, {"metadata": {"trace_id": "trace-123"}}),
+        ({}, {"litellm_metadata": {"trace_id": "trace-123"}}),
+        ({}, {"litellm_trace_id": "trace-123"}),
+        ({}, {"litellm_trace_id": "", "metadata": {"trace_id": "trace-123"}}),
+        ({}, {"litellm_trace_id": None, "metadata": {"trace_id": "trace-123"}}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_require_trace_id_accepts_supported_trace_carriers(
+    headers: Mapping[str, str],
+    request_body: dict[str, object],
+) -> None:
+    original_body: Final = deepcopy(request_body)
+    await _run_team_trace_id_check(
+        route="/chat/completions",
+        headers=headers,
+        request_body=request_body,
+        team_metadata={"require_trace_id": True},
+    )
+    assert request_body == original_body
+
+
+@pytest.mark.parametrize("route", ["/v1/traces", "/v1/logs", "/v1/traces/query"])
+@pytest.mark.asyncio
+async def test_team_require_trace_id_accepts_trace_telemetry_routes(route: str) -> None:
+    assert await _run_team_trace_id_check(
+        route=route,
+        method="POST",
+        request_body={},
+        team_metadata={"require_trace_id": True},
+    ) is True
+
+
+@pytest.mark.asyncio
+async def test_team_require_trace_id_rejects_overridden_body_metadata_on_chat() -> None:
+    request_body: Final[dict[str, object]] = {
+        "metadata": {"trace_id": ""},
+        "litellm_metadata": {"trace_id": "trace-123"},
+    }
+    exc_info: Final[pytest.ExceptionInfo[ProxyException]]
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_team_trace_id_check(
+            route="/chat/completions",
+            request_body=request_body,
+            team_metadata={"require_trace_id": True},
+        )
+    assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+    assert exc_info.value.param == "trace_id"
+
+
+@pytest.mark.parametrize(
+    "request_body",
+    [
+        {"litellm_metadata": {"trace_id": "trace-123"}},
+        {"metadata": {"trace_id": "trace-123"}},
+    ],
+    ids=["selected-litellm-metadata", "promoted-requester-metadata"],
+)
+@pytest.mark.asyncio
+async def test_team_require_trace_id_accepts_effective_metadata_on_responses_route(
+    request_body: dict[str, object],
+) -> None:
+    assert await _run_team_trace_id_check(
+        route="/v1/responses",
+        request_body=request_body,
+        team_metadata={"require_trace_id": True},
+    ) is True
+
+
+@pytest.mark.parametrize(
+    ("headers", "request_body"),
+    [
+        (
+            {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"},
+            {"litellm_trace_id": ""},
+        ),
+        (
+            {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"},
+            {"litellm_trace_id": None},
+        ),
+    ],
+    ids=[
+        "traceparent-with-empty-top-level",
+        "traceparent-with-null-top-level",
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_require_trace_id_rejects_fallback_carriers_when_litellm_trace_id_is_explicit(
+    headers: Mapping[str, str],
+    request_body: dict[str, object],
+) -> None:
+    exc_info: Final[pytest.ExceptionInfo[ProxyException]]
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_team_trace_id_check(
+            route="/chat/completions",
+            headers=headers,
+            request_body=request_body,
+            team_metadata={"require_trace_id": True},
+        )
+    assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+    assert exc_info.value.param == "trace_id"
+
+
+@pytest.mark.asyncio
+async def test_team_require_trace_id_accepts_header_on_mcp_with_empty_body() -> None:
+    assert await _run_team_trace_id_check(
+        route="/mcp/",
+        request_body={},
+        headers={"x-litellm-trace-id": "trace-mcp-123"},
+        team_metadata={"require_trace_id": True},
+    ) is True
+
+
+@pytest.mark.parametrize(
+    ("headers", "request_body"),
+    [
+        (
+            {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"},
+            {},
+        ),
+        ({}, {"metadata": {"trace_id": "trace-body-123"}}),
+    ],
+    ids=["traceparent", "body-metadata"],
+)
+@pytest.mark.asyncio
+async def test_team_require_trace_id_rejects_nonheader_carriers_on_pass_through_routes(
+    headers: Mapping[str, str],
+    request_body: dict[str, object],
+) -> None:
+    exc_info: Final[pytest.ExceptionInfo[ProxyException]]
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_team_trace_id_check(
+            route="/anthropic/v1/messages",
+            headers=headers,
+            request_body=request_body,
+            team_metadata={"require_trace_id": True},
+        )
+    assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+    assert exc_info.value.param == "trace_id"
+
+
+@pytest.mark.asyncio
+async def test_team_require_trace_id_accepts_header_on_pass_through_route() -> None:
+    assert await _run_team_trace_id_check(
+        route="/anthropic/v1/messages",
+        request_body={},
+        headers={"x-litellm-trace-id": "trace-provider-123"},
+        team_metadata={"require_trace_id": True},
+    ) is True
+
+
+@pytest.mark.parametrize(
+    ("headers", "request_body"),
+    [
+        (
+            {"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"},
+            {},
+        ),
+        ({}, {"metadata": {"trace_id": "trace-body-123"}}),
+    ],
+    ids=["traceparent", "body-metadata"],
+)
+@pytest.mark.asyncio
+async def test_team_require_trace_id_rejects_nonheader_carriers_on_registered_pass_through_routes(
+    headers: Mapping[str, str],
+    request_body: dict[str, object],
+) -> None:
+    exc_info: Final[pytest.ExceptionInfo[ProxyException]]
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_team_trace_id_check(
+            route="/configured-passthrough/infer",
+            headers=headers,
+            request_body=request_body,
+            team_metadata={"require_trace_id": True},
+            registered_pass_through_endpoint=True,
+        )
+    assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+    assert exc_info.value.param == "trace_id"
+
+
+@pytest.mark.parametrize(
+    ("route", "request_body"),
+    [
+        ("/mcp/", {}),
+        (
+            "/mcp-rest/tools/call",
+            {"server_id": "math", "name": "add", "arguments": {"left": 2, "right": 3}},
+        ),
+        (
+            "/a2a/my-agent",
+            {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "message/send",
+                "params": {"message": {"messageId": "msg-1", "role": "user", "parts": [{"type": "text", "text": "hi"}]}},
+            },
+        ),
+    ],
+    ids=["streamable-mcp", "mcp-rest", "a2a"],
+)
+@pytest.mark.asyncio
+async def test_team_require_trace_id_rejects_traceparent_on_mcp_and_agent_routes(
+    route: str,
+    request_body: dict[str, object],
+) -> None:
+    exc_info: Final[pytest.ExceptionInfo[ProxyException]]
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_team_trace_id_check(
+            route=route,
+            headers={"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"},
+            request_body=request_body,
+            team_metadata={"require_trace_id": True},
+        )
+    assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+    assert exc_info.value.param == "trace_id"
+
+
+@pytest.mark.parametrize(
+    ("route", "request_body"),
+    [
+        (
+            "/mcp-rest/tools/call",
+            {
+                "server_id": "math",
+                "name": "add",
+                "arguments": {"left": 2, "right": 3},
+                "metadata": {"trace_id": "trace-body-123"},
+            },
+        ),
+        (
+            "/a2a/my-agent",
+            {
+                "jsonrpc": "2.0",
+                "id": "1",
+                "method": "message/send",
+                "params": {"message": {"messageId": "msg-1", "role": "user", "parts": [{"type": "text", "text": "hi"}]}},
+                "metadata": {"trace_id": "trace-body-123"},
+            },
+        ),
+    ],
+    ids=["mcp-rest", "a2a"],
+)
+@pytest.mark.asyncio
+async def test_team_require_trace_id_rejects_body_metadata_on_mcp_and_agent_routes(
+    route: str,
+    request_body: dict[str, object],
+) -> None:
+    exc_info: Final[pytest.ExceptionInfo[ProxyException]]
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_team_trace_id_check(
+            route=route,
+            request_body=request_body,
+            team_metadata={"require_trace_id": True},
+        )
+    assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+    assert exc_info.value.param == "trace_id"
+
+
+@pytest.mark.parametrize(
+    ("headers", "request_body"),
+    [
+        ({"traceparent": "invalid"}, {}),
+        ({}, {"metadata": {"trace_id": ""}}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_require_trace_id_rejects_invalid_trace_carriers(
+    headers: Mapping[str, str],
+    request_body: dict[str, object],
+) -> None:
+    original_body: Final = deepcopy(request_body)
+    exc_info: Final[pytest.ExceptionInfo[ProxyException]]
+    with pytest.raises(ProxyException) as exc_info:
+        await _run_team_trace_id_check(
+            route="/chat/completions",
+            headers=headers,
+            request_body=request_body,
+            team_metadata={"require_trace_id": True},
+        )
+    assert exc_info.value.code == str(status.HTTP_400_BAD_REQUEST)
+    assert exc_info.value.param == "trace_id"
+    assert request_body == original_body
+
+
+@pytest.mark.parametrize(
+    ("route", "method", "team_metadata"),
+    [
+        ("/v1/models", "GET", {"require_trace_id": True}),
+        ("/chat/completions", "POST", None),
+        ("/chat/completions", "POST", {"require_trace_id": False}),
+        ("/key/generate", "POST", {"require_trace_id": True}),
+    ],
+)
+@pytest.mark.asyncio
+async def test_team_require_trace_id_exempts_methods_routes_and_disabled_teams(
+    route: str,
+    method: str,
+    team_metadata: Mapping[str, object] | None,
+) -> None:
+    assert await _run_team_trace_id_check(route=route, method=method, team_metadata=team_metadata) is True
+
+
+@pytest.mark.asyncio
+async def test_team_require_trace_id_skips_non_dict_team_metadata() -> None:
+    team: Final[LiteLLM_TeamTable] = LiteLLM_TeamTable.model_construct(
+        team_id="trace-id-team",
+        metadata="not a mapping",
+    )
+    assert await _run_team_trace_id_check(route="/v1/chat/completions", team_object=team) is True
 
 
 @pytest.mark.parametrize("route", ("/lens/datasets", "/lens/tracing/keys"))
@@ -59,7 +460,7 @@ async def test_get_end_user_object(customer_spend, customer_budget):
     Scenario 1: normal - get_end_user_object returns the cached user
     Scenario 2: user over budget - NOTE: budget enforcement now happens in 
                 common_checks() via _check_end_user_budget(), not in get_end_user_object()
-    
+
     This test verifies that get_end_user_object correctly retrieves the end user
     from cache. Budget enforcement is tested separately in test_check_end_user_budget().
     """
@@ -99,12 +500,12 @@ async def test_check_end_user_budget(customer_spend, customer_budget):
     Test _check_end_user_budget enforcement:
     - Scenario 1: customer_spend=0, customer_budget=10 - should pass (under budget)
     - Scenario 2: customer_spend=10, customer_budget=0 - should fail (over budget)
-    
-    Note: Budget enforcement for end users happens in common_checks() via 
+
+    Note: Budget enforcement for end users happens in common_checks() via
     _check_end_user_budget(), not in get_end_user_object().
     """
     from litellm.proxy.auth.auth_checks import check_end_user_budget
-    
+
     _budget = LiteLLM_BudgetTable(max_budget=customer_budget)
     end_user_obj = LiteLLM_EndUserTable(
         user_id="my-test-customer",
@@ -112,9 +513,9 @@ async def test_check_end_user_budget(customer_spend, customer_budget):
         litellm_budget_table=_budget,
         blocked=False,
     )
-    
+
     should_exceed = customer_spend > customer_budget
-    
+
     if not should_exceed:
         await check_end_user_budget(
             end_user_obj=end_user_obj,
