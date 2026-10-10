@@ -38,6 +38,19 @@ class TeamAccess:
             return "org_admin"
         return "team_admin" if is_team_admin(caller, team) else None
 
+    async def reads_roster(self, caller: UserAPIKeyAuth, team: LiteLLM_TeamTable) -> bool:
+        """The readers `/team/info` admits: proxy admins and admin viewers, a key issued to this team,
+        anyone on the roster, and admins of the team's org."""
+        if caller.user_role in (LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY):
+            return True
+        if caller.team_id == team.team_id:
+            return True
+        if caller.user_id is None:
+            return False
+        if any(member.user_id == caller.user_id for member in team.members_with_roles):
+            return True
+        return await self._is_org_admin(caller, team)
+
     async def _is_org_admin(self, caller: UserAPIKeyAuth, team: LiteLLM_TeamTable) -> bool:
         if not caller.user_id or not team.organization_id:
             return False

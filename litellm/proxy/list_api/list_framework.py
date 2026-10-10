@@ -4,7 +4,9 @@ A resource declares a `ListSpec`; `build_query_plan` turns query parameters into
 `QueryPlan` or an RFC 9457 problem without touching a database, and `handle_list`
 runs that plan through an injected `ListExecutor`. Keeping the planning pure is what
 lets a caller assert the plan as a value instead of asserting against a live Prisma
-client, and it keeps this module free of any database dependency.
+client, and it keeps this module free of any database dependency. An endpoint that
+declares its query parameters hands them over typed, as a `ListQuery`, and
+`plan_list_query` plans them the same way.
 
 A plan's `where` is a tuple of frozen `Predicate`s rather than a backend-shaped
 mapping, so the framework never has to know which query builder executes it and a
@@ -368,8 +370,7 @@ def _parse_page_size(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> i
     return min(value, spec.max_page_size)
 
 
-def _parse_sort(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> tuple[SortKey, ...] | ProblemDetail:
-    raw: Final = params.get(SORT_PARAM)
+def _sort_keys(spec: ListSpec[TRow, TOut], raw: str | None) -> tuple[SortKey, ...] | ProblemDetail:
     if raw is None:
         return spec.default_sort
     segments: Final = tuple(segment.strip() for segment in raw.split(","))
@@ -464,8 +465,7 @@ def _parse_filters(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> tup
     return tuple(item for item in parsed if not isinstance(item, ProblemDetail))
 
 
-def _search_predicate(spec: ListSpec[TRow, TOut], params: Mapping[str, str]) -> Predicate | None:
-    raw: Final = params.get(SEARCH_PARAM)
+def _search_predicate(spec: ListSpec[TRow, TOut], raw: str | None) -> Predicate | None:
     if not raw:
         return None
     return AnyOf(clauses=tuple(Compare(field=field, op="contains", value=raw) for field in sorted(spec.searchable)))
@@ -505,7 +505,7 @@ def build_query_plan(
     if isinstance(page_size, ProblemDetail):
         return page_size
 
-    sort: Final = _parse_sort(spec, params)
+    sort: Final = _sort_keys(spec, params.get(SORT_PARAM))
     if isinstance(sort, ProblemDetail):
         return sort
 
@@ -513,16 +513,57 @@ def build_query_plan(
     if isinstance(filters, ProblemDetail):
         return filters
 
-    search: Final = _search_predicate(spec, params)
+    return _assemble_plan(spec, scope_predicates, filters, params.get(SEARCH_PARAM), sort, page, page_size)
+
+
+def _assemble_plan(
+    spec: ListSpec[TRow, TOut],
+    scope_predicates: tuple[Predicate, ...],
+    filters: tuple[Predicate, ...],
+    search: str | None,
+    sort: tuple[SortKey, ...],
+    page: int,
+    page_size: int,
+) -> QueryPlan:
+    search_predicate: Final = _search_predicate(spec, search)
     return QueryPlan(
         # Scope first: conjuncts a caller filter sits behind and cannot replace.
-        where=scope_predicates + filters + ((search,) if search is not None else ()),
+        where=scope_predicates + filters + ((search_predicate,) if search_predicate is not None else ()),
         # Ordering by an all-null column without a unique final key lets Postgres return
         # the same row on two different pages.
         order=sort + (SortKey(field=spec.tiebreaker, descending=False),),
         skip=(page - 1) * page_size,
         take=page_size,
     )
+
+
+@dataclass(frozen=True, slots=True)
+class ListQuery:
+    """List parameters an endpoint declared in its signature, so they arrive typed and already validated."""
+
+    page: int = 1
+    page_size: int | None = None
+    sort: str | None = None
+    search: str | None = None
+    filters: tuple[Predicate, ...] = ()
+
+
+def plan_list_query(
+    spec: ListSpec[TRow, TOut],
+    query: ListQuery,
+    caller: UserAPIKeyAuth,
+) -> QueryPlan | ProblemDetail:
+    """`build_query_plan` for an endpoint that declares its query parameters instead of reading them as text."""
+    scope_predicates: Final = _scope_predicates(spec.scope(caller))
+    if isinstance(scope_predicates, ProblemDetail):
+        return scope_predicates
+
+    sort: Final = _sort_keys(spec, query.sort)
+    if isinstance(sort, ProblemDetail):
+        return sort
+
+    page_size: Final = spec.default_page_size if query.page_size is None else min(query.page_size, spec.max_page_size)
+    return _assemble_plan(spec, scope_predicates, query.filters, query.search, sort, query.page, page_size)
 
 
 def _facet_allowed_params(spec: ListSpec[TRow, TOut]) -> tuple[str, ...]:
@@ -541,7 +582,7 @@ def _facet_where(
     filters: Final = _parse_filters(spec, params)
     if isinstance(filters, ProblemDetail):
         return filters
-    search: Final = _search_predicate(spec, params)
+    search: Final = _search_predicate(spec, params.get(SEARCH_PARAM))
     return scope_predicates + filters + ((search,) if search is not None else ())
 
 
@@ -602,20 +643,9 @@ def _duplicate_params(request: Request) -> tuple[str, ...]:
     return tuple(sorted(frozenset(name for name in names if names.count(name) > 1)))
 
 
-async def handle_list(
-    spec: ListSpec[TRow, TOut],
-    executor: ListExecutor[TRow],
-    request: Request,
-    caller: UserAPIKeyAuth,
-) -> ListResponse[TOut]:
-    """Plan, execute, count, serialize, envelope. Failures reach the client as RFC 9457 problems."""
-    plan: Final = build_query_plan(spec=spec, params=request.query_params, caller=caller)
-    if isinstance(plan, ProblemDetail):
-        raise ManagementProblem(plan)
-
-    # Checked here rather than in build_query_plan because a Mapping[str, str] cannot
-    # represent a repeat: query_params.get() silently keeps the last one, so ?page=1&page=999
-    # would page from 999 without the caller ever being told which value won.
+def reject_repeated_params(request: Request) -> None:
+    """Neither a `Mapping[str, str]` nor a declared query model can represent a repeat: both silently keep
+    the last one, so ?page=1&page=999 would page from 999 without the caller ever being told which value won."""
     duplicates: Final = _duplicate_params(request)
     if duplicates:
         raise ManagementProblem(
@@ -628,12 +658,22 @@ async def handle_list(
             )
         )
 
-    total_count: Final = await executor.count(plan.where)
-    rows: Final = await executor.find_many(plan)
+
+def plan_list_request(spec: ListSpec[TRow, TOut], request: Request, caller: UserAPIKeyAuth) -> QueryPlan:
+    """The request's query parameters as a plan. Parameters that cannot be planned raise their RFC 9457 problem."""
+    plan: Final = build_query_plan(spec=spec, params=request.query_params, caller=caller)
+    if isinstance(plan, ProblemDetail):
+        raise ManagementProblem(plan)
+    reject_repeated_params(request)
+    return plan
+
+
+def list_response(request: Request, plan: QueryPlan, data: Sequence[TOut], total_count: int) -> ListResponse[TOut]:
+    """One planned page in the list envelope. The request is read only for the URL its links point back to."""
     total_pages: Final = ceil(total_count / plan.take)
     page: Final = plan.skip // plan.take + 1
     return ListResponse[TOut](
-        data=tuple(spec.serialize(row) for row in rows),
+        data=tuple(data),
         meta=ListMeta(
             total_count=total_count,
             page=page,
@@ -642,3 +682,16 @@ async def handle_list(
         ),
         links=build_list_links(request=request, page=page, total_pages=total_pages),
     )
+
+
+async def handle_list(
+    spec: ListSpec[TRow, TOut],
+    executor: ListExecutor[TRow],
+    request: Request,
+    caller: UserAPIKeyAuth,
+) -> ListResponse[TOut]:
+    """Plan, execute, count, serialize, envelope. Failures reach the client as RFC 9457 problems."""
+    plan: Final = plan_list_request(spec, request, caller)
+    total_count: Final = await executor.count(plan.where)
+    rows: Final = await executor.find_many(plan)
+    return list_response(request, plan, tuple(spec.serialize(row) for row in rows), total_count)

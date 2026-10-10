@@ -84,7 +84,6 @@ from litellm.proxy._types import (
     TeamInfoResponseObjectTeamTable,
     TeamListResponseObject,
     TeamMemberAddRequest,
-    TeamMemberBudgetSource,
     TeamMemberDeleteRequest,
     TeamMemberResetBudgetResponse,
     TeamMemberUpdateRequest,
@@ -126,6 +125,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
 )
 from litellm.proxy.management.teams.authz import TEAM_OR_ORG_ADMIN, TeamRole, is_team_admin, team_access_denied
 from litellm.proxy.management.teams.dependencies import get_team_access
+from litellm.proxy.management.teams.service import member_budget_source
 from litellm.proxy.management_endpoints.common_daily_activity import (
     InvalidDateRange,
     parse_canonical_date_range,
@@ -4105,12 +4105,6 @@ async def _existing_team_default_budget_id(team: LiteLLM_TeamTable, prisma_clien
     return budget_id if row is not None else None
 
 
-def _member_budget_source(budget_id: str | None, team_default_budget_id: str | None) -> TeamMemberBudgetSource:
-    if budget_id is not None and budget_id != team_default_budget_id:
-        return "custom"
-    return "team_default" if team_default_budget_id is not None else "none"
-
-
 @router.post(
     "/team/{team_id}/member/{user_id}/reset_budget",
     tags=["team management"],
@@ -4171,7 +4165,7 @@ async def reset_team_member_budget_fn(
         user_id=user_id,
         budget_id=team_default_budget_id,
         previous_budget_id=membership_row.budget_id,
-        budget_source=_member_budget_source(team_default_budget_id, team_default_budget_id),
+        budget_source=member_budget_source(team_default_budget_id, team_default_budget_id),
     )
 
 
@@ -5029,7 +5023,7 @@ async def team_info(
                     MappingProxyType(
                         {
                             **tm.model_dump(),
-                            "budget_source": _member_budget_source(tm.budget_id, active_default_budget_id),
+                            "budget_source": member_budget_source(tm.budget_id, active_default_budget_id),
                         }
                     )
                 )

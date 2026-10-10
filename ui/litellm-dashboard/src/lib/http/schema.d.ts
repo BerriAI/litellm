@@ -9237,6 +9237,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/management/v1/teams/{team_id}/members": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * List Team Members
+         * @description List a team's members one page at a time, with each member's spend and budget limits in the team.
+         *
+         *     Anyone who can read `/team/info` for the team can call this: proxy admins, admin viewers, the team's keys,
+         *     its members and its org admins. Anyone else gets a 403, and a team that does not exist is a 404.
+         *
+         *     `budget_source` says where a member's budget comes from:
+         *     - `custom`: the member has a budget of their own
+         *     - `team_default`: the member follows the team's member budget
+         *     - `none`: the team has no member budget
+         *
+         *     ```
+         *     curl --globoff 'http://0.0.0.0:4000/management/v1/teams/team-1/members?q=acme&filter[role]=admin' -H "Authorization: Bearer $LITELLM_MASTER_KEY"
+         *     ```
+         */
+        get: operations["list_team_members_management_v1_teams__team_id__members_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/management/v1/teams/{team_id}/members/bulk_delete": {
         parameters: {
             query?: never;
@@ -33370,6 +33402,13 @@ export interface components {
             links: components["schemas"]["ListLinks"];
             meta: components["schemas"]["ListMeta"];
         };
+        /** ListResponse[TeamMemberResponse] */
+        ListResponse_TeamMemberResponse_: {
+            /** Data */
+            data: components["schemas"]["TeamMemberResponse"][];
+            links: components["schemas"]["ListLinks"];
+            meta: components["schemas"]["ListMeta"];
+        };
         /**
          * ListRunsResponse
          * @description Response from listing runs
@@ -45531,6 +45570,49 @@ export interface components {
             team_id: string;
             /** User Id */
             user_id: string;
+        };
+        /**
+         * TeamMemberResponse
+         * @description One roster entry with the member's spend in the team and the budget row their membership points at.
+         *
+         *     The limits are that row's, exactly as `/team/info` returns it under `team_memberships`, so a member
+         *     with no row of their own reads null limits even when `budget_source` is `team_default`.
+         */
+        TeamMemberResponse: {
+            /** Allowed Models */
+            allowed_models: string[];
+            /** Budget Duration */
+            budget_duration: string | null;
+            /** Budget Id */
+            budget_id: string | null;
+            /** Budget Reset At */
+            budget_reset_at: string | null;
+            /**
+             * Budget Source
+             * @enum {string}
+             */
+            budget_source: "team_default" | "custom" | "none";
+            /** Max Budget In Team */
+            max_budget_in_team: number | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "admin" | "user";
+            /** Rpm Limit */
+            rpm_limit: number | null;
+            /** Spend */
+            spend: number;
+            /** Total Spend */
+            total_spend: number;
+            /** Tpm Limit */
+            tpm_limit: number | null;
+            /** User Alias */
+            user_alias: string | null;
+            /** User Email */
+            user_email: string | null;
+            /** User Id */
+            user_id: string | null;
         };
         /** TeamMemberUpdateRequest */
         TeamMemberUpdateRequest: {
@@ -62261,6 +62343,50 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["FacetListResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_team_members_management_v1_teams__team_id__members_get: {
+        parameters: {
+            query?: {
+                /** @description Search by `user_id` or `user_email`. Matches any part of the value and ignores case */
+                q?: string | null;
+                /** @description Only members with this role */
+                "filter[role]"?: ("admin" | "user") | null;
+                /** @description Only members with one of these roles, comma-separated, as in `admin,user` */
+                "filter[role][in]"?: string | null;
+                /** @description `user_alias`, `user_email`, `user_id`, `role`, `spend`, `total_spend`, `max_budget_in_team` or `budget_reset_at`. Put `-` in front to sort descending. Defaults to the order members were added */
+                sort?: string | null;
+                /** @description The page to return, starting at 1 */
+                page?: number;
+                /** @description Members per page. Defaults to 50, max 100 */
+                page_size?: number | null;
+            };
+            header?: never;
+            path: {
+                team_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ListResponse_TeamMemberResponse_"];
                 };
             };
             /** @description Validation Error */

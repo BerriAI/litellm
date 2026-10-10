@@ -136,6 +136,45 @@ def test_team_access_denied_is_the_403_management_routes_have_always_raised() ->
     assert denied.value.detail == "You do not have access to this team"
 
 
+def team_key(team_id: str) -> UserAPIKeyAuth:
+    return UserAPIKeyAuth(user_id=None, team_id=team_id, api_key="sk-team", user_role=LitellmUserRoles.INTERNAL_USER)
+
+
+@pytest.mark.parametrize(
+    ("who", "expected"),
+    [
+        pytest.param(caller("root", LitellmUserRoles.PROXY_ADMIN), True, id="proxy-admin"),
+        pytest.param(caller("viewer", LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY), True, id="admin-viewer"),
+        pytest.param(team_key("team-1"), True, id="key-issued-to-the-team"),
+        pytest.param(caller("admin"), True, id="team-admin"),
+        pytest.param(caller("member"), True, id="plain-member"),
+        pytest.param(team_key("team-2"), False, id="key-issued-to-another-team"),
+        pytest.param(caller(None), False, id="no-user-no-team"),
+    ],
+)
+async def test_reads_roster_admits_team_info_readers_without_an_org_lookup(who: UserAPIKeyAuth, expected: bool) -> None:
+    assert await TeamAccess(org_roles=NoOrgLookup()).reads_roster(who, team(ADMIN, MEMBER)) is expected
+
+
+async def test_reads_roster_never_matches_a_userless_caller_to_an_email_only_member() -> None:
+    email_only: Final = Member(user_id=None, user_email="invitee@example.com", role="user")
+    assert await TeamAccess(org_roles=NoOrgLookup()).reads_roster(caller(None), team(email_only)) is False
+
+
+@pytest.mark.parametrize(
+    ("who", "on_team", "expected"),
+    [
+        pytest.param(caller("boss"), team(ADMIN, organization_id="org-1"), True, id="org-admin-of-the-team"),
+        pytest.param(caller("boss"), team(ADMIN, organization_id="org-2"), False, id="org-admin-elsewhere"),
+        pytest.param(caller("stranger"), team(ADMIN, organization_id="org-1"), False, id="off-the-roster"),
+    ],
+)
+async def test_reads_roster_falls_back_to_the_teams_org_admins(
+    who: UserAPIKeyAuth, on_team: LiteLLM_TeamTable, expected: bool
+) -> None:
+    assert await TeamAccess(org_roles=BOSS_OF_ORG_1).reads_roster(who, on_team) is expected
+
+
 def test_the_old_access_module_still_serves_the_published_enterprise_wheel() -> None:
     from litellm.proxy.management.teams import access, authz
 

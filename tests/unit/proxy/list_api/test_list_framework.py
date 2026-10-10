@@ -17,6 +17,7 @@ from litellm.proxy.list_api.list_framework import (
     Compare,
     FilterSpec,
     IsNull,
+    ListQuery,
     ListSpec,
     QueryPlan,
     ScopeAll,
@@ -28,6 +29,7 @@ from litellm.proxy.list_api.list_framework import (
     handle_facet,
     handle_list,
     order_by_sql,
+    plan_list_query,
     where_sql,
 )
 from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
@@ -140,7 +142,10 @@ def _conjuncts(plan: QueryPlan) -> tuple[object, ...]:
 def test_appends_the_tiebreaker_to_the_default_sort():
     """Without a unique final key, ordering by an all-null column lets Postgres hand the
     same row back on two different pages."""
-    assert _plan({}).order == (SortKey(field="created_at", descending=True), SortKey(field="budget_id", descending=False))
+    assert _plan({}).order == (
+        SortKey(field="created_at", descending=True),
+        SortKey(field="budget_id", descending=False),
+    )
 
 
 def test_appends_the_tiebreaker_to_an_explicit_multi_key_sort():
@@ -240,13 +245,7 @@ def test_a_search_renders_as_a_parenthesised_or():
         )
     )
 
-    assert sql == (
-        '"created_by" = $1 AND ('
-        "\"budget_id\" ILIKE $2 ESCAPE '\\'"
-        " OR "
-        "\"created_by\" ILIKE $3 ESCAPE '\\'"
-        ")"
-    )
+    assert sql == ('"created_by" = $1 AND ("budget_id" ILIKE $2 ESCAPE \'\\\' OR "created_by" ILIKE $3 ESCAPE \'\\\')')
     assert params == ("alice", "%prod%", "%prod%")
 
 
@@ -274,11 +273,7 @@ def test_a_planned_filter_renders_end_to_end():
     sql, params = where_sql(_plan({"filter[max_budget][is_null]": "true", "q": "prod"}).where)
 
     assert sql == (
-        '"max_budget" IS NULL AND ('
-        "\"budget_id\" ILIKE $1 ESCAPE '\\'"
-        " OR "
-        "\"created_by\" ILIKE $2 ESCAPE '\\'"
-        ")"
+        '"max_budget" IS NULL AND ("budget_id" ILIKE $1 ESCAPE \'\\\' OR "created_by" ILIKE $2 ESCAPE \'\\\')'
     )
     assert params == ("%prod%", "%prod%")
 
@@ -627,15 +622,11 @@ def test_in_splits_on_commas_and_coerces_every_member():
 def test_is_null_true_matches_rows_with_no_budget():
     """Budgets renders a null max_budget as "Unlimited"; without is_null there is no way
     to ask for those rows."""
-    assert _conjuncts(_plan({"filter[max_budget][is_null]": "true"})) == (
-        IsNull(field="max_budget", negated=False),
-    )
+    assert _conjuncts(_plan({"filter[max_budget][is_null]": "true"})) == (IsNull(field="max_budget", negated=False),)
 
 
 def test_is_null_false_matches_rows_that_have_one():
-    assert _conjuncts(_plan({"filter[max_budget][is_null]": "false"})) == (
-        IsNull(field="max_budget", negated=True),
-    )
+    assert _conjuncts(_plan({"filter[max_budget][is_null]": "false"})) == (IsNull(field="max_budget", negated=True),)
 
 
 def test_is_null_rejects_a_non_boolean():
@@ -688,9 +679,7 @@ async def test_returns_the_page_mode_envelope():
         total_count=42,
     )
 
-    response = await handle_list(
-        spec=_spec(), executor=executor, request=_request("page=2&page_size=5"), caller=CALLER
-    )
+    response = await handle_list(spec=_spec(), executor=executor, request=_request("page=2&page_size=5"), caller=CALLER)
     body = response.model_dump(by_alias=True)
 
     assert body["meta"] == {"total_count": 42, "page": 2, "page_size": 5, "total_pages": 9}
@@ -714,9 +703,7 @@ async def test_serializes_rows_flat_without_a_json_api_resource_wrapper():
 async def test_links_let_a_client_page_without_building_urls():
     executor = RecordingExecutor(rows=(), total_count=42)
 
-    response = await handle_list(
-        spec=_spec(), executor=executor, request=_request("page=2&page_size=5"), caller=CALLER
-    )
+    response = await handle_list(spec=_spec(), executor=executor, request=_request("page=2&page_size=5"), caller=CALLER)
     links = response.model_dump(by_alias=True)["links"]
 
     assert links["self"] == f"{BUDGETS_PATH}?page_size=5&page=2"
@@ -730,9 +717,7 @@ async def test_links_let_a_client_page_without_building_urls():
 async def test_the_last_page_has_no_next_link():
     executor = RecordingExecutor(rows=(), total_count=10)
 
-    response = await handle_list(
-        spec=_spec(), executor=executor, request=_request("page=2&page_size=5"), caller=CALLER
-    )
+    response = await handle_list(spec=_spec(), executor=executor, request=_request("page=2&page_size=5"), caller=CALLER)
     links = response.model_dump(by_alias=True)["links"]
 
     assert links["next"] is None
@@ -997,3 +982,48 @@ async def test_a_facet_rejects_a_page_size_that_is_not_a_positive_integer():
 
     assert problem.status == 400
     assert "'page_size'" in problem.detail
+
+
+# ------------------------------------------------------ declared (typed) parameters
+
+
+@pytest.mark.parametrize(
+    ("typed", "as_text"),
+    [
+        pytest.param(ListQuery(), {}, id="defaults"),
+        pytest.param(ListQuery(page=3, page_size=10), {"page": "3", "page_size": "10"}, id="paging"),
+        pytest.param(ListQuery(page_size=1000), {"page_size": "1000"}, id="page-size-over-the-cap"),
+        pytest.param(ListQuery(sort="-max_budget,budget_id"), {"sort": "-max_budget,budget_id"}, id="sort"),
+        pytest.param(ListQuery(search="acme"), {"q": "acme"}, id="search"),
+        pytest.param(
+            ListQuery(
+                filters=(
+                    Within(field="created_by", values=("u1", "u2")),
+                    Compare(field="max_budget", op="gte", value=5.0),
+                )
+            ),
+            {"filter[created_by][in]": "u1,u2", "filter[max_budget][gte]": "5"},
+            id="filters",
+        ),
+    ],
+)
+def test_declared_params_plan_exactly_as_the_same_params_sent_as_text(typed: ListQuery, as_text: Mapping[str, str]):
+    scoped = _spec(scope=lambda caller: ScopeWhere(where=(Compare(field="created_by", op="eq", value="caller-1"),)))
+
+    assert plan_list_query(scoped, typed, CALLER) == _plan(as_text, scoped)
+
+
+@pytest.mark.parametrize(
+    ("typed", "spec", "status"),
+    [
+        pytest.param(ListQuery(sort="created_by"), _spec(), 400, id="unsortable-field"),
+        pytest.param(ListQuery(), _spec(scope=lambda caller: ScopeDenied(reason="no")), 403, id="scope-denied"),
+    ],
+)
+def test_declared_params_that_cannot_be_planned_are_a_problem(
+    typed: ListQuery, spec: ListSpec[BudgetRow, BudgetOut], status: int
+):
+    problem = plan_list_query(spec, typed, CALLER)
+
+    assert isinstance(problem, ProblemDetail)
+    assert problem.status == status

@@ -603,6 +603,8 @@ from litellm.proxy.lens.adapter import router as lens_router
 from litellm.proxy.lens.internal import LensInternalMiddleware
 from litellm.proxy.list_api.common import (
     ManagementProblem,
+    database_unavailable_problem,
+    internal_server_error_problem,
     problem_response,
     request_validation_problem,
 )
@@ -2186,11 +2188,14 @@ async def otel_request_validation_exception_handler(request: Request, exc: Reque
 async def otel_unhandled_exception_handler(request: Request, exc: Exception):
     if isinstance(exc, (ProxyException, HTTPException, RequestValidationError)):
         raise exc
+    on_management_v1: Final = request.url.path.startswith(MANAGEMENT_V1_PREFIX)
     if PrismaDBExceptionHandler.is_database_service_unavailable_error_in_chain(exc):
         verbose_proxy_logger.warning("Database unavailable during request: %s", type(exc).__name__)
-        return await openai_exception_handler(
-            request=request, exc=PrismaDBExceptionHandler.service_unavailable_proxy_exception(exc)
-        )
+        unavailable: Final = PrismaDBExceptionHandler.service_unavailable_proxy_exception(exc)
+        if on_management_v1:
+            _close_dangling_otel_server_span(request, 503, exc=exc)
+            return problem_response(database_unavailable_problem(unavailable.message))
+        return await openai_exception_handler(request=request, exc=unavailable)
     verbose_proxy_logger.exception("Unhandled exception in request: %s", type(exc).__name__)
     if should_report_bug(exc):
         verbose_proxy_logger.error(
@@ -2202,6 +2207,8 @@ async def otel_unhandled_exception_handler(request: Request, exc: Exception):
             )
         )
     _close_dangling_otel_server_span(request, 500, exc=exc)
+    if on_management_v1:
+        return problem_response(internal_server_error_problem())
     otlp_response: Final = tracing_endpoints.otlp_error_response(request, 500)
     if otlp_response is not None:
         return otlp_response

@@ -943,6 +943,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/update",
         "/team/member_add",
         "/team/member_delete",
+        "/management/v1/teams/{team_id}/members",
         "/management/v1/teams/{team_id}/members/bulk_delete",
         "/management/v1/teams/{team_id}/members/bulk_update",
         "/team/member_update",
