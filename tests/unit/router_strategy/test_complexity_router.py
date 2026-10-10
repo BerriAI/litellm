@@ -668,6 +668,45 @@ class TestReasoningMarkerScoring:
         assert score == 0.25
         assert tier == ComplexityTier.REASONING
 
+    def test_heuristic_v2_honors_the_zero_floor_override(self, mock_router_instance, basic_config):
+        """#44527: reasoning_override_min_score=0 must promote on heuristic_v2 too.
+
+        The success predictor reads outcome statistics, never the ask's reasoning
+        markers, so before the fix a request carrying 2+ exact markers was still
+        classified by the predictor alone and the operator's explicit 0 floor was
+        silently ignored.
+        """
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "classifier_type": "heuristic_v2",
+                "heuristic_v2_artifact": _heuristic_v2_artifact(),
+                "reasoning_override_min_score": 0.0,
+            },
+        )
+        outcome = asyncio.run(router.aclassify("hi, step by step, pros and cons"))
+        assert outcome.cause == "reasoning_override"
+        assert outcome.tier == ComplexityTier.REASONING
+
+    def test_heuristic_v2_respects_a_floor_above_the_markers_score(self, mock_router_instance, basic_config):
+        """A floor above the markers' weighted score leaves heuristic_v2 to the predictor."""
+        router = ComplexityRouter(
+            model_name="test-complexity-router",
+            litellm_router_instance=mock_router_instance,
+            complexity_router_config={
+                **basic_config,
+                "classifier_type": "heuristic_v2",
+                "heuristic_v2_artifact": _heuristic_v2_artifact(),
+                "reasoning_override_min_score": 0.99,
+            },
+        )
+        outcome = asyncio.run(router.aclassify("hi, step by step, pros and cons"))
+        assert outcome.cause != "reasoning_override"
+        assert outcome.cause == "heuristic_v2"
+        assert outcome.tier == ComplexityTier.COMPLEX
+
     def test_system_prompt_reasoning_not_counted(self, complexity_router):
         """Reasoning markers in system prompt should not count for override."""
         user_prompt = "What is 2+2?"
