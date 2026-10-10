@@ -69,8 +69,9 @@ async def test_infinity_rerank():
         assert_response_shape(response, custom_llm_provider="infinity")
 
 
+@pytest.mark.parametrize("provider_document", ["hello", {"text": "hello"}])
 @pytest.mark.asyncio()
-async def test_infinity_rerank_with_return_documents():
+async def test_infinity_rerank_with_return_documents(provider_document: str | dict[str, str]):
     mock_response = AsyncMock()
 
     mock_response = AsyncMock()
@@ -78,7 +79,7 @@ async def test_infinity_rerank_with_return_documents():
     def return_val():
         return {
             "id": "cmpl-mockid",
-            "results": [{"index": 0, "relevance_score": 0.95, "document": "hello"}],
+            "results": [{"index": 0, "relevance_score": 0.95, "document": provider_document}],
             "usage": {"prompt_tokens": 100, "total_tokens": 150},
         }
 
