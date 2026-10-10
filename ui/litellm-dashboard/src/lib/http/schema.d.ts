@@ -26732,6 +26732,16 @@ export interface components {
              */
             mask_response_content?: boolean | null;
             /**
+             * Max Concurrent Decision Calls
+             * @description Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.
+             */
+            max_concurrent_decision_calls?: number | null;
+            /**
+             * Max Input Chars
+             * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.
+             */
+            max_input_chars?: number | null;
+            /**
              * Model
              * @description Optional field if guardrail requires a 'model' parameter
              */
@@ -26849,7 +26859,7 @@ export interface components {
             timeout?: number | null;
             /**
              * Unreachable Fallback
-             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
+             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed. Also implemented by guardrail='decision_model'.
              * @default fail_closed
              * @enum {string}
              */
@@ -31009,6 +31019,27 @@ export interface components {
             total_tokens: number;
         };
         /**
+         * DecisionModelCheck
+         * @description One predicate the decision model scores the request or response against.
+         */
+        DecisionModelCheck: {
+            /**
+             * Action
+             * @default block
+             * @enum {string}
+             */
+            action: "block" | "log";
+            /** Instructions */
+            instructions: string;
+            /** Name */
+            name: string;
+            /**
+             * Threshold
+             * @default 0.7
+             */
+            threshold: number;
+        };
+        /**
          * DefaultInternalUserParams
          * @description Default parameters to apply when a new user signs in via SSO or is created on the /user/new API endpoint
          */
@@ -32562,6 +32593,8 @@ export interface components {
             content_filter_settings?: {
                 [key: string]: unknown;
             } | null;
+            /** Decision Model Providers */
+            decision_model_providers?: string[];
             /** Pii Entity Categories */
             pii_entity_categories: components["schemas"]["PiiEntityCategoryMap"][];
             /** Providers Without Directional Logging Only Scope */
@@ -35810,8 +35843,11 @@ export interface components {
              * @default true
              */
             ccr_retrieval: boolean;
-            /** @description Inline safeguards for the resource-less InvokeGuardrailChecks API (contentFilter / promptAttack / sensitiveInformation). When set, the guardrail calls InvokeGuardrailChecks instead of ApplyGuardrail and no guardrailIdentifier is required. Mutually exclusive with guardrailIdentifier. */
-            checks?: components["schemas"]["BedrockChecksConfigModel"] | null;
+            /**
+             * Checks
+             * @description Inline Bedrock InvokeGuardrailChecks config for guardrail='bedrock', or the predicate checks a decision_model guardrail scores for guardrail='decision_model'
+             */
+            checks?: components["schemas"]["BedrockChecksConfigModel"] | components["schemas"]["DecisionModelCheck"][] | null;
             /**
              * Chunk Budget Chars
              * @description ApplyGuardrail: batch size, in characters, used to re-send content after AWS has rejected a request as too large. Requests AWS accepts are always sent in a single call, so this has no effect until a rejection happens. Defaults to 25,000; a batch AWS still rejects is bisected automatically, so this value only trades round trips against batch size and cannot fail a request on its own.
@@ -35873,6 +35909,11 @@ export interface components {
              * @description Python-like code containing the apply_guardrail function for custom guardrail logic
              */
             custom_code?: string | null;
+            /**
+             * Decision Model
+             * @description For guardrail='decision_model': the Decisions-API model that scores each check
+             */
+            decision_model?: string | null;
             /**
              * Deepkeep Firewall Id
              * @description The DeepKeep Firewall ID to use for guardrail evaluation. If not provided, the `DEEPKEEP_FIREWALL_ID` environment variable is checked.
@@ -36078,6 +36119,16 @@ export interface components {
              * @description Will mask response content if guardrail makes any changes
              */
             mask_response_content?: boolean | null;
+            /**
+             * Max Concurrent Decision Calls
+             * @description Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.
+             */
+            max_concurrent_decision_calls?: number | null;
+            /**
+             * Max Input Chars
+             * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.
+             */
+            max_input_chars?: number | null;
             /**
              * Metadata
              * @description Additional metadata to include in the request

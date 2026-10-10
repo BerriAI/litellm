@@ -6,6 +6,7 @@ export interface GuardrailPreset {
   // modes seeded, not one; the form already normalises either shape.
   mode: string | string[];
   defaultOn: boolean;
+  decisionProvider?: string;
 }
 
 export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
@@ -161,6 +162,43 @@ export const GUARDRAIL_PRESETS: Record<string, GuardrailPreset> = {
     guardrailNameSuggestion: "Competitor Name Blocking",
     mode: "pre_call",
     defaultOn: false,
+  },
+
+  // ── Decision Models ──
+  dm_typesafe_jev: {
+    provider: "DecisionModel",
+    guardrailNameSuggestion: "TypeSafe Jev",
+    mode: "pre_call",
+    defaultOn: false,
+    decisionProvider: "typesafe",
+  },
+  dm_perplexity: {
+    provider: "DecisionModel",
+    guardrailNameSuggestion: "Perplexity Decision",
+    mode: "pre_call",
+    defaultOn: false,
+    decisionProvider: "perplexity",
+  },
+  dm_microsoft: {
+    provider: "DecisionModel",
+    guardrailNameSuggestion: "Microsoft Decision Model",
+    mode: "pre_call",
+    defaultOn: false,
+    decisionProvider: "azure_ai",
+  },
+  dm_openai: {
+    provider: "DecisionModel",
+    guardrailNameSuggestion: "OpenAI Decision Model",
+    mode: "pre_call",
+    defaultOn: false,
+    decisionProvider: "openai",
+  },
+  dm_databricks: {
+    provider: "DecisionModel",
+    guardrailNameSuggestion: "Databricks Decision Model",
+    mode: "pre_call",
+    defaultOn: false,
+    decisionProvider: "databricks",
   },
 
   // ── Partner Guardrails ──

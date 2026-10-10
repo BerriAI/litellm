@@ -1496,6 +1496,7 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
     - PII entity categories for UI organization
     - Content filter settings (patterns and categories)
     """
+    from litellm.decisions.main import supported_decisions_providers
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
         PATTERN_CATEGORIES,
         get_available_content_categories,
@@ -1533,6 +1534,7 @@ async def get_guardrail_ui_settings() -> GuardrailUIAddGuardrailSettings:
         supported_modes_by_provider=supported_modes_by_provider,
         providers_without_directional_logging_only_scope=providers_without_directional_logging_only_scope,
         pii_entity_categories=category_maps,
+        decision_model_providers=supported_decisions_providers(),
         content_filter_settings={
             "prebuilt_patterns": get_pattern_metadata(),
             "pattern_categories": list(PATTERN_CATEGORIES.keys()),

@@ -63,7 +63,7 @@ class _DecisionsCall:
     litellm_params: Mapping[str, object] = field(repr=False)
 
 
-def _supported_providers() -> tuple[str, ...]:
+def supported_decisions_providers() -> tuple[str, ...]:
     return tuple(
         provider.value
         for provider in LlmProviders
@@ -77,7 +77,7 @@ def _provider_config(model: str, custom_llm_provider: str) -> BaseDecisionsConfi
         None if provider is None else ProviderConfigManager.get_provider_decisions_config(model, provider)
     )
     if provider_config is None:
-        supported: Final = ", ".join(_supported_providers())
+        supported: Final = ", ".join(supported_decisions_providers())
         raise litellm.BadRequestError(
             message=f"Unknown Decisions provider '{custom_llm_provider}'. Supported providers: {supported}",
             model=model,
