@@ -1,24 +1,28 @@
 import asyncio
 import hashlib
+import json
 import logging
 import re
 import traceback
 import uuid
+from datetime import timedelta
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import httpx
 import pytest
 import respx
 
 import litellm
-from litellm import completion, embedding
+from litellm import acompletion, aembedding, completion, embedding
 import litellm.caching.redis_cache as redis_cache_module
 from litellm._internal_context import current_service_target
 from litellm.caching.caching import Cache, CacheMode, response_cache_phase
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
+from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.caching.redis_cache import RedisCache, _RedisTimeoutLogThrottle
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheType, SemanticCacheScope
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
@@ -30,6 +34,13 @@ messages = [{"role": "user", "content": "who is ishaan 5222"}]
 @pytest.fixture
 def preserve_litellm_set_verbose(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "set_verbose", litellm.set_verbose)
+
+
+@pytest.fixture
+def redis_client_without_network(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("redis.Redis.info", lambda *args, **kwargs: {"redis_version": "7.2.0"})
+    monkeypatch.setattr("redis.Redis.ping", lambda *args, **kwargs: True)
+    monkeypatch.setattr("redis.asyncio.Redis.ping", AsyncMock(return_value=True))
 
 
 def test_cache_key_debug_log_does_not_include_prompt_material(caplog):
@@ -1057,3 +1068,483 @@ def test_enable_cache_serves_a_repeated_bedrock_titan_embedding_from_the_local_c
     assert first.data[0]["embedding"] == [0.25, -0.5, 0.75]
     assert second.data[0]["embedding"] == [0.25, -0.5, 0.75]
     assert second._hidden_params["cache_hit"] is True
+
+
+def test_basic_caching_import() -> None:
+    from litellm.caching import Cache as PublicCache
+
+    assert PublicCache is Cache
+    cache: Final = PublicCache(type=LiteLLMCacheType.LOCAL)
+    assert cache.type == LiteLLMCacheType.LOCAL
+
+
+def test_cache_context_managers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    monkeypatch.setattr(litellm, "input_callback", list(litellm.input_callback))
+    monkeypatch.setattr(litellm, "success_callback", list(litellm.success_callback))
+    monkeypatch.setattr(litellm, "_async_success_callback", list(litellm._async_success_callback))
+
+    litellm.disable_cache()
+    assert litellm.cache is None
+    assert "cache" not in litellm.success_callback
+    assert "cache" not in litellm._async_success_callback
+
+    litellm.enable_cache(type=LiteLLMCacheType.LOCAL)
+    assert litellm.cache is not None
+    assert litellm.cache.type == LiteLLMCacheType.LOCAL
+
+
+@pytest.mark.asyncio
+async def test_cache_default_off_acompletion(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL, mode=CacheMode.default_off))
+    request: Final = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": f"cache mode {uuid.uuid4().hex}"}],
+    }
+
+    first: Final = await acompletion(**request, mock_response="first")
+    second: Final = await acompletion(**request, mock_response="second")
+    opted_in_first: Final = await acompletion(**request, cache={"use-cache": True}, mock_response="third")
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    opted_in_second: Final = await acompletion(**request, cache={"use-cache": True}, mock_response="fourth")
+
+    assert first.id != second.id
+    assert opted_in_first.id == opted_in_second.id
+
+
+def test_caching_kwargs_input(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    request: Final = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": f"kwargs input {uuid.uuid4().hex}"}],
+        "caching": True,
+    }
+
+    first: Final = completion(**request, mock_response="stored")
+    second: Final = completion(**request, mock_response="not stored")
+
+    assert first.id == second.id
+
+
+def test_caching_reasoning_args_hit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    request: Final = {
+        "model": "anthropic/claude-sonnet-4-6",
+        "messages": [{"role": "user", "content": f"reasoning hit {uuid.uuid4().hex}"}],
+        "reasoning_effort": "low",
+        "caching": True,
+    }
+
+    first: Final = completion(**request, mock_response="cached")
+    second: Final = completion(**request, mock_response="uncached")
+
+    assert first.id == second.id
+
+
+def test_caching_reasoning_args_miss(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    messages: Final = [{"role": "user", "content": f"reasoning miss {uuid.uuid4().hex}"}]
+
+    first: Final = completion(
+        model="anthropic/claude-sonnet-4-6",
+        messages=messages,
+        reasoning_effort="low",
+        caching=True,
+        mock_response="low",
+    )
+    second: Final = completion(
+        model="anthropic/claude-sonnet-4-6",
+        messages=messages,
+        caching=True,
+        mock_response="default",
+    )
+
+    assert first.id != second.id
+
+
+def test_caching_thinking_args_hit(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    request: Final = {
+        "model": "anthropic/claude-sonnet-4-5-20250929",
+        "messages": [{"role": "user", "content": f"thinking hit {uuid.uuid4().hex}"}],
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+        "caching": True,
+    }
+
+    first: Final = completion(**request, mock_response="cached")
+    second: Final = completion(**request, mock_response="uncached")
+
+    assert first.id == second.id
+
+
+def test_caching_thinking_args_miss(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    messages: Final = [{"role": "user", "content": f"thinking miss {uuid.uuid4().hex}"}]
+
+    first: Final = completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=messages,
+        thinking={"type": "enabled", "budget_tokens": 1024},
+        caching=True,
+        mock_response="thinking",
+    )
+    second: Final = completion(
+        model="anthropic/claude-sonnet-4-5-20250929",
+        messages=messages,
+        caching=True,
+        mock_response="not thinking",
+    )
+
+    assert first.id != second.id
+
+
+def test_caching_with_reasoning_content(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    request: Final = {
+        "model": "anthropic/claude-sonnet-4-5-20250929",
+        "messages": [{"role": "user", "content": f"reasoning content {uuid.uuid4().hex}"}],
+        "thinking": {"type": "enabled", "budget_tokens": 1024},
+    }
+
+    completion(**request, mock_response="reasoned")
+    cached: Final = completion(**request, mock_response="different")
+
+    assert cached._hidden_params["cache_hit"] is True
+
+
+def test_custom_redis_cache_params(redis_client_without_network: None) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.REDIS, host="127.0.0.1", port="6379", db=4)
+
+    assert cache.cache.redis_client.connection_pool.connection_kwargs["db"] == 4
+
+
+def test_custom_redis_cache_with_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+    request: Final = {
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": f"custom key {uuid.uuid4().hex}"}],
+        "caching": True,
+        "cache_key": f"custom-{uuid.uuid4().hex}",
+    }
+
+    first: Final = completion(**request, mock_response="stored")
+    second: Final = completion(
+        **{**request, "messages": [{"role": "user", "content": "different prompt, same key"}]},
+        mock_response="not stored",
+    )
+    uncached: Final = completion(
+        **{**request, "cache_key": f"other-{uuid.uuid4().hex}"},
+        mock_response="fresh",
+    )
+
+    assert second.id == first.id
+    assert second.choices[0].message.content == "stored"
+    assert uncached.id != first.id
+    assert uncached.choices[0].message.content == "fresh"
+
+
+@pytest.mark.asyncio
+async def test_dual_cache_async_batch_get_cache_returns_memory_values() -> None:
+    cache: Final = InMemoryCache()
+    cache.set_cache("test-value", "cached")
+    dual_cache: Final = DualCache(in_memory_cache=cache)
+
+    result: Final = await dual_cache.async_batch_get_cache(keys=["test-value"])
+
+    assert result == ["cached"]
+
+
+def test_embedding_caching(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    inputs: Final = [f"embedding {uuid.uuid4().hex}"]
+
+    first: Final = embedding(model="text-embedding-3-small", input=inputs, caching=True, mock_response="0.1,0.2")
+    second: Final = embedding(model="text-embedding-3-small", input=inputs, caching=True, mock_response="0.3,0.4")
+
+    assert second.data[0]["embedding"] == first.data[0]["embedding"]
+
+
+def test_embedding_caching_azure(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    request: Final = {
+        "model": "azure/text-embedding-3-small",
+        "input": [f"azure embedding {uuid.uuid4().hex}"],
+        "api_key": "test-key",
+        "api_base": "https://example.test",
+        "api_version": "2024-01-01",
+        "caching": True,
+    }
+
+    first: Final = embedding(**request, mock_response="0.1,0.2")
+    second: Final = embedding(**request, mock_response="0.3,0.4")
+
+    assert second.data[0]["embedding"] == first.data[0]["embedding"]
+
+
+@pytest.mark.asyncio
+async def test_embedding_caching_individual_items(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    item: Final = f"individual embedding {uuid.uuid4().hex}"
+
+    first: Final = await aembedding(
+        model="text-embedding-3-small", input=item, caching=True, mock_response="0.1,0.2"
+    )
+    second: Final = await aembedding(
+        model="text-embedding-3-small", input=item, caching=True, mock_response="0.3,0.4"
+    )
+
+    assert second.data[0].embedding == first.data[0].embedding
+    assert second._hidden_params["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_embedding_caching_azure_individual_items(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    shared: Final = f"shared azure embedding {uuid.uuid4().hex}"
+
+    await aembedding(
+        model="azure/text-embedding-3-small",
+        input=[shared],
+        api_key="test-key",
+        api_base="https://example.test",
+        api_version="2024-01-01",
+        caching=True,
+        mock_response="0.1,0.2",
+    )
+    result: Final = await aembedding(
+        model="azure/text-embedding-3-small",
+        input=[shared, f"new {uuid.uuid4().hex}"],
+        api_key="test-key",
+        api_base="https://example.test",
+        api_version="2024-01-01",
+        caching=True,
+        mock_response="0.3,0.4",
+    )
+
+    assert result._hidden_params["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_embedding_caching_azure_individual_items_reordered(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    first_item: Final = f"first reordered embedding {uuid.uuid4().hex}"
+    second_item: Final = f"second reordered embedding {uuid.uuid4().hex}"
+    first: Final = await aembedding(
+        model="azure/text-embedding-3-small",
+        input=first_item,
+        api_key="test-key",
+        api_base="https://example.test",
+        api_version="2024-01-01",
+        caching=True,
+        mock_response="0.1,0.2",
+    )
+    second: Final = await aembedding(
+        model="azure/text-embedding-3-small",
+        input=second_item,
+        api_key="test-key",
+        api_base="https://example.test",
+        api_version="2024-01-01",
+        caching=True,
+        mock_response="0.3,0.4",
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    reordered: Final = await aembedding(
+        model="azure/text-embedding-3-small",
+        input=[second_item, first_item],
+        api_key="test-key",
+        api_base="https://example.test",
+        api_version="2024-01-01",
+        caching=True,
+        mock_response="0.5,0.6",
+    )
+
+    assert reordered._hidden_params["cache_hit"] is True
+    assert [item.index for item in reordered.data] == [0, 1]
+    assert reordered.data[0].embedding == second.data[0].embedding
+    assert reordered.data[1].embedding == first.data[0].embedding
+
+
+@pytest.mark.asyncio
+async def test_embedding_caching_individual_items_and_then_list(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    first_item: Final = f"first embedding {uuid.uuid4().hex}"
+    second_item: Final = f"second embedding {uuid.uuid4().hex}"
+
+    first: Final = await aembedding(
+        model="text-embedding-3-small", input=first_item, caching=True, mock_response="0.1,0.2"
+    )
+    second: Final = await aembedding(
+        model="text-embedding-3-small", input=second_item, caching=True, mock_response="0.3,0.4"
+    )
+    combined: Final = await aembedding(
+        model="text-embedding-3-small",
+        input=[first_item, second_item],
+        caching=True,
+        mock_response="0.5,0.6",
+    )
+
+    assert combined.data[0].embedding == first.data[0].embedding
+    assert combined.data[1].embedding == second.data[0].embedding
+    assert combined._hidden_params["cache_hit"] is True
+
+
+@pytest.mark.asyncio
+async def test_caching_with_cache_controls(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "cache", Cache(type=LiteLLMCacheType.LOCAL))
+    sync_no_ttl_messages: Final = [{"role": "user", "content": f"sync controls {uuid.uuid4().hex}"}]
+    sync_no_ttl_first: Final = completion(
+        model="gpt-4o-mini", messages=sync_no_ttl_messages, cache={"ttl": 0}, mock_response="first"
+    )
+    sync_no_ttl_second: Final = completion(
+        model="gpt-4o-mini", messages=sync_no_ttl_messages, cache={"s-maxage": 10}, mock_response="second"
+    )
+    sync_ttl_messages: Final = [{"role": "user", "content": f"sync ttl {uuid.uuid4().hex}"}]
+    sync_ttl_first: Final = completion(
+        model="gpt-4o-mini", messages=sync_ttl_messages, cache={"ttl": 25}, mock_response="third"
+    )
+    sync_ttl_second: Final = completion(
+        model="gpt-4o-mini", messages=sync_ttl_messages, cache={"s-maxage": 25}, mock_response="fourth"
+    )
+    async_no_ttl_messages: Final = [{"role": "user", "content": f"async controls {uuid.uuid4().hex}"}]
+    async_no_ttl_first: Final = await acompletion(
+        model="gpt-4o-mini", messages=async_no_ttl_messages, cache={"ttl": 0}, mock_response="first"
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    async_no_ttl_second: Final = await acompletion(
+        model="gpt-4o-mini", messages=async_no_ttl_messages, cache={"s-maxage": 10}, mock_response="second"
+    )
+    async_ttl_messages: Final = [{"role": "user", "content": f"async ttl {uuid.uuid4().hex}"}]
+    async_ttl_first: Final = await acompletion(
+        model="gpt-4o-mini", messages=async_ttl_messages, cache={"ttl": 25}, mock_response="third"
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+    async_ttl_second: Final = await acompletion(
+        model="gpt-4o-mini", messages=async_ttl_messages, cache={"s-maxage": 25}, mock_response="fourth"
+    )
+
+    assert sync_no_ttl_first.id != sync_no_ttl_second.id
+    assert sync_ttl_first.id == sync_ttl_second.id
+    assert async_no_ttl_first.id != async_no_ttl_second.id
+    assert async_ttl_first.id == async_ttl_second.id
+
+
+@pytest.mark.asyncio
+async def test_embedding_caching_redis_ttl(
+    monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None
+) -> None:
+    mock_pipeline: Final = AsyncMock()
+    mock_set: Final = AsyncMock()
+    mock_pipeline.__aenter__.return_value.set = mock_set
+    monkeypatch.setattr("redis.asyncio.Redis.pipeline", lambda *args, **kwargs: mock_pipeline)
+    monkeypatch.setattr(
+        litellm,
+        "cache",
+        Cache(type=LiteLLMCacheType.REDIS, host="unused", port="6379", default_in_redis_ttl=2),
+    )
+
+    await aembedding(
+        model="text-embedding-3-small",
+        input=[f"redis ttl embedding {uuid.uuid4().hex}"],
+        encoding_format="base64",
+        caching=True,
+        mock_response="0.1,0.2",
+    )
+    await asyncio.gather(*_PENDING_CACHE_WRITES)
+
+    assert [call.kwargs["ex"] for call in mock_set.call_args_list] == [timedelta(seconds=2)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_logging_turn_off_message_logging_streaming(
+    sync_mode: bool, monkeypatch: pytest.MonkeyPatch, drained_logging_worker: None
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    messages: Final = [{"role": "user", "content": f"stream {uuid.uuid4().hex}"}]
+    if sync_mode:
+        stream: Final = completion(
+            model="gpt-4o-mini", messages=messages, caching=True, stream=True, mock_response="cached"
+        )
+        tuple(stream)
+    else:
+        stream: Final = await acompletion(
+            model="gpt-4o-mini", messages=messages, caching=True, stream=True, mock_response="cached"
+        )
+        tuple([chunk async for chunk in stream])
+
+    for _ in range(50):
+        await asyncio.sleep(0)
+        await GLOBAL_LOGGING_WORKER.flush()
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        if cache.cache.cache_dict:
+            break
+
+    assert len(cache.cache.cache_dict) == 1
+    cached_entry: Final = next(iter(cache.cache.cache_dict.values()))
+    cached_response: Final = json.loads(cached_entry["response"])
+    assert cached_response["choices"][0]["message"]["content"] == "cached"
+
+
+def test_redis_caching_default_ttl(
+    monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None
+) -> None:
+    monkeypatch.setattr(litellm, "default_redis_ttl", 120)
+    cache: Final = RedisCache(host="127.0.0.1", port="6379")
+
+    assert cache.default_ttl == 120
+
+
+def test_redis_caching_llm_caching_ttl(
+    monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None
+) -> None:
+    monkeypatch.setattr(litellm, "default_redis_ttl", 120)
+    cache: Final = RedisCache(host="127.0.0.1", port="6379")
+    set_cache: Final = MagicMock()
+    monkeypatch.setattr(cache.redis_client, "set", set_cache)
+
+    cache.set_cache(key="cache-key", value="cache-value")
+
+    assert set_cache.call_args.kwargs["ex"] == 120
+
+
+@pytest.mark.asyncio
+async def test_redis_caching_ttl_pipeline(
+    monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None
+) -> None:
+    monkeypatch.setattr(litellm, "default_redis_ttl", 120)
+    cache: Final = RedisCache(host="127.0.0.1", port="6379")
+    pipeline: Final = AsyncMock()
+    set_pipeline: Final = MagicMock()
+    monkeypatch.setattr(pipeline, "set", set_pipeline)
+
+    await cache._pipeline_helper(
+        pipe=pipeline,
+        cache_list=[("first", "one"), ("second", "two")],
+        ttl=None,
+    )
+
+    assert set_pipeline.call_args_list == [
+        call(name="first", value='"one"', ex=timedelta(seconds=120)),
+        call(name="second", value='"two"', ex=timedelta(seconds=120)),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_redis_caching_ttl_sadd(
+    monkeypatch: pytest.MonkeyPatch, redis_client_without_network: None
+) -> None:
+    monkeypatch.setattr(litellm, "default_redis_ttl", 120)
+    cache: Final = RedisCache(host="127.0.0.1", port="6379")
+    redis_client: Final = AsyncMock()
+
+    await cache._set_cache_sadd_helper(
+        redis_client=redis_client,
+        key="cache-key",
+        value=["cache-value"],
+        ttl=None,
+    )
+
+    redis_client.expire.assert_awaited_once_with("cache-key", timedelta(seconds=120))

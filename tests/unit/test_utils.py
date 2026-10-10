@@ -24,6 +24,7 @@ import respx
 from jsonschema import validate
 
 import litellm
+from litellm.exceptions import MidStreamFallbackError
 from litellm._internal_context import is_internal_call
 from litellm._logging import (
     CorrelationContextFilter,
@@ -117,6 +118,92 @@ def test_get_base_model_from_metadata_returns_unvalidated_root_value():
     from litellm.utils import get_base_model_from_metadata
 
     assert get_base_model_from_metadata({"litellm_params": {"base_model": 42}}) == 42
+
+
+def _reject_short_post_call_response(input: str, model: str | None = None) -> dict[str, object]:
+    if len(input) < 200:
+        return {
+            "decision": False,
+            "message": "This violates LiteLLM Proxy Rules. Response too short",
+        }
+    return {"decision": True}
+
+
+def test_post_call_rule_rejects_mock_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "pre_call_rules", [])
+    monkeypatch.setattr(litellm, "post_call_rules", [_reject_short_post_call_response])
+
+    with pytest.raises(
+        litellm.APIResponseValidationError,
+        match=re.escape("This violates LiteLLM Proxy Rules. Response too short"),
+    ):
+        litellm.completion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "say sorry"}],
+            max_tokens=2,
+            mock_response="I'm sorry",
+        )
+
+
+def test_post_call_rule_rejects_streaming_mock_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "pre_call_rules", [])
+    monkeypatch.setattr(litellm, "post_call_rules", [_reject_short_post_call_response])
+
+    response = litellm.completion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": "say sorry"}],
+        max_tokens=2,
+        stream=True,
+        mock_response="I'm sorry",
+    )
+
+    with pytest.raises(
+        MidStreamFallbackError,
+        match=re.escape("This violates LiteLLM Proxy Rules. Response too short"),
+    ) as raised:
+        list(response)
+
+    assert isinstance(raised.value.original_exception, litellm.APIResponseValidationError)
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_rule_error_is_deterministic(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "pre_call_rules", [])
+    monkeypatch.setattr(litellm, "post_call_rules", [_reject_short_post_call_response])
+
+    with pytest.raises(
+        litellm.APIResponseValidationError,
+        match=re.escape("This violates LiteLLM Proxy Rules. Response too short"),
+    ):
+        await litellm.acompletion(
+            model="gpt-3.5-turbo",
+            messages=[{"role": "user", "content": "say sorry"}],
+            max_tokens=2,
+            mock_response="I'm sorry",
+        )
+
+
+def test_provider_config_manager_returns_bedrock_converse_like_config() -> None:
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    config = ProviderConfigManager.get_provider_chat_config(
+        model="bedrock/converse_like/us.amazon.nova-pro-v1:0",
+        provider=LlmProviders.BEDROCK,
+    )
+
+    assert isinstance(config, AmazonConverseConfig)
+
+
+def test_litellm_proxy_responses_api_config_manager_returns_proxy_config() -> None:
+    from litellm.llms.litellm_proxy.responses.transformation import LiteLLMProxyResponsesAPIConfig
+
+    config = ProviderConfigManager.get_provider_responses_api_config(
+        model="litellm_proxy/gpt-4",
+        provider=LlmProviders.LITELLM_PROXY,
+    )
+
+    assert isinstance(config, LiteLLMProxyResponsesAPIConfig)
+    assert config.custom_llm_provider == LlmProviders.LITELLM_PROXY
 
 
 # Adds the parent directory to the system path
