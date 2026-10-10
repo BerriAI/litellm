@@ -16,6 +16,7 @@ from typing import (
     Protocol,
     TypeAlias,
     TypeVar,
+    cast,  # noqa: TID251  # _pre_call_with_fallbacks receives general_settings as a legacy bare dict
     overload,
     runtime_checkable,
 )
@@ -633,6 +634,27 @@ def proxy_exception_from_http_exception(exc: HTTPException, headers: dict[str, s
         code=error_status,
         provider_specific_fields=merged_fields,
         headers=headers,
+    )
+
+
+def proxy_exception_from_route_error(exc: Exception) -> ProxyException:
+    if isinstance(exc, ProxyException):
+        return exc
+    if isinstance(exc, HTTPException):
+        return proxy_exception_from_http_exception(exc, {})
+    error_status: Final = error_status_code(exc, status.HTTP_500_INTERNAL_SERVER_ERROR)
+    message: Final = attribute_of(exc, "message", str(exc))
+    carried_code: Final = attribute_of(exc, "code")
+    provider_fields: Final = attribute_of(exc, "provider_specific_fields")
+    return ProxyException(
+        message=redact_internal_details_from_client_message(
+            strip_bug_report_notice(message) if isinstance(message, str) else str(exc)
+        ),
+        type=openai_error_type(exc, error_status),
+        param=openai_error_param(exc),
+        code=error_status,
+        openai_code=carried_code if isinstance(carried_code, str) else None,
+        provider_specific_fields=provider_fields if isinstance(provider_fields, dict) else None,
     )
 
 
@@ -2281,7 +2303,21 @@ class ProxyBaseLLMRequestProcessing:
         route_type: str,
         llm_router: Router | None,
     ) -> tuple[dict, LiteLLMLoggingObj]:
-        from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
+        from litellm.proxy.common_utils.proxy_rate_limit_error import (
+            PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS,
+            ProxyRateLimitError,
+            per_model_rate_limits_disable_fallbacks,
+        )
+
+        general_settings_view: Final = cast(  # cast-ok: this method keeps its legacy bare-dict settings parameter
+            Mapping[str, object], general_settings
+        )
+
+        def is_hard_per_model_limit(exc: ProxyRateLimitError) -> bool:
+            return (
+                exc.descriptor_key in PER_MODEL_RATE_LIMIT_DESCRIPTOR_KEYS
+                and per_model_rate_limits_disable_fallbacks(general_settings_view)
+            )
 
         configured_fallbacks: Final = (
             self._configured_fallbacks(llm_router=llm_router, user_api_key_dict=user_api_key_dict)
@@ -2315,6 +2351,7 @@ class ProxyBaseLLMRequestProcessing:
                 or not configured_fallbacks
                 or rate_limited_data.get("disable_fallbacks")
                 or not isinstance(original_model, str)
+                or is_hard_per_model_limit(original_exc)
             ):
                 raise
 
@@ -2354,7 +2391,9 @@ class ProxyBaseLLMRequestProcessing:
                             llm_router=llm_router,
                             rate_limited_model=original_model,
                         )
-                    except ProxyRateLimitError:
+                    except ProxyRateLimitError as fallback_exc:
+                        if is_hard_per_model_limit(fallback_exc):
+                            raise
                         continue
             except BaseException:
                 self.data = rate_limited_data

@@ -545,18 +545,6 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/rag/ingest",
         "/rag/query",
         "/v1/rag/query",
-        "/lens",
-        "/lens/{lens_id}",
-        "/lens/{lens_id}/runs",
-        "/lens/{lens_id}/runs/{job_id}",
-        "/lens/{lens_id}/executions/{execution_id}",
-        "/lens/{lens_id}/cancel",
-        "/lens/{lens_id}/findings/{finding_id}",
-        "/lens/feedback",
-        "/lens/feedback/summary",
-        "/lens/preview/sample",
-        "/lens/workers/register",
-        "/lens/workers/{worker_id}",
         "/v1/traces",
         "/v1/logs",
         "/v1/traces/query",
@@ -948,6 +936,8 @@ class LiteLLMRoutes(enum.Enum):
     )
 
     self_managed_routes = [
+        "/lens",
+        "/lens/{path:path}",
         # update_team resolves proxy/org/team admin itself and filters team admins
         # through the team_admin_editable_team_fields setting
         "/team/update",
@@ -1069,6 +1059,7 @@ class LiteLLMRoutes(enum.Enum):
     admin_viewer_routes = (
         [
             "/lens/traces/findings",
+            "/lens/traces/signals",
             "/lens/feedback/summary",
             "/user/list",
             "/user/available_users",
@@ -3139,6 +3130,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.",
     )
+    disable_fallbacks_on_per_model_rate_limits: bool | None = Field(
+        None,
+        description=(
+            "If true, a request rejected by a key/team/org/project per-model rate limit "
+            "(model_rpm_limit / model_tpm_limit) returns 429 instead of retrying on the "
+            "configured fallbacks"
+        ),
+    )
     scheduled_job_stagger: ScheduledJobStaggerSettings | None = Field(
         None,
         description=(
@@ -4929,6 +4928,7 @@ class TeamEditUnrestricted(LiteLLMBaseModel):
 class TeamEditAsTeamAdmin(LiteLLMBaseModel):
     kind: Literal["team_admin"] = "team_admin"
     editable_fields: tuple[str, ...]
+    may_raise_max_budget: bool = False
 
 
 class TeamEditAsTeamAdminDisabled(LiteLLMBaseModel):

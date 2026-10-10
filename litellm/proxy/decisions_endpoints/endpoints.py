@@ -1,4 +1,5 @@
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Annotated, Final
 
 from fastapi import APIRouter, Depends, Request, Response
@@ -38,6 +39,10 @@ async def _invalid_request(
     )
 
 
+def _fields_checked_before_routing(data: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in data.items() if key != "safety_identifier"})
+
+
 async def _request_data(request: Request, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
     body: Final = await request.body()
     try:
@@ -75,7 +80,7 @@ async def _process_decisions(
 
     data: Final = await _request_data(request, user_api_key_dict)
     try:
-        body_adapter.validate_python(data)
+        body_adapter.validate_python(_fields_checked_before_routing(data))
     except ValidationError as error:
         raise await _invalid_request(raw_data=data, error=error, user_api_key_dict=user_api_key_dict)
     general_settings: Final = _GENERAL_SETTINGS_ADAPTER.validate_python(proxy_general_settings)
