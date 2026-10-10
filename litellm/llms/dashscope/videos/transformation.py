@@ -8,7 +8,8 @@ import json
 from collections.abc import Mapping
 from datetime import datetime
 from io import BufferedReader, BytesIO
-from math import gcd
+from math import log
+from pathlib import Path, PurePath
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -138,6 +139,8 @@ _RESOLUTION_HEIGHT_TIERS: Final[tuple[tuple[int, str], ...]] = (
     (900, "720p"),
 )
 
+_SUPPORTED_RATIOS: Final[tuple[tuple[int, int], ...]] = ((16, 9), (9, 16), (1, 1), (4, 3), (3, 4))
+
 
 def _video_error(raw_response: httpx.Response, status_code: int, message: str) -> DashScopeVideoError:
     """The provider's own status wins when it reported one. DashScope otherwise answers 200 even for
@@ -172,8 +175,11 @@ def _ratio_from_size(size: str) -> str | None:
     width, height = _size_dimensions(size) or (0, 0)
     if not width or not height:
         return None
-    divisor: Final = gcd(width, height)
-    return f"{width // divisor}:{height // divisor}"
+    ratio_width, ratio_height = min(
+        _SUPPORTED_RATIOS,
+        key=lambda ratio: abs(log((width * ratio[1]) / (height * ratio[0]))),
+    )
+    return f"{ratio_width}:{ratio_height}"
 
 
 def _size_dimensions(size: str) -> tuple[int, int] | None:
@@ -211,6 +217,20 @@ def _duration_param(seconds: object) -> int | None:
 
 
 def _read_all_bytes(file_obj: object) -> bytes:
+    match file_obj:
+        case (
+            (str() | None, object() as file_content)
+            | (str() | None, object() as file_content, object())
+            | (str() | None, object() as file_content, object(), object())
+        ):
+            return _read_all_bytes(file_content)
+        case PurePath():
+            return Path(file_obj).read_bytes()
+        case _:
+            return _read_file_content(file_obj)
+
+
+def _read_file_content(file_obj: object) -> bytes:
     if isinstance(file_obj, (BytesIO, BufferedReader)):
         current_position: Final = file_obj.tell()
         file_obj.seek(0)

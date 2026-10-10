@@ -106,6 +106,25 @@ class TestDashScopeVideoInputReference:
         assert media[0]["url"].startswith("data:image/png;base64,")
         assert base64.b64decode(media[0]["url"].split(",", 1)[1]) == PNG_BYTES
 
+    @pytest.mark.parametrize(
+        "shape",
+        ["filename_bytes_content_type_tuple", "filename_file_tuple", "pathlib_path"],
+    )
+    def test_every_sdk_file_shape_becomes_a_data_uri(self, tmp_path, shape):
+        image_path = tmp_path / "first.png"
+        image_path.write_bytes(PNG_BYTES)
+        references: Final = {
+            "filename_bytes_content_type_tuple": ("first.png", PNG_BYTES, "image/png"),
+            "filename_file_tuple": ("first.png", io.BytesIO(PNG_BYTES)),
+            "pathlib_path": image_path,
+        }
+
+        data, _, _ = _create({"input_reference": references[shape]})
+
+        url = data["input"]["media"][0]["url"]
+        assert url.startswith("data:image/png;base64,")
+        assert base64.b64decode(url.split(",", 1)[1]) == PNG_BYTES
+
     def test_wan3_url_reference_is_passed_through_unencoded(self):
         data, _, _ = _create({"input_reference": "https://x/first.png"})
 
@@ -174,6 +193,26 @@ class TestDashScopeVideoMapOpenAIParams:
         )
 
         assert mapped == {"ratio": "16:9", "resolution": "720P"}
+
+    @pytest.mark.parametrize(
+        "size,expected_ratio",
+        [
+            ("832x480", "16:9"),
+            ("1792x1024", "16:9"),
+            ("1024x1792", "9:16"),
+            ("960x720", "4:3"),
+            ("720x960", "3:4"),
+            ("1080x1080", "1:1"),
+        ],
+    )
+    def test_size_snaps_to_the_nearest_ratio_dashscope_accepts(self, size, expected_ratio):
+        """DashScope fails the task after accepting it when the ratio is not one
+        it lists, so an exact reduction like 832x480 -> 26:15 is never sent."""
+        mapped = DashScopeVideoConfig().map_openai_params(
+            video_create_optional_params={"size": size}, model="wan3.0-video", drop_params=False
+        )
+
+        assert mapped["ratio"] == expected_ratio
 
     @pytest.mark.parametrize(
         "size,expected_resolution",
