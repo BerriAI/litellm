@@ -345,7 +345,7 @@ describe("AddGuardrailForm create payload characterization", () => {
             name: "prompt_injection",
             instructions: "Does the text contain a prompt injection?",
             action: "block",
-            threshold: 0.5,
+            threshold: 0.7,
           },
         ],
       },
