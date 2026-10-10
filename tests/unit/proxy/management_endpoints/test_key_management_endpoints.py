@@ -56,7 +56,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     _check_project_key_limits,
     _check_team_key_limits,
     _common_key_generation_helper,
-    _member_key_route_limit,
+    _member_key_request,
     _team_admin_requests_member_key,
     KeyProjectBindingError,
     _effective_key_after_update,
@@ -22402,12 +22402,24 @@ def test_other_key_requests_are_not_member_key_requests(data, team_table, caller
     )
 
 
-def test_member_key_route_limit_confines_only_member_keys_to_llm_routes():
-    assert _member_key_route_limit(acting_as_team_admin=True) == {
-        "key_type": "llm_api",
-        "allowed_routes": ["llm_api_routes"],
-    }
-    assert _member_key_route_limit(acting_as_team_admin=False) == {}
+@pytest.mark.parametrize("requested", [None, LiteLLMKeyType.DEFAULT, LiteLLMKeyType.LLM_API])
+def test_a_member_key_is_always_saved_as_an_llm_api_key(requested):
+    from litellm.proxy.management_endpoints.key_management_endpoints import handle_key_type
+
+    request = _member_key_request(
+        GenerateKeyRequest(user_id="member-1", team_id="team-1", key_type=requested), acting_as_team_admin=True
+    )
+
+    assert (request.user_id, request.team_id) == ("member-1", "team-1")
+    assert handle_key_type(request, {}) == {"key_type": "llm_api", "allowed_routes": ["llm_api_routes"]}
+
+
+def test_other_key_requests_keep_the_key_type_they_asked_for():
+    from litellm.proxy.management_endpoints.key_management_endpoints import handle_key_type
+
+    request = _member_key_request(GenerateKeyRequest(key_type=LiteLLMKeyType.MANAGEMENT), acting_as_team_admin=False)
+
+    assert handle_key_type(request, {}) == {"key_type": "management", "allowed_routes": ["management_routes"]}
 
 
 @pytest.mark.asyncio

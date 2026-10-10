@@ -1234,10 +1234,10 @@ def _team_admin_requests_member_key(
     )
 
 
-def _member_key_route_limit(acting_as_team_admin: bool) -> dict[str, object]:
+def _member_key_request(data: GenerateKeyRequest, acting_as_team_admin: bool) -> GenerateKeyRequest:
     if not acting_as_team_admin:
-        return {}
-    return handle_key_type(GenerateKeyRequest(key_type=TEAM_ADMIN_MEMBER_KEY_TYPE), {})
+        return data
+    return data.model_copy(update={"key_type": TEAM_ADMIN_MEMBER_KEY_TYPE})
 
 
 async def _stored_user_role(prisma_client: PrismaClient | None, user_id: str | None) -> str | None:
@@ -1487,7 +1487,7 @@ async def _common_key_generation_helper(
 
     data_json = data.model_dump(exclude_unset=True, exclude_none=True)
 
-    data_json = {**handle_key_type(data, data_json), **_member_key_route_limit(acting_as_team_admin)}
+    data_json = handle_key_type(_member_key_request(data, acting_as_team_admin), data_json)
 
     # Re-check allowed_routes after handle_key_type, since key_type can derive
     # an elevated bucket (e.g. ["management_routes"]) that wasn't present in
