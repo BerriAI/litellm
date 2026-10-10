@@ -6,6 +6,16 @@ import { credentialListCall, indexesListCall, vectorStoreListCall } from "@/comp
 
 import VectorStoreManagement from "./index";
 
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async () => ({
+  ...(await vi.importActual("@/app/(dashboard)/hooks/users/useUsers")),
+  useUserDisplayNames: () => ({ data: undefined }),
+}));
+
+vi.mock("next/navigation", async () => ({
+  ...(await vi.importActual("next/navigation")),
+  useRouter: () => ({ push: vi.fn() }),
+}));
+
 vi.mock("@/components/networking", () => ({
   vectorStoreListCall: vi.fn(),
   vectorStoreDeleteCall: vi.fn(),

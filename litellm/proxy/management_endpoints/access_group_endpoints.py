@@ -35,6 +35,7 @@ from litellm.proxy.management_helpers.resource_display_names import (
     agent_display_names,
     key_display_names,
     mcp_server_display_names,
+    user_display_names,
 )
 from litellm.proxy.utils import PrismaClient, get_prisma_client_or_throw
 from litellm.repositories.table_repositories import AccessGroupRepository, TeamRepository
@@ -65,6 +66,12 @@ class _AccessGroupRecord(Protocol):
 
     @property
     def assigned_key_ids(self) -> Sequence[str] | None: ...
+
+    @property
+    def created_by(self) -> str | None: ...
+
+    @property
+    def updated_by(self) -> str | None: ...
 
     def dict(self) -> Mapping[str, object]: ...
 
@@ -185,10 +192,17 @@ class _ResourceNames:
     agents: Mapping[str, str]
     teams: Mapping[str, str | None]
     keys: Mapping[str, str]
+    users: Mapping[str, str]
 
 
 def _label(ids: Sequence[str], names: Mapping[str, str | None]) -> tuple[AccessGroupResource, ...]:
     return tuple(AccessGroupResource(id=resource_id, name=names.get(resource_id)) for resource_id in ids)
+
+
+def _actor_resource(user_id: str | None, names: Mapping[str, str]) -> AccessGroupResource | None:
+    if user_id is None:
+        return None
+    return AccessGroupResource(id=user_id, name=names.get(user_id))
 
 
 def _record_to_response(
@@ -202,6 +216,8 @@ def _record_to_response(
             "access_agents": _label(record.access_agent_ids or (), names.agents),
             "assigned_teams": _label(assigned_team_ids, names.teams),
             "assigned_keys": _label(record.assigned_key_ids or (), names.keys),
+            "created_by_user": _actor_resource(record.created_by, names.users),
+            "updated_by_user": _actor_resource(record.updated_by, names.users),
         }
     )
     return AccessGroupResponse.model_validate(payload)
@@ -219,7 +235,7 @@ async def _responses_for(
     if not records:
         return ()
     teams: Final = await _teams_touching(TeamRepository(prisma_client).table, records)
-    mcp_servers, agents, keys = await asyncio.gather(
+    mcp_servers, agents, keys, users = await asyncio.gather(
         mcp_server_display_names(
             prisma_client,
             _ids_across(records, lambda record: record.access_mcp_server_ids),
@@ -229,12 +245,19 @@ async def _responses_for(
             prisma_client, _ids_across(records, lambda record: record.access_agent_ids), global_agent_registry
         ),
         key_display_names(prisma_client, _ids_across(records, lambda record: record.assigned_key_ids)),
+        user_display_names(
+            prisma_client,
+            _ids_across(
+                records, lambda record: tuple(user_id for user_id in (record.created_by, record.updated_by) if user_id)
+            ),
+        ),
     )
     names: Final = _ResourceNames(
         mcp_servers=mcp_servers,
         agents=agents,
         teams=MappingProxyType({team.team_id: team.team_alias for team in teams}),
         keys=keys,
+        users=users,
     )
     attached: Final = _attached_team_ids_by_group(records, teams)
     return tuple(

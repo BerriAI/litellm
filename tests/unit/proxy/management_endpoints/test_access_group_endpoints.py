@@ -130,6 +130,9 @@ def client_and_mocks(monkeypatch):
     mock_agents_table.find_many = AsyncMock(return_value=[])
     mock_agents_table.update = AsyncMock(return_value=None)
 
+    mock_user_table = MagicMock()
+    mock_user_table.find_many = AsyncMock(return_value=[])
+
     @asynccontextmanager
     async def mock_tx():
         tx = types.SimpleNamespace(
@@ -146,6 +149,7 @@ def client_and_mocks(monkeypatch):
         litellm_verificationtoken=mock_key_table,
         litellm_mcpservertable=mock_mcp_server_table,
         litellm_agentstable=mock_agents_table,
+        litellm_usertable=mock_user_table,
         tx=mock_tx,
     )
     mock_prisma.db = mock_db
@@ -421,6 +425,51 @@ def test_get_access_group_success(client_and_mocks, base_path, access_group_id):
     resp = client.get(f"{base_path}/{access_group_id}")
     assert resp.status_code == 200
     assert resp.json()["access_group_id"] == access_group_id
+
+
+@pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
+def test_get_access_group_resolves_actor_display_names(client_and_mocks, base_path):
+    """Get names the creator/updater from the user table: alias beats email, unresolved ids keep name=None."""
+    client, mock_prisma, mock_table, *_ = client_and_mocks
+
+    record = _make_access_group_record(
+        access_group_id="ag-123", created_by="ada", updated_by="ghost-user"
+    )
+    mock_table.find_unique = AsyncMock(return_value=record)
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[types.SimpleNamespace(user_id="ada", user_alias="Ada Reviewer", user_email="ada@x.com")]
+    )
+
+    resp = client.get(f"{base_path}/ag-123")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["created_by_user"] == {"id": "ada", "name": "Ada Reviewer"}
+    assert body["updated_by_user"] == {"id": "ghost-user", "name": None}
+    queried_ids = mock_prisma.db.litellm_usertable.find_many.call_args.kwargs["where"]["user_id"]["in"]
+    assert sorted(queried_ids) == ["ada", "ghost-user"]
+
+
+@pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)
+def test_list_access_groups_resolves_actor_display_names_across_records(client_and_mocks, base_path):
+    """List carries created_by_user per group from one batched user query."""
+    client, mock_prisma, mock_table, *_ = client_and_mocks
+
+    records = [
+        _make_access_group_record(access_group_id="ag-1", created_by="ada", updated_by="ada"),
+        _make_access_group_record(access_group_id="ag-2", created_by="bob", updated_by="bob"),
+    ]
+    mock_table.find_many = AsyncMock(return_value=records)
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        return_value=[types.SimpleNamespace(user_id="bob", user_alias=None, user_email="bob@x.com")]
+    )
+
+    resp = client.get(base_path)
+    assert resp.status_code == 200
+    body = {entry["access_group_id"]: entry for entry in resp.json()}
+    assert body["ag-1"]["created_by_user"] == {"id": "ada", "name": None}
+    assert body["ag-2"]["created_by_user"] == {"id": "bob", "name": "bob@x.com"}
+    assert body["ag-2"]["updated_by_user"] == {"id": "bob", "name": "bob@x.com"}
+    mock_prisma.db.litellm_usertable.find_many.assert_awaited_once()
 
 
 @pytest.mark.parametrize("base_path", ACCESS_GROUP_PATHS)

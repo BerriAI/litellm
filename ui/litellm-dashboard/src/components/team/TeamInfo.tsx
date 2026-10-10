@@ -26,8 +26,9 @@ import { isProxyAdminRole } from "@/utils/roles";
 import { ArrowLeftIcon } from "@heroicons/react/outline";
 import { StatusBadge, type StatusTone } from "@/components/shared/table_cells/status_badge";
 import { BadgeLink } from "@/components/shared/BadgeLink";
+import { EntityReference } from "@/components/shared/EntityReference";
 import { Badge } from "@/components/ui/badge";
-import { modelGroupHref, modelOrAccessGroupHref } from "@/utils/entityLinks";
+import { modelGroupHref, modelOrAccessGroupHref, orgDetailHref } from "@/utils/entityLinks";
 import { Card } from "@/components/ui/card";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Input as UIInput } from "@/components/ui/input";
@@ -2258,7 +2259,9 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
             <div className="space-y-4">
               <div>
                 <p className="font-medium">Team Name</p>
-                <div>{info.team_alias}</div>
+                <div className="truncate" title={info.team_alias}>
+                  {info.team_alias}
+                </div>
               </div>
               <div>
                 <p className="font-medium">Team ID</p>
@@ -2427,8 +2430,18 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 )}
               </div>
               <div>
-                <p className="font-medium">Organization ID</p>
-                <div>{info.organization_id}</div>
+                <p className="font-medium">Organization</p>
+                <div>
+                  {info.organization_id ? (
+                    <EntityReference
+                      id={info.organization_id}
+                      name={organization?.organization_alias}
+                      href={orgDetailHref(info.organization_id)}
+                    />
+                  ) : (
+                    "-"
+                  )}
+                </div>
               </div>
               <div>
                 <p className="font-medium">Status</p>
@@ -2484,12 +2497,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   return (
     <div className="p-4">
       <div className="flex justify-between items-center mb-6">
-        <div>
+        <div className="min-w-0">
           <Button variant="ghost" onClick={onClose} className="mb-4">
             <ArrowLeftIcon className="h-4 w-4" />
             Back to Teams
           </Button>
-          <h1 className="text-2xl font-semibold">{info.team_alias}</h1>
+          <h1 className="truncate text-2xl font-semibold" title={info.team_alias}>
+            {info.team_alias}
+          </h1>
           <div className="flex items-center">
             <p className="text-sm text-muted-foreground font-mono">{info.team_id}</p>
             <Button

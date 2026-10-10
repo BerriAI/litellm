@@ -3,6 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { renderWithProviders, screen } from "../../../../../tests/test-utils";
 import { ProjectDetail } from "./ProjectDetailsPage";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
+vi.mock("@/app/(dashboard)/hooks/users/useUsers", async () => ({
+  ...(await vi.importActual("@/app/(dashboard)/hooks/users/useUsers")),
+  useUserDisplayNames: () => ({ data: undefined }),
+}));
+
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 const mockUseProjectDetails = vi.fn();
 vi.mock("@/app/(dashboard)/hooks/projects/useProjectDetails", () => ({

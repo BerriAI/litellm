@@ -123,6 +123,34 @@ test("renders organization view after loading data", async () => {
   expect(orgName).toBeInTheDocument();
 });
 
+test("shows the creator's email when their user alias is an empty string", async () => {
+  const orgWithBlankAliasCreator = {
+    ...mockOrg,
+    created_by: "creator-user-id",
+    members: [
+      {
+        user_id: "creator-user-id",
+        user: { user_id: "creator-user-id", user_alias: "", user_email: "e@x.com" },
+      },
+    ],
+  };
+  mockUseOrganization.mockReturnValue({ data: orgWithBlankAliasCreator, isLoading: false } as any);
+
+  renderWithProviders(
+    <OrganizationInfoView
+      organizationId="org_123"
+      onClose={() => {}}
+      accessToken="test-token"
+      is_org_admin={false}
+      is_proxy_admin={false}
+      userModels={[]}
+    />,
+  );
+
+  expect(await screen.findByText("e@x.com")).toBeInTheDocument();
+  expect(screen.queryByText("creator-user-id")).not.toBeInTheDocument();
+});
+
 test("should display empty state when organization has no members", async () => {
   mockUseOrganization.mockReturnValue({ data: mockOrg, isLoading: false } as any);
 
@@ -375,6 +403,10 @@ describe("organization detail tab in the URL (?org_tab=)", () => {
   });
 
   test("falls back to Overview for an unknown ?org_tab= and removes it from the URL", async () => {
+    vi.mock("@/app/(dashboard)/hooks/users/useUsers", async () => ({
+      ...(await vi.importActual("@/app/(dashboard)/hooks/users/useUsers")),
+      useUserDisplayNames: () => ({ data: undefined }),
+    }));
     const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
     render(renderOrgView(), {
       wrapper: ({ children }) => (

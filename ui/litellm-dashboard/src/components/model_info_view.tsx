@@ -25,6 +25,8 @@ import {
 import { canEditAutoRouter, canModifyModel } from "@/utils/modelPermissions";
 import { teamsUserCanAssign } from "@/utils/roles";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
+import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
+import { UserReference } from "@/components/shared/EntityReference";
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import EditAutoRouterModal from "./edit_auto_router/edit_auto_router_modal";
 import ReuseCredentialsModal from "./model_add/reuse_credentials";
@@ -117,6 +119,9 @@ export default function ModelInfoView({
 
   // Keep modelData variable name for backwards compatibility
   const modelData = transformedModelData;
+  const { data: displayNames } = useUserDisplayNames(
+    useMemo(() => [modelData?.model_info?.created_by ?? ""], [modelData]),
+  );
 
   const aliasForTeam = (teamId: string | null | undefined): string | null =>
     teams?.find((team) => team.team_id === teamId)?.team_alias || null;
@@ -702,7 +707,15 @@ export default function ModelInfoView({
                     d="M16 7a4 4 0 11-8 0 4 4 0 018 0zM12 14a7 7 0 00-7 7h14a7 7 0 00-7-7z"
                   />
                 </svg>
-                Created By {modelData.model_info.created_by || "Not Set"}
+                Created By{" "}
+                {modelData.model_info.created_by ? (
+                  <UserReference
+                    userId={modelData.model_info.created_by}
+                    displayName={displayNames?.[modelData.model_info.created_by]}
+                  />
+                ) : (
+                  "Not Set"
+                )}
               </div>
             </div>
 
@@ -787,7 +800,10 @@ export default function ModelInfoView({
           },
           {
             label: "Created By",
-            value: modelData?.model_info?.created_by || "Not Set",
+            value:
+              (modelData?.model_info?.created_by &&
+                (displayNames?.[modelData.model_info.created_by] ?? modelData.model_info.created_by)) ||
+              "Not Set",
           },
         ]}
         onCancel={() => setIsDeleteModalOpen(false)}

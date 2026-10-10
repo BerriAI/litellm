@@ -5,6 +5,8 @@ import moment from "moment";
 import { AuditLogDrawer } from "./AuditLogDrawer";
 import { AuditLogEntry } from "../AuditLogsTableColumns";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("../../../common_components/DefaultProxyAdminTag", () => ({
   default: ({ userId }: { userId: string }) => <span>{userId}</span>,
 }));

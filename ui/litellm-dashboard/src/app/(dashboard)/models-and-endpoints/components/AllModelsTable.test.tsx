@@ -6,6 +6,8 @@ import { ModelData } from "@/components/model_dashboard/types";
 
 import { AllModelsTable } from "./AllModelsTable";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 const makeModel = (overrides: Partial<ModelData> = {}): ModelData =>
   ({
     model_name: "gpt-4-public",
@@ -457,6 +459,10 @@ describe("AllModelsTable", () => {
     });
 
     it("runs the full reset from the filter drawer", async () => {
+      vi.mock("@/app/(dashboard)/hooks/users/useUsers", async () => ({
+        ...(await vi.importActual("@/app/(dashboard)/hooks/users/useUsers")),
+        useUserDisplayNames: () => ({ data: undefined }),
+      }));
       const user = userEvent.setup();
       const onResetFilters = vi.fn();
       render(<AllModelsTable {...baseProps} onResetFilters={onResetFilters} />);

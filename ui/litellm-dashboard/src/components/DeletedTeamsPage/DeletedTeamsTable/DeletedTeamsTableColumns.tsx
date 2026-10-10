@@ -5,7 +5,8 @@ import { ColumnDef } from "@tanstack/react-table";
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { DateCell, IdCell, IdentityCell, ModelsCell, MoneyCell } from "@/components/shared/table_cells";
 import { DeletedTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
-import { orgDetailHref, userDetailHref } from "@/utils/entityLinks";
+import { orgDetailHref } from "@/utils/entityLinks";
+import { UserReference } from "@/components/shared/EntityReference";
 
 function EntityCell({ value, href }: { value: string | null | undefined; href: string | undefined }) {
   if (!value) {
@@ -18,7 +19,9 @@ function EntityCell({ value, href }: { value: string | null | undefined; href: s
   );
 }
 
-export const getDeletedTeamsTableColumns = (): ColumnDef<DeletedTeam>[] => [
+export const getDeletedTeamsTableColumns = (
+  resolveUserName: (userId: string) => string | undefined = () => undefined,
+): ColumnDef<DeletedTeam>[] => [
   {
     id: "team_alias",
     accessorKey: "team_alias",
@@ -113,7 +116,10 @@ export const getDeletedTeamsTableColumns = (): ColumnDef<DeletedTeam>[] => [
     enableSorting: false,
     cell: ({ row }) => {
       const deletedBy = row.original.deleted_by;
-      return <EntityCell value={deletedBy} href={deletedBy ? userDetailHref(deletedBy) : undefined} />;
+      if (!deletedBy) {
+        return <EntityCell value={deletedBy} href={undefined} />;
+      }
+      return <UserReference userId={deletedBy} displayName={resolveUserName(deletedBy)} />;
     },
   },
 ];

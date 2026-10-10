@@ -63,6 +63,8 @@ import { useDebouncedValue } from "@tanstack/react-pacer/debouncer";
 import { DEBOUNCE_WAIT_MS } from "@/utils/debounceConstants";
 import { uiSpendLogsCall } from "../../networking";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 const logEntry = (overrides: Partial<LogEntry>): LogEntry => ({
   request_id: "req-1",
   api_key: "key-1",

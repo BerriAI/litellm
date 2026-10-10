@@ -9,6 +9,7 @@ from litellm.proxy.management_helpers.resource_display_names import (
     agent_display_names,
     key_display_names,
     mcp_server_display_names,
+    user_display_names,
 )
 from litellm.types.agents import AgentResponse
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
@@ -127,4 +128,30 @@ async def test_key_alias_only_for_keys_that_have_one():
 async def test_key_empty_ids_skip_the_db():
     table = _table()
     assert dict(await key_display_names(_prisma(litellm_verificationtoken=table), ())) == {}
+    table.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_user_alias_beats_email_and_users_with_neither_are_skipped():
+    table = _table(
+        [
+            types.SimpleNamespace(user_id="u1", user_alias="Ada Reviewer", user_email="ada@x.com"),
+            types.SimpleNamespace(user_id="u2", user_alias=None, user_email="bob@x.com"),
+            types.SimpleNamespace(user_id="u3", user_alias=None, user_email=None),
+        ]
+    )
+    names = await user_display_names(_prisma(litellm_usertable=table), ("u1", "u2", "u3", "missing", "u1"))
+    assert dict(names) == {"u1": "Ada Reviewer", "u2": "bob@x.com"}
+    assert sorted(table.find_many.call_args.kwargs["where"]["user_id"]["in"]) == [
+        "missing",
+        "u1",
+        "u2",
+        "u3",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_user_empty_ids_skip_the_db():
+    table = _table()
+    assert dict(await user_display_names(_prisma(litellm_usertable=table), ())) == {}
     table.find_many.assert_not_awaited()

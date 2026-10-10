@@ -4,6 +4,8 @@ import { describe, expect, it, vi } from "vitest";
 import { DataTable } from "@/components/shared/DataTable";
 import { getMCPHubTableColumns, MCPServerData } from "./MCPHubTableColumns";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 const SERVER_URL = "https://mcp.exa.ai/mcp";
 
 const mockServer: MCPServerData = {

@@ -7,6 +7,7 @@ import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
 import { ModelData } from "@/components/model_dashboard/types";
 import { DataTableSortHeader } from "@/components/shared/DataTable";
 import { CellTooltip, DateCell, formatCellDate, IdCell, StatusBadge } from "@/components/shared/table_cells";
+import { UserReference } from "@/components/shared/EntityReference";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
@@ -178,17 +179,30 @@ function CredentialsCell({ credentialName, label }: { credentialName: string | u
   );
 }
 
-function CreatedByCell({ model }: { model: ModelData }) {
+function CreatedByCell({
+  model,
+  resolveUserName,
+}: {
+  model: ModelData;
+  resolveUserName: (userId: string) => string | undefined;
+}) {
   const isConfigModel = !model.model_info?.db_model;
   const createdAt = formatShortDate(model.model_info.created_at);
   const primary = isConfigModel ? "Defined in config" : model.model_info.created_by || "Unknown";
   const secondaryForDbModel = createdAt ?? "Unknown date";
+  const createdBy = model.model_info.created_by;
 
   return (
     <div className="flex min-w-0 flex-col gap-0.5">
-      <span className="max-w-44 truncate text-sm text-foreground" title={primary}>
-        {primary}
-      </span>
+      {!isConfigModel && createdBy ? (
+        <span className="max-w-44 truncate text-sm text-foreground">
+          <UserReference userId={createdBy} displayName={resolveUserName(createdBy)} />
+        </span>
+      ) : (
+        <span className="max-w-44 truncate text-sm text-foreground" title={primary}>
+          {primary}
+        </span>
+      )}
       <span className="truncate text-xs text-muted-foreground">{isConfigModel ? "-" : secondaryForDbModel}</span>
     </div>
   );
@@ -365,6 +379,7 @@ export interface ModelsTableColumnDeps {
   onTogglePauseClick?: (modelId: string, blocked: boolean) => void | Promise<void>;
   pausingModelId?: string | null;
   credentialLabels?: ReadonlyMap<string, string>;
+  resolveUserName?: (userId: string) => string | undefined;
 }
 
 export const getModelsTableColumns = ({
@@ -377,6 +392,7 @@ export const getModelsTableColumns = ({
   onTogglePauseClick,
   pausingModelId,
   credentialLabels,
+  resolveUserName = () => undefined,
 }: ModelsTableColumnDeps): ColumnDef<ModelData>[] => [
   {
     id: MODEL_ID_COLUMN_ID,
@@ -432,7 +448,7 @@ export const getModelsTableColumns = ({
     enableSorting: true,
     size: 180,
     minSize: 110,
-    cell: ({ row }) => <CreatedByCell model={row.original} />,
+    cell: ({ row }) => <CreatedByCell model={row.original} resolveUserName={resolveUserName} />,
   },
   {
     id: UPDATED_AT_COLUMN_ID,

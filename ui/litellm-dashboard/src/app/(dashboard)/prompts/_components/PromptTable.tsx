@@ -8,6 +8,7 @@ import { DataTable } from "@/components/shared/DataTable";
 import { modelHubCall, PromptSpec } from "@/components/networking";
 
 import { getPromptTableColumns } from "./PromptTableColumns";
+import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
 import { ModelGroupInfo } from "./prompt_utils";
 
 interface PromptTableProps {
@@ -65,9 +66,19 @@ const PromptTable: React.FC<PromptTableProps> = ({
     fetchModelHubData();
   }, [accessToken]);
 
+  const { data: displayNames } = useUserDisplayNames(
+    useMemo(() => promptsList.map((prompt) => prompt.created_by ?? ""), [promptsList]),
+  );
   const columns = useMemo(
-    () => getPromptTableColumns({ modelHubData, isAdmin, onPromptClick, onDeleteClick }),
-    [modelHubData, isAdmin, onPromptClick, onDeleteClick],
+    () =>
+      getPromptTableColumns({
+        modelHubData,
+        isAdmin,
+        onPromptClick,
+        onDeleteClick,
+        resolveUserName: (userId) => displayNames?.[userId],
+      }),
+    [modelHubData, isAdmin, onPromptClick, onDeleteClick, displayNames],
   );
 
   return (

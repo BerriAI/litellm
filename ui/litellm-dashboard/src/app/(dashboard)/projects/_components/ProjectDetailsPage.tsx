@@ -6,8 +6,9 @@ import { isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { BarChart } from "@/components/shared/charts";
 import { ArrowLeftIcon, DollarSignIcon, EditIcon, UsersIcon } from "lucide-react";
 import { useMemo, useState } from "react";
-import DefaultProxyAdminTag from "@/components/common_components/DefaultProxyAdminTag";
+import { UserReference } from "@/components/shared/EntityReference";
 import CopyButton from "@/components/shared/CopyButton";
+import { useUserDisplayNames } from "@/app/(dashboard)/hooks/users/useUsers";
 import { StatusBadge } from "@/components/shared/table_cells/status_badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -28,6 +29,9 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
   const { data: project, isLoading } = useProjectDetails(projectId);
   const { data: teamInfo } = useTeam(project?.team_id ?? undefined);
   const { userId } = useAuthorized();
+  const { data: displayNames } = useUserDisplayNames(
+    useMemo(() => [project?.created_by ?? "", project?.updated_by ?? ""], [project]),
+  );
   const canEditProject = useCanManageProjects(
     isUserTeamAdminForSingleTeam(teamInfo?.members_with_roles ?? null, userId ?? ""),
   );
@@ -107,27 +111,27 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
           <CardTitle>Project Details</CardTitle>
         </CardHeader>
         <CardContent>
-          <dl className="grid grid-cols-[max-content_1fr] gap-x-4 gap-y-2 text-sm">
+          <dl className="grid w-1/2 grid-cols-[max-content_minmax(0,1fr)] gap-x-4 gap-y-2 text-sm">
             <dt className="text-muted-foreground">Description</dt>
             <dd className="text-foreground">{project.description || "—"}</dd>
             <dt className="text-muted-foreground">Created</dt>
-            <dd className="flex items-center gap-1 text-foreground">
-              {new Date(project.created_at).toLocaleString()}
+            <dd className="flex min-w-0 flex-wrap items-center gap-x-1 text-foreground">
+              <span className="shrink-0 whitespace-nowrap">{new Date(project.created_at).toLocaleString()}</span>
               {project.created_by && (
-                <>
-                  <span>by</span>
-                  <DefaultProxyAdminTag userId={project.created_by} />
-                </>
+                <span className="flex min-w-0 grow basis-24 items-center gap-1">
+                  <span className="shrink-0">by</span>
+                  <UserReference userId={project.created_by} displayName={displayNames?.[project.created_by]} />
+                </span>
               )}
             </dd>
             <dt className="text-muted-foreground">Last Updated</dt>
-            <dd className="flex items-center gap-1 text-foreground">
-              {new Date(project.updated_at).toLocaleString()}
+            <dd className="flex min-w-0 flex-wrap items-center gap-x-1 text-foreground">
+              <span className="shrink-0 whitespace-nowrap">{new Date(project.updated_at).toLocaleString()}</span>
               {project.updated_by && (
-                <>
-                  <span>by</span>
-                  <DefaultProxyAdminTag userId={project.updated_by} />
-                </>
+                <span className="flex min-w-0 grow basis-24 items-center gap-1">
+                  <span className="shrink-0">by</span>
+                  <UserReference userId={project.updated_by} displayName={displayNames?.[project.updated_by]} />
+                </span>
               )}
             </dd>
           </dl>
@@ -188,7 +192,7 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
         </Card>
       </div>
 
-      <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
+      <div className="mb-6 grid grid-cols-1 gap-4 lg:grid-cols-2 [&>*]:min-w-0">
         <ProjectKeysSection projectId={projectId} />
 
         <Card className="h-full">
@@ -209,7 +213,12 @@ export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
                 return (
                   <div className="flex flex-col gap-3">
                     <div>
-                      <p className="text-base font-medium text-foreground">{teamInfo.team_alias || teamInfo.team_id}</p>
+                      <p
+                        className="truncate text-base font-medium text-foreground"
+                        title={teamInfo.team_alias || teamInfo.team_id}
+                      >
+                        {teamInfo.team_alias || teamInfo.team_id}
+                      </p>
                       <div className="flex items-center gap-1 text-xs text-muted-foreground">
                         <span>ID: {teamInfo.team_id}</span>
                         <CopyButton value={teamInfo.team_id} label="Copy team ID" />

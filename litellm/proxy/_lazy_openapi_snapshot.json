@@ -856,6 +856,16 @@
               ],
               "title": "Created By"
             },
+            "created_by_user": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AccessGroupResource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
             "description": {
               "anyOf": [
                 {
@@ -882,6 +892,16 @@
                 }
               ],
               "title": "Updated By"
+            },
+            "updated_by_user": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AccessGroupResource"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             }
           },
           "required": [
