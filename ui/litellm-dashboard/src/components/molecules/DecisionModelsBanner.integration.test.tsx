@@ -10,7 +10,7 @@ describe("DecisionModelsBanner", () => {
     localStorage.removeItem("hideCostOptimizationFeedbackBanner");
   });
 
-  it("links directly to the System One playground", () => {
+  it("links directly to the Decisions playground", () => {
     render(<DecisionModelsBanner />);
     const link = screen.getByRole("link", { name: "Try decision models" });
     expect(link).toHaveAttribute("href", "/ui/playground?tab=system-one");
