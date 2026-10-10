@@ -497,19 +497,27 @@ async def _execute_tool_call(
     user_id: str | None,
     is_admin: bool,
 ) -> str:
-    """Run a single tool and return the summarised result text, or the reason its dates
-    are invalid so the model can correct them."""
-    from litellm.proxy.management_endpoints.common_daily_activity import (
-        InvalidDateRange,
-        parse_canonical_date_range,
-    )
-
+    """Run a single tool and return the summarised result text, or the reason the query
+    layer rejected its dates so the model can correct them."""
     kwargs: Final = _resolve_fetch_kwargs(fn_name, fn_args, user_id, is_admin)
-    date_range: Final = parse_canonical_date_range(kwargs["start_date"], kwargs["end_date"])
-    if isinstance(date_range, InvalidDateRange):
-        return f"Invalid date range: {date_range.reason}"
-    raw_data: Final = await handler["fetch"](**kwargs)
+    try:
+        raw_data: Final = await handler["fetch"](**kwargs)
+    except HTTPException as e:
+        reason: Final = _invalid_date_reason(e)
+        if reason is None:
+            raise
+        return f"Invalid date range: {reason}"
     return handler["summarise"](raw_data)
+
+
+def _invalid_date_reason(error: HTTPException) -> str | None:
+    """The reason in the daily activity query layer's 400 for invalid or reversed dates."""
+    detail: Final = cast(object, error.detail)  # cast-ok: starlette types detail as str; the query layer passes a dict
+    match detail:
+        case {"error": str() as reason} if error.status_code == 400:
+            return reason
+        case _:
+            return None
 
 
 async def _process_tool_call(

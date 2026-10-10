@@ -1,5 +1,5 @@
-"""The /usage/ai/chat tools hand the model the reason its dates are invalid, the same check the daily activity
-routes answer 400 with, instead of an empty dataset for a reversed range or a generic fetch error."""
+"""The /usage/ai/chat tools hand the model the reason the daily activity query rejected its dates, the same check
+the daily activity routes answer 400 with, instead of a generic fetch error."""
 
 from __future__ import annotations
 
@@ -98,26 +98,28 @@ def _tool_results(usage_chat: _UsageChat, start_date: str, end_date: str) -> tup
     return tool_messages, statuses
 
 
+_REVERSED: Final = "Invalid date range: end_date must be on or after start_date"
+_NOT_CANONICAL: Final = "Invalid date range: start_date and end_date must be valid YYYY-MM-DD dates"
+_NO_TEAM_DATA: Final = "No Team usage data found for the given date range."
+_NO_TAG_DATA: Final = "No Tag usage data found for the given date range."
+
+
 @pytest.mark.parametrize(
-    ("start_date", "end_date", "reason"),
+    ("start_date", "end_date", "team_message", "tag_message"),
     (
-        pytest.param("2026-10-09", "2026-10-01", "end_date must be on or after start_date", id="reversed"),
-        pytest.param(
-            "2026-13-01", "2026-10-09", "start_date and end_date must be valid YYYY-MM-DD dates", id="invalid-month"
-        ),
+        pytest.param("2026-10-09", "2026-10-01", _REVERSED, _REVERSED, id="reversed"),
+        pytest.param("2026-13-01", "2026-10-09", _NOT_CANONICAL, _NOT_CANONICAL, id="invalid-month"),
+        pytest.param("2001/01/01", "2001-01-09", _NOT_CANONICAL, _NOT_CANONICAL, id="slashes"),
+        pytest.param("2001-01-01", "2001-01-09", _NO_TEAM_DATA, _NO_TAG_DATA, id="valid"),
     ),
 )
-def test_usage_chat_tools_report_invalid_dates_to_the_model(
-    usage_chat: _UsageChat, start_date: str, end_date: str, reason: str
+def test_usage_chat_tools_answer_with_the_query_layers_date_check(
+    usage_chat: _UsageChat, start_date: str, end_date: str, team_message: str, tag_message: str
 ) -> None:
+    """The team and tag tools give the model the daily activity routes' 400 reason; the global tool, whose query
+    takes these dates without that check, still answers with its usage summary."""
     tool_messages, statuses = _tool_results(usage_chat, start_date, end_date)
-    assert tool_messages == dict.fromkeys(_TOOLS, f"Invalid date range: {reason}"), tool_messages
-    assert statuses == ("running", "complete") * len(_TOOLS), statuses
-
-
-def test_usage_chat_tools_still_query_a_valid_range(usage_chat: _UsageChat) -> None:
-    tool_messages, statuses = _tool_results(usage_chat, "2001-01-01", "2001-01-09")
     assert tool_messages["get_usage_data"].startswith("Total Spend: $"), tool_messages
-    assert tool_messages["get_team_usage_data"] == "No Team usage data found for the given date range.", tool_messages
-    assert tool_messages["get_tag_usage_data"] == "No Tag usage data found for the given date range.", tool_messages
+    assert tool_messages["get_team_usage_data"] == team_message, tool_messages
+    assert tool_messages["get_tag_usage_data"] == tag_message, tool_messages
     assert statuses == ("running", "complete") * len(_TOOLS), statuses
