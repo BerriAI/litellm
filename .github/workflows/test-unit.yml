@@ -800,6 +800,7 @@ jobs:
 
           - shard: mcp-oauth
             test-path: |-
+              tests/unit/proxy/_experimental/mcp_server/auth/test_user_api_key_auth_mcp.py
               tests/unit/proxy/_experimental/mcp_server/test_discoverable_endpoints.py
               tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
               tests/unit/proxy/_experimental/mcp_server/test_db_credentials.py
