@@ -54,7 +54,32 @@ DecisionQuestionMap: TypeAlias = Annotated[
 ]
 
 
-class DecisionsRequestBody(LiteLLMPydanticObjectBase):
+class DecisionsBase64Audio(LiteLLMPydanticObjectBase):
+    content_type: Annotated[str, Field(pattern=r"^audio/[^;\s]+$")]
+    base64: Annotated[str, Field(min_length=1)]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class DecisionsBase64Video(LiteLLMPydanticObjectBase):
+    content_type: Annotated[str, Field(pattern=r"^video/[^;\s]+$")]
+    base64: Annotated[str, Field(min_length=1)]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+DecisionsAudio: TypeAlias = Annotated[str, Field(pattern=r"^data:audio/[^;,\s]+;base64,.+$")] | DecisionsBase64Audio
+DecisionsVideo: TypeAlias = Annotated[str, Field(pattern=r"^data:video/[^;,\s]+;base64,.+$")] | DecisionsBase64Video
+
+
+class DecisionsMediaBody(LiteLLMPydanticObjectBase):
+    audio: Annotated[tuple[DecisionsAudio, ...], Field(max_length=4)] = ()
+    videos: Annotated[tuple[DecisionsVideo, ...], Field(max_length=2)] = ()
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+
+class DecisionsRequestBody(DecisionsMediaBody):
     state: DecisionsJSON
     questions: DecisionQuestionMap
 
@@ -70,6 +95,8 @@ class DecisionsCallParams(TypedDict, total=False):
     model: Required[ReadOnly[str]]
     state: Required[ReadOnly[DecisionsJSON]]
     questions: Required[ReadOnly[DecisionQuestionMap]]
+    audio: ReadOnly[Sequence[DecisionsAudio]]
+    videos: ReadOnly[Sequence[DecisionsVideo]]
     api_key: ReadOnly[str | None]
     api_base: ReadOnly[str | None]
     timeout: ReadOnly[float | None]
@@ -228,7 +255,7 @@ OpenAIDecisionQuestion: TypeAlias = Annotated[
 ]
 
 
-class OpenAIDecisionRequestBody(LiteLLMPydanticObjectBase):
+class OpenAIDecisionRequestBody(DecisionsMediaBody):
     input: OpenAIDecisionInput
     questions: Annotated[Sequence[OpenAIDecisionQuestion], Field(min_length=1, max_length=MAX_DECISION_QUESTIONS)]
     safety_identifier: str | None = None
@@ -380,6 +407,8 @@ class DecisionsIRRequest:
     input: DecisionsIRState | DecisionsIRMessages
     questions: tuple[DecisionsIRQuestion, ...]
     safety_identifier: str | None = None
+    audio: tuple[DecisionsAudio, ...] = ()
+    videos: tuple[DecisionsVideo, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
