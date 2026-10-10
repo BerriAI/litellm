@@ -9,7 +9,6 @@
 
 import ast
 import hashlib
-import hmac
 import json
 import logging
 import time
@@ -625,7 +624,7 @@ class Cache:
             auth_object: object | None = metadata.get("user_api_key_auth")
             if isinstance(auth_object, UserAPIKeyAuth):
                 identity_fields = {
-                    "api_key": getattr(auth_object, "api_key", None),
+                    "api_key_hash": getattr(auth_object, "token", None),
                     "team_id": getattr(auth_object, "team_id", None),
                     "project_id": getattr(auth_object, "project_id", None),
                     "org_id": getattr(auth_object, "org_id", None),
@@ -634,10 +633,7 @@ class Cache:
                     "user_role": getattr(auth_object, "user_role", None),
                 }
                 identity = json.dumps(identity_fields, sort_keys=True, default=str, separators=(",", ":"))
-                caller_digest = hmac.new(
-                    b"litellm-cache-namespace-v1", identity.encode("utf-8"), hashlib.sha256
-                ).hexdigest()
-                authenticated_namespace = "caller:" + caller_digest[:32]
+                authenticated_namespace = "caller:" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:32]
                 break
         requested_namespace_value: Final = dynamic_cache_control.get("namespace")
         requested_namespace: Final[str | None] = (

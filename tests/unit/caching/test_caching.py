@@ -28,8 +28,8 @@ messages = [{"role": "user", "content": "who is ishaan 5222"}]
 
 def test_authenticated_proxy_callers_get_distinct_exact_cache_keys() -> None:
     cache: Final = Cache(type=LiteLLMCacheType.LOCAL, namespace="qa")
-    caller_a: Final = UserAPIKeyAuth(api_key="hashed-key-a", team_id="team-a", user_id="user-a")
-    caller_b: Final = UserAPIKeyAuth(api_key="hashed-key-b", team_id="team-a", user_id="user-b")
+    caller_a: Final = UserAPIKeyAuth(api_key="fixture-a", token="hashed-key-a", team_id="team-a", user_id="user-a")
+    caller_b: Final = UserAPIKeyAuth(api_key="fixture-b", token="hashed-key-b", team_id="team-a", user_id="user-b")
     common: Final = {
         "model": "gpt-4.1-mini",
         "messages": messages,
