@@ -9,7 +9,7 @@ import sys
 import urllib.parse as urlparse
 from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import click
 import httpx
@@ -736,6 +736,16 @@ class ProxyInitializationHelpers:
     _maybe_setup_prometheus_multiproc_dir = maybe_setup_prometheus_multiproc_dir
 
 
+def _value_type_name(value: object) -> str:
+    """Return the runtime class name of an arbitrary config value.
+
+    The value read from YAML is untyped; annotate the parameter as ``object``
+    so ``type()`` receives a known-typed argument and the strict type gate does
+    not count a ``reportUnknownArgumentType`` error on the error path.
+    """
+    return type(value).__name__
+
+
 @click.command()
 @click.argument("cli_args", nargs=-1)
 @click.option("--host", default="0.0.0.0", help="Host for the server to listen on.", envvar="HOST")
@@ -1262,6 +1272,12 @@ def run_server(
             general_settings = _config.get("general_settings", {})
             if general_settings is None:
                 general_settings = {}
+            elif not isinstance(general_settings, dict):
+                raise ValueError(
+                    "`general_settings` in the proxy config must be a mapping "
+                    f"(got {_value_type_name(cast(object, general_settings))}). Check the "
+                    "`general_settings:` block in your config file."
+                )
             ### LOAD KEY MANAGEMENT SETTINGS FIRST (needed for custom secret manager) ###
             key_management_settings: Final = general_settings.get("key_management_settings", None)
             if key_management_settings is not None:
