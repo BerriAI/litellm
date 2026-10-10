@@ -160,12 +160,17 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
   return (
     <div className="h-screen w-full bg-background p-4">
       <div className="mb-6 flex items-center justify-between">
-        <div>
+        <div className="min-w-0">
           <Button variant="ghost" onClick={onClose} className="mb-4">
             <ArrowLeft className="size-4" />
             Back to Organizations
           </Button>
-          <h1 className="text-xl font-semibold tracking-tight text-foreground">{orgData.organization_alias}</h1>
+          <h1
+            className="truncate text-xl font-semibold tracking-tight text-foreground"
+            title={orgData.organization_alias}
+          >
+            {orgData.organization_alias}
+          </h1>
           <div className="flex items-center gap-1">
             <span className="font-mono text-sm text-muted-foreground">{orgData.organization_id}</span>
             <CopyButton value={orgData.organization_id} label="Copy organization ID" iconClassName="size-3" />
@@ -255,8 +260,10 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <p className="text-sm text-muted-foreground">Teams</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {orgData.teams?.map((team, index) => (
-                    <BadgeLink key={index} href={teamDetailHref(team.team_id)}>
-                      {teamAliasMap[team.team_id] || team.team_id}
+                    <BadgeLink key={index} href={teamDetailHref(team.team_id)} className="max-w-64">
+                      <span className="min-w-0 truncate" title={teamAliasMap[team.team_id] || team.team_id}>
+                        {teamAliasMap[team.team_id] || team.team_id}
+                      </span>
                     </BadgeLink>
                   ))}
                 </div>
@@ -315,7 +322,9 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
                 <div className="space-y-4 text-sm">
                   <div>
                     <p className="font-medium text-foreground">Organization Name</p>
-                    <div>{orgData.organization_alias}</div>
+                    <div className="truncate" title={orgData.organization_alias}>
+                      {orgData.organization_alias}
+                    </div>
                   </div>
                   <div>
                     <p className="font-medium text-foreground">Organization ID</p>
