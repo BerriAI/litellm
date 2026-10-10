@@ -36,7 +36,7 @@ from litellm.utils import ProviderConfigManager, client
 
 from ..adapters.handler import LiteLLMMessagesToCompletionTransformationHandler, request_safeguards_evaluator
 from ..responses_adapters.handler import LiteLLMMessagesToResponsesAPIHandler
-from ..safeguards import SafeguardsEvaluator, with_safeguard_results
+from ..safeguards import SafeguardsEvaluator, native_route_classifies, with_safeguard_results
 from .interceptors import get_messages_interceptors
 from .utils import AnthropicMessagesRequestUtils, mock_response, prepare_native_messages
 
@@ -649,11 +649,12 @@ def anthropic_messages_handler(
         if dynamic_api_base is not None and anthropic_messages_provider_config.uses_get_llm_provider_api_base()
         else api_base
     )
+    safeguard_kwargs: Final = (
+        _SAFEGUARD_KWARGS.validate_python(kwargs) if is_async is True and "safeguards" in kwargs else None
+    )
     safeguards_evaluator: Final = (
-        request_safeguards_evaluator(
-            _SAFEGUARD_KWARGS.validate_python(kwargs), _SAFEGUARD_MESSAGES.validate_python(messages)
-        )
-        if is_async is True and "claude" not in model.lower() and "safeguards" in kwargs
+        request_safeguards_evaluator(safeguard_kwargs, _SAFEGUARD_MESSAGES.validate_python(messages))
+        if safeguard_kwargs is not None and native_route_classifies(model, safeguard_kwargs.get("safeguards"))
         else None
     )
     native_response: Final = base_llm_http_handler.anthropic_messages_handler(
