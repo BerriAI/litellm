@@ -5,6 +5,7 @@ import {
   openAIDecisionsExample,
   presetPayload,
   toOpenAIDecisionsRequest,
+  matchPreset,
 } from "./example";
 import { validateOpenAIDecisionsPayload, validateSystemOnePayload } from "./validatePayload";
 
@@ -37,6 +38,18 @@ describe("decision presets", () => {
       ["score", "severity"],
     ]);
     expect(request).toEqual(openAIDecisionsExample("jev-latest"));
+  });
+
+  it("recognises a preset whatever the model key holds or where it sits", () => {
+    const lead = DECISION_PRESETS.find((preset) => preset.id === "lead-scoring");
+    const parsed = JSON.parse(presetPayload(lead!, "/v1/systemone", "jev-latest")) as Record<string, unknown>;
+    const { model: _model, ...rest } = parsed;
+    expect(matchPreset("/v1/systemone", JSON.stringify({ ...rest, model: "pplx-decider" }))).toBe(lead);
+    expect(matchPreset("/v1/systemone", JSON.stringify(rest))).toBe(lead);
+    expect(matchPreset("/v1/decisions", presetPayload(lead!, "/v1/decisions"))).toBe(lead);
+    expect(matchPreset("/v1/decisions", presetPayload(lead!, "/v1/systemone"))).toBeUndefined();
+    expect(matchPreset("/v1/systemone", JSON.stringify({ ...rest, state: "edited" }))).toBeUndefined();
+    expect(matchPreset("/v1/systemone", "{")).toBeUndefined();
   });
 
   it("omits the model from payloads when none is known", () => {

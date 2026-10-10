@@ -142,6 +142,28 @@ describe("SystemOneUI integration", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 
+  it("keeps the preset label after picking a model and leaves an omitted model out when clearing", async () => {
+    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    render(<SystemOneUI accessToken="session-key" />);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest"));
+    const picker = screen.getByRole("combobox", { name: "Example" });
+    const editor = await openJsonEditor();
+    const example = JSON.parse((editor as HTMLTextAreaElement).value) as Record<string, unknown>;
+    const { model: _model, ...withoutModel } = example;
+
+    fireEvent.change(editor, {
+      target: { value: JSON.stringify({ ...withoutModel, model: "pplx-decider" }, null, 2) },
+    });
+    expect(picker).toHaveTextContent("Triage a bug report");
+
+    fireEvent.change(editor, { target: { value: JSON.stringify(withoutModel, null, 2) } });
+    expect(picker).toHaveTextContent("Triage a bug report");
+    await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+    expect(JSON.parse((editor as HTMLTextAreaElement).value)).toEqual({ state: "", questions: {} });
+    await selectPreset("Score a sales lead");
+    expect(JSON.parse((editor as HTMLTextAreaElement).value)).not.toHaveProperty("model");
+  });
+
   it("offers the same presets on /v1/decisions in the OpenAI shape and clears to an empty input", async () => {
     const user = userEvent.setup();
     render(<SystemOneUI accessToken="session-key" />);

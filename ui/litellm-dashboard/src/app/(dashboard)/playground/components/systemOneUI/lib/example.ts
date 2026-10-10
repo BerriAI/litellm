@@ -1,5 +1,6 @@
 import type { DecisionRequest, SystemOneRequest } from "./schemas";
 import type { OpenAIDecisionsRequest } from "./openAIDecisions";
+import { parseJson } from "./validatePayload";
 
 type PresetChoice = {
   type: "choice";
@@ -151,7 +152,7 @@ const toOpenAIQuestion = (name: string, question: PresetQuestion): OpenAIDecisio
   }
 };
 
-export const toSystemOneRequest = (request: PresetRequest, model?: string): DecisionRequest => ({ ...request, model });
+export const toSystemOneRequest = (request: PresetRequest, model?: string): DecisionRequest => ({ model, ...request });
 
 export const toOpenAIDecisionsRequest = (request: PresetRequest, model?: string): OpenAIDecisionsRequest => ({
   model,
@@ -167,6 +168,27 @@ export const presetPayload = (preset: DecisionPreset, endpoint: PresetEndpoint, 
     null,
     2,
   );
+
+const stableJson = (value: unknown): string =>
+  JSON.stringify(value, (_key, item: unknown) =>
+    item !== null && typeof item === "object" && !Array.isArray(item)
+      ? Object.fromEntries(Object.entries(item as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)))
+      : item,
+  );
+
+const withoutModel = (value: unknown): string => {
+  const { model: _model, ...rest } = (value ?? {}) as Record<string, unknown>;
+  return stableJson(rest);
+};
+
+export const matchPreset = (endpoint: PresetEndpoint, raw: string): DecisionPreset | undefined => {
+  const json = parseJson(raw);
+  if (!json.ok) {
+    return undefined;
+  }
+  const current = withoutModel(json.value);
+  return DECISION_PRESETS.find((preset) => withoutModel(JSON.parse(presetPayload(preset, endpoint))) === current);
+};
 
 export const emptyPayload = (endpoint: PresetEndpoint, model?: string): string =>
   JSON.stringify(

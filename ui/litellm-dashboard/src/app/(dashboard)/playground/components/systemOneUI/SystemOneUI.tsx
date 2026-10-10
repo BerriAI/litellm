@@ -12,7 +12,7 @@ import { useMutation } from "@tanstack/react-query";
 import { Code, Eraser, Info, LoaderCircle, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { makePlaygroundDecisionRequest, type PlaygroundDecisionRequest } from "../../llm_calls/system_one";
-import { DECISION_PRESETS, emptyPayload, presetPayload, type DecisionPreset } from "./lib/example";
+import { DECISION_PRESETS, emptyPayload, matchPreset, presetPayload, type DecisionPreset } from "./lib/example";
 import { payloadModel, withPayloadModel } from "./lib/payloadModel";
 import JsonEditor from "./JsonEditor";
 import QuestionBreakdown from "./QuestionBreakdown";
@@ -82,8 +82,8 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   const [drafts, setDrafts] = useState<Partial<Record<PlaygroundDecisionRequest["endpoint"], string>>>({});
   const [view, setView] = useState<EditorView>("form");
   const rawPayload = drafts[endpoint] ?? presetPayload(DECISION_PRESETS[0], endpoint, decisionModels[0]);
-  const draftModel = payloadModel(rawPayload) ?? decisionModels[0];
-  const activePreset = DECISION_PRESETS.find((preset) => presetPayload(preset, endpoint, draftModel) === rawPayload);
+  const draftModel = drafts[endpoint] === undefined ? decisionModels[0] : payloadModel(rawPayload);
+  const activePreset = matchPreset(endpoint, rawPayload);
   const clearedPayload = emptyPayload(endpoint, draftModel);
   const activeController = useRef<AbortController | null>(null);
   const validated = useMemo(
