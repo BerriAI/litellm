@@ -12919,7 +12919,7 @@ async def audio_speech(
 
         requested_format: Final = data.get("response_format")
         upstream_content_type: Final = (
-            response.response.headers.get("content-type") if isinstance(response, HttpxBinaryResponseContent) else None
+            response.content_type if isinstance(response, HttpxBinaryResponseContent) else None
         )
         media_type: Final = resolve_speech_media_type(
             upstream_content_type=upstream_content_type,
@@ -18399,6 +18399,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "pass_through_endpoints": "PydanticModel",
         "store_model_in_db": "Boolean",
         "store_prompts_in_spend_logs": "Boolean",
+        "disable_fallbacks_on_per_model_rate_limits": "Boolean",
         "maximum_spend_logs_retention_period": "String",
         "maximum_health_check_retention_period": "String",
         "maximum_daily_tag_spend_retention_period": "String",

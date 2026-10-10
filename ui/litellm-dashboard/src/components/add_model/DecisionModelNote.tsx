@@ -45,7 +45,7 @@ export default function DecisionModelNote({ catalog, litellmProvider }: Decision
         <p>
           After you add it,{" "}
           <a href={uiHref(SYSTEM_ONE_PLAYGROUND_ROUTE)} className="underline">
-            test it in the System One playground
+            test it in the Decisions playground
           </a>
         </p>
       </AlertDescription>
