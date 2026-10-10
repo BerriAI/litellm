@@ -1,7 +1,7 @@
 import json
 from collections.abc import Callable, Iterator
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
@@ -9,9 +9,10 @@ import respx
 
 import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
+from litellm.litellm_core_utils.prompt_templates.factory import cohere_messages_pt_v2
 from litellm.llms.cohere.chat.transformation import CohereChatConfig
 from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
-from unittest.mock import AsyncMock, patch
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 COHERE_V1_CHAT_URL: Final = "https://api.cohere.ai/v1/chat"
 COHERE_V2_CHAT_URL: Final = "https://api.cohere.com/v2/chat"
@@ -97,6 +98,250 @@ class TestCohereV2Transform:
         )
 
         assert result == {"temperature": 0.7, "max_tokens": 200}
+
+
+def test_cohere_v1_response_parses_citations_tool_calls_and_billed_units() -> None:
+    config: Final = CohereChatConfig()
+    model_response: Final = litellm.ModelResponse()
+    raw_response: Final = httpx.Response(
+        200,
+        json={
+            "text": "Searching",
+            "citations": [{"start": 0, "end": 9, "text": "Searching", "document_ids": ["doc-1"]}],
+            "tool_calls": [{"name": "lookup", "generation_id": "call-1", "parameters": {"query": "weather"}}],
+            "meta": {"billed_units": {"input_tokens": 7, "output_tokens": 3}},
+        },
+    )
+
+    response: Final = config.transform_response(
+        model="command-r-plus",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert response.choices[0].message.tool_calls[0].function.name == "lookup"
+    assert response.choices[0].message.tool_calls[0].function.arguments == '{"query": "weather"}'
+    assert getattr(response, "citations") == [{"start": 0, "end": 9, "text": "Searching", "document_ids": ["doc-1"]}]
+    assert response.usage.prompt_tokens == 7
+    assert response.usage.completion_tokens == 3
+
+
+def test_cohere_v2_response_parses_annotations_and_tool_calls() -> None:
+    config: Final = CohereV2ChatConfig()
+    model_response: Final = litellm.ModelResponse()
+    raw_response: Final = httpx.Response(
+        200,
+        json={
+            "id": "response-1",
+            "finish_reason": "COMPLETE",
+            "message": {
+                "content": [{"type": "text", "text": "The weather is clear."}],
+                "citations": [
+                    {
+                        "start": 0,
+                        "end": 21,
+                        "sources": [
+                            {
+                                "type": "document",
+                                "id": "source-1",
+                                "url": "https://example.com/weather",
+                                "document": {"title": "Weather report"},
+                            }
+                        ],
+                    }
+                ],
+                "tool_calls": [
+                    {
+                        "id": "call-1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": '{"city":"Paris"}'},
+                    }
+                ],
+            },
+            "usage": {"tokens": {"input_tokens": 11, "output_tokens": 5}},
+        },
+    )
+
+    response: Final = config.transform_response(
+        model="command-r-plus",
+        raw_response=raw_response,
+        model_response=model_response,
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert response.choices[0].message.tool_calls[0].function.name == "lookup"
+    assert response.choices[0].message.tool_calls[0].function.arguments == '{"city":"Paris"}'
+    assert response.choices[0].message.annotations[0]["url_citation"]["url"] == "https://example.com/weather"
+    assert response.choices[0].message.annotations[0]["url_citation"]["title"] == "Weather report"
+    assert response.usage.prompt_tokens == 11
+    assert response.usage.completion_tokens == 5
+
+
+def test_cohere_v2_request_preserves_conversation_messages_and_parameters() -> None:
+    config: Final = CohereV2ChatConfig()
+    messages: Final = [
+        {"role": "user", "content": "What is the capital of France?"},
+        {"role": "assistant", "content": "Paris."},
+        {"role": "user", "content": "What language is spoken there?"},
+    ]
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            "max_completion_tokens": 128,
+            "top_p": 0.7,
+            "frequency_penalty": 0.3,
+            "presence_penalty": 0.2,
+            "stop": ["END"],
+        },
+        optional_params={},
+        model="command-r-plus",
+        drop_params=False,
+    )
+
+    request: Final = config.transform_request(
+        model="command-r-plus",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["messages"] == messages
+    assert request["max_tokens"] == 128
+    assert request["p"] == 0.7
+    assert request["frequency_penalty"] == 0.3
+    assert request["presence_penalty"] == 0.2
+    assert request["stop_sequences"] == ["END"]
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_cohere_v2_completion_sends_mapped_request_and_parses_response(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post(COHERE_V2_CHAT_URL).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "response-1",
+                "finish_reason": "COMPLETE",
+                "message": {"content": [{"type": "text", "text": "Paris is the capital."}]},
+                "usage": {"tokens": {"input_tokens": 8, "output_tokens": 4}},
+            },
+        )
+    )
+    response: Final = litellm.completion(
+        model="cohere_chat/command-r-plus",
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        api_key="test-api-key",
+        client=HTTPHandler(),
+        max_completion_tokens=64,
+        top_p=0.7,
+    )
+
+    assert response.choices[0].message.content == "Paris is the capital."
+    assert response.usage.prompt_tokens == 8
+    assert response.usage.completion_tokens == 4
+    assert route.called
+    request_body: Final = json.loads(route.calls.last.request.content)
+    assert request_body["messages"] == [{"role": "user", "content": "What is the capital of France?"}]
+    assert request_body["model"] == "command-r-plus"
+    assert request_body["max_tokens"] == 64
+    assert request_body["p"] == 0.7
+    assert "top_p" not in request_body
+
+
+def test_cohere_v1_request_separates_conversation_history_from_latest_message() -> None:
+    messages: Final = [
+        {"role": "user", "content": "What is 2 + 2?"},
+        {"role": "assistant", "content": "4."},
+        {"role": "user", "content": "And 3 + 3?"},
+    ]
+
+    latest_message, history = cohere_messages_pt_v2(
+        messages=messages.copy(),
+        model="command-r-plus",
+        llm_provider="cohere_chat",
+    )
+
+    assert latest_message == "And 3 + 3?"
+    assert history == [
+        {"role": "USER", "message": "What is 2 + 2?"},
+        {"role": "CHATBOT", "message": "4.", "tool_calls": []},
+    ]
+
+
+def test_cohere_v2_stream_parser_emits_text_tool_calls_and_usage() -> None:
+    config: Final = CohereV2ChatConfig()
+    response_iterator: Final = config.get_model_response_iterator(
+        iter(
+            [
+                json.dumps(
+                    {
+                        "type": "content-delta",
+                        "delta": {"message": {"content": {"text": "Searching"}}},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "type": "tool-call-delta",
+                        "delta": {
+                            "tool_calls": [
+                                {
+                                    "id": "call-1",
+                                    "name": "lookup",
+                                    "arguments": '{"city":"Paris"}',
+                                }
+                            ]
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "event": "message-end",
+                        "data": {
+                            "delta": {
+                                "finish_reason": "COMPLETE",
+                                "usage": {"tokens": {"input_tokens": 8, "output_tokens": 3}},
+                            }
+                        },
+                    }
+                ),
+            ]
+        ),
+        sync_stream=True,
+    )
+
+    chunks: Final = list(response_iterator)
+
+    assert chunks[0]["text"] == "Searching"
+    assert chunks[1]["tool_use"] is not None
+    assert chunks[1]["tool_use"]["id"] == "call-1"
+    assert chunks[1]["tool_use"]["function"]["name"] == "lookup"
+    assert chunks[2]["is_finished"]
+    assert chunks[2]["finish_reason"] == "COMPLETE"
+    assert chunks[2]["usage"]["prompt_tokens"] == 8
+    assert chunks[2]["usage"]["completion_tokens"] == 3
+
+
+def test_cohere_v2_error_class_preserves_status_and_message() -> None:
+    config: Final = CohereV2ChatConfig()
+
+    error: Final = config.get_error_class(
+        error_message="rate limit exceeded",
+        status_code=429,
+        headers={},
+    )
+
+    assert error.status_code == 429
+    assert error.message == "rate limit exceeded"
 
     def test_v2_map_max_completion_tokens_overrides_max_tokens(self):
         """max_completion_tokens maps to cohere max_tokens and overrides max_tokens, matching v1"""
@@ -202,7 +447,6 @@ async def test_cohere_request_body_with_allowed_params():
 
         # Get and parse the request body
         request_data = json.loads(mock_post.call_args.kwargs["data"])
-        print(f"request_data: {request_data}")
 
         # Validate request contains our specified parameters
         assert "allowed_openai_params" not in request_data
@@ -259,7 +503,6 @@ async def test_cohere_documents_options_in_request_body():
 
         # Get and parse the request body
         request_data = json.loads(mock_post.call_args.kwargs["data"])
-        print(f"Request body: {request_data}")
 
         # Validate that documents and citation_options are in the request body
         assert "documents" in request_data
