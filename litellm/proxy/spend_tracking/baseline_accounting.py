@@ -7,7 +7,7 @@ owners. Replaying these values in event order is independent of callback order.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import groupby
 from math import isfinite
 from types import MappingProxyType
@@ -15,11 +15,13 @@ from typing import Final, Literal
 
 from pydantic import ConfigDict, Field
 
+from litellm.litellm_core_utils.llm_cost_calc.utils import parse_prompt_tokens_details
 from litellm.llms.anthropic.prompt_cache_prediction import CountedBreakpoint, CountedPromptCachePlan
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import CacheCreationTokenDetails, PromptTokensDetailsWrapper, Usage
 
 MAX_CACHE_TTL: Final = 3600
+MAX_ESTIMATED_CACHE_TTL: Final = 86400
 MAX_CACHE_ENTRIES: Final = 1024
 
 
@@ -36,6 +38,10 @@ class BaselineObservation(LiteLLMBaseModel):
     plan: CountedPromptCachePlan | None = None
     minimum_cache_tokens: int = Field(default=0, ge=0)
     reason: str | None = None
+    cache_policy: Literal["anthropic", "estimated"] = "anthropic"
+    assumptions: tuple[str, ...] = ()
+    cache_write_pricing: Literal["duration", "standard"] = "duration"
+    cache_ttl_seconds: int | None = Field(default=None, ge=0, le=MAX_ESTIMATED_CACHE_TTL)
 
 
 @dataclass(frozen=True, slots=True)
@@ -65,9 +71,12 @@ class BaselineHistory:
     uncertain_before: float = 0.0
     entries: tuple[CacheEntry, ...] = ()
     blocked_until: float = 0.0
+    uncertain_until: float = 0.0
+    uncertain_ttl_seconds: int = 0
+    version: Literal[1, 2] = 1
 
 
-def _complete_usage(usage: Usage | None) -> bool:
+def _complete_usage(usage: Usage | None, policy: str = "anthropic") -> bool:
     if usage is None or usage.prompt_tokens < 0 or usage.completion_tokens < 0:
         return False
     details: Final = usage.prompt_tokens_details
@@ -78,6 +87,19 @@ def _complete_usage(usage: Usage | None) -> bool:
         return False
     split: Final = details.cache_creation_token_details if hasattr(details, "cache_creation_token_details") else None
     writes: Final = details.cache_creation_tokens or 0
+    modalities: Final = (details.audio_tokens or 0, details.image_tokens or 0, details.video_tokens or 0)
+    if policy == "estimated":
+        parsed: Final = parse_prompt_tokens_details(usage)
+        return (
+            usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
+            and min(modalities) >= 0
+            and sum(modalities) <= usage.prompt_tokens
+            and (details.cached_tokens or 0) + writes <= usage.prompt_tokens
+            and sum(parsed[key] for key in ("text_tokens", "audio_tokens", "image_tokens", "video_tokens"))
+            + (details.cached_tokens or 0)
+            + writes
+            == usage.prompt_tokens
+        )
     return (
         usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
         and sum(value or 0 for value in values) == usage.prompt_tokens
@@ -94,19 +116,25 @@ def _complete_usage(usage: Usage | None) -> bool:
     )
 
 
-def _valid_plan(plan: CountedPromptCachePlan | None) -> bool:
+def _valid_plan(observation: BaselineObservation) -> bool:
+    plan: Final = observation.plan
     if plan is None or plan.total_tokens < 0 or len(plan.breakpoints) > 4:
         return False
+    standard: Final = observation.cache_policy == "estimated" and observation.cache_write_pricing == "standard"
     return all(
         marker.fingerprint
         and marker.content_fingerprint
         and marker.fingerprint in marker.lookback_fingerprints
         and marker.content_fingerprint in marker.lookback_content_fingerprints
-        and marker.ttl_seconds in (300, 3600)
+        and (
+            0 < marker.ttl_seconds <= MAX_ESTIMATED_CACHE_TTL
+            if observation.cache_policy == "estimated"
+            else marker.ttl_seconds in (300, 3600)
+        )
         and 0 <= marker.prefix_tokens <= plan.total_tokens
         for marker in plan.breakpoints
     ) and all(
-        left.prefix_tokens <= right.prefix_tokens and left.ttl_seconds >= right.ttl_seconds
+        left.prefix_tokens <= right.prefix_tokens and (standard or left.ttl_seconds >= right.ttl_seconds)
         for left, right in zip(plan.breakpoints, plan.breakpoints[1:])
     )
 
@@ -143,10 +171,12 @@ def _ambiguous(entry: CacheEntry, markers: tuple[CountedBreakpoint, ...], starte
     )
 
 
-def _usage_with_cache(usage: Usage, total: int, read: int, write_5m: int, write_1h: int) -> Usage:
-    writes: Final = write_5m + write_1h
+def _usage_with_cache(
+    usage: Usage, total: int, read: int, write_5m: int, write_1h: int, *, generic_writes: int | None = None
+) -> Usage:
+    writes: Final = write_5m + write_1h + (generic_writes or 0)
     original_details: Final = usage.prompt_tokens_details or PromptTokensDetailsWrapper()
-    details: Final = original_details.model_copy(
+    remapped: Final = original_details.model_copy(
         deep=True,
         update=MappingProxyType(
             {
@@ -157,7 +187,9 @@ def _usage_with_cache(usage: Usage, total: int, read: int, write_5m: int, write_
                 "cache_creation_token_details": CacheCreationTokenDetails(
                     ephemeral_5m_input_tokens=write_5m,
                     ephemeral_1h_input_tokens=write_1h,
-                ),
+                )
+                if generic_writes is None
+                else None,
             }
         ),
     )
@@ -166,7 +198,7 @@ def _usage_with_cache(usage: Usage, total: int, read: int, write_5m: int, write_
             **usage.model_dump(),
             "prompt_tokens": total,
             "total_tokens": total + usage.completion_tokens,
-            "prompt_tokens_details": details,
+            "prompt_tokens_details": remapped,
             "cache_read_input_tokens": read,
             "cache_creation_input_tokens": writes,
         },
@@ -174,7 +206,7 @@ def _usage_with_cache(usage: Usage, total: int, read: int, write_5m: int, write_
 
 
 def _estimate(history: BaselineHistory, observation: BaselineObservation, equivalent: bool) -> BaselineEstimate:
-    if observation.outcome != "complete" or not _complete_usage(observation.usage):
+    if observation.outcome != "complete" or not _complete_usage(observation.usage, observation.cache_policy):
         return BaselineEstimate(observation.request_id, observation.reason or observation.outcome)
     usage: Final = observation.usage
     if usage is None:
@@ -186,9 +218,11 @@ def _estimate(history: BaselineHistory, observation: BaselineObservation, equiva
     if observation.started_at < history.blocked_until:
         return BaselineEstimate(observation.request_id, "concurrent_uncertainty")
     plan: Final = observation.plan
-    if not _valid_plan(plan) or plan is None:
+    if not _valid_plan(observation) or plan is None:
         return BaselineEstimate(observation.request_id, observation.reason or "unsupported_cache_plan")
     markers: Final = _markers(observation)
+    if markers and observation.started_at < history.uncertain_until:
+        return BaselineEstimate(observation.request_id, "history_unavailable")
     if any(_ambiguous(entry, markers, observation.started_at) for entry in history.entries):
         return BaselineEstimate(observation.request_id, "cache_ttl_changed")
     read: Final = max(
@@ -200,10 +234,14 @@ def _estimate(history: BaselineHistory, observation: BaselineObservation, equiva
         default=0,
     )
     end: Final = markers[-1].prefix_tokens if markers else 0
-    if read < end and observation.started_at < history.uncertain_before + max(marker.ttl_seconds for marker in markers):
+    if (
+        read < end
+        and history.uncertain_before > 0
+        and observation.started_at < history.uncertain_before + max(marker.ttl_seconds for marker in markers)
+    ):
         return BaselineEstimate(observation.request_id, "history_unavailable")
     one_hour: Final = max(
-        (marker.prefix_tokens for marker in markers if marker.ttl_seconds == 3600 and marker.prefix_tokens > read),
+        (marker.prefix_tokens for marker in markers if marker.ttl_seconds >= 3600 and marker.prefix_tokens > read),
         default=read,
     )
     expired: Final = any(
@@ -226,7 +264,9 @@ def _estimate(history: BaselineHistory, observation: BaselineObservation, equiva
         observation.request_id,
         reason,
         "modeled",
-        _usage_with_cache(usage, plan.total_tokens, read, end - one_hour, one_hour - read),
+        _usage_with_cache(usage, plan.total_tokens, read, 0, 0, generic_writes=end - read)
+        if observation.cache_write_pricing == "standard"
+        else _usage_with_cache(usage, plan.total_tokens, read, end - one_hour, one_hour - read),
     )
 
 
@@ -234,8 +274,9 @@ def _writes(history: BaselineHistory, observation: BaselineObservation) -> tuple
     if (
         observation.outcome != "complete"
         or observation.started_at < history.blocked_until
-        or not _complete_usage(observation.usage)
-        or not _valid_plan(observation.plan)
+        or observation.started_at < history.uncertain_until
+        or not _complete_usage(observation.usage, observation.cache_policy)
+        or not _valid_plan(observation)
     ):
         return ()
     markers: Final = _markers(observation)
@@ -274,7 +315,7 @@ def _writes(history: BaselineHistory, observation: BaselineObservation) -> tuple
                 marker.fingerprint,
                 marker.content_fingerprint,
                 marker.prefix_tokens,
-                marker.ttl_seconds,
+                max((marker.ttl_seconds, *(entry.ttl_seconds for entry in ambiguous))),
                 observation.available_at,
                 observation.started_at + max((marker.ttl_seconds, *(entry.ttl_seconds for entry in ambiguous))),
                 uncertain=bool(ambiguous),
@@ -327,15 +368,57 @@ def advance_baseline_history(
     if not valid_order:
         return history, tuple(BaselineEstimate(item.request_id, "invalid_observation_order") for item in simultaneous)
     first: Final = started if history.first_at is None else history.first_at
-    uncertain: Final = max(history.uncertain_before, first)
-    relevant: Final = tuple(item for item in simultaneous if item.outcome != "response_cache")
-    equivalent: Final = history.equivalent and all(item.baseline_equivalent for item in relevant)
-    before: Final = BaselineHistory(
-        first, history.last_at, equivalent, uncertain, history.entries, history.blocked_until
+    uncertain: Final = (
+        history.uncertain_before
+        if all(item.cache_policy == "estimated" for item in simultaneous)
+        else max(history.uncertain_before, first)
+    )
+    skipped: Final = tuple(
+        item
+        for item in simultaneous
+        if item.outcome != "response_cache" and item.cache_policy == "estimated" and item.plan is None
+    )
+    relevant: Final = tuple(item for item in simultaneous if item.outcome != "response_cache" and item not in skipped)
+    equivalent: Final = history.equivalent and all(
+        item.baseline_equivalent for item in simultaneous if item.outcome != "response_cache"
+    )
+    legacy_lifetime: Final = (
+        MAX_ESTIMATED_CACHE_TTL
+        if history.version == 1
+        and (
+            history.uncertain_before > (history.first_at or 0)
+            or history.uncertain_before > 0
+            and not history.entries
+            or history.blocked_until > 0
+            or any(entry.uncertain for entry in history.entries)
+        )
+        else 0
+    )
+    legacy_until: Final = (
+        max(
+            (
+                history.uncertain_before,
+                history.last_at or 0,
+                history.blocked_until,
+                *(entry.available_at for entry in history.entries),
+            )
+        )
+        + legacy_lifetime
+        if legacy_lifetime
+        else 0
+    )
+    before: Final = replace(
+        history,
+        first_at=first,
+        equivalent=equivalent,
+        uncertain_before=uncertain,
+        uncertain_until=max(history.uncertain_until, legacy_until),
+        uncertain_ttl_seconds=max(history.uncertain_ttl_seconds, legacy_lifetime),
     )
     estimates: Final = tuple(_estimate(before, item, equivalent) for item in simultaneous)
     invalidated: Final = any(
-        item.outcome != "complete" or not _complete_usage(item.usage) or not _valid_plan(item.plan) for item in relevant
+        item.outcome != "complete" or not _complete_usage(item.usage, item.cache_policy) or not _valid_plan(item)
+        for item in relevant
     )
     blocked: Final = max((history.blocked_until, *(item.available_at for item in relevant if invalidated)))
     entries: Final = _compact_entries(
@@ -343,11 +426,35 @@ def advance_baseline_history(
         started,
     )
     overflow: Final = len(entries) > MAX_CACHE_ENTRIES
+    active: Final = started < before.uncertain_until
+    unknown: Final = tuple(
+        item
+        for item in simultaneous
+        if item.outcome != "response_cache"
+        and (invalidated or overflow or item in skipped or active and bool(_markers(item)))
+    )
+    lifetime: Final = max(
+        (
+            before.uncertain_ttl_seconds if active else 0,
+            *(entry.ttl_seconds for entry in history.entries if unknown and entry.expires_at > started),
+            *(
+                item.cache_ttl_seconds
+                if item.cache_ttl_seconds is not None
+                else MAX_ESTIMATED_CACHE_TTL
+                if item.cache_policy == "estimated"
+                else MAX_CACHE_TTL
+                for item in unknown
+            ),
+        )
+    )
     return BaselineHistory(
         first_at=first,
         last_at=started,
         equivalent=equivalent,
-        uncertain_before=max(started, blocked) if invalidated or overflow else uncertain,
+        uncertain_before=uncertain,
         entries=() if overflow else entries,
         blocked_until=blocked,
+        uncertain_until=max((before.uncertain_until, *(item.available_at + lifetime for item in unknown))),
+        uncertain_ttl_seconds=lifetime,
+        version=2,
     ), estimates

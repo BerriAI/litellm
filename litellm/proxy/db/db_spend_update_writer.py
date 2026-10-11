@@ -870,7 +870,15 @@ class DBSpendUpdateWriter:
             router_name=captured.router_name,
             baseline_model=captured.baseline_model,
             observation=captured.observation.model_copy(update=MappingProxyType({"request_id": payload["request_id"]})),
-            pricing=baseline_cost_snapshot(captured.model, captured.prices, payload["spend"], breakdown, decision),
+            pricing=baseline_cost_snapshot(
+                captured.model,
+                captured.prices,
+                payload["spend"],
+                breakdown,
+                decision,
+                captured.provider,
+                captured.actual_token_cost,
+            ),
             turn=turn,
             daily=daily,
         )

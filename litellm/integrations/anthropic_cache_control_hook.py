@@ -260,7 +260,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return request_mapping.get(key)
 
     @staticmethod
-    def _request_user_agent(request_kwargs: object) -> str | None:
+    def request_user_agent(request_kwargs: object) -> str | None:
         proxy_server_request: Final = AnthropicCacheControlHook._request_value(request_kwargs, "proxy_server_request")
         proxy_server_request_mapping: Final = _validated_object_mapping(proxy_server_request)
         if proxy_server_request_mapping is None:
@@ -872,7 +872,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
             return []
 
         if is_claude_code_one_shot_subagent_request(
-            messages, system, tools, AnthropicCacheControlHook._request_user_agent(request_kwargs)
+            messages, system, tools, AnthropicCacheControlHook.request_user_agent(request_kwargs)
         ):
             return []
 

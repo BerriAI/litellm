@@ -108,6 +108,35 @@ async def _user_sessions(db: Prisma, record: BaselineAccountingRecord) -> dict[s
     return {str(row["user_id"]): row for row in rows}
 
 
+async def test_skipped_lifetime_survives_checkpoints_without_changing_spend(
+    db: Prisma, record: Callable[..., BaselineAccountingRecord],
+) -> None:
+    store: Final = _store(db)
+    marker: Final = CountedBreakpoint("prefix:300", 300, 6000, ("prefix:300",), "content", ("content",))
+    for label, started, skipped, expected in (
+        ("cold", 10000.0, False, "cache_prefix_cold"),
+        ("skipped", 10002.0, True, "unsupported_cache_plan"),
+        ("shorter", 10400.0, False, "history_unavailable"),
+        ("expired", 14001.0, False, "cache_prefix_expired"),
+    ):
+        original: Final = record(label, started, identical=False)
+        item: Final = original.model_copy(update={"observation": original.observation.model_copy(update={
+            "cache_policy": "estimated", "cache_ttl_seconds": 3600 if skipped else 300,
+            "plan": None if skipped else CountedPromptCachePlan(6200, (marker,)),
+        })})
+        await _log(db, item)
+        assert await store.append(item) == "recorded"
+        assert await store.project(item.scope) == "published"
+        rows: Final = await db.query_raw(
+            'SELECT spend, metadata FROM "LiteLLM_SpendLogs" WHERE request_id=$1', item.observation.request_id,
+        )
+        assert rows[0]["spend"] == 0.17
+        assert rows[0]["metadata"]["autorouter_savings_estimate"]["reason"] == expected
+    session: Final = await _session(db, item)
+    assert session["turns"] == 4 and session["spend"] == 0.68
+    assert session["savings_estimated_turns"] == 2
+
+
 async def test_late_replay_updates_all_projections_without_rebilling(db: Prisma, record: Callable[..., BaselineAccountingRecord]) -> None:
     store: Final = _store(db)
     late: Final = record("late", 10001.0, user_id="late-user")

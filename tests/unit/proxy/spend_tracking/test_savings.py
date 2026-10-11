@@ -14,7 +14,7 @@ from litellm.proxy.spend_tracking.savings import (
     prompt_caching_savings_for_request,
 )
 from litellm.router import Router
-from litellm.types.utils import Usage
+from litellm.types.utils import ModelInfo, Usage
 
 pytestmark = pytest.mark.usefixtures("local_model_cost_map")
 
@@ -1374,3 +1374,32 @@ def test_modeled_baseline_uses_recorded_prices_and_preserves_other_actual_charge
     assert result.savings == pytest.approx(-0.09)
     assert price_baseline_comparison(snapshot.model_copy(update={"prices": None}), usage, "modeled") is None
     assert marks_gateway_injection({"litellm_gateway_injected_cache": True}, "dep-a") is False
+
+
+@pytest.mark.parametrize("read_rate", (None, 0.001))
+@pytest.mark.parametrize("write_rate", (None, 0.017))
+def test_observed_modalities_survive_fallback_from_missing_cache_prices(
+    read_rate: float | None, write_rate: float | None,
+) -> None:
+    usage: Final = Usage(
+        prompt_tokens=8000, completion_tokens=20, total_tokens=8020,
+        prompt_tokens_details={
+            "text_tokens": 2500, "audio_tokens": 2000, "image_tokens": 1000, "video_tokens": 500,
+            "cached_tokens": 2000, "cache_creation_tokens": 2000,
+            "cached_tokens_details": {"audio_tokens": 800, "image_tokens": 300, "text_tokens": 900},
+        },
+    )
+    prices: Final[ModelInfo] = {
+        **litellm.get_model_info("gpt-6-astra", "openai"),
+        "input_cost_per_token": 0.01, "output_cost_per_token": 0.03,
+        "cache_read_input_token_cost": read_rate, "cache_read_input_audio_token_cost": 0.002,
+        "cache_creation_input_token_cost": write_rate,
+        "input_cost_per_audio_token": 0.02, "input_cost_per_image_token": 0.03, "input_cost_per_video_token": 0.04,
+    }
+    normalized: Final = _baseline_usage(usage, prices)
+    costs: Final = generic_cost_per_token("gpt-6-astra", normalized, "openai", model_info=prices)
+    ordinary: Final = 1600 * 0.01 + 1200 * 0.02 + 700 * 0.03 + 500 * 0.04
+    cached: Final = 900 * 0.01 + 800 * 0.02 + 300 * 0.03 if read_rate is None else 1200 * read_rate + 800 * 0.002
+    written: Final = 2000 * (0.01 if write_rate is None else write_rate)
+    assert sum(costs) == pytest.approx(ordinary + cached + written + 20 * 0.03)
+    assert usage.prompt_tokens_details.cached_tokens_details.audio_tokens == 800
