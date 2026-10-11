@@ -28,10 +28,12 @@ const {
 }));
 
 vi.mock("../networking", () => ({
-  modelInfoCall: vi.fn().mockResolvedValue({ data: [
-    { model_name: "decision-one", litellm_params: { model: "typesafe/jev-latest" } },
-    { model_name: "decision-two", litellm_params: { model: "typesafe/jev-latest" } },
-  ] }),
+  modelInfoCall: vi.fn().mockResolvedValue({
+    data: [
+      { model_name: "decision-one", litellm_params: { model: "typesafe/jev-latest" } },
+      { model_name: "decision-two", litellm_params: { model: "typesafe/jev-latest" } },
+    ],
+  }),
   apiClient: { post: vi.fn().mockResolvedValue({ allowances: [], error: null }) },
   modelPatchUpdateCall,
   modelAvailableCall,
