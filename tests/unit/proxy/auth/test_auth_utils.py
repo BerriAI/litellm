@@ -4,7 +4,7 @@ Unit tests for auth_utils functions related to rate limiting and customer ID ext
 
 import base64
 import logging
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,8 +16,6 @@ from litellm.proxy.auth.auth_utils import (
     abbreviate_api_key,
     check_complete_credentials,
     custom_auth_common_checks_warning,
-    log_once_if_budget_reservation_disabled,
-    warn_once_if_custom_auth_skips_common_checks,
     get_end_user_id_from_request_body,
     get_key_mcp_rpm_limit,
     get_key_model_rpm_limit,
@@ -29,6 +27,8 @@ from litellm.proxy.auth.auth_utils import (
     get_project_model_tpm_limit,
     get_request_route_template,
     is_request_body_safe,
+    log_once_if_budget_reservation_disabled,
+    warn_once_if_custom_auth_skips_common_checks,
 )
 
 

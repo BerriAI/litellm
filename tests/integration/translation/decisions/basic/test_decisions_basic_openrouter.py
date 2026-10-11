@@ -3,8 +3,8 @@ from integration._support.client import Gateway
 from integration._support.provider import SharedProvider
 from integration.translation.case import TranslationTestCase
 from integration.translation.decisions.bases.openrouter import (
-    TYPESAFE_JEV_1_13_TEST_CASE,
     TYPESAFE_JEV_1_13_SYSTEMONE_TEST_CASE,
+    TYPESAFE_JEV_1_13_TEST_CASE,
 )
 from integration.translation.runner import assert_translation
 
