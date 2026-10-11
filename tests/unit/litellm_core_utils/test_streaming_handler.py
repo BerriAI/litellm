@@ -6417,3 +6417,64 @@ def validate_last_format(chunk):
         assert isinstance(
             choice["finish_reason"], str
         ), "'finish_reason' should be a string."
+
+
+class TestCloseFlushesAbandonedStream:
+    """A stream abandoned before its final chunk must still emit its terminal
+    success log when closed (issue #45736): tracing, spend and custom
+    callbacks otherwise silently miss the call."""
+
+    def _wrapper_with_chunk(self) -> CustomStreamWrapper:
+        wrapper = CustomStreamWrapper(
+            completion_stream=None,
+            model="gpt-4o-mini",
+            logging_obj=MagicMock(),
+            custom_llm_provider=None,
+        )
+        wrapper.sent_last_chunk = False
+        wrapper.chunks.append(ModelResponseStream(id="c1", choices=[]))
+        return wrapper
+
+    def test_close_flushes_terminal_log_for_abandoned_stream(self):
+        wrapper = self._wrapper_with_chunk()
+        with patch.object(wrapper, "run_success_logging_and_cache_storage") as run_logging:
+            wrapper.close()
+
+        run_logging.assert_called_once()
+        assembled = wrapper.logging_obj.model_call_details["async_complete_streaming_response"]
+        assert assembled is not None
+
+    def test_close_is_noop_after_natural_completion(self):
+        wrapper = self._wrapper_with_chunk()
+        wrapper.sent_last_chunk = True
+        with patch.object(wrapper, "run_success_logging_and_cache_storage") as run_logging:
+            wrapper.close()
+
+        run_logging.assert_not_called()
+
+    def test_double_close_flushes_only_once(self):
+        wrapper = self._wrapper_with_chunk()
+        with patch.object(wrapper, "run_success_logging_and_cache_storage") as run_logging:
+            wrapper.close()
+            wrapper.close()
+
+        run_logging.assert_called_once()
+
+    def test_context_manager_exit_flushes(self):
+        wrapper = self._wrapper_with_chunk()
+        with patch.object(wrapper, "run_success_logging_and_cache_storage") as run_logging:
+            with wrapper:
+                pass
+
+        run_logging.assert_called_once()
+
+    def test_close_releases_underlying_stream(self):
+        wrapper = self._wrapper_with_chunk()
+        wrapper.logging_obj.async_success_handler = AsyncMock()
+        stream = MagicMock()
+        wrapper.completion_stream = stream
+
+        wrapper.close()
+
+        stream.close.assert_called_once()
+        assert wrapper.completion_stream is None
