@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from datetime import datetime, timezone
 from importlib.resources import files
@@ -7,6 +8,8 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+import litellm
 
 
 from fastapi import FastAPI
@@ -1601,6 +1604,10 @@ async def test_get_whats_new_serves_bundled_list_without_fetching_when_no_url_is
 
     assert served == _load_bundled_whats_new()
     assert len(served.launches) > 0
+
+
+def test_whats_new_url_defaults_to_unset_so_only_the_env_var_opts_into_a_remote_list() -> None:
+    assert litellm.whats_new_url == os.getenv("LITELLM_WHATS_NEW_URL")
 
 
 @pytest.mark.asyncio
