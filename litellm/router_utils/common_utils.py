@@ -136,7 +136,8 @@ def format_fallback_outcome_message(
     fallback_failure_detail: str,
 ) -> str:
     """User-facing explanation appended when the fallback orchestrator gives up and re-raises the primary error."""
-    lead: Final = f"\n\nLiteLLM: model group '{model_group}' failed with the error above."
+    shown_model_group: Final = truncate_fallback_error_detail(model_group) if model_group is not None else None
+    lead: Final = f"\n\nLiteLLM: model group '{shown_model_group}' failed with the error above."
     if not fallback_model_group:
         return f"{lead} No fallback was attempted."
     targets: Final = ", ".join(str(mask_sensitive_structure(target)) for target in fallback_model_group)
