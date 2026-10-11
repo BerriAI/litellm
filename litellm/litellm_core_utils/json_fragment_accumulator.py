@@ -50,7 +50,7 @@ class JSONFragmentAccumulator:
         unconsumed: Final = self._buffer[self._offset :]
         self._buffer = unconsumed + "".join(self._chunks)
         self._offset = 0
-        self._chunks = []  # mutable-ok: see __init__
+        self._chunks = []
 
     def pop_next_value(self) -> tuple[bool, object]:
         """
@@ -88,7 +88,7 @@ class JSONFragmentAccumulator:
 
     def set(self, value: str) -> None:
         """Replace the buffer's contents with a single fragment."""
-        self._chunks = []  # mutable-ok: see __init__
+        self._chunks = []
         self._buffer = value
         self._offset = 0
         stripped: Final = value.rstrip()

@@ -3,6 +3,7 @@ import json
 import logging
 import os
 import time
+from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
@@ -230,6 +231,13 @@ def test_oidc_circleci_success(monkeypatch):
     assert result == "circleci_token"
 
 
+def test_oidc_circleci_v2_returns_the_environment_token(monkeypatch: pytest.MonkeyPatch) -> None:
+    token: Final = "circleci-v2-token"
+    monkeypatch.setenv("CIRCLE_OIDC_TOKEN_V2", token)
+
+    assert get_secret("oidc/circleci_v2/test-audience") == token
+
+
 def test_oidc_circleci_failure(monkeypatch):
     monkeypatch.delenv("CIRCLE_OIDC_TOKEN", raising=False)
     secret_name = "oidc/circleci/test-audience"
@@ -431,3 +439,38 @@ def test_secret_manager_would_be_consulted_is_false_without_a_client(monkeypatch
     monkeypatch.setattr(litellm, "secret_manager_client", None)
 
     assert secret_manager_would_be_consulted("os.environ/ANY_NAME") is False
+
+
+class _FixedValueSecretManager(CustomSecretManager):
+    def __init__(self, value):
+        self.value = value
+
+    def sync_read_secret(self, secret_name, optional_params=None, timeout=None):
+        return self.value
+
+    async def async_read_secret(self, secret_name, optional_params=None, timeout=None):
+        return self.value
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        ("True", True),
+        ("False", False),
+        ("1", "1"),
+        ("[True]", "[True]"),
+        ("'True'", "'True'"),
+        ("sk-not-a-literal", "sk-not-a-literal"),
+        ("", ""),
+    ],
+)
+def test_get_secret_turns_only_boolean_literals_from_the_secret_manager_into_bools(monkeypatch, stored, expected):
+    monkeypatch.setattr(litellm, "secret_manager_client", _FixedValueSecretManager(stored))
+    monkeypatch.setattr(litellm, "_key_management_system", KeyManagementSystem.CUSTOM)
+    monkeypatch.setattr(litellm, "_key_management_settings", KeyManagementSettings(access_mode="read_only"))
+    monkeypatch.delenv("STORED_FLAG", raising=False)
+
+    secret = get_secret("os.environ/STORED_FLAG")
+
+    assert secret == expected
+    assert type(secret) is type(expected)

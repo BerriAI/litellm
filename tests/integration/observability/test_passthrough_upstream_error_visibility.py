@@ -223,6 +223,57 @@ def test_gemini_passthrough_streaming_200_relays_every_chunk(gateway: Gateway, t
             assert not _upstream_warnings(owned.log), owned.log.read_text()[-2000:]
 
 
+def test_gemini_streaming_passthrough_request_tags_reach_spend_log(gateway: Gateway, tmp_path: Path) -> None:
+    expected_body: Final = {"contents": [{"role": "user", "parts": [{"text": "hi"}]}]}
+    chunks: Final = (
+        b'data: {"candidates":[{"content":{"parts":[{"text":"hello"}],"role":"model"},"index":0}]}\n\n',
+        b'data: {"candidates":[{"finishReason":"STOP","index":0}],"usageMetadata":{"promptTokenCount":1,"candidatesTokenCount":1,"totalTokenCount":2}}\n\n',
+    )
+
+    def respond(request: Request) -> Reply:
+        assert request.method == "POST", request
+        assert request.target.split("?", 1)[0] == "/v1beta/models/claude-nope-9:streamGenerateContent", request
+        assert json.loads(request.body) == expected_body, request
+        return Reply(status=200, chunks=chunks, content_type="text/event-stream")
+
+    config_path: Final = tmp_path / "gemini-stream-tags.yaml"
+    with wire_server(respond) as wire:
+        _gemini_config(config_path, wire.url)
+        with owned_proxy_process(gateway, tmp_path, {}, config=config_path, workers=2) as owned:
+            candidate: Final = owned.gateway
+            with candidate.client.stream(
+                "POST",
+                _GEMINI_STREAM_PATH,
+                params={"alt": "sse"},
+                json=expected_body,
+                headers={**_gemini_headers(candidate), "tags": "gemini-js-sdk,pass-through-endpoint"},
+            ) as response:
+                assert response.status_code == 200
+                streamed: Final = response.read()
+                call_id: Final = response.headers["x-litellm-call-id"]
+            assert streamed == b"".join(chunks)
+
+            rows: Final = eventually(
+                lambda: read_rows(
+                    'SELECT request_tags, call_type, status FROM "LiteLLM_SpendLogs" WHERE request_id=%s',
+                    (call_id,),
+                ),
+                lambda values: len(values) == 1,
+                seconds=70,
+            )
+            row: Final = rows[0]
+            raw_tags: Final = row["request_tags"]
+            request_tags: Final = json.loads(raw_tags) if isinstance(raw_tags, str) else raw_tags
+            policy_tags: Final = [
+                tag
+                for tag in request_tags
+                if not (isinstance(tag, str) and tag.startswith("User-Agent: "))
+            ]
+            assert policy_tags == ["gemini-js-sdk", "pass-through-endpoint"], row
+            assert row["call_type"] == "pass_through_endpoint", row
+            assert row["status"] == "success", row
+
+
 def test_config_pass_through_route_logs_body_and_strips_query(gateway: Gateway, tmp_path: Path) -> None:
     upstream_error: Final = {"error": {"message": "max budget reached for this deployment"}}
 
@@ -238,6 +289,7 @@ def test_config_pass_through_route_logs_body_and_strips_query(gateway: Gateway, 
                 "target": f"{wire.url}/upstream?trace=secret-q",
                 "include_subpath": True,
                 "headers": {"Authorization": "Bearer scripted"},
+                "auth": True,
             }
         ]
         path.write_text(yaml.safe_dump(config))

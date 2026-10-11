@@ -3,7 +3,7 @@ Translates from OpenAI's `/v1/chat/completions` to Moonshot AI's `/v1/chat/compl
 """
 
 from collections.abc import Coroutine, Mapping
-from typing import Any, Final, Literal, cast, overload
+from typing import Final, Literal, cast, overload
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -29,7 +29,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
-    ) -> Coroutine[Any, Any, list[AllMessageValues]]: ...
+    ) -> Coroutine[object, object, list[AllMessageValues]]: ...
 
     @overload
     def _transform_messages(
@@ -41,7 +41,7 @@ class MoonshotChatConfig(OpenAIGPTConfig):
 
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: bool = False
-    ) -> list[AllMessageValues] | Coroutine[Any, Any, list[AllMessageValues]]:
+    ) -> list[AllMessageValues] | Coroutine[object, object, list[AllMessageValues]]:
         """
         Moonshot text-only models don't support content in list format.
         Multimodal models (kimi-k2.5, kimi-latest, etc.) accept the
@@ -73,6 +73,13 @@ class MoonshotChatConfig(OpenAIGPTConfig):
         api_base = api_base or get_secret_str("MOONSHOT_API_BASE") or "https://api.moonshot.ai/v1"
         dynamic_api_key: Final = api_key or get_secret_str("MOONSHOT_API_KEY")
         return api_base, dynamic_api_key
+
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
 
     def get_complete_url(
         self,

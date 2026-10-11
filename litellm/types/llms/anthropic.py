@@ -2,8 +2,10 @@ from collections.abc import Iterable, Sequence
 from enum import Enum
 from typing import Any, Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .openai import (
     ChatCompletionCachedContent,
@@ -639,12 +641,12 @@ class MessageStartBlock(TypedDict):
     message: MessageChunk
 
 
-class AnthropicResponseContentBlockText(BaseModel):
+class AnthropicResponseContentBlockText(LiteLLMBaseModel):
     type: Literal["text"]
     text: str
 
 
-class AnthropicResponseContentBlockToolUse(BaseModel):
+class AnthropicResponseContentBlockToolUse(LiteLLMBaseModel):
     type: Literal["tool_use"]
     id: str
     name: str
@@ -654,25 +656,25 @@ class AnthropicResponseContentBlockToolUse(BaseModel):
     model_config = ConfigDict(extra="allow")  # Allow provider_specific_fields
 
 
-class AnthropicResponseContentBlockThinking(BaseModel):
+class AnthropicResponseContentBlockThinking(LiteLLMBaseModel):
     type: Literal["thinking"]
     thinking: str
     signature: str | None
 
 
-class AnthropicResponseContentBlockRedactedThinking(BaseModel):
+class AnthropicResponseContentBlockRedactedThinking(LiteLLMBaseModel):
     type: Literal["redacted_thinking"]
     data: str
 
 
-class AnthropicResponseUsageBlock(BaseModel):
+class AnthropicResponseUsageBlock(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     input_tokens: int
     output_tokens: int
 
 
-class AnthropicOutputTokensDetails(BaseModel):
+class AnthropicOutputTokensDetails(LiteLLMBaseModel):
     model_config = ConfigDict(extra="allow")
 
     thinking_tokens: int | None = None
@@ -681,7 +683,7 @@ class AnthropicOutputTokensDetails(BaseModel):
 AnthropicFinishReason = Literal["end_turn", "max_tokens", "stop_sequence", "tool_use", "refusal"]
 
 
-class AnthropicResponse(BaseModel):
+class AnthropicResponse(LiteLLMBaseModel):
     id: str
     """Unique object identifier."""
 
@@ -777,11 +779,13 @@ ANTHROPIC_EFFORT_BETA_HEADER: Final = "effort-2025-11-24"
 ANTHROPIC_MID_CONVERSATION_OUTPUT_CONFIG_BETA_HEADER: Final = "mid-conversation-output-config-2026-07-01"
 
 ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER: Final = "thinking-display-updates-2026-08-18"
+ANTHROPIC_MID_CONVERSATION_TOOL_CHANGES_BETA_HEADER: Final = "mid-conversation-tool-changes-2026-07-01"
 
 ANTHROPIC_FINE_GRAINED_TOOL_STREAMING_BETA_HEADER: Final = "fine-grained-tool-streaming-2025-05-14"
 
 # OAuth constants
 ANTHROPIC_OAUTH_TOKEN_PREFIX: Final = "sk-ant-oat"
 ANTHROPIC_OAUTH_BETA_HEADER: Final = "oauth-2025-04-20"
+ANTHROPIC_TOKEN_EXCHANGE_PATH: Final = "/v1/oauth/token"
 
 ANTHROPIC_PROMPT_CACHING_SCOPE_BETA_HEADER: Final = "prompt-caching-scope-2026-01-05"

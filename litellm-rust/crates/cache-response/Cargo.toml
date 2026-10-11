@@ -21,4 +21,4 @@ redis = "1.7.0"
 redis-test = "1.0.4"
 rstest.workspace = true
 tokio.workspace = true
-wiremock = "0.6.5"
+wiremock.workspace = true

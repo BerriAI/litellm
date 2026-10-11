@@ -1,22 +1,21 @@
 import inspect
 from collections.abc import AsyncIterator, Awaitable, Callable, Coroutine, Iterator, Mapping
-from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm.exceptions import BadRequestError
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.anthropic.pass_through.messages import handler as main
 from litellm.rust_bridge.catalog import Route, RouteContext
-from litellm.rust_bridge.dispatch import PublicDispatch, call_hook
+from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.messages.entrypoints import (
     NATIVE_AMESSAGES,
     NATIVE_MESSAGES,
-    LiteLLMMessagesRequest,
 )
 from litellm.rust_bridge.public_call import (
+    NativeCall,
     bind,
-    optional_bool,
-    optional_mapping,
+    native_call,
+    native_call_hook,
     optional_sequence,
     optional_str,
     signature,
@@ -52,7 +51,7 @@ _AMESSAGES: Final = signature(_PYTHON_AMESSAGES)
 
 def _public_request(
     legacy: inspect.Signature, args: tuple[object, ...], kwargs: Mapping[str, object]
-) -> LiteLLMMessagesRequest | None:
+) -> NativeCall | None:
     fields: Final = bind(legacy, args, kwargs)
     if fields is None:
         return None
@@ -61,30 +60,30 @@ def _public_request(
     max_tokens: Final = fields.get("max_tokens")
     if not isinstance(model, str) or messages is None or not isinstance(max_tokens, int):
         return None
-    return LiteLLMMessagesRequest(
-        model=model,
-        messages=messages,
-        max_tokens=max_tokens,
-        stream=optional_bool(fields.get("stream")),
-        api_key=optional_str(fields.get("api_key")),
-        api_base=optional_str(fields.get("api_base")),
-        custom_llm_provider=optional_str(fields.get("custom_llm_provider")),
-        kwargs=optional_mapping(fields.get("kwargs")) or MappingProxyType({}),
-    )
+    return native_call(legacy, args, kwargs)
 
 
-def _resolved_provider(request: LiteLLMMessagesRequest) -> str | None:
+def _resolved_provider(request: NativeCall) -> str | None:
     try:
-        return get_llm_provider(request.model, request.custom_llm_provider)[1]
+        return get_llm_provider(
+            str(request.resolved["model"]), optional_str(request.resolved.get("custom_llm_provider"))
+        )[1]
     except BadRequestError:
-        return request.custom_llm_provider
+        return optional_str(request.resolved.get("custom_llm_provider"))
 
 
-def _context(request: LiteLLMMessagesRequest) -> RouteContext:
+def _python_serves(request: NativeCall) -> bool:
+    """Vertex AI serves only Claude through the Anthropic Messages config, as
+    ``get_provider_anthropic_messages_config`` does; every other Vertex model keeps Python's
+    translation through Chat Completions."""
+    return _resolved_provider(request) == "vertex_ai" and "claude" not in str(request.resolved["model"]).lower()
+
+
+def _context(request: NativeCall) -> RouteContext:
     return RouteContext(
         Route.MESSAGES,
         provider=_resolved_provider(request),
-        model=request.model,
+        model=str(request.resolved["model"]),
     )
 
 
@@ -92,13 +91,14 @@ _DISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_MESSAGES, args, kwargs),
     context=_context,
-    bypass=lambda request: request.kwargs.get("is_async") is True,
+    bypass=lambda request: request.kwargs.get("is_async") is True or _python_serves(request),
 )
 
 _ADISPATCH: Final = PublicDispatch(
     route=Route.MESSAGES,
     request=lambda args, kwargs: _public_request(_AMESSAGES, args, kwargs),
     context=_context,
+    bypass=_python_serves,
 )
 
 
@@ -112,7 +112,7 @@ def anthropic_messages_handler(
         kwargs,
         python=python,
         binding=NATIVE_MESSAGES,
-        native=call_hook,
+        native=native_call_hook,
     )
 
 
@@ -123,7 +123,7 @@ async def anthropic_messages(*args: object, **kwargs: object) -> MessagesResult:
         kwargs,
         python=python,
         binding=NATIVE_AMESSAGES,
-        native=call_hook,
+        native=native_call_hook,
     )
 
 

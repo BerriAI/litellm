@@ -6,7 +6,7 @@ from typing import Final
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
-from litellm.constants import PTU_SENTINEL_API_KEY
+from litellm.constants import PTU_SENTINEL_API_KEY, USAGE_TOP_API_KEYS_DEFAULT
 from tests.integration._support.client import Gateway, object_value
 from tests.integration._support.database import write_rows
 
@@ -43,57 +43,86 @@ def _row_id() -> str:
     return f"agg-{uuid.uuid4().hex}"
 
 
+def _ranked_key_rows(day: str, count: int) -> list[tuple[object, ...]]:
+    return [
+        (
+            _row_id(),
+            f"user-{i:03d}",
+            day,
+            f"key-{i:03d}",
+            "gpt-5",
+            "",
+            "openai",
+            None,
+            "/v1/chat/completions",
+            10,
+            6.0 if i == 4 else float(i + 1),
+            1,
+            1,
+        )
+        for i in range(count)
+    ]
+
+
 @pytest.mark.asyncio
-async def test_get_daily_activity_aggregated_returns_every_api_key(gateway: Gateway) -> None:
+async def test_get_daily_activity_aggregated_bounds_api_key_rollups(gateway: Gateway) -> None:
+    """key-004 and key-005 tie on spend exactly at the default api_key_limit cutoff; the api_key
+    tiebreaker keeps key-004 and drops key-005. The PTU sentinel outspends every key but takes no
+    slot. Dropped keys and the sentinel still count toward the totals and the model rollup."""
+    key_count: Final = USAGE_TOP_API_KEYS_DEFAULT + 5
     day: Final = _unique_day()
     _seed(
         day,
         [
-            *[
-                (
-                    _row_id(),
-                    f"user-{i:03d}",
-                    day,
-                    f"key-{i:03d}",
-                    "gpt-5",
-                    "",
-                    "openai",
-                    None,
-                    "/v1/chat/completions",
-                    10,
-                    6.0 if i == 4 else float(i + 1),
-                    1,
-                    1,
-                )
-                for i in range(105)
-            ],
+            *_ranked_key_rows(day, key_count),
             (_row_id(), None, day, PTU_SENTINEL_API_KEY, "gpt-5", "", "azure", None, None, 0, 1000.0, 0, 0),
         ],
     )
+    key_spend: Final = sum(6.0 if i == 4 else float(i + 1) for i in range(key_count))
     try:
         body: Final = _activity(gateway, day)
         metadata: Final = object_value(body["metadata"])
-        assert metadata["total_spend"] == pytest.approx(6566.0)
-        assert metadata["total_api_requests"] == 105
+        assert metadata["total_spend"] == pytest.approx(key_spend + 1000.0)
+        assert metadata["total_api_requests"] == key_count
+        assert metadata["total_api_keys"] == key_count
+        assert metadata["api_key_limit"] == USAGE_TOP_API_KEYS_DEFAULT
         results: Final = _RESULTS.validate_python(body["results"])
         assert len(results) == 1
         result_day: Final = object_value(results[0])
-        assert object_value(result_day["metrics"])["spend"] == pytest.approx(6566.0)
+        assert object_value(result_day["metrics"])["spend"] == pytest.approx(key_spend + 1000.0)
         breakdown: Final = object_value(result_day["breakdown"])
-        expected_api_keys: Final = {f"key-{i:03d}" for i in range(105)}
+        expected_top: Final = {f"key-{i:03d}" for i in range(6, key_count)} | {"key-004"}
         api_keys: Final = object_value(breakdown["api_keys"])
-        assert set(api_keys) == expected_api_keys
+        assert set(api_keys) == expected_top
+        assert object_value(object_value(api_keys["key-004"])["metrics"])["spend"] == 6.0
         assert PTU_SENTINEL_API_KEY not in api_keys
         models: Final = object_value(breakdown["models"])
         gpt5: Final = object_value(models["gpt-5"])
-        assert object_value(gpt5["metrics"])["spend"] == pytest.approx(6566.0)
-        assert set(object_value(gpt5["api_key_breakdown"])) == expected_api_keys
+        assert object_value(gpt5["metrics"])["spend"] == pytest.approx(key_spend + 1000.0)
+        assert set(object_value(gpt5["api_key_breakdown"])) == expected_top
         providers: Final = object_value(breakdown["providers"])
         openai: Final = object_value(providers["openai"])
-        assert object_value(openai["metrics"])["spend"] == pytest.approx(5566.0)
-        assert set(object_value(openai["api_key_breakdown"])) == expected_api_keys
+        assert object_value(openai["metrics"])["spend"] == pytest.approx(key_spend)
+        assert set(object_value(openai["api_key_breakdown"])) == expected_top
         endpoints: Final = object_value(breakdown["endpoints"])
-        assert object_value(object_value(endpoints["/v1/chat/completions"])["metrics"])["api_requests"] == 105
+        assert object_value(object_value(endpoints["/v1/chat/completions"])["metrics"])["api_requests"] == key_count
+    finally:
+        _clean(day)
+
+
+@pytest.mark.asyncio
+async def test_get_daily_activity_aggregated_reports_exact_limit_key_count_as_complete(gateway: Gateway) -> None:
+    """With exactly USAGE_TOP_API_KEYS_DEFAULT keys nothing is dropped and total_api_keys equals the limit."""
+    day: Final = _unique_day()
+    _seed(day, _ranked_key_rows(day, USAGE_TOP_API_KEYS_DEFAULT))
+    try:
+        body: Final = _activity(gateway, day)
+        metadata: Final = object_value(body["metadata"])
+        assert metadata["total_api_keys"] == USAGE_TOP_API_KEYS_DEFAULT
+        assert metadata["api_key_limit"] == USAGE_TOP_API_KEYS_DEFAULT
+        results: Final = _RESULTS.validate_python(body["results"])
+        api_keys: Final = object_value(object_value(object_value(results[0])["breakdown"])["api_keys"])
+        assert set(api_keys) == {f"key-{i:03d}" for i in range(USAGE_TOP_API_KEYS_DEFAULT)}
     finally:
         _clean(day)
 
@@ -126,7 +155,9 @@ async def test_get_daily_activity_aggregated_explicit_api_key_filter_scopes_resu
     )
     try:
         body: Final = _activity(gateway, day, api_key="key-1")
-        assert object_value(body["metadata"])["total_spend"] == 2.0
+        metadata: Final = object_value(body["metadata"])
+        assert metadata["total_spend"] == 2.0
+        assert metadata["total_api_keys"] == 1
         results: Final = _RESULTS.validate_python(body["results"])
         assert len(results) == 1
         breakdown: Final = object_value(object_value(results[0])["breakdown"])
