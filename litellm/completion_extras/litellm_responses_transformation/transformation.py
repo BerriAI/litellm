@@ -883,6 +883,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     summary_raw=item.summary,
                 )
                 pending_reasoning_items = (*pending_reasoning_items, built_reasoning_item)
+                # ``reasoning_content`` deliberately keeps its pre-existing meaning —
+                # the summary text of the most recent reasoning item — even though
+                # ``reasoning_items`` now carries all of them. Widening it to join
+                # every item's summary would change what every existing consumer of
+                # ``reasoning_content`` sees, which is a different fix from "stop
+                # dropping reasoning items" and belongs in its own change.
                 reasoning_content = " ".join(s["text"] for s in built_reasoning_item["summary"] if s.get("text"))
 
             elif isinstance(item, ResponseOutputMessage):
