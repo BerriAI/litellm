@@ -21,3 +21,9 @@ main-edit-timeout-after.png shows Advanced settings then Classifier tuning expan
 main-edit-legacy-before.png and main-edit-legacy-after.png show a legacy direct Jev router in edit, which keeps its provider controls on both sides
 
 main-template-reset-after.png shows Start from scratch clearing the tiers and returning to Heuristics
+
+## Main final tip replay
+
+Candidate tip: ed8ccb4dbf0263cc64cd0d1bd3a92bf8193c4f5c, which differs from 36b18fa2e07f57a1d72a0bda39cf31b45e96875a only by Prettier formatting in add_auto_router_tab.integration.test.tsx. Baseline is unchanged at bea0d5cb331015e629bf01bcbdb5b745c958057b, so main-populated-before.png remains the paired baseline capture on the same data
+
+main-tip-ed8ccb4-create-after.png and main-tip-ed8ccb4-edit-after.png were captured at this tip with a source label in the page corner. They show the creation modal and the reopened deployment-backed router with jev-decider-2 selected
