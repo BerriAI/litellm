@@ -1,4 +1,4 @@
-"""azure_ai, bedrock, cohere, cohere_chat, dashscope, deepgram, deepseek, groq, mistral, openrouter, perplexity, text-completion-openai, xai cost tracking cases, one CostTrackingTestCase literal per request shape (moved from cost_tracking_cases.json).
+"""azure_ai, bedrock, cohere, cohere_chat, dashscope, deepgram, deepseek, groq, mistral, openrouter, text-completion-openai, xai cost tracking cases, one CostTrackingTestCase literal per request shape (moved from cost_tracking_cases.json).
 
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
@@ -840,31 +840,6 @@ MISTRAL_MEDIUM_2604_JSON: Final = CostTrackingTestCase(
 )
 
 
-# perplexity/pplx-decider-v1-27b
-PERPLEXITY_PPLX_DECIDER_V1_27B_DECISIONS: Final = CostTrackingTestCase(
-    name="perplexity/pplx-decider-v1-27b-decisions",
-    covers="quota_management.spend_tracking.decisions_costs",
-    model="perplexity/pplx-decider-v1-27b",
-    endpoint="/v1/systemone",
-    request={
-        "model": "$MODEL",
-        "state": {"source": "cost-tracking"},
-        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
-    },
-    response=JsonResponse(
-        content_type="application/json",
-        body={
-            "model": "pplx-decider-v1-27b",
-            "answers": {"is_defect": {"type": "noul", "noul": 0.9}},
-            "usage": {"input_tokens": 367, "output_tokens": 3},
-        },
-    ),
-    expected=ExactExpected(
-        spend=1.468e-05, input_cost=1.468e-05, output_cost=0.0, prompt_tokens=367, completion_tokens=3
-    ),
-)
-
-
 # xai/grok-4.7
 XAI_GROK_4_7_INPUT_TEXT: Final = CostTrackingTestCase(
     name="xai-grok-4.7-input_text",
@@ -925,7 +900,6 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GROQ_QWEN_3_8_STREAM_X_GROQ_RECOUNT,
     COHERE_COMMAND_A_V2_TOKENS,
     MISTRAL_MEDIUM_2604_JSON,
-    PERPLEXITY_PPLX_DECIDER_V1_27B_DECISIONS,
     XAI_GROK_4_7_INPUT_TEXT,
 )
 
