@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
+import { parseAsString, useQueryStates } from "nuqs";
 import { useQueryClient } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -39,6 +40,8 @@ type ModelTabSlug =
   | "price-data";
 
 const BASE_TAB_KEY = "all-models";
+
+const TAB_URL_PARAMS = { tab: parseAsString, provider: parseAsString, litellm_model: parseAsString };
 
 const TAB_LABELS: Record<ModelTabSlug, string> = {
   add: "Add Model",
@@ -87,7 +90,7 @@ export default function ModelsAndEndpointsPage() {
   const { modelId, teamId, close } = useModelDetailRouting();
   const { availableModelAccessGroups, allModelsOnProxy } = useModelDashboardData();
 
-  const [activeKey, setActiveKey] = useState<string>(BASE_TAB_KEY);
+  const [{ tab: requestedTab }, setTabParams] = useQueryStates(TAB_URL_PARAMS);
   const [lastRefreshed, setLastRefreshed] = useState("");
 
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
@@ -123,6 +126,13 @@ export default function ModelsAndEndpointsPage() {
     ],
     [canCreate, canViewAutoRouters, isAdmin, isInternalUser, isViewOnly],
   );
+
+  const visibleKeys: readonly string[] = visibleSlugs.map((slug) => slug || BASE_TAB_KEY);
+  const activeKey = requestedTab !== null && visibleKeys.includes(requestedTab) ? requestedTab : BASE_TAB_KEY;
+
+  const handleTabChange = (key: string) => {
+    void setTabParams({ tab: key === BASE_TAB_KEY ? null : key, provider: null, litellm_model: null });
+  };
 
   const allModelsLabel = isAdmin ? "Deployed Models" : "Your Models";
   const tabLabel = (slug: "" | ModelTabSlug): React.ReactNode => {
@@ -192,7 +202,7 @@ export default function ModelsAndEndpointsPage() {
             modelAccessGroups={availableModelAccessGroups}
           />
         ) : (
-          <Tabs value={activeKey} onValueChange={setActiveKey}>
+          <Tabs value={activeKey} onValueChange={handleTabChange}>
             <div className="flex min-w-0 flex-nowrap items-center gap-3 border-b">
               <div className="no-scrollbar scroll-fade-e -mb-1.5 min-w-0 flex-1 overflow-x-auto pb-1.5">
                 <TabsList variant="line" className="w-max justify-start">

@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { act } from "@testing-library/react";
 import type { MCPServerData } from "./MCPHubTableColumns";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { renderWithProviders, screen, waitFor } from "../../../tests/test-utils";
+import { renderWithProviders, screen, testQueryClient, waitFor, within } from "../../../tests/test-utils";
 import ModelHubTable from "./ModelHubTable";
 
 const mockUseUISettings = vi.hoisted(() => vi.fn());
@@ -24,7 +24,15 @@ vi.mock("@/components/networking", () => ({
   makeMCPPublicCall: vi.fn(),
   getUiSettings: vi.fn(),
   getClaudeCodePluginsList: vi.fn(() => Promise.resolve({ plugins: [] })),
+  modelCostMap: vi.fn(() => Promise.resolve({})),
 }));
+
+const GARDEN_COST_MAP = {
+  "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+  "typesafe/decisions/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+  "cloudflare/clef": { litellm_provider: "cloudflare", mode: "evaluation" },
+  "claude-opus-4-8": { litellm_provider: "anthropic", mode: "chat" },
+};
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -72,6 +80,7 @@ describe("ModelHubTable", () => {
       writable: true,
     });
     vi.clearAllMocks();
+    testQueryClient.clear();
   });
 
   // Reusable helper function to setup mocks for auth redirect tests
@@ -286,6 +295,108 @@ describe("ModelHubTable", () => {
 
       expect(dialog).toHaveTextContent("client.chat.completions.create(");
       expect(screen.queryByRole("link", { name: "How to call decision models" })).not.toBeInTheDocument();
+    });
+  });
+
+  describe("decision model garden", () => {
+    const renderHub = async (
+      models: { model_group: string; providers: string[]; mode: string }[],
+      userRole = "Admin",
+    ) => {
+      vi.mocked(networking.modelHubCall).mockResolvedValue({ data: models });
+      vi.mocked(networking.modelCostMap).mockResolvedValue(GARDEN_COST_MAP);
+      vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
+      vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [] });
+      vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
+      vi.mocked(networking.getUiSettings).mockResolvedValue({ values: {} });
+      mockUseUISettings.mockReturnValue({ data: { values: {} }, isLoading: false });
+      const user = userEvent.setup();
+      renderWithProviders(
+        <ModelHubTable
+          accessToken="test-token"
+          publicPage={false}
+          premiumUser={false}
+          userRole={userRole}
+          canOpenPlayground
+        />,
+      );
+      await screen.findByText(/Showing \d+ of \d+ models/);
+      return { user, modeSelect: () => screen.getByDisplayValue("All Modes") };
+    };
+
+    const chatOnly = [{ model_group: "claude-opus-4-8", providers: ["anthropic"], mode: "chat" }];
+
+    it("lists the decision models from the cost map when the proxy has none configured", async () => {
+      await renderHub(chatOnly);
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      expect(garden).toHaveTextContent("2 decision models across 2 providers");
+      expect(within(garden).getByTestId("decision-model-card-typesafe/jev-latest")).toHaveTextContent("TypeSafe");
+      expect(within(garden).getByTestId("decision-model-card-cloudflare/clef")).toHaveTextContent("Cloudflare");
+      expect(within(garden).queryByTestId("decision-model-card-typesafe/decisions/jev-latest")).not.toBeInTheDocument();
+      expect(within(garden).queryByText("claude-opus-4-8")).not.toBeInTheDocument();
+    });
+
+    it("links each card to the decisions docs and to Add Model prefilled with that provider and model", async () => {
+      await renderHub(chatOnly);
+
+      const card = within(await screen.findByTestId("decision-model-garden")).getByTestId(
+        "decision-model-card-typesafe/jev-latest",
+      );
+      expect(within(card).getByRole("link", { name: "/v1/decisions docs" })).toHaveAttribute(
+        "href",
+        "https://docs.litellm.ai/docs/decisions",
+      );
+      expect(within(card).getByRole("link", { name: "Add model" })).toHaveAttribute(
+        "href",
+        expect.stringMatching(/\/models-and-endpoints\?tab=add&provider=typesafe&litellm_model=typesafe%2Fjev-latest$/),
+      );
+    });
+
+    it("offers a decisions mode option that keeps the garden and hides the chat rows", async () => {
+      const { user, modeSelect } = await renderHub(chatOnly);
+      await screen.findByTestId("decision-model-garden");
+
+      expect(within(modeSelect()).queryByRole("option", { name: "evaluation" })).not.toBeInTheDocument();
+      await user.selectOptions(modeSelect(), "decisions");
+
+      expect(screen.getByTestId("decision-model-garden")).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "claude-opus-4-8" })).not.toBeInTheDocument();
+      expect(screen.getByText("Showing 0 of 1 models")).toBeInTheDocument();
+    });
+
+    it("hides the garden while a non-decision mode is selected", async () => {
+      const { user, modeSelect } = await renderHub(chatOnly);
+      await screen.findByTestId("decision-model-garden");
+
+      await user.selectOptions(modeSelect(), "chat");
+      expect(screen.queryByTestId("decision-model-garden")).not.toBeInTheDocument();
+
+      await user.click(screen.getByRole("button", { name: "Clear Filters" }));
+      expect(await screen.findByTestId("decision-model-garden")).toBeInTheDocument();
+    });
+
+    it("labels a configured evaluation model as decisions in the table and under the decisions filter", async () => {
+      const { user, modeSelect } = await renderHub([
+        ...chatOnly,
+        { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
+      ]);
+
+      const row = screen.getByRole("button", { name: "jev-latest" }).closest("tr");
+      expect(row).toHaveTextContent("decisions");
+      expect(row).not.toHaveTextContent("evaluation");
+
+      await user.selectOptions(modeSelect(), "decisions");
+      expect(screen.getByText("Showing 1 of 2 models")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "jev-latest" })).toBeInTheDocument();
+    });
+
+    it("drops the Add Model link for a session that cannot add models", async () => {
+      await renderHub(chatOnly, "Admin Viewer");
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      expect(within(garden).queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
+      expect(within(garden).getAllByRole("link", { name: "/v1/decisions docs" })).toHaveLength(2);
     });
   });
 

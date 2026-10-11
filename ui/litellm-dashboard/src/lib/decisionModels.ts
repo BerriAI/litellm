@@ -25,8 +25,16 @@ export interface DecisionCatalog {
 
 export const EMPTY_DECISION_CATALOG: DecisionCatalog = { models: new Set(), providers: new Map() };
 
+export const DECISIONS_MODE_LABEL = "decisions";
+export const DECISION_MODE_VALUES: readonly string[] = ["evaluation", DECISIONS_MODE_LABEL];
+
 export const isDecisionMode = (mode: string | null | undefined): boolean =>
-  mode === "decisions" || mode === "evaluation";
+  mode !== null && mode !== undefined && DECISION_MODE_VALUES.includes(mode);
+
+export const displayMode = (mode: string): string => (isDecisionMode(mode) ? DECISIONS_MODE_LABEL : mode);
+
+export const expandModeFilterValues = (modes: readonly string[]): readonly string[] =>
+  modes.flatMap((mode) => (mode === DECISIONS_MODE_LABEL ? DECISION_MODE_VALUES : [mode]));
 
 const isDecisionEntry = (entry: CostMapEntry): boolean =>
   isDecisionMode(entry.mode) || (entry.supported_endpoints ?? []).some((endpoint) => DECISION_ENDPOINTS.has(endpoint));
@@ -54,6 +62,19 @@ export function buildDecisionCatalog(costMap: unknown): DecisionCatalog {
   );
   return { models: new Set(decisionEntries.map(([key]) => key)), providers };
 }
+
+export interface DecisionGardenModel {
+  readonly model: string;
+  readonly provider: string;
+}
+
+const isHiddenBillingRow = (key: string): boolean => key.includes("/decisions/");
+
+export const buildDecisionGarden = (costMap: unknown): readonly DecisionGardenModel[] =>
+  parsedEntries(costMap)
+    .filter(([key, entry]) => isDecisionMode(entry.mode) && !isHiddenBillingRow(key))
+    .map(([key, entry]) => ({ model: key, provider: entry.litellm_provider }))
+    .sort((a, b) => a.provider.localeCompare(b.provider) || a.model.localeCompare(b.model));
 
 export const isDecisionSelection = (
   catalog: DecisionCatalog,

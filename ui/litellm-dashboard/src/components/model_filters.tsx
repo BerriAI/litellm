@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Card } from "@/components/ui/card";
+import { displayMode } from "@/lib/decisionModels";
 import { matchesSearchTerm } from "@/utils/searchUtils";
 
 interface ModelGroupInfo {
@@ -25,6 +26,8 @@ interface ModelFiltersProps {
   onFilteredDataChange: (filteredData: ModelGroupInfo[]) => void;
   showFiltersCard?: boolean;
   className?: string;
+  extraModes?: readonly string[];
+  onModeChange?: (mode: string) => void;
 }
 
 const ModelFilters: React.FC<ModelFiltersProps> = ({
@@ -32,6 +35,8 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   onFilteredDataChange,
   showFiltersCard = true,
   className = "",
+  extraModes = [],
+  onModeChange,
 }) => {
   const [searchTerm, setSearchTerm] = useState<string>("");
   const [selectedProvider, setSelectedProvider] = useState<string>("");
@@ -49,11 +54,16 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   };
 
   const getUniqueModes = (data: ModelGroupInfo[]) => {
-    const modes = new Set<string>();
+    const modes = new Set<string>(extraModes);
     data.forEach((model) => {
-      if (model.mode) modes.add(model.mode);
+      if (model.mode) modes.add(displayMode(model.mode));
     });
     return Array.from(modes);
+  };
+
+  const changeMode = (mode: string) => {
+    setSelectedMode(mode);
+    onModeChange?.(mode);
   };
 
   const getUniqueFeatures = (data: ModelGroupInfo[]) => {
@@ -79,7 +89,8 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
       modelHubData?.filter((model) => {
         const matchesSearch = matchesSearchTerm(searchTerm, [model.model_group]);
         const matchesProvider = selectedProvider === "" || model.providers.includes(selectedProvider);
-        const matchesMode = selectedMode === "" || model.mode === selectedMode;
+        const matchesMode =
+          selectedMode === "" || (model.mode !== undefined && displayMode(model.mode) === selectedMode);
 
         // Check if model has the selected feature
         const matchesFeature =
@@ -117,7 +128,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   const resetFilters = () => {
     setSearchTerm("");
     setSelectedProvider("");
-    setSelectedMode("");
+    changeMode("");
     setSelectedFeature("");
   };
 
@@ -157,7 +168,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
         <p className="text-sm font-medium mb-2">Mode:</p>
         <select
           value={selectedMode}
-          onChange={(e) => setSelectedMode(e.target.value)}
+          onChange={(e) => changeMode(e.target.value)}
           className="border rounded-sm px-3 py-2 text-sm text-muted-foreground w-32 h-10"
         >
           <option value="" className="text-sm text-muted-foreground">

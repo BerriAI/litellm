@@ -140,9 +140,9 @@ const baseModelInfo = { access_groups: undefined, mode: undefined };
 
 const { api_base: _omitted, ...ALWAYS_MOUNTED_WITHOUT_API_BASE } = alwaysMounted;
 
-const setup = async () => {
+const setup = async (searchParams?: string) => {
   const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
-  renderWithProviders(<AddModelPanel />);
+  renderWithProviders(<AddModelPanel />, { searchParams });
   await screen.findByText("Provider");
 
   const openAdvanced = async () => {
@@ -593,5 +593,66 @@ describe("AddModelPanel decision models", () => {
     const note = await screen.findByRole("note", { name: "Decision model notice" });
     expect(note).toHaveTextContent("/v1/decisions");
     expect(note).not.toHaveTextContent("/chat/completions");
+  });
+});
+
+describe("AddModelPanel prefill from the URL", () => {
+  const COST_MAP = {
+    "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+    "gpt-4o-2024-08-06": { litellm_provider: "openai", mode: "chat" },
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockUseModelCostMap.mockReturnValue({ data: COST_MAP });
+    mockPtuEnabled.mockReturnValue(false);
+    mockAuthorized.mockReturnValue(PROXY_ADMIN);
+  });
+
+  it("preselects the provider and model named in the URL and submits that model", async () => {
+    const { submit } = await setup("?provider=typesafe&litellm_model=typesafe%2Fjev-latest");
+
+    await waitFor(() => expect(screen.getByRole("combobox", { name: /provider/i })).toHaveValue("TypeSafe"));
+    expect(screen.getByRole("combobox", { name: "Select models" })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("typesafe/jev-latest")).toBeInTheDocument();
+    expect(await screen.findByRole("note", { name: "Decision model notice" })).toBeInTheDocument();
+
+    await submit();
+
+    expect(lastCreatedModel()).toStrictEqual({
+      model_name: "typesafe/jev-latest",
+      litellm_params: { api_key: undefined, custom_llm_provider: "typesafe", model: "typesafe/jev-latest" },
+      model_info: { ...baseModelInfo },
+    });
+  });
+
+  it("leaves the form on its defaults when the provider slug matches no provider, model included", async () => {
+    const { submitExpectingRejection } = await setup("?provider=unknownslug&litellm_model=typesafe%2Fjev-latest");
+
+    expect(screen.getByRole("combobox", { name: /provider/i })).toHaveValue("");
+    expect(screen.queryByDisplayValue("typesafe/jev-latest")).not.toBeInTheDocument();
+
+    await submitExpectingRejection("Required");
+
+    expect(modelCreateCall).not.toHaveBeenCalled();
+  });
+
+  it("keeps a provider the user picks after the prefill instead of re-applying the URL", async () => {
+    const { user, submit } = await setup("?provider=typesafe&litellm_model=typesafe%2Fjev-latest");
+    await waitFor(() => expect(screen.getByRole("combobox", { name: /provider/i })).toHaveValue("TypeSafe"));
+
+    const provider = screen.getByRole("combobox", { name: /provider/i });
+    await user.clear(provider);
+    await user.type(provider, "OpenAI");
+    await user.click(await screen.findByRole("option", { name: /OpenAI/ }));
+    await user.click(await screen.findByPlaceholderText("Select models"));
+    await user.click(await screen.findByText("gpt-4o-2024-08-06"));
+    await submit();
+
+    expect(lastCreatedModel()).toStrictEqual({
+      model_name: "gpt-4o-2024-08-06",
+      litellm_params: { ...alwaysMounted, model: "gpt-4o-2024-08-06" },
+      model_info: { ...baseModelInfo },
+    });
   });
 });

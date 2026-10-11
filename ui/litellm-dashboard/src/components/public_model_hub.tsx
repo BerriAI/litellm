@@ -49,6 +49,7 @@ import { generateCodeSnippet } from "@/components/chat_ui/CodeSnippets";
 import { getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 import { MessageType } from "@/components/chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
+import { displayMode } from "@/lib/decisionModels";
 import { filterBySearchTerm, rankBySearchRelevance } from "@/utils/searchUtils";
 
 interface PublicModelHubProps {
@@ -267,7 +268,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
 
   const models = usePublicModelHubList(proxyConfigured);
   const modelFacets = usePublicModelHubFacets(proxyConfigured);
-  const modeOptions = useMemo(() => modelFacets.modes.map((mode) => ({ label: mode, value: mode })), [modelFacets]);
+  const modeOptions = useMemo(
+    () => [...new Set(modelFacets.modes.map(displayMode))].map((mode) => ({ label: mode, value: mode })),
+    [modelFacets],
+  );
   const featureOptions = useMemo(
     () => modelFacets.features.map((feature) => ({ label: featureLabel(feature), value: feature })),
     [modelFacets],
@@ -687,7 +691,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       </div>
                       <div>
                         <p className="font-medium">Mode:</p>
-                        <p>{selectedModel.mode || "Not specified"}</p>
+                        <p>{selectedModel.mode ? displayMode(selectedModel.mode) : "Not specified"}</p>
                       </div>
                       <div>
                         <p className="font-medium">Providers:</p>

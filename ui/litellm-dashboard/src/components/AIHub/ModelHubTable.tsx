@@ -44,7 +44,14 @@ import { checkTokenValidity } from "@/utils/jwtUtils";
 import { getCookie } from "@/utils/cookieUtils";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
 import { uiHref } from "@/utils/uiHref";
-import { DECISIONS_DOCS_URL, SYSTEM_ONE_PLAYGROUND_ROUTE, isDecisionMode } from "@/lib/decisionModels";
+import {
+  DECISIONS_DOCS_URL,
+  DECISIONS_MODE_LABEL,
+  SYSTEM_ONE_PLAYGROUND_ROUTE,
+  displayMode,
+  isDecisionMode,
+} from "@/lib/decisionModels";
+import DecisionModelGarden from "@/components/AIHub/DecisionModelGarden";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -88,6 +95,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [selectedModel, setSelectedModel] = useState<null | ModelHubData>(null);
   const [filteredData, setFilteredData] = useState<ModelHubData[]>([]);
+  const [selectedMode, setSelectedMode] = useState<string>("");
+  const showDecisionGarden = !publicPage && (selectedMode === "" || selectedMode === DECISIONS_MODE_LABEL);
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
   // Agent Hub state
   const [agentHubData, setAgentHubData] = useState<AgentHubData[] | null>(null);
@@ -479,7 +488,12 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   )}
 
                   {/* Filters */}
-                  <ModelFilters modelHubData={modelHubData || []} onFilteredDataChange={handleFilteredDataChange} />
+                  <ModelFilters
+                    modelHubData={modelHubData || []}
+                    onFilteredDataChange={handleFilteredDataChange}
+                    extraModes={publicPage ? [] : [DECISIONS_MODE_LABEL]}
+                    onModeChange={setSelectedMode}
+                  />
 
                   {/* Model Table */}
                   <DataTable
@@ -511,6 +525,8 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                     Showing {filteredData.length} of {modelHubData?.length || 0} models
                   </p>
                 </div>
+
+                {showDecisionGarden && <DecisionModelGarden canAddModels={canModify} />}
               </TabsContent>
 
               {/* Agent Hub Tab */}
@@ -672,7 +688,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   </div>
                   <div>
                     <p className="font-medium">Mode:</p>
-                    <p>{selectedModel.mode || "Not specified"}</p>
+                    <p>{selectedModel.mode ? displayMode(selectedModel.mode) : "Not specified"}</p>
                   </div>
                   <div>
                     <p className="font-medium">Providers:</p>
