@@ -72,7 +72,6 @@ async def test_generic_api_callback():
         user="test_user",
     )
 
-    # Wait for this test's event to reach the queue, then flush it
     await _wait_for_events_and_flush(generic_logger, 1)
 
     # Assert httpx post was called
@@ -431,25 +430,18 @@ async def test_generic_api_callback_sumologic_uses_ndjson():
 
 @pytest.mark.asyncio
 async def test_generic_api_callback_sends_queued_events_on_its_own(monkeypatch: pytest.MonkeyPatch):
-    """
-    Test that GenericAPILogger's periodic flush sends queued events without an explicit flush.
-    """
-    # Create a mock for the async_httpx_client's post method
     mock_post = AsyncMock()
     mock_post.return_value.status_code = 200
     mock_post.return_value.text = "OK"
 
-    # Set up an endpoint for testing
     test_endpoint = "https://example.com/api/logs"
     test_headers = {"Authorization": "Bearer test_token"}
     monkeypatch.setenv("GENERIC_LOGGER_ENDPOINT", test_endpoint)
 
-    # Short flush interval so periodic_flush fires during the test
     generic_logger = GenericAPILogger(endpoint=test_endpoint, headers=test_headers, flush_interval=0.05)
     generic_logger.async_httpx_client.post = mock_post
     monkeypatch.setattr(litellm, "callbacks", [generic_logger])
 
-    # Make multiple completion calls
     for i in range(3):
         await litellm.acompletion(
             model="gpt-5.5",
@@ -462,7 +454,6 @@ async def test_generic_api_callback_sends_queued_events_on_its_own(monkeypatch: 
         while sum(len(json.loads(call.kwargs["data"])) for call in mock_post.call_args_list) < 3:
             await asyncio.sleep(0.01)
 
-    # Wait for the periodic flush to post all 3 events; never call flush_queue ourselves
     await asyncio.wait_for(_poll(), timeout=10)
 
     posted_bodies: Final = [json.loads(call.kwargs["data"]) for call in mock_post.call_args_list]
