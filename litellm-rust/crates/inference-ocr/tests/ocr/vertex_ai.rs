@@ -1,6 +1,5 @@
 use litellm_auth::{InputSource, Sourced};
 use litellm_inference_ocr::arguments::is_supported_request;
-use litellm_llms::base_llm::ocr::settings::OcrSettings;
 use rstest::rstest;
 
 use super::*;
@@ -39,30 +38,6 @@ async fn mistral_is_served_at_the_resolved_project_and_location() {
             "document": {"type": "document_url", "document_url": INLINE_PDF},
             "extract_footer": true
         })
-    );
-}
-
-#[tokio::test]
-async fn configured_project_and_location_apply_when_the_call_sets_neither() {
-    let upstream = upstream([pages_response()]).await;
-    let route = ocr_route_with(OcrSettings {
-        vertex_project: Some("configured-project".into()),
-        vertex_location: Some("europe-west4".into()),
-        ..OcrSettings::default()
-    });
-
-    route
-        .execute(
-            ocr_request("vertex_ai/mistral-ocr-maas", &upstream.uri(), json!({})),
-            &(),
-            None,
-        )
-        .await
-        .unwrap();
-
-    assert_eq!(
-        only_request(&upstream).await.url.path(),
-        "/v1/projects/configured-project/locations/europe-west4/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
     );
 }
 

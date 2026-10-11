@@ -20,10 +20,9 @@ pub struct MessagesResponse {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rstest::rstest;
     use serde_json::json;
-
-    use super::*;
 
     fn response(
         stop_reason: Option<&str>,
