@@ -4,6 +4,8 @@ import uuid
 from pathlib import Path
 from typing import Final
 
+import pytest
+
 import httpx
 from _azure_storage_support import (
     SINK_HOSTS,
@@ -174,6 +176,7 @@ def test_killing_one_worker_keeps_the_other_serving_and_uploading(gateway: Gatew
             )
 
 
+@pytest.mark.timeout(180)
 def test_restarting_the_proxy_before_the_queue_flushes_bounds_the_loss_to_the_unflushed_queue_and_recovers(
     gateway: Gateway, tmp_path: Path
 ) -> None:
