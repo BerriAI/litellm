@@ -1415,8 +1415,12 @@ class ResetBudgetJob:
         new_value: Final = await ResetBudgetJob._window_carried_spend(window, counter_key, spend_counter_cache)
         spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=new_value)
         if spend_counter_cache.redis_cache is not None:
+            from litellm.proxy.proxy_server import spend_counter_redis_ttl
+
             try:
-                await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=new_value)
+                await spend_counter_cache.redis_cache.async_set_cache(
+                    key=counter_key, value=new_value, ttl=spend_counter_redis_ttl()
+                )
             except Exception as redis_err:
                 verbose_proxy_logger.warning("Failed to reset Redis counter %s: %s", counter_key, redis_err)
         budget_duration: Final = window["budget_duration"]

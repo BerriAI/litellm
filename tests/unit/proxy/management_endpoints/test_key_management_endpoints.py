@@ -95,7 +95,7 @@ from litellm.proxy.management_endpoints.key_management_endpoints import (
     validate_key_list_check,
     validate_key_team_change,
 )
-from litellm.proxy.proxy_server import app
+from litellm.proxy.proxy_server import app, spend_counter_redis_ttl
 from litellm.types.proxy.management_endpoints.key_management_endpoints import (
     BulkUpdateKeyRequest,
     BulkUpdateKeyResponse,
@@ -8449,7 +8449,7 @@ async def test_reset_key_spend_resets_budget_windows(monkeypatch):
         key=window_counter_key, value=0.0, ttl=60
     )
     mock_spend_counter_cache.redis_cache.async_set_cache.assert_any_call(
-        key=window_counter_key, value=0.0, ttl=60
+        key=window_counter_key, value=0.0, ttl=spend_counter_redis_ttl()
     )
     mock_spend_counter_cache.in_memory_cache.set_cache.assert_any_call(
         key=f"spend_db_floor:{window_counter_key}", value=0.0, ttl=5
@@ -8658,7 +8658,7 @@ async def test_update_key_spend_updates_counter(monkeypatch):
             key=f"spend:key:{hashed_key}", value=0.0, ttl=60
         )
         mock_spend_counter_cache.redis_cache.async_set_cache.assert_awaited_once_with(
-            key=f"spend:key:{hashed_key}", value=0.0, ttl=60
+            key=f"spend:key:{hashed_key}", value=0.0, ttl=spend_counter_redis_ttl()
         )
 
 

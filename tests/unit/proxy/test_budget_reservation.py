@@ -2347,6 +2347,9 @@ class _ExpiringRedisCache:
         self.refresh_count = 0
         self.fail_first_refresh = fail_first_refresh
 
+    def _expiry(self, ttl: object) -> float:
+        return time.monotonic() + (float(ttl) if isinstance(ttl, (int, float)) else self.default_ttl)
+
     def _evict_expired(self, key: str) -> None:
         if self.expires_at.get(key, float("inf")) <= time.monotonic():
             self.store.pop(key, None)
@@ -2359,18 +2362,18 @@ class _ExpiringRedisCache:
     async def async_increment(self, key: str, value: float, **kwargs: object) -> float:
         self._evict_expired(key)
         self.store[key] = self.store.get(key, 0.0) + float(value)
-        self.expires_at[key] = time.monotonic() + self.default_ttl
+        self.expires_at[key] = self._expiry(kwargs.get("ttl"))
         return self.store[key]
 
     async def async_set_max(self, key: str, value: float, **kwargs: object) -> float:
         self._evict_expired(key)
         self.store[key] = max(self.store.get(key, float("-inf")), float(value))
-        self.expires_at[key] = time.monotonic() + self.default_ttl
+        self.expires_at[key] = self._expiry(kwargs.get("ttl"))
         return self.store[key]
 
     async def async_set_cache(self, key: str, value: float, *args: object, **kwargs: object) -> bool:
         self.store[key] = float(value)
-        self.expires_at[key] = time.monotonic() + self.default_ttl
+        self.expires_at[key] = self._expiry(kwargs.get("ttl"))
         return True
 
     async def async_delete_cache(self, key: str, *args: object, **kwargs: object) -> None:
@@ -2385,13 +2388,15 @@ class _ExpiringRedisCache:
         if key not in self.store:
             return False
         self.refresh_count += 1
-        self.expires_at[key] = time.monotonic() + (ttl if ttl is not None else self.default_ttl)
+        self.expires_at[key] = self._expiry(ttl)
         return True
 
     async def async_increment_pipeline(
         self, increment_list: Sequence[RedisPipelineIncrementOperation], **kwargs: object
     ) -> list[float]:
-        return [await self.async_increment(op["key"], op["increment_value"]) for op in increment_list]
+        return [
+            await self.async_increment(op["key"], op["increment_value"], ttl=op.get("ttl")) for op in increment_list
+        ]
 
     def get_ttl(self, **kwargs: object) -> int | None:
         return int(self.default_ttl)
@@ -2400,11 +2405,13 @@ class _ExpiringRedisCache:
 @pytest.mark.asyncio
 async def test_reservation_survives_redis_counter_ttl_while_request_in_flight(
     spend_counter_state,
+    monkeypatch,
 ):
     """A request that runs longer than the counter TTL must keep its reservation in Redis
     (so a concurrent request on any worker still sees it), and renewal must stop once the
     reservation is reconciled so an idle counter still expires on its own."""
     counter_cache, key_cache = spend_counter_state
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_redis_ttl", lambda: 0.2)
     redis_cache = _ExpiringRedisCache(default_ttl=0.2)
     counter_cache.redis_cache = redis_cache
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
@@ -2432,10 +2439,12 @@ async def test_reservation_survives_redis_counter_ttl_while_request_in_flight(
 @pytest.mark.asyncio
 async def test_reservation_lease_keeps_renewing_after_transient_redis_failure(
     spend_counter_state,
+    monkeypatch,
 ):
     """One failed EXPIRE (Redis blip, open circuit breaker) must not end renewal for the
     rest of the request."""
     counter_cache, key_cache = spend_counter_state
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_redis_ttl", lambda: 0.2)
     redis_cache = _ExpiringRedisCache(default_ttl=0.2, fail_first_refresh=True)
     counter_cache.redis_cache = redis_cache
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)
@@ -2452,11 +2461,13 @@ async def test_reservation_lease_keeps_renewing_after_transient_redis_failure(
 @pytest.mark.asyncio
 async def test_reservation_lease_stops_when_request_task_ends_without_reconciling(
     spend_counter_state,
+    monkeypatch,
 ):
     """A request whose task ends without reconciling (client disconnect path that skips the
     cost callbacks) must not keep renewing: the counter falls back to its plain TTL instead of
     pinning the reservation until the request timeout."""
     counter_cache, key_cache = spend_counter_state
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_redis_ttl", lambda: 0.2)
     redis_cache = _ExpiringRedisCache(default_ttl=0.2)
     counter_cache.redis_cache = redis_cache
     proxy_logging_obj = ProxyLogging(user_api_key_cache=key_cache)

@@ -3799,14 +3799,16 @@ async def update_key_fn(
         )
 
         if data.spend is not None:
-            from litellm.proxy.proxy_server import spend_counter_cache
+            from litellm.proxy.proxy_server import spend_counter_cache, spend_counter_redis_ttl
 
             counter_key: Final = f"spend:key:{hash_token_if_needed(key)}"
             spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=data.spend, ttl=60)
             if spend_counter_cache.redis_cache is not None:
                 try:
                     with service_target(SPEND_COUNTERS_TARGET):
-                        await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=data.spend, ttl=60)
+                        await spend_counter_cache.redis_cache.async_set_cache(
+                            key=counter_key, value=data.spend, ttl=spend_counter_redis_ttl()
+                        )
                 except Exception as redis_err:
                     verbose_proxy_logger.warning(
                         "Failed to update spend counter %s in Redis after key spend update: %s. "
@@ -6350,12 +6352,18 @@ async def _set_spend_counter_with_floor_and_broadcast(counter_key: str, value: f
     Without the broadcast, a worker that already cached the pre-reset key object
     or floor marker keeps enforcing against it until its own TTL expires.
     """
-    from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
+    from litellm.proxy.proxy_server import (
+        SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
+        spend_counter_cache,
+        spend_counter_redis_ttl,
+    )
 
     spend_counter_cache.in_memory_cache.set_cache(key=counter_key, value=value, ttl=60)
     if spend_counter_cache.redis_cache is not None:
         try:
-            await spend_counter_cache.redis_cache.async_set_cache(key=counter_key, value=value, ttl=60)
+            await spend_counter_cache.redis_cache.async_set_cache(
+                key=counter_key, value=value, ttl=spend_counter_redis_ttl()
+            )
         except Exception as redis_err:
             verbose_proxy_logger.warning(
                 "Failed to update spend counter %s in Redis: %s. "

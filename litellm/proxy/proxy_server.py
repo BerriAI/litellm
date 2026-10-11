@@ -306,6 +306,7 @@ from litellm.constants import (
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
     SPEND_CAPTURE_RATE_CHECK_JOB_ID,
+    SPEND_COUNTER_REDIS_TTL_SECONDS,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
@@ -2914,6 +2915,16 @@ async def _drain_spend_event_producer_on_shutdown() -> None:
 # Bounds authoritative DB re-reads when enforcing a budget against a
 # stale-low spend counter: at most one DB read per counter per window.
 SPEND_DB_FLOOR_CACHE_TTL_SECONDS: Final = 5
+_SPEND_COUNTER_TTL_BATCH_WRITE_MULTIPLE: Final = 10
+
+
+def spend_counter_redis_ttl() -> int:
+    """Redis TTL for spend counters. A counter that expires before its spend is flushed to the DB reseeds from a
+    stale-low row and re-admits a key that is over budget, so it must outlive many batch-write intervals."""
+    batch_write_at: Final = (
+        proxy_batch_write_at if isinstance(proxy_batch_write_at, (int, float)) else PROXY_BATCH_WRITE_AT
+    )
+    return max(SPEND_COUNTER_REDIS_TTL_SECONDS, int(_SPEND_COUNTER_TTL_BATCH_WRITE_MULTIPLE * batch_write_at))
 
 
 def _fail_closed_budget_enforcement() -> bool:
@@ -3046,7 +3057,9 @@ async def _repair_stale_spend_counter(counter_key: str, db_spend: float) -> None
     if spend_counter_cache.redis_cache is not None:
         forget_spend_counter(counter_key)
         try:
-            repaired: Final = await spend_counter_cache.redis_cache.async_set_max(key=counter_key, value=db_spend)
+            repaired: Final = await spend_counter_cache.redis_cache.async_set_max(
+                key=counter_key, value=db_spend, ttl=spend_counter_redis_ttl()
+            )
         except Exception:
             verbose_proxy_logger.debug(
                 "Unable to repair stale spend counter %s in Redis",
@@ -3879,7 +3892,7 @@ async def refresh_spend_counter_ttl(counter_key: str) -> bool:
     if spend_counter_cache.redis_cache is None:
         return False
     try:
-        return await spend_counter_cache.redis_cache.async_refresh_ttl(key=counter_key)
+        return await spend_counter_cache.redis_cache.async_refresh_ttl(key=counter_key, ttl=spend_counter_redis_ttl())
     except Exception as e:
         verbose_proxy_logger.debug("spend counter TTL refresh skipped for %s: %s", counter_key, e)
         return False
@@ -3892,6 +3905,7 @@ async def increment_spend_counter_cache(counter_key: str, increment: float) -> f
             current_value: Final = await spend_counter_cache.redis_cache.async_increment(
                 key=counter_key,
                 value=increment,
+                ttl=spend_counter_redis_ttl(),
                 refresh_ttl=True,
             )
         except Exception:
@@ -3951,7 +3965,7 @@ def _defer_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) ->
     batch: Final = active_post_call_redis_batch(redis_cache)
     if batch is None:
         return False
-    ttl: Final = redis_cache.get_ttl()
+    ttl: Final = spend_counter_redis_ttl()
     with service_target(SPEND_COUNTERS_TARGET):
         for item in pending:
             batch.increment(item.counter_key, item.increment, ttl).on_settled(_settle_spend_counter_increment(item))
@@ -4005,7 +4019,7 @@ async def run_spend_counter_pipeline(pending: Sequence[PendingSpendIncrement]) -
                 for item in pending
             ]
         )
-    ttl: Final = redis_cache.get_ttl()
+    ttl: Final = spend_counter_redis_ttl()
     increment_list: Final = [
         RedisPipelineIncrementOperation(key=item.counter_key, increment_value=item.increment, ttl=ttl)
         for item in pending

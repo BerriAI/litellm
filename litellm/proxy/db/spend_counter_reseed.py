@@ -267,10 +267,13 @@ class SpendCounterReseed:
             current_value: float = float(db_spend)
             try:
                 if spend_counter_cache.redis_cache is not None:
+                    from litellm.proxy.proxy_server import spend_counter_redis_ttl
+
                     seeded: Final = await spend_counter_cache.redis_cache.async_set_cache(
                         key=counter_key,
                         value=db_spend,
                         nx=True,
+                        ttl=spend_counter_redis_ttl(),
                     )
                     if seeded:
                         current_value = float(db_spend)
@@ -462,10 +465,13 @@ class SpendCounterReseed:
                 return None
             try:
                 if spend_counter_cache.redis_cache is not None:
+                    from litellm.proxy.proxy_server import spend_counter_redis_ttl
+
                     seeded: Final = await spend_counter_cache.redis_cache.async_set_cache(
                         key=counter_key,
                         value=window_spend,
                         nx=True,
+                        ttl=spend_counter_redis_ttl(),
                     )
                     if seeded:
                         current_value = window_spend
@@ -475,6 +481,7 @@ class SpendCounterReseed:
                             current_value = await spend_counter_cache.redis_cache.async_increment(
                                 key=counter_key,
                                 value=window_spend,
+                                ttl=spend_counter_redis_ttl(),
                             )
                         else:
                             current_value = float(current_cached_value)

@@ -134,7 +134,9 @@ async def test_get_current_spend_floors_stale_low_counter_against_db(monkeypatch
     # the stale counter is repaired up to the authoritative DB value via a
     # monotonic set-max so other workers read the corrected total, and a
     # concurrent increment cannot be clobbered
-    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(key="spend:key:abc", value=12.0)
+    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
+        key="spend:key:abc", value=12.0, ttl=ps.spend_counter_redis_ttl()
+    )
 
 
 @pytest.mark.asyncio
@@ -282,7 +284,9 @@ async def test_get_current_spend_end_user_floor_repairs_a_stale_low_counter(monk
     )
 
     assert result == 12.0
-    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(key="spend:end_user:customer-42", value=12.0)
+    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
+        key="spend:end_user:customer-42", value=12.0, ttl=ps.spend_counter_redis_ttl()
+    )
 
 
 @pytest.mark.asyncio
@@ -326,7 +330,9 @@ async def test_get_current_spend_floors_window_against_spend_logs(monkeypatch):
 
     assert result == 15.0
     assert wfsl.await_count == 1
-    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(key=counter_key, value=15.0)
+    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
+        key=counter_key, value=15.0, ttl=ps.spend_counter_redis_ttl()
+    )
 
 
 def _make_window_spend_prisma(row=None, spend_logs_total=0.0):
@@ -367,7 +373,9 @@ async def test_get_current_spend_floors_window_against_maintained_row(monkeypatc
 
     assert result == 15.0
     fake_prisma.db.litellm_spendlogs.group_by.assert_not_awaited()
-    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(key=counter_key, value=15.0)
+    fake_cache.redis_cache.async_set_max.assert_awaited_once_with(
+        key=counter_key, value=15.0, ttl=ps.spend_counter_redis_ttl()
+    )
 
 
 @pytest.mark.asyncio
@@ -828,6 +836,32 @@ async def test_increment_spend_counters_pipelines_all_scopes_in_one_redis_call(
     assert all(op["increment_value"] == 0.5 for op in increment_list)
     for key in expected_keys:
         assert counter_cache.in_memory_cache.get_cache(key=key) == 1.5
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("batch_write_at", [60, 900])
+async def test_spend_counter_redis_ttl_outlives_db_batch_write_interval(monkeypatch, batch_write_at):
+    """A counter that expires before its buffered spend is written to the DB reseeds from a stale-low
+    row and re-admits an over-budget key, so every counter write must outlive the batch interval"""
+    counter_cache = ps.DualCache()
+    fake_redis = AsyncMock()
+    fake_redis.async_increment = AsyncMock(return_value=1.0)
+    fake_redis.async_increment_pipeline = AsyncMock(return_value=[1.0])
+    fake_redis.async_refresh_ttl = AsyncMock(return_value=True)
+    fake_redis.get_ttl = MagicMock(return_value=60)
+    fake_redis.default_ttl = 60
+    counter_cache.redis_cache = fake_redis
+    monkeypatch.setattr(ps, "spend_counter_cache", counter_cache)
+    monkeypatch.setattr(ps, "proxy_batch_write_at", batch_write_at)
+    max_flush_delay: Final = batch_write_at + 5
+
+    await ps.increment_spend_counter_cache(counter_key="spend:key:direct", increment=0.5)
+    await ps.run_spend_counter_pipeline((ps.PendingSpendIncrement(counter_key="spend:key:batched", increment=0.5),))
+    await ps.refresh_spend_counter_ttl(counter_key="spend:key:reserved")
+
+    assert fake_redis.async_increment.await_args.kwargs["ttl"] > max_flush_delay
+    assert fake_redis.async_increment_pipeline.await_args.kwargs["increment_list"][0]["ttl"] > max_flush_delay
+    assert fake_redis.async_refresh_ttl.await_args.kwargs["ttl"] > max_flush_delay
 
 
 @pytest.mark.asyncio
