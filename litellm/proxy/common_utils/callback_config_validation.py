@@ -256,10 +256,20 @@ def conflicting_callback_var_error(
             f"{variable_name} is already set to {stored!r} by another {callback_name} entry. "
             f"Every {callback_name} entry shares one value: remove that entry or send the same value."
             for name, entry_vars in stored_entries
-            if name == callback_name and (stored := entry_vars.get(variable_name)) not in (None, incoming)
+            if name == callback_name
+            and (stored := entry_vars.get(variable_name)) is not None
+            and not _same_callback_var_value(variable_name, stored, incoming)
         ),
         None,
     )
+
+
+def _same_callback_var_value(variable_name: str, first: str, second: str) -> bool:
+    if variable_name != EXCLUDED_SERVICES_VAR:
+        return first == second
+    from litellm.integrations.otel.model.config import parse_excluded_services
+
+    return parse_excluded_services(first) == parse_excluded_services(second)
 
 
 def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str | None:

@@ -466,6 +466,36 @@ def test_key_logging_entries_for_one_backend_may_not_disagree_on_excluded_servic
 
 
 @pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.parametrize(
+    ("stored", "incoming", "conflicts"),
+    [
+        ("redis,postgres", "postgres,redis", False),
+        ("redis", "REDIS", False),
+        ("postgres", "postgresql", False),
+        ("none", "NONE", False),
+        ("redis", "postgres", True),
+        ("none", "redis", True),
+    ],
+)
+def test_key_logging_entries_compare_excluded_services_by_parsed_value(
+    stored: str, incoming: str, conflicts: bool
+) -> None:
+    def entry(callback_type: str, excluded_services: str) -> dict[str, str | dict[str, str]]:
+        return {
+            "callback_name": "newrelic",
+            "callback_type": callback_type,
+            "callback_vars": {"newrelic_api_key": "license-key", "excluded_services": excluded_services},
+        }
+
+    error: Final = logging_metadata_config_error(
+        {"logging": [entry("success", stored), entry("success_and_failure", incoming)]}
+    )
+    assert (error is not None) is conflicts
+    if conflicts:
+        assert error is not None and f"already set to {stored!r}" in error
+
+
+@pytest.mark.usefixtures("otel_v2_on")
 def test_a_failure_only_entry_rejects_excluded_services() -> None:
     error: Final = callback_config_error("langfuse_otel", {"excluded_services": "redis"}, "failure")
     assert error is not None and "excluded_services" in error and "success_and_failure" in error
