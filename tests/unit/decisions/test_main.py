@@ -1128,7 +1128,7 @@ async def test_databricks_rejects_a_serving_endpoint_name_that_would_rewrite_the
     monkeypatch.setenv("DATABRICKS_API_BASE", "https://workspace.example/serving-endpoints")
     monkeypatch.setenv("DATABRICKS_API_KEY", "dapi-key")
 
-    with pytest.raises(litellm.BadRequestError, match="bare endpoint name"):
+    with pytest.raises(litellm.BadRequestError, match="bare serving endpoint name"):
         await litellm.asystemone(
             model=f"databricks/{endpoint_name}",
             state="review",
@@ -1257,7 +1257,7 @@ def test_every_dedicated_decider_provider_ships_an_evaluation_mode_cost_map_entr
 
 
 @pytest.mark.asyncio
-async def test_databricks_requires_api_base_before_http(
+async def test_databricks_ai_decide_requires_api_base_before_http(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -1278,7 +1278,7 @@ async def test_databricks_requires_api_base_before_http(
 @pytest.mark.parametrize(
     "endpoint_name", ["serving-endpoints/openjev", "openjev?x=1", "openjev#frag", "..", "open jev"]
 )
-async def test_databricks_rejects_a_serving_endpoint_name_that_would_rewrite_the_url(
+async def test_databricks_adecisions_rejects_a_serving_endpoint_name_that_would_rewrite_the_url(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
     endpoint_name: str,
@@ -1297,7 +1297,7 @@ async def test_databricks_rejects_a_serving_endpoint_name_that_would_rewrite_the
 
 
 @pytest.mark.asyncio
-async def test_databricks_requires_a_key_before_http(
+async def test_databricks_ai_decide_requires_a_key_before_http(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -1319,7 +1319,7 @@ async def test_databricks_requires_a_key_before_http(
 @pytest.mark.parametrize(
     "api_base", ["https://workspace.example/serving-endpoints", "https://workspace.example/serving-endpoints/"]
 )
-async def test_databricks_posts_the_jev_body_to_the_serving_endpoint_invocations_route(
+async def test_databricks_adecisions_posts_the_jev_body_to_the_serving_endpoint_invocations_route(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
     api_base: str,
@@ -1399,7 +1399,7 @@ async def test_databricks_posts_the_systemone_body_without_model_to_the_ai_decid
 
 
 @pytest.mark.asyncio
-async def test_databricks_router_deployment_sends_its_own_key_to_its_own_base(
+async def test_databricks_ai_decide_router_deployment_sends_its_own_key_to_its_own_base(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -1428,30 +1428,6 @@ async def test_databricks_router_deployment_sends_its_own_key_to_its_own_base(
     assert route.called
     assert respx_mock.calls[0].request.headers["authorization"] == "Bearer deployment-key"
     assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9)
-
-
-_PROVIDERS_WHOSE_CHAT_MODELS_ALSO_DECIDE: Final = frozenset(
-    {LlmProviders.OPENAI.value, LlmProviders.OPENROUTER.value, LlmProviders.HOSTED_VLLM.value}
-)
-_DEDICATED_DECIDER_PROVIDERS: Final[tuple[str, ...]] = tuple(
-    sorted(
-        provider.value
-        for provider in LlmProviders
-        if provider.value not in _PROVIDERS_WHOSE_CHAT_MODELS_ALSO_DECIDE
-        and ProviderConfigManager.get_provider_decisions_config(model="", provider=provider) is not None
-    )
-)
-
-
-@pytest.mark.parametrize("provider", _DEDICATED_DECIDER_PROVIDERS)
-def test_every_dedicated_decider_provider_ships_an_evaluation_mode_cost_map_entry(provider: str) -> None:
-    evaluation_entries: Final = tuple(
-        name
-        for name, info in litellm.model_cost.items()
-        if isinstance(info, Mapping) and info.get("litellm_provider") == provider and info.get("mode") == "evaluation"
-    )
-
-    assert evaluation_entries, f"a {provider} decider would be health-checked as chat without a mode: evaluation entry"
 
 
 @pytest.mark.asyncio
