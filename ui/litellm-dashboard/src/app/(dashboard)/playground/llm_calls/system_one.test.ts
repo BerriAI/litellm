@@ -196,6 +196,11 @@ describe("/v1/decisions requests", () => {
 describe("fetchDecisionModels", () => {
   const mockFetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
   const modelInfo = (data: unknown) => ({ ok: true, text: async () => JSON.stringify({ data }) }) as Response;
+  const group = (model_group: string, mode: string | null) => ({ model_group, mode });
+  const serve = (deployments: unknown[], groups: unknown[] = []) =>
+    mockFetch.mockImplementation(async (input) =>
+      String(input).endsWith("/model_group/info") ? modelInfo(groups) : modelInfo(deployments),
+    );
   const deployment = (model_name: string, mode: string | null, supported_endpoints?: string[]) => ({
     model_name,
     litellm_params: { model: `openai/${model_name}` },
@@ -212,50 +217,58 @@ describe("fetchDecisionModels", () => {
   });
 
   it("lists the key's decision models from the proxy that answers the request, sorted by name", async () => {
-    mockFetch.mockResolvedValueOnce(
-      modelInfo([
-        deployment("pplx-decider", "evaluation"),
-        deployment("gpt-5.5", "chat", ["/v1/chat/completions", "/v1/responses"]),
-        deployment("jev-latest", "evaluation"),
-        deployment("unknown-mode", null),
-      ]),
-    );
+    serve([
+      deployment("pplx-decider", "evaluation"),
+      deployment("gpt-5.5", "chat", ["/v1/chat/completions", "/v1/responses"]),
+      deployment("jev-latest", "evaluation"),
+      deployment("unknown-mode", null),
+    ]);
 
     await expect(fetchDecisionModels("virtual-key", "https://custom.example.com/")).resolves.toEqual([
       "jev-latest",
       "pplx-decider",
     ]);
-    expect(mockFetch).toHaveBeenCalledWith(
-      "https://custom.example.com/model/info",
-      expect.objectContaining({
-        method: "GET",
-        headers: expect.objectContaining({ Authorization: "Bearer virtual-key" }),
-      }),
+    for (const path of ["/model/info", "/model_group/info"]) {
+      expect(mockFetch).toHaveBeenCalledWith(
+        `https://custom.example.com${path}`,
+        expect.objectContaining({
+          method: "GET",
+          headers: expect.objectContaining({ Authorization: "Bearer virtual-key" }),
+        }),
+      );
+    }
+  });
+
+  it("lists a routing group whose members serve decisions, next to the deployments", async () => {
+    serve(
+      [deployment("decision-primary", "evaluation")],
+      [group("decision-balanced", "evaluation"), group("chat-pool", "chat"), group("unknown-mode", null)],
     );
+
+    await expect(fetchDecisionModels("virtual-key")).resolves.toEqual(["decision-balanced", "decision-primary"]);
   });
 
   it("lists a chat-mode model whose cost map entry serves a decision endpoint", async () => {
-    mockFetch.mockResolvedValueOnce(
-      modelInfo([
-        deployment("gpt-6-luna", "chat", ["/v1/chat/completions", "/v1/responses", "/v1/decisions"]),
-        deployment("clef", "chat", ["/v1/systemone"]),
-        deployment("gpt-5.5", "chat", ["/v1/chat/completions"]),
-      ]),
-    );
+    serve([
+      deployment("gpt-6-luna", "chat", ["/v1/chat/completions", "/v1/responses", "/v1/decisions"]),
+      deployment("clef", "chat", ["/v1/systemone"]),
+      deployment("gpt-5.5", "chat", ["/v1/chat/completions"]),
+    ]);
 
     await expect(fetchDecisionModels("virtual-key")).resolves.toEqual(["clef", "gpt-6-luna"]);
   });
 
   it("lists a model group once when several deployments share its name", async () => {
-    mockFetch.mockResolvedValueOnce(
-      modelInfo([deployment("jev-latest", "evaluation"), deployment("jev-latest", "evaluation")]),
+    serve(
+      [deployment("jev-latest", "evaluation"), deployment("jev-latest", "evaluation")],
+      [group("jev-latest", "evaluation")],
     );
 
     await expect(fetchDecisionModels("virtual-key")).resolves.toEqual(["jev-latest"]);
   });
 
   it("rejects a response that is not a model list", async () => {
-    mockFetch.mockResolvedValueOnce(modelInfo([{ model_info: { mode: "evaluation" } }]));
+    serve([{ model_info: { mode: "evaluation" } }]);
 
     await expect(fetchDecisionModels("virtual-key")).rejects.toThrow();
   });

@@ -54,6 +54,8 @@ const modelInfoResponse = (deployments: Deployment[]) =>
       JSON.stringify({
         data: deployments.map(({ model_name, mode }) => ({
           model_name,
+          model_group: model_name,
+          mode,
           litellm_params: { model: `openai/${model_name}` },
           model_info: { id: model_name, mode },
         })),
@@ -67,7 +69,7 @@ const EXPIRED_KEY_RESPONSE = {
     JSON.stringify({ error: { message: "Authentication Error - Expired Key.", type: "expired_key", code: "401" } }),
 } as Response;
 
-const isModelLookup = (input: RequestInfo | URL) => String(input).endsWith("/model/info");
+const isModelLookup = (input: RequestInfo | URL) => /\/model(_group)?\/info$/.test(String(input));
 
 const lookupAuthHeaders = (calls: Parameters<typeof fetch>[]) =>
   calls.map(([, init]) => Object.values((init?.headers ?? {}) as Record<string, string>));
@@ -218,7 +220,10 @@ describe("SystemOneUI integration", () => {
     render(<SystemOneUI accessToken="session-key" />);
 
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest"));
-    expect(lookupAuthHeaders(mockModelLookup.mock.calls)).toEqual([expect.arrayContaining(["Bearer session-key"])]);
+    expect(lookupAuthHeaders(mockModelLookup.mock.calls)).toEqual([
+      expect.arrayContaining(["Bearer session-key"]),
+      expect.arrayContaining(["Bearer session-key"]),
+    ]);
     await user.click(screen.getByRole("button", { name: "Send" }));
 
     expect(await screen.findByText("Selected choice")).toBeInTheDocument();
@@ -474,11 +479,11 @@ describe("SystemOneUI integration", () => {
     expect(await screen.findByRole("link", { name: "Add a decision model" })).toBeInTheDocument();
     first.unmount();
 
-    mockModelLookup.mockResolvedValueOnce(modelInfoResponse(DECISION_AND_CHAT_MODELS));
+    mockModelLookup.mockResolvedValue(modelInfoResponse(DECISION_AND_CHAT_MODELS));
     rtlRender(page);
     const picker = await screen.findByRole("combobox", { name: "Decision model" });
     await waitFor(() => expect(picker).toHaveValue("jev-latest"));
-    expect(mockModelLookup).toHaveBeenCalledTimes(2);
+    expect(mockModelLookup).toHaveBeenCalledTimes(4);
   });
 
   it("routes a configured TypeSafe model through the same proxy endpoint", async () => {
@@ -518,7 +523,10 @@ describe("SystemOneUI integration", () => {
     await user.type(screen.getByLabelText("Virtual Key", { exact: true }), "sk-typed-key");
 
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest"));
-    expect(lookupAuthHeaders(mockModelLookup.mock.calls)).toEqual([expect.arrayContaining(["Bearer sk-typed-key"])]);
+    expect(lookupAuthHeaders(mockModelLookup.mock.calls)).toEqual([
+      expect.arrayContaining(["Bearer sk-typed-key"]),
+      expect.arrayContaining(["Bearer sk-typed-key"]),
+    ]);
   });
 
   it("keeps the admin signed in when a typed virtual key has expired", async () => {
