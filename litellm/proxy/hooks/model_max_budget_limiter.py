@@ -4,7 +4,7 @@ import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # untyped callback payload requires explicit narrowing
 
 from openai.types import Batch
 
@@ -25,6 +25,7 @@ VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX: Final = "virtual_key_spend"
 END_USER_SPEND_CACHE_KEY_PREFIX: Final = "end_user_model_spend"
 USER_SPEND_CACHE_KEY_PREFIX: Final = "user_model_spend"
 TEAM_SPEND_CACHE_KEY_PREFIX: Final = "team_model_spend"
+TEAM_MEMBER_SPEND_CACHE_KEY_PREFIX: Final = "team_member_model_spend"
 
 _SPEND_CACHE_KEY_PREFIXES: Final = MappingProxyType(
     {
@@ -32,6 +33,7 @@ _SPEND_CACHE_KEY_PREFIXES: Final = MappingProxyType(
         Litellm_EntityType.USER: USER_SPEND_CACHE_KEY_PREFIX,
         Litellm_EntityType.END_USER: END_USER_SPEND_CACHE_KEY_PREFIX,
         Litellm_EntityType.TEAM: TEAM_SPEND_CACHE_KEY_PREFIX,
+        Litellm_EntityType.TEAM_MEMBER: TEAM_MEMBER_SPEND_CACHE_KEY_PREFIX,
     }
 )
 
@@ -45,6 +47,7 @@ _BUDGET_START_TIME_KEY_PREFIXES: Final = MappingProxyType(
         Litellm_EntityType.USER: "user_model_budget_start_time",
         Litellm_EntityType.END_USER: "end_user_budget_start_time",
         Litellm_EntityType.TEAM: "team_model_budget_start_time",
+        Litellm_EntityType.TEAM_MEMBER: "team_member_model_budget_start_time",
     }
 )
 
@@ -61,6 +64,10 @@ class ResolvedModelBudget:
 
     budget_model: str
     budget_config: BudgetConfig
+
+
+def team_member_budget_entity_id(user_id: str, team_id: str) -> str:
+    return f"{len(user_id)}:{user_id}:{team_id}"
 
 
 def model_budget_spend_cache_key(
@@ -290,6 +297,18 @@ def _resolve_entity_model_budgets(
     )
 
 
+def _metadata_value(metadata: object, key: str) -> object | None:
+    metadata_mapping: Final[Mapping[str, object]] = cast(  # cast-ok: callback metadata has string keys
+        Mapping[str, object], metadata
+    )
+    return metadata_mapping.get(key)
+
+
+def _metadata_string_value(metadata: object, key: str) -> str | None:
+    value: Final = _metadata_value(metadata, key)
+    return value if isinstance(value, str) else None
+
+
 class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     """
     Handles budgets for model + virtual key
@@ -410,6 +429,24 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             exceeded_message=f"LiteLLM Team: {team_id}, exceeded budget for model={model}",
         )
 
+    @with_service_target("model_budgets")
+    async def is_team_member_within_model_budget(
+        self,
+        user_id: str,
+        team_id: str,
+        team_member_model_max_budget: Mapping[str, object],
+        model: str,
+    ) -> bool:
+        return await self._is_entity_within_model_budget(
+            entity_type=Litellm_EntityType.TEAM_MEMBER,
+            entity_id=team_member_budget_entity_id(user_id=user_id, team_id=team_id),
+            model_max_budget=team_member_model_max_budget,
+            model=model,
+            exceeded_message=(
+                f"LiteLLM Team Member: user={user_id}, team={team_id}, exceeded budget for model={model}"
+            ),
+        )
+
     async def _is_entity_within_model_budget(
         self,
         entity_type: Litellm_EntityType,
@@ -523,6 +560,19 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
 
         response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
         key_model_max_budget: Final = _metadata.get("user_api_key_model_max_budget")
+        team_member_user_id: Final = _metadata_string_value(
+            payload_metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+            "user_api_key_user_id",
+        )
+        team_member_team_id: Final = _metadata_string_value(
+            payload_metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+            "user_api_key_team_id",
+        )
+        team_member_entity_id: Final = (
+            team_member_budget_entity_id(user_id=team_member_user_id, team_id=team_member_team_id)
+            if team_member_user_id is not None and team_member_team_id is not None
+            else None
+        )
         entity_budgets: Final = (
             (
                 Litellm_EntityType.KEY,
@@ -552,6 +602,14 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                 Litellm_EntityType.END_USER,
                 standard_logging_payload.get("end_user") or payload_metadata.get("user_api_key_end_user_id"),
                 _metadata.get("user_api_key_end_user_model_max_budget"),
+            ),
+            (
+                Litellm_EntityType.TEAM_MEMBER,
+                team_member_entity_id,
+                _metadata_value(
+                    _metadata,  # pyright: ignore[reportUnknownArgumentType]  # callback metadata is partially untyped
+                    "user_api_key_team_member_model_max_budget",
+                ),
             ),
         )
 

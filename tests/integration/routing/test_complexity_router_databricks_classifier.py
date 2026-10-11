@@ -31,9 +31,10 @@ from pydantic import JsonValue, TypeAdapter
 from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS
 
-_ENDPOINT: Final = "databricks-openjev-qwen35-4b"
+_MODEL: Final = "ai_decide"
+_ROUTE: Final = "/api/2.0/ai-functions/ai-decide"
 _API_KEY: Final = "synthetic-databricks-key"
-_CLASSIFIER_MODEL: Final = f"databricks/{_ENDPOINT}"
+_CLASSIFIER_MODEL: Final = f"databricks/{_MODEL}"
 _TYPESAFE_MODEL: Final = "jev-1.13.0"
 _TYPESAFE_KEY: Final = "synthetic-typesafe-key"
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -48,10 +49,12 @@ _TIER_CRITERIA: Final[dict[str, JsonValue]] = {
 }
 _PROBABILITIES: Final[dict[str, JsonValue]] = {"SIMPLE": 0.03, "MEDIUM": 0.06, "COMPLEX": 0.91}
 _USAGE: Final[dict[str, JsonValue]] = {"input_tokens": 12, "output_tokens": 1}
-_ANSWER: Final[dict[str, JsonValue]] = {
-    "answers": {"tier": {"type": "choice", "choice": "COMPLEX", "confidence": 0.91, "probabilities": _PROBABILITIES}},
-    "usage": _USAGE,
+_ANSWERS: Final[dict[str, JsonValue]] = {
+    "tier": {"type": "choice", "choice": "COMPLEX", "confidence": 0.91, "probabilities": _PROBABILITIES}
 }
+_METADATA: Final[dict[str, JsonValue]] = {"version": "1.0"}
+_ANSWER: Final[dict[str, JsonValue]] = {"response": {"answers": _ANSWERS}, "metadata": _METADATA}
+_TYPESAFE_ANSWER: Final[dict[str, JsonValue]] = {"model": _TYPESAFE_MODEL, "answers": _ANSWERS, "usage": _USAGE}
 _ROWS_QUERY: Final = (
     "SELECT request_id, status, model, call_type, cache_hit, custom_llm_provider, spend, "
     "metadata->>'internal_call_origin' AS origin "
@@ -155,7 +158,7 @@ def _wires(classifier: Callable[[Request], Reply] | None = None) -> Iterator[tup
 def _classifier_config(judge_url: str, **overrides: JsonValue) -> dict[str, JsonValue]:
     return {
         "provider": "databricks",
-        "model": _ENDPOINT,
+        "model": _MODEL,
         "api_base": judge_url,
         "api_key": _API_KEY,
         "timeout_ms": 20000,
@@ -209,25 +212,25 @@ def _state(prompt: str, system: str | None) -> str:
 
 
 def _assert_classifier_call(
-    call: Request, *, prompt: str, system: str | None = None, endpoint: str = _ENDPOINT, key: str = _API_KEY
+    call: Request, *, prompt: str, system: str | None = None, key: str = _API_KEY, endpoint: str | None = None
 ) -> None:
-    assert call.target == f"/{endpoint}/invocations", call.target
+    assert call.target == (_ROUTE if endpoint is None else f"/{endpoint}/invocations"), call.target
     assert call.headers.get("authorization") == f"Bearer {key}", call.headers
     assert json.loads(call.body) == {
         "state": _state(prompt, system),
-        "model": endpoint,
+        **({} if endpoint is None else {"model": endpoint}),
         "questions": {"tier": {"type": "choice", "instructions": DEFAULT_JEV_INSTRUCTIONS, "criteria": _TIER_CRITERIA}},
     }, call.body
 
 
-def _assert_classified(headers: Mapping[str, str], *, router: str, cost: str | None = "0.0") -> None:
+def _assert_classified(headers: Mapping[str, str], *, router: str) -> None:
     assert (
         headers.get("x-litellm-model-group"),
         headers.get("x-litellm-model-name"),
         headers.get("x-litellm-complexity-router-tier"),
         headers.get("x-litellm-complexity-router-cause"),
         headers.get("x-litellm-classifier-cost"),
-    ) == (router, "openai/complex-tier", "COMPLEX", "jev_classifier", cost), dict(headers)
+    ) == (router, "openai/complex-tier", "COMPLEX", "jev_classifier", None), dict(headers)
 
 
 def _assert_fell_back(headers: Mapping[str, str], *, router: str) -> None:
@@ -622,10 +625,19 @@ def test_messages_stream_over_httpx_is_classified_and_logged_under_the_message_s
         _assert_logged_once(_rows(routed.name, want=2), route="/v1/messages", request_id=identity)
 
 
-def test_a_non_catalog_endpoint_name_is_classified_without_a_cost_header_and_logged_at_zero(gateway: Gateway) -> None:
+def test_a_serving_endpoint_name_is_classified_through_its_invocations_route_and_logged_at_zero(
+    gateway: Gateway,
+) -> None:
     prompt: Final = _prompt()
     endpoint: Final = "my-jev-endpoint"
-    with _wires() as (judge, simple, complex_), gateway.scenario() as scenario:
+    with (
+        _wires(_answering({"model": "/mosaicml/local_model", "answers": _ANSWERS, "usage": _USAGE})) as (
+            judge,
+            simple,
+            complex_,
+        ),
+        gateway.scenario() as scenario,
+    ):
         routed: Final = _deploy(scenario, judge, simple, complex_, _classifier_config(judge.url, model=endpoint))
         response: Final = gateway.request(
             "POST", "/v1/chat/completions", _body("/v1/chat/completions", routed.name, prompt, stream=False)
@@ -633,7 +645,7 @@ def test_a_non_catalog_endpoint_name_is_classified_without_a_cost_header_and_log
         assert response.status_code == 200, response.text
         identity, text = _identity_and_text("/v1/chat/completions", _JSON_OBJECT.validate_json(response.content))
         assert text == _COMPLEX_TEXT, response.text
-        _assert_classified(response.headers, router=routed.name, cost=None)
+        _assert_classified(response.headers, router=routed.name)
         (classifier_call,) = _posts(judge)
         _assert_classifier_call(classifier_call, prompt=prompt, endpoint=endpoint)
         assert len(_posts(complex_)) == 1 and _posts(simple) == ()
@@ -686,7 +698,7 @@ _FAILURES: Final = (
     _Failure("401", _failing(401), {}, "classifier_error", "MaskedHTTPStatusError", 0),
     _Failure(
         "malformed",
-        _answering({"answers": {"tier": {"type": "choice", "choice": "COMPLEX", "confidence": 0.91}}, "usage": _USAGE}),
+        _answering({"response": {"answers": {"tier": {"type": "choice", "choice": "COMPLEX", "confidence": 0.91}}}}),
         {},
         "invalid_response",
         "ValidationError",
@@ -696,15 +708,17 @@ _FAILURES: Final = (
         "unknown-tier",
         _answering(
             {
-                "answers": {
-                    "tier": {
-                        "type": "choice",
-                        "choice": "GALAXY",
-                        "confidence": 0.91,
-                        "probabilities": {"GALAXY": 0.91},
+                "response": {
+                    "answers": {
+                        "tier": {
+                            "type": "choice",
+                            "choice": "GALAXY",
+                            "confidence": 0.91,
+                            "probabilities": {"GALAXY": 0.91},
+                        }
                     }
                 },
-                "usage": _USAGE,
+                "metadata": _METADATA,
             }
         ),
         {},
@@ -793,7 +807,7 @@ def test_the_default_jev_provider_still_posts_to_systemone_and_bills_from_the_co
     prompt: Final = _prompt()
     expected_cost: Final = _typesafe_cost()
     with (
-        _wires(_answering({**_ANSWER, "model": _TYPESAFE_MODEL})) as (judge, simple, complex_),
+        _wires(_answering(_TYPESAFE_ANSWER)) as (judge, simple, complex_),
         gateway.scenario() as scenario,
     ):
         classifier: Final[dict[str, JsonValue]] = {
@@ -848,7 +862,7 @@ async def test_a_classifier_outage_mid_traffic_falls_back_and_recovers_with_ever
             before_prompts: Final = tuple(_prompt() for _ in calls)
             before: Final = await _burst(base_url, gateway.key, routed.name, calls, before_prompts)
             assert [item.cause for item in before] == ["jev_classifier"] * 12, before
-            assert [item.classifier_cost for item in before] == ["0.0"] * 12, before
+            assert [item.classifier_cost for item in before] == [None] * 12, before
             assert [item.text for item in before] == [_COMPLEX_TEXT] * 12, before
             assert sorted(json.loads(call.body)["state"] for call in _posts(judge)) == sorted(
                 _state(prompt, None) for prompt in before_prompts

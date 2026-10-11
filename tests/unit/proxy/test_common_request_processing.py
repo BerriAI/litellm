@@ -17,6 +17,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 import litellm
 from litellm._uuid import uuid
 from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
+from litellm.caching.caching import DualCache
 from litellm.litellm_core_utils.bug_report import (
     DISABLE_ENV_VAR,
     ISSUE_URL_BASE,
@@ -59,11 +60,18 @@ from litellm.proxy.common_request_processing import (
     sse_error_payload,
 )
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
+from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.sse_keepalive import ANTHROPIC_PING_SSE_CHUNK
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy._types import ProxyErrorTypes, ProxyException
+from litellm.proxy._types import Litellm_EntityType, ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
+from litellm.proxy.auth.fallback_budget import RouterFallbackBudgetCheck
+from litellm.proxy.hooks.model_max_budget_limiter import (
+    PROXY_VirtualKeyModelMaxBudgetLimiter,
+    model_budget_spend_cache_key,
+    team_member_budget_entity_id,
+)
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
 from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
@@ -3882,13 +3890,18 @@ class TestStreamingOverheadHeader:
 class TestDDSpanTaggerTagRequest:
     """Tests for DDSpanTagger.tag_request - key/model DD span tagging."""
 
-    def _make_user_api_key_dict(self, key_alias=None, token=None):
+    def _make_user_api_key_dict(self, key_alias=None, token=None, user_email=None):
         from litellm.proxy._types import UserAPIKeyAuth
 
         d = UserAPIKeyAuth()
         d.key_alias = key_alias
         d.token = token
+        d.user_email = user_email
         return d
+
+    def _tracer_with_active_span_writing_to(self, tags: dict[str, str]) -> SimpleNamespace:
+        span = SimpleNamespace(set_tag_str=tags.__setitem__)
+        return SimpleNamespace(current_span=lambda: span)
 
     def test_tags_key_alias_and_model(self):
         """key_alias and requested_model are set on the span when present."""
@@ -3927,6 +3940,32 @@ class TestDDSpanTaggerTagRequest:
             )
 
         mock_set_tag.assert_called_once_with("litellm.requested_model", "claude-3-5-sonnet")
+
+    def test_tags_user_email(self):
+        """user_email is tagged so JWT-authenticated requests are traceable per person."""
+        user_key = self._make_user_api_key_dict(user_email="user@example.com")
+        tags: dict[str, str] = {}
+
+        with patch("litellm.litellm_core_utils.dd_tracing.tracer", self._tracer_with_active_span_writing_to(tags)):
+            DDSpanTagger.tag_request(
+                user_api_key_dict=user_key,
+                requested_model=None,
+            )
+
+        assert tags == {"litellm.user_email": "user@example.com"}
+
+    def test_no_user_email_tag_when_absent(self):
+        """No user email tag when the authenticated identity has no email."""
+        user_key = self._make_user_api_key_dict(key_alias="my-prod-key", user_email=None)
+        tags: dict[str, str] = {}
+
+        with patch("litellm.litellm_core_utils.dd_tracing.tracer", self._tracer_with_active_span_writing_to(tags)):
+            DDSpanTagger.tag_request(
+                user_api_key_dict=user_key,
+                requested_model="gpt-4o",
+            )
+
+        assert tags == {"litellm.key_alias": "my-prod-key", "litellm.requested_model": "gpt-4o"}
 
 
 class TestHasAttributeErrorInChain:
@@ -7097,6 +7136,9 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         fallbacks: list[dict[str, list[str]]],
         model_guardrails: dict[str, list[str]] | None = None,
         untagged_rate_limited_models: frozenset[str] = frozenset(),
+        fallback_budget_check: RouterFallbackBudgetCheck | None = None,
+        free_models: frozenset[str] = frozenset(),
+        extra_models: frozenset[str] = frozenset(),
     ) -> tuple[ProxyLogging, litellm.Router, ProxyConfig, list[str]]:
         """Real v3 limiter (the default ``parallel_request_limiter``) wired in through the
         ``proxy_logging_obj`` seam, so ``common_processing_pre_call_logic`` runs for real:
@@ -7145,11 +7187,17 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
                         "api_key": "fake",
                         **({"guardrails": guardrails_by_group[group]} if group in guardrails_by_group else {}),
                     },
+                    **(
+                        {"model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0}}
+                        if group in free_models
+                        else {}
+                    ),
                 }
                 for chain in fallbacks
-                for group in (*chain.keys(), *(m for models in chain.values() for m in models))
+                for group in (*chain.keys(), *(m for models in chain.values() for m in models), *sorted(extra_models))
             ],
             fallbacks=fallbacks,
+            fallback_budget_check=fallback_budget_check,
         )
         return proxy_logging_obj, router, proxy_server.ProxyConfig(), limiter_models
 
@@ -7636,6 +7684,138 @@ class TestPreCallWithFallbacksOnLocalRateLimit:
         assert data["metadata"]["guardrails"] == [structured_guardrail]
         assert rig[3] == [primary_model, primary_model, fallback_model]
 
+    @staticmethod
+    async def _install_member_spend(monkeypatch: pytest.MonkeyPatch, model: str, spend: float) -> None:
+        from litellm.proxy import proxy_server
+
+        member_limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+        await member_limiter.dual_cache.async_set_cache(
+            key=model_budget_spend_cache_key(
+                entity_type=Litellm_EntityType.TEAM_MEMBER,
+                entity_id=team_member_budget_entity_id(user_id="user-1", team_id="team-1"),
+                budget_model=model,
+                budget_duration="1d",
+            ),
+            value=spend,
+        )
+        monkeypatch.setattr(proxy_server, "model_max_budget_limiter", member_limiter)
+
+    def _member_key(self, primary_model: str, fallback_model: str) -> ProxyUserAPIKeyAuth:
+        return self._otel_key(model_rpm_limit={primary_model: 1}).model_copy(
+            update={
+                "user_id": "user-1",
+                "team_id": "team-1",
+                "team_member_model_max_budget": {fallback_model: {"max_budget": 5.0, "budget_duration": "1d"}},
+            }
+        )
+
+    @staticmethod
+    def _client_request(model: str) -> dict[str, object]:
+        return {"model": model, "messages": [{"role": "user", "content": "hi"}]}
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_fallback_skips_backup_over_member_model_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        primary_model: Final = "gpt-4.1"
+        fallback_model: Final = "gpt-4.1-mini"
+        await self._install_member_spend(monkeypatch, fallback_model, spend=5.0)
+        key: Final = self._member_key(primary_model, fallback_model)
+        rig: Final = self._v3_limiter_rig(monkeypatch, key, [{primary_model: [fallback_model]}])
+
+        _, (first_data, _) = await self._pre_call(self._client_request(primary_model), key, rig)
+        processor: Final = ProxyBaseLLMRequestProcessing(data=self._client_request(primary_model))
+        with pytest.raises(ProxyRateLimitError):
+            await self._run(processor, key, rig)
+
+        assert first_data["model"] == primary_model
+        assert rig[3] == [primary_model, primary_model]
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_fallback_skips_backup_aliased_to_model_over_member_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        primary_model: Final = "gpt-4.1"
+        fallback_model: Final = "gpt-4.1-mini"
+        resolved_model: Final = "expensive"
+        await self._install_member_spend(monkeypatch, resolved_model, spend=5.0)
+        key: Final = self._member_key(primary_model, fallback_model).model_copy(
+            update={
+                "router_settings": {"model_group_alias": {fallback_model: resolved_model}},
+                "team_member_model_max_budget": {resolved_model: {"max_budget": 5.0, "budget_duration": "1d"}},
+            }
+        )
+        rig: Final = self._v3_limiter_rig(
+            monkeypatch,
+            key,
+            [{primary_model: [fallback_model]}],
+            extra_models=frozenset({resolved_model}),
+        )
+
+        await self._pre_call(self._client_request(primary_model), key, rig)
+        processor: Final = ProxyBaseLLMRequestProcessing(data=self._client_request(primary_model))
+        with pytest.raises(ProxyRateLimitError):
+            await self._run(processor, key, rig)
+
+        assert processor.data["model"] == primary_model
+        assert rig[3] == [primary_model, primary_model]
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_fallback_uses_backup_within_member_model_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        primary_model: Final = "gpt-4.1"
+        fallback_model: Final = "gpt-4.1-mini"
+        await self._install_member_spend(monkeypatch, fallback_model, spend=4.0)
+        key: Final = self._member_key(primary_model, fallback_model)
+        rig: Final = self._v3_limiter_rig(monkeypatch, key, [{primary_model: [fallback_model]}])
+
+        await self._pre_call(self._client_request(primary_model), key, rig)
+        _, (data, logging_obj) = await self._pre_call(self._client_request(primary_model), key, rig)
+
+        assert data["model"] == fallback_model
+        assert logging_obj.model == fallback_model
+        assert rig[3] == [primary_model, primary_model, fallback_model]
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_fallback_uses_free_backup_with_spent_member_model_budget(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        primary_model: Final = "gpt-4.1"
+        fallback_model: Final = "gpt-4.1-mini"
+        await self._install_member_spend(monkeypatch, fallback_model, spend=5.0)
+        key: Final = self._member_key(primary_model, fallback_model)
+        rig: Final = self._v3_limiter_rig(
+            monkeypatch, key, [{primary_model: [fallback_model]}], free_models=frozenset({fallback_model})
+        )
+
+        await self._pre_call(self._client_request(primary_model), key, rig)
+        _, (data, _) = await self._pre_call(self._client_request(primary_model), key, rig)
+
+        assert data["model"] == fallback_model
+        assert rig[3] == [primary_model, primary_model, fallback_model]
+
+    @pytest.mark.asyncio
+    async def test_rate_limit_fallback_ignores_key_budget_already_admitted_at_auth(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        primary_model: Final = "gpt-4.1"
+        fallback_model: Final = "gpt-4.1-mini"
+        key: Final = self._otel_key(model_rpm_limit={primary_model: 1}).model_copy(
+            update={"token": "hashed-key", "max_budget": 1.0, "spend": 2.0}
+        )
+        rig: Final = self._v3_limiter_rig(
+            monkeypatch,
+            key,
+            [{primary_model: [fallback_model]}],
+            fallback_budget_check=RouterFallbackBudgetCheck(is_enforced=lambda: True),
+        )
+
+        await self._pre_call(self._client_request(primary_model), key, rig)
+        _, (data, _) = await self._pre_call(self._client_request(primary_model), key, rig)
+
+        assert data["model"] == fallback_model
+        assert rig[3] == [primary_model, primary_model, fallback_model]
 
 class _RecordingSuccessLogger(CustomLogger):
     def __init__(self):

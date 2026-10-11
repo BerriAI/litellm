@@ -144,6 +144,7 @@ def test_classify_decisions(category: str, changed: list[str], expected: str) ->
     (
         ("litellm/caching/redis_cache.py", "run"),
         ("tests/unit/caching/test_redis_cluster_cache.py", "run"),
+        ("tests/integration/sdk/test_redis_cluster_iam_auth.py", "run"),
         (".circleci/config.yml", "run"),
         ("uv.lock", "run"),
         ("litellm/router.py", "skip"),

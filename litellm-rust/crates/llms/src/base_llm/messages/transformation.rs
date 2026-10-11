@@ -7,8 +7,6 @@ use super::context::MessagesTransformContext;
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 use crate::{Error, base_llm::messages::streaming::StreamDecoder};
 
-pub const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
-
 pub trait BaseMessagesConfig: Sync {
     fn shape_request(
         &self,
