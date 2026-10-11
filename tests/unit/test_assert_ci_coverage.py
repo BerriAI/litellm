@@ -124,7 +124,6 @@ def test_every_circleci_postgres_suite_is_credited_on_the_repo_as_it_stands() ->
         if isinstance(job, dict) and "postgres_suite" in job
     )
     assert paths == (
-        "tests/proxy_behavior",
         "tests/proxy_security_tests",
         "tests/proxy_migration_tests",
         "tests/integration/database/test_roi_observed.py",
@@ -433,7 +432,7 @@ def test_a_dockerfile_directory_entry_is_stale_because_only_an_exact_path_exempt
 def test_a_workflow_that_names_a_file_clears_it_from_the_slice_check():
     named = coverage._workflow_named_tokens()
     assert named, "the workflows must name some test paths or the check proves nothing"
-    assert any(coverage._token_covers(token, "tests/proxy_unit_tests/test_proxy_custom_logger.py") for token in named)
+    assert any(coverage._token_covers(token, "tests/unit/proxy/test_proxy_server_custom_logger.py") for token in named)
 
 
 def test_the_slice_check_credits_only_workflows_never_the_circleci_config():
