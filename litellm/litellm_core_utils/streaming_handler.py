@@ -333,8 +333,8 @@ class CustomStreamWrapper:
             return
         self._abandonment_logged = True
         try:
-            complete_streaming_response = litellm.stream_chunk_builder(  # pyright: ignore[reportUnknownMemberType]  # stream_chunk_builder is exposed on the package root
-                chunks=self.chunks,  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]
+            complete_streaming_response: Final = litellm.stream_chunk_builder(  # pyright: ignore[reportUnknownMemberType]  # stream_chunk_builder is exposed on the package root
+                chunks=self.chunks,  # pyright: ignore[reportUnknownArgumentType, reportUnknownMemberType]  # chunks is a loosely-typed accumulator
                 messages=self.messages,
                 logging_obj=self.logging_obj,
                 count_prompt_tokens=self.count_prompt_tokens,
