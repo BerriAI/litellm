@@ -39,6 +39,25 @@ def assert_completed(database: Database, migration: Migration = COMPLETE) -> Non
     assert database.query("SELECT id FROM migration_effect") == ((1,),)
 
 
+@step("Check that migration {migration.name} rolled back lock timeouts and completed exactly once")
+def assert_completed_after_lock_timeouts(database: Database, migration: Migration) -> None:
+    rows: Final = database.query(
+        "SELECT finished_at IS NOT NULL, rolled_back_at IS NOT NULL, applied_steps_count FROM "
+        "_prisma_migrations WHERE migration_name = %s ORDER BY started_at",
+        (migration.name,),
+    )
+    finished: Final = tuple(row for row in rows if row[0])
+    rolled_back: Final = tuple(row for row in rows if row[1])
+    assert finished == ((True, False, 1),), "Expected exactly one completed migration attempt"
+    assert rolled_back and all(row == (False, True, 0) for row in rolled_back), (
+        "Expected every failed migration attempt to be rolled back"
+    )
+    assert all(is_finished != is_rolled_back for is_finished, is_rolled_back, _ in rows), (
+        "Expected every migration attempt to be either completed or rolled back"
+    )
+    assert database.query("SELECT id FROM migration_effect") == ((1,),)
+
+
 @step("Apply the test migration by hand and record it in _prisma_migrations")
 def confirmed_history(database: Database) -> str:
     database.execute(COMPLETE_SQL)

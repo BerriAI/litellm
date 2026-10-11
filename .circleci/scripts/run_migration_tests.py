@@ -10,7 +10,7 @@ from typing import Final
 from xml.etree import ElementTree
 
 SUITES: Final = {
-    "startup": (("test_startup.py",), 12),
+    "startup": (("test_startup.py",), 13),
     "recovery": (("test_recovery.py",), 15),
     "legacy": (("test_legacy.py", "test_pooling.py"), 11),
     "upgrade": (("test_upgrade.py", "test_rolling_upgrade.py"), 5),
