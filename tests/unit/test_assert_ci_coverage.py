@@ -124,7 +124,6 @@ def test_every_circleci_postgres_suite_is_credited_on_the_repo_as_it_stands() ->
         if isinstance(job, dict) and "postgres_suite" in job
     )
     assert paths == (
-        "tests/proxy_behavior",
         "tests/proxy_security_tests",
         "tests/proxy_migration_tests",
         "tests/integration/database/test_roi_observed.py",

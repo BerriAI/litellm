@@ -119,7 +119,7 @@ async def test_filters_are_passed_to_sql_as_json_arrays(mock_prisma: MagicMock):
 async def test_every_query_excludes_the_same_info_routes(mock_prisma: MagicMock):
     """Regression for LIT-5884: failed info-route calls are spend-logged but are not inference traffic, so
     the groups, error breakdown and both filter-option queries all receive the same exclusion list. What
-    the SQL does with it is covered against Postgres in tests/proxy_behavior/spend/test_cache_activity.py."""
+    the SQL does with it is covered against Postgres in tests/integration/spend/test_cache_activity.py."""
     await get_global_activity(start_date="2026-07-01", end_date="2026-07-27", key_aliases=[], models=[])
 
     exclusions_by_query = {call.args[0]: json.loads(call.args[-1]) for call in mock_prisma.db.query_raw.call_args_list}
