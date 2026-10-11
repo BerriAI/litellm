@@ -1,4 +1,5 @@
 from contextlib import ExitStack
+from itertools import accumulate, repeat
 from typing import Final
 
 import pytest
@@ -12,11 +13,17 @@ from .checks import (
     start_replicas,
 )
 from .containers import Containers, failed, ready, until, waiting
-from .database import PRISMA_LOCK, Database, Databases, restricted_user
+from .database import GATE_KEY, PRISMA_LOCK, Database, Databases, restricted_user
 from .startup_models import Migration
 from e2e_metadata import Domain, Subject, meta
 
 pytestmark: Final = [pytest.mark.e2e, pytest.mark.migration_startup]
+
+
+def union_waiting_identities(
+    observed: frozenset[str], snapshot: frozenset[str]
+) -> frozenset[str]:
+    return observed | snapshot
 
 
 class TestMigrationStartup:
@@ -57,7 +64,16 @@ class TestMigrationStartup:
                 owner: Final = stack.enter_context(containers.start(database, (GATED,)))
                 until("owner blocked in migration SQL", lambda: bool(database.blocked()))
                 followers: Final = start_replicas(stack, containers, database, (GATED,), count=2)
-                until("both followers attempted Prisma locking", lambda: len(database.blocked(PRISMA_LOCK)) == 2)
+                waiting_identities: Final = accumulate(
+                    (database.waiting_identities((PRISMA_LOCK, GATE_KEY)) for _ in repeat(None)),
+                    union_waiting_identities,
+                    initial=frozenset(),
+                )
+                follower_identities: Final = frozenset(follower.identity for follower in followers)
+                until(
+                    "both followers entered migration locking",
+                    lambda: follower_identities <= next(waiting_identities),
+                )
                 until(
                     "a replica logged a migration lock-timeout retry",
                     lambda: any(
