@@ -12,7 +12,7 @@ const SCORE_FORMAT = new Intl.NumberFormat("en-US", { maximumFractionDigits: 2 }
 
 interface ResponseViewProps {
   response?: SystemOneResponse | OpenAIDecisionsResponse;
-  view?: "form" | "json";
+  view?: "form" | "curl";
   fallbackModel?: string;
   latencyMs?: number;
   error?: string;
@@ -236,7 +236,7 @@ export default function ResponseView({
       <CardHeader>
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="grid gap-1">
-            <CardTitle>{view === "json" ? "Response JSON" : "Calibrated probabilities"}</CardTitle>
+            <CardTitle>{view === "curl" ? "Response JSON" : "Calibrated probabilities"}</CardTitle>
             {model && <CardDescription>{model}</CardDescription>}
           </div>
           <div className="flex flex-wrap items-center gap-2 text-xs">
@@ -250,7 +250,7 @@ export default function ResponseView({
         </div>
       </CardHeader>
       <CardContent className="grid gap-3">
-        {view === "json" ? <RawResponse response={response} /> : <AnswerCards answers={response.answers} />}
+        {view === "curl" ? <RawResponse response={response} /> : <AnswerCards answers={response.answers} />}
         {view === "form" && (
           <Collapsible open={showRaw} onOpenChange={setShowRaw}>
             <CollapsibleTrigger

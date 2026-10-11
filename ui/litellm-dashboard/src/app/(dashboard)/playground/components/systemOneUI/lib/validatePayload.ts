@@ -23,6 +23,9 @@ export interface PayloadValidation<T> {
 
 export type SystemOnePayloadValidation = PayloadValidation<PlaygroundRequest>;
 
+export const errorCount = (validation: PayloadValidation<unknown>): number =>
+  validation.issues.filter((issue) => issue.severity === "error").length;
+
 const invalid = (path: string, message: string) => ({
   isValid: false,
   issues: [{ path, message, severity: "error" as const }],

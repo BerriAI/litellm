@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/cva.config";
 import { Plus, Trash2 } from "lucide-react";
 import { useId, type ReactNode } from "react";
-import { IssueList, ValidationStatus } from "./JsonEditor";
+import { IssueList, ValidationStatus } from "./ValidationFeedback";
 import type { PayloadValidation } from "./lib/validatePayload";
 
 export function RemoveButton({ label, onClick }: { label: string; onClick: () => void }) {
