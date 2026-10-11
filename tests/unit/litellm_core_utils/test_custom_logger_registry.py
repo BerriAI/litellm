@@ -474,3 +474,26 @@ def test_registry_maps_every_callback_name_to_a_class() -> None:
     ]
 
     assert non_classes == []
+
+
+def test_registry_builds_without_enterprise_callbacks_when_enterprise_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    registry_module_name: Final = "litellm.litellm_core_utils.custom_logger_registry"
+    monkeypatch.setitem(sys.modules, "litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty", None)
+    monkeypatch.setattr(
+        litellm.litellm_core_utils, "custom_logger_registry", importlib.import_module(registry_module_name)
+    )
+    monkeypatch.delitem(sys.modules, registry_module_name)
+
+    fresh_mapping: Final = importlib.import_module(
+        registry_module_name
+    ).CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE
+
+    assert fresh_mapping.keys() == CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE.keys() - {
+        "pagerduty",
+        "generic_api",
+        "resend_email",
+        "sendgrid_email",
+        "smtp_email",
+    }
