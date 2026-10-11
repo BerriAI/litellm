@@ -1,21 +1,18 @@
 import json
 import os
 import re
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from importlib.resources import files
-from collections.abc import Iterator
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-import litellm
-
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
+import litellm
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.public_endpoints import router
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
@@ -1171,8 +1168,8 @@ def test_public_mcp_hub_derives_publication_metadata_without_mutating_registry(
     stored_public: bool | None,
 ) -> None:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     app: Final = FastAPI()
     app.include_router(router)
@@ -1256,8 +1253,8 @@ def test_public_mcp_hub_returns_empty_when_whitelist_unset():
 def test_public_mcp_hub_does_not_expose_upstream_url():
     """Regression: /public/mcp_hub is unauthenticated, so the gateway-internal
     upstream url must never appear in its response even when the server has one."""
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     app = FastAPI()
     app.include_router(router)
