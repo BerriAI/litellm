@@ -80,6 +80,7 @@ class RedisToolVectorStore:
             self._degraded = True
             verbose_logger.warning("MCP semantic tool index store put_many failed; vectors stay local: %s", e)
 
+    @with_service_target(_CACHE_TARGET)
     async def try_acquire_build_lock(self) -> bool:
         # PodLockManager returns False on Redis errors too; once degraded, embed locally instead of waiting.
         try:
