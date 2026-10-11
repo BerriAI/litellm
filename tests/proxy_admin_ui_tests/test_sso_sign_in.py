@@ -58,7 +58,7 @@ async def test_auth_callback_new_user(mock_google_sso, mock_env_vars, prisma_cli
     from litellm._uuid import uuid
     import litellm
 
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
 
     # Generate a unique user ID
     unique_user_id = str(uuid.uuid4())

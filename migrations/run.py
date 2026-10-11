@@ -2,7 +2,12 @@
 
 Runs `prisma migrate deploy` against the LiteLLM writer database using the
 recovery logic in `litellm_proxy_extras.ProxyExtrasDBManager.setup_database`
-(P3005 baseline + P3009/P3018 idempotent-error handling, retries, etc.).
+(P3005 baseline + P3009/P3018 idempotent-error handling, retries, etc.), then
+builds the request-log indexes the migrations leave out
+(`litellm_proxy_extras.request_log_indexes`), waiting for them. The job exits
+non-zero when an index could not be built so that it is rerun. A serving proxy
+that runs the migrations itself builds the same indexes in the background once
+it serves.
 
 Env vars:
   DATABASE_URL                  required unless it can be assembled at
@@ -23,9 +28,10 @@ Env vars:
 import os
 import sys
 
-from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 from litellm_proxy_extras._logging import logger
 from litellm_proxy_extras.utils import ProxyExtrasDBManager, str_to_bool
+
+from litellm.proxy.db.db_url_settings import DatabaseURLSettings
 
 
 def main() -> int:
@@ -52,7 +58,7 @@ def main() -> int:
         not use_db_push,
         use_v2,
     )
-    ok = ProxyExtrasDBManager.setup_database(
+    ok = ProxyExtrasDBManager.run_migration_job(
         use_migrate=not use_db_push,
         use_v2_resolver=use_v2,
     )

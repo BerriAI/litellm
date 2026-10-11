@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, type ReactNode } from "react";
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode, type RefObject } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RotateCcw, Sparkles, X } from "lucide-react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -15,42 +15,82 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { FieldError } from "@/components/ui/field";
-import {
-  Popover,
-  PopoverContent,
-  PopoverDescription,
-  PopoverHeader,
-  PopoverTitle,
-  PopoverTrigger,
-} from "@/components/ui/popover";
 import { Skeleton } from "@/components/ui/skeleton";
+import { cn } from "@/lib/cva.config";
 import { isProxyAdminRole } from "@/utils/roles";
-import { MAX_INPUT_LENGTH, resolveInferenceTarget } from "./agent";
+import { getPreferredLiteAdminModel, MAX_INPUT_LENGTH, resolveInferenceTarget } from "./agent";
 import { LiteAdminConversation } from "./LiteAdminConversation";
 import { useLiteAdmin, type LiteAdminSession } from "./useLiteAdmin";
 
-const PANEL_CLASS =
-  "flex h-[min(42rem,calc(100dvh-6rem))] w-[min(30rem,calc(100vw-2rem))] min-w-0 flex-col gap-0 overflow-hidden rounded-xl p-0";
 type ManagementSession = Omit<LiteAdminSession, "inferenceBaseUrl">;
+type LiteAdminState = { open: boolean; toggle: () => void };
 
-export default function LiteAdmin() {
+const LiteAdminContext = createContext<LiteAdminState | null>(null);
+
+function useLiteAdminSession() {
   const auth = useAuthorized();
   const [disabled] = useDisableLiteAdmin(auth.userId);
-  const sessionReady = !auth.isLoading && auth.isAuthorized;
+  const sessionReady = !auth.isLoading && auth.isAuthorized && auth.premiumUser === true;
   const writableAdmin = !auth.isViewOnly && isProxyAdminRole(auth.userRole);
   const allowed = sessionReady && writableAdmin && !disabled;
   if (!allowed || !auth.token || !auth.accessToken) return null;
   const session = { token: auth.token, accessToken: auth.accessToken, managementBaseUrl: getProxyBaseUrl() };
+  return { session, key: JSON.stringify([auth.userId, session.token, session.accessToken, session.managementBaseUrl]) };
+}
+
+/** Wraps the dashboard content column and docks the LiteAdmin panel beside it, so opening it narrows the page instead of covering it. */
+export function LiteAdminFrame({ children }: { children: ReactNode }) {
+  const configured = useLiteAdminSession();
+  const sessionKey = configured?.key ?? null;
+  const [open, setOpen] = useState(false);
+  const [openedSession, setOpenedSession] = useState(sessionKey);
+  if (openedSession !== sessionKey) {
+    setOpenedSession(sessionKey);
+    setOpen(false);
+  }
+  const toggle = () => setOpen((current) => !current);
+  useEffect(() => {
+    if (sessionKey === null) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const modifier = event.metaKey || event.ctrlKey;
+      const extraModifier = event.shiftKey || event.altKey;
+      if (event.key.toLowerCase() !== "j" || !modifier || extraModifier) return;
+      event.preventDefault();
+      toggle();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [sessionKey]);
   return (
-    <ConfiguredLiteAdmin
-      key={JSON.stringify([auth.userId, session.token, session.accessToken, session.managementBaseUrl])}
-      session={session}
-    />
+    <LiteAdminContext.Provider value={configured ? { open, toggle } : null}>
+      {children}
+      {configured && (
+        <DockedPanel key={configured.key} session={configured.session} open={open} close={() => setOpen(false)} />
+      )}
+    </LiteAdminContext.Provider>
   );
 }
 
-function ConfiguredLiteAdmin({ session }: { session: ManagementSession }) {
-  const [open, setOpen] = useState(false);
+export default function LiteAdminTrigger() {
+  const state = useContext(LiteAdminContext);
+  if (!state) return null;
+  return (
+    <Button
+      variant="ghost"
+      aria-label="LiteAdmin"
+      aria-keyshortcuts="Meta+J Control+J"
+      aria-expanded={state.open}
+      onClick={state.toggle}
+      className="rounded-full bg-info/10 text-info hover:bg-info/15 hover:text-info/80 aria-expanded:bg-info/15 aria-expanded:text-info"
+    >
+      <Sparkles className="size-4" />
+      <span className="hidden lg:inline">LiteAdmin</span>
+      <kbd className="hidden rounded-full border border-info/30 px-1.5 font-sans text-xs lg:inline">⌘J</kbd>
+    </Button>
+  );
+}
+
+function DockedPanel({ session, open, close }: { session: ManagementSession; open: boolean; close: () => void }) {
   const settings = useProxySettingsQuery(session.accessToken);
   const candidate =
     settings.data?.LITELLM_UI_API_DOC_BASE_URL?.trim() ||
@@ -60,21 +100,15 @@ function ConfiguredLiteAdmin({ session }: { session: ManagementSession }) {
     ? resolveInferenceTarget(candidate, session.managementBaseUrl, window.location.href)
     : null;
   return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger render={<Button className="fixed right-5 bottom-5 z-floating rounded-full shadow-lg" />}>
-        <Sparkles className="size-4" />
-        LiteAdmin
-      </PopoverTrigger>
-      <Destination
-        key={target?.baseUrl ?? "unavailable"}
-        session={session}
-        target={target}
-        loading={settings.isPending}
-        retry={() => void settings.refetch()}
-        open={open}
-        close={() => setOpen(false)}
-      />
-    </Popover>
+    <Destination
+      key={target?.baseUrl ?? "unavailable"}
+      session={session}
+      target={target}
+      loading={settings.isPending}
+      retry={() => void settings.refetch()}
+      open={open}
+      close={close}
+    />
   );
 }
 
@@ -98,7 +132,7 @@ function Destination({
     return <LiteAdminChat session={{ ...session, inferenceBaseUrl: target.baseUrl }} open={open} close={close} />;
   }
   return (
-    <PopoverContent side="top" align="end" sideOffset={12} className={PANEL_CLASS}>
+    <Panel open={open}>
       <PanelHeader close={close} />
       <div className="p-4">
         {loading && <Skeleton className="h-24" aria-label="Loading gateway settings" />}
@@ -128,7 +162,41 @@ function Destination({
           </Card>
         )}
       </div>
-    </PopoverContent>
+    </Panel>
+  );
+}
+
+/** On open, focus `initialFocus` when given, else the composer when it is usable, else the panel itself. */
+function Panel({
+  open,
+  initialFocus,
+  children,
+}: {
+  open: boolean;
+  initialFocus?: RefObject<HTMLElement | null>;
+  children: ReactNode;
+}) {
+  const ref = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const panel = ref.current;
+    if (!open || !panel) return;
+    (initialFocus?.current ?? panel.querySelector<HTMLElement>("textarea:enabled") ?? panel).focus({
+      preventScroll: true,
+    });
+  }, [open, initialFocus]);
+  return (
+    <aside
+      ref={ref}
+      aria-label="LiteAdmin"
+      tabIndex={-1}
+      hidden={!open}
+      className={cn(
+        "w-[min(26rem,40vw)] min-w-80 flex-none flex-col overflow-hidden border-l bg-background outline-none",
+        open && "flex",
+      )}
+    >
+      {children}
+    </aside>
   );
 }
 
@@ -145,7 +213,8 @@ function LiteAdminChat({ session, open, close }: { session: LiteAdminSession; op
       available.filter((item) => isModeCompatibleWithEndpoint(item.mode, EndpointType.CHAT)),
   };
   const models = useQuery(modelQuery);
-  const selectedModel = models.data?.some((item) => item.model_group === model) ? model : null;
+  const preferredModel = model ?? getPreferredLiteAdminModel(models.data ?? []);
+  const selectedModel = models.data?.some((item) => item.model_group === preferredModel) ? preferredModel : null;
   const busy = chat.phase !== "idle";
   const tooLong = input.trim().length > MAX_INPUT_LENGTH;
   const hasValidInput = selectedModel && input.trim() && !tooLong;
@@ -156,13 +225,7 @@ function LiteAdminChat({ session, open, close }: { session: LiteAdminSession; op
     setInput("");
   };
   return (
-    <PopoverContent
-      side="top"
-      align="end"
-      sideOffset={12}
-      className={PANEL_CLASS}
-      initialFocus={chat.phase === "review" ? reviewRef : true}
-    >
+    <Panel open={open} initialFocus={chat.phase === "review" ? reviewRef : undefined}>
       <PanelHeader close={close}>
         <Button
           variant="ghost"
@@ -227,17 +290,20 @@ function LiteAdminChat({ session, open, close }: { session: LiteAdminSession; op
         />
         <p className="text-xs text-muted-foreground">Use a model you trust with your gateway data.</p>
       </div>
-    </PopoverContent>
+    </Panel>
   );
 }
 
 function PanelHeader({ close, children }: { close: () => void; children?: ReactNode }) {
   return (
     <div className="flex items-start justify-between gap-3 border-b p-4">
-      <PopoverHeader>
-        <PopoverTitle>LiteAdmin</PopoverTitle>
-        <PopoverDescription>Ask about your gateway. Review changes in chat.</PopoverDescription>
-      </PopoverHeader>
+      <div className="flex flex-col gap-1 text-sm">
+        <h2 className="flex items-center gap-1.5 font-medium">
+          <Sparkles className="size-4 text-info" />
+          LiteAdmin
+        </h2>
+        <p className="text-muted-foreground">Ask about your gateway. Review changes in chat.</p>
+      </div>
       <div className="flex shrink-0">
         {children}
         <Button variant="ghost" size="icon-sm" aria-label="Close LiteAdmin" onClick={close}>

@@ -1,3 +1,4 @@
+import { hydrateOssClassifier } from "@/components/add_model/jev_classifier_config";
 import {
   ComplexityRouterConfigPayload,
   hydrateTierLabels,
@@ -24,6 +25,7 @@ import {
   TierModelParams,
   TierModelParamsByTier,
   hydrateTierModelParams,
+  normalizeTierModels,
 } from "@/components/add_model/complexity_router_tiers";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
@@ -302,8 +304,9 @@ export const buildPresetPrefill = (
   config: ComplexityRouterConfigPayload,
   availability: ModelAvailability,
 ): PresetPrefill => {
+  const classifier = hydrateOssClassifier(config);
   const resolve = (model: string): string => resolveAvailableModel(model, availability) ?? model;
-  const resolveTier = (models: string[]): string[] => models.map(resolve);
+  const resolveTier = (models: string | string[]): string[] => normalizeTierModels(models).map(resolve);
   // Params key on the model name the preset spells while every tier entry is rewritten to the
   // caller's registered spelling, so the keys have to be rewritten the same way. Otherwise
   // serializeTierModelConfigs drops them for naming a model the tier no longer holds.
@@ -334,11 +337,10 @@ export const buildPresetPrefill = (
       },
       tier_model_params: resolveParamKeys(hydrateTierModelParams(config.tiers, config.tier_model_configs)),
       tier_labels: hydrateTierLabels(config.tier_labels),
-      classifier_type: config.classifier_type,
+      ...classifier,
       heuristic_v2_success_threshold: config.heuristic_v2_success_threshold,
-      jev_classifier_config: config.classifier_type === "jev" ? config.jev_classifier_config : undefined,
       classifier_llm_config:
-        config.classifier_type !== "jev" && config.classifier_llm_config
+        classifier.classifier_type !== "jev" && config.classifier_llm_config
           ? { ...config.classifier_llm_config, model: resolve(config.classifier_llm_config.model) }
           : undefined,
       classifier_context_window_size: config.classifier_context_window_size,
@@ -363,6 +365,9 @@ export const buildPresetPrefill = (
       reasoning_override_min_score: hydrateReasoningOverrideMinScore(config.reasoning_override_min_score),
       enable_context_window_escalation: config.enable_context_window_escalation,
       context_window_escalation_buffer: config.context_window_escalation_buffer,
+      cache_aware_routing: config.cache_aware_routing,
+      cache_aware_routing_output_tokens: config.cache_aware_routing_output_tokens,
+      cache_aware_routing_timeout_ms: config.cache_aware_routing_timeout_ms,
     },
     customTechnicalKeywords: config.custom_technical_keywords ?? [],
     keywordTierRules: hydrateKeywordTierRules(config.keyword_tier_rules ?? []),

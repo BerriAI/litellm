@@ -21,6 +21,8 @@ from typing import (
     cast,  # noqa: TID251  # bounded compatibility calls into legacy Python integrations
 )
 
+from pydantic import TypeAdapter
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -53,7 +55,7 @@ def setup(
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.utils import Rules, function_setup
 
-    arguments: Final = {  # mutable-ok: function_setup consumes an owned kwargs dict
+    arguments: Final = {
         "litellm_call_id": str(uuid.uuid4()),
         **kwargs,
     }
@@ -124,7 +126,7 @@ class LoggingSurface(Protocol):
     ) -> object: ...
 
     def handle_sync_success_callbacks_for_async_calls(
-        self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: object = None
+        self, result: object, start_time: datetime.datetime, end_time: datetime.datetime, cache_hit: bool | None = None
     ) -> None: ...
 
     def failure_handler(
@@ -225,7 +227,7 @@ def post_call(
 
 
 def defers_async_logging(logger: LoggingSurface) -> bool:
-    return bool(getattr(logger, "_defer_async_logging", False))
+    return bool(getattr(logger, "defer_async_logging", False))
 
 
 def defer_success(logger: LoggingSurface, pending: object) -> None:
@@ -337,9 +339,15 @@ def after_deployment_failure(kwargs: dict[str, object], error: Exception, call_t
     return hook(kwargs, error, call_type)
 
 
-def stream_opened(logger: Logging) -> None:
+_STREAM_HEADERS: Final = TypeAdapter(Mapping[str, str])
+
+
+def stream_opened(logger: Logging, head: Mapping[str, object]) -> None:
     logger.stream = True
     logger.model_call_details["stream"] = True
+    logger.model_call_details["response_headers"] = _STREAM_HEADERS.validate_python(
+        head.get("additional_headers") or {}
+    )
 
 
 def stream_success(

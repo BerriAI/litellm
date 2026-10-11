@@ -12,9 +12,9 @@ if TYPE_CHECKING:
     from litellm.types.agents import AgentResponse
 
 AccessGroupIds: TypeAlias = tuple[str, ...]
-AccessGroupIdsLoader: TypeAlias = Callable[[str], Awaitable[AccessGroupIds]]  # mutable-ok: Callable params
+AccessGroupIdsLoader: TypeAlias = Callable[[str], Awaitable[AccessGroupIds]]
 LoadedAccessGroup: TypeAlias = LiteLLM_AccessGroupTable | None
-AccessGroupLoader: TypeAlias = Callable[[str], Awaitable[LoadedAccessGroup]]  # mutable-ok: Callable parameter syntax
+AccessGroupLoader: TypeAlias = Callable[[str], Awaitable[LoadedAccessGroup]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,7 +27,7 @@ class AgentAccessGroupCeiling:
     agent_ids: frozenset[str]
 
 
-CeilingResolver: TypeAlias = Callable[[str], Awaitable[AgentAccessGroupCeiling | None]]  # mutable-ok: Callable params
+CeilingResolver: TypeAlias = Callable[[str], Awaitable[AgentAccessGroupCeiling | None]]
 
 
 async def _registry_access_group_ids(agent_id: str) -> AccessGroupIds:

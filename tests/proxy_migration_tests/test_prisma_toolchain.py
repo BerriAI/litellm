@@ -312,7 +312,7 @@ def test_db_push_timeout_hint_names_the_per_command_budget(
 ) -> None:
     """``db push`` keeps the per-command budget, so its timeout hint has to name that variable."""
     _, log_path = toolchain_env
-    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
+    monkeypatch.delenv("DATABASE_URL", raising=False)
     monkeypatch.setenv(PRISMA_COMMAND_TIMEOUT_ENV_VAR, "1")
     monkeypatch.setenv("FAKE_PRISMA_FIRST_PUSH_SLEEP", "3")
 
