@@ -1,7 +1,8 @@
 import React, { useContext, useId } from "react";
 import { Label } from "@/components/ui/label";
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
-import { ChevronDownIcon } from "lucide-react";
+import { SimpleTooltip } from "@/components/ui/tooltip";
+import { ChevronDownIcon, Info } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -119,9 +120,17 @@ interface AutoRouterClassifierTabsProps {
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
   children: React.ReactNode;
+  judgeModel?: React.ReactNode;
+  decisionModel?: React.ReactNode;
 }
 
-const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ value, onChange, children }) => {
+const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
+  value,
+  onChange,
+  children,
+  judgeModel,
+  decisionModel,
+}) => {
   const id = useId();
   const availability = useContext(AutoRouterAvailabilityContext);
   const classifierType = effectiveClassifierType(value);
@@ -154,17 +163,28 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
     llm_v2: "Use the efficient model when its predicted quality is close enough to the capable model",
   };
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <fieldset>
-        <legend className="mb-3 flex w-full items-center justify-between gap-3 text-sm font-medium">
-          What classifies your requests?
+        <legend className="mb-4 flex w-full items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <h4 className="m-0 text-xl font-semibold text-foreground">Choose your classifier</h4>
+            <SimpleTooltip content="Choose how requests are evaluated and routed to your tiers">
+              <button type="button" aria-label="About classifiers" className="text-muted-foreground">
+                <Info className="size-4" />
+              </button>
+            </SimpleTooltip>
+          </div>
           <AutoRouterLimits />
         </legend>
         <RadioGroup value={family} onValueChange={changeFamily} className="grid gap-3 sm:grid-cols-3">
           {[
             { value: "heuristics", label: "Heuristics", description: "Classify locally, with no API call" },
             { value: "llm", label: "LLM", description: "Use a judge model to choose a solver" },
-            { value: "jev", label: "Jev", description: "Use TypeSafe System One Choice to choose a tier" },
+            {
+              value: "jev",
+              label: "Decisions Model",
+              description: "Use a decision model to choose a tier",
+            },
           ].map((option) => (
             <Label
               key={option.value}
@@ -189,6 +209,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
           ))}
         </RadioGroup>
       </fieldset>
+      {family === "jev" && decisionModel}
       {family === "custom" && (
         <p className="text-sm text-muted-foreground">This router uses a custom classifier plugin</p>
       )}
@@ -224,7 +245,8 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
           </p>
         </div>
       )}
-      {(family === "llm" || family === "jev") && (
+      {family === "llm" && judgeModel}
+      {family === "llm" && (
         <div className="space-y-2">
           <Label htmlFor={`${id}-approach`}>Routing approach</Label>
           <ClassifierMenu
