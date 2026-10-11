@@ -2614,7 +2614,9 @@ app.add_middleware(GZipBufferedResponseMiddleware)
 # is set). Added inside SecurityHeaders so screened responses are still
 # headered, and outside the auth dependencies so screened-and-blocked
 # requests never reach key validation. See middleware/guard_middleware.py.
-from litellm.proxy.middleware.guard_middleware import GuardMiddleware  # noqa: E402
+from litellm.proxy.middleware.guard_middleware import (  # noqa: E402  # mid-file attach: the middleware stack freezes once the lifespan runs
+    GuardMiddleware,
+)
 
 app.add_middleware(GuardMiddleware)
 
