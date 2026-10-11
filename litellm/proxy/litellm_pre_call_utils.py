@@ -237,9 +237,7 @@ from litellm.types.utils import (
     SupportedCacheControls,
 )
 
-_DESTINATION_ONLY_CALLBACK_VARS: Final[frozenset[str]] = frozenset(
-    {CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR}
-)
+_DESTINATION_ONLY_CALLBACK_VARS: Final[frozenset[str]] = frozenset({CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR})
 
 _CALLBACK_CREDENTIAL_KEYS: Final = frozenset(StandardCallbackDynamicParams.__annotations__) | frozenset(
     {TRUSTED_CALLBACK_VARS_FIELD}

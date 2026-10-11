@@ -368,9 +368,11 @@ async def add_team_callbacks(
             (
                 error
                 for variable_name in (CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR)
-                if (error := conflicting_callback_var_error(
-                    data.callback_name, variable_name, data.callback_vars, stored_callbacks
-                ))
+                if (
+                    error := conflicting_callback_var_error(
+                        data.callback_name, variable_name, data.callback_vars, stored_callbacks
+                    )
+                )
                 is not None
             ),
             None,
