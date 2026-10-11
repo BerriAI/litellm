@@ -103,3 +103,81 @@ async def test_gcs_cache_async_set_encodes_object_name_in_query(mock_gcs_depende
 
     called_url = mock_gcs_dependencies["async_client"].post.call_args.kwargs["url"]
     assert "name=my_cache%2Fabc123" in called_url
+
+
+@pytest.mark.asyncio
+async def test_gcs_cache_completion_hit_and_param_sensitivity(mock_gcs_dependencies):
+    """Same params hit the injected GCS cache client; different params do not."""
+    import asyncio
+
+    import litellm
+    from litellm.caching import Cache
+
+    store = {}
+
+    import json as _json
+    from urllib.parse import parse_qs, unquote, urlparse
+
+    def _store(url, data=None, json=None, content=None, **kw):
+        object_name = parse_qs(urlparse(url).query).get("name", [None])[0]
+        if object_name is not None:
+            store[unquote(object_name)] = data if isinstance(data, (str, bytes)) else json
+        resp = AsyncMock()
+        resp.status_code = 200
+        resp.text = "{}"
+        return resp
+
+    def _get(url, **kw):
+        object_name = unquote(url.split("/o/")[-1].split("?")[0])
+        resp = AsyncMock()
+        if object_name in store:
+            stored = store[object_name]
+            resp.status_code = 200
+            resp.text = stored if isinstance(stored, str) else _json.dumps(stored)
+        else:
+            resp.status_code = 404
+            resp.text = "not found"
+        return resp
+
+    mock_gcs_dependencies["async_client"].post.side_effect = _store
+    mock_gcs_dependencies["async_client"].get.side_effect = _get
+    mock_gcs_dependencies["sync_client"].post.side_effect = _store
+    mock_gcs_dependencies["sync_client"].get.side_effect = _get
+
+    messages = [{"role": "user", "content": "write a one sentence poem about: gcs-cache-unit-key"}]
+    litellm.cache = Cache(type="gcs", gcs_bucket_name="test-bucket")
+    try:
+        response1 = await litellm.acompletion(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            max_tokens=20,
+            mock_response="This number is so great!",
+        )
+        deadline = asyncio.get_event_loop().time() + 10
+        while not store and asyncio.get_event_loop().time() < deadline:
+            await asyncio.sleep(0.05)
+        assert store
+        response2 = await litellm.acompletion(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            max_tokens=20,
+            mock_response="This number is great!",
+        )
+        assert response1.choices[0].message.content == response2.choices[0].message.content
+
+        response3 = await litellm.acompletion(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            temperature=0.5,
+            mock_response="This number is awful!",
+        )
+        assert response1.choices[0].message.content != response3.choices[0].message.content
+    finally:
+        litellm.cache = None
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+
+

@@ -10439,7 +10439,7 @@ def test_truncate_standard_logging_payload():
     1. the payload passed in is never modified, since every callback of the request shares it
     2. the `messages`, `response`, and `error_str` in the returned payload are truncated
     """
-    from tests.local_testing.create_mock_standard_logging_payload import (
+    from tests.unit.create_mock_standard_logging_payload import (
         create_standard_logging_payload_with_long_content,
     )
 

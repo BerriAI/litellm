@@ -37,7 +37,6 @@ GLOB_CHARS = frozenset("*?")
 # tests has to be named by some shard or it runs nowhere. A child listed here is
 # itself decomposed one level deeper and is checked through its own entry.
 SHARDED_ROOTS: tuple[str, ...] = (
-    "tests/test_litellm",
     "tests/unit",
     "tests/unit/enterprise",
     "tests/unit/enterprise/enterprise_callbacks",
