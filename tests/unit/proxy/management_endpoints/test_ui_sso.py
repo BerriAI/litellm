@@ -1348,17 +1348,22 @@ async def test_concurrent_sso_creation_refuses_partial_membership_across_multipl
 
 
 @pytest.mark.asyncio
-async def test_public_sso_upsert_recovers_an_actual_duplicate_user_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize(
+    "defaults,user_role", ((None, "internal_user"), ({"organizations": ["not-for-admins"]}, "proxy_admin"))
+)
+async def test_public_sso_upsert_recovers_an_actual_duplicate_user_refusal(
+    defaults: Mapping[str, JsonValue] | None, user_role: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy import proxy_server
 
-    row: Final = {"user_id": RACE_SUBJECT, "sso_user_id": RACE_SUBJECT, "user_role": "internal_user"}
+    row: Final = {"user_id": RACE_SUBJECT, "sso_user_id": RACE_SUBJECT, "user_role": user_role}
     prisma: Final = _writer_with_row(row)
     prisma.db.litellm_usertable.find_first = AsyncMock(return_value=LiteLLM_UserTable.model_validate(row))
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
-    monkeypatch.setattr(litellm, "default_internal_user_params", None)
-    values: Final[SSOUserDefinedValues] = {**RACE_VALUES}
+    monkeypatch.setattr(litellm, "default_internal_user_params", defaults)
+    values: Final[SSOUserDefinedValues] = {**RACE_VALUES, "user_role": user_role}
     recovered: Final = await SSOAuthenticationHandler.upsert_sso_user(
-        result=CustomOpenID(id=RACE_SUBJECT, email=RACE_VALUES["user_email"], user_role="internal_user", team_ids=[]),
+        result=CustomOpenID(id=RACE_SUBJECT, email=RACE_VALUES["user_email"], user_role=user_role, team_ids=[]),
         user_info=None,
         user_email=RACE_VALUES["user_email"],
         user_defined_values=values,
@@ -1368,7 +1373,7 @@ async def test_public_sso_upsert_recovers_an_actual_duplicate_user_refusal(monke
     assert (recovered.user_id, recovered.sso_user_id, recovered.user_role) == (
         RACE_SUBJECT,
         RACE_SUBJECT,
-        "internal_user",
+        user_role,
     )
 
 

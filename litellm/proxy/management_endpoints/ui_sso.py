@@ -2703,7 +2703,9 @@ async def _concurrently_inserted_sso_user(
         getattr(litellm, "default_internal_user_params", None) or {}
     )
     required_organizations: Final = TypeAdapter(tuple[str, ...]).validate_python(
-        default_parameters.get("organizations") or ()
+        ()
+        if user_defined_values["user_role"] == LitellmUserRoles.PROXY_ADMIN
+        else default_parameters.get("organizations") or ()
     )
     existing: Final = await UserRepository(prisma_client, use_writer=True).find_by_id(
         user_id, include_organization_memberships=bool(required_organizations)
