@@ -516,6 +516,7 @@
             "audio_transcription",
             "chat",
             "completion",
+            "decisions",
             "embedding",
             "evaluation",
             "guardrail",

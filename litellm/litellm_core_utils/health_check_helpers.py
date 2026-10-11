@@ -215,6 +215,7 @@ class HealthCheckHelpers:
             "anthropic_messages",
             "ocr",
             "evaluation",
+            "decisions",
         ],
         Callable,
     ]:
@@ -312,6 +313,17 @@ class HealthCheckHelpers:
                 document=_ocr_health_check_document(model=model, custom_llm_provider=custom_llm_provider),
             ),
             "evaluation": lambda: litellm.asystemone(
+                **DECISIONS_CALL_PARAMS.validate_python(
+                    {
+                        "state": prompt or "health check",
+                        "questions": _decisions_health_check_questions(
+                            model=model, custom_llm_provider=custom_llm_provider
+                        ),
+                        **_filter_model_params(model_params=model_params),
+                    }
+                )
+            ),
+            "decisions": lambda: litellm.asystemone(
                 **DECISIONS_CALL_PARAMS.validate_python(
                     {
                         "state": prompt or "health check",

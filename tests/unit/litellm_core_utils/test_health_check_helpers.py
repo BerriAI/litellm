@@ -5,7 +5,7 @@ import socket
 import struct
 import zlib
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -724,9 +724,11 @@ async def test_ahealth_check_probes_hosted_vllm_with_a_choice_question(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("evaluation", "decisions"))
 async def test_ahealth_check_keeps_the_noul_probe_for_other_decisions_providers(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
+    mode: Literal["evaluation", "decisions"],
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
@@ -743,7 +745,7 @@ async def test_ahealth_check_keeps_the_noul_probe_for_other_decisions_providers(
             "model": "typesafe/jev-1.13",
             "api_key": "sk-test",
         },
-        mode="evaluation",
+        mode=mode,
     )
 
     assert "error" not in result, result

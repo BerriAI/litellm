@@ -467,7 +467,26 @@ def test_decisions_pricing_rows_match_their_plain_evaluation_rows(prices: dict) 
 
     assert matching_rows
     for key, decisions_row, evaluation_row in matching_rows:
-        assert decisions_row == evaluation_row, f"{key} must copy its plain evaluation row"
+        assert decisions_row.get("mode") == "decisions", f"{key} must use the decisions mode"
+        assert {
+            field: value for field, value in decisions_row.items() if field != "mode"
+        } == {field: value for field, value in evaluation_row.items() if field != "mode"}, (
+            f"{key} must copy every field except mode from its plain evaluation row"
+        )
+
+
+def test_all_decisions_pricing_rows_use_decisions_mode(prices: dict) -> None:
+    decisions_rows: Final = tuple(
+        (key, value)
+        for key, value in prices.items()
+        if isinstance(value, Mapping)
+        and isinstance(provider := value.get("litellm_provider"), str)
+        and is_decisions_pricing_key(key, provider)
+    )
+
+    assert decisions_rows
+    for key, value in decisions_rows:
+        assert value.get("mode") == "decisions", f"{key} must use the decisions mode"
 
 
 _ABSENT: Final = object()
@@ -668,7 +687,7 @@ def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
 
 
 PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
-MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "evaluation"})
+MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "evaluation", "decisions"})
 VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST: Final = frozenset(
     {
         "vertex_ai-ai21_models",

@@ -4,8 +4,9 @@ Plain JSON-shaped data: cost_tracking_case.py validates it into CostMapEntry and
 
 from typing import Final
 
-from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_key
 from pydantic import JsonValue
+
+from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_key
 
 _PERPLEXITY_DECISION_COST: Final[dict[str, JsonValue]] = {
     "input_cost_per_token": 4e-08,
@@ -13,6 +14,10 @@ _PERPLEXITY_DECISION_COST: Final[dict[str, JsonValue]] = {
     "max_input_tokens": 262144,
     "mode": "evaluation",
     "output_cost_per_token": 0.0,
+}
+_PERPLEXITY_DECISIONS_PRICING_COST: Final[dict[str, JsonValue]] = {
+    **_PERPLEXITY_DECISION_COST,
+    "mode": "decisions",
 }
 
 COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
@@ -55,7 +60,7 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "input_cost_per_token_above_272k_tokens": 2e-07,
         "litellm_provider": "openai",
         "max_input_tokens": 922000,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
@@ -73,7 +78,7 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         },
     },
     "perplexity/pplx-decider-v1-27b": _PERPLEXITY_DECISION_COST,
-    decisions_pricing_key("perplexity", "pplx-decider-v1-27b"): _PERPLEXITY_DECISION_COST,
+    decisions_pricing_key("perplexity", "pplx-decider-v1-27b"): _PERPLEXITY_DECISIONS_PRICING_COST,
     "deepseek/deepseek-v4-chat": {
         "litellm_provider": "deepseek",
         "mode": "chat",

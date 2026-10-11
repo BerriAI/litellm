@@ -16025,7 +16025,7 @@
         "input_cost_per_token": 2.4e-07,
         "litellm_provider": "cloudflare",
         "max_input_tokens": 65536,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
     },
@@ -16041,7 +16041,7 @@
         "input_cost_per_token": 9e-08,
         "litellm_provider": "cloudflare",
         "max_input_tokens": 65536,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://developers.cloudflare.com/workers-ai/platform/pricing/"
     },
@@ -21216,7 +21216,7 @@
         "metadata": {
             "notes": "Pay-per-token Foundation Model API decision endpoint (OpenJev, Qwen 3.5 4B) queried through the System One API. Databricks published no DBU rate for it as of 2026-10-07, so a deployment's model_info prices set the billed cost."
         },
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://docs.databricks.com/aws/en/machine-learning/foundation-model-apis/supported-models"
     },
@@ -35019,7 +35019,7 @@
         "input_cost_per_token_above_272k_tokens": 2e-07,
         "litellm_provider": "openai",
         "max_input_tokens": 922000,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "regional_processing_uplift_multiplier_eu": 1.1,
         "regional_processing_uplift_multiplier_us": 1.1,
@@ -43010,7 +43010,7 @@
         "input_cost_per_token": 4e-08,
         "litellm_provider": "perplexity",
         "max_input_tokens": 262144,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://docs.perplexity.ai/api-reference/decisions-post"
     },
@@ -68130,7 +68130,7 @@
         "input_cost_per_token": 0.0,
         "litellm_provider": "bespoke",
         "max_input_tokens": 8192,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://github.com/bespokelabsai/nimble",
         "supported_endpoints": [
@@ -68158,7 +68158,7 @@
         "input_cost_per_token": 0.0,
         "litellm_provider": "bespoke",
         "max_input_tokens": 8192,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://ollama.com/library/nimble",
         "supported_endpoints": [
@@ -68186,7 +68186,7 @@
         "input_cost_per_token": 0.0,
         "litellm_provider": "bespoke",
         "max_input_tokens": 8192,
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://github.com/bespokelabsai/nimble",
         "supported_endpoints": [
@@ -68212,7 +68212,7 @@
     "laya/decisions/english": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "laya",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://github.com/NandhaKishorM/laya",
         "supported_endpoints": [
@@ -68238,7 +68238,7 @@
     "laya/decisions/multilingual": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "laya",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://github.com/NandhaKishorM/laya",
         "supported_endpoints": [
@@ -68264,7 +68264,7 @@
     "laya/decisions/typed-decisions": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "laya",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://github.com/NandhaKishorM/laya",
         "supported_endpoints": [
@@ -68287,7 +68287,7 @@
     "strands_decider/decisions/strands-decider-2B-hobson-v19": {
         "input_cost_per_token": 0.0,
         "litellm_provider": "strands_decider",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://huggingface.co/StrandsAgents/strands-decider-2B-hobson-v19",
         "metadata": {
@@ -68304,7 +68304,7 @@
     "typesafe/decisions/jev-1.13.0": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models"
     },
@@ -68318,7 +68318,7 @@
     "typesafe/decisions/jev-latest": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models"
     },
@@ -68332,7 +68332,7 @@
     "typesafe/decisions/jev-preview": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://docs.typesafe.ai/models"
     },
@@ -72013,7 +72013,7 @@
     "azure_ai/decisions/Microsoft-Decision-1": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "azure_ai",
-        "mode": "evaluation",
+        "mode": "decisions",
         "output_cost_per_token": 0.0,
         "source": "https://prices.azure.com/api/retail/prices?$filter=productName eq 'Microsoft Decision Models'"
     },

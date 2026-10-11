@@ -431,6 +431,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "audio_speech",
             "responses",
             "evaluation",
+            "decisions",
             "ocr",
             "realtime",
         ]

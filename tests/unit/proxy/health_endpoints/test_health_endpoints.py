@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from importlib import import_module
 from types import MappingProxyType, SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -5011,7 +5011,8 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
     assert response.json()["status"] == "success"
 
 
-def test_test_model_connection_accepts_evaluation_mode(monkeypatch):
+@pytest.mark.parametrize("mode", ("evaluation", "decisions"))
+def test_test_model_connection_accepts_decisions_modes(monkeypatch, mode: Literal["evaluation", "decisions"]):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
@@ -5036,7 +5037,7 @@ def test_test_model_connection_accepts_evaluation_mode(monkeypatch):
         response = client.post(
             "/health/test_connection",
             json={
-                "mode": "evaluation",
+                "mode": mode,
                 "litellm_params": {"model": "typesafe/jev-latest", "api_key": "sk-test"},
             },
         )
