@@ -1211,7 +1211,10 @@ def _register_custom_pricing_for_request(
             deployment_id: entry,
             shared_key: (
                 {k: v for k, v in shared_entry.items() if k != "mode"}
-                if mode_register_model_would_merge_into(shared_key, custom_llm_provider) is not None
+                if mode_register_model_would_merge_into(
+                    shared_key, custom_llm_provider, custom_llm_provider=custom_llm_provider
+                )
+                is not None
                 else shared_entry
             ),
         },

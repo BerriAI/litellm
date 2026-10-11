@@ -10528,7 +10528,9 @@ class Router:
         backend_keys: Final = Router._backend_cost_map_keys(model=model, custom_llm_provider=custom_llm_provider)
         shared_model_info: Final = shared_backend_model_info(
             model_info,
-            existing_mode=mode_register_model_would_merge_into(backend_keys[0], model_info.get("litellm_provider", "")),
+            existing_mode=mode_register_model_would_merge_into(
+                backend_keys[0], model_info.get("litellm_provider", ""), custom_llm_provider=None
+            ),
         )
         litellm.register_model(
             model_cost={_key: shared_model_info for _key in backend_keys},
