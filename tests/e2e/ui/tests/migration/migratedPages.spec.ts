@@ -63,7 +63,7 @@ test.describe("App Router migrated pages", () => {
     const landing = await page.goto(`${ROOT}/ui/`);
     expect(landing?.ok(), "dashboard document loads successfully").toBe(true);
     await dismissFeedbackPopup(page);
-    await navigateToDestination(page, apiKeys);
+    await expectContent(page, apiKeys);
 
     for (const destination of [apiKeys, MIGRATED_E2E_PAGES.models, apiKeys]) {
       await navigateToDestination(page, destination);

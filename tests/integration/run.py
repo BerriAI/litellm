@@ -26,7 +26,6 @@ GROUPS: Final = MappingProxyType(
 GITHUB_FILES: Final = frozenset(
     {"tests/integration/database/test_roi_observed.py", "tests/integration/mcp/test_interactions.py"}
 )
-GITHUB_SHARED_FILES: Final = frozenset({"tests/integration/configuration/test_basic_proxy_startup.py"})
 
 
 @dataclass(frozen=True, slots=True)
