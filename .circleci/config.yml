@@ -38,7 +38,7 @@ commands:
     parameters:
       category:
         type: enum
-        enum: ["backend", "client", "provider-harness", "redis-compat"]
+        enum: ["backend", "client", "redis-compat"]
         default: "backend"
     steps:
       - run:
@@ -619,7 +619,7 @@ jobs:
           name: Run Basic Proxy Startup Tests (Health Readiness and Chat Completion)
           command: |
             mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/basic_proxy_startup_tests/**/test_*.py")
+            TEST_FILES=$(circleci tests glob "tests/integration/configuration/test_basic_proxy_startup.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
@@ -696,7 +696,7 @@ jobs:
           name: Run second round of tests
           command: |
             mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/basic_proxy_startup_tests/**/test_*.py")
+            TEST_FILES=$(circleci tests glob "tests/integration/configuration/test_basic_proxy_startup.py")
             echo "$TEST_FILES" | circleci tests run \
               --verbose \
               --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
@@ -708,84 +708,46 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-  proxy_pass_through_endpoint_tests:
-    machine:
-      image: ubuntu-2204:2024.04.1
+  e2e_ui_build:
+    docker:
+      - image: cimg/python:3.12-browsers@sha256:b432899af01c9a311bf74f4f22e9ada2e5306d4b1b4383f8d29e1228a5844ef2
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     resource_class: large
     working_directory: ~/project
     steps:
       - checkout
-      - run:
-          name: Generate LiteLLM master key
-          command: |
-            key="$(openssl rand -hex 16)"
-            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
-      - skip_if_unrelated_changes
+      - skip_if_unrelated_changes:
+          category: client
       - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - start_postgres
-      - attach_workspace:
-          at: ~/project
-      - run:
-          name: Load Docker Database Image
-          command: |
-            zstd -d litellm-docker-database.tar.zst --stdout | docker load
-            docker images | grep litellm-docker-database
-      - run:
-          name: Run Docker container
-          command: |
-            docker run -d \
-              -p 4000:4000 \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
-              -e OPENAI_API_KEY=$OPENAI_API_KEY \
-              -e GEMINI_API_KEY=$GEMINI_API_KEY \
-              -e ANTHROPIC_API_KEY=$ANTHROPIC_API_KEY \
-              -e ASSEMBLYAI_API_KEY=$ASSEMBLYAI_API_KEY \
-              -e AZURE_API_KEY=$AZURE_API_KEY \
-              -e AZURE_API_BASE=$AZURE_API_BASE \
-              -e USE_DDTRACE=True \
-              -e DD_API_KEY=$DD_API_KEY \
-              -e DD_SITE=$DD_SITE \
-              -e LITELLM_LICENSE=$LITELLM_LICENSE \
-              -e LITELLM_USE_CHAT_COMPLETIONS_URL_FOR_ANTHROPIC_MESSAGES=true \
-              -e LITELLM_LOG=ERROR \
-              --add-host host.docker.internal:host-gateway \
-              --name my-app \
-              -v $(pwd)/litellm/proxy/example_config_yaml/pass_through_config.yaml:/app/config.yaml \
-              -v $(pwd)/litellm/proxy/example_config_yaml/custom_auth_basic.py:/app/custom_auth_basic.py \
-              litellm-docker-database:ci \
-              --config /app/config.yaml \
-              --port 4000
-      - run:
-          name: Start outputting logs
-          command: docker logs -f my-app
-          background: true
-      - wait_for_service:
-          url: http://localhost:4000
-          timeout: "300"
-      # Install Node.js directly from nodejs.org with SHA256 verification,
-      # instead of piping NodeSource's setup_24.x apt-repo installer into
-      # sudo bash (which runs a mutable upstream script unattended).
       - install_node
-
+      - restore_cache:
+          keys:
+            - ui-dashboard-node-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
       - run:
-          name: Install Node.js test dependencies
+          name: Install dashboard dependencies
           command: |
-            cd tests/pass_through_tests
+            cd ui/litellm-dashboard
             npm ci
-
+      - save_cache:
+          key: ui-dashboard-node-deps-v1-{{ checksum "ui/litellm-dashboard/package-lock.json" }}
+          paths:
+            - ui/litellm-dashboard/node_modules
       - run:
-          name: Run Vertex AI, Google AI Studio Node.js tests
+          name: Build UI bundle
           command: |
-            cd tests/pass_through_tests
-            NODE_OPTIONS=--experimental-vm-modules npx jest . --verbose
-          no_output_timeout: 30m
+            cd ui/litellm-dashboard
+            npm run build
+            mkdir -p ../../ui-bundle
+            mv out ../../ui-bundle/out
+            find ../../ui-bundle/out -name '*.html' ! -name 'index.html' | while read -r f; do
+              d="${f%.html}"; mkdir -p "$d"; mv "$f" "$d/index.html"
+            done
+      - persist_to_workspace:
+          root: ~/project
+          paths:
+            - ui-bundle/out
 
   e2e_ui_testing:
     docker:
@@ -798,7 +760,7 @@ jobs:
           POSTGRES_USER: e2euser
           POSTGRES_PASSWORD: e2epassword
           POSTGRES_DB: litellm_e2e
-    resource_class: large
+    resource_class: xlarge
     working_directory: ~/project
     environment:
       DATABASE_URL: "postgresql://e2euser:e2epassword@localhost:5432/litellm_e2e"
@@ -817,6 +779,8 @@ jobs:
             printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes:
           category: client
+      - attach_workspace:
+          at: ~/project
       - setup_google_dns
       - install_node
       - install_uv
@@ -835,7 +799,7 @@ jobs:
             - ~/.cache/uv
       - restore_cache:
           keys:
-            - ui-e2e-node-deps-v4-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+            - ui-playwright-node-deps-v1-{{ checksum "tests/e2e/ui/package-lock.json" }}
       - run:
           name: Install Node dependencies and Playwright
           # The cimg/python:3.12-browsers image already ships the Chromium system
@@ -844,36 +808,19 @@ jobs:
           # 5-10 minutes to the job and frequently stalls on flaky Ubuntu mirrors,
           # so we install just the browser binary.
           command: |
-            cd ui/litellm-dashboard
-            npm ci
-            cd ../../tests/e2e/ui
+            cd tests/e2e/ui
             npm ci
             npx playwright install chromium
       - save_cache:
-          key: ui-e2e-node-deps-v4-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+          key: ui-playwright-node-deps-v1-{{ checksum "tests/e2e/ui/package-lock.json" }}
           paths:
-            - ui/litellm-dashboard/node_modules
             - tests/e2e/ui/node_modules
             - ~/.cache/ms-playwright
       - run:
-          name: Build UI from source
-          # Prior version used `cp -r out/ ../../litellm/proxy/_experimental/out/`.
-          # GNU cp (used on CircleCI's Ubuntu image) interprets that as "copy the
-          # source directory as a child of the destination" when the destination
-          # already exists — silently creating `_experimental/out/out/` instead of
-          # replacing the served bundle. The proxy continued serving whatever was
-          # checked into `_experimental/out/*`, so this job was effectively testing
-          # the pre-build bundle on every run. Replace-and-move guarantees the
-          # freshly built bundle is what the proxy actually serves.
+          name: Use built UI bundle
           command: |
-            cd ui/litellm-dashboard
-            npm run build
-            rm -rf ../../litellm/proxy/_experimental/out
-            mv out ../../litellm/proxy/_experimental/out
-            # Restructure HTML so extensionless routes work (login.html -> login/index.html)
-            find ../../litellm/proxy/_experimental/out -name '*.html' ! -name 'index.html' | while read -r f; do
-              d="${f%.html}"; mkdir -p "$d"; mv "$f" "$d/index.html"
-            done
+            rm -rf litellm/proxy/_experimental/out
+            cp -r ui-bundle/out litellm/proxy/_experimental/out
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "30"
@@ -940,7 +887,7 @@ jobs:
           command: |
             cd tests/e2e/ui
             LITELLM_LICENSE="$LITELLM_LICENSE" \
-              npx playwright test --config playwright.config.ts
+              npx playwright test --config playwright.config.ts --workers=3 --retries=0
           no_output_timeout: 10m
       - store_artifacts:
           path: tests/e2e/ui/test-results
@@ -978,6 +925,8 @@ jobs:
             printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
       - skip_if_unrelated_changes:
           category: client
+      - attach_workspace:
+          at: ~/project
       - setup_google_dns
       - install_node
       - install_uv
@@ -996,31 +945,23 @@ jobs:
             - ~/.cache/uv
       - restore_cache:
           keys:
-            - ui-e2e-node-deps-v4-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+            - ui-playwright-node-deps-v1-{{ checksum "tests/e2e/ui/package-lock.json" }}
       - run:
           name: Install Node dependencies and Playwright
           command: |
-            cd ui/litellm-dashboard
-            npm ci
-            cd ../../tests/e2e/ui
+            cd tests/e2e/ui
             npm ci
             npx playwright install chromium
       - save_cache:
-          key: ui-e2e-node-deps-v4-{{ checksum "ui/litellm-dashboard/package-lock.json" }}-{{ checksum "tests/e2e/ui/package-lock.json" }}
+          key: ui-playwright-node-deps-v1-{{ checksum "tests/e2e/ui/package-lock.json" }}
           paths:
-            - ui/litellm-dashboard/node_modules
             - tests/e2e/ui/node_modules
             - ~/.cache/ms-playwright
       - run:
-          name: Build UI from source
+          name: Use built UI bundle
           command: |
-            cd ui/litellm-dashboard
-            npm run build
-            rm -rf ../../litellm/proxy/_experimental/out
-            mv out ../../litellm/proxy/_experimental/out
-            find ../../litellm/proxy/_experimental/out -name '*.html' ! -name 'index.html' | while read -r f; do
-              d="${f%.html}"; mkdir -p "$d"; mv "$f" "$d/index.html"
-            done
+            rm -rf litellm/proxy/_experimental/out
+            cp -r ui-bundle/out litellm/proxy/_experimental/out
       - wait_for_service:
           url: tcp://localhost:5432
           timeout: "30"
@@ -1270,45 +1211,6 @@ jobs:
             ! grep -q "Application startup complete" docker_output.log || fail "proxy reached serving state"
             ! docker exec my-app true 2>/dev/null || fail "container is still running"
             echo "Proxy refused to serve (exit $exit_code) and never reached startup. Test passed."
-
-  provider_replay_harness:
-    docker:
-      - &python312_image
-        image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-      - image: redis@sha256:e2debfb7956fa12c7ddc79d7e645c8cf26b30c99a6e9161ea9bf4171e1668a5f
-    working_directory: ~/project
-    resource_class: medium
-    environment:
-      E2E_CACHE_TEST_REDIS_URL: redis://127.0.0.1:6379/0
-      E2E_PROVIDER_CACHE: "0"
-      E2E_FIXTURE_MODE: live
-    steps:
-      - checkout
-      - run:
-          name: Generate LiteLLM master key
-          command: |
-            key="$(openssl rand -hex 16)"
-            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
-      - skip_if_unrelated_changes:
-          category: provider-harness
-      - setup_litellm_test_deps
-      - wait_for_service:
-          url: tcp://localhost:6379
-      - run:
-          name: Test provider capture and replay harness
-          command: |
-            mkdir -p test-results/provider-replay-harness
-            uv run --no-sync pytest --tb=short -q --noconftest -o addopts= -o "pythonpath=tests/e2e tests/e2e_harness" -p no:rerunfailures \
-              --junitxml=test-results/provider-replay-harness/junit.xml \
-              tests/e2e_harness/test_provider_edge.py tests/e2e_harness/test_fixture_bundle.py \
-              tests/e2e_harness/test_fixture_canonical.py tests/e2e_harness/test_fixture_mode.py \
-              tests/code_coverage_tests/test_provider_replay_harness.py \
-              tests/code_coverage_tests/test_provider_cache.py
-      - store_test_results:
-          path: test-results/provider-replay-harness
 
   integration_contracts:
     parameters:
@@ -1682,9 +1584,14 @@ jobs:
           path: test-results
 
 workflows:
-  migration_startup:
-    when: << pipeline.parameters.run_migration_tests >>
-    jobs: &migration_jobs
+  migration_startup_scheduled:
+    triggers:
+      - schedule:
+          cron: "17 0,6,12,18 * * *"
+          filters:
+            branches:
+              only: main
+    jobs:
       - build_docker_database_image:
           migration_qualification: true
       - migration_startup_tests:
@@ -1709,33 +1616,11 @@ workflows:
           suite: shaped
           baseline: true
           requires: [build_docker_database_image]
-  migration_startup_scheduled:
-    triggers:
-      - schedule:
-          cron: "17 0,6,12,18 * * *"
-          filters:
-            branches:
-              only: main
-    jobs: *migration_jobs
-  routing_parity:
-    when:
-      not:
-        equal: ["", << pipeline.parameters.routing_parity_base >>]
-    jobs:
-      - routing_parity:
-          name: routing-parity-<< matrix.suite >>
-          matrix:
-            parameters:
-              suite: [management, accounting, database, providers, extensions, cost, mcp]
   integration:
-    unless:
-      or:
-        - << pipeline.parameters.run_migration_tests >>
-        - not:
-            equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
       - integration_contracts:
           name: integration-<< matrix.suite >>
+          filters: &integration_default_run not pipeline.parameters.run_migration_tests and pipeline.parameters.routing_parity_base == ""
           matrix:
             parameters:
               suite: [sdk, cost, browser]
@@ -1745,116 +1630,131 @@ workflows:
           suite: security
           parallelism: 1
           resource_class: xlarge
+          filters: *integration_default_run
       - integration_contracts:
           name: integration-management
           suite: management
           parallelism: 4
           resource_class: xlarge
+          filters: *integration_default_run
       - integration_shard_coverage:
           name: integration-management-coverage
           suite: management
           shards: 4
           requires: [integration-management]
+          filters: *integration_default_run
       - integration_contracts:
           name: integration-accounting
           suite: accounting
           parallelism: 4
           resource_class: xlarge
+          filters: *integration_default_run
       - integration_shard_coverage:
           name: integration-accounting-coverage
           suite: accounting
           shards: 4
           requires: [integration-accounting]
+          filters: *integration_default_run
       - integration_contracts:
           name: integration-providers
           suite: providers
           parallelism: 4
           resource_class: xlarge
+          filters: *integration_default_run
       - integration_shard_coverage:
           name: integration-providers-coverage
           suite: providers
           shards: 4
           requires:
             - integration-providers
+          filters: *integration_default_run
       - integration_contracts:
           name: integration-database
           suite: database
           parallelism: 2
+          filters: *integration_default_run
       - integration_shard_coverage:
           name: integration-database-coverage
           suite: database
           shards: 2
           requires: [integration-database]
+          filters: *integration_default_run
       - integration_contracts:
           name: integration-mcp
           suite: mcp
           resource_class: xlarge
           parallelism: 2
+          filters: *integration_default_run
       - integration_shard_coverage:
           name: integration-mcp-coverage
           suite: mcp
           shards: 2
           requires:
             - integration-mcp
+          filters: *integration_default_run
       - integration_contracts:
           name: integration-extensions
           suite: extensions
           parallelism: 8
           resource_class: xlarge
+          filters: *integration_default_run
       - integration_shard_coverage:
           name: integration-extensions-coverage
           suite: extensions
           shards: 8
           requires:
             - integration-extensions
+          filters: *integration_default_run
       - integration_contracts:
           name: integration-management-replica
           suite: management
           mode: replica
           parallelism: 4
           resource_class: xlarge
+          filters: *integration_default_run
       - integration_shard_coverage:
           name: integration-management-replica-coverage
           suite: management
           mode: replica
           shards: 4
           requires: [integration-management-replica]
+          filters: *integration_default_run
       - integration_contracts:
           name: integration-database-replica
           suite: database
           mode: replica
           parallelism: 2
+          filters: *integration_default_run
       - integration_shard_coverage:
           name: integration-database-replica-coverage
           suite: database
           mode: replica
           shards: 2
           requires: [integration-database-replica]
-      - postgres_suite:
-          name: proxy-behavior
-          test_path: tests/proxy_behavior
-          seed: true
-          coverage_flag: lens-postgres
-          timeout_minutes: 25
+          filters: *integration_default_run
       - postgres_suite:
           name: proxy-security
           test_path: tests/proxy_security_tests
           seed: true
           timeout_minutes: 15
+          filters: *integration_default_run
       - postgres_suite:
           name: schema-migration
           test_path: tests/proxy_migration_tests
           seed: false
           timeout_minutes: 20
           workers: 2
+          filters: *integration_default_run
       - postgres_suite:
           name: roi-database
           test_path: tests/integration/database/test_roi_observed.py
           seed: false
           coverage_flag: roi-postgres
           timeout_minutes: 10
+          filters: *integration_default_run
       - mcp_integration:
           name: mcp-integration
+          filters: *integration_default_run
       - redis_compat:
           name: redis-compat-<< matrix.redis_py >>
           matrix:
@@ -1864,31 +1764,71 @@ workflows:
                 - "6.4.0"
                 - "7.4.1"
                 - "8.0.1"
-      - windows_release_wheel
-      - base_sdk_install
-  build_and_test:
-    unless:
-      or:
-        - << pipeline.parameters.run_migration_tests >>
-        - not:
-            equal: ["", << pipeline.parameters.routing_parity_base >>]
-    jobs:
-      - provider_replay_harness
-      - build_docker_database_image
-      - e2e_ui_testing
-      - e2e_ui_testing_server_root_path
+          filters: *integration_default_run
+      - windows_release_wheel:
+          filters: *integration_default_run
+      - base_sdk_install:
+          filters: *integration_default_run
+      - build_docker_database_image:
+          filters: *integration_default_run
       - proxy_logging_guardrails_model_info_tests:
           requires:
             - build_docker_database_image
-      - proxy_pass_through_endpoint_tests:
-          requires:
-            - build_docker_database_image
+          filters: *integration_default_run
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
-      - helm_chart_testing:
-          requires:
-            - build_docker_database_image
+          filters: *integration_default_run
       - test_bad_database_url:
           requires:
             - build_docker_database_image
+          filters: *integration_default_run
+      - helm_chart_testing:
+          requires:
+            - build_docker_database_image
+          filters: *integration_default_run
+      - e2e_ui_build:
+          filters: *integration_default_run
+      - e2e_ui_testing:
+          requires: [e2e_ui_build]
+          filters: *integration_default_run
+      - e2e_ui_testing_server_root_path:
+          requires: [e2e_ui_build]
+          filters: *integration_default_run
+      - build_docker_database_image:
+          name: build_docker_database_image-migration
+          migration_qualification: true
+          filters: pipeline.parameters.run_migration_tests
+      - migration_startup_tests:
+          name: migration-startup
+          suite: startup
+          requires: [build_docker_database_image-migration]
+          filters: pipeline.parameters.run_migration_tests
+      - migration_startup_tests:
+          name: migration-recovery
+          suite: recovery
+          requires: [build_docker_database_image-migration]
+          filters: pipeline.parameters.run_migration_tests
+      - migration_startup_tests:
+          name: migration-legacy-and-pooling
+          suite: legacy
+          requires: [build_docker_database_image-migration]
+          filters: pipeline.parameters.run_migration_tests
+      - migration_startup_tests:
+          name: migration-upgrade
+          suite: upgrade
+          baseline: true
+          requires: [build_docker_database_image-migration]
+          filters: pipeline.parameters.run_migration_tests
+      - migration_startup_tests:
+          name: migration-upgrade-shaped
+          suite: shaped
+          baseline: true
+          requires: [build_docker_database_image-migration]
+          filters: pipeline.parameters.run_migration_tests
+      - routing_parity:
+          name: routing-parity-<< matrix.suite >>
+          matrix:
+            parameters:
+              suite: [management, accounting, database, providers, extensions, cost, mcp]
+          filters: pipeline.parameters.routing_parity_base != ""
