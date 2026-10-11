@@ -1,0 +1,30 @@
+name: Deploy main to gateway-dev
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: deploy-dev-dispatch
+  cancel-in-progress: true
+
+jobs:
+  dispatch:
+    if: github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/create-github-app-token@fee1f7d63c2ff003460e3d139729b119787bc349 # v2.2.2
+        id: token
+        with:
+          app-id: ${{ secrets.LITELLM_OPS_DISPATCH_APP_ID }}
+          private-key: ${{ secrets.LITELLM_OPS_DISPATCH_APP_PRIVATE_KEY }}
+          owner: BerriAI
+          repositories: litellm-ops
+          permission-actions: write
+      - name: Dispatch the litellm-ops dev deploy
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: gh api --method POST repos/BerriAI/litellm-ops/actions/workflows/deploy-dev.yml/dispatches -f ref=main
