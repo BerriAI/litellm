@@ -148,9 +148,11 @@ def _usage_token_value(usage_obj: object, standard_name: str, decision_name: str
         int: The token count, defaulting to 0.
     """
     if isinstance(usage_obj, dict):
-        usage_proto: Final[_UsageObject] = cast(
-            "_UsageObject", usage_obj
-        )  # cast-ok: plain dict at runtime, narrowed by isinstance; _UsageObject only describes .get
+        usage_proto: Final[_UsageObject] = (
+            cast(  # cast-ok: plain dict at runtime, narrowed by isinstance; _UsageObject only describes .get
+                "_UsageObject", usage_obj
+            )
+        )
         if (dict_value := usage_proto.get(standard_name)) is None and decision_name is not None:
             decision_dict_value: Final = usage_proto.get(decision_name)
             return decision_dict_value if isinstance(decision_dict_value, int) else 0
