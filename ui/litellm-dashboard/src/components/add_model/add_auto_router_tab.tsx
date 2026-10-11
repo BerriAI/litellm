@@ -11,7 +11,7 @@ import { FormField } from "@/components/shared/form/FormField";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useZodForm } from "@/lib/forms/useZodForm";
@@ -328,7 +328,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   const templateItems = React.useMemo(
     () => [
       ...sortedPresetOptions.map(({ preset }) => ({ value: preset.key, label: preset.label })),
-      { value: "custom", label: "Custom Configuration" },
+      { value: "custom", label: "Start from scratch" },
     ],
     [sortedPresetOptions],
   );
@@ -535,7 +535,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
   };
 
   const tierSetup = (
-    <div className="w-full space-y-2 sm:w-64">
+    <div className="mb-4 w-full space-y-2">
       <div className="space-y-2">
         <Select
           items={templateItems}
@@ -545,7 +545,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
           <SelectTrigger aria-label="Use a template" data-testid="template-selector" className="w-full">
             <SelectValue placeholder="Use a template" />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent className="[&_[data-slot=select-item]>div]:min-w-0 [&_[data-slot=select-item]>div]:shrink [&_[data-slot=select-item]>div]:whitespace-normal [&_[data-slot=select-item]>div]:break-words">
             {sortedPresetOptions.map(({ preset, availability: presetState }) => {
               const disabledHint = presetDisabledHint(presetState);
               const hintClass = isPresetHintAlarming(presetState) ? "text-destructive" : "text-muted-foreground";
@@ -570,10 +570,13 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                 </SelectItem>
               );
             })}
-            <SelectItem value="custom" label="Custom Configuration">
+            <SelectSeparator className="mx-0" />
+            <SelectItem value="custom" label="Start from scratch">
               <div>
-                <div className="font-medium">Custom Configuration</div>
-                <div className="text-xs text-muted-foreground">Define your auto router from scratch</div>
+                <div className="font-medium">Start from scratch</div>
+                <div className="text-xs text-muted-foreground">
+                  Clears tier models, switches to Heuristics, and resets routing settings
+                </div>
               </div>
             </SelectItem>
           </SelectContent>
@@ -582,7 +585,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         {presetsPending && <div className="text-xs mt-1 text-muted-foreground">Loading templates...</div>}
         {presetsUnavailable && (
           <div className="text-xs mt-1 text-destructive">
-            Could not load templates, so only Custom Configuration is shown.{" "}
+            Could not load templates, so only Start from scratch is shown.{" "}
             <button type="button" className="underline" onClick={() => void refetchPresets()}>
               Retry
             </button>
@@ -596,6 +599,31 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     <ComplexityRouterConfig
       creationFlow
       tierSetup={tierSetup}
+      beforeAdvancedSettings={
+        isAdmin && (
+          <div className="mt-6">
+            <FormField
+              control={form.control}
+              name="model_access_group"
+              label={labelWithHint(
+                "Model Access Group",
+                "Use model access groups to control who can access this auto router",
+              )}
+            >
+              {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                <AccessGroupTagsCombobox
+                  id={id}
+                  value={value}
+                  onChange={onChange}
+                  options={modelAccessGroups}
+                  ariaInvalid={ariaInvalid}
+                  ariaDescribedBy={ariaDescribedBy}
+                />
+              )}
+            </FormField>
+          </div>
+        )
+      }
       editingTiers={editingTiers}
       onEditingTiersChange={setEditingTiers}
       modelInfo={modelInfo}
@@ -682,28 +710,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     </p>
                   )}
                   {configurationForm}
-
-                  {isAdmin && (
-                    <FormField
-                      control={form.control}
-                      name="model_access_group"
-                      label={labelWithHint(
-                        "Model Access Group",
-                        "Use model access groups to control who can access this auto router",
-                      )}
-                    >
-                      {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                        <AccessGroupTagsCombobox
-                          id={id}
-                          value={value}
-                          onChange={onChange}
-                          options={modelAccessGroups}
-                          ariaInvalid={ariaInvalid}
-                          ariaDescribedBy={ariaDescribedBy}
-                        />
-                      )}
-                    </FormField>
-                  )}
 
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <Tooltip>

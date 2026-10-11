@@ -34,7 +34,7 @@ export default function JevClassifierConfig({
     onChange({ ...value, jev_classifier_config: { ...config, ...patch } });
 
   return (
-    <div className="mt-4 space-y-3">
+    <div className={section === "model" ? "space-y-3" : "mt-4 space-y-3"}>
       {section !== "advanced" && (
         <>
           <p className="text-sm text-muted-foreground">{providerDescriptions[config.provider ?? "jev"]}</p>

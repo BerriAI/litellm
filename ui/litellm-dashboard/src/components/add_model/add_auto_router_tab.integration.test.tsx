@@ -1400,7 +1400,7 @@ describe("AddAutoRouterTab", () => {
 
   // Custom is the escape hatch, not the headline choice, so it's listed after every bundled preset
   // rather than first.
-  it("lists Custom Configuration after the bundled presets", async () => {
+  it("lists Start from scratch after the bundled presets", async () => {
     renderWithProviders(<Harness />);
     openTemplateDropdown();
 
@@ -1412,7 +1412,7 @@ describe("AddAutoRouterTab", () => {
       "Gemini Family",
       "Lite",
       "OpenAI Family",
-      "Custom Configuration",
+      "Start from scratch",
     ]);
   });
 
@@ -1570,11 +1570,11 @@ describe("AddAutoRouterTab", () => {
       expectTierModel("reasoning", ANTHROPIC_TIERS.REASONING[0]);
     });
 
-    it("expands detailed configuration when Custom Configuration is chosen", async () => {
+    it("expands detailed configuration when Start from scratch is chosen", async () => {
       renderWithProviders(<Harness />);
       openTemplateDropdown();
 
-      await selectTemplate("Custom Configuration");
+      await selectTemplate("Start from scratch");
 
       openAutoRouterAdvanced("Keyword/Semantic Matching");
 
@@ -1857,7 +1857,7 @@ describe("AddAutoRouterTab", () => {
         "Gemini Family",
         "Lite",
         "OpenAI Family",
-        "Custom Configuration",
+        "Start from scratch",
       ]);
     });
 
@@ -2050,7 +2050,7 @@ describe("preset catalog fetch states", () => {
     expect(screen.getByText("Loading templates...")).toBeInTheDocument();
   });
 
-  it("degrades to Custom Configuration with a retry hint that refetches the catalog", async () => {
+  it("degrades to Start from scratch with a retry hint that refetches the catalog", async () => {
     const refetch = vi.fn();
     vi.mocked(useAutoRouterPresets).mockReturnValue({
       ...LOADED_PRESETS_QUERY,
@@ -2065,7 +2065,7 @@ describe("preset catalog fetch states", () => {
     openTemplateDropdown();
     const options = screen.queryAllByRole("option");
     expect(options).toHaveLength(1);
-    expect(options[0]).toHaveTextContent("Custom Configuration");
+    expect(options[0]).toHaveTextContent("Start from scratch");
 
     fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(refetch).toHaveBeenCalled();

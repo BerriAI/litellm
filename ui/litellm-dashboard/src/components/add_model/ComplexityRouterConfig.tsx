@@ -475,6 +475,7 @@ export const withClassificationFrequency = (
 interface ComplexityRouterConfigProps {
   creationFlow?: boolean;
   tierSetup?: React.ReactNode;
+  beforeAdvancedSettings?: React.ReactNode;
   modelInfo: ModelGroup[];
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
@@ -610,6 +611,7 @@ const CreationClassifierSettings = ({
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   creationFlow,
   tierSetup,
+  beforeAdvancedSettings,
   modelInfo,
   value,
   onChange,
@@ -691,7 +693,8 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         defaultModel={defaultModel}
         showValidationErrors={showValidationErrors}
       />
-      <div className="mb-4 flex flex-wrap items-start justify-between gap-4">
+      {creationFlow && <Separator className="my-6" />}
+      <div className="mb-4">
         <div className="inline-flex items-center gap-2">
           <h4 className="m-0 text-xl font-semibold text-foreground">{forecast ? "Solver models" : tierHeading}</h4>
           {!forecast && (
@@ -700,7 +703,6 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
             </SimpleTooltip>
           )}
         </div>
-        {!forecast && tierSetup}
       </div>
 
       <InactiveHeuristicV2Threshold value={value} onChange={onChange} />
@@ -725,16 +727,9 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
       ) : (
         <>
           <TierConfigIntro value={value} />
+          {tierSetup}
           <Card>
             <CardContent>
-              {!customTierSet && (
-                <NonReasoningTierToggle
-                  value={value}
-                  onChange={onChange}
-                  available={value.classifier_type === "llm" || value.classifier_type === "jev"}
-                />
-              )}
-
               {tierRows.map((row, index) => {
                 const tierInfo = builtInTierInfo(row.id);
                 const label = tierRowLabel(row, value.tier_labels);
@@ -824,6 +819,14 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
                 );
               })}
 
+              {!customTierSet && (
+                <NonReasoningTierToggle
+                  value={value}
+                  onChange={onChange}
+                  available={value.classifier_type === "llm" || value.classifier_type === "jev"}
+                />
+              )}
+
               <TierSetToolbar
                 editing={editingTiers}
                 isCustomSet={Boolean(customTierSet)}
@@ -847,6 +850,7 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         </>
       )}
       <DefaultModelField value={value} onChange={onChange} modelOptions={modelOptions} />
+      {beforeAdvancedSettings}
       <Separator className="my-6" />
 
       <RoutingOptions

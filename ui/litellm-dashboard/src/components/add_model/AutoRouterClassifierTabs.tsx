@@ -175,7 +175,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
     llm_v2: "Use the efficient model when its predicted quality is close enough to the capable model",
   };
   return (
-    <div className="flex flex-col gap-6">
+    <div className="flex flex-col gap-4">
       <fieldset>
         <legend className="mb-4 flex w-full items-center justify-between gap-3">
           <div className="flex items-center gap-2">
