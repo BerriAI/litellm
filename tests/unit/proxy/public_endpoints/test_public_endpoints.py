@@ -1,4 +1,5 @@
 import json
+import os
 import re
 from datetime import datetime, timezone
 from importlib.resources import files
@@ -1603,6 +1604,10 @@ async def test_get_whats_new_serves_bundled_list_without_fetching_when_no_url_is
 
     assert served == _load_bundled_whats_new()
     assert len(served.launches) > 0
+
+
+def test_whats_new_url_default_mirrors_the_env_var_so_no_remote_url_is_baked_in() -> None:
+    assert litellm.whats_new_url == os.environ.get("LITELLM_WHATS_NEW_URL")
 
 
 @pytest.mark.asyncio
