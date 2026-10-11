@@ -1,9 +1,9 @@
 import { Badge } from "@/components/ui/badge";
 import { CircleAlert, CircleCheck, TriangleAlert } from "lucide-react";
-import type { PayloadValidation } from "./lib/validatePayload";
+import { errorCount as countErrors, type PayloadValidation } from "./lib/validatePayload";
 
 export function ValidationStatus({ validation }: { validation: PayloadValidation<unknown> }) {
-  const errorCount = validation.issues.filter((issue) => issue.severity === "error").length;
+  const errorCount = countErrors(validation);
   if (errorCount > 0) {
     return (
       <Badge variant="destructive">

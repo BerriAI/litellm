@@ -20,7 +20,7 @@ import CurlPreview from "./CurlPreview";
 import ResponseView from "./ResponseView";
 import SystemOneForm from "./SystemOneForm";
 import OpenAIDecisionsForm from "./OpenAIDecisionsForm";
-import { validateSystemOnePayload, validateOpenAIDecisionsPayload } from "./lib/validatePayload";
+import { validateSystemOnePayload, validateOpenAIDecisionsPayload, errorCount } from "./lib/validatePayload";
 import { useDecisionModels, type ApiKeySource } from "./useDecisionModels";
 
 interface SystemOneUIProps {
@@ -281,7 +281,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                 endpoint={endpoint}
                 payload={validation.payload === undefined ? rawPayload : JSON.stringify(validation.payload)}
                 authHeaderName={getGlobalLitellmHeaderName()}
-                errorCount={validation.issues.filter((issue) => issue.severity === "error").length}
+                errorCount={errorCount(validation)}
               />
             </TabsContent>
           </Tabs>
