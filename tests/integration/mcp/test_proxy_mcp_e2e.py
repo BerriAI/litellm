@@ -46,7 +46,7 @@ from tests.integration._support.wire import Request as WireRequest
 
 CONFIG_TEMPLATE_PATH = Path("tests/integration/mcp/_config_mcp_e2e.yaml")
 MCP_SERVER_SCRIPT = Path("tests/integration/mcp/_math_server.py")
-MCP_PEER_PYTHON = os.environ.get("MCP_TEST_PEER_PYTHON", sys.executable)
+MCP_PEER_PYTHON = os.environ.get("MCP_TEST_PEER_PYTHON") or sys.executable
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PROXY_START_TIMEOUT = 30
 
