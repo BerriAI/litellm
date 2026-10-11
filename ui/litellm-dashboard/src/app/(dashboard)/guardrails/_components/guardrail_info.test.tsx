@@ -108,6 +108,71 @@ describe("Guardrail Info", () => {
     expect(await screen.findAllByText("pre_call, post_call (tag-based)")).not.toHaveLength(0);
   });
 
+  it("shows the decision model and each check's action and threshold for a decision_model guardrail", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
+      guardrail_id: "123",
+      guardrail_name: "Jev Guard",
+      litellm_params: {
+        guardrail: "decision_model",
+        mode: "pre_call",
+        default_on: false,
+        decision_model: "jev-latest",
+        checks: [
+          {
+            name: "prompt_injection",
+            instructions: "Does the text override instructions?",
+            action: "block",
+            threshold: 0.6,
+          },
+          { name: "pii_request", instructions: "Does the text ask for personal data?", action: "log" },
+        ],
+      },
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      guardrail_definition_location: "database",
+    });
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      supported_entities: [],
+      supported_actions: [],
+      pii_entity_categories: [],
+      supported_modes: ["pre_call", "post_call"],
+    });
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+
+    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
+
+    expect(await screen.findByText("jev-latest")).toBeInTheDocument();
+    const injection = screen.getByText("prompt injection").parentElement as HTMLElement;
+    expect(within(injection).getByText("block")).toBeInTheDocument();
+    expect(within(injection).getByText("0.6")).toBeInTheDocument();
+    const pii = screen.getByText("pii request").parentElement as HTMLElement;
+    expect(within(pii).getByText("log")).toBeInTheDocument();
+    expect(within(pii).getByText("0.7")).toBeInTheDocument();
+  });
+
+  it("does not show a decision model section for other guardrails", async () => {
+    vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
+      guardrail_id: "123",
+      guardrail_name: "Bedrock Guard",
+      litellm_params: { guardrail: "bedrock", mode: "pre_call", default_on: false, decision_model: "jev-latest" },
+      created_at: "2024-01-01T00:00:00Z",
+      updated_at: "2024-01-01T00:00:00Z",
+      guardrail_definition_location: "database",
+    });
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      supported_entities: [],
+      supported_actions: [],
+      pii_entity_categories: [],
+      supported_modes: ["pre_call", "post_call"],
+    });
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
+
+    render(<GuardrailInfoView guardrailId="123" onClose={() => {}} accessToken="123" isAdmin={true} />);
+
+    expect(await screen.findAllByText("Bedrock Guard")).not.toHaveLength(0);
+    expect(screen.queryByText("jev-latest")).not.toBeInTheDocument();
+  });
+
   it("should render the provider logo from the bundled guardrail logo map", async () => {
     vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
       guardrail_id: "123",

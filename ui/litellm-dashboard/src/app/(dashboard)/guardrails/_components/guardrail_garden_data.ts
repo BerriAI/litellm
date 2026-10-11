@@ -1,10 +1,12 @@
+import { Providers, providerLogoMap } from "@/components/provider_info_helpers";
+import typesafeLogo from "../../../../../public/assets/logos/typesafe.png";
 import { guardrailLogoMap } from "./guardrail_info_helpers";
 
 export interface GuardrailCardInfo {
   id: string;
   name: string;
   description: string;
-  category: "litellm" | "partner";
+  category: "litellm" | "decision_model" | "partner";
   subcategory?: string;
   logo: string;
   tags: string[];
@@ -237,6 +239,58 @@ export const LITELLM_CONTENT_FILTER_CARDS: GuardrailCardInfo[] = [
     subcategory: "Content Category",
     logo: litellmContentFilterLogo,
     tags: ["Content Category", "Competitor", "Topic Blocker"],
+  },
+];
+
+export const DECISION_MODEL_CARDS: GuardrailCardInfo[] = [
+  {
+    id: "dm_typesafe_jev",
+    name: "TypeSafe Jev",
+    description:
+      "TypeSafe's Jev decision model answers your yes/no questions about each request, such as prompt injection or policy checks.",
+    category: "decision_model",
+    logo: typesafeLogo.src,
+    tags: ["Decision Model", "TypeSafe", "Prompt Injection"],
+    providerKey: "DecisionModel",
+  },
+  {
+    id: "dm_perplexity",
+    name: "Perplexity Decision",
+    description: "Perplexity's pplx-decider model answers your yes/no questions about each request or response.",
+    category: "decision_model",
+    logo: providerLogoMap[Providers.Perplexity] ?? "",
+    tags: ["Decision Model", "Perplexity"],
+    providerKey: "DecisionModel",
+  },
+  {
+    id: "dm_microsoft",
+    name: "Microsoft Decision Model",
+    description:
+      "Microsoft Foundry decision models, such as Microsoft-Decision-1, answer your yes/no questions about each request or response.",
+    category: "decision_model",
+    logo: providerLogoMap[Providers.Azure_AI_Studio] ?? "",
+    tags: ["Decision Model", "Microsoft"],
+    providerKey: "DecisionModel",
+  },
+  {
+    id: "dm_openai",
+    name: "OpenAI Decision Model",
+    description:
+      "OpenAI decision models, such as gpt-6-luna, answer your yes/no questions about each request or response.",
+    category: "decision_model",
+    logo: providerLogoMap[Providers.OpenAI] ?? "",
+    tags: ["Decision Model", "OpenAI"],
+    providerKey: "DecisionModel",
+  },
+  {
+    id: "dm_databricks",
+    name: "Databricks Decision Model",
+    description:
+      "Decision models served on Databricks, such as OpenJev, answer your yes/no questions about each request or response.",
+    category: "decision_model",
+    logo: providerLogoMap[Providers.Databricks] ?? "",
+    tags: ["Decision Model", "Databricks"],
+    providerKey: "DecisionModel",
   },
 ];
 
@@ -496,4 +550,4 @@ export const PARTNER_GUARDRAIL_CARDS: GuardrailCardInfo[] = [
   },
 ];
 
-export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...PARTNER_GUARDRAIL_CARDS];
+export const ALL_CARDS = [...LITELLM_CONTENT_FILTER_CARDS, ...DECISION_MODEL_CARDS, ...PARTNER_GUARDRAIL_CARDS];
