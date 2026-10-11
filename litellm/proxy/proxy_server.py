@@ -2433,7 +2433,7 @@ try:
         )
 
     def _apply_server_root_path_to_ui(ui_dir: str, server_root_path: str) -> None:
-        for root, dirs, files in os.walk(ui_dir):
+        for root, _dirs, files in os.walk(ui_dir):
             for filename in files:
                 file_path = os.path.join(root, filename)
                 # Skip binary files and files that don't need path replacement
