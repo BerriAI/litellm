@@ -330,6 +330,13 @@
       ]
     },
     {
+      "path": "litellm-rust/crates/llms/src/tencent/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/tencent/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/tencent/messages/**"
+      ]
+    },
+    {
       "path": "litellm-rust/crates/llms/src/vertex_ai/messages/AGENTS.md",
       "description": "Conventions for code under litellm-rust/crates/llms/src/vertex_ai/messages/",
       "scope": [
