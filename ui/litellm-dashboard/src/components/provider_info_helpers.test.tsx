@@ -505,9 +505,9 @@ describe("provider_info_helpers", () => {
 
     it("should list only typesafe decision models for the 'TypeSafe' provider key, not the OpenRouter-hosted one", () => {
       const modelMap = {
-        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "decisions" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
         "typesafe/jev-preview": { litellm_provider: "typesafe", mode: "decisions" },
-        "openrouter/typesafe/jev-1.13": { litellm_provider: "openrouter", mode: "decisions" },
+        "openrouter/typesafe/jev-1.13": { litellm_provider: "openrouter", mode: "evaluation" },
         "strands_decider/strands-decider-2B-hobson-v19": { litellm_provider: "strands_decider", mode: "decisions" },
       };
       expect(getProviderModels("TypeSafe" as Providers, modelMap)).toEqual([
@@ -519,8 +519,8 @@ describe("provider_info_helpers", () => {
     it("should list only strands_decider models for the 'StrandsDecider' provider key", () => {
       const modelMap = {
         "strands_decider/strands-decider-2B-hobson-v19": { litellm_provider: "strands_decider", mode: "decisions" },
-        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "decisions" },
-        "openrouter/typesafe/jev-1.13": { litellm_provider: "openrouter", mode: "decisions" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
+        "openrouter/typesafe/jev-1.13": { litellm_provider: "openrouter", mode: "evaluation" },
       };
       expect(getProviderModels("StrandsDecider" as Providers, modelMap)).toEqual([
         "strands_decider/strands-decider-2B-hobson-v19",

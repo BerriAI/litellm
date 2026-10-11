@@ -617,7 +617,9 @@ async def test_ahealth_check_probes_decisions_models_through_the_decisions_api(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("decisions", "evaluation"), ids=("decisions", "legacy-evaluation"))
 async def test_ahealth_check_decisions_uses_configured_probe_state_and_questions(
+    mode: str,
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
@@ -638,7 +640,7 @@ async def test_ahealth_check_decisions_uses_configured_probe_state_and_questions
             "state": "custom probe",
             "questions": {"ok": {"type": "noul", "instructions": "Is it ok?"}},
         },
-        mode="evaluation",
+        mode=mode,
     )
 
     assert "error" not in result, result
