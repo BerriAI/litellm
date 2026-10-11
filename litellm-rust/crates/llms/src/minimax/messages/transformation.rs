@@ -45,6 +45,15 @@ impl BaseMessagesConfig for MinimaxMessagesConfig {
         _params: &LitellmParams,
         env: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
+        let headers: Headers = headers
+            .into_iter()
+            .filter(|(name, value)| {
+                let value = value.trim();
+                !((name.eq_ignore_ascii_case("x-api-key") && value.is_empty())
+                    || (name.eq_ignore_ascii_case("authorization")
+                        && (value.is_empty() || value.eq_ignore_ascii_case("bearer"))))
+            })
+            .collect();
         if has_anthropic_credential(&headers) {
             return Ok(ValidatedEnvironment {
                 headers,
