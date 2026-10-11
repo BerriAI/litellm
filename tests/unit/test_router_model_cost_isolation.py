@@ -2427,7 +2427,7 @@ def test_reload_keeps_cost_map_when_router_starts_with_no_model_list():
         assert litellm.model_cost[deployment_id]["output_cost_per_token"] == output_cost
         assert router.model_list
     finally:
-        litellm.model_cost = saved_catalog
+        litellm.model_cost = saved_catalog  # test-quality-ok: restore shared catalog after empty-init reload regression
         _invalidate_model_cost_lowercase_map()
 
 
