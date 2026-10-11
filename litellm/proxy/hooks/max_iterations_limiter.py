@@ -12,11 +12,13 @@ Follows the same pattern as parallel_request_limiter_v3.py.
 
 import asyncio
 import json
+import math
 import os
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm import DualCache
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
@@ -48,6 +50,13 @@ end
 local agent_scope_key = KEYS[2]
 local ttl = tonumber(ARGV[1])
 local agent_field = ARGV[2]
+local function is_count(raw)
+    return raw == '0' or string.match(raw, '^[1-9]%d*$') ~= nil
+end
+local legacy_raw = redis.call('GET', legacy_key)
+if legacy_raw ~= false and not is_count(legacy_raw) then
+    return redis.error_reply('legacy session count is not a non-negative integer')
+end
 if redis.call('EXISTS', agent_scope_key) == 0 then
     if redis.call('EXISTS', legacy_key) == 0 then
         redis.call('SET', legacy_key, '0')
@@ -76,7 +85,7 @@ local total_new_raw = redis.call('HGET', agent_scope_key, '__total_new')
 if total_new_raw == false then
     return redis.error_reply('agent session scope is missing its migration total')
 end
-if string.match(total_new_raw, '^%d+$') == nil then
+if not is_count(total_new_raw) then
     return redis.error_reply('agent session migration total is not an integer')
 end
 local validated_total_new = tonumber(total_new_raw)
@@ -85,7 +94,7 @@ if validated_total_new == nil or validated_total_new >= 9223372036854774784 then
 end
 
 local agent_raw = redis.call('HGET', agent_scope_key, agent_field)
-if agent_raw ~= false and string.match(agent_raw, '^%d+$') == nil then
+if agent_raw ~= false and not is_count(agent_raw) then
     return redis.error_reply('agent session counter is not an integer')
 end
 local validated_agent_value = tonumber(agent_raw or '0')
@@ -115,9 +124,10 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         - session_id: sent by caller via x-litellm-session-id header or
           metadata.session_id in request body
 
-    Cache key pattern:
-        {session_iterations:<session_id>}:agent:<agent_id>:count
-        Without an agent, retains {session_iterations:<session_id>}:count.
+    Cache keys:
+        {session_iterations:<session_id>}:count (legacy aggregate)
+        {session_iterations:<session_id>}:agent-scope (per-agent migration ledger)
+        Unbound keys use only the legacy aggregate.
 
     Multi-instance support:
         Uses Redis Lua scripts for atomic increments when Redis is configured.
@@ -150,6 +160,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         )
         self._registered_redis_cache = redis_cache
 
+    @with_service_target("session_iterations")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -270,6 +281,17 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
             return cast(dict[str, object], result)  # cast-ok: keys are checked and values remain opaque
         raise RuntimeError("Agent session scope cache has an invalid value")
 
+    @staticmethod
+    def _parse_count(value: object) -> int:
+        if isinstance(value, bool) or not isinstance(value, (int, float, str, bytes)):
+            raise RuntimeError("Agent session count is invalid")
+        if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
+            raise RuntimeError("Agent session count is not an integer")
+        count: Final = int(value)
+        if count < 0:
+            raise RuntimeError("Agent session count is negative")
+        return count
+
     async def _get_local_count(self, cache_key: str) -> int | None:
         local_result: Final[object | None] = cast(  # cast-ok: cache API returns Any; validate value below
             object | None,
@@ -279,9 +301,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
                 local_only=True,
             ),
         )
-        if isinstance(local_result, (int, float, str, bytes)):
-            return int(local_result)
-        return None
+        return None if local_result is None else self._parse_count(local_result)
 
     async def _increment_legacy_and_get(self, cache_key: str) -> int:
         self._ensure_redis_scripts()
@@ -343,8 +363,8 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
                 raw_agent_value = agent_scope.get(agent_field, 0)
                 if not isinstance(raw_agent_value, (int, float, str, bytes)):
                     raise RuntimeError("Agent session scope has an invalid counter")
-                total_new_value = int(raw_total_new)
-                agent_value = int(raw_agent_value)
+                total_new_value = self._parse_count(raw_total_new)
+                agent_value = self._parse_count(raw_agent_value)
             new_legacy: Final = legacy_value + 1
             new_total_new: Final = total_new_value + 1
             new_agent: Final = agent_value + 1
@@ -368,3 +388,6 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
                 local_only=True,
             )
             return max(new_legacy - new_total_new, 0) + new_agent
+
+
+PROXY_MaxIterationsHandler: Final = _PROXY_MaxIterationsHandler

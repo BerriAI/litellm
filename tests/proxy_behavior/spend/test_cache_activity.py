@@ -2,7 +2,7 @@
 Behavior tests for the cache analytics queries against a real Postgres. The info-route
 exclusion and the Unknown grouping live in SQL, so these tests are the ones that exercise
 them; the endpoint wiring is unit-tested in
-tests/test_litellm/proxy/analytics_endpoints/test_analytics_endpoints.py.
+tests/unit/proxy/analytics_endpoints/test_analytics_endpoints.py.
 """
 
 import json

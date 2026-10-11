@@ -1,6 +1,6 @@
 """Runs the auth prefetch's raw SQL against a real Postgres: the join must bind the membership to the requested
 team and hand the getters rows they validate. The per-regime round-trip counts are unit-tested with fakes in
-tests/test_litellm/proxy/auth/test_auth_object_prefetch.py."""
+tests/unit/proxy/auth/test_auth_object_prefetch.py."""
 
 import json
 from unittest.mock import AsyncMock, MagicMock

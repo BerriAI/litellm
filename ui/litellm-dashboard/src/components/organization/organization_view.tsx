@@ -134,6 +134,7 @@ const OrganizationInfoView: React.FC<OrganizationInfoProps> = ({
     {
       title: "Spend (USD)",
       key: "spend",
+      numeric: true,
       sortValue: (record: Member) => orgMemberFor(record)?.spend ?? null,
       render: (record: Member) => <MoneyCell value={orgMemberFor(record)?.spend} decimals={4} />,
     },

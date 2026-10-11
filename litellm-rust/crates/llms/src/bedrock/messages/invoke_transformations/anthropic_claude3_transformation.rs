@@ -1,6 +1,11 @@
 use std::convert::Infallible;
 
+use crate::{
+    anthropic::messages::handler::shape_anthropic_messages_request,
+    base_llm::messages::context::MessagesTransformContext,
+};
 use futures_util::StreamExt;
+use litellm_auth::AwsParams;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
@@ -10,27 +15,28 @@ use litellm_auth_aws::{
     },
     resolve_bedrock_region,
 };
-use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
+use litellm_llms_types::formats::messages::{
+    MessagesRequest,
+    streaming::{MessagesStreamEvent, MessagesStreamUsage},
+};
+use litellm_llms_types::providers::bedrock::{
+    INVOCATION_METRICS_KEY, INVOKE_PATH, INVOKE_STREAM_PATH,
+};
+use litellm_router_types::LitellmParams;
 use serde_json::{Map, Value};
 
 use crate::{
     Error,
-    anthropic::messages::streaming_iterator::{AnthropicMessagesStreamEvent, AnthropicStreamUsage},
     base_llm::{
-        anthropic_messages::{
-            streaming::{ByteStream, EventStream, StreamDecoder},
-            transformation::{
-                BaseAnthropicMessagesConfig, Headers, MessagesTransformContext,
-                ValidatedEnvironment,
-            },
-        },
         auth::AuthScheme,
         base_model_iterator::{StreamError, StreamTransformer, transform_stream},
+        messages::{
+            streaming::{ByteStream, EventStream, StreamDecoder},
+            transformation::{BaseMessagesConfig, Headers, ValidatedEnvironment},
+        },
     },
     bedrock::chat::invoke_handler::{decode_invoke_anthropic_chunk, invoke_chunk_stream},
 };
-
-const INVOCATION_METRICS_KEY: &str = "amazon-bedrock-invocationMetrics";
 
 const METRICS_USAGE_KEYS: [(&str, &str); 4] = [
     ("input_tokens", "inputTokenCount"),
@@ -39,8 +45,6 @@ const METRICS_USAGE_KEYS: [(&str, &str); 4] = [
     ("cache_creation_input_tokens", "cacheWriteInputTokenCount"),
 ];
 
-const INVOKE_PATH: &str = "invoke";
-const INVOKE_STREAM_PATH: &str = "invoke-with-response-stream";
 const INVOKE_MODEL_PREFIX: &str = "invoke/";
 
 const SECRET_NAMES: &[&str] = &[
@@ -70,45 +74,62 @@ fn bearer_token(
 fn invoke_url(
     api_base: Option<&str>,
     model: &str,
+    aws: &AwsParams,
+    stream: bool,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-    path: &str,
 ) -> String {
     let (model_id, model_region) =
         bedrock_model_id_and_region(model.strip_prefix(INVOKE_MODEL_PREFIX).unwrap_or(model));
-    let region = resolve_bedrock_region(model_region.as_deref(), &Map::new(), env_lookup);
-    let endpoint = api_base
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
+    let region = resolve_bedrock_region(model_region.as_deref(), aws, env_lookup);
+    let path = if stream {
+        INVOKE_STREAM_PATH
+    } else {
+        INVOKE_PATH
+    };
+    let configured = |value: Option<&str>| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string)
+    };
+    let endpoint = configured(api_base)
+        .or_else(|| configured(aws.aws_bedrock_runtime_endpoint.as_deref()))
         .or_else(|| env_lookup(AWS_BEDROCK_RUNTIME_ENDPOINT))
         .unwrap_or_else(|| BEDROCK_RUNTIME_ENDPOINT_TEMPLATE.replace("{region}", &region));
     format!("{}/model/{model_id}/{path}", endpoint.trim_end_matches('/'))
 }
 
-impl BaseAnthropicMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
+impl BaseMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
+    fn shape_request(
+        &self,
+        request: MessagesRequest,
+        reasoning_auto_summary: bool,
+    ) -> Result<MessagesRequest, Error> {
+        shape_anthropic_messages_request(request, reasoning_auto_summary)
+    }
+
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
         model: &str,
+        litellm_params: &LitellmParams,
+        stream: bool,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<String, Error> {
-        Ok(invoke_url(api_base, model, env_lookup, INVOKE_PATH))
-    }
-
-    fn complete_stream_url(
-        &self,
-        api_base: Option<&str>,
-        model: &str,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(invoke_url(api_base, model, env_lookup, INVOKE_STREAM_PATH))
+        Ok(invoke_url(
+            api_base,
+            model,
+            &litellm_params.aws,
+            stream,
+            env_lookup,
+        ))
     }
 
     fn transform_anthropic_messages_request(
         &self,
-        _request: AnthropicMessagesRequest,
+        _request: MessagesRequest,
         _context: &MessagesTransformContext,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<MessagesRequest, Error> {
         Err(Error::Unsupported(
             "Bedrock invoke messages request shaping",
         ))
@@ -125,6 +146,7 @@ impl BaseAnthropicMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         headers: Headers,
         api_key: Option<&str>,
         model: &str,
+        litellm_params: &LitellmParams,
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error> {
         if let Some(token) = bearer_token(api_key, env_lookup) {
@@ -138,13 +160,13 @@ impl BaseAnthropicMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         }
         let (_, model_region) =
             bedrock_model_id_and_region(model.strip_prefix(INVOKE_MODEL_PREFIX).unwrap_or(model));
-        let params = Map::new();
+        let params = &litellm_params.aws;
         Ok(ValidatedEnvironment {
             headers,
             auth: AuthScheme::AwsSigV4 {
-                region: resolve_bedrock_region(model_region.as_deref(), &params, env_lookup),
+                region: resolve_bedrock_region(model_region.as_deref(), params, env_lookup),
                 service: BEDROCK_SERVICE,
-                credentials: Box::new(AwsCredentialSource::from_params(&params, env_lookup)),
+                credentials: Box::new(AwsCredentialSource::from_params(params, env_lookup)),
             },
         })
     }
@@ -198,17 +220,17 @@ pub fn bedrock_anthropic_messages_event_stream(bytes: ByteStream) -> EventStream
 
 #[derive(Default)]
 pub struct MessageStopUsagePromoter {
-    pending_delta: Option<AnthropicMessagesStreamEvent>,
-    start_usage: Option<AnthropicStreamUsage>,
+    pending_delta: Option<MessagesStreamEvent>,
+    start_usage: Option<MessagesStreamUsage>,
 }
 
 fn promoted_usage(
-    delta: Option<AnthropicStreamUsage>,
-    stop: Option<&AnthropicStreamUsage>,
-    start: Option<&AnthropicStreamUsage>,
-) -> Option<AnthropicStreamUsage> {
+    delta: Option<MessagesStreamUsage>,
+    stop: Option<&MessagesStreamUsage>,
+    start: Option<&MessagesStreamUsage>,
+) -> Option<MessagesStreamUsage> {
     let delta = delta.unwrap_or_default();
-    let merged = AnthropicStreamUsage {
+    let merged = MessagesStreamUsage {
         input_tokens: stop
             .and_then(|stop| stop.input_tokens)
             .or(delta.input_tokens),
@@ -234,20 +256,20 @@ fn promoted_usage(
             }),
         ..delta
     };
-    (merged != AnthropicStreamUsage::default()).then_some(merged)
+    (merged != MessagesStreamUsage::default()).then_some(merged)
 }
 
 fn promoted(
-    event: AnthropicMessagesStreamEvent,
-    stop: Option<&AnthropicStreamUsage>,
-    start: Option<&AnthropicStreamUsage>,
-) -> AnthropicMessagesStreamEvent {
+    event: MessagesStreamEvent,
+    stop: Option<&MessagesStreamUsage>,
+    start: Option<&MessagesStreamUsage>,
+) -> MessagesStreamEvent {
     match event {
-        AnthropicMessagesStreamEvent::MessageDelta {
+        MessagesStreamEvent::MessageDelta {
             delta,
             usage,
             context_management,
-        } => AnthropicMessagesStreamEvent::MessageDelta {
+        } => MessagesStreamEvent::MessageDelta {
             delta,
             usage: promoted_usage(usage, stop, start),
             context_management,
@@ -257,37 +279,37 @@ fn promoted(
 }
 
 impl StreamTransformer for MessageStopUsagePromoter {
-    type Input = AnthropicMessagesStreamEvent;
-    type Output = AnthropicMessagesStreamEvent;
+    type Input = MessagesStreamEvent;
+    type Output = MessagesStreamEvent;
     type Error = Infallible;
 
     fn transform(
         &mut self,
-        input: AnthropicMessagesStreamEvent,
-    ) -> Result<Vec<AnthropicMessagesStreamEvent>, Infallible> {
+        input: MessagesStreamEvent,
+    ) -> Result<Vec<MessagesStreamEvent>, Infallible> {
         let pending = self.pending_delta.take();
         match input {
-            AnthropicMessagesStreamEvent::MessageDelta { .. } => {
+            MessagesStreamEvent::MessageDelta { .. } => {
                 self.pending_delta = Some(input);
                 Ok(pending.into_iter().collect())
             }
-            AnthropicMessagesStreamEvent::MessageStop { usage } => Ok(pending
+            MessagesStreamEvent::MessageStop { usage } => Ok(pending
                 .map(|delta| promoted(delta, usage.as_ref(), self.start_usage.as_ref()))
                 .into_iter()
-                .chain([AnthropicMessagesStreamEvent::MessageStop { usage }])
+                .chain([MessagesStreamEvent::MessageStop { usage }])
                 .collect()),
-            AnthropicMessagesStreamEvent::MessageStart { message } => {
+            MessagesStreamEvent::MessageStart { message } => {
                 self.start_usage = Some(message.usage.clone());
                 Ok(pending
                     .into_iter()
-                    .chain([AnthropicMessagesStreamEvent::MessageStart { message }])
+                    .chain([MessagesStreamEvent::MessageStart { message }])
                     .collect())
             }
             other => Ok(pending.into_iter().chain([other]).collect()),
         }
     }
 
-    fn finish(&mut self) -> Result<Vec<AnthropicMessagesStreamEvent>, Infallible> {
+    fn finish(&mut self) -> Result<Vec<MessagesStreamEvent>, Infallible> {
         Ok(self
             .pending_delta
             .take()
@@ -310,13 +332,13 @@ mod tests {
     use litellm_auth_aws::constants::DEFAULT_BEDROCK_REGION;
 
     use super::*;
-    use crate::base_llm::anthropic_messages::streaming::encode_anthropic_sse;
+    use crate::base_llm::messages::streaming::encode_anthropic_sse;
 
-    fn event(value: Value) -> AnthropicMessagesStreamEvent {
+    fn event(value: Value) -> MessagesStreamEvent {
         serde_json::from_value(value).unwrap()
     }
 
-    fn message_start(usage: Value) -> AnthropicMessagesStreamEvent {
+    fn message_start(usage: Value) -> MessagesStreamEvent {
         event(json!({
             "type": "message_start",
             "message": {
@@ -326,7 +348,7 @@ mod tests {
         }))
     }
 
-    fn message_delta(usage: Value) -> AnthropicMessagesStreamEvent {
+    fn message_delta(usage: Value) -> MessagesStreamEvent {
         event(json!({
             "type": "message_delta",
             "delta": {"stop_reason": "end_turn"},
@@ -334,14 +356,14 @@ mod tests {
         }))
     }
 
-    fn message_stop(usage: Option<Value>) -> AnthropicMessagesStreamEvent {
+    fn message_stop(usage: Option<Value>) -> MessagesStreamEvent {
         match usage {
             Some(usage) => event(json!({"type": "message_stop", "usage": usage})),
             None => event(json!({"type": "message_stop"})),
         }
     }
 
-    fn promote(events: Vec<AnthropicMessagesStreamEvent>) -> Vec<AnthropicMessagesStreamEvent> {
+    fn promote(events: Vec<MessagesStreamEvent>) -> Vec<MessagesStreamEvent> {
         let mut promoter = MessageStopUsagePromoter::default();
         let mut output: Vec<_> = events
             .into_iter()
@@ -491,19 +513,129 @@ mod tests {
         assert_eq!(sse, expected);
     }
 
-    #[test]
-    fn config_uses_the_streaming_url_only_for_streams() {
-        let env = |_: &str| -> Option<String> { None };
-        let config = AmazonAnthropicClaudeMessagesConfig;
+    fn in_region(region: &str) -> LitellmParams {
+        LitellmParams {
+            aws: AwsParams {
+                aws_region_name: Some(region.into()),
+                ..AwsParams::default()
+            },
+            ..LitellmParams::default()
+        }
+    }
 
+    fn with_runtime_endpoint(endpoint: &str) -> LitellmParams {
+        LitellmParams {
+            aws: AwsParams {
+                aws_bedrock_runtime_endpoint: Some(endpoint.into()),
+                ..in_region("us-west-2").aws
+            },
+            ..LitellmParams::default()
+        }
+    }
+
+    #[rstest]
+    #[case::invoke_in_the_params_region(
+        None,
+        in_region("us-west-2"),
+        false,
+        None,
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3/invoke"
+    )]
+    #[case::stream_in_the_params_region(
+        None,
+        in_region("us-west-2"),
+        true,
+        None,
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-3/invoke-with-response-stream"
+    )]
+    #[case::api_base_outranks_the_params_endpoint(
+        Some("https://base.test/"),
+        with_runtime_endpoint("https://params.test"),
+        false,
+        None,
+        "https://base.test/model/anthropic.claude-3/invoke"
+    )]
+    #[case::a_blank_api_base_does_not_hide_the_params_endpoint(
+        Some("  "),
+        with_runtime_endpoint("https://params.test"),
+        false,
+        Some("https://env.test"),
+        "https://params.test/model/anthropic.claude-3/invoke"
+    )]
+    #[case::params_endpoint_outranks_the_environment(
+        None,
+        with_runtime_endpoint("https://params.test"),
+        false,
+        Some("https://env.test"),
+        "https://params.test/model/anthropic.claude-3/invoke"
+    )]
+    #[case::environment_outranks_the_region_template(
+        None,
+        in_region("us-west-2"),
+        false,
+        Some("https://env.test"),
+        "https://env.test/model/anthropic.claude-3/invoke"
+    )]
+    fn url_follows_python_endpoint_precedence_and_the_stream_path(
+        #[case] api_base: Option<&str>,
+        #[case] litellm_params: LitellmParams,
+        #[case] stream: bool,
+        #[case] env_endpoint: Option<&str>,
+        #[case] expected: &str,
+    ) {
+        let env = |name: &str| {
+            (name == AWS_BEDROCK_RUNTIME_ENDPOINT)
+                .then_some(env_endpoint)
+                .flatten()
+                .map(str::to_string)
+        };
         assert_eq!(
-            config
-                .get_complete_url(None, "anthropic.claude-3", &env)
+            AmazonAnthropicClaudeMessagesConfig
+                .get_complete_url(
+                    api_base,
+                    "anthropic.claude-3",
+                    &litellm_params,
+                    stream,
+                    &env
+                )
                 .unwrap(),
-            config
-                .complete_stream_url(None, "anthropic.claude-3", &env)
-                .unwrap()
-                .replace(INVOKE_STREAM_PATH, INVOKE_PATH)
+            expected
+        );
+    }
+
+    #[test]
+    fn sigv4_scope_and_credentials_come_from_the_litellm_params() {
+        let litellm_params = LitellmParams {
+            aws: AwsParams {
+                aws_access_key_id: Some("AKIAPARAMS".into()),
+                aws_secret_access_key: Some("params-secret".into()),
+                ..in_region("eu-central-1").aws
+            },
+            ..LitellmParams::default()
+        };
+        let validated = AmazonAnthropicClaudeMessagesConfig
+            .validate_environment(
+                Vec::new(),
+                None,
+                "anthropic.claude-3",
+                &litellm_params,
+                &|_| None,
+            )
+            .unwrap();
+        let AuthScheme::AwsSigV4 {
+            region,
+            credentials,
+            ..
+        } = validated.auth
+        else {
+            panic!("expected SigV4, got {:?}", validated.auth);
+        };
+        let AwsCredentialSource::HostSupplied(credentials) = *credentials else {
+            panic!("expected the params' static keys, got {credentials:?}");
+        };
+        assert_eq!(
+            (region.as_str(), credentials.access_key_id()),
+            ("eu-central-1", "AKIAPARAMS")
         );
     }
 
@@ -526,6 +658,7 @@ mod tests {
                 vec![("authorization".into(), "Bearer forwarded".into())],
                 api_key,
                 "anthropic.claude-3",
+                &LitellmParams::default(),
                 &env,
             )
             .unwrap();

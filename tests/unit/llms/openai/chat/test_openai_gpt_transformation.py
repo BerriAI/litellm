@@ -248,6 +248,33 @@ class TestOpenAIChatCompletionStreamingHandler:
         assert result.usage.completion_tokens == 350
         assert result.usage.total_tokens == 14147
 
+    def test_chunk_parser_preserves_service_tier(self):
+        """OpenAI-compatible upstreams serve a service_tier on every streamed
+        chunk; chunk_parser must keep it on the emitted ModelResponseStream so
+        disconnect billing and the reassembled response see the served tier."""
+        handler = OpenAIChatCompletionStreamingHandler(
+            streaming_response=None, sync_stream=True
+        )
+
+        tiered_chunk = {
+            "id": "gen-123",
+            "created": 1234567890,
+            "model": "openai/gpt-4o-mini",
+            "object": "chat.completion.chunk",
+            "choices": [
+                {
+                    "index": 0,
+                    "delta": {"role": "assistant", "content": ""},
+                    "finish_reason": None,
+                }
+            ],
+            "service_tier": "priority",
+        }
+        plain_chunk = {key: value for key, value in tiered_chunk.items() if key != "service_tier"}
+
+        assert handler.chunk_parser(tiered_chunk).model_dump().get("service_tier") == "priority"
+        assert handler.chunk_parser(plain_chunk).model_dump().get("service_tier") is None
+
     def test_chunk_parser_raises_on_in_body_error_payload(self):
         """vLLM/sglang return HTTP 200 streams whose body carries the error,
         e.g. data: {"error": {..., "code": 400}}. chunk_parser must surface it

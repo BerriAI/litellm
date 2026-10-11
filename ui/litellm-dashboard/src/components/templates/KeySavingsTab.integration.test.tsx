@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import KeySavingsTab from "./KeySavingsTab";
 import { DailyData, SpendMetrics } from "@/components/UsagePage/types";
+import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
 import * as useScopedDailyActivityRangeModule from "@/app/(dashboard)/cost-optimization/_components/useDailyActivityRange";
 
 const metrics = (overrides: Partial<SpendMetrics>): SpendMetrics => ({
@@ -36,12 +37,16 @@ const mockActivity = (
   dateValue: { from: new Date("2025-01-01"), to: new Date("2025-01-31") },
   onDateChange: vi.fn(),
   results: [] as DailyData[],
+  metadata: EMPTY_DAILY_ACTIVITY_METADATA,
   loading: false,
-  isFetchingMore: false,
-  progress: { currentPage: 1, totalPages: 1 },
-  cancelled: false,
   failed: false,
-  cancel: vi.fn(),
+  scope: {
+    accessToken: "test-token",
+    startTime: new Date("2025-01-01"),
+    endTime: new Date("2025-01-31"),
+    userId: null,
+    apiKey: null,
+  },
   ...overrides,
 });
 

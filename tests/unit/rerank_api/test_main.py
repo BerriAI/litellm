@@ -1,3 +1,4 @@
+import json
 import logging
 from unittest.mock import MagicMock, patch
 
@@ -7,6 +8,7 @@ import respx
 
 
 import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 MARKER_QUERY = "MARKER_QUERY_do_not_log_at_info"
 MARKER_DOC = "MARKER_DOC_sensitive_customer_text"
@@ -63,9 +65,9 @@ def test_rerank_does_not_log_request_content_at_info(caplog):
 
     optional_params_logs = [r for r in litellm_records if "optional_rerank_params" in r.getMessage()]
     assert optional_params_logs, "expected the optional_rerank_params line to be logged"
-    assert all(
-        r.levelno == logging.DEBUG for r in optional_params_logs
-    ), "optional_rerank_params must be logged at DEBUG, not INFO"
+    assert all(r.levelno == logging.DEBUG for r in optional_params_logs), (
+        "optional_rerank_params must be logged at DEBUG, not INFO"
+    )
 
 
 TOGETHER_RERANK_BODY = {
@@ -291,3 +293,100 @@ async def test_together_rerank_async_honors_env_api_base(respx_mock: respx.MockR
 
     assert mock_route.called
     assert response.results[0]["relevance_score"] == 0.95
+
+
+def test_cohere_rerank_v2_client():
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+
+    client = HTTPHandler()
+    litellm.api_base = "http://localhost:4000"
+    litellm.set_verbose = True
+
+    text = "Hello there!"
+    list_texts = ["Hello there!", "How are you?", "How do you do?"]
+
+    rerank_model = "rerank-multilingual-v3.0"
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = MagicMock()
+        mock_response.text = json.dumps(
+            {
+                "id": "cmpl-mockid",
+                "results": [
+                    {"index": 0, "relevance_score": 0.95},
+                    {"index": 1, "relevance_score": 0.75},
+                    {"index": 2, "relevance_score": 0.65},
+                ],
+                "usage": {"prompt_tokens": 100, "total_tokens": 150},
+            }
+        )
+        mock_response.status_code = 200
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json = lambda: json.loads(mock_response.text)
+
+        mock_post.return_value = mock_response
+
+        response = litellm.rerank(
+            model=rerank_model,
+            query=text,
+            documents=list_texts,
+            custom_llm_provider="cohere",
+            max_tokens_per_doc=3,
+            top_n=2,
+            api_key="fake-api-key",
+            client=client,
+        )
+
+        # Ensure Cohere API is called with the expected params
+        mock_post.assert_called_once()
+        assert mock_post.call_args.kwargs["url"] == "http://localhost:4000/v2/rerank"
+
+        request_data = json.loads(mock_post.call_args.kwargs["data"])
+        assert request_data["model"] == rerank_model
+        assert request_data["query"] == text
+        assert request_data["documents"] == list_texts
+        assert request_data["max_tokens_per_doc"] == 3
+        assert request_data["top_n"] == 2
+
+        # Ensure litellm response is what we expect
+        assert response["results"] == mock_response.json()["results"]
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_rerank_infer_region_from_model_arn(monkeypatch):
+
+    mock_response = MagicMock()
+
+    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+    args = {
+        "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
+        "query": "hello",
+        "documents": ["hello", "world"],
+    }
+
+    def return_val():
+        return {
+            "results": [
+                {"index": 0, "relevanceScore": 0.6716859340667725},
+                {"index": 1, "relevanceScore": 0.0004994205664843321},
+            ]
+        }
+
+    mock_response.json = return_val
+    mock_response.headers = {"key": "value"}
+    mock_response.status_code = 200
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        litellm.rerank(
+            model=args["model"],
+            query=args["query"],
+            documents=args["documents"],
+            client=client,
+        )
+
+        mock_post.assert_called_once()
+        print(f"mock_post.call_args: {mock_post.call_args.kwargs}")
+        assert "us-west-2" in mock_post.call_args.kwargs["url"]
+        assert "us-east-1" not in mock_post.call_args.kwargs["url"]

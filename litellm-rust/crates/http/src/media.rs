@@ -487,30 +487,32 @@ mod tests {
         }
     }
 
-    #[test]
-    fn blocks_non_public_addresses() {
-        for address in [
-            "0.0.0.1",
-            "10.0.0.1",
-            "100.64.0.1",
-            "127.0.0.1",
-            "169.254.1.1",
-            "172.16.0.1",
-            "192.168.0.1",
-            "198.18.0.1",
-            "198.51.100.1",
-            "203.0.113.1",
-            "224.0.0.1",
-            "::1",
-            "fc00::1",
-            "fe80::1",
-            "2001:db8::1",
-            "::ffff:127.0.0.1",
-        ] {
-            assert!(is_blocked_ip(address.parse().expect("valid test address")));
-        }
+    #[rstest::rstest]
+    #[case::unspecified_v4("0.0.0.1")]
+    #[case::private_v4("10.0.0.1")]
+    #[case::carrier_grade_nat("100.64.0.1")]
+    #[case::loopback_v4("127.0.0.1")]
+    #[case::link_local_v4("169.254.1.1")]
+    #[case::private_v4_second_range("172.16.0.1")]
+    #[case::private_v4_third_range("192.168.0.1")]
+    #[case::benchmarking_v4("198.18.0.1")]
+    #[case::documentation_v4_first_range("198.51.100.1")]
+    #[case::documentation_v4_second_range("203.0.113.1")]
+    #[case::multicast_v4("224.0.0.1")]
+    #[case::loopback_v6("::1")]
+    #[case::unique_local_v6("fc00::1")]
+    #[case::link_local_v6("fe80::1")]
+    #[case::documentation_v6("2001:db8::1")]
+    #[case::mapped_loopback_v6("::ffff:127.0.0.1")]
+    fn blocks_non_public_addresses(#[case] address: &str) {
+        assert!(is_blocked_ip(address.parse().expect("valid test address")));
+    }
+
+    #[rstest::rstest]
+    #[case::public("8.8.8.8")]
+    fn allows_a_public_address(#[case] address: &str) {
         assert!(!is_blocked_ip(
-            "8.8.8.8".parse().expect("valid public address")
+            address.parse().expect("valid public address")
         ));
     }
 

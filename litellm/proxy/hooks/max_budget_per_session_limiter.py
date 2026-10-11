@@ -1,11 +1,12 @@
 """
 Per-Session Budget Limiter for LiteLLM Proxy.
 
-Enforces a dollar-amount cap per agent and session (identified by `session_id` /
-`x-litellm-trace-id`). After each successful LLM call the response cost is
-accumulated against the session. When the accumulated spend exceeds
-`max_budget_per_session` (configured in agent litellm_params), subsequent
-requests for that session receive a 429.
+Stops new calls once recorded spend for an agent and session reaches
+`max_budget_per_session` (configured in agent litellm_params). Sessions are
+identified by `session_id` / `x-litellm-trace-id`. Costs are recorded after
+successful responses, with no reservation before forwarding. Calls admitted
+before those responses arrive can finish above the budget. Subsequent requests
+receive a 429 once recorded spend is at or above the threshold.
 
 Note: trace-id enforcement (require_trace_id_on_calls_by_agent) is handled
 separately in auth_checks.py at the agent level, not in this hook.
@@ -17,11 +18,13 @@ Follows the same pattern as max_iterations_limiter.py.
 import asyncio
 import json
 import logging
+import math
 import os
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm import DualCache
+from litellm._internal_context import with_service_target
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.exceptions import RateLimitType
@@ -47,8 +50,22 @@ local agent_scope_key = KEYS[2]
 local amount = tonumber(ARGV[1])
 local ttl = tonumber(ARGV[2])
 local agent_field = ARGV[3]
+local function parse_spend(raw)
+    if raw == false then return 0 end
+    if string.match(raw, '^%s') or string.match(raw, '%s$') or string.find(raw, '%z') then
+        return nil
+    end
+    return tonumber(raw)
+end
 if amount == nil or amount <= 0 or amount ~= amount or math.abs(amount) == math.huge then
     return redis.error_reply('agent session spend increment is invalid')
+end
+
+local legacy_raw = redis.call('GET', legacy_key)
+local previous_legacy = parse_spend(legacy_raw)
+if previous_legacy == nil or previous_legacy < 0 or previous_legacy ~= previous_legacy
+    or math.abs(previous_legacy) == math.huge then
+    return redis.error_reply('legacy session spend is invalid')
 end
 
 if redis.call('EXISTS', agent_scope_key) == 0 then
@@ -79,16 +96,18 @@ local total_new_raw = redis.call('HGET', agent_scope_key, '__total_new')
 if total_new_raw == false then
     return redis.error_reply('agent session scope is missing its migration total')
 end
-local total_new_value = tonumber(total_new_raw)
-if total_new_value == nil or total_new_value ~= total_new_value or math.abs(total_new_value) == math.huge then
+local total_new_value = parse_spend(total_new_raw)
+if total_new_value == nil or total_new_value < 0 or total_new_value ~= total_new_value
+    or math.abs(total_new_value) == math.huge then
     return redis.error_reply('agent session migration total is not numeric')
 end
 local agent_raw = redis.call('HGET', agent_scope_key, agent_field)
-local agent_value = tonumber(agent_raw or '0')
-if agent_value == nil or agent_value ~= agent_value or math.abs(agent_value) == math.huge then
+local agent_value = parse_spend(agent_raw)
+if agent_value == nil or agent_value < 0 or agent_value ~= agent_value or math.abs(agent_value) == math.huge then
     return redis.error_reply('agent session counter is not numeric')
 end
-if math.abs(total_new_value + amount) == math.huge or math.abs(agent_value + amount) == math.huge then
+if math.abs(previous_legacy + amount) == math.huge or math.abs(total_new_value + amount) == math.huge
+    or math.abs(agent_value + amount) == math.huge then
     return redis.error_reply('agent session spend increment is out of range')
 end
 
@@ -102,7 +121,18 @@ return tostring(math.max(legacy_value - next_total_new, 0) + next_agent_value)
 MAX_BUDGET_SESSION_GET_AGENT_SPEND_SCRIPT: Final = """
 local legacy_key = KEYS[1]
 local agent_scope_key = KEYS[2]
-local legacy_value = tonumber(redis.call('GET', legacy_key)) or 0
+local function parse_spend(raw)
+    if raw == false then return 0 end
+    if string.match(raw, '^%s') or string.match(raw, '%s$') or string.find(raw, '%z') then
+        return nil
+    end
+    return tonumber(raw)
+end
+local legacy_raw = redis.call('GET', legacy_key)
+local legacy_value = parse_spend(legacy_raw)
+if legacy_value == nil or legacy_value < 0 or legacy_value ~= legacy_value or math.abs(legacy_value) == math.huge then
+    return redis.error_reply('legacy session spend is invalid')
+end
 
 if redis.call('EXISTS', agent_scope_key) == 0 then
     return tostring(legacy_value)
@@ -116,15 +146,16 @@ local total_new_raw = redis.call('HGET', agent_scope_key, '__total_new')
 if total_new_raw == false then
     return redis.error_reply('agent session scope is missing its migration total')
 end
-local total_new_value = tonumber(total_new_raw)
-if total_new_value == nil or total_new_value ~= total_new_value or math.abs(total_new_value) == math.huge then
+local total_new_value = parse_spend(total_new_raw)
+if total_new_value == nil or total_new_value < 0 or total_new_value ~= total_new_value
+    or math.abs(total_new_value) == math.huge then
     return redis.error_reply('agent session migration total is not numeric')
 end
 local agent_raw = redis.call('HGET', agent_scope_key, ARGV[1])
 local agent_value = 0
 if agent_raw ~= false then
-    agent_value = tonumber(agent_raw)
-    if agent_value == nil or agent_value ~= agent_value or math.abs(agent_value) == math.huge then
+    agent_value = parse_spend(agent_raw)
+    if agent_value == nil or agent_value < 0 or agent_value ~= agent_value or math.abs(agent_value) == math.huge then
         return redis.error_reply('agent session counter is not numeric')
     end
 end
@@ -138,13 +169,17 @@ DEFAULT_MAX_BUDGET_PER_SESSION_TTL: Final = 3600
 
 class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
     """
-    Pre-call hook that enforces max_budget_per_session.
+    Pre-call hook that checks the max_budget_per_session stop threshold.
 
     Configuration (set in agent litellm_params):
-        - max_budget_per_session: dollar cap per agent and session_id
+        - max_budget_per_session: recorded-spend threshold per agent and session_id
 
-    Cache key pattern:
-        {session_budget:<session_id>}:agent:<agent_id>:spend
+    Costs are recorded after successful responses. Concurrent calls can pass
+    the check before their costs are recorded and finish above the threshold.
+
+    Cache keys:
+        {session_budget:<session_id>}:spend (legacy aggregate)
+        {session_budget:<session_id>}:agent-scope (per-agent migration ledger)
     """
 
     def __init__(self, internal_usage_cache: InternalUsageCache):
@@ -182,6 +217,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         )
         self._registered_redis_cache = redis_cache
 
+    @with_service_target("session_budgets")
     async def async_pre_call_hook(
         self,
         user_api_key_dict: UserAPIKeyAuth,
@@ -190,8 +226,8 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         call_type: str,
     ) -> Exception | str | dict | None:
         """
-        Before each LLM call, check if max_budget_per_session is set and
-        whether accumulated spend exceeds the budget (429 if so).
+        Reject at or above the recorded-spend threshold without reserving cost
+        for calls that pass the check.
         """
         max_budget = self._get_max_budget_per_session(user_api_key_dict)
 
@@ -226,11 +262,12 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
         return None
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    @with_service_target("session_budgets")
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
         """
         Record every successful agent call so limits added later still see the
-        session's accumulated spend. The pre-call hook enforces a cap only when
-        one is configured.
+        session's accumulated spend. A configured threshold stops later calls
+        after recorded spend reaches it.
         """
         try:
             litellm_params: Final = kwargs.get("litellm_params") or {}
@@ -239,7 +276,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             if session_id is None:
                 return
 
-            agent_id: Final = metadata.get("agent_id")
+            agent_id: Final = metadata.get("billing_agent_id") or metadata.get("agent_id")
             if agent_id is None:
                 return
 
@@ -329,14 +366,21 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         raise RuntimeError("Agent session scope cache has an invalid value")
 
     @staticmethod
-    def _get_scope_spend(scope: dict[str, object], field: str) -> float:
-        value = scope.get(field)
-        if value is None:
-            return 0.0
-        if isinstance(value, (int, float, str, bytes)):
-            return float(value)
-        raise RuntimeError("Agent session scope has an invalid counter")
+    def _parse_spend(value: object) -> float:
+        if isinstance(value, bool) or not isinstance(value, (int, float, str, bytes)):
+            raise RuntimeError("Agent session spend counter is invalid")
+        if isinstance(value, (str, bytes)) and value != value.strip():
+            raise RuntimeError("Agent session spend counter is invalid")
+        spend: Final = float(value)
+        if not math.isfinite(spend) or spend < 0:
+            raise RuntimeError("Agent session spend counter is invalid")
+        return spend
 
+    @staticmethod
+    def _get_scope_spend(scope: dict[str, object], field: str) -> float:
+        return _PROXY_MaxBudgetPerSessionHandler._parse_spend(scope.get(field, 0.0))
+
+    @with_service_target("session_budgets")
     async def _get_agent_spend(self, session_id: str, agent_id: str) -> float:
         legacy_key: Final = self._make_legacy_cache_key(session_id)
         agent_scope_key: Final = self._make_agent_scope_cache_key(session_id)
@@ -349,7 +393,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                     args=[agent_field],
                 )
                 if isinstance(result, (int, float, str, bytes)):
-                    return float(result)
+                    return self._parse_spend(result)
                 raise TypeError(f"Unexpected Redis spend result: {type(result).__name__}")
             except Exception as e:
                 log_redis_failure(
@@ -371,7 +415,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         raw_total_new = agent_scope.get("__total_new")
         if not isinstance(raw_total_new, (int, float, str, bytes)):
             raise RuntimeError("Agent session scope is missing its migration total")
-        total_new_value = float(raw_total_new)
+        total_new_value: Final = self._parse_spend(raw_total_new)
         agent_value = self._get_scope_spend(agent_scope, agent_field)
         return max(float(legacy_value) - total_new_value, 0.0) + agent_value
 
@@ -384,11 +428,12 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 local_only=True,
             ),
         )
-        if isinstance(result, (int, float, str, bytes)):
-            return float(result)
-        return None
+        return None if result is None else self._parse_spend(result)
 
     async def _increment_agent_spend(self, session_id: str, agent_id: str, amount: float) -> float:
+        validated_amount: Final = self._parse_spend(amount)
+        if validated_amount == 0:
+            raise RuntimeError("Agent session spend increment must be positive")
         legacy_key: Final = self._make_legacy_cache_key(session_id)
         agent_scope_key: Final = self._make_agent_scope_cache_key(session_id)
         agent_field: Final = self._make_agent_scope_field(agent_id)
@@ -397,10 +442,10 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             try:
                 result: Final[object] = await self.increment_script(
                     keys=[legacy_key, agent_scope_key],
-                    args=[str(amount), self.ttl, agent_field],
+                    args=[str(validated_amount), self.ttl, agent_field],
                 )
                 if isinstance(result, (int, float, str, bytes)):
-                    return float(result)
+                    return self._parse_spend(result)
                 raise TypeError(f"Unexpected Redis spend result: {type(result).__name__}")
             except Exception as e:
                 log_redis_failure(
@@ -425,11 +470,11 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 raw_total_new = agent_scope.get("__total_new")
                 if not isinstance(raw_total_new, (int, float, str, bytes)):
                     raise RuntimeError("Agent session scope is missing its migration total")
-                total_new_value = float(raw_total_new)
+                total_new_value = self._parse_spend(raw_total_new)
                 agent_value = self._get_scope_spend(agent_scope, agent_field)
-            new_legacy: Final = float(legacy_value) + amount
-            new_total_new: Final = float(total_new_value) + amount
-            new_agent: Final = float(agent_value) + amount
+            new_legacy: Final = self._parse_spend(float(legacy_value) + validated_amount)
+            new_total_new: Final = self._parse_spend(float(total_new_value) + validated_amount)
+            new_agent: Final = self._parse_spend(float(agent_value) + validated_amount)
             await self.internal_usage_cache.async_set_cache(
                 key=legacy_key,
                 value=new_legacy,
@@ -450,3 +495,6 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 local_only=True,
             )
             return max(new_legacy - new_total_new, 0.0) + new_agent
+
+
+PROXY_MaxBudgetPerSessionHandler: Final = _PROXY_MaxBudgetPerSessionHandler

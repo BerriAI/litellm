@@ -21,13 +21,17 @@ pub fn apply_credential(
     placement: CredentialPlacement,
 ) -> Result<Vec<(String, String)>, Error> {
     if credential.trim().is_empty() {
-        return Err(Error::EmptyCredential);
+        return Err(Error::InvalidConfiguration(
+            "credential cannot be empty".into(),
+        ));
     }
     if headers
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case(placement.header_name()))
     {
-        return Err(Error::DuplicateHeader(placement.header_name()));
+        return Err(Error::InvalidConfiguration(
+            crate::ErrorDetail::DuplicateHeader(placement.header_name()),
+        ));
     }
     let value = match placement {
         CredentialPlacement::Bearer => format!("Bearer {credential}"),

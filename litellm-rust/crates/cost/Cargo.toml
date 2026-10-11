@@ -8,6 +8,7 @@ repository.workspace = true
 [dev-dependencies]
 criterion.workspace = true
 proptest.workspace = true
+rstest.workspace = true
 
 [[bench]]
 name = "calculate"
