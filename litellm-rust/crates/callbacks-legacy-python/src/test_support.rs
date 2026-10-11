@@ -72,6 +72,16 @@ def setup(call_type, args, kwargs, start, asynchronous):
     return types.SimpleNamespace(logger=logger, kwargs=kwargs)
 
 
+last_body_logger = [None]
+
+
+def run_sync(awaitable):
+    logger = last_body_logger[0]
+    if logger is not None:
+        logger.record('run_sync', awaitable)
+    return awaitable
+
+
 FAKES = {
     'setup': setup,
     'finalize': lambda response, logger, kwargs, start, end: logger.record('finalize', response),
@@ -112,6 +122,7 @@ FAKES = {
     'stream_failure': lambda logger, endpoint_type, request_body, chunks, error: logger.record('stream_failure', error),
     'prepare_request': lambda operation, request: request['logger'].body('prepare', operation, request),
     'transform_response': lambda operation, response, request: request['logger'].body('transform', operation, response, request),
+    'run_sync': lambda awaitable: run_sync(awaitable),
 }
 assert FAKES.keys() == CONTRACT.keys(), sorted(FAKES.keys() ^ CONTRACT.keys())
 for name, fake in FAKES.items():
@@ -161,6 +172,7 @@ class StubLogger:
 
     def body(self, phase, *values):
         self.record(phase + '_body', values)
+        last_body_logger[0] = self
         return self.bodies.get(phase, lambda *values: 'awaitable')(*values)
 
     def failure_handler(self, error, trace, start, end):

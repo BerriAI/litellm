@@ -116,5 +116,8 @@
     "operation",
     "response",
     "request"
+  ],
+  "run_sync": [
+    "awaitable"
   ]
 }

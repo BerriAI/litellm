@@ -377,8 +377,114 @@ async def test_agentic_response_hooks_that_do_not_run_keep_the_provider_response
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ("ocr", "completion", "responses"))
-async def test_body_hooks_refuse_an_operation_whose_handler_has_none(operation: str) -> None:
+async def test_request_body_hooks_refuse_an_operation_whose_handler_has_none(operation: str) -> None:
     with pytest.raises(ValueError, match=operation):
         await legacy.prepare_request(operation, {"model": "m"})
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("ocr", "completion"))
+async def test_response_body_hooks_refuse_an_operation_whose_handler_has_none(operation: str) -> None:
     with pytest.raises(ValueError, match=operation):
         await legacy.transform_response(operation, {}, {"model": "m"})
+
+
+def _responses_logger() -> Logging:
+    return Logging(
+        model="openai/gpt-6-sol",
+        messages=[],
+        stream=False,
+        call_type="aresponses",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="supplied",
+        function_id="supplied",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("public_input", ("hello", [{"role": "user", "content": "hello"}]), ids=("text", "items"))
+async def test_responses_agentic_hooks_see_the_responses_surface_and_their_answer_is_selected(
+    monkeypatch: pytest.MonkeyPatch, public_input: object
+) -> None:
+    from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+    from litellm.types.integrations.custom_logger import RESPONSES_AGENTIC_SURFACE
+
+    original: Final = {"output": [{"type": "function_call", "name": "lookup"}]}
+    replacement: Final = {"output": [{"type": "message", "content": "callback"}]}
+    seen: Final[list[Mapping[str, object]]] = []
+
+    class Gate(CustomLogger):
+        async def async_should_run_agentic_loop(
+            self, response, model, messages, tools, stream, custom_llm_provider, kwargs
+        ) -> tuple[bool, dict[str, object]]:
+            seen.append(
+                {
+                    "response": response,
+                    "model": model,
+                    "messages": messages,
+                    "tools": tools,
+                    "provider": custom_llm_provider,
+                    "surface": kwargs.get("_agentic_loop_api_surface"),
+                    "api_key": kwargs.get("api_key"),
+                }
+            )
+            return True, {}
+
+        async def async_run_agentic_loop(
+            self,
+            tools,
+            model,
+            messages,
+            response,
+            anthropic_messages_provider_config,
+            anthropic_messages_optional_request_params,
+            logging_obj,
+            stream,
+            kwargs,
+        ) -> object:
+            assert isinstance(anthropic_messages_provider_config, BaseResponsesAPIConfig)
+            assert anthropic_messages_optional_request_params["max_output_tokens"] == 8
+            assert logging_obj is logger
+            return replacement
+
+    logger: Final = _responses_logger()
+    request: Final[dict[str, object]] = {
+        "model": "openai/gpt-6-sol",
+        "input": public_input,
+        "litellm_logging_obj": logger,
+        "api_key": "caller-key",
+    }
+    legacy.update_logging(
+        logger,
+        request,
+        "gpt-6-sol",
+        {"tools": [{"type": "function", "name": "lookup"}], "max_output_tokens": 8},
+        {},
+        "openai",
+    )
+    monkeypatch.setattr(litellm, "callbacks", [Gate()])
+
+    selected: Final = await legacy.transform_response("responses", original, request)
+
+    assert selected is replacement
+    assert seen == [
+        {
+            "response": original,
+            "model": "gpt-6-sol",
+            "messages": [{"role": "user", "content": "hello"}],
+            "tools": [{"type": "function", "name": "lookup"}],
+            "provider": "openai",
+            "surface": RESPONSES_AGENTIC_SURFACE,
+            "api_key": "caller-key",
+        }
+    ]
+
+
+def test_run_sync_runs_a_body_fan_out_to_completion_without_a_running_loop() -> None:
+    async def fan_out() -> str:
+        import asyncio
+
+        await asyncio.sleep(0)
+        return "settled"
+
+    assert legacy.run_sync(fan_out()) == "settled"

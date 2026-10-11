@@ -93,6 +93,8 @@ pub(crate) enum Body {
     PrepareRequest,
     #[strum(serialize = "transform_response")]
     TransformResponse,
+    #[strum(serialize = "run_sync")]
+    RunSync,
 }
 
 impl LegacyPython {

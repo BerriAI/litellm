@@ -219,6 +219,7 @@ class AgenticCompletionHooks(Protocol):
         stream: bool,
         custom_llm_provider: str,
         kwargs: Mapping[str, object],
+        api_surface: str,
     ) -> Awaitable[object]: ...
 
 
@@ -379,6 +380,28 @@ def _messages_extra(request: Mapping[str, object]) -> Mapping[str, object]:
     return {name: value for name, value in request.items() if name not in MESSAGES_PARAMETERS}
 
 
+def _responses_extra(request: Mapping[str, object]) -> Mapping[str, object]:
+    from litellm.responses.dispatch import RESPONSES_PARAMETERS
+
+    return {name: value for name, value in request.items() if name not in RESPONSES_PARAMETERS}
+
+
+def run_sync(awaitable: Awaitable[object]) -> object:
+    """Runs a body fan-out for a sync native call, as Python's sync handlers run the same coroutine:
+    on a fresh loop here, or on a fresh loop in a helper thread when this thread already runs one."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    async def settle() -> object:
+        return await awaitable
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(settle())
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, settle()).result()
+
+
 async def prepare_request(operation: str, request: Mapping[str, object]) -> Mapping[str, object]:
     """The body of the operation's async handler before the provider call, over the resolved
     request. Messages runs its `async_pre_request_hook` fan-out, and the answer is the request
@@ -397,6 +420,8 @@ async def transform_response(operation: str, response: object, request: Mapping[
     match operation:
         case "messages":
             return await _transform_messages_response(response, request)
+        case "responses":
+            return await _transform_responses_response(response, request)
         case _:
             raise ValueError(f"no response body hooks for the {operation} operation")
 
@@ -456,6 +481,47 @@ async def _transform_messages_response(response: object, request: Mapping[str, o
         stream=False,
         custom_llm_provider=provider,
         kwargs={**_messages_extra(request), **credentials},
+        api_surface="anthropic_messages",
+    )
+    return response if selected is None else selected
+
+
+async def _transform_responses_response(response: object, request: Mapping[str, object]) -> object:
+    from litellm.llms.anthropic.pass_through.messages import handler
+    from litellm.rust_bridge.public_call import optional_str
+    from litellm.types.integrations.custom_logger import RESPONSES_AGENTIC_SURFACE
+    from litellm.types.router import GenericLiteLLMParams
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    logger: Final = cast(  # cast-ok: the argument stage injected the initialized Logging surface
+        LoggingSurface, request["litellm_logging_obj"]
+    )
+    provider: Final = optional_str(logger.model_call_details.get("custom_llm_provider")) or "openai"
+    model: Final = optional_str(logger.model_call_details.get("model")) or str(request["model"]).removeprefix(
+        f"{provider}/"
+    )
+    from litellm.rust_bridge.public_call import optional_sequence
+
+    public_input: Final = request.get("input")
+    items: Final = optional_sequence(public_input)
+    execute: Final = cast(  # cast-ok: the legacy fan-out forwards opaque callback values
+        AgenticCompletionHooks,
+        handler.base_llm_http_handler._call_agentic_completion_hooks,  # pyright: ignore[reportPrivateUsage]  # the native call runs the handler's own agentic orchestration, loop guards included
+    )
+    selected: Final = await execute(
+        response=response,
+        model=model,
+        messages=list(items) if items is not None else [{"role": "user", "content": public_input}],
+        anthropic_messages_provider_config=ProviderConfigManager.get_provider_responses_api_config(
+            LlmProviders(provider), model=model, api_base=optional_str(request.get("api_base"))
+        ),
+        anthropic_messages_optional_request_params=logger.optional_params,
+        logging_obj=logger,
+        stream=False,
+        custom_llm_provider=provider,
+        kwargs=dict(GenericLiteLLMParams(**_responses_extra(request))),
+        api_surface=RESPONSES_AGENTIC_SURFACE,
     )
     return response if selected is None else selected
 

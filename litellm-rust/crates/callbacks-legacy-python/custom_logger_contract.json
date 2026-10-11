@@ -1,14 +1,18 @@
 {
   "async_agentic_loop_cleanup_hook": [
     {
-      "python": "litellm.llms.custom_httpx.llm_http_handler"
+      "boundary": "TransformResponse",
+      "operations": [
+        "responses"
+      ]
     }
   ],
   "async_build_agentic_loop_plan": [
     {
       "boundary": "TransformResponse",
       "operations": [
-        "messages"
+        "messages",
+        "responses"
       ]
     }
   ],
@@ -89,7 +93,8 @@
     {
       "boundary": "TransformResponse",
       "operations": [
-        "messages"
+        "messages",
+        "responses"
       ]
     },
     {
@@ -176,7 +181,8 @@
     {
       "boundary": "TransformResponse",
       "operations": [
-        "messages"
+        "messages",
+        "responses"
       ]
     }
   ],
@@ -192,7 +198,8 @@
     {
       "boundary": "TransformResponse",
       "operations": [
-        "messages"
+        "messages",
+        "responses"
       ]
     }
   ],

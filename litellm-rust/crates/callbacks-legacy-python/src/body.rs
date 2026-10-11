@@ -1,9 +1,11 @@
-//! The dispatched handler's body as the native call sees it. Python's async handlers run
-//! body hooks between the `@client` wrapper and the provider call: Messages runs
+//! The dispatched handler's body as the native call sees it. Python's handlers run body hooks
+//! between the `@client` wrapper and the provider call: the async Messages handler runs
 //! `async_pre_request_hook` over the resolved call before the provider transform and the
-//! agentic-loop hooks over the complete response before `@client` sees it. Both fan-outs
-//! stay in Python, keyed by operation, and are awaited on the caller's task; this hook hands
-//! them the resolved request and folds their answers back into the keyword view.
+//! agentic-loop hooks over the complete response, and both Responses handlers run the
+//! agentic-loop hooks over the complete response. The fan-outs stay in Python, keyed by
+//! operation; an async call awaits them on the caller's task and a sync call runs them to
+//! completion the way Python's sync handler does. This hook hands them the resolved request
+//! and folds their answers back into the keyword view.
 
 use litellm_host::{hooks::CallHooks, lifecycle::Timing};
 use litellm_host_python::{
@@ -19,28 +21,35 @@ use crate::{LoggingOperation, PublicCall, python::Body};
 
 pub struct HandlerBody {
     operation: LoggingOperation,
+    prepares_request: bool,
     base: Option<Py<PyDict>>,
     request: Option<Py<PyDict>>,
 }
 
-fn runs_body_hooks(operation: LoggingOperation, asynchronous: bool) -> bool {
-    matches!(
-        (operation, asynchronous),
-        (LoggingOperation::Messages, true)
-    )
+/// Whether the operation's Python handler runs body hooks at all, and if so whether it runs
+/// a request stage before the provider call.
+fn body_stages(operation: LoggingOperation, asynchronous: bool) -> Option<bool> {
+    match (operation, asynchronous) {
+        (LoggingOperation::Messages, true) => Some(true),
+        (LoggingOperation::Responses, _) => Some(false),
+        (LoggingOperation::Messages, false)
+        | (LoggingOperation::Completion, _)
+        | (LoggingOperation::Ocr, _) => None,
+    }
 }
 
 impl HandlerBody {
     /// The body hooks for a call, when Python's handler would run them: the async Messages
-    /// route today. Every other call keeps its wrapper-only contract.
+    /// route and both Responses routes. Every other call keeps its wrapper-only contract.
     pub fn new(
         py: Python<'_>,
         operation: LoggingOperation,
         call: &PublicCall,
         asynchronous: bool,
     ) -> Option<Self> {
-        runs_body_hooks(operation, asynchronous).then(|| Self {
+        body_stages(operation, asynchronous).map(|prepares_request| Self {
             operation,
+            prepares_request,
             base: Some(call.base(py)),
             request: None,
         })
@@ -54,6 +63,15 @@ impl HandlerBody {
         let base = self.base.as_ref().ok_or_else(missing_state)?;
         effective_py_args(base.bind(py), kwargs)
     }
+}
+
+/// A fan-out's answer: awaited on the caller's task for an async call, run to completion
+/// for a sync one, as Python's sync handler runs the same coroutine.
+async fn settle(task: &PythonTask, awaitable: Py<PyAny>) -> PyResult<Py<PyAny>> {
+    if task.asynchronous() {
+        return task.settle(Ok(awaitable)).await?;
+    }
+    Python::attach(|py| Body::RunSync.call(py, (awaitable,)).map(Bound::unbind))
 }
 
 /// Lays the keys Python changed over the keyword layer. A key whose value is the very object
@@ -81,6 +99,9 @@ impl CallHooks<PythonRuntime> for HandlerBody {
         task: &PythonTask,
         arguments: Py<PyDict>,
     ) -> PyResult<Py<PyDict>> {
+        if !self.prepares_request {
+            return Ok(arguments);
+        }
         let (before, awaitable) = Python::attach(|py| -> PyResult<_> {
             let resolved = self.resolved(py, arguments.bind(py))?;
             let awaitable = Body::PrepareRequest
@@ -88,9 +109,9 @@ impl CallHooks<PythonRuntime> for HandlerBody {
                 .unbind();
             Ok((resolved.unbind(), awaitable))
         })?;
-        let result = task.settle(Ok(awaitable)).await?;
+        let replacement = settle(task, awaitable).await?;
         Python::attach(|py| {
-            let replacement = result?.into_bound(py).cast_into::<PyDict>()?;
+            let replacement = replacement.into_bound(py).cast_into::<PyDict>()?;
             write_back(before.bind(py), &replacement, arguments.bind(py))?;
             Ok(arguments)
         })
@@ -114,7 +135,7 @@ impl CallHooks<PythonRuntime> for HandlerBody {
                 .call(py, (<&str>::from(self.operation), &response, resolved))?
                 .unbind())
         })?;
-        task.settle(Ok(awaitable)).await?
+        settle(task, awaitable).await
     }
 }
 
@@ -156,6 +177,15 @@ mod tests {
     };
 
     fn body<'py>(py: Python<'py>, script: &CStr) -> (HandlerBody, Bound<'py, PyDict>) {
+        body_of(py, script, LoggingOperation::Messages, true)
+    }
+
+    fn body_of<'py>(
+        py: Python<'py>,
+        script: &CStr,
+        operation: LoggingOperation,
+        asynchronous: bool,
+    ) -> (HandlerBody, Bound<'py, PyDict>) {
         let locals = namespace(py, script);
         let call = PublicCall::capture(
             &local_dict(&locals, "bound"),
@@ -163,17 +193,20 @@ mod tests {
             &local_dict(&locals, "kwargs"),
         )
         .unwrap();
-        let body = HandlerBody::new(py, LoggingOperation::Messages, &call, true).unwrap();
+        let body = HandlerBody::new(py, operation, &call, asynchronous).unwrap();
         (body, locals)
     }
 
     #[rstest]
     #[case::sync_messages(LoggingOperation::Messages, false, false)]
     #[case::async_messages(LoggingOperation::Messages, true, true)]
+    #[case::sync_responses(LoggingOperation::Responses, false, true)]
+    #[case::async_responses(LoggingOperation::Responses, true, true)]
     #[case::async_ocr(LoggingOperation::Ocr, true, false)]
+    #[case::sync_ocr(LoggingOperation::Ocr, false, false)]
     #[case::async_completion(LoggingOperation::Completion, true, false)]
-    #[case::async_responses(LoggingOperation::Responses, true, false)]
-    fn only_the_async_messages_call_runs_body_hooks(
+    #[case::sync_completion(LoggingOperation::Completion, false, false)]
+    fn the_calls_whose_python_handler_runs_body_hooks_compose_one(
         #[case] operation: LoggingOperation,
         #[case] asynchronous: bool,
         #[case] composed: bool,
@@ -409,6 +442,80 @@ assert request == {'model': 'kwargs-model', 'max_tokens': 8, 'logger': logger}
                 finish(py, &task, body.prepare_request(&task, kwargs.clone_ref(py))).unwrap_err();
             assert!(error.is_instance_of::<pyo3::exceptions::PyRuntimeError>(py));
             run(py, &locals, c"assert logger.calls == []");
+        });
+    }
+
+    /// Responses has no pre-request fan-out: the request stage is a pass-through that never
+    /// reaches Python, for the async and the sync route alike.
+    #[rstest]
+    #[case::asynchronous(true)]
+    #[case::synchronous(false)]
+    fn the_responses_body_leaves_the_request_stage_to_the_wrapper(
+        #[case] asynchronous: bool,
+        initialized_python: &InitializedPython,
+    ) {
+        initialized_python.attach(|py| {
+            let (mut body, locals) = body_of(
+                py,
+                c"bound = {'model': 'bound-model'}\nkwargs = {'logger': logger}",
+                LoggingOperation::Responses,
+                asynchronous,
+            );
+            let task = PythonTask::new(asynchronous);
+            let kwargs = local_dict(&locals, "kwargs").unbind();
+            let driven = drive(
+                py,
+                &task,
+                body.prepare_request(&task, kwargs.clone_ref(py)),
+                echo,
+            );
+            assert!(driven.outcome.unwrap().is(&kwargs));
+            assert!(driven.awaited.is_empty());
+            run(py, &locals, c"assert logger.calls == []");
+        });
+    }
+
+    /// A sync call cannot await the fan-out, so the body runs it to completion through the
+    /// shim's runner and never suspends the caller's task.
+    #[rstest]
+    fn a_sync_responses_call_runs_the_response_fan_out_to_completion_without_suspending(
+        initialized_python: &InitializedPython,
+    ) {
+        initialized_python.attach(|py| {
+            let (mut body, locals) = body_of(
+                py,
+                c"
+bound = {'model': 'bound-model'}
+kwargs = {'logger': logger}
+response = {'output': []}
+replacement = {'output': ['from the loop']}
+logger.bodies = {'transform': lambda operation, response, request: replacement}
+",
+                LoggingOperation::Responses,
+                false,
+            );
+            let task = PythonTask::new(false);
+            let kwargs = local_dict(&locals, "kwargs").unbind();
+            finish(py, &task, body.arguments_prepared(&task, &kwargs)).unwrap();
+            let response = local(&locals, "response").unbind();
+            let driven = drive(
+                py,
+                &task,
+                body.transform_response(&task, response, TIMING),
+                |_, _, _| panic!("a sync call never suspends"),
+            );
+            let selected = driven.outcome.unwrap();
+            assert!(driven.awaited.is_empty());
+            locals.set_item("selected", selected).unwrap();
+            run(
+                py,
+                &locals,
+                c"
+assert selected is replacement
+assert [name for name, _ in logger.calls] == ['transform_body', 'run_sync']
+assert logger.calls[0][1][0] == 'responses'
+",
+            );
         });
     }
 }

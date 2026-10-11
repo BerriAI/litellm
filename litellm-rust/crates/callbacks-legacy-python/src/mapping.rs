@@ -73,6 +73,9 @@ impl Binding {
 }
 
 const MESSAGES: Operations = Operations::Only(&[LoggingOperation::Messages]);
+const RESPONSES: Operations = Operations::Only(&[LoggingOperation::Responses]);
+const MESSAGES_AND_RESPONSES: Operations =
+    Operations::Only(&[LoggingOperation::Messages, LoggingOperation::Responses]);
 
 /// Every `CustomLogger` callback a native call runs itself, by the boundary that runs it.
 const BINDINGS: &[Binding] = &[
@@ -98,13 +101,18 @@ const BINDINGS: &[Binding] = &[
     },
     Binding {
         boundary: CallBoundary::TransformResponse,
-        operations: MESSAGES,
+        operations: MESSAGES_AND_RESPONSES,
         callbacks: &[
             "async_should_run_agentic_loop",
             "async_run_agentic_loop",
             "async_build_agentic_loop_plan",
             "async_post_agentic_loop_response_hook",
         ],
+    },
+    Binding {
+        boundary: CallBoundary::TransformResponse,
+        operations: RESPONSES,
+        callbacks: &["async_agentic_loop_cleanup_hook"],
     },
     Binding {
         boundary: CallBoundary::TransformResponse,
@@ -267,7 +275,6 @@ python_callbacks! {
     Dispatch::Python("litellm.integrations.argilla") => ["async_dataset_hook"],
     Dispatch::Python("litellm.proxy.management_helpers.audit_logs") => ["async_log_audit_log_event"],
     Dispatch::Python("litellm.llms.custom_httpx.llm_http_handler") => [
-        "async_agentic_loop_cleanup_hook",
         "async_should_run_chat_completion_agentic_loop",
         "async_run_chat_completion_agentic_loop",
         "async_build_chat_completion_agentic_loop_plan",

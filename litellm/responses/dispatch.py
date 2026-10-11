@@ -45,6 +45,9 @@ _PYTHON_RESPONSES: Final = _python_responses()
 _RESPONSES: Final = signature(_PYTHON_RESPONSES)
 _PYTHON_ARESPONSES: Final = _python_aresponses()
 _ARESPONSES: Final = signature(_PYTHON_ARESPONSES)
+RESPONSES_PARAMETERS: Final = frozenset(
+    name for name, parameter in _ARESPONSES.parameters.items() if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+)
 
 
 def _public_request(
