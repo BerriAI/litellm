@@ -204,7 +204,7 @@ def _owns_listener(launch: _Launch) -> bool:
                 for connection in member.net_connections(kind="inet")
             ):
                 return True
-        except psutil.NoSuchProcess:
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
     return False
 
@@ -233,9 +233,23 @@ def _ready_workers(pids: frozenset[int], pid: int) -> frozenset[int]:
     return pids | frozenset((pid,))
 
 
+def _ready_worker_pid(member: psutil.Process) -> int | None:
+    try:
+        status: Final = member.status()
+        return (
+            None
+            if status in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD, psutil.STATUS_STOPPED, psutil.STATUS_TRACING_STOP)
+            else member.pid
+        )
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return None
+
+
 def _wait_until_ready(launch: _Launch, workers: int = 1) -> None:
     for ready in accumulate(_readiness_pids(launch), _ready_workers, initial=frozenset[int]()):
-        members: Final = frozenset(member.pid for member in group_members(launch.process.pid))
+        members: Final = frozenset(
+            pid for member in group_members(launch.process.pid) if (pid := _ready_worker_pid(member)) is not None
+        )
         if len(ready & members) >= max(1, workers):
             return
 

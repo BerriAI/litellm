@@ -3,13 +3,17 @@ from __future__ import annotations
 import asyncio
 import errno
 import importlib
+import os
 import socket
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import Final
+from unittest.mock import MagicMock
 
 import httpx
+import psutil
 import pytest
 import yaml
 from pydantic import TypeAdapter
@@ -130,6 +134,94 @@ def test_lost_port_race_needs_the_process_to_have_exited(
     process_module: ModuleType, bind_error_line: str, tmp_path: Path
 ) -> None:
     assert not process_module._lost_port_race(None, _written_log(tmp_path, bind_error_line))
+
+
+@pytest.mark.parametrize("failure", (psutil.AccessDenied, psutil.NoSuchProcess))
+def test_an_unreadable_process_cannot_establish_listener_ownership(
+    process_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, failure: type[psutil.Error]
+) -> None:
+    member: Final = MagicMock(spec=psutil.Process)
+    member.pid = os.getpid()
+    member.net_connections.side_effect = failure(member.pid)
+    monkeypatch.setattr(psutil, "process_iter", lambda: iter((member,)))
+    parent: Final = MagicMock()
+    parent.pid = os.getpgid(member.pid)
+    launch: Final = process_module._Launch(parent, 8123, tmp_path / "unused.log", 0.0)
+    assert not process_module._owns_listener(launch)
+
+
+def test_an_unreadable_member_does_not_hide_another_owned_listener(
+    process_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    unreadable: Final = MagicMock(spec=psutil.Process)
+    unreadable.pid = 1
+    unreadable.net_connections.side_effect = psutil.AccessDenied(1)
+    readable: Final = MagicMock(spec=psutil.Process)
+    readable.pid = 2
+    listener: Final = MagicMock()
+    listener.status = psutil.CONN_LISTEN
+    listener.laddr.port = 8123
+    readable.net_connections.return_value = (listener,)
+    monkeypatch.setattr(psutil, "process_iter", lambda: iter((unreadable, readable)))
+    monkeypatch.setattr(os, "getpgid", lambda pid: 99)
+    parent: Final = MagicMock()
+    parent.pid = 99
+    launch: Final = process_module._Launch(parent, 8123, tmp_path / "unused.log", 0.0)
+    assert process_module._owns_listener(launch)
+
+
+@pytest.mark.parametrize(
+    ("status", "ready"),
+    (
+        (psutil.STATUS_RUNNING, True),
+        (psutil.STATUS_SLEEPING, True),
+        (psutil.STATUS_ZOMBIE, False),
+        (psutil.STATUS_DEAD, False),
+        (psutil.STATUS_STOPPED, False),
+        (psutil.STATUS_TRACING_STOP, False),
+        (psutil.AccessDenied, False),
+        (psutil.NoSuchProcess, False),
+    ),
+)
+def test_only_live_readable_workers_can_satisfy_readiness(
+    process_module: ModuleType, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, status: str | type[psutil.Error], ready: bool
+) -> None:
+    member: Final = MagicMock(spec=psutil.Process)
+    member.pid = os.getpid()
+    if isinstance(status, str):
+        member.status.return_value = status
+    else:
+        member.status.side_effect = status(member.pid)
+    listener: Final = MagicMock()
+    listener.status = psutil.CONN_LISTEN
+    listener.laddr.port = 8123
+    member.net_connections.return_value = (listener,)
+    monkeypatch.setattr(psutil, "process_iter", lambda: iter((member,)))
+    parent: Final = MagicMock()
+    parent.pid = os.getpgid(member.pid)
+    parent.poll.return_value = None
+    launch: Final = process_module._Launch(parent, 8123, tmp_path / "unused.log", 0.0)
+    original_client: Final = httpx.Client
+
+    def client(*, base_url: str, timeout: float, trust_env: bool, limits: httpx.Limits) -> httpx.Client:
+        return original_client(
+            base_url=base_url,
+            timeout=timeout,
+            trust_env=trust_env,
+            limits=limits,
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, headers={"x-integration-worker-pid": str(member.pid)})
+            ),
+        )
+
+    monkeypatch.setattr(httpx, "Client", client)
+    monkeypatch.setattr(time, "monotonic", lambda: 0.0)
+    monkeypatch.setenv("INTEGRATION_PROXY_READY_SECONDS", "-1")
+    if ready:
+        process_module._wait_until_ready(launch)
+    else:
+        with pytest.raises(AssertionError, match="readiness deadline"):
+            process_module._wait_until_ready(launch)
 
 
 @pytest.mark.parametrize(
