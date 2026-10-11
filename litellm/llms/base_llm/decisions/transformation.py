@@ -313,6 +313,17 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
     )
 
 
+DECISIONS_MODE: Final = "evaluation"
+
+
+def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
+    try:
+        model_mode: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get("mode")
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which has no mode
+        return False
+    return model_mode == DECISIONS_MODE
+
+
 class BaseDecisionsConfig(ABC):
     path: str = "/v1/systemone"
     api_key_env: tuple[str, ...] = ()
@@ -373,10 +384,14 @@ class BaseDecisionsConfig(ABC):
         return headers, None
 
     def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
-        return litellm.supports_audio_input(model=model, custom_llm_provider=custom_llm_provider)
+        return _is_decisions_model(model, custom_llm_provider) and litellm.supports_audio_input(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
 
     def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
-        return litellm.supports_video_input(model=model, custom_llm_provider=custom_llm_provider)
+        return _is_decisions_model(model, custom_llm_provider) and litellm.supports_video_input(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
 
     def transform_decisions_request(
         self,

@@ -89,13 +89,13 @@ async def adecisions(
     input: OpenAIDecisionInput | None = None,
     questions: OpenAIDecisionQuestions | SystemOneQuestions | None = None,
     safety_identifier: str | None = None,
-    audio: DecisionsAudioClips | None = None,
-    videos: DecisionsVideoClips | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
+    audio: DecisionsAudioClips | None = None,
+    videos: DecisionsVideoClips | None = None,
     **kwargs: object,
 ) -> OpenAIDecisionResponse | DecisionsResponse:
     call: Final = _prepare_decisions_call(
@@ -121,13 +121,13 @@ def decisions(
     input: OpenAIDecisionInput | None = None,
     questions: OpenAIDecisionQuestions | SystemOneQuestions | None = None,
     safety_identifier: str | None = None,
-    audio: DecisionsAudioClips | None = None,
-    videos: DecisionsVideoClips | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
+    audio: DecisionsAudioClips | None = None,
+    videos: DecisionsVideoClips | None = None,
     **kwargs: object,
 ) -> OpenAIDecisionResponse | DecisionsResponse:
     call: Final = _prepare_decisions_call(

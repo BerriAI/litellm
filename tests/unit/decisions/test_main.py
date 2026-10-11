@@ -1918,3 +1918,75 @@ async def test_media_support_is_read_per_kind_from_the_cost_map(
         "questions": _QUESTIONS,
         "audio": audio,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "url", "cost_map_entry"),
+    (
+        (
+            "typesafe/jev-chatty",
+            "https://example.com/v1/systemone",
+            {"litellm_provider": "typesafe", "mode": "chat", "supports_audio_input": True, "supports_video_input": True},
+        ),
+        ("openai/gpt-audio", "https://example.com/v1/decisions", None),
+    ),
+)
+async def test_a_chat_models_media_flags_do_not_count_for_decisions(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+    model: str,
+    url: str,
+    cost_map_entry: Mapping[str, object] | None,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    if cost_map_entry is not None:
+        monkeypatch.setitem(litellm.model_cost, model, cost_map_entry)
+    assert litellm.supports_audio_input(model) is True
+    route: Final = respx_mock.post(url).respond(200, json=dict(_RESPONSE if "systemone" in url else _OPENAI_RESPONSE))
+    questions: Final = {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}
+    audio: Final = ["data:audio/wav;base64,YQ=="]
+    videos: Final = ["data:video/mp4;base64,YQ=="]
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("does not support parameters: ['audio', 'videos']")):
+        await litellm.asystemone(
+            model=model,
+            state="test",
+            questions=questions,
+            api_base="https://example.com",
+            api_key="test",
+            audio=audio,
+            videos=videos,
+        )
+    assert not route.calls
+
+    await litellm.asystemone(
+        model=model,
+        state="test",
+        questions=questions,
+        api_base="https://example.com",
+        api_key="test",
+        audio=audio,
+        videos=videos,
+        drop_params=True,
+    )
+    sent: Final = json.loads(route.calls[0].request.content)
+    assert "audio" not in sent
+    assert "videos" not in sent
+    assert sent["model"] == model.split("/", 1)[1]
+
+
+def test_positional_arguments_keep_the_order_the_sdk_had_before_media(respx_mock: respx.MockRouter) -> None:
+    decisions_route: Final = respx_mock.post("https://example.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    systemone_route: Final = respx_mock.post("https://example.com/v1/systemone").respond(json=_RESPONSE)
+    openai_questions: Final = [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}]
+    systemone_questions: Final = {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}
+
+    litellm.decisions("openai/gpt-6-luna", "review", openai_questions, None, "positional-key", "https://example.com")
+    litellm.systemone("typesafe/jev-1.13", "review", systemone_questions, "positional-key", "https://example.com")
+
+    assert decisions_route.calls[0].request.headers["authorization"] == "Bearer positional-key"
+    assert systemone_route.calls[0].request.headers["authorization"] == "Bearer positional-key"
+    for sent in (decisions_route.calls[0].request.content, systemone_route.calls[0].request.content):
+        assert "audio" not in json.loads(sent)

@@ -313,6 +313,12 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
     def resolve_api_key(self, api_key: str | None) -> str | None:
         return api_key or litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY")
 
+    def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
+        return False
+
+    def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
+        return False
+
     def transform_decisions_request(
         self,
         model: str,
