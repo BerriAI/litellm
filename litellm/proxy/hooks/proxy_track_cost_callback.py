@@ -733,6 +733,29 @@ class _IncrementSpendCounters(Protocol):
     ) -> None: ...
 
 
+def _extract_total_tokens(kwargs: dict, completion_response: object) -> int:
+    """Total tokens for this request, for the team token-budget counter.
+
+    Prefers the StandardLoggingPayload (always populated for a billed call),
+    falling back to the response usage. Returns 0 when unknown, which leaves the
+    token counter untouched.
+    """
+    sl_object = kwargs.get("standard_logging_object") or {}
+    total = sl_object.get("total_tokens")
+    if total:
+        return int(total)
+    usage = getattr(completion_response, "usage", None)
+    if usage is None and isinstance(completion_response, dict):
+        usage = completion_response.get("usage")
+    if usage is not None:
+        total = getattr(usage, "total_tokens", None)
+        if total is None and isinstance(usage, dict):
+            total = usage.get("total_tokens")
+        if total:
+            return int(total)
+    return 0
+
+
 async def _update_database_and_spend_counters(
     proxy_logging_obj: "ProxyLogging",
     increment_spend_counters: _IncrementSpendCounters,
@@ -874,6 +897,27 @@ async def _update_database_and_spend_counters_in_batch(
             finally:
                 budget_reservation["finalized"] = True
         raise
+
+    # Mirror the spend counter for the team token budget: bump the cross-pod
+    # tokens:team:{id} counter so the next request's auth check sees this
+    # request's tokens before the batched DB flush of tokens_used lands.
+    # Awaited like the spend counter above; best-effort so a counter hiccup
+    # never fails a request that was already billed.
+    if team_id is not None:
+        total_tokens: Final = _extract_total_tokens(kwargs=kwargs, completion_response=completion_response)
+        if total_tokens:
+            from litellm.proxy.proxy_server import increment_spend_counter_cache
+
+            try:
+                await increment_spend_counter_cache(
+                    counter_key=f"tokens:team:{team_id}",
+                    increment=total_tokens,
+                )
+            except Exception:
+                verbose_proxy_logger.warning(
+                    "Failed to increment team token-budget counter for team_id=%s", team_id
+                )
+
     return True
 
 

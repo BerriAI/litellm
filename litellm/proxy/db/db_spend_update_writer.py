@@ -1066,6 +1066,7 @@ class DBSpendUpdateWriter:
                 team_id=team_id,
                 user_id=user_id,
                 prisma_client=prisma_client,
+                tokens=int(payload.get("total_tokens") or 0),
             )
         except Exception:
             verbose_proxy_logger.debug(
@@ -1281,6 +1282,7 @@ class DBSpendUpdateWriter:
         team_id: str | None,
         user_id: str | None,
         prisma_client: PrismaClient | None,
+        tokens: int | None = None,
     ):
         try:
             if team_id is None or prisma_client is None:
@@ -1294,6 +1296,7 @@ class DBSpendUpdateWriter:
                     entity_type=Litellm_EntityType.TEAM,
                     entity_id=team_id,
                     response_cost=response_cost,
+                    tokens=tokens,
                 )
             )
 
@@ -2165,6 +2168,9 @@ class DBSpendUpdateWriter:
 
         ### UPDATE TEAM TABLE ###
         team_list_transactions: Final = db_spend_update_transactions["team_list_transactions"]
+        team_token_list_transactions: Final = (
+            db_spend_update_transactions.get("team_token_list_transactions") or {}
+        )
         verbose_proxy_logger.debug("Team Spend transactions: %s", team_list_transactions)
         if team_list_transactions is not None and len(team_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
@@ -2174,12 +2180,21 @@ class DBSpendUpdateWriter:
                         async with transaction.batch_() as batcher:
                             # Sort by team_id for consistent lock ordering across pods to prevent deadlocks.
                             for team_id, response_cost in sorted(team_list_transactions.items()):
+                                # Increment tokens_used beside spend for token budgets; 0 when
+                                # no token budget is in play, which leaves the column at its default.
+                                token_increment = team_token_list_transactions.get(team_id) or 0
                                 verbose_proxy_logger.debug(
-                                    "Updating spend for team id=%s by %s", team_id, response_cost
+                                    "Updating spend for team id=%s by %s (tokens +%s)",
+                                    team_id,
+                                    response_cost,
+                                    token_increment,
                                 )
+                                team_update_data: dict = {"spend": {"increment": response_cost}}
+                                if token_increment:
+                                    team_update_data["tokens_used"] = {"increment": token_increment}
                                 batcher.litellm_teamtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"team_id": team_id},
-                                    data={"spend": {"increment": response_cost}},
+                                    data=team_update_data,
                                 )
                     break
                 except Exception as e:

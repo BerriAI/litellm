@@ -3020,6 +3020,24 @@ async def get_current_spend(
     return current
 
 
+async def get_current_tokens_used(counter_key: str, fallback_tokens: int) -> int:
+    """Cross-pod cumulative token usage for a team's token budget.
+
+    Reads the Redis-backed ``tokens:team:{id}`` counter first (authoritative
+    across pods), the same way :func:`get_current_spend` reads the spend
+    counter, and falls back to the ``tokens_used`` column loaded in auth when
+    the counter is cold or Redis is unreachable. The counter is incremented
+    post-call in the cost callback and invalidated on the budget-reset tick, so
+    a read after a reset re-seeds from the freshly-zeroed column. Token budgets
+    tolerate the spend path's fallback-to-DB behavior for the same reason spend
+    does: the column is the authoritative value the reset job maintains.
+    """
+    value, _ = await read_spend_counter_cache_value(counter_key=counter_key)
+    if value is not None:
+        return int(value)
+    return int(fallback_tokens or 0)
+
+
 @with_service_target(SPEND_COUNTERS_TARGET)
 async def _repair_stale_spend_counter(counter_key: str, db_spend: float) -> None:
     """Raise a counter that has fallen below the authoritative DB spend (e.g.

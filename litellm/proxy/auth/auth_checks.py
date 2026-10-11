@@ -1404,6 +1404,11 @@ async def common_checks(
                     proxy_logging_obj=proxy_logging_obj,
                     valid_token=valid_token,
                 ),
+                team_max_tokens_check(
+                    team_object=team_object,
+                    proxy_logging_obj=proxy_logging_obj,
+                    valid_token=valid_token,
+                ),
                 _team_multi_budget_check(team_object=team_object),
                 _virtual_key_multi_budget_check(valid_token=valid_token) if valid_token is not None else None,
                 _team_soft_budget_check(
@@ -6516,6 +6521,66 @@ async def team_max_budget_check(
                 entity_type=Litellm_EntityType.TEAM.value,
                 entity_id=team_object.team_id,
             )
+
+
+
+async def team_max_tokens_check(
+    team_object: LiteLLM_TeamTable | None,
+    valid_token: UserAPIKeyAuth | None,
+    proxy_logging_obj: ProxyLogging,
+) -> None:
+    """Reject a request when the team is over its cumulative token budget.
+
+    Mirrors ``team_max_budget_check``: dollars are a poor proxy for a token
+    allowance once a team mixes models at different prices, so a team can cap
+    tokens directly (``max_tokens_budget`` + ``budget_duration``). The usage is
+    read from the cross-pod ``tokens:team:{id}`` counter (Redis-first), falling
+    back to the ``tokens_used`` column loaded in auth. No budget set on the team
+    means the check is skipped, so existing teams are unaffected.
+    """
+    max_tokens_budget = getattr(team_object, "max_tokens_budget", None)
+    if team_object is None or max_tokens_budget is None:
+        return
+
+    from litellm.proxy.proxy_server import get_current_tokens_used
+
+    tokens_used: Final = await get_current_tokens_used(
+        counter_key=f"tokens:team:{team_object.team_id}",
+        fallback_tokens=team_object.tokens_used or 0,
+    )
+
+    if tokens_used > max_tokens_budget:
+        if valid_token:
+            call_info: Final = CallInfo(
+                token=valid_token.token,
+                spend=float(tokens_used),
+                max_budget=float(max_tokens_budget),
+                user_id=valid_token.user_id,
+                team_id=valid_token.team_id,
+                team_alias=valid_token.team_alias,
+                organization_id=valid_token.org_id,
+                event_group=Litellm_EntityType.TEAM,
+            )
+            asyncio.create_task(
+                proxy_logging_obj.budget_alerts(
+                    type="team_budget",
+                    user_info=call_info,
+                )
+            )
+
+        raise litellm.BudgetExceededError(
+            current_cost=float(tokens_used),
+            max_budget=float(max_tokens_budget),
+            message=(
+                f"Token budget has been exceeded! Team={team_object.team_id} "
+                f"Tokens used: {tokens_used}, Max tokens: {max_tokens_budget}"
+            ),
+            entity_type=Litellm_EntityType.TEAM.value,
+            entity_id=team_object.team_id,
+        )
+
+
+_team_max_tokens_check: Final = team_max_tokens_check
 
 
 _team_max_budget_check: Final = team_max_budget_check
