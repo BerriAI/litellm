@@ -6,18 +6,24 @@ This module handles the transformation of requests to Anthropic's CountTokens AP
 
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
+from typing import (
+    Final,
+    cast,  # noqa: TID251  # boundary casts into the provider message dict shape; the result is revalidated by _COUNT_REQUEST
+)
 
 from pydantic import JsonValue, TypeAdapter
 
 from litellm.constants import ANTHROPIC_TOKEN_COUNTING_BETA_VERSION
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
     anthropic_system_blocks,
+    place_mid_conversation_system,
     split_leading_system_run,
 )
 from litellm.llms.anthropic.common_utils import merge_anthropic_beta_headers
 from litellm.llms.anthropic.wif import resolve_anthropic_base
 from litellm.types.llms.openai import ChatCompletionImageObject
+from litellm.types.utils import AllMessageValues
+from litellm.utils import supports_mid_conversation_system
 
 _COUNT_REQUEST: Final = TypeAdapter(dict[str, JsonValue])
 _SYSTEM_BLOCKS: Final = TypeAdapter(list[JsonValue])
@@ -116,6 +122,25 @@ class AnthropicCountTokensConfig:
         """
         options: Final[Mapping[str, JsonValue]] = optional_params or MappingProxyType({})
         counted_messages, counted_system = _lift_leading_system(messages, system)
+        # A system message after the leading run is placed the same way the chat
+        # path places it, so count_tokens never sends a role the API rejects (the
+        # chat path's placement exists because the API answers 400 there). A
+        # malformed ``system`` is the provider's to judge: nothing is rearranged.
+        if system is None or isinstance(system, (str, list)):
+            counted_messages = cast(  # cast-ok: placement returns the same provider message dicts it was given
+                tuple[Mapping[str, JsonValue], ...],
+                place_mid_conversation_system(
+                    cast(
+                        tuple[
+                            AllMessageValues, ...
+                        ],  # cast-ok: provider messages arrive as the typed chat message dicts
+                        counted_messages,
+                    ),
+                    supports_mid_conversation_system=supports_mid_conversation_system(
+                        model=model, custom_llm_provider="anthropic"
+                    ),
+                ),
+            )
         return _COUNT_REQUEST.validate_python(
             MappingProxyType(
                 {

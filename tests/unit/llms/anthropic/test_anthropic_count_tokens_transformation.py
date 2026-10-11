@@ -339,7 +339,8 @@ def test_count_lifts_the_leading_system_run_into_system(
 ) -> None:
     """A Responses ``instructions`` arrives as a leading system-role message. count_tokens answers 400
     on that role at the head of ``messages`` and only takes the initial prompt in ``system``, so the
-    leading run moves there with its cache_control, empty text dropped, and a later reminder stays."""
+    leading run moves there with its cache_control, empty text dropped, and a later reminder is placed
+    the way the chat path places it."""
     cache_control: Final[dict[str, JsonValue]] = {"type": "ephemeral"}
     messages: Final[list[dict[str, JsonValue]]] = [
         {"role": "system", "content": "Be terse", "cache_control": cache_control},
@@ -359,7 +360,7 @@ def test_count_lifts_the_leading_system_run_into_system(
         ],
         "messages": [
             {"role": "user", "content": "Hello, how are you?"},
-            {"role": "system", "content": "later reminder"},
+            {"role": "system", "content": [{"type": "text", "text": "later reminder"}]},
             {"role": "assistant", "content": "Bonjour."},
         ],
     }
