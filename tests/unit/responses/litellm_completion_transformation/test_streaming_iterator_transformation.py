@@ -1326,3 +1326,31 @@ async def test_plain_text_stream_announces_exactly_one_message_item(sync_mode: b
             ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
         ):
             assert event.item_id == message_item_adds[0].item.id
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_reasoning_item_opens_with_empty_summary_and_a_summary_part(sync_mode: bool):
+    iterator: Final = _build_iterator(
+        [_reasoning_chunk("let me "), _reasoning_chunk("think"), _chunk("hi", finish_reason="stop")]
+    )
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    types: Final = [event.type for event in events]
+    item_added: Final = next(
+        e for e in events if e.type == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED and e.item.type == "reasoning"
+    )
+    part_added: Final = next(e for e in events if e.type == ResponsesAPIStreamEvents.RESPONSE_PART_ADDED)
+    first_delta: Final = types.index(ResponsesAPIStreamEvents.REASONING_SUMMARY_TEXT_DELTA)
+
+    assert item_added.item.summary == []
+    assert (
+        types.index(ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED)
+        < types.index(ResponsesAPIStreamEvents.RESPONSE_PART_ADDED)
+        < first_delta
+    )
+    assert types.count(ResponsesAPIStreamEvents.RESPONSE_PART_ADDED) == 1
+    assert part_added.item_id == item_added.item.id
+    assert part_added.output_index == item_added.output_index
+    assert part_added.summary_index == 0
+    assert part_added.part == {"type": "summary_text", "text": ""}
