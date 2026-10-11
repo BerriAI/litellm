@@ -40,6 +40,7 @@ import {
   FlaskConical,
   Folder,
   HeartPulse,
+  House,
   KeyRound,
   LayoutGrid,
   Network,
@@ -207,6 +208,7 @@ const menuGroups: MenuGroup[] = [
   {
     groupLabel: "AI GATEWAY",
     items: [
+      { key: "home", page: "home", label: "Home", icon: <House {...ICON} /> },
       { key: "api-keys", page: "api-keys", label: "Virtual Keys", icon: <KeyRound {...ICON} /> },
       {
         key: "llm-playground",
@@ -468,7 +470,7 @@ const menuGroups: MenuGroup[] = [
   },
 ];
 
-const HOME_ROUTE = "api-keys";
+const HOME_ROUTE = "home";
 
 export const routeOf = (item: MenuItem): string => item.route ?? item.page;
 
