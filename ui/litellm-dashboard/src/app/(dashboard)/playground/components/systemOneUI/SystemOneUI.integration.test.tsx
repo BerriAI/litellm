@@ -801,15 +801,15 @@ describe("SystemOneUI integration", () => {
       fireEvent.blur(field);
     }
 
-    it("explains noul on the answer type option", async () => {
+    it("explains the yes / no answer type option", async () => {
       const user = userEvent.setup();
       render(<SystemOneUI accessToken="session-key" />);
 
       question("has_repro_steps").getByRole("combobox", { name: "Answer type" }).focus();
       await user.keyboard("{ArrowDown}");
-      expect(await screen.findByRole("option", { name: "noul" })).toHaveAttribute(
+      expect(await screen.findByRole("option", { name: "Yes / no" })).toHaveAttribute(
         "title",
-        "noul is a yes / no question",
+        "The model returns the probability that the answer is yes",
       );
       expect(screen.getByRole("option", { name: "Choice" })).not.toHaveAttribute("title");
     });
@@ -835,7 +835,7 @@ describe("SystemOneUI integration", () => {
       fill(question("team").getByRole("textbox", { name: "Description of infra" }), "Deploys");
 
       await user.click(screen.getByRole("button", { name: "Add question" }));
-      await pickAnswerType(user, "question_1", "noul");
+      await pickAnswerType(user, "question_1", "Yes / no");
       rename(question("question_1").getByRole("textbox", { name: "Question name" }), "urgent");
       fill(question("urgent").getByRole("textbox", { name: "Instructions" }), "Is this blocking users?");
       fill(question("urgent").getByRole("textbox", { name: "Yes means" }), "Nobody can log in");
