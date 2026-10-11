@@ -107,5 +107,14 @@
     "request_body",
     "chunks",
     "error"
+  ],
+  "prepare_request": [
+    "operation",
+    "request"
+  ],
+  "transform_response": [
+    "operation",
+    "response",
+    "request"
   ]
 }

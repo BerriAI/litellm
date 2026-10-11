@@ -182,6 +182,11 @@ where
             .prepare_arguments(&self.task, arguments, started_at)
             .await
             .map_err(Setup::Host)?;
+        let prepared = parts
+            .hooks
+            .prepare_request(&self.task, prepared)
+            .await
+            .map_err(Setup::Host)?;
         parts
             .hooks
             .arguments_prepared(&self.task, &prepared)
@@ -853,6 +858,7 @@ mod tests {
     enum HookScript {
         Plain,
         RewriteArguments,
+        RewriteRequest,
         ObserveArguments,
         FailBegin,
         ReplaceResponse,
@@ -886,6 +892,23 @@ mod tests {
                 });
             }
             Ok(arguments)
+        }
+
+        async fn prepare_request(
+            &mut self,
+            _: &PythonTask,
+            arguments: Py<PyDict>,
+        ) -> PyResult<Py<PyDict>> {
+            if !matches!(self.script, HookScript::RewriteRequest) {
+                return Ok(arguments);
+            }
+            self.log.push("request");
+            Python::attach(|py| {
+                let prepared = arguments.bind(py).copy()?;
+                prepared.set_item("prepared", "request")?;
+                prepared.set_item("requested", "yes")?;
+                Ok(prepared.unbind())
+            })
         }
 
         async fn arguments_prepared(
@@ -930,6 +953,7 @@ mod tests {
                 HookScript::Plain
                 | HookScript::ObserveArguments
                 | HookScript::RewriteArguments
+                | HookScript::RewriteRequest
                 | HookScript::FailBegin
                 | HookScript::CancelTerminal
                 | HookScript::FailTerminal => Ok(response),
@@ -1177,6 +1201,67 @@ mod tests {
                 3
             );
             assert!(!entries.iter().any(|entry| entry.starts_with("failed:")));
+        });
+    }
+
+    /// The request stage runs after every hook's argument stage, whatever the chain order,
+    /// and the binding decodes the view it produced.
+    #[rstest::rstest]
+    #[case::synchronous(false)]
+    #[case::asynchronous(true)]
+    fn request_rewrites_follow_every_argument_rewrite_and_reach_the_binding(
+        #[case] asynchronous: bool,
+    ) {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            let log = Log::default();
+            let hook = |script| SyntheticHooks {
+                log: Log(log.0.clone()),
+                script,
+            };
+            let hooks = crate::HookChain::new()
+                .with(hook(HookScript::RewriteRequest))
+                .with(hook(HookScript::ObserveArguments))
+                .with(hook(HookScript::RewriteArguments));
+            let (result, entries) = run_composed(
+                py,
+                success_machine(),
+                SyntheticBinding {
+                    log: Log(log.0.clone()),
+                    op: OpScript::Answer,
+                    classifier_fails: false,
+                },
+                HookScript::Plain,
+                move |_| hooks,
+                call_options(asynchronous),
+            );
+            assert_eq!(
+                result.unwrap().extract::<String>(py).unwrap(),
+                "project:4|sign|rewritten"
+            );
+            let stages: Vec<&str> = entries
+                .iter()
+                .map(String::as_str)
+                .filter(|entry| {
+                    matches!(*entry, "begin" | "request" | "project")
+                        || entry.starts_with("adopted:")
+                })
+                .collect();
+            assert_eq!(
+                stages,
+                [
+                    "begin",
+                    "begin",
+                    "begin",
+                    "request",
+                    "adopted:request",
+                    "project"
+                ]
+            );
         });
     }
 

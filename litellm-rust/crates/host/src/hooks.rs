@@ -30,6 +30,14 @@ pub trait CallHooks<R: HookRuntime>: Send + Sized {
         async move { Ok(arguments) }
     }
 
+    fn prepare_request(
+        &mut self,
+        _runtime: &R::Context,
+        arguments: R::Arguments,
+    ) -> impl Future<Output = Result<R::Arguments, R::Error>> + Send {
+        async move { Ok(arguments) }
+    }
+
     fn arguments_prepared(
         &mut self,
         _runtime: &R::Context,

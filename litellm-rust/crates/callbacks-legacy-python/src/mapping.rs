@@ -5,24 +5,45 @@ use litellm_host::{
 };
 use litellm_host_python::{PythonCallEvent, PythonRuntime, PythonTask};
 use pyo3::{prelude::*, types::PyDict};
+use strum::IntoStaticStr;
 
-use crate::LegacyLogging;
+use crate::{LegacyLogging, LoggingOperation};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq)]
 pub enum CallBoundary {
+    #[strum(serialize = "PrepareArguments")]
     PrepareArguments,
+    #[strum(serialize = "PrepareRequest")]
+    PrepareRequest,
+    #[strum(serialize = "BeforeProviderRequest")]
     BeforeProviderRequest,
+    #[strum(serialize = "AfterProviderResponse")]
     AfterProviderResponse,
+    #[strum(serialize = "TransformResponse")]
     TransformResponse,
+    #[strum(serialize = "Succeeded")]
     Succeeded,
+    #[strum(serialize = "Failed")]
     Failed,
+    #[strum(serialize = "StreamOpened")]
     StreamOpened,
+    #[strum(serialize = "StreamChunk")]
     StreamChunk,
+}
+
+/// The operations a boundary runs a callback on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Operations {
+    All,
+    Only(&'static [LoggingOperation]),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Dispatch {
-    Call(CallBoundary),
+    Call {
+        boundary: CallBoundary,
+        operations: Operations,
+    },
     Python(&'static str),
     DeclarationOnly,
 }
@@ -35,6 +56,7 @@ pub struct CallbackMapping {
 
 struct Binding {
     boundary: CallBoundary,
+    operations: Operations,
     callbacks: &'static [&'static str],
 }
 
@@ -42,30 +64,56 @@ impl Binding {
     fn mappings(&self) -> impl Iterator<Item = CallbackMapping> {
         self.callbacks.iter().map(|callback| CallbackMapping {
             callback,
-            dispatch: Dispatch::Call(self.boundary),
+            dispatch: Dispatch::Call {
+                boundary: self.boundary,
+                operations: self.operations,
+            },
         })
     }
 }
 
-const BOUNDARIES: [Binding; 8] = [
+const MESSAGES: Operations = Operations::Only(&[LoggingOperation::Messages]);
+
+/// Every `CustomLogger` callback a native call runs itself, by the boundary that runs it.
+const BINDINGS: &[Binding] = &[
     Binding {
         boundary: CallBoundary::PrepareArguments,
+        operations: Operations::All,
         callbacks: &["async_pre_call_deployment_hook"],
     },
     Binding {
+        boundary: CallBoundary::PrepareRequest,
+        operations: MESSAGES,
+        callbacks: &["async_pre_request_hook"],
+    },
+    Binding {
         boundary: CallBoundary::BeforeProviderRequest,
+        operations: Operations::All,
         callbacks: &["log_pre_api_call", "log_input_event"],
     },
     Binding {
         boundary: CallBoundary::AfterProviderResponse,
+        operations: Operations::All,
         callbacks: &["log_post_api_call"],
     },
     Binding {
         boundary: CallBoundary::TransformResponse,
+        operations: MESSAGES,
+        callbacks: &[
+            "async_should_run_agentic_loop",
+            "async_run_agentic_loop",
+            "async_build_agentic_loop_plan",
+            "async_post_agentic_loop_response_hook",
+        ],
+    },
+    Binding {
+        boundary: CallBoundary::TransformResponse,
+        operations: Operations::All,
         callbacks: &["async_post_call_success_deployment_hook"],
     },
     Binding {
         boundary: CallBoundary::Succeeded,
+        operations: Operations::All,
         callbacks: &[
             "log_success_event",
             "async_log_success_event",
@@ -78,6 +126,7 @@ const BOUNDARIES: [Binding; 8] = [
     },
     Binding {
         boundary: CallBoundary::Failed,
+        operations: Operations::All,
         callbacks: &[
             "async_post_call_failure_deployment_hook",
             "log_failure_event",
@@ -89,16 +138,18 @@ const BOUNDARIES: [Binding; 8] = [
     },
     Binding {
         boundary: CallBoundary::StreamOpened,
+        operations: Operations::All,
         callbacks: &[],
     },
     Binding {
         boundary: CallBoundary::StreamChunk,
+        operations: Operations::All,
         callbacks: &[],
     },
 ];
 
 pub fn callback_mappings() -> impl Iterator<Item = CallbackMapping> {
-    BOUNDARIES
+    BINDINGS
         .iter()
         .flat_map(Binding::mappings)
         .chain(PYTHON_CALLBACKS.iter().copied())
@@ -202,9 +253,6 @@ python_callbacks! {
         "async_log_stream_event",
         "async_post_mcp_tool_call_hook",
     ],
-    Dispatch::Python("litellm.llms.anthropic.pass_through.messages.handler") => [
-        "async_pre_request_hook",
-    ],
     Dispatch::Python("litellm.litellm_core_utils.streaming_handler") => [
         "async_post_call_streaming_deployment_hook",
     ],
@@ -219,21 +267,13 @@ python_callbacks! {
     Dispatch::Python("litellm.integrations.argilla") => ["async_dataset_hook"],
     Dispatch::Python("litellm.proxy.management_helpers.audit_logs") => ["async_log_audit_log_event"],
     Dispatch::Python("litellm.llms.custom_httpx.llm_http_handler") => [
-        "async_should_run_agentic_loop",
-        "async_run_agentic_loop",
-        "async_build_agentic_loop_plan",
-        "async_post_agentic_loop_response_hook",
         "async_agentic_loop_cleanup_hook",
         "async_should_run_chat_completion_agentic_loop",
         "async_run_chat_completion_agentic_loop",
         "async_build_chat_completion_agentic_loop_plan",
     ],
     Dispatch::Python("litellm.litellm_core_utils.chat_completion_agentic_loop") => [
-        "async_should_run_agentic_loop",
-        "async_run_agentic_loop",
-        "async_build_agentic_loop_plan",
         "async_post_agentic_loop_response_hook",
-        "async_agentic_loop_cleanup_hook",
     ],
     Dispatch::Python("litellm.llms.openai.openai") => [
         "async_should_run_chat_completion_agentic_loop",
@@ -252,4 +292,56 @@ python_callbacks! {
         "async_log_pre_api_call",
         "async_log_input_event",
     ],
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::{Map, Value, json};
+
+    use super::{Dispatch, Operations, callback_mappings};
+
+    fn render(dispatch: Dispatch) -> Value {
+        match dispatch {
+            Dispatch::Call {
+                boundary,
+                operations: Operations::All,
+            } => json!({"boundary": <&str>::from(boundary)}),
+            Dispatch::Call {
+                boundary,
+                operations: Operations::Only(operations),
+            } => json!({
+                "boundary": <&str>::from(boundary),
+                "operations": operations.iter().map(|&operation| <&str>::from(operation)).collect::<Vec<_>>(),
+            }),
+            Dispatch::Python(module) => json!({"python": module}),
+            Dispatch::DeclarationOnly => json!({"declaration_only": true}),
+        }
+    }
+
+    fn table() -> Value {
+        let mut table = Map::new();
+        for mapping in callback_mappings() {
+            let rows = table
+                .entry(mapping.callback)
+                .or_insert_with(|| Value::Array(Vec::new()));
+            if let Value::Array(rows) = rows {
+                rows.push(render(mapping.dispatch));
+            }
+        }
+        Value::Object(table)
+    }
+
+    /// `custom_logger_contract.json` is the table as Python reads it:
+    /// `tests/unit/rust_bridge/test_callbacks_legacy_python.py` checks every public
+    /// `CustomLogger` method has a row, so a hook added to Python fails there until this
+    /// table says where the native call runs it.
+    #[test]
+    fn the_callback_table_is_published() {
+        let published: Value =
+            serde_json::from_str(include_str!("../custom_logger_contract.json")).unwrap();
+        assert_eq!(
+            serde_json::to_string_pretty(&published).unwrap(),
+            serde_json::to_string_pretty(&table()).unwrap()
+        );
+    }
 }

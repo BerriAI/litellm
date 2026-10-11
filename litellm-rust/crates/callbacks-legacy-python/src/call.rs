@@ -35,6 +35,11 @@ impl PublicCall {
         self.kwargs.clone_ref(py)
     }
 
+    /// The bound request object backing omitted keywords, as the dispatched function sees it.
+    pub(crate) fn base(&self, py: Python<'_>) -> Py<PyDict> {
+        self.bound.clone_ref(py)
+    }
+
     pub(crate) fn args(&self) -> &Py<PyTuple> {
         &self.args
     }

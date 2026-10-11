@@ -67,6 +67,15 @@ impl CallHooks<PythonRuntime> for ScriptHooks {
         Python::attach(|py| Ok(result?.into_bound(py).cast_into::<PyDict>()?.unbind()))
     }
 
+    async fn prepare_request(
+        &mut self,
+        task: &PythonTask,
+        arguments: Py<PyDict>,
+    ) -> PyResult<Py<PyDict>> {
+        let result = self.call(task, "request", arguments.into_any()).await?;
+        Python::attach(|py| Ok(result?.into_bound(py).cast_into::<PyDict>()?.unbind()))
+    }
+
     async fn arguments_prepared(&mut self, _: &PythonTask, arguments: &Py<PyDict>) -> PyResult<()> {
         Python::attach(|py| self.object.call_method1(py, "adopt", (arguments,)))?;
         Ok(())
@@ -152,6 +161,9 @@ class Hooks:
         if self.error:
             raise self.error
         return {**value, 'order': value.get('order', '') + self.name}
+    def request(self, value):
+        log.append((self.name, 'request', value))
+        return {**value, 'request': value.get('request', '') + self.name}
     def adopt(self, value):
         self.adopted = value
     def before(self, value):
@@ -242,12 +254,13 @@ fn transformations_feed_each_other_and_notifications_share_final_values(
         let task = PythonTask::new(asynchronous);
         let mut hooks = chain(py, &scripts).with(PreparedPolicy);
         let original = PyDict::new(py).unbind();
-        let arguments = finish(
+        let prepared = finish(
             py,
             &task,
             hooks.prepare_arguments(&task, original.clone_ref(py), 0.0),
         )
         .unwrap();
+        let arguments = finish(py, &task, hooks.prepare_request(&task, prepared)).unwrap();
         finish(py, &task, hooks.arguments_prepared(&task, &arguments)).unwrap();
         let context = RequestContext {
             model: "model".into(),
@@ -297,17 +310,19 @@ fn transformations_feed_each_other_and_notifications_share_final_values(
         py.run(
             c"
 assert arguments['order'] == 'ab'
+assert arguments['request'] == 'ab'
 assert original == {}
 assert first.adopted is arguments and second.adopted is arguments
 assert first.adopted['policy'] == second.adopted['policy'] == 'configured'
 assert first.model == second.model == 'model'
-assert final_response == ((response, 'a'), 'b')
+assert final_response == ((response, 'b'), 'a')
 assert [(name, kind) for name, kind, value in log] == [
-    ('a', 'prepare'), ('b', 'prepare'), ('a', 'success'), ('b', 'success'),
+    ('a', 'prepare'), ('b', 'prepare'), ('a', 'request'), ('b', 'request'),
+    ('a', 'success'), ('b', 'success'),
     ('a', 'stream'), ('b', 'stream'), ('a', 'stream'), ('b', 'stream'),
 ]
-assert log[2][2] is final_response and log[3][2] is final_response
-assert log[6][2] is response and log[7][2] is response
+assert log[4][2] is final_response and log[5][2] is final_response
+assert log[8][2] is response and log[9][2] is response
 ",
             Some(locals),
             Some(locals),
@@ -699,6 +714,53 @@ fn builder_runs_hooks_in_append_order(
         locals.set_item("expected", expected).unwrap();
         py.run(
             c"assert ''.join(name for name, kind, value in log) == expected",
+            Some(locals),
+            Some(locals),
+        )
+        .unwrap();
+    });
+}
+
+/// The last hook appended is the innermost layer: it sees the response first, so a body
+/// hook composed after the wrapper transforms before the wrapper's own success hook.
+#[rstest]
+#[case::single(1, "a")]
+#[case::pair(2, "ba")]
+#[case::three(3, "cba")]
+fn response_transformations_run_from_the_innermost_hook_outward(
+    scripts: Py<PyDict>,
+    #[case] count: usize,
+    #[case] expected: &str,
+    #[values(false, true)] asynchronous: bool,
+) {
+    Python::attach(|py| {
+        let task = PythonTask::new(asynchronous);
+        let mut hooks = ["first", "second", "third"]
+            .into_iter()
+            .take(count)
+            .fold(HookChain::new(), |chain, name| {
+                chain.with(hook(py, &scripts, name))
+            });
+        let response = py.None();
+        let transformed = finish(
+            py,
+            &task,
+            hooks.transform_response(&task, response.clone_ref(py), TIMING),
+        )
+        .unwrap();
+        let locals = scripts.bind(py);
+        locals.set_item("transformed", transformed).unwrap();
+        locals.set_item("expected", expected).unwrap();
+        py.run(
+            c"
+applied = []
+value = transformed
+while isinstance(value, tuple):
+    value, name = value
+    applied.insert(0, name)
+assert value is None
+assert ''.join(applied) == expected, applied
+",
             Some(locals),
             Some(locals),
         )

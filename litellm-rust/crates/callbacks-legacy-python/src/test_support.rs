@@ -3,6 +3,26 @@ use std::{ffi::CStr, future::Future, pin::pin};
 use litellm_host_python::{PythonTask, Resumed, Suspension};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
+use rstest::fixture;
+
+/// The one interpreter every test shares, initialized once per test binary.
+pub(crate) struct InitializedPython;
+
+impl InitializedPython {
+    pub(crate) fn attach<F, R>(&self, f: F) -> R
+    where
+        F: for<'py> FnOnce(Python<'py>) -> R,
+    {
+        Python::attach(f)
+    }
+}
+
+#[fixture]
+#[once]
+pub(crate) fn initialized_python() -> InitializedPython {
+    Python::initialize();
+    InitializedPython
+}
 
 use crate::{LegacyLogging, PublicCall};
 
@@ -90,6 +110,8 @@ FAKES = {
         'stream_success', list(chunks)
     ),
     'stream_failure': lambda logger, endpoint_type, request_body, chunks, error: logger.record('stream_failure', error),
+    'prepare_request': lambda operation, request: request['logger'].body('prepare', operation, request),
+    'transform_response': lambda operation, response, request: request['logger'].body('transform', operation, response, request),
 }
 assert FAKES.keys() == CONTRACT.keys(), sorted(FAKES.keys() ^ CONTRACT.keys())
 for name, fake in FAKES.items():
@@ -124,6 +146,7 @@ class StubLogger:
     def __init__(self):
         self.calls = []
         self.hooks = {}
+        self.bodies = {}
         self.on_enqueue = lambda coroutine: None
 
     def record(self, name, value):
@@ -135,6 +158,10 @@ class StubLogger:
     def hook(self, phase, value, call_type):
         self.record(phase + '_hook', call_type)
         return self.hooks.get(phase, lambda value: 'awaitable')(value)
+
+    def body(self, phase, *values):
+        self.record(phase + '_body', values)
+        return self.bodies.get(phase, lambda *values: 'awaitable')(*values)
 
     def failure_handler(self, error, trace, start, end):
         self.record('failure_handler', error)

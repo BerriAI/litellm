@@ -103,6 +103,9 @@ class LoggingSurface(Protocol):
     @property
     def litellm_params(self) -> Mapping[str, object]: ...
 
+    @property
+    def optional_params(self) -> Mapping[str, object]: ...
+
     def update_from_kwargs(
         self,
         kwargs: dict[str, object],
@@ -189,6 +192,34 @@ class StreamingLogBuilder(Protocol):
 
 class DeploymentHook(Protocol):
     def __call__(self, kwargs: dict[str, object], call_type: str) -> Awaitable[object]: ...
+
+
+class PreRequestHooks(Protocol):
+    def __call__(
+        self,
+        model: object,
+        messages: object,
+        tools: object,
+        stream: object,
+        custom_llm_provider: object,
+        **kwargs: object,  # kwargs-ok: the Messages handler forwards every caller keyword to the hooks
+    ) -> Awaitable[object]: ...
+
+
+class AgenticCompletionHooks(Protocol):
+    def __call__(
+        self,
+        *,
+        response: object,
+        model: str,
+        messages: object,
+        anthropic_messages_provider_config: object,
+        anthropic_messages_optional_request_params: Mapping[str, object],
+        logging_obj: LoggingSurface,
+        stream: bool,
+        custom_llm_provider: str,
+        kwargs: Mapping[str, object],
+    ) -> Awaitable[object]: ...
 
 
 class DeploymentSuccessHook(Protocol):
@@ -337,6 +368,96 @@ def after_deployment_failure(kwargs: dict[str, object], error: Exception, call_t
         DeploymentFailureHook, utils.async_post_call_failure_deployment_hook
     )
     return hook(kwargs, error, call_type)
+
+
+_REQUEST_KWARGS: Final = TypeAdapter(dict[str, object])
+
+
+def _messages_extra(request: Mapping[str, object]) -> Mapping[str, object]:
+    from litellm.messages.dispatch import MESSAGES_PARAMETERS
+
+    return {name: value for name, value in request.items() if name not in MESSAGES_PARAMETERS}
+
+
+async def prepare_request(operation: str, request: Mapping[str, object]) -> Mapping[str, object]:
+    """The body of the operation's async handler before the provider call, over the resolved
+    request. Messages runs its `async_pre_request_hook` fan-out, and the answer is the request
+    with the hooks' edits laid over it."""
+    match operation:
+        case "messages":
+            return await _prepare_messages_request(request)
+        case _:
+            raise ValueError(f"no request body hooks for the {operation} operation")
+
+
+async def transform_response(operation: str, response: object, request: Mapping[str, object]) -> object:
+    """The body of the operation's async handler after the provider call. Messages runs the
+    agentic-loop orchestration, and the answer is the response a callback's loop produced, or
+    the provider's own when no loop ran."""
+    match operation:
+        case "messages":
+            return await _transform_messages_response(response, request)
+        case _:
+            raise ValueError(f"no response body hooks for the {operation} operation")
+
+
+async def _prepare_messages_request(request: Mapping[str, object]) -> Mapping[str, object]:
+    from litellm.llms.anthropic.pass_through.messages import handler
+    from litellm.rust_bridge.public_call import optional_mapping
+
+    execute: Final = cast(  # cast-ok: the legacy fan-out forwards opaque caller values
+        PreRequestHooks,
+        handler._execute_pre_request_hooks,  # pyright: ignore[reportPrivateUsage]  # the native call runs the handler's own pre-request fan-out
+    )
+    modified: Final = _REQUEST_KWARGS.validate_python(
+        await execute(
+            request.get("model"),
+            request.get("messages"),
+            request.get("tools"),
+            request.get("stream"),
+            request.get("custom_llm_provider"),
+            tool_choice=request.get("tool_choice"),
+            **_messages_extra(request),
+        )
+    )
+    params: Final = optional_mapping(modified.get("litellm_params"))
+    derived: Final = params.get("custom_llm_provider") if params is not None else None
+    updates: Final = {name: value for name, value in modified.items() if name != "litellm_params"}
+    return {**request, **updates, "custom_llm_provider": request.get("custom_llm_provider") or derived}
+
+
+async def _transform_messages_response(response: object, request: Mapping[str, object]) -> object:
+    from litellm.llms.anthropic.pass_through.messages import handler
+    from litellm.rust_bridge.public_call import optional_str
+    from litellm.types.utils import LlmProviders
+    from litellm.utils import ProviderConfigManager
+
+    logger: Final = cast(  # cast-ok: the argument stage injected the initialized Logging surface
+        LoggingSurface, request["litellm_logging_obj"]
+    )
+    provider: Final = optional_str(logger.model_call_details.get("custom_llm_provider")) or "anthropic"
+    model: Final = optional_str(logger.model_call_details.get("model")) or str(request["model"]).removeprefix(
+        f"{provider}/"
+    )
+    credentials: Final = {name: request[name] for name in ("api_key", "api_base") if request.get(name)}
+    execute: Final = cast(  # cast-ok: the legacy fan-out forwards opaque callback values
+        AgenticCompletionHooks,
+        handler.base_llm_http_handler._call_agentic_completion_hooks,  # pyright: ignore[reportPrivateUsage]  # the native call runs the handler's own agentic orchestration, loop guards included
+    )
+    selected: Final = await execute(
+        response=response,
+        model=model,
+        messages=request.get("messages"),
+        anthropic_messages_provider_config=ProviderConfigManager.get_provider_anthropic_messages_config(
+            model, LlmProviders(provider)
+        ),
+        anthropic_messages_optional_request_params=logger.optional_params,
+        logging_obj=logger,
+        stream=False,
+        custom_llm_provider=provider,
+        kwargs={**_messages_extra(request), **credentials},
+    )
+    return response if selected is None else selected
 
 
 _STREAM_HEADERS: Final = TypeAdapter(Mapping[str, str])

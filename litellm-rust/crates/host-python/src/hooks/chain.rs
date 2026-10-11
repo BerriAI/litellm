@@ -20,6 +20,11 @@ trait ChainHooks: PythonOwned {
         arguments: Py<PyDict>,
         started_at: f64,
     ) -> BoxFuture<'a, PyResult<Py<PyDict>>>;
+    fn prepare_request<'a>(
+        &'a mut self,
+        task: &'a PythonTask,
+        arguments: Py<PyDict>,
+    ) -> BoxFuture<'a, PyResult<Py<PyDict>>>;
     fn arguments_prepared<'a>(
         &'a mut self,
         task: &'a PythonTask,
@@ -64,6 +69,14 @@ impl<H: PythonCallHooks> ChainHooks for H {
         Box::pin(CallHooks::prepare_arguments(
             self, task, arguments, started_at,
         ))
+    }
+
+    fn prepare_request<'a>(
+        &'a mut self,
+        task: &'a PythonTask,
+        arguments: Py<PyDict>,
+    ) -> BoxFuture<'a, PyResult<Py<PyDict>>> {
+        Box::pin(CallHooks::prepare_request(self, task, arguments))
     }
 
     fn arguments_prepared<'a>(
@@ -119,9 +132,11 @@ impl<H: PythonCallHooks> ChainHooks for H {
     }
 }
 
-/// Hooks composed in append order: each transformation feeds the next, every notification
-/// reaches every hook, and a terminal notification that raises an ordinary exception is
-/// reported without stopping the later hooks.
+/// Hooks composed as layers: the argument and request transformations walk inbound in
+/// append order and the response transformation walks back outbound, so the last hook
+/// appended is the innermost. Every notification reaches every hook, and a terminal
+/// notification that raises an ordinary exception is reported without stopping the later
+/// hooks.
 #[derive(Default)]
 pub struct HookChain {
     hooks: Vec<Box<dyn ChainHooks>>,
@@ -172,6 +187,18 @@ impl CallHooks<PythonRuntime> for HookChain {
         Ok(prepared)
     }
 
+    async fn prepare_request(
+        &mut self,
+        task: &PythonTask,
+        arguments: Py<PyDict>,
+    ) -> PyResult<Py<PyDict>> {
+        let mut prepared = arguments;
+        for hooks in &mut self.hooks {
+            prepared = hooks.prepare_request(task, prepared).await?;
+        }
+        Ok(prepared)
+    }
+
     async fn arguments_prepared(
         &mut self,
         task: &PythonTask,
@@ -205,7 +232,7 @@ impl CallHooks<PythonRuntime> for HookChain {
         timing: Timing,
     ) -> PyResult<Py<PyAny>> {
         let mut transformed = response;
-        for hooks in &mut self.hooks {
+        for hooks in self.hooks.iter_mut().rev() {
             transformed = hooks.transform_response(task, transformed, timing).await?;
         }
         Ok(transformed)

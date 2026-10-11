@@ -271,3 +271,397 @@ async def test_native_messages_does_not_restore_keywords_deleted_by_a_pre_call_h
     }
     assert sent.headers.get("x-deleted") is None
     assert sent.headers.get("x-kept") == "keep this header"
+
+
+TOOL: Final = {
+    "name": "get_weather",
+    "description": "Current weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
+TOOL_USE_RESPONSE: Final = {
+    **MESSAGES_RESPONSE,
+    "id": "msg_tool_use",
+    "content": [{"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}],
+    "stop_reason": "tool_use",
+}
+FINAL_RESPONSE: Final = {
+    **MESSAGES_RESPONSE,
+    "id": "msg_final",
+    "content": [{"type": "text", "text": "18C and raining in Paris"}],
+}
+
+
+def agentic_arguments(server: RecordingServer, **kwargs: object) -> dict[str, object]:
+    return arguments(server, tools=[TOOL], **kwargs)
+
+
+class RewriteOneField(CustomLogger):
+    def __init__(self, field: str, value: object) -> None:
+        super().__init__()
+        self.field = field
+        self.value = value
+        self.seen: list[dict[str, object]] = []
+
+    async def async_pre_request_hook(
+        self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+    ) -> dict[str, object]:
+        self.seen.append(dict(kwargs))
+        return {**kwargs, self.field: self.value}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("system", "rewritten by the body hook"),
+        ("stop_sequences", ["END"]),
+        ("max_tokens", 32),
+        ("metadata", {"user_id": "hook"}),
+        ("tools", [TOOL]),
+    ),
+    ids=("system", "stop_sequences", "max_tokens", "metadata", "tools"),
+)
+@pytest.mark.parametrize("stream", (False, True), ids=("complete", "stream"))
+async def test_native_messages_pre_request_edit_reaches_the_provider_and_the_pre_call_log(
+    messages_server: RecordingServer, field: str, value: object, stream: bool
+) -> None:
+    if stream:
+        messages_server.enqueue(STREAM)
+    hook: Final = RewriteOneField(field, value)
+    recorder: Final = RecordingLogger()
+
+    with rebound(litellm, "callbacks", [hook]):
+        result: Final = await litellm.anthropic.messages.acreate(
+            **arguments(messages_server, stream=stream, callbacks=[recorder])
+        )
+        if stream:
+            assert isinstance(result, AsyncIterator)
+            assert b"".join([chunk async for chunk in result]) == sse_payload()
+        else:
+            assert result["content"] == MESSAGES_RESPONSE["content"]
+
+    assert_served_natively(messages_server)
+    sent: Final = messages_server.requests[0].body
+    assert sent[field] == value
+    assert sent["stream"] is stream
+    assert len(hook.seen) == 1
+    assert hook.seen[0]["stream"] is stream
+    assert hook.seen[0]["litellm_params"] == {"custom_llm_provider": "anthropic"}
+    assert field not in hook.seen[0] or hook.seen[0][field] != value
+    pre_call: Final = recorder.wait_for("log_pre_api_call")
+    assert request_body(pre_call[0].kwargs)[field] == value
+
+
+@pytest.mark.asyncio
+async def test_native_messages_pre_request_hooks_run_in_the_caller_task_and_chain_their_edits(
+    messages_server: RecordingServer,
+) -> None:
+    import asyncio
+
+    caller: Final = asyncio.current_task()
+    first: Final = RewriteOneField("system", "first")
+    second: Final = RewriteOneField("stop_sequences", ["END"])
+
+    class InCallerTask(CustomLogger):
+        async def async_pre_request_hook(
+            self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+        ) -> None:
+            await asyncio.sleep(0)
+            assert asyncio.current_task() is caller
+
+    with rebound(litellm, "callbacks", [first, InCallerTask(), second]):
+        await litellm.anthropic.messages.acreate(**arguments(messages_server))
+
+    sent: Final = messages_server.requests[0].body
+    assert sent["system"] == "first"
+    assert sent["stop_sequences"] == ["END"]
+    assert second.seen[0]["system"] == "first"
+
+
+def test_native_sync_messages_run_no_body_hooks(messages_server: RecordingServer) -> None:
+    hook: Final = RewriteOneField("system", "never sent")
+
+    with rebound(litellm, "callbacks", [hook]):
+        response: Final = litellm.anthropic.messages.create(**arguments(messages_server))
+
+    assert_served_natively(messages_server)
+    assert response["content"] == MESSAGES_RESPONSE["content"]
+    assert hook.seen == []
+    assert "system" not in messages_server.requests[0].body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "logged"),
+    ((RuntimeError("pre-request rejected"), True), (__import__("asyncio").CancelledError(), False)),
+    ids=("exception", "cancellation"),
+)
+async def test_native_messages_pre_request_failure_never_sends_and_ends_the_call(
+    messages_server: RecordingServer, failure: BaseException, logged: bool
+) -> None:
+    messages_server.expected_requests = 0
+    observed: Final = []
+
+    class Reject(CustomLogger):
+        async def async_pre_request_hook(
+            self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+        ) -> None:
+            raise failure
+
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            observed.append(kwargs["exception"])
+
+        async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+            observed.append("success")
+
+    with rebound(litellm, "callbacks", [Reject()]), pytest.raises(type(failure)) as raised:
+        await litellm.anthropic.messages.acreate(**arguments(messages_server))
+
+    assert raised.value is failure
+    assert messages_server.requests == []
+    await drain_logging()
+    assert observed == ([failure] if logged else [])
+
+
+class Gate(CustomLogger):
+    def __init__(self, decision: str) -> None:
+        super().__init__()
+        self.decision = decision
+        self.seen: list[object] = []
+
+    async def async_should_run_agentic_loop(
+        self, response, model, messages, tools, stream, custom_llm_provider, kwargs
+    ) -> tuple[bool, dict[str, object]]:
+        self.seen.append(response)
+        assert model == "claude-sonnet-5"
+        assert custom_llm_provider == "anthropic"
+        assert stream is False
+        assert tools == [TOOL]
+        if self.decision == "crash":
+            raise RuntimeError("gate crashed")
+        return self.decision != "decline", {}
+
+    async def async_run_agentic_loop(
+        self,
+        tools,
+        model,
+        messages,
+        response,
+        anthropic_messages_provider_config,
+        anthropic_messages_optional_request_params,
+        logging_obj,
+        stream,
+        kwargs,
+    ) -> object:
+        assert anthropic_messages_optional_request_params["max_tokens"] == 64
+        return FINAL_RESPONSE
+
+
+POST_LOOP_RESPONSE: Final = {**FINAL_RESPONSE, "id": "msg_post_loop"}
+TOOL_RESULT_TURNS: Final = (
+    {"role": "assistant", "content": TOOL_USE_RESPONSE["content"]},
+    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "18C"}]},
+)
+
+
+class Planned(Gate):
+    """Builds a typed plan instead of running the loop itself; the handler executes the plan."""
+
+    def __init__(self, plan: str) -> None:
+        super().__init__("run")
+        self.plan = plan
+        self.post_loop_inputs: list[tuple[str, str]] = []
+
+    async def async_build_agentic_loop_plan(
+        self,
+        tools,
+        model,
+        messages,
+        response,
+        anthropic_messages_provider_config,
+        anthropic_messages_optional_request_params,
+        logging_obj,
+        stream,
+        kwargs,
+    ):
+        from litellm.types.integrations.custom_logger import AgenticLoopPlan, AgenticLoopRequestPatch
+
+        match self.plan:
+            case "override":
+                return AgenticLoopPlan(response_override=FINAL_RESPONSE)
+            case "follow-up":
+                return AgenticLoopPlan(
+                    run_agentic_loop=True,
+                    request_patch=AgenticLoopRequestPatch(messages=[*messages, *TOOL_RESULT_TURNS]),
+                )
+            case "terminate":
+                return AgenticLoopPlan(terminate=True, stop_reason="refused by the plan")
+            case _:
+                return AgenticLoopPlan(run_agentic_loop=False)
+
+    async def async_post_agentic_loop_response_hook(self, response, plan, kwargs):
+        self.post_loop_inputs.append((response["id"], str(plan.stop_reason)))
+        return POST_LOOP_RESPONSE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("callback", "expected", "provider_calls"),
+    (
+        (Gate("run"), FINAL_RESPONSE, 1),
+        (Gate("decline"), TOOL_USE_RESPONSE, 1),
+        (Gate("crash"), TOOL_USE_RESPONSE, 1),
+        (Planned("override"), FINAL_RESPONSE, 1),
+        (Planned("skip"), TOOL_USE_RESPONSE, 1),
+        (Planned("terminate"), POST_LOOP_RESPONSE, 1),
+        (Planned("follow-up"), POST_LOOP_RESPONSE, 2),
+    ),
+    ids=(
+        "loop-runs",
+        "gate-declines",
+        "gate-crashes",
+        "plan-overrides",
+        "plan-skips",
+        "plan-terminates",
+        "plan-follows-up",
+    ),
+)
+async def test_native_messages_agentic_hooks_select_what_the_caller_and_the_success_log_see(
+    messages_server: RecordingServer, callback: Gate, expected: dict[str, object], provider_calls: int
+) -> None:
+    messages_server.expected_requests = provider_calls
+    messages_server.enqueue(ResponseSpec(body=TOOL_USE_RESPONSE))
+    if provider_calls == 2:
+        messages_server.enqueue(ResponseSpec(body=FINAL_RESPONSE))
+    recorder: Final = RecordingLogger()
+
+    with rebound(litellm, "callbacks", [callback]):
+        response: Final = await litellm.anthropic.messages.acreate(
+            **agentic_arguments(messages_server, callbacks=[recorder])
+        )
+
+    assert len(messages_server.requests) == provider_calls
+    assert callback.seen[0]["content"] == TOOL_USE_RESPONSE["content"]
+    assert response["id"] == expected["id"]
+    assert response["content"] == expected["content"]
+    success: Final = await recorder.wait_for_async("async_log_success_event", count=provider_calls)
+    logged: Final = [event.response.id for event in success]
+    assert logged[-1] == expected["id"]
+    assert len(logged) == provider_calls
+    assert "log_failure_event" not in recorder.names
+
+
+@pytest.mark.asyncio
+async def test_native_messages_plan_follow_up_is_a_second_native_call_whose_answer_reaches_the_post_loop_hook(
+    messages_server: RecordingServer,
+) -> None:
+    messages_server.expected_requests = 2
+    messages_server.enqueue(ResponseSpec(body=TOOL_USE_RESPONSE))
+    messages_server.enqueue(ResponseSpec(body=FINAL_RESPONSE))
+    callback: Final = Planned("follow-up")
+
+    with rebound(litellm, "callbacks", [callback]):
+        response: Final = await litellm.anthropic.messages.acreate(**agentic_arguments(messages_server))
+
+    assert response["id"] == POST_LOOP_RESPONSE["id"]
+    first, second = messages_server.requests
+    assert first.body["messages"] == list(MESSAGES)
+    assert second.body["messages"] == [*MESSAGES, *TOOL_RESULT_TURNS]
+    assert second.body["tools"] == [TOOL]
+    assert second.body["max_tokens"] == first.body["max_tokens"]
+    assert all(not request.headers.get("user-agent", "").startswith("python-httpx") for request in (first, second))
+    assert callback.post_loop_inputs == [("msg_final", "None")]
+
+
+@pytest.mark.asyncio
+async def test_native_messages_terminated_plan_hands_the_post_loop_hook_the_refused_turn(
+    messages_server: RecordingServer,
+) -> None:
+    messages_server.enqueue(ResponseSpec(body=TOOL_USE_RESPONSE))
+    callback: Final = Planned("terminate")
+
+    with rebound(litellm, "callbacks", [callback]):
+        response: Final = await litellm.anthropic.messages.acreate(**agentic_arguments(messages_server))
+
+    assert response["id"] == POST_LOOP_RESPONSE["id"]
+    assert callback.post_loop_inputs == [("msg_tool_use", "refused by the plan")]
+
+
+@pytest.mark.asyncio
+async def test_native_messages_agentic_loop_follow_up_is_a_second_native_call_with_the_tool_result(
+    messages_server: RecordingServer,
+) -> None:
+    messages_server.expected_requests = 2
+    messages_server.enqueue(ResponseSpec(body=TOOL_USE_RESPONSE))
+    messages_server.enqueue(ResponseSpec(body=FINAL_RESPONSE))
+
+    class ServerSideTool(Gate):
+        async def async_run_agentic_loop(
+            self,
+            tools,
+            model,
+            messages,
+            response,
+            anthropic_messages_provider_config,
+            anthropic_messages_optional_request_params,
+            logging_obj,
+            stream,
+            kwargs,
+        ) -> object:
+            call: Final = response["content"][0]
+            return await litellm.anthropic.messages.acreate(
+                model=f"anthropic/{model}",
+                max_tokens=anthropic_messages_optional_request_params["max_tokens"],
+                messages=[
+                    *messages,
+                    {"role": "assistant", "content": response["content"]},
+                    {"role": "user", "content": [{"type": "tool_result", "tool_use_id": call["id"], "content": "18C"}]},
+                ],
+                tools=anthropic_messages_optional_request_params["tools"],
+                api_key=kwargs["api_key"],
+                api_base=kwargs["api_base"],
+            )
+
+    recorder: Final = RecordingLogger()
+    with rebound(litellm, "callbacks", [ServerSideTool("run")]):
+        response: Final = await litellm.anthropic.messages.acreate(
+            **agentic_arguments(messages_server, callbacks=[recorder])
+        )
+
+    assert response["content"] == FINAL_RESPONSE["content"]
+    first, second = messages_server.requests
+    assert first.body["messages"] == list(MESSAGES)
+    assert second.body["messages"][1:] == [
+        {"role": "assistant", "content": TOOL_USE_RESPONSE["content"]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "18C"}]},
+    ]
+    assert second.body["tools"] == [TOOL]
+    assert all(not request.headers.get("user-agent", "").startswith("python-httpx") for request in (first, second))
+    success: Final = await recorder.wait_for_async("async_log_success_event")
+    assert {event.response.id for event in success} == {"msg_final"}
+
+
+@pytest.mark.asyncio
+async def test_native_messages_agentic_hooks_run_before_the_deployment_success_hook(
+    messages_server: RecordingServer,
+) -> None:
+    messages_server.enqueue(ResponseSpec(body=TOOL_USE_RESPONSE))
+    order: Final = []
+
+    class Observe(Gate):
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            order.append(("deployment", response["id"]))
+
+    class Loop(Observe):
+        async def async_should_run_agentic_loop(
+            self, response, model, messages, tools, stream, custom_llm_provider, kwargs
+        ):
+            order.append(("agentic", response["id"]))
+            return await super().async_should_run_agentic_loop(
+                response, model, messages, tools, stream, custom_llm_provider, kwargs
+            )
+
+    with rebound(litellm, "callbacks", [Loop("run")]):
+        await litellm.anthropic.messages.acreate(**agentic_arguments(messages_server))
+
+    assert order == [("agentic", "msg_tool_use"), ("deployment", "msg_final")]

@@ -47,6 +47,9 @@ _PYTHON_MESSAGES: Final = _python_messages()
 _MESSAGES: Final = signature(_PYTHON_MESSAGES)
 _PYTHON_AMESSAGES: Final = _python_amessages()
 _AMESSAGES: Final = signature(_PYTHON_AMESSAGES)
+MESSAGES_PARAMETERS: Final = frozenset(
+    name for name, parameter in _AMESSAGES.parameters.items() if parameter.kind is not inspect.Parameter.VAR_KEYWORD
+)
 
 
 def _public_request(
