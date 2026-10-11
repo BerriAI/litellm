@@ -1,16 +1,21 @@
 from collections import deque
+from pathlib import Path
 from typing import Final
 
 import pytest
-from integration._support.upstream import Provider
-from integration.cost_calculation.cost_tracking_case import RealtimeResponse
 from starlette.types import Message, Scope
 from starlette.websockets import WebSocket
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("failure", (OSError("client disconnected"), RuntimeError("unexpected upstream failure")))
-async def test_realtime_disconnect_after_session_creation_keeps_unexpected_errors_visible(failure: Exception) -> None:
+async def test_realtime_disconnect_after_session_creation_keeps_unexpected_errors_visible(
+    failure: Exception, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
+    from integration._support.upstream import Provider
+    from integration.cost_calculation.cost_tracking_case import RealtimeResponse
+
     provider: Final = Provider()
     response: Final = RealtimeResponse(content_type="application/x-realtime", events=({"type": "response.done"},))
     provider.scenario_store.put("owned-scenario", response)
