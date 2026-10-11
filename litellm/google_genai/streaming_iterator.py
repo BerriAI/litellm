@@ -4,9 +4,6 @@ from typing import TYPE_CHECKING, Any, Final
 
 import litellm
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.proxy.pass_through_endpoints.success_handler import (
-    PassThroughEndpointLogging,
-)
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
 if TYPE_CHECKING:
@@ -15,8 +12,6 @@ if TYPE_CHECKING:
     )
 else:
     BaseGoogleGenAIGenerateContentConfig = Any
-
-GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ: Final = PassThroughEndpointLogging()
 
 
 def _encode_google_genai_sse_event(event_lines: list[str]) -> bytes:
@@ -86,6 +81,9 @@ class BaseGoogleGenAIGenerateContentStreamingIterator:
         """Handle the logging after all chunks have been collected."""
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
+        )
+        from litellm.proxy.pass_through_endpoints.success_handler import (
+            GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
         )
 
         end_time: Final = datetime.now()

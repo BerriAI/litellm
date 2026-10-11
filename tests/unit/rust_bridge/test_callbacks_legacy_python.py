@@ -10,6 +10,7 @@ from pydantic import TypeAdapter
 
 from litellm._internal_context import is_internal_call
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.proxy.pass_through_endpoints import success_handler
 from litellm.rust_bridge import callbacks_legacy_python as legacy
 from litellm.rust_bridge.callbacks_legacy_python import failure_handler, setup
 from litellm.types.utils import ModelResponse
@@ -174,3 +175,29 @@ def test_the_rust_contract_matches_the_shim_signatures() -> None:
     contract: Final = TypeAdapter(dict[str, list[str]]).validate_json(CONTRACT_PATH.read_text())
 
     assert contract == {name: list(inspect.signature(getattr(legacy, name)).parameters) for name in contract}
+
+
+def test_stream_success_defers_billing_through_the_proxy_pass_through_success_handler() -> None:
+    logger: Final = _supplied_logger()
+    logger._on_deferred_stream_complete = lambda: None  # pyright: ignore[reportAttributeAccessIssue]  # the proxy's deferred stream release sets this slot
+    first_chunk: Final = datetime.datetime.now()
+
+    legacy.stream_success(
+        logger,
+        url_route="/v1/messages",
+        endpoint_type="anthropic",
+        request_body={},
+        chunks=[b'event: message_stop\ndata: {"type": "message_stop"}\n\n'],
+        start=first_chunk,
+        end=datetime.datetime.now(),
+        first_chunk=first_chunk,
+    )
+
+    assert logger.completion_start_time == first_chunk
+    (deferred,) = logger._deferred_stream_complete_args  # pyright: ignore[reportAttributeAccessIssue]  # set by stream_success for the deferred release
+    try:
+        assert inspect.getcoroutinelocals(deferred)["passthrough_success_handler_obj"] is (
+            success_handler.GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ
+        )
+    finally:
+        deferred.close()

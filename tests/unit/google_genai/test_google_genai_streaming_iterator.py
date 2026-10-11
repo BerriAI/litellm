@@ -1,5 +1,6 @@
+import asyncio
 import json
-from unittest.mock import MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -8,6 +9,8 @@ from litellm.google_genai.streaming_iterator import (
     GoogleGenAIGenerateContentStreamingIterator,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.proxy.pass_through_endpoints import success_handler
+from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
 
@@ -154,3 +157,27 @@ async def test_async_streaming_iterator_forwards_sse_comment_events():
 
     chunk = await iterator.__anext__()
     assert chunk == b": keepalive\n\n"
+
+
+@pytest.mark.asyncio
+async def test_async_streaming_logging_bills_through_the_proxy_pass_through_success_handler():  # test-quality-ok: no injection seam, the handler object identity passed to the router is the contract
+    iterator = AsyncGoogleGenAIGenerateContentStreamingIterator(
+        response=MagicMock(),
+        model="gemini-3.1-flash-image",
+        logging_obj=MagicMock(spec=LiteLLMLoggingObj),
+        generate_content_provider_config=MagicMock(),
+        litellm_metadata={},
+        custom_llm_provider="gemini",
+    )
+    iterator.collected_chunks.append(b"data: {}\n\n")
+
+    with patch.object(PassThroughStreamingHandler, "route_streaming_logging_to_handler", new=AsyncMock()) as route:
+        await iterator._handle_async_streaming_logging()
+        await asyncio.sleep(0)
+
+    route.assert_awaited_once()
+    assert route.await_args.kwargs["passthrough_success_handler_obj"] is (
+        success_handler.GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ
+    )
+    assert route.await_args.kwargs["endpoint_type"] is EndpointType.GEMINI
+    assert route.await_args.kwargs["raw_bytes"] == [b"data: {}\n\n"]

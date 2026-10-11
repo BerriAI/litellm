@@ -17,14 +17,9 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP
 from litellm.llms.anthropic.pass_through.messages.utils import INCOMPLETE_STREAM_ERROR_MESSAGE
-from litellm.proxy.pass_through_endpoints.success_handler import (
-    PassThroughEndpointLogging,
-)
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
-
-GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ: Final = PassThroughEndpointLogging()
 
 _UPSTREAM_PUMP_TASKS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: stdlib strong-ref set for pump tasks
 _DETACHED_STREAM_DRAINS: Final[set[asyncio.Task[None]]] = set()  # mutable-ok: bounded strong-ref set, detached drains
@@ -414,6 +409,9 @@ class BaseAnthropicMessagesStreamingIterator:
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
         )
+        from litellm.proxy.pass_through_endpoints.success_handler import (
+            GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
+        )
 
         end_time: Final = datetime.now()
         # Set completion_start_time so TTFT is calculated from the first
@@ -451,6 +449,9 @@ class BaseAnthropicMessagesStreamingIterator:
         """Helper function to handle Anthropic streaming responses using the existing logging handlers"""
         from litellm.proxy.pass_through_endpoints.streaming_handler import (
             PassThroughStreamingHandler,
+        )
+        from litellm.proxy.pass_through_endpoints.success_handler import (
+            GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
         )
 
         # Use the existing streaming handler for Anthropic

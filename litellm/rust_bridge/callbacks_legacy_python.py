@@ -360,10 +360,8 @@ def stream_success(
     end: datetime.datetime,
     first_chunk: datetime.datetime | None,
 ) -> None:
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
-        GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
-    )
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
+    from litellm.proxy.pass_through_endpoints.success_handler import GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
     if first_chunk is not None:
