@@ -42,7 +42,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route, WebSocketRoute
-from starlette.websockets import WebSocket
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 INTERNAL_FIELDS: Final = frozenset(
@@ -405,6 +405,14 @@ class Provider:
         if not isinstance(response, RealtimeResponse):
             await websocket.close(code=4404)
             return
+        try:
+            await self._realtime_frames(websocket, response, scenario_id, authorization, api_key)
+        except WebSocketDisconnect:
+            return
+
+    async def _realtime_frames(
+        self, websocket: WebSocket, response: RealtimeResponse, scenario_id: str, authorization: str, api_key: str
+    ) -> None:
         await websocket.accept()
         session: Final = _realtime_session(response, scenario_id, websocket.query_params.get("model", ""))
         for _ in range(response.created_repeats):

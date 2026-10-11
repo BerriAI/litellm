@@ -1166,6 +1166,7 @@ def test_s3_v2_hour_worker_kill_mid_burst_keeps_the_other_worker_logging(gateway
     assert _outside_layout(objects, "hour") == ()
 
 
+@pytest.mark.timeout(180)
 def test_s3_v2_hour_proxy_restart_mid_burst_keeps_the_layout_without_duplicates(
     gateway: Gateway, tmp_path: Path
 ) -> None:

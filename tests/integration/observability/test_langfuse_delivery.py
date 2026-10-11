@@ -9,6 +9,7 @@ from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from queue import SimpleQueue
 from typing import Final
 
 import anthropic
@@ -1723,12 +1724,17 @@ def test_audit_sink_outage_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_p
     baggage_session: Final = "baggage-" + marker
     targets: Final[list[str]] = []  # mutable-ok: the upstream records every hit
     outage: Final = threading.Event()
+    rejected_export: Final = threading.Event()
+    accepted: Final[SimpleQueue[Request]] = SimpleQueue()
 
     def langfuse(request: Request) -> Reply:
         if outage.is_set():
+            if request.method == "POST" and request.target == TRACES_PATH:
+                rejected_export.set()
             return Reply(status=503)
         if request.method == "GET" and request.target.startswith(PROJECTS_PATH):
             return _projects()
+        accepted.put(request)
         return Reply(body=b"", content_type="application/x-protobuf")
 
     with (
@@ -1767,6 +1773,7 @@ def test_audit_sink_outage_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_p
         outage.set()
         with ThreadPoolExecutor(max_workers=30) as pool:
             first_wave: Final = tuple(pool.map(fire, jobs[:10]))
+        assert rejected_export.wait(timeout=10), "the exporter did not reach the scripted outage"
         unhealthy: Final = candidate.request("GET", "/health/services?service=langfuse")
         assert unhealthy.status_code != 200 or "unhealthy" in unhealthy.text, (
             f"langfuse must report unhealthy while the sink 503s: {unhealthy.status_code} {unhealthy.text}"
@@ -1786,7 +1793,7 @@ def test_audit_sink_outage_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_p
         received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
         delivered: Final = eventually(
             lambda: (
-                received.extend(destination.drain()) or tuple(
+                received.extend(accepted.get_nowait() for _ in range(accepted.qsize())) or tuple(
                     span
                     for span in _spans(received)
                     if _attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id")

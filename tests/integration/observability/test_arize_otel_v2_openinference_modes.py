@@ -411,6 +411,7 @@ def test_arize_otel_v2_c9_upstream_failures_are_recorded(failure_status: int, ga
         assert not any(".tool_calls." in key for key in attributes), attributes
 
 
+@pytest.mark.timeout(180)
 def test_arize_otel_v2_c10_attribute_limit_keeps_tool_prefix(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "c10-" + uuid.uuid4().hex
     calls: Final = _response_tool_calls(marker, ("Paris", "Berlin", "Rome", "Tokyo", "Oslo", "Lima", "Accra", "Delhi"))

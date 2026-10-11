@@ -16,20 +16,38 @@ from integration._support.client import (
     gateway_from_environment,
 )
 from integration._support.otlp_sink import (
+    AuditConfigWriter,
     Span,
     SpanSinks,
+    audit_configuration_writer,
+    langfuse_callback_variables,
+    owned_sinks,
     recorded_spans,
     spans_for_trace,
 )
 from integration._support.process import owned_proxy, owned_proxy_process
 from pydantic import JsonValue
 
-AuditConfigWriter = Callable[[Path, Mapping[str, JsonValue]], Path]
-
 DB_SYSTEM_KEYS: Final = frozenset({"db.system.name", "db.system"})
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
+def audit_sinks(tmp_path: Path) -> Iterator[SpanSinks]:
+    with owned_sinks(tmp_path / "sinks") as sinks:
+        yield sinks
+
+
+@pytest.fixture
+def otel_audit_config(audit_sinks: SpanSinks) -> AuditConfigWriter:
+    return audit_configuration_writer(audit_sinks)
+
+
+@pytest.fixture
+def langfuse_vars(audit_sinks: SpanSinks) -> dict[str, JsonValue]:
+    return langfuse_callback_variables(audit_sinks)
+
+
+@pytest.fixture
 def gateway(audit_sinks: SpanSinks) -> Iterator[Gateway]:
     with gateway_from_environment() as base:
         yield base

@@ -3,7 +3,8 @@ import json
 import re
 import signal
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -59,6 +60,16 @@ def _held_connections(pid: int, port: int) -> int:
     )
 
 
+@contextmanager
+def _suspended_worker(pid: int) -> Iterator[None]:
+    worker: Final = psutil.Process(pid)
+    worker.suspend()
+    try:
+        yield
+    finally:
+        worker.resume()
+
+
 def _error_information(call_id: str) -> dict[str, JsonValue]:
     rows: Final = eventually(
         lambda: read_rows('SELECT metadata FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,)),
@@ -90,7 +101,7 @@ def _single_spend_row(call_id: str) -> None:
 
 
 async def _fire_burst(
-    base_url: str, key: str, count: int, *, tolerate_transport_errors: bool = False
+    base_url: str, key: str, count: int, *, start_index: int = 0, tolerate_transport_errors: bool = False
 ) -> tuple[_Served, ...]:
     async def one(client: httpx.AsyncClient, index: int) -> _Served:
         if index % 3 == 0:
@@ -111,7 +122,7 @@ async def _fire_burst(
 
     async with httpx.AsyncClient(base_url=base_url, timeout=30, trust_env=False) as client:
         results: Final = await asyncio.gather(
-            *(one(client, index) for index in range(count)), return_exceptions=tolerate_transport_errors
+            *(one(client, index) for index in range(start_index, start_index + count)), return_exceptions=tolerate_transport_errors
         )
     for result in results:
         assert not isinstance(result, BaseException) or isinstance(result, httpx.TransportError), repr(result)
@@ -163,11 +174,23 @@ async def test_passthrough_worker_sigkill_leaves_sibling_serving_and_logging(gat
                 seconds=30,
             )
             async with asyncio.TaskGroup() as tasks:
-                burst: Final = tasks.create_task(
-                    _fire_burst(str(candidate.client.base_url), candidate.key, 20, tolerate_transport_errors=True)
-                )
                 try:
-                    await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= 20, 30)
+                    with _suspended_worker(workers[0]):
+                        seed: Final = tasks.create_task(
+                            _fire_burst(str(candidate.client.base_url), candidate.key, 1, tolerate_transport_errors=True)
+                        )
+                        await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= 1, 30)
+                    with _suspended_worker(workers[1]):
+                        rest: Final = tasks.create_task(
+                            _fire_burst(
+                                str(candidate.client.base_url),
+                                candidate.key,
+                                19,
+                                start_index=1,
+                                tolerate_transport_errors=True,
+                            )
+                        )
+                        await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= 20, 30)
                     peer_port: Final = int(wire.url.rsplit(":", 1)[1])
                     held_by: Final = {pid: _held_connections(pid, peer_port) for pid in workers}
                     assert sum(held_by.values()) == 20 and min(held_by.values()) > 0, held_by
@@ -177,9 +200,10 @@ async def test_passthrough_worker_sigkill_leaves_sibling_serving_and_logging(gat
                         connection.raddr.port for connection in victim.net_connections(kind="tcp") if connection.raddr
                     )
                     victim.send_signal(signal.SIGKILL)
+                    victim.wait(timeout=5)
                 finally:
                     release.set()
-                served: Final = await burst
+                served: Final = (*await seed, *await rest)
             for item in served:
                 assert item.response.status_code in (200, 404, 500, 502), item.response.status_code
             follow_up: Final = candidate.request(

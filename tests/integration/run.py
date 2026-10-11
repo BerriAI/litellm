@@ -88,6 +88,11 @@ def main() -> int:
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
         "LITELLM_MODE": "PRODUCTION",
         "PYTHON_DOTENV_DISABLED": "1",
+        **(
+            {"INTEGRATION_WORKER_ISOLATION": "1"}
+            if options.workers > 1 and options.group in {"management", "accounting", "providers", "extensions"}
+            else {}
+        ),
     }
     result: Final = subprocess.call(
         [
@@ -114,8 +119,7 @@ def main() -> int:
             "-o",
             "junit_family=xunit1",
             *(("-n", str(options.workers)) if options.workers > 1 else ()),
-            *(("--dist=worksteal",) if options.group == "security" and options.workers > 1 else ()),
-            *(("--dist=loadgroup",) if options.group == "mcp" and options.workers > 1 else ()),
+            *(("--dist=loadgroup",) if options.workers > 1 else ()),
         ],
         cwd=root,
         env=environment,
