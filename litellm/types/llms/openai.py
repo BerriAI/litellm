@@ -1672,6 +1672,7 @@ class ResponsePartAddedEvent(BaseLiteLLMOpenAIResponseObject):
     item_id: str
     output_index: int
     part: dict
+    summary_index: int = 0
 
 
 class ReasoningSummaryTextDeltaEvent(BaseLiteLLMOpenAIResponseObject):
