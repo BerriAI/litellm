@@ -374,7 +374,7 @@ def extract_parameters(operation: _OpenAPIOperation) -> tuple[Sequence[str], Seq
     return path_params, query_params, body_params
 
 
-def build_input_schema(operation: _OpenAPIOperation) -> Mapping[str, object]:
+def build_input_schema(operation: _OpenAPIOperation) -> dict[str, object]:
     """Build MCP input schema from OpenAPI operation."""
     properties: Final = {}
     required: Final = []
