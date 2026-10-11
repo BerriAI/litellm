@@ -559,6 +559,7 @@ async def test_deployed_decision_classifier_uses_registered_connection(
     status_code: int, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(litellm.model_cost, "typesafe/jev-latest", {"input_cost_per_token": 0.01})
     router: Final = litellm.Router(
         model_list=[
             {
@@ -586,7 +587,11 @@ async def test_deployed_decision_classifier_uses_registered_connection(
         route: Final = requests.post("https://decision.test/v1/systemone").mock(
             return_value=httpx.Response(
                 status_code,
-                json={"model": "jev-latest", "answers": {"tier": _answer().model_dump()}},
+                json={
+                    "model": "jev-latest",
+                    "answers": {"tier": _answer().model_dump()},
+                    "usage": {"input_tokens": 31, "output_tokens": 0},
+                },
             )
         )
         outcome: Final = await classifier.aclassify("What is two plus two?")
@@ -597,6 +602,9 @@ async def test_deployed_decision_classifier_uses_registered_connection(
     if status_code == 200:
         assert outcome.jev_verdict is not None
         assert outcome.jev_verdict.label == _answer().choice
+
+        assert outcome.jev_verdict.provider == "typesafe"
+        assert outcome.classifier_cost == pytest.approx(0.31)
 
 
 @pytest.mark.parametrize("deployment_name", ["", "   "])
