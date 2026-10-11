@@ -597,27 +597,40 @@ def test_model_info_team_key_cannot_see_other_teams_byok_model(
 
 
 @pytest.mark.parametrize("path", ["/v1/model/info", "/model/info"])
-def test_model_info_lists_routing_group_rows(client, auth_as, byok_team_router, monkeypatch, path):
+def test_model_info_lists_routing_group_rows(client, auth_as, monkeypatch, path):
     """A routing group is callable by its own name, so /model/info surfaces the
-    rows the router materializes for it next to plain deployments and aliases.
+    rows a configured router materializes for it next to the member deployment.
     """
     from litellm.proxy._types import LitellmUserRoles
 
-    group_row = {
-        "model_name": "decision-balanced",
-        "litellm_params": {"model": "openai/gpt-6-luna"},
-        "model_info": {"id": "luna-deployment-id", "db_model": True, "mode": "chat"},
+    member = {
+        "model_name": "gpt-6-luna",
+        "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "sk-test"},
+        "model_info": {"id": "luna-deployment-id", "mode": "chat"},
     }
-    byok_team_router.get_model_list_from_routing_groups = MagicMock(return_value=[group_row])
+    router = litellm.Router(
+        model_list=[member],
+        routing_groups=[
+            {
+                "group_name": "decision-balanced",
+                "models": ["gpt-6-luna"],
+                "routing_strategy": "simple-shuffle",
+            }
+        ],
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", [member])
+    monkeypatch.setattr(proxy_server, "user_model", None)
     monkeypatch.setattr(proxy_server, "prisma_client", None)
 
     with auth_as(role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"):
         response = client.get(path)
 
-    assert response.status_code == 200
+    assert response.status_code == 200, response.text
     surfaced = {m["model_name"]: m for m in response.json()["data"]}
+    assert set(surfaced) == {"gpt-6-luna", "decision-balanced"}
+    assert surfaced["decision-balanced"]["model_info"]["id"] == "luna-deployment-id"
     assert surfaced["decision-balanced"]["model_info"]["mode"] == "chat"
-    byok_team_router.get_model_list_from_routing_groups.assert_called_once_with()
 
 
 # ---------------------------------------------------------------------------
