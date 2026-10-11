@@ -8,11 +8,12 @@ redacted audit rows for callback mutations.
 
 import json
 from collections.abc import Iterator
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from fastapi import HTTPException, Request
+from pydantic import ValidationError
 
 import litellm
 from litellm.proxy._types import (
@@ -1821,3 +1822,12 @@ def test_add_team_callback_returns_http_422_for_unknown_excluded_services() -> N
 
     assert response.status_code == 422
     assert "excluded_services" in response.text
+
+
+@pytest.mark.parametrize("callback_var", ["capture_message_content", "excluded_services"])
+@pytest.mark.parametrize("value", [None, 1])
+def test_add_team_callback_rejects_non_string_destination_callback_vars(callback_var: str, value: object) -> None:
+    callback_vars: Final = cast("dict[str, str]", {callback_var: value})
+    with pytest.raises(ValidationError) as exc:
+        AddTeamCallback(callback_name="newrelic", callback_vars=callback_vars)
+    assert f"{callback_var} must be a string, got {type(value).__name__}" in str(exc.value)

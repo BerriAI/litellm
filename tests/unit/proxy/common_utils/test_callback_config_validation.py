@@ -344,6 +344,23 @@ def test_an_unsupported_capture_message_content_is_rejected_on_key_logging_metad
 
 
 @pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.parametrize("callback_var", ["capture_message_content", "excluded_services"])
+def test_key_logging_metadata_rejects_non_string_destination_callback_vars(callback_var: str) -> None:
+    error: Final = logging_metadata_config_error(
+        {
+            "logging": [
+                {
+                    "callback_name": "newrelic",
+                    "callback_type": "success_and_failure",
+                    "callback_vars": {callback_var: None},
+                }
+            ]
+        }
+    )
+    assert error == f"{callback_var} must be a string, got NoneType"
+
+
+@pytest.mark.usefixtures("otel_v2_on")
 def test_each_entry_keeps_its_own_capture_message_content() -> None:
     error: Final = logging_metadata_config_error(
         {

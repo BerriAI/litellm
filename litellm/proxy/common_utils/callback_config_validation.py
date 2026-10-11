@@ -10,8 +10,11 @@ from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter
+
 from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR
 
+_STRING_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[str, object])
 _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
 _LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
@@ -269,13 +272,18 @@ def logging_metadata_config_error(metadata: Mapping[str, object] | None) -> str 
     entries: Final = _object_sequence(metadata.get("logging"))
     if entries is None:
         return None
+    entry_error: Final = next(
+        (error for entry in entries if (error := _logging_entry_error(entry)) is not None),
+        None,
+    )
+    if entry_error is not None:
+        return entry_error
     entry_vars: Final = tuple(_entry_callback_vars(entry) for entry in entries)
     named_vars: Final = tuple(zip((_entry_callback_name(entry) for entry in entries), entry_vars))
     return next(
         (
             error
             for error in (
-                *(_logging_entry_error(entry) for entry in entries),
                 *(conflicting_span_scope_error(entry_vars[i], entry_vars[:i]) for i in range(len(entry_vars))),
                 *(_conflicting_entry_setting_error(named_vars[i], named_vars[:i]) for i in range(len(named_vars))),
             )
@@ -330,12 +338,25 @@ def _entry_callback_vars(entry: object) -> Mapping[str, str]:
 def _logging_entry_error(entry: object) -> str | None:
     if not isinstance(entry, Mapping):
         return None
-    callback_name: Final = entry.get("callback_name")
-    if not isinstance(callback_name, str) or not isinstance(entry.get("callback_vars"), Mapping):
+    typed_entry: Final[Mapping[str, object]] = _STRING_OBJECT_MAPPING_ADAPTER.validate_python(entry)
+    callback_name: Final = typed_entry.get("callback_name")
+    callback_vars_raw: Final = typed_entry.get("callback_vars")
+    if not isinstance(callback_name, str) or not isinstance(callback_vars_raw, Mapping):
         return None
-    callback_type_raw: Final = entry.get("callback_type")
+    callback_vars: Final[Mapping[str, object]] = _STRING_OBJECT_MAPPING_ADAPTER.validate_python(callback_vars_raw)
+    if CAPTURE_MESSAGE_CONTENT_VAR in callback_vars:
+        capture_message_content: Final = callback_vars[CAPTURE_MESSAGE_CONTENT_VAR]
+        if not isinstance(capture_message_content, str):
+            return f"{CAPTURE_MESSAGE_CONTENT_VAR} must be a string, got {type(capture_message_content).__name__}"
+    if EXCLUDED_SERVICES_VAR in callback_vars:
+        excluded_services: Final = callback_vars[EXCLUDED_SERVICES_VAR]
+        if not isinstance(excluded_services, str):
+            return f"{EXCLUDED_SERVICES_VAR} must be a string, got {type(excluded_services).__name__}"
+    callback_type_raw: Final = typed_entry.get("callback_type")
     return callback_config_error(
-        callback_name, _entry_callback_vars(entry), callback_type_raw if isinstance(callback_type_raw, str) else None
+        callback_name,
+        _entry_callback_vars(typed_entry),
+        callback_type_raw if isinstance(callback_type_raw, str) else None,
     )
 
 
