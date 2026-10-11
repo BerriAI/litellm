@@ -56,9 +56,15 @@ class TeamSpendResetWrites:
     table: BatchTable
 
     def queue_spend_reset(self, team_id: str, budget_reset_at: datetime | None, spend_decrement: float) -> None:
+        data = dict(_spend_reset_data(budget_reset_at, spend_decrement))
+        # Token budgets are team-only, so zero the cumulative tokens_used on the
+        # same tick that resets spend. A hard reset (vs spend's decrement) is
+        # acceptable at a budget boundary: a token allowance need not carry the
+        # handful of tokens that can race the reset the way billing-exact spend does.
+        data["tokens_used"] = 0
         self.table.update(
             where={"team_id": team_id},
-            data=_spend_reset_data(budget_reset_at, spend_decrement),
+            data=data,
         )
 
 

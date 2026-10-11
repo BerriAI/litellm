@@ -1336,6 +1336,9 @@ class ResetBudgetJob:
                         team_id = getattr(t.row, "team_id", None)
                         if team_id:
                             await self._invalidate_spend_counter(f"spend:team:{team_id}")
+                            # Drop the token-budget counter too, so the next read
+                            # re-seeds from the freshly-zeroed tokens_used column.
+                            await self._invalidate_spend_counter(f"tokens:team:{team_id}")
 
             end_time = time.time()
             outcome: Final = _ChunkOutcome(
