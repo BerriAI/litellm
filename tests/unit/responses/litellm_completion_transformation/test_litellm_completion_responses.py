@@ -2928,6 +2928,64 @@ class TestToolTransformation:
 
         assert expected_thinking.items() <= mapped["thinking"].items()
 
+    @pytest.mark.parametrize(
+        "model, custom_llm_provider, expected_thinking",
+        [
+            ("claude-opus-5-5", "anthropic", {"type": "adaptive", "display": "summarized"}),
+            ("claude-opus-5-5", "azure_ai", {"type": "adaptive", "display": "summarized"}),
+            ("global.anthropic.claude-sonnet-5", "bedrock", {"type": "adaptive", "display": "summarized"}),
+            ("claude-opus-5-5", "vertex_ai", {"type": "adaptive", "display": "summarized"}),
+            ("gemini-3.8-flash", "gemini", {"type": "enabled"}),
+            ("gemini-2.5-flash", "vertex_ai", {"type": "enabled"}),
+            # Thinks only with a budget: picking one would choose an effort nobody asked for
+            ("anthropic.claude-sonnet-4-5-20250929-v1:0", "bedrock", None),
+            ("gemini-2.5-flash-lite", "gemini", None),
+            # Not a provider whose config maps Anthropic's ``thinking``
+            ("claude-opus-5-5", "hosted_vllm", None),
+        ],
+    )
+    def test_summary_without_effort_asks_for_readable_reasoning(self, model, custom_llm_provider, expected_thinking):
+        """
+        ``reasoning: {summary}`` with no ``effort`` used to reach a chat provider as nothing at all:
+        adaptive Claude thought but returned an empty, signed thinking block (``display`` defaults
+        to ``"omitted"``), and Gemini never sent its thoughts. The summary must turn on the
+        provider's readable reasoning without choosing a thinking level.
+        """
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": {"summary": "auto"}},
+            custom_llm_provider=custom_llm_provider,
+        )
+
+        assert result.get("thinking") == expected_thinking
+        assert "reasoning_effort" not in result
+
+    @pytest.mark.parametrize(
+        "reasoning, kwargs, model, custom_llm_provider",
+        [
+            # An effort already maps to the provider's thinking config, display included
+            ({"effort": "medium", "summary": "auto"}, {}, "claude-opus-5-5", "anthropic"),
+            # The caller's own thinking arrives in kwargs and wins
+            ({"summary": "auto"}, {"thinking": {"type": "adaptive"}}, "claude-opus-5-5", "anthropic"),
+            # A model bridged back to the Responses API gets the summary natively
+            ({"summary": "auto"}, {}, "gpt-5", "openai"),
+            ({}, {}, "claude-opus-5-5", "anthropic"),
+        ],
+    )
+    def test_summary_only_thinking_is_added_only_when_nothing_else_asks(
+        self, reasoning, kwargs, model, custom_llm_provider
+    ):
+        result = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="hi",
+            responses_api_request={"reasoning": reasoning},
+            custom_llm_provider=custom_llm_provider,
+            **kwargs,
+        )
+
+        assert "thinking" not in result
+
     def test_bedrock_anthropic_responses_tools_yield_only_function_toolspec(self):
         """
         End-to-end (no network) of the LIT-3858 acceptance criterion: the mixed tools array

@@ -365,3 +365,43 @@ def test_streamed_responses_over_anthropic_emit_the_responses_event_sequence(res
     assert deltas == "Argentina won."
     assert completed.response.status == "completed"
     assert completed.response.output[0].content[0].text == "Argentina won."
+
+
+def test_a_summary_only_request_returns_claudes_reasoning_text(respx_mock: respx.MockRouter) -> None:
+    """
+    ``reasoning: {summary}`` with no effort must ask adaptive Claude to show its thinking. Without
+    ``display: "summarized"`` it thinks but sends back an empty, signed block, so the Responses
+    reasoning item has no text.
+    """
+    route: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "msg_summary_only",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-opus-5-5",
+                "content": [
+                    {"type": "thinking", "thinking": "Two plus two is four.", "signature": "sig"},
+                    {"type": "text", "text": "4"},
+                ],
+                "stop_reason": "end_turn",
+                "stop_sequence": None,
+                "usage": {"input_tokens": 9, "output_tokens": 12},
+            },
+        )
+    )
+
+    response: Final = litellm.responses(
+        model="anthropic/claude-opus-5-5",
+        input="What is 2 + 2?",
+        reasoning={"summary": "auto"},
+        api_key="mock_api_key",
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert sent["thinking"] == {"type": "adaptive", "display": "summarized"}
+    reasoning_text: Final = [
+        part.text for item in response.output if item.type == "reasoning" for part in (item.content or [])
+    ]
+    assert reasoning_text == ["Two plus two is four."]

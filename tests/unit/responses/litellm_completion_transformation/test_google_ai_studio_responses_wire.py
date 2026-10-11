@@ -156,3 +156,45 @@ async def test_gemini_streaming_function_call_preserves_thought_signature() -> N
     assert function_calls[0].name == "get_weather"
     assert function_calls[0].provider_specific_fields == {"thought_signature": signature}
     assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model, expected_thinking_config",
+    [
+        # includeThoughts only: Gemini keeps its own thinking level
+        ("gemini-3.8-flash", {"includeThoughts": True}),
+        ("gemini-2.5-flash", {"includeThoughts": True}),
+        # Thinks only with a budget, and rejects includeThoughts without one
+        ("gemini-2.5-flash-lite", None),
+    ],
+)
+async def test_a_summary_only_request_asks_gemini_for_its_thoughts(
+    model: str, expected_thinking_config: dict[str, object] | None
+) -> None:
+    response_body: Final = {
+        "candidates": [
+            {
+                "content": {"role": "model", "parts": [{"text": "4"}]},
+                "finishReason": "STOP",
+                "index": 0,
+            }
+        ],
+        "usageMetadata": {"promptTokenCount": 2, "candidatesTokenCount": 1, "totalTokenCount": 3},
+    }
+
+    with respx.mock() as mock_router:
+        route: Final = mock_router.post(
+            url__regex=rf"https://generativelanguage\.googleapis\.com/v1(?:alpha|beta)/models/{model}:generateContent.*"
+        ).mock(return_value=httpx.Response(status_code=200, json=response_body))
+        await litellm.aresponses(
+            model=f"gemini/{model}",
+            api_key="test-key",
+            input="What is 2 + 2?",
+            reasoning={"summary": "auto"},
+        )
+
+    assert route.call_count == 1
+    request_body: Final = _JSON_OBJECT.validate_json(route.calls.last.request.content)
+    generation_config: Final = _JSON_OBJECT.validate_python(request_body.get("generationConfig", {}))
+    assert generation_config.get("thinkingConfig") == expected_thinking_config

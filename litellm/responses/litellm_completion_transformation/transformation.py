@@ -169,10 +169,19 @@ class ResponsesToolChatForm:
 
 @dataclass(frozen=True, slots=True)
 class ResponsesReasoningChatForm:
-    """The Responses ``reasoning`` object as the two params Chat Completions takes."""
+    """The Responses ``reasoning`` object as the params Chat Completions takes."""
 
     effort: str | None
     summary: str | None
+    thinking: Mapping[str, str] | None = None
+
+
+# Chat surfaces whose provider config maps Anthropic's ``thinking`` onto a Claude model.
+_ANTHROPIC_THINKING_PROVIDERS: Final = frozenset({"anthropic", "azure_ai", "bedrock", "vertex_ai"})
+_GEMINI_PROVIDERS: Final = frozenset({"gemini", "vertex_ai"})
+# Thinks only when given a budget, and Google rejects ``includeThoughts`` without one
+# ("include_thoughts is only enabled when thinking is enabled").
+_GEMINI_THINKING_OFF_BY_DEFAULT: Final = "gemini-2.5-flash-lite"
 
 
 if TYPE_CHECKING:
@@ -441,7 +450,48 @@ class LiteLLMCompletionResponsesConfig:
             reasoning_summary=summary,
             api_base=api_base,
         )
-        return ResponsesReasoningChatForm(effort=effort, summary=summary if bridges_back else None)
+        if bridges_back:
+            return ResponsesReasoningChatForm(effort=effort, summary=summary)
+        if effort is not None:
+            return ResponsesReasoningChatForm(effort=effort, summary=None)
+        return ResponsesReasoningChatForm(
+            effort=None,
+            summary=None,
+            thinking=LiteLLMCompletionResponsesConfig._thinking_for_summary_only(model, custom_llm_provider),
+        )
+
+    @staticmethod
+    def _thinking_for_summary_only(model: str, custom_llm_provider: str | None) -> Mapping[str, str] | None:
+        """
+        The chat ``thinking`` param that returns ``model``'s reasoning when a request asks for a
+        ``summary`` but no ``effort``.
+
+        An effort already maps to each provider's thinking config, readable reasoning included.
+        Without one there is nothing to map, so the model either thinks and hides it (adaptive
+        Claude defaults ``thinking.display`` to ``"omitted"``) or never sends its thoughts (Gemini
+        without ``includeThoughts``). Each value below turns that on while leaving the thinking
+        level to the provider's default. Models that only think when given a budget get nothing,
+        since picking one would be choosing an effort the caller did not ask for.
+        """
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+        from litellm.utils import supports_reasoning
+
+        if not custom_llm_provider:
+            return None
+        if custom_llm_provider in _ANTHROPIC_THINKING_PROVIDERS and AnthropicModelInfo.is_adaptive_thinking_model(
+            model, custom_llm_provider
+        ):
+            return {"type": "adaptive", "display": "summarized"}
+        lowered: Final = model.lower()
+        if (
+            custom_llm_provider in _GEMINI_PROVIDERS
+            and "gemini" in lowered
+            and _GEMINI_THINKING_OFF_BY_DEFAULT not in lowered
+            and supports_reasoning(model=model, custom_llm_provider=custom_llm_provider)
+        ):
+            # No budget: the Gemini config maps this to ``includeThoughts`` at the model's own level.
+            return {"type": "enabled"}
+        return None
 
     @staticmethod
     def transform_responses_api_request_to_chat_completion_request(
@@ -506,6 +556,8 @@ class LiteLLMCompletionResponsesConfig:
             "response_format": response_format,
             "reasoning_effort": reasoning.effort,
             "reasoning_summary": reasoning.summary,
+            # A caller's own ``thinking`` arrives in kwargs and must not be overwritten.
+            "thinking": reasoning.thinking if "thinking" not in kwargs or kwargs["thinking"] is None else None,
             "context_management": responses_api_request.get("context_management"),
             # litellm specific params
             "custom_llm_provider": custom_llm_provider,
