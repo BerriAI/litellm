@@ -6,7 +6,9 @@ import re
 from typing import Final, List
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -22,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
+    convert_to_ollama_image,
     encode_tool_call_id_with_signature,
     function_call_prompt,
     get_thought_signature_from_tool,
@@ -283,6 +286,23 @@ def test_ollama_pt_rejects_a_malformed_content_part_as_a_bad_request(part: objec
     assert excinfo.value.status_code == 400
     assert "user message at index 0" in excinfo.value.message
     assert expected_detail in excinfo.value.message
+
+
+def test_convert_to_ollama_image_downloads_an_http_image_url_to_bare_base64(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    png_bytes: Final = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    )
+    image_url: Final = f"https://images.example.com/{uuid.uuid4()}.png"
+
+    with respx.mock:
+        route: Final = respx.get(image_url).mock(
+            return_value=httpx.Response(200, content=png_bytes, headers={"content-type": "image/png"})
+        )
+        result: Final = convert_to_ollama_image(image_url)
+
+    assert route.call_count == 1
+    assert result == base64.b64encode(png_bytes).decode("utf-8")
 
 
 @pytest.mark.asyncio
@@ -3262,6 +3282,41 @@ def test_convert_to_anthropic_tool_result_openai_file_pdf_becomes_document():
     assert "document" in tool_result["content"][0]
     assert tool_result["content"][0]["document"]["format"] == "pdf"
     assert tool_result["content"][0]["document"]["source"]["bytes"] == pdf_b64
+
+
+def test_convert_to_bedrock_tool_call_result_maps_tool_references_to_text() -> None:
+    tool_reference_message: Final[ChatCompletionToolMessage] = {
+        "role": "tool",
+        "tool_call_id": "toolu_1",
+        "content": [
+            {"type": "tool_reference", "tool_name": "WebFetch"},
+            {"type": "tool_reference", "tool_name": "WebSearch"},
+        ],
+    }
+    mixed_message: Final[ChatCompletionToolMessage] = {
+        "role": "tool",
+        "tool_call_id": "toolu_2",
+        "content": [
+            {"type": "text", "text": "Loaded tools:"},
+            {"type": "tool_reference", "tool_name": "WebSearch"},
+        ],
+    }
+
+    tool_reference_result: Final = _convert_to_bedrock_tool_call_result(tool_reference_message)
+    mixed_result: Final = _convert_to_bedrock_tool_call_result(mixed_message)
+
+    assert tool_reference_result == {
+        "toolResult": {
+            "toolUseId": "toolu_1",
+            "content": [{"text": "WebFetch"}, {"text": "WebSearch"}],
+        }
+    }
+    assert mixed_result == {
+        "toolResult": {
+            "toolUseId": "toolu_2",
+            "content": [{"text": "Loaded tools:"}, {"text": "WebSearch"}],
+        }
+    }
 
 
 def test_bedrock_converse_messages_pt_document_various_formats():

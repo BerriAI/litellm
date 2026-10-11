@@ -15,6 +15,7 @@ import { Providers } from "../provider_info_helpers";
 import { projectMountedValues, useMountRegistry, type MountedFormValues } from "../common_components/MountedFormField";
 import { useForm } from "react-hook-form";
 import AddModelForm from "./AddModelForm";
+import { EMPTY_DECISION_CATALOG } from "@/lib/decisionModels";
 import { handleAddModelSubmit } from "./handle_add_model_submit";
 import { toast } from "@/lib/toast";
 
@@ -245,6 +246,7 @@ const createTestProps = (userRole = "proxy_admin", userId = "user-1", isTeamAdmi
     showAdvancedSettings: false,
     teams,
     credentials,
+    decisionCatalog: EMPTY_DECISION_CATALOG,
     userRole,
     userId,
   };

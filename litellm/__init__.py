@@ -100,6 +100,7 @@ from litellm.constants import (
     DEFAULT_ALLOWED_FAILS,
 )
 import httpx
+from openai import DefaultAsyncHttpxClient, DefaultHttpxClient
 
 # register_async_client_cleanup is lazy-loaded and called on first access
 
@@ -420,8 +421,8 @@ error_logs: Dict = {}
 add_function_to_prompt: bool = (
     False  # if function calling not supported by api, append function call details to system prompt
 )
-client_session: Optional[httpx.Client] = None
-aclient_session: Optional[httpx.AsyncClient] = None
+client_session: Optional[Union[httpx.Client, DefaultHttpxClient]] = None
+aclient_session: Optional[Union[httpx.AsyncClient, DefaultAsyncHttpxClient]] = None
 model_fallbacks: Optional[List] = None  # Deprecated for 'litellm.fallbacks'
 model_cost_map_url: str = os.getenv(
     "LITELLM_MODEL_COST_MAP_URL",
@@ -438,6 +439,10 @@ anthropic_beta_headers_url: str = os.getenv(
 autorouter_presets_url: str = os.getenv(
     "LITELLM_AUTOROUTER_PRESETS_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/proxy/public_endpoints/autorouter_presets.json",
+)
+whats_new_url: str = os.getenv(
+    "LITELLM_WHATS_NEW_URL",
+    "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/proxy/public_endpoints/whats_new.json",
 )
 suppress_debug_info: bool = False
 dynamodb_table_name: Optional[str] = None
@@ -673,6 +678,7 @@ nvidia_nim_models: Set = set()
 nvidia_riva_models: Set = set()
 soniox_models: Set = set()
 sambanova_models: Set = set()
+scaledown_models: Final[Set[str]] = set()  # Price reloads update this registry through existing references.
 sambanova_embedding_models: Set = set()
 novita_models: Set = set()
 assemblyai_models: Set = set()
@@ -755,7 +761,7 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
-def _populate_provider_model_sets(model_cost_map: Dict) -> None:
+def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
     for key, value in model_cost_map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
@@ -917,6 +923,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             soniox_models.add(key)
         elif value.get("litellm_provider") == "sambanova":
             sambanova_models.add(key)
+        elif value.get("litellm_provider") == "scaledown":
+            scaledown_models.add(key)
         elif value.get("litellm_provider") == "sambanova-embedding-models":
             sambanova_embedding_models.add(key)
         elif value.get("litellm_provider") == "novita":
@@ -1105,6 +1113,7 @@ model_list = list(
     | nvidia_riva_models
     | soniox_models
     | sambanova_models
+    | scaledown_models
     | azure_text_models
     | novita_models
     | assemblyai_models
@@ -1214,6 +1223,7 @@ def _build_models_by_provider() -> dict:
         "nvidia_riva": nvidia_riva_models,
         "soniox": soniox_models,
         "sambanova": sambanova_models | sambanova_embedding_models,
+        "scaledown": scaledown_models,
         "novita": novita_models,
         "nebius": nebius_models | nebius_embedding_models,
         "aiml": aiml_models,
@@ -1484,6 +1494,7 @@ from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *
 from .decisions.main import *
+from .systemone.main import *
 from .tool_loop import ToolLoopMaxRoundsExceeded, arun_tool_loop, run_tool_loop
 from .search.main import *
 from .realtime_api.main import (
@@ -2053,6 +2064,9 @@ if TYPE_CHECKING:
     from .llms.featherless_ai.chat.transformation import (
         FeatherlessAIConfig as FeatherlessAIConfig,
     )
+    from .llms.scaledown.chat.transformation import (
+        ScaleDownChatConfig as ScaleDownChatConfig,
+    )
     from .llms.cerebras.chat import CerebrasConfig as CerebrasConfig
     from .llms.nadir.chat.transformation import NadirConfig as NadirConfig
     from .llms.baseten.chat import BasetenConfig as BasetenConfig
@@ -2384,6 +2398,11 @@ def __getattr__(name: str) -> Any:
     if name in registry:
         handler_func: Final = registry[name]
         return handler_func(name)
+
+    if name == "proxy":
+        import importlib
+
+        return importlib.import_module("litellm.proxy")
 
     if name == "harness" or name in _AGENT_EXPORTS:
         import importlib

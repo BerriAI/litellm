@@ -5,8 +5,8 @@ import threading
 import time
 import types
 import unittest
-from typing import Final, Optional
-from unittest.mock import MagicMock, patch
+from typing import Final
+from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
@@ -16,6 +16,7 @@ import litellm
 from litellm.integrations.langfuse import langfuse as langfuse_module
 from litellm.integrations.langfuse.langfuse import LangFuseLogger
 from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.types.utils import (
     Choices,
     Message,
@@ -28,9 +29,10 @@ from litellm.types.utils import (
     TextCompletionResponse,
 )
 
-
 # Import LangfuseUsageDetails directly from the module where it's defined
 from litellm.types.integrations.langfuse import *
+from litellm.responses.utils import ResponseAPILoggingUtils
+from litellm.types.llms.openai import InputTokensDetails, ResponseAPIUsage, ResponsesAPIResponse
 
 
 class TestLangfuseUsageDetails(unittest.TestCase):
@@ -327,7 +329,103 @@ class TestLangfuseUsageDetails(unittest.TestCase):
 
             mock_add_prompt_params.assert_called_once()
 
-    def _build_standard_logging_payload(self, trace_id: Optional[str] = None):
+    def _responses_api_usage(self) -> ResponseAPIUsage:
+        return ResponseAPIUsage(
+            input_tokens=16,
+            output_tokens=21,
+            total_tokens=37,
+            input_tokens_details=InputTokensDetails(cached_tokens=4),
+        )
+
+    def _log_responses_api_generation(self, response_obj: ResponsesAPIResponse) -> dict[str, int]:
+        self.use_real_langfuse_client()
+
+        kwargs = {
+            "model": "gpt-5.5",
+            "messages": [{"role": "user", "content": "Test"}],
+            "litellm_params": {"metadata": {}},
+            "optional_params": {},
+            "litellm_call_id": "test-call-id-responses-api-usage",
+            "standard_logging_object": self._build_standard_logging_payload(),
+            "response_cost": 0.0,
+        }
+
+        fixed_time = datetime.datetime(2024, 1, 1, 12, 0, 0)
+
+        self.logger._log_langfuse_v2(
+            user_id="test-user",
+            metadata={},
+            litellm_params=kwargs["litellm_params"],
+            output={"role": "assistant", "content": "Response"},
+            start_time=fixed_time,
+            end_time=fixed_time + datetime.timedelta(seconds=1),
+            kwargs=kwargs,
+            optional_params=kwargs["optional_params"],
+            input={"messages": kwargs["messages"]},
+            response_obj=response_obj,
+            level="DEFAULT",
+            litellm_call_id=kwargs["litellm_call_id"],
+        )
+
+        return json.loads(self.exported_generation().attributes["langfuse.observation.usage_details"])
+
+    def test_log_langfuse_v2_responses_api_usage(self):
+        """
+        Regression test: a /v1/responses response carries ResponseAPIUsage
+        (input_tokens/output_tokens), which must be normalized to a chat Usage
+        before Langfuse usage_details are read, or generations log 0 tokens.
+        """
+        response_obj = ResponsesAPIResponse(id="resp_123", created_at=0, output=[], usage=self._responses_api_usage())
+
+        usage_details = self._log_responses_api_generation(response_obj)
+
+        # input is reduced by cache_read_input_tokens per Langfuse docs
+        assert usage_details == {
+            "input": 12,
+            "output": 21,
+            "total": 37,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 4,
+        }
+
+    def test_log_langfuse_v2_streamed_responses_api_usage(self):
+        """
+        Regression test: an assembled /v1/responses stream reaches the logger
+        with its usage already converted to a plain dict of chat usage fields,
+        the shape litellm_logging stores on the completed response.
+        """
+        response_obj = ResponsesAPIResponse(id="resp_123", created_at=0, output=[])
+        streamed_usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(
+            self._responses_api_usage()
+        ).model_dump()
+        setattr(response_obj, "usage", streamed_usage)
+
+        usage_details = self._log_responses_api_generation(response_obj)
+
+        assert usage_details == {
+            "input": 12,
+            "output": 21,
+            "total": 37,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 4,
+        }
+
+    def test_log_langfuse_v2_malformed_responses_api_usage_still_logs(self):
+        """A usage dict whose token counts fail validation is logged as zero usage, not dropped."""
+        response_obj = ResponsesAPIResponse(id="resp_123", created_at=0, output=[])
+        setattr(response_obj, "usage", {"input_tokens": 16, "output_tokens": None})
+
+        usage_details = self._log_responses_api_generation(response_obj)
+
+        assert usage_details == {
+            "input": 0,
+            "output": 0,
+            "total": 0,
+            "cache_creation_input_tokens": 0,
+            "cache_read_input_tokens": 0,
+        }
+
+    def _build_standard_logging_payload(self, trace_id: str | None = None):
         payload = {
             "id": "payload-id",
             "call_type": "completion",
@@ -2708,7 +2806,113 @@ def test_langfuse_v2_uses_standard_logging_model_parameters():
 
     from litellm.litellm_core_utils.model_param_helper import ModelParamHelper
 
-    fallback_sanitized = ModelParamHelper.get_standard_logging_model_parameters(optional_params_with_secrets)
+    fallback_sanitized: Final = ModelParamHelper.get_standard_logging_model_parameters(optional_params_with_secrets)
     assert "api_key" not in fallback_sanitized
     assert "secret_fields" not in fallback_sanitized
     assert fallback_sanitized["temperature"] == 0.5
+
+
+def _assert_langfuse_prompt_fields(prompt: str | list[dict[str, str]]) -> None:
+    from litellm.integrations.langfuse.langfuse import _add_prompt_to_generation_params
+
+    generation_params: Final = {"model": "gpt-4o"}
+    clean_metadata: Final = {
+        "prompt": {
+            "name": "support-answer",
+            "version": 9,
+            "config": {"temperature": 0.2},
+            "labels": ["latest"],
+            "tags": ["support"],
+            "prompt": prompt,
+        }
+    }
+    result: Final = _add_prompt_to_generation_params(
+        generation_params=generation_params,
+        clean_metadata=clean_metadata,
+        prompt_management_metadata=None,
+        langfuse_client=Mock(),
+    )
+    prompt_client: Final = result["prompt"]
+    assert prompt_client.name == "support-answer"
+    assert prompt_client.version == 9
+    expected_prompt: Final = (
+        [{"type": "message", **message} for message in prompt] if isinstance(prompt, list) else prompt
+    )
+    assert prompt_client.prompt == expected_prompt
+    assert prompt_client.config == {"temperature": 0.2}
+
+
+def test_langfuse_prompt_type():
+    _assert_langfuse_prompt_fields("Hello {{name}}")
+    _assert_langfuse_prompt_fields(
+        [{"role": "system", "content": "You are concise"}, {"role": "user", "content": "{{question}}"}]
+    )
+
+
+def test_langfuse_logging_metadata():
+    from litellm.integrations.langfuse.langfuse import log_requester_metadata
+
+    metadata: Final = {"key": "value", "requester_metadata": {"key": "value"}}
+    assert log_requester_metadata(clean_metadata=metadata) == {"requester_metadata": {"key": "value"}}
+
+
+def test_langfuse_logging_tool_calling():
+    logger, exporter = _steering_logger()
+    timestamp: Final = datetime.datetime(2025, 1, 1)
+    tool_calls: Final = [
+        {
+            "id": "call_weather",
+            "type": "function",
+            "function": {"name": "get_weather", "arguments": '{"city":"Paris"}'},
+        }
+    ]
+    logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {"metadata": {}},
+            "messages": [{"role": "user", "content": "weather"}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": None, "tool_calls": tool_calls}}]
+        ),
+        start_time=timestamp,
+        end_time=timestamp,
+    )
+    span = _exported_span(logger, exporter)
+
+    assert json.loads(span.attributes["langfuse.observation.output"]) == {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": tool_calls,
+        "function_call": None,
+        "provider_specific_fields": None,
+    }
+
+
+def test_langfuse_logging_without_request_response(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    logger, exporter = _steering_logger()
+    logger.log_event_on_langfuse(
+        kwargs={
+            "call_type": "completion",
+            "litellm_params": {"metadata": {}},
+            "messages": [{"role": "user", "content": _LANGFUSE_REDACTED}],
+            "optional_params": {},
+        },
+        response_obj=litellm.ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": _LANGFUSE_REDACTED}}]
+        ),
+    )
+    span = _exported_span(logger, exporter)
+
+    assert json.loads(span.attributes["langfuse.observation.input"]) == {
+        "messages": [{"role": "user", "content": _LANGFUSE_REDACTED}]
+    }
+    assert json.loads(span.attributes["langfuse.observation.output"]) == {
+        "role": "assistant",
+        "content": _LANGFUSE_REDACTED,
+        "function_call": None,
+        "tool_calls": None,
+        "provider_specific_fields": None,
+    }
