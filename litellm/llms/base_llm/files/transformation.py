@@ -22,9 +22,9 @@ from ..chat.transformation import BaseConfig
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
-    from litellm.proxy._types import UserAPIKeyAuth as _UserAPIKeyAuth
     from litellm.router import Router as _Router
     from litellm.types.llms.openai import HttpxBinaryResponseContent
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth as _UserAPIKeyAuth
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     Span = Any

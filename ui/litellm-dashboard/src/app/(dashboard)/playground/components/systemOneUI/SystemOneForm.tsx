@@ -28,6 +28,11 @@ import type { SystemOnePayloadValidation } from "./lib/validatePayload";
 
 const QUESTION_TYPES: readonly QuestionType[] = ["choice", "noul", "score"];
 const TYPE_LABELS: Record<QuestionType, string> = { choice: "Choice", noul: "Yes / no", score: "Score" };
+const TYPE_HELP: Record<QuestionType, string | undefined> = {
+  choice: undefined,
+  noul: "The model returns the probability that the answer is yes",
+  score: undefined,
+};
 
 const isQuestionType = (value: unknown): value is QuestionType => QUESTION_TYPES.some((type) => type === value);
 
@@ -35,7 +40,7 @@ interface SystemOneFormProps {
   value: string;
   onChange: (value: string) => void;
   validation: SystemOnePayloadValidation;
-  onOpenJson: () => void;
+  onReset: () => void;
 }
 
 interface QuestionEditorProps<Q extends FormQuestion> {
@@ -219,7 +224,7 @@ function QuestionCard({ name, question, taken, onChange, onRename, onRemove }: Q
           </SelectTrigger>
           <SelectContent>
             {QUESTION_TYPES.map((type) => (
-              <SelectItem key={type} value={type}>
+              <SelectItem key={type} value={type} title={TYPE_HELP[type]}>
                 {TYPE_LABELS[type]}
               </SelectItem>
             ))}
@@ -242,18 +247,16 @@ function QuestionCard({ name, question, taken, onChange, onRename, onRemove }: Q
   );
 }
 
-export default function SystemOneForm({ value, onChange, validation, onOpenJson }: SystemOneFormProps) {
+export default function SystemOneForm({ value, onChange, validation, onReset }: SystemOneFormProps) {
   const stateId = useId();
   const form = useMemo(() => readForm(value), [value]);
 
   if (form === undefined) {
     return (
       <FormFrame validation={validation}>
-        <p className="text-sm text-muted-foreground">
-          This request has JSON the form can&apos;t show, such as a syntax error or a value that isn&apos;t text.
-        </p>
-        <Button variant="outline" className="w-fit" onClick={onOpenJson}>
-          Edit in JSON
+        <p className="text-sm text-muted-foreground">This request has a shape the form can&apos;t show.</p>
+        <Button variant="outline" className="w-fit" onClick={onReset}>
+          Reset to example
         </Button>
       </FormFrame>
     );
