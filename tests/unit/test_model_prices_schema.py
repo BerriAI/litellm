@@ -637,7 +637,7 @@ def test_deepseek_rows_bill_half_rate_outside_weekday_peak_hours(path: Path):
 
 
 PROVIDER_LABELS_WITHOUT_A_MODEL_SET: Final = frozenset({"sagemaker", "bedrock_converse"})
-MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "evaluation"})
+MODES_SERVED_OUTSIDE_THE_LLM_PROVIDER_REGISTRY: Final = frozenset({"search", "decisions", "evaluation"})
 VERTEX_FAMILIES_A_VERTEX_WILDCARD_GRANT_DOES_NOT_LIST: Final = frozenset(
     {
         "vertex_ai-ai21_models",
