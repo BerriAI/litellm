@@ -760,4 +760,5 @@ def can_satisfy_confirmed_routing_tags(
         for d in candidates
     )
 
+
 _get_tags_from_request_kwargs = get_tags_from_request_kwargs
