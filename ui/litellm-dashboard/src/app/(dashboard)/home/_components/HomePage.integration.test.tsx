@@ -6,7 +6,6 @@ import type { DailyActivityAggregatedResponse } from "@/components/UsagePage/dai
 import { EMPTY_DAILY_ACTIVITY_METADATA } from "@/components/UsagePage/dailyActivityApi";
 import { all_admin_roles } from "@/utils/roles";
 import HomePage from "./HomePage";
-import { WHATS_NEW_ITEMS } from "./homeContent";
 
 const auth = vi.hoisted(() => ({
   accessToken: "sk-test",
@@ -30,6 +29,28 @@ vi.mock("@/components/networking", async (importOriginal) => ({
 }));
 
 const blogPosts = { posts: [{ title: "Post one", description: "d", date: "2026-10-09", url: "https://x/1" }] };
+
+const launch = (title: string, icon: string, published_on: string) => ({
+  icon,
+  title,
+  description: `${title} description`,
+  href: `https://docs.litellm.ai/blog/${title}`,
+  published_on,
+});
+
+const whatsNew = vi.hoisted(() => ({ launches: [] as unknown[] }));
+
+const requestUrl = (input: RequestInfo | URL): string => {
+  if (typeof input === "string") return input;
+  return input instanceof URL ? input.href : input.url;
+};
+
+const fakeFetch = (input: RequestInfo | URL) => {
+  const body = requestUrl(input).endsWith("/public/whats_new") ? whatsNew : blogPosts;
+  return Promise.resolve(
+    new Response(JSON.stringify(body), { status: 200, headers: { "Content-Type": "application/json" } }),
+  );
+};
 
 const dayResult = (date: string, model: string, tokens: number) => {
   const metrics = {
@@ -86,7 +107,8 @@ describe("HomePage", () => {
     network.aggregated.mockReset().mockResolvedValue(activity);
     network.gateway.mockReset().mockResolvedValue({ total_successful_requests: 0, total_failed_requests: 0 });
     network.userInfo.mockReset().mockResolvedValue({ user_info: { max_budget: null } });
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify(blogPosts), { status: 200 })));
+    whatsNew.launches = [launch("mid", "box", "2026-10-06"), launch("new", "zap", "2026-10-11")];
+    vi.stubGlobal("fetch", vi.fn(fakeFetch));
   });
   afterEach(() => {
     vi.unstubAllGlobals();
@@ -121,13 +143,32 @@ describe("HomePage", () => {
     expect(network.aggregated).toHaveBeenCalledTimes(2);
   });
 
-  it("lists the curated launches newest first with their links", () => {
+  it("renders the launches served by /public/whats_new newest first, whatever order the JSON lists them in", async () => {
+    whatsNew.launches = [
+      launch("mid", "box", "2026-10-06"),
+      launch("new", "an-icon-from-a-newer-list", "2026-10-11"),
+      launch("old", "scale", "2026-09-30"),
+    ];
     renderHome();
-    const section = screen.getByTestId("home-whats-new");
-    const links = within(section).getAllByRole("link");
-    expect(links.map((link) => link.getAttribute("href"))).toEqual(WHATS_NEW_ITEMS.map((item) => item.href));
-    const dates = WHATS_NEW_ITEMS.map((item) => item.publishedOn);
-    expect(dates).toEqual([...dates].sort().reverse());
+    const section = await screen.findByTestId("home-whats-new");
+    expect(await within(section).findByText("new")).toBeInTheDocument();
+    expect(
+      within(section)
+        .getAllByRole("link")
+        .map((link) => link.getAttribute("href")),
+    ).toEqual([
+      "https://docs.litellm.ai/blog/new",
+      "https://docs.litellm.ai/blog/mid",
+      "https://docs.litellm.ai/blog/old",
+    ]);
+    expect(within(section).getByText("Oct 11")).toBeInTheDocument();
+  });
+
+  it("hides What's new when /public/whats_new has no launches", async () => {
+    whatsNew.launches = [];
+    renderHome();
+    expect(await screen.findByRole("link", { name: /post one/i })).toBeInTheDocument();
+    expect(screen.queryByTestId("home-whats-new")).not.toBeInTheDocument();
   });
 
   it("ranks model groups by token share on the leaderboard", async () => {
