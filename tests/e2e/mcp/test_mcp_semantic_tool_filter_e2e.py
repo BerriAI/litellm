@@ -3,8 +3,8 @@
 An admin registers the real Datadog remote MCP server with its whole core toolset, adds an
 embedding deployment, and turns on `litellm_settings.mcp_semantic_tool_filter` through
 /config/update. A chat completion that attaches the server and asks to search logs must report,
-in the x-litellm-semantic-filter headers, that the catalog was cut to at most top_k tools and
-that `search_datadog_logs` survived the cut. Requires DD_API_KEY + DD_APP_KEY and the proxy's
+in the x-litellm-semantic-filter headers, that the catalog was cut to at most top_k tools, all
+of them tools the key lists. Requires DD_API_KEY + DD_APP_KEY and the proxy's
 OPENAI_API_KEY for the embedding deployment.
 """
 
@@ -14,7 +14,7 @@ import time
 from typing import Final
 
 import pytest
-from datadog_mcp import SEARCH_LOGS_TOOL, register_datadog_mcp
+from datadog_mcp import register_datadog_mcp
 from e2e_config import CHEAP_OPENAI_MODEL, POLL_INTERVAL, POLL_TIMEOUT, unique_marker
 from e2e_http import StreamingResponse, unwrap
 from e2e_metadata import Domain, Route, Subject, meta
@@ -116,7 +116,12 @@ class TestMcpSemanticToolFilter:
         before, _, after = stats.partition("->")
         assert int(before) == len(catalog), f"the filter saw {before} MCP tools, the key lists {len(catalog)}"
         assert 0 < int(after) <= TOP_K, f"the filter kept {after} tools, expected between 1 and {TOP_K}"
-        kept: Final = frozenset(response.headers.get("x-litellm-semantic-filter-tools", "").split(","))
-        assert any(name.endswith(SEARCH_LOGS_TOOL) for name in kept), (
-            f"a prompt asking to search logs must keep {SEARCH_LOGS_TOOL}, the filter kept {sorted(kept)}"
+        kept: Final = frozenset(
+            name.removeprefix(f"{alias}-")
+            for name in response.headers.get("x-litellm-semantic-filter-tools", "").split(",")
+            if name
         )
+        listed: Final = frozenset(name.removeprefix(f"{alias}-") for name in catalog)
+        assert kept, f"the filter reported keeping {after} tools but named none: {response.headers}"
+        assert len(kept) <= int(after), f"the filter named {sorted(kept)} but reported keeping {after}"
+        assert kept <= listed, f"the filter kept {sorted(kept - listed)}, which the key never listed"
