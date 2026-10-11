@@ -178,16 +178,32 @@ def test_non_openai_error_uses_nested_error_object(code: int | str) -> None:
 
 
 @pytest.mark.parametrize(
-    ("error", "expected_status", "expected_message"),
+    ("error", "expected_status", "expected_message", "expected_exception", "expected_match"),
     [
-        ({"response": "Provider unavailable", "status": "503"}, 503, "Provider unavailable"),
-        ("Provider request failed", 500, "Provider request failed"),
+        (
+            {"response": "Provider unavailable", "status": "503"},
+            503,
+            "Provider unavailable",
+            APIError,
+            r"^litellm\.APIError: Provider unavailable$",
+        ),
+        (
+            "Provider request failed",
+            500,
+            "Provider request failed",
+            Exception,
+            r"^$",
+        ),
     ],
 )
 def test_non_openai_error_uses_nested_error_message_variants(
-    error: dict[str, object] | str, expected_status: int, expected_message: str
+    error: dict[str, object] | str,
+    expected_status: int,
+    expected_message: str,
+    expected_exception: type[Exception],
+    expected_match: str,
 ) -> None:
-    with pytest.raises(Exception) as exc_info:
+    with pytest.raises(expected_exception, match=expected_match) as exc_info:
         convert_to_model_response_object(
             response_object={"error": error, "choices": None},
             model_response_object=ModelResponse(),
