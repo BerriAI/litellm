@@ -70,7 +70,7 @@ def guard_enabled() -> bool:
     return _env_bool(GUARD_ENABLED_ENV)
 
 
-def _build_guard_config():
+def _build_guard_config():  # noqa: ANN202  # return type is from the lazily imported, untyped optional dependency
     # type: () -> object
     """Build the guard config from the LITELLM_GUARD_* environment variables."""
     guard_module: Final = importlib.import_module("guard")
