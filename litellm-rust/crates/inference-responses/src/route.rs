@@ -1,10 +1,12 @@
 use std::convert::Infallible;
 
 use bytes::Bytes;
+use futures_util::{StreamExt, TryStreamExt};
 use litellm_host::{
     call::{HostedMachine, hosted_call},
     protocol::Protocol,
 };
+use litellm_llms::base_llm::responses::streaming::openai_sse_blocks;
 use litellm_llms_types::formats::responses::ResponsesApiResponse;
 
 use super::{
@@ -64,7 +66,9 @@ impl litellm_inference::caching::StreamCachable for Responses {
             head: ResponsesStreamHead {
                 headers: Vec::new(),
             },
-            chunks: Box::pin(futures_util::stream::iter([Ok(data)])),
+            chunks: openai_sse_blocks(futures_util::stream::iter([Ok(data)]).boxed())
+                .map_err(super::handler::stream_error)
+                .boxed(),
         })
     }
 

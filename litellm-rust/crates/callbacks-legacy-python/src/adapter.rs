@@ -27,13 +27,7 @@ use crate::{
     setup,
 };
 
-#[derive(Clone, Copy, Debug)]
-struct PassThroughStream {
-    url_route: &'static str,
-    endpoint_type: &'static str,
-}
-
-/// What the Messages stream iterator keeps for its end-of-stream billing.
+/// What a stream iterator keeps for its end-of-stream logging.
 struct DeliveredStream {
     chunks: Py<PyList>,
     first_chunk: Option<Py<PyAny>>,
@@ -118,15 +112,12 @@ impl LegacyLogging {
         }
     }
 
-    fn stream_billing(&self) -> Option<PassThroughStream> {
+    /// Whether the operation's Python stream iterator logs the stream itself, which the
+    /// shim's `stream_success` and `stream_failure` arms reproduce.
+    fn logs_streams(&self) -> bool {
         match self.operation {
-            LoggingOperation::Messages => Some(PassThroughStream {
-                url_route: "/v1/messages",
-                endpoint_type: "anthropic",
-            }),
-            LoggingOperation::Completion | LoggingOperation::Responses | LoggingOperation::Ocr => {
-                None
-            }
+            LoggingOperation::Messages | LoggingOperation::Responses => true,
+            LoggingOperation::Completion | LoggingOperation::Ocr => false,
         }
     }
 
@@ -216,13 +207,14 @@ impl LegacyLogging {
 
     fn stream_success(&self, py: Python<'_>, stream: &DeliveredStream) -> PyResult<()> {
         let logger = self.logger()?;
-        let billing = self.stream_billing().ok_or_else(missing_state)?;
+        if !self.logs_streams() {
+            return Err(missing_state());
+        }
         let billed = Streaming::Success.call(
             py,
             (
+                <&str>::from(self.operation),
                 logger.object(py),
-                billing.url_route,
-                billing.endpoint_type,
                 &self.request.as_ref().map_or_else(
                     || self.call.kwargs().clone_ref(py),
                     |request| request.body.clone_ref(py),
@@ -255,7 +247,7 @@ impl LegacyLogging {
         let delivered = self.logger.is_some()
             && self.error.is_some()
             && self.stream.is_some()
-            && self.stream_billing().is_some();
+            && self.logs_streams();
         if !delivered {
             return Ok(());
         }
@@ -263,20 +255,16 @@ impl LegacyLogging {
             return self.dispatch_failure(task).await;
         }
         let scheduled = Python::attach(|py| -> PyResult<Py<PyAny>> {
-            let (Some(logger), Some(error), Some(stream), Some(billing)) = (
-                &self.logger,
-                &self.error,
-                &self.stream,
-                self.stream_billing(),
-            ) else {
+            let (Some(logger), Some(error), Some(stream)) = (&self.logger, &self.error, &self.stream)
+            else {
                 return Err(missing_state());
             };
             Streaming::Failure
                 .call(
                     py,
                     (
+                        <&str>::from(self.operation),
                         logger.object(py),
-                        billing.endpoint_type,
                         &self.request.as_ref().map_or_else(
                             || self.call.kwargs().clone_ref(py),
                             |request| request.body.clone_ref(py),
@@ -536,7 +524,7 @@ impl LegacyLogging {
     }
 
     pub(crate) fn stream_opened(&mut self, py: Python<'_>, head: &Py<PyAny>) -> PyResult<()> {
-        if self.stream_billing().is_none() {
+        if !self.logs_streams() {
             return Err(missing_state());
         }
         if let Some(key) = &self.cache_key {

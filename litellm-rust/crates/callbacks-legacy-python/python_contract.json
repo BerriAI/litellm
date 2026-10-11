@@ -92,9 +92,8 @@
     "head"
   ],
   "stream_success": [
+    "operation",
     "logger",
-    "url_route",
-    "endpoint_type",
     "request_body",
     "chunks",
     "start",
@@ -102,8 +101,8 @@
     "first_chunk"
   ],
   "stream_failure": [
+    "operation",
     "logger",
-    "endpoint_type",
     "request_body",
     "chunks",
     "error"

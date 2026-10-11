@@ -72,8 +72,9 @@ pub(crate) enum DeploymentHooks {
     AfterDeploymentFailure,
 }
 
-/// The Messages stream iterator's logging: the stream flag, the end-of-stream billing
-/// from the delivered chunks, and the partial-usage failure path.
+/// The stream iterators' logging, keyed by operation: the stream flag, the end-of-stream
+/// success logging from the delivered chunks, and the failure path after chunks reached the
+/// caller.
 #[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq, VariantArray)]
 pub(crate) enum Streaming {
     #[strum(serialize = "stream_opened")]

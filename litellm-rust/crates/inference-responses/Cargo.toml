@@ -10,6 +10,7 @@ bytes.workspace = true
 futures-util.workspace = true
 litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-cache-response.workspace = true
+litellm-framer = { workspace = true, features = ["sse"] }
 litellm-host.workspace = true
 litellm-http.workspace = true
 litellm-inference.workspace = true

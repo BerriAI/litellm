@@ -4084,6 +4084,7 @@ dependencies = [
  "litellm-cache",
  "litellm-cache-memory",
  "litellm-cache-response",
+ "litellm-framer",
  "litellm-host",
  "litellm-host-native",
  "litellm-http",

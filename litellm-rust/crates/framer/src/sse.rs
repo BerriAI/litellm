@@ -29,12 +29,7 @@ impl Decoder for SseCodec {
             return Ok(None);
         }
         while let Some(end) = block_end(src) {
-            let block = src.split_to(end);
-            let pending = lines(&block)
-                .map(|(line, _)| line)
-                .take_while(|line| !line.is_empty())
-                .try_fold(Pending::default(), Pending::apply)?;
-            if let Some(event) = pending.dispatch() {
+            if let Some(event) = event_in(&src.split_to(end))? {
                 return Ok(Some(event));
             }
         }
@@ -59,17 +54,60 @@ pub fn decode_all(wire: &[u8]) -> Result<Vec<SseEvent>, SseError> {
 
 impl SseCodec {
     fn skip_bom(&mut self, src: &mut BytesMut) -> bool {
-        if self.past_bom {
-            return true;
-        }
-        if src.starts_with(BOM) {
-            src.advance(BOM.len());
-        } else if BOM.starts_with(src) {
-            return false;
-        }
-        self.past_bom = true;
-        true
+        skip_bom(&mut self.past_bom, src)
     }
+}
+
+/// The event the block's lines spell out, or `None` for a block with no `data` field, which
+/// the protocol says to ignore.
+fn event_in(block: &[u8]) -> Result<Option<SseEvent>, SseError> {
+    Ok(lines(block)
+        .map(|(line, _)| line)
+        .take_while(|line| !line.is_empty())
+        .try_fold(Pending::default(), Pending::apply)?
+        .dispatch())
+}
+
+/// The raw bytes of each block the SSE codec would dispatch an event for, left exactly as
+/// the wire carried them, blank-line terminator included. Blocks with no event are dropped.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SseBlockCodec {
+    past_bom: bool,
+}
+
+impl Decoder for SseBlockCodec {
+    type Item = bytes::Bytes;
+    type Error = SseError;
+
+    fn decode(&mut self, src: &mut BytesMut) -> Result<Option<bytes::Bytes>, SseError> {
+        if !skip_bom(&mut self.past_bom, src) {
+            return Ok(None);
+        }
+        while let Some(end) = block_end(src) {
+            let block = src.split_to(end);
+            if event_in(&block)?.is_some() {
+                return Ok(Some(block.freeze()));
+            }
+        }
+        Ok(None)
+    }
+
+    fn decode_eof(&mut self, _pending: &mut BytesMut) -> Result<Option<bytes::Bytes>, SseError> {
+        Ok(None)
+    }
+}
+
+fn skip_bom(past_bom: &mut bool, src: &mut BytesMut) -> bool {
+    if *past_bom {
+        return true;
+    }
+    if src.starts_with(BOM) {
+        src.advance(BOM.len());
+    } else if BOM.starts_with(src) {
+        return false;
+    }
+    *past_bom = true;
+    true
 }
 
 fn block_end(bytes: &[u8]) -> Option<usize> {

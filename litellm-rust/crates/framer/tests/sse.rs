@@ -8,7 +8,7 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_framer::{
     SseError, frames,
-    sse::{SseCodec, SseEvent},
+    sse::{SseBlockCodec, SseCodec, SseEvent},
 };
 use proptest::prelude::*;
 use rstest::rstest;
@@ -166,4 +166,33 @@ async fn a_body_error_keeps_earlier_events_and_its_cause_then_terminates(
     assert_eq!(body_cause::<io::Error>(&body).unwrap().kind(), kind);
     assert!(events.next().await.is_none());
     assert!(events.next().await.is_none());
+}
+
+/// The block codec hands back each event's bytes untouched, however the wire was cut, and
+/// skips the blocks the event codec would not dispatch, so a consumer that frames per event
+/// still relays the provider's exact bytes for every event.
+#[rstest]
+#[case::one_piece(usize::MAX)]
+#[case::byte_at_a_time(1)]
+#[case::across_blocks(7)]
+fn blocks_keep_the_wire_bytes_of_each_event(#[case] size: usize) {
+    let wire = concat!(
+        "\u{feff}event: a\ndata: 1\n\n",
+        ": comment only\n\n",
+        "data: 2\ndata: 3\n\n",
+        "id: 7\n\n",
+        "data:4\n\n",
+    );
+    let pieces = every(wire.as_bytes(), size.min(wire.len()));
+    let blocks: Vec<Bytes> = runtime()
+        .block_on(frames(input(pieces), SseBlockCodec::default()).try_collect())
+        .unwrap();
+    assert_eq!(
+        blocks,
+        vec![
+            Bytes::from("event: a\ndata: 1\n\n"),
+            Bytes::from("data: 2\ndata: 3\n\n"),
+            Bytes::from("data:4\n\n"),
+        ]
+    );
 }

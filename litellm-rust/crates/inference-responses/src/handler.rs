@@ -2,9 +2,13 @@ use litellm_host::lifecycle::ExecutionEvent;
 use litellm_host::observation::ObservationSender;
 use std::time::Duration;
 
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt};
+use litellm_framer::SseError;
 use litellm_host::interceptors::{Interceptors, RawResponse, WireRequest};
-use litellm_llms::base_llm::auth::{Authenticated, resolve_auth};
+use litellm_llms::base_llm::{
+    auth::{Authenticated, resolve_auth},
+    responses::streaming::openai_sse_blocks,
+};
 
 use super::{
     Error,
@@ -81,10 +85,14 @@ pub(super) async fn execute(
                         Some((name.to_string(), value.to_str().ok()?.to_owned()))
                     })
                     .collect();
-                let chunks = response
-                    .bytes_stream()
-                    .map(|chunk| chunk.map_err(network))
-                    .boxed();
+                let chunks = openai_sse_blocks(
+                    response
+                        .bytes_stream()
+                        .map_err(std::io::Error::other)
+                        .boxed(),
+                )
+                .map_err(stream_error)
+                .boxed();
                 return Ok(ResponsesOutput::Stream {
                     head: ResponsesStreamHead { headers },
                     chunks,
@@ -115,4 +123,24 @@ pub(super) async fn execute(
 
 fn network(error: reqwest::Error) -> Error {
     litellm_http::transport::Error::Network(error.to_string()).into()
+}
+
+/// A body read that failed is still a network error; only bytes that could not be framed as
+/// SSE are an invalid response.
+pub(super) fn stream_error(error: SseError) -> Error {
+    match error {
+        SseError::Body(io) => match io.downcast::<reqwest::Error>() {
+            Ok(error) => network(error),
+            Err(io) => framing_error(SseError::Body(io)),
+        },
+        other => framing_error(other),
+    }
+}
+
+fn framing_error(error: SseError) -> Error {
+    litellm_llms::Error::InvalidResponse(litellm_llms::ErrorDetail::failed(
+        "stream framing",
+        error,
+    ))
+    .into()
 }
