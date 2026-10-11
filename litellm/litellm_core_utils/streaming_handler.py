@@ -13,8 +13,8 @@ from typing import Any, Final, NoReturn, Protocol, TypeVar, cast
 
 import anyio
 import httpx
-from pydantic import BaseModel, ValidationError
-from typing_extensions import NotRequired, TypedDict
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm import verbose_logger
@@ -127,6 +127,26 @@ class _NlpCloudStreamData(TypedDict):
 
 class _AlephAlphaStreamData(TypedDict):
     completions: Sequence[Mapping[str, str]]
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _TritonStreamData(TypedDict, total=False):
+    text_output: ReadOnly[str | None]
+    stop_reason: ReadOnly[str | None]
+    is_finished: ReadOnly[bool | None]
+    input_token_count: ReadOnly[int | float | None]
+    generated_token_count: ReadOnly[int | float | None]
+
+
+class _TritonStreamResponse(TypedDict):
+    text: ReadOnly[str | None]
+    is_finished: ReadOnly[bool | None]
+    prompt_tokens: ReadOnly[int | float | None]
+    completion_tokens: ReadOnly[int | float | None]
+    finish_reason: NotRequired[ReadOnly[str | None]]
+
+
+_TRITON_STREAM_DATA_ADAPTER: Final = TypeAdapter(_TritonStreamData)
 
 
 class _DeltaDumpDict(TypedDict):
@@ -703,27 +723,29 @@ class CustomStreamWrapper:
         except Exception as e:
             raise e
 
-    def handle_triton_stream(self, chunk):
+    @staticmethod
+    def _parse_triton_stream_data(chunk: object) -> _TritonStreamData | None:
+        if isinstance(chunk, dict):
+            return _TRITON_STREAM_DATA_ADAPTER.validate_python(chunk)
+        if not isinstance(chunk, (str, bytes)):
+            print_verbose(f"chunk: {chunk} (Type: {type(chunk)})")
+            raise ValueError(f"Unable to parse response. Original response: {chunk}")
+        response: Final = chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk
+        if "text_output" not in response:
+            return None
+        response_data: Final = CustomStreamWrapper.strip_sse_data_from_chunk(response) or ""
+        return _TRITON_STREAM_DATA_ADAPTER.validate_python(json.loads(response_data.strip()))
+
+    def handle_triton_stream(self, chunk: object) -> _TritonStreamResponse:
         try:
-            if isinstance(chunk, dict):
-                parsed_response = chunk
-            elif isinstance(chunk, (str, bytes)):
-                if isinstance(chunk, bytes):
-                    chunk = chunk.decode("utf-8")
-                if "text_output" in chunk:
-                    response = CustomStreamWrapper.strip_sse_data_from_chunk(chunk) or ""
-                    response = response.strip()
-                    parsed_response = json.loads(response)
-                else:
-                    return {
-                        "text": "",
-                        "is_finished": False,
-                        "prompt_tokens": 0,
-                        "completion_tokens": 0,
-                    }
-            else:
-                print_verbose(f"chunk: {chunk} (Type: {type(chunk)})")
-                raise ValueError(f"Unable to parse response. Original response: {chunk}")
+            parsed_response: Final = self._parse_triton_stream_data(chunk)
+            if parsed_response is None:
+                return {
+                    "text": "",
+                    "is_finished": False,
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                }
             text: Final = parsed_response.get("text_output", "")
             finish_reason: Final = parsed_response.get("stop_reason")
             is_finished: Final = parsed_response.get("is_finished", False)
@@ -961,7 +983,7 @@ class CustomStreamWrapper:
         completion_obj: dict[str, Any],
         model_response: ModelResponseStream,
         response_obj: dict[str, Any],
-    ):
+    ) -> ModelResponseStream | None:
         from litellm.litellm_core_utils.core_helpers import (
             preserve_upstream_non_openai_attributes,
         )
@@ -1288,11 +1310,12 @@ class CustomStreamWrapper:
             completion_obj["content"] = new_chunk
             self.completion_stream = stream[chunk_size:]
         elif self.custom_llm_provider == "triton":
-            response_obj = self.handle_triton_stream(chunk)
-            completion_obj["content"] = response_obj["text"]
+            triton_chunk: Final[object] = chunk
+            triton_response: Final = self.handle_triton_stream(triton_chunk)
+            completion_obj["content"] = triton_response["text"]
             print_verbose(f"completion obj content: {completion_obj['content']}")
-            if response_obj["is_finished"]:
-                self.received_finish_reason = response_obj["finish_reason"]
+            if triton_response["is_finished"]:
+                self.received_finish_reason = triton_response.get("finish_reason")
         elif self.custom_llm_provider == "text-completion-openai":
             response_obj = self.handle_openai_text_completion_chunk(chunk)
             completion_obj["content"] = response_obj["text"]
@@ -1414,7 +1437,7 @@ class CustomStreamWrapper:
                     )
         return _ProviderChunkParsed(response_obj)
 
-    def chunk_creator(self, chunk: Any):
+    def chunk_creator(self, chunk: Any) -> ModelResponseStream | None:
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
         provider_response_model: Final = _provider_response_model(chunk)
@@ -1726,7 +1749,7 @@ class CustomStreamWrapper:
         if self.logging_obj.is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
-    def finish_reason_handler(self):
+    def finish_reason_handler(self) -> ModelResponseStream:
         model_response: Final = self.model_response_creator()
         _finish_reason: Final = self.received_finish_reason or self.intermittent_finish_reason
         if _finish_reason is not None:
