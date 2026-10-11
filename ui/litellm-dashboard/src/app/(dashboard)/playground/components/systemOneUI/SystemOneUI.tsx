@@ -12,7 +12,7 @@ import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networ
 import { uiHref } from "@/utils/uiHref";
 import { useMutation } from "@tanstack/react-query";
 import { BookOpen, Eraser, LoaderCircle, Send } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { makePlaygroundDecisionRequest, type PlaygroundDecisionRequest } from "../../llm_calls/system_one";
 import { DECISION_PRESETS, emptyPayload, matchPreset, presetPayload, type DecisionPreset } from "./lib/example";
 import { payloadModel, withPayloadModel } from "./lib/payloadModel";
@@ -38,6 +38,15 @@ interface SystemOneSendVariables {
 
 const CUSTOM_PRESET = "custom";
 
+function SetupField({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div className="grid min-w-0 content-start gap-1.5">
+      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      {children}
+    </div>
+  );
+}
+
 interface PresetPickerProps {
   activePreset: DecisionPreset | undefined;
   onPick: (id: string | null) => void;
@@ -46,7 +55,7 @@ interface PresetPickerProps {
 function PresetPicker({ activePreset, onPick }: PresetPickerProps) {
   return (
     <Select value={activePreset?.id ?? CUSTOM_PRESET} onValueChange={onPick}>
-      <SelectTrigger className="w-56" aria-label="Example">
+      <SelectTrigger className="w-48" aria-label="Example">
         <SelectValue>{activePreset?.label ?? "Custom"}</SelectValue>
       </SelectTrigger>
       <SelectContent>
@@ -166,26 +175,28 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           hasResult ? "max-w-7xl xl:grid-cols-2" : "max-w-3xl",
         )}
       >
-        <section className="flex min-h-96 flex-col gap-3 xl:min-h-0" aria-label="Decisions request editor">
-          <div className="flex flex-wrap items-center gap-2">
-            <Select
-              value={endpoint}
-              onValueChange={(value) => {
-                if (value === "/v1/decisions" || value === "/v1/systemone") {
-                  clearRequestState();
-                  setEndpoint(value);
-                }
-              }}
-            >
-              <SelectTrigger className="w-44" aria-label="Decision endpoint">
-                <SelectValue>{endpoint}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="/v1/decisions">/v1/decisions</SelectItem>
-                <SelectItem value="/v1/systemone">/v1/systemone</SelectItem>
-              </SelectContent>
-            </Select>
-            <div className="w-56">
+        <section className="flex min-h-96 flex-col gap-4 xl:min-h-0" aria-label="Decisions request editor">
+          <div className="grid gap-3 rounded-lg border bg-card p-3 sm:grid-cols-3">
+            <SetupField label="Endpoint">
+              <Select
+                value={endpoint}
+                onValueChange={(value) => {
+                  if (value === "/v1/decisions" || value === "/v1/systemone") {
+                    clearRequestState();
+                    setEndpoint(value);
+                  }
+                }}
+              >
+                <SelectTrigger className="w-full" aria-label="Decision endpoint">
+                  <SelectValue>{endpoint}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="/v1/decisions">/v1/decisions</SelectItem>
+                  <SelectItem value="/v1/systemone">/v1/systemone</SelectItem>
+                </SelectContent>
+              </Select>
+            </SetupField>
+            <SetupField label="Model">
               <SearchSelect
                 aria-label="Decision model"
                 options={decisionModels.map((model) => ({ label: model, value: model }))}
@@ -195,54 +206,59 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                 emptyText="No decision models found"
                 allowClear={false}
               />
-            </div>
-            {decisionModelsLoaded && decisionModels.length === 0 && (
-              <a href={uiHref("models-and-endpoints")} className="text-sm text-primary underline">
-                Add a decision model
-              </a>
-            )}
-            <Select
-              value={apiKeySource}
-              onValueChange={(value) => {
-                if (value === "session" || value === "custom") {
-                  setApiKeySource(value);
-                }
-              }}
-              disabled={disabledPersonalKeyCreation}
-            >
-              <SelectTrigger className="w-44" aria-label="Virtual Key Source">
-                <SelectValue>{apiKeySource === "custom" ? "Virtual Key" : "Current UI Session"}</SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="session" disabled={!accessToken}>
-                  Current UI Session
-                </SelectItem>
-                <SelectItem value="custom">Virtual Key</SelectItem>
-              </SelectContent>
-            </Select>
-            {apiKeySource === "custom" && (
-              <Input
-                type="password"
-                aria-label="Virtual Key"
-                value={customApiKey}
-                onChange={(event) => setCustomApiKey(event.target.value)}
-                placeholder="Enter Virtual Key"
-                className="w-56"
-              />
-            )}
+              {decisionModelsLoaded && decisionModels.length === 0 && (
+                <a href={uiHref("models-and-endpoints")} className="text-xs text-primary underline">
+                  Add a decision model
+                </a>
+              )}
+            </SetupField>
+            <SetupField label="API key">
+              <Select
+                value={apiKeySource}
+                onValueChange={(value) => {
+                  if (value === "session" || value === "custom") {
+                    setApiKeySource(value);
+                  }
+                }}
+                disabled={disabledPersonalKeyCreation}
+              >
+                <SelectTrigger className="w-full" aria-label="Virtual Key Source">
+                  <SelectValue>{apiKeySource === "custom" ? "Virtual Key" : "Current UI Session"}</SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="session" disabled={!accessToken}>
+                    Current UI Session
+                  </SelectItem>
+                  <SelectItem value="custom">Virtual Key</SelectItem>
+                </SelectContent>
+              </Select>
+              {apiKeySource === "custom" && (
+                <Input
+                  type="password"
+                  aria-label="Virtual Key"
+                  value={customApiKey}
+                  onChange={(event) => setCustomApiKey(event.target.value)}
+                  placeholder="Enter Virtual Key"
+                />
+              )}
+            </SetupField>
           </div>
 
           <Tabs
             value={view}
             onValueChange={(value) => (value === "form" || value === "curl") && setView(value)}
-            className="min-h-0 flex-1"
+            className={cn(
+              "flex min-h-0 flex-1 flex-col gap-0 overflow-hidden rounded-lg border bg-card",
+              !validation.isValid && "border-destructive/60",
+            )}
           >
-            <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
               <TabsList aria-label="Request editor view">
                 <TabsTrigger value="form">Form</TabsTrigger>
                 <TabsTrigger value="curl">cURL</TabsTrigger>
               </TabsList>
-              <div className="flex items-center gap-1">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Example</span>
                 <PresetPicker activePreset={activePreset} onPick={handlePresetPick} />
                 <SimpleTooltip content="How to call /v1/decisions and /v1/systemone">
                   <a
@@ -257,7 +273,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                 </SimpleTooltip>
               </div>
             </div>
-            <TabsContent value="form" className="flex min-h-0 flex-col">
+            <TabsContent value="form" className="flex min-h-0 flex-1 flex-col">
               {validated.endpoint === "/v1/decisions" ? (
                 <OpenAIDecisionsForm
                   value={rawPayload}
@@ -274,7 +290,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                 />
               )}
             </TabsContent>
-            <TabsContent value="curl" className="flex min-h-0 flex-col">
+            <TabsContent value="curl" className="flex min-h-0 flex-1 flex-col">
               <CurlPreview
                 baseUrl={getCustomProxyBaseUrl() ?? getProxyBaseUrl()}
                 endpoint={endpoint}
@@ -283,34 +299,33 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                 errorCount={errorCount(validation)}
               />
             </TabsContent>
-          </Tabs>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="ghost"
-              onClick={() => handlePayloadChange(clearedPayload)}
-              disabled={rawPayload === clearedPayload}
-            >
-              <Eraser />
-              Clear
-            </Button>
-            <div className="ml-auto flex items-center gap-2">
-              {isLoading && (
-                <Button variant="outline" onClick={clearRequestState}>
-                  Cancel request
-                </Button>
-              )}
+            <div className="flex flex-wrap items-center gap-2 border-t bg-muted/30 px-3 py-2">
               <Button
-                size="lg"
-                className="min-w-32"
-                onClick={handleSend}
-                disabled={!validation.isValid || isLoading || !effectiveApiKey}
+                variant="ghost"
+                onClick={() => handlePayloadChange(clearedPayload)}
+                disabled={rawPayload === clearedPayload}
               >
-                {isLoading ? <LoaderCircle className="animate-spin" /> : <Send />}
-                Send
+                <Eraser />
+                Clear
               </Button>
+              <div className="ml-auto flex items-center gap-2">
+                {isLoading && (
+                  <Button variant="outline" onClick={clearRequestState}>
+                    Cancel request
+                  </Button>
+                )}
+                <Button
+                  size="lg"
+                  className="min-w-32"
+                  onClick={handleSend}
+                  disabled={!validation.isValid || isLoading || !effectiveApiKey}
+                >
+                  {isLoading ? <LoaderCircle className="animate-spin" /> : <Send />}
+                  Send
+                </Button>
+              </div>
             </div>
-          </div>
+          </Tabs>
         </section>
 
         {hasResult && (

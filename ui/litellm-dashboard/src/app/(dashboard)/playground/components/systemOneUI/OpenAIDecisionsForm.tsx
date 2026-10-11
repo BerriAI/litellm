@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { useId, useMemo } from "react";
-import { AddButton, FormFrame, RemoveButton } from "./DecisionFormControls";
+import { AddButton, FormFrame, QuestionCardHeader, RemoveButton } from "./DecisionFormControls";
 import { freeName, removeAt, replaceAt } from "./lib/formPayload";
 import {
   readDecisionsForm,
@@ -128,34 +128,39 @@ function QuestionCard({ question, index, onChange, onRemove }: QuestionCardProps
   const instructionsId = useId();
 
   return (
-    <fieldset aria-label={`Question ${index + 1}`} className="grid gap-3 rounded-md border p-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <Input
-          aria-label="Question name"
-          className="min-w-0 flex-1"
-          value={question.name ?? ""}
-          placeholder="Optional question name"
-          onChange={(event) => onChange({ ...question, name: event.target.value })}
-        />
-        <Select
-          value={question.type}
-          onValueChange={(type) => {
-            const next = QUESTION_TYPES.find((value) => value === type);
-            if (next) onChange(retypeDecisionQuestion(question, next));
-          }}
-        >
-          <SelectTrigger className="w-36" aria-label="Answer type">
-            <SelectValue>{TYPE_LABELS[question.type]}</SelectValue>
-          </SelectTrigger>
-          <SelectContent>
-            {QUESTION_TYPES.map((type) => (
-              <SelectItem key={type} value={type}>
-                {TYPE_LABELS[type]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <RemoveButton label={`Remove question ${index + 1}`} onClick={onRemove} />
+    <fieldset aria-label={`Question ${index + 1}`} className="grid gap-3 rounded-lg border bg-muted/30 p-3">
+      <QuestionCardHeader index={index} onRemove={onRemove} removeLabel={`Remove question ${index + 1}`} />
+      <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_10rem]">
+        <div className="grid gap-1.5">
+          <span className="text-sm font-medium">Name</span>
+          <Input
+            aria-label="Question name"
+            value={question.name ?? ""}
+            placeholder="Optional question name"
+            onChange={(event) => onChange({ ...question, name: event.target.value })}
+          />
+        </div>
+        <div className="grid gap-1.5">
+          <span className="text-sm font-medium">Answer type</span>
+          <Select
+            value={question.type}
+            onValueChange={(type) => {
+              const next = QUESTION_TYPES.find((value) => value === type);
+              if (next) onChange(retypeDecisionQuestion(question, next));
+            }}
+          >
+            <SelectTrigger className="w-full" aria-label="Answer type">
+              <SelectValue>{TYPE_LABELS[question.type]}</SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {QUESTION_TYPES.map((type) => (
+                <SelectItem key={type} value={type}>
+                  {TYPE_LABELS[type]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
       <div className="grid gap-1.5">
         <Label htmlFor={instructionsId}>Instructions</Label>
