@@ -2286,6 +2286,71 @@ class TestVLLMProxyRoute:
     @pytest.mark.asyncio
     @patch(  # test-quality-ok: patching litellm internal for unit test isolation
         "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
+        return_value={"model": "router-model", "messages": [{"role": "user", "content": "Hi"}], "stream": True},
+    )
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.is_passthrough_request_using_router_model",
+        return_value=True,
+    )
+    @patch(
+        "litellm.proxy.proxy_server.general_settings", {}
+    )  # test-quality-ok: the proxy config surface for always_include_stream_usage
+    @patch(
+        "litellm.proxy.proxy_server.llm_router"
+    )  # test-quality-ok: patching litellm internal for unit test isolation
+    async def test_vllm_proxy_route_asks_the_router_model_for_stream_usage_and_hides_it_from_the_client(
+        self, mock_llm_router, mock_is_router, mock_get_body
+    ):
+        chunk = {
+            "id": "chatcmpl-1",
+            "object": "chat.completion.chunk",
+            "created": 1,
+            "model": "Qwen/Qwen2.5-0.5B-Instruct",
+        }
+        frames = [
+            {**chunk, "choices": [{"index": 0, "delta": {"content": "Hi"}, "finish_reason": None}]},
+            {**chunk, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]},
+            {
+                **chunk,
+                "choices": [],
+                "usage": {"prompt_tokens": 34, "completion_tokens": 4},
+                "system_fingerprint": "fp-1",
+            },
+        ]
+        upstream_body = (
+            b"".join(b"data: " + json.dumps(frame).encode() + b"\n\n" for frame in frames) + b"data: [DONE]\n\n"
+        )
+        mock_request = MagicMock(spec=Request)
+        mock_request.method = "POST"
+        mock_request.headers = {"content-type": "application/json"}
+        mock_request.query_params = {}
+        mock_llm_router.resolved_litellm_models = MagicMock(return_value=("hosted_vllm/Qwen/Qwen2.5-0.5B-Instruct",))
+        mock_llm_router.allm_passthrough_route = AsyncMock(
+            return_value=httpx.Response(200, content=upstream_body, headers={"content-type": "text/event-stream"})
+        )
+
+        result = await vllm_proxy_route(
+            endpoint="/chat/completions",
+            request=mock_request,
+            fastapi_response=MagicMock(spec=Response),
+            user_api_key_dict=UserAPIKeyAuth(api_key="hashed-token"),
+        )
+
+        relayed_body = mock_llm_router.allm_passthrough_route.await_args.kwargs["json"]
+        assert relayed_body["stream_options"] == {"include_usage": True}
+        assert isinstance(result, StreamingResponse)
+        body = b"".join([piece async for piece in result.body_iterator])
+        payloads = [
+            json.loads(line[len("data: ") :]) for line in body.decode().split("\n\n") if line.startswith("data: {")
+        ]
+        assert [payload["choices"] for payload in payloads] == [frames[0]["choices"], frames[1]["choices"]]
+        assert "usage" not in body.decode()
+        assert payloads[1]["system_fingerprint"] == "fp-1"
+        assert body.endswith(b"data: [DONE]\n\n")
+
+    @pytest.mark.asyncio
+    @patch(  # test-quality-ok: patching litellm internal for unit test isolation
+        "litellm.proxy.pass_through_endpoints.llm_passthrough_endpoints.get_request_body",
         return_value={"model": "other-model"},
     )
     @patch(  # test-quality-ok: patching litellm internal for unit test isolation
@@ -4472,7 +4537,9 @@ class TestVertexCredentiallessPassthroughVirtualKeyLeak:
                 (b"authorization", f"Bearer {self.MASTER_KEY}".encode()),
                 (b"content-type", b"application/json"),
             ],
-            authenticated=UserAPIKeyAuth(api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN),
+            authenticated=UserAPIKeyAuth(
+                api_key=LITELLM_PROXY_MASTER_KEY_ALIAS, user_role=LitellmUserRoles.PROXY_ADMIN
+            ),
         )
         assert forwarded is None, "the master key must never reach the upstream forwarder"
         assert raised is not None and raised.status_code == 401
@@ -7752,13 +7819,17 @@ class TestTypeSafePassthroughRoute:
         monkeypatch.setenv("OPENROUTER_API_BASE", "https://typesafe.example/base")
         monkeypatch.setenv("LAYA_API_BASE", "https://typesafe.example/base")
         monkeypatch.setenv("BESPOKE_API_BASE", "https://typesafe.example/base")
-        model: Final = {"typesafe": "jev-latest", "laya": "english", "bespoke": "nimble-latest"}.get(provider, "test-generative-model")
+        model: Final = {"typesafe": "jev-latest", "laya": "english", "bespoke": "nimble-latest"}.get(
+            provider, "test-generative-model"
+        )
         permission_model: Final = f"{provider}/{model}" if provider in ("laya", "bespoke") else model
         auth: Final = UserAPIKeyAuth(
             api_key="sk-limited",
             tpm_limit=token_limit if quota_scope == "key" else None,
             project_id="test-project" if quota_scope == "project_output" else None,
-            project_metadata={"model_otpm_limit": {permission_model: token_limit}} if quota_scope == "project_output" else {},
+            project_metadata={"model_otpm_limit": {permission_model: token_limit}}
+            if quota_scope == "project_output"
+            else {},
         )
         monkeypatch.setitem(proxy_server.app.dependency_overrides, user_api_key_auth, lambda: auth)
         body: Final = (
@@ -7780,7 +7851,9 @@ class TestTypeSafePassthroughRoute:
             return httpx.Response(200, json={"model": model})
 
         with respx.mock(assert_all_called=False) as upstream:
-            route: Final = upstream.post(f"https://typesafe.example/base/v1/{endpoint}").mock(side_effect=upstream_response)
+            route: Final = upstream.post(f"https://typesafe.example/base/v1/{endpoint}").mock(
+                side_effect=upstream_response
+            )
             response: Final = client.post(f"/{provider}/v1/{endpoint}", json=body)
 
         assert response.status_code == (429 if token_limit == 0 else 200), response.text
@@ -7856,11 +7929,14 @@ class TestOssDecisionPassthroughRoute:
             "questions": {"department": {"type": "choice", "criteria": {"billing": "refunds"}}},
         }
         answer: Final = {
-            "model": "laya-rl-agent" if provider == "laya" else checkpoint, "answers": {},
+            "model": "laya-rl-agent" if provider == "laya" else checkpoint,
+            "answers": {},
             **({"routing": {"model": checkpoint}} if provider == "laya" else {}),
         }
         with respx.mock(assert_all_called=True) as upstream:
-            route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone?trace=yes").respond(200, json=answer)
+            route: Final = upstream.post(f"http://{provider}.test/base/v1/systemone?trace=yes").respond(
+                200, json=answer
+            )
             response: Final = client.post(
                 f"/{provider}/v1/systemone?trace=yes",
                 json=body,
@@ -7882,14 +7958,18 @@ class TestOssDecisionPassthroughRoute:
         assert f"{provider.upper()}_API_BASE" in response.text
         assert len(upstream.calls) == 0
 
-    def test_oss_does_not_forward_unsupported_endpoints(self, client: TestClient, provider: str, checkpoint: str) -> None:
+    def test_oss_does_not_forward_unsupported_endpoints(
+        self, client: TestClient, provider: str, checkpoint: str
+    ) -> None:
         with respx.mock(assert_all_called=False) as upstream:
             response: Final = client.post(f"/{provider}/v1/evaluate", json={"model": checkpoint})
         assert response.status_code == 404
         assert len(upstream.calls) == 0
 
     @pytest.mark.parametrize("model", [None, "auto", "jev-latest"])
-    def test_oss_rejects_implicit_checkpoint_selection(self, client: TestClient, model: str | None, provider: str) -> None:
+    def test_oss_rejects_implicit_checkpoint_selection(
+        self, client: TestClient, model: str | None, provider: str
+    ) -> None:
         with respx.mock(assert_all_called=False) as upstream:
             response: Final = client.post(f"/{provider}/v1/systemone", json={"model": model})
         assert response.status_code == 400
@@ -7908,7 +7988,6 @@ class TestOssDecisionPassthroughRoute:
         assert response.status_code == 400
         assert not route.called
 
-
     @pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
     def test_oss_hooks_enforce_canonical_model_limits_and_keep_native_wire_body(
         self, client: TestClient, monkeypatch: pytest.MonkeyPatch, metadata_slot: str, provider: str, checkpoint: str
@@ -7921,8 +8000,10 @@ class TestOssDecisionPassthroughRoute:
         cache: Final = DualCache()
         limiter: Final = PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(cache))
         auth: Final = UserAPIKeyAuth(
-            api_key="oss-native-rpm", metadata={"model_rpm_limit": {f"{provider}/{checkpoint}": 1}},
+            api_key="oss-native-rpm",
+            metadata={"model_rpm_limit": {f"{provider}/{checkpoint}": 1}},
         )
+
         def authenticated_key() -> UserAPIKeyAuth:
             return auth
 
@@ -7930,8 +8011,11 @@ class TestOssDecisionPassthroughRoute:
 
         class LimitHook(CustomLogger):
             async def async_pre_call_hook(
-                self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache,
-                data: dict[str, object], call_type: CallTypesLiteral,
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: DualCache,
+                data: dict[str, object],
+                call_type: CallTypesLiteral,
             ) -> dict[str, object]:
                 assert data["model"] == f"{provider}/{checkpoint}"
                 metadata: Final = data.get(metadata_slot)
@@ -7943,9 +8027,11 @@ class TestOssDecisionPassthroughRoute:
 
         monkeypatch.setattr(litellm, "callbacks", [LimitHook()])
         body: Final = {
-            "model": checkpoint, "state": "refund",
+            "model": checkpoint,
+            "state": "refund",
             metadata_slot: {
-                "customer_label": "retained", "model_group": "unbounded-client-choice",
+                "customer_label": "retained",
+                "model_group": "unbounded-client-choice",
                 "standard_logging_guardrail_information": [{"guardrail_cost": 25.0}],
             },
         }
@@ -7967,8 +8053,11 @@ class TestOssDecisionPassthroughRoute:
 
         class CheckpointHook(CustomLogger):
             async def async_pre_call_hook(
-                self, user_api_key_dict: UserAPIKeyAuth, cache: DualCache,
-                data: dict[str, object], call_type: CallTypesLiteral,
+                self,
+                user_api_key_dict: UserAPIKeyAuth,
+                cache: DualCache,
+                data: dict[str, object],
+                call_type: CallTypesLiteral,
             ) -> dict[str, object]:
                 assert data["model"] == f"{provider}/{checkpoint}"
                 return {**data, "model": f"{provider}/{changed_checkpoint}"}

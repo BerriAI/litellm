@@ -5,7 +5,13 @@ from httpx import Response
 
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
-from litellm.llms.openai_like.passthrough.transformation import logged_openai_like_response, logged_openai_like_stream
+from litellm.llms.openai_like.passthrough.transformation import (
+    logged_openai_like_response,
+    logged_openai_like_stream,
+    logged_text_completion_response,
+    logged_text_completion_stream,
+    relays_text_completion,
+)
 
 from ..common_utils import VLLMModelInfo
 
@@ -47,6 +53,8 @@ class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
         logging_obj: Logging,
         endpoint: str,
     ) -> "LoggedRelayResponse | None":
+        if relays_text_completion(endpoint):
+            return logged_text_completion_response(httpx_response, logging_obj, endpoint)
         return logged_openai_like_response(model, httpx_response, request_data, logging_obj, endpoint)
 
     def handle_logging_collected_chunks(
@@ -57,4 +65,6 @@ class VLLMPassthroughConfig(VLLMModelInfo, BasePassthroughConfig):
         custom_llm_provider: str,
         endpoint: str,
     ) -> "LoggedRelayResponse | None":
+        if relays_text_completion(endpoint):
+            return logged_text_completion_stream(all_chunks, litellm_logging_obj, model)
         return logged_openai_like_stream(all_chunks, litellm_logging_obj, model, endpoint)

@@ -7845,10 +7845,10 @@ def _apply_stream_usage_tracking(
     route_type: str,
     supports_stream_options: Callable[[], bool] = lambda: True,
 ) -> None:
-    from litellm.proxy.common_request_processing import _stream_usage_tracking_updates
+    from litellm.proxy.common_request_processing import stream_usage_tracking_updates
 
     data.update(
-        _stream_usage_tracking_updates(
+        stream_usage_tracking_updates(
             data=data,
             general_settings=general_settings,
             route_type=route_type,
@@ -7993,10 +7993,10 @@ class TestApplyStreamUsageTracking:
 class TestModelDeploymentsSupportStreamOptions:
     def _support(self, model, llm_router=None, team_id=None) -> bool:
         from litellm.proxy.common_request_processing import (
-            _model_deployments_support_stream_options,
+            model_deployments_support_stream_options,
         )
 
-        return _model_deployments_support_stream_options(model=model, llm_router=llm_router, team_id=team_id)
+        return model_deployments_support_stream_options(model=model, llm_router=llm_router, team_id=team_id)
 
     def test_openai_compatible_deployment_supports_stream_options(self):
         router = litellm.Router(

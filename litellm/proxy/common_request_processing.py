@@ -508,7 +508,7 @@ def _litellm_model_supports_stream_options(litellm_model: str) -> bool:
     return supported_params is not None and "stream_options" in supported_params
 
 
-def _model_deployments_support_stream_options(
+def model_deployments_support_stream_options(
     model: object,
     llm_router: Router | None,
     team_id: str | None,
@@ -522,7 +522,7 @@ def _model_deployments_support_stream_options(
     return all(_litellm_model_supports_stream_options(m) for m in candidate_models)
 
 
-def _stream_usage_tracking_updates(
+def stream_usage_tracking_updates(
     data: Mapping[str, object],
     general_settings: Mapping[str, object],
     route_type: str,
@@ -2196,11 +2196,11 @@ class ProxyBaseLLMRequestProcessing:
 
         ### AUTO STREAM USAGE TRACKING ###
         self.data.update(
-            _stream_usage_tracking_updates(
+            stream_usage_tracking_updates(
                 data=self.data,
                 general_settings=general_settings,
                 route_type=route_type,
-                supports_stream_options=lambda: _model_deployments_support_stream_options(
+                supports_stream_options=lambda: model_deployments_support_stream_options(
                     model=self.data.get("model"),
                     llm_router=llm_router,
                     team_id=user_api_key_dict.team_id,

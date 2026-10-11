@@ -79,7 +79,7 @@ from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy modul
     user_api_key_auth_websocket,
     user_api_key_auth_websocket_for_model,
 )
-from litellm.proxy.common_request_processing import open_sse_before_first_byte
+from litellm.proxy.common_request_processing import model_deployments_support_stream_options, open_sse_before_first_byte
 from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
     _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
     _safe_get_request_headers,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -96,6 +96,10 @@ from litellm.proxy.common_utils.sse_keepalive import (
     wrap_passthrough_sse_bytes_with_keepalive_pings,
 )
 from litellm.proxy.pass_through_endpoints.common_utils import get_litellm_virtual_key
+from litellm.proxy.pass_through_endpoints.injected_stream_usage import (
+    stream_usage_relay,
+    without_injected_usage_frames,
+)
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     create_pass_through_route,
@@ -509,6 +513,17 @@ async def vllm_proxy_route(
     is_router_model: Final = is_passthrough_request_using_router_model(request_body, llm_router)
     is_streaming_request: Final = is_passthrough_request_streaming(request_body)
     if is_router_model and llm_router:
+        is_json_request: Final = is_json_content_type(request.headers.get("content-type", ""))
+        relay: Final = stream_usage_relay(
+            endpoint=endpoint,
+            request_body=request_body,
+            general_settings=_proxy_general_settings(),
+            supports_stream_options=lambda: model_deployments_support_stream_options(
+                model=request_body.get("model"),
+                llm_router=llm_router,
+                team_id=user_api_key_dict.team_id,
+            ),
+        )
         result: Final = cast(
             httpx.Response,
             await llm_router.allm_passthrough_route(
@@ -521,7 +536,7 @@ async def vllm_proxy_route(
                 content=None,
                 data=None,
                 files=None,
-                json=(request_body if is_json_content_type(request.headers.get("content-type", "")) else None),
+                json=(relay.body if is_json_request else None),
                 params=None,
                 headers=None,
                 cookies=None,
@@ -531,7 +546,11 @@ async def vllm_proxy_route(
 
         if is_streaming_request:
             return StreamingResponse(
-                content=result.aiter_bytes(),
+                content=(
+                    without_injected_usage_frames(result.aiter_bytes())
+                    if relay.strips_usage and is_json_request
+                    else result.aiter_bytes()
+                ),
                 status_code=result.status_code,
                 headers=HttpPassThroughEndpointHelpers.get_response_headers(
                     headers=result.headers,
