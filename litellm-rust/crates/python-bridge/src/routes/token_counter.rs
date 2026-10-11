@@ -7,13 +7,12 @@ use litellm_token_counter::{
     CountableRequest, Error, InputTokenCount, TokenCounter as CoreTokenCounter,
 };
 use pyo3::{
-    exceptions::{PyRuntimeError, PyValueError},
+    exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError},
     prelude::*,
     types::PyAny,
 };
 use tokio::sync::Semaphore;
 
-use crate::errors::RustBridgeDeclined;
 use crate::tokenizer::Tokenizer;
 
 /// Counts the input tokens of a raw request body off the Python event loop with
@@ -82,7 +81,7 @@ pub(crate) fn token_count_error_to_pyerr(error: Error) -> PyErr {
         | Error::ContentBlock
         | Error::ArrayItems
         | Error::JsonSerialization(_)
-        | Error::JsonUtf8(_) => RustBridgeDeclined::new_err(message),
+        | Error::JsonUtf8(_) => PyNotImplementedError::new_err(message),
         Error::Encode(_) | Error::Decode(_) | Error::Task(_) => PyRuntimeError::new_err(message),
     }
 }

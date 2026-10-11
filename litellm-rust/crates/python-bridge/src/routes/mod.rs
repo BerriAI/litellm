@@ -34,7 +34,6 @@ pub(crate) struct NativeCall<'py> {
 }
 
 impl<'py> NativeCall<'py> {
-    /// The call before any hook ran, for the reads that admit or decline it.
     fn resolved(&self) -> PyResult<Bound<'py, PyDict>> {
         effective_py_args(&self.base, &self.kwargs)
     }

@@ -96,9 +96,5 @@ def _native_tokenizer(tokenizer: RustTokenizer) -> NativeTokenizer:
 
 
 async def native_count(factory: RustTokenCounterFactory, tokenizer: RustTokenizer, body: bytes) -> InputTokenCount:
-    """One native count, validated into the public shape.
-
-    ``RustBridgeDeclined`` and upstream errors propagate so the caller's route
-    runner can map them onto its fallback policy; other failures (RuntimeError,
-    ValueError) propagate as-is."""
+    """One native count, validated into the public shape."""
     return _INPUT_TOKEN_COUNT.validate_python(await _counter(factory, tokenizer).acount_request(body))
