@@ -12,6 +12,7 @@ from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
+from litellm.llms.base_llm.base_utils import response_format_schema
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
@@ -2367,3 +2368,112 @@ def test_served_model_reaches_assembled_stream_through_custom_stream_wrapper():
         assert chunk._hidden_params["provider_response_model"] == served_model
     assembled: Final = litellm.stream_chunk_builder(chunks=list(chunks), messages=[{"role": "user", "content": "hi"}])
     assert assembled._hidden_params["provider_response_model"] == served_model
+
+
+_STREAMED_RISK_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"tier": {"type": "integer"}, "summary": {"type": "string"}},
+    "required": ["tier", "summary"],
+}
+_STREAMED_RISK_OBJECT: Final = {"tier": 3, "summary": "Two-hour read-only window on the loyalty APIs"}
+_STREAMED_LOOSE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "email": {"type": "string"}},
+}
+_STREAMED_CONTACT: Final = {"name": "Ada", "email": "ada@example.com"}
+
+
+def _json_tool_events(fragments: tuple[str, ...]) -> tuple[dict[str, object], ...]:
+    return (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "model": "claude-emulated-structured-output",
+                "content": [],
+                "stop_reason": None,
+                "stop_sequence": None,
+                "usage": {"input_tokens": 10, "output_tokens": 1},
+            },
+        },
+        {
+            "type": "content_block_start",
+            "index": 0,
+            "content_block": {"type": "tool_use", "id": "toolu_1", "name": RESPONSE_FORMAT_TOOL_NAME, "input": {}},
+        },
+        *(
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "input_json_delta", "partial_json": fragment}}
+            for fragment in fragments
+        ),
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+            "usage": {"output_tokens": 20},
+        },
+    )
+
+
+def _streamed_json_mode_contents(
+    fragments: tuple[str, ...], schema: dict[str, object] = _STREAMED_RISK_SCHEMA
+) -> tuple[str, ...]:
+    iterator = ModelResponseIterator(
+        streaming_response=MagicMock(),
+        sync_stream=True,
+        json_mode=True,
+        response_format_schema=response_format_schema(schema),
+    )
+    chunks = tuple(iterator.chunk_parser(event) for event in _json_tool_events(fragments))
+    assert all(chunk.choices[0].delta.tool_calls is None for chunk in chunks)
+    assert chunks[-1].choices[0].finish_reason == "stop"
+    return tuple(chunk.choices[0].delta.content or "" for chunk in chunks)
+
+
+def test_streamed_json_mode_envelope_is_unwrapped_when_the_block_ends():
+    envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_RISK_OBJECT})
+    fragments = (envelope[:9], envelope[9:40], envelope[40:])
+
+    contents = _streamed_json_mode_contents(fragments)
+
+    assert json.loads("".join(contents)) == _STREAMED_RISK_OBJECT
+    assert contents[:-2] == ("",) * (len(contents) - 2)
+
+
+def test_streamed_json_mode_schema_object_streams_as_it_arrives():
+    answer = json.dumps(_STREAMED_RISK_OBJECT)
+    fragments = (answer[:4], answer[4:12], answer[12:])
+
+    contents = _streamed_json_mode_contents(fragments)
+
+    assert "".join(contents) == answer
+    assert contents[3] == answer[:12]
+    assert contents[4] == answer[12:]
+    assert contents[5] == ""
+
+
+def test_streamed_json_mode_truncated_output_is_passed_through_untouched():
+    contents = _streamed_json_mode_contents(('{"na', 'me": "json_tool_call", "parameters": {"tier": 3'))
+
+    assert "".join(contents) == '{"name": "json_tool_call", "parameters": {"tier": 3'
+
+
+def test_streamed_json_mode_tool_name_envelope_is_unwrapped_when_name_is_a_schema_property():
+    envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_CONTACT})
+
+    contents = _streamed_json_mode_contents((envelope[:6], envelope[6:24], envelope[24:]), _STREAMED_LOOSE_SCHEMA)
+
+    assert json.loads("".join(contents)) == _STREAMED_CONTACT
+    assert contents[:-2] == ("",) * (len(contents) - 2)
+
+
+def test_streamed_json_mode_name_property_answer_streams_once_its_value_is_known():
+    answer = json.dumps(_STREAMED_CONTACT)
+
+    contents = _streamed_json_mode_contents((answer[:6], answer[6:16], answer[16:]), _STREAMED_LOOSE_SCHEMA)
+
+    assert "".join(contents) == answer
+    assert contents[2] == ""
+    assert contents[3] == answer[:16]
+    assert contents[4] == answer[16:]

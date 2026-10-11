@@ -789,6 +789,12 @@ _CALLER_FORMAT: Final = {
         ),
         pytest.param(
             "claude-opus-4-6",
+            {"output_format": _STRUCTURED_FORMAT, "output_config": {"format": None}},
+            {"format": _STRUCTURED_FORMAT},
+            id="null_output_config_format_counts_as_absent",
+        ),
+        pytest.param(
+            "claude-opus-4-6",
             {"output_format": _STRUCTURED_FORMAT, "output_config": "not-a-dict"},
             {"format": _STRUCTURED_FORMAT},
             id="malformed_output_config_replaced",

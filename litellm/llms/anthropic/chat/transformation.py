@@ -38,6 +38,7 @@ from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import 
 from litellm.llms.base_llm.base_utils import (
     ResponseFormatSchema,
     as_json_object,
+    response_format_schema,
     type_to_response_format_param,
     unwrap_response_format_envelope,
 )
@@ -1751,7 +1752,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         else:
             _input_schema.update(cast(AnthropicInputSchema, json_schema))
 
-        _tool: Final = AnthropicMessagesTool(name=RESPONSE_FORMAT_TOOL_NAME, input_schema=_input_schema)
+        _tool: Final = AnthropicMessagesTool(
+            name=RESPONSE_FORMAT_TOOL_NAME,
+            description="Return the final answer as this structured object, filling every required field.",
+            input_schema=_input_schema,
+        )
         return _tool
 
     def should_strip_billing_metadata(self) -> bool:
@@ -2835,11 +2840,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             prefix_prompt=prefix_prompt,
             speed=speed,
             tool_name_reverse_map=tool_name_reverse_map,
-            response_format_schema=(
-                _response_format_tool_schema(_ResponseFormatRequest.model_validate(optional_params))
-                if json_mode
-                else None
-            ),
+            response_format_schema=JsonModeRequest.model_validate(optional_params).tool_schema() if json_mode else None,
         )
         return model_response
 
@@ -2861,17 +2862,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         except json.JSONDecodeError:
             # json decode error does occur, return the original tool response str
             return litellm.Message(content=json_mode_content_str)
-        payload_object: Final = as_json_object(payload)
-        if payload_object is not None and (values := payload_object.get("values")) is not None:
-            return litellm.Message(content=json.dumps(values))
+        if response_format_schema is not None:
+            return litellm.Message(
+                content=json.dumps(
+                    unwrap_response_format_envelope(payload, response_format_schema, RESPONSE_FORMAT_TOOL_NAME)
+                )
+            )
         # a lot of the times the `values` key is not present in the tool response
         # relevant issue: https://github.com/BerriAI/litellm/issues/6741
-        content: Final = (
-            payload
-            if response_format_schema is None
-            else unwrap_response_format_envelope(payload, response_format_schema)
-        )
-        return litellm.Message(content=json.dumps(content))
+        payload_object: Final = as_json_object(payload)
+        values: Final = None if payload_object is None else payload_object.get("values")
+        return litellm.Message(content=json.dumps(payload if values is None else values))
 
     @classmethod
     def convert_tool_response_to_message(
@@ -2889,22 +2890,21 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         )
 
 
-class _ResponseFormatRequest(BaseModel):
+_REQUEST_TOOLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
+
+
+class JsonModeRequest(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     tools: object = None
 
-
-_REQUEST_TOOLS: Final = TypeAdapter(tuple[Mapping[str, object], ...])
-
-
-def _response_format_tool_schema(request: _ResponseFormatRequest) -> ResponseFormatSchema | None:
-    try:
-        tools: Final = _REQUEST_TOOLS.validate_python(request.tools)
+    def tool_schema(self) -> ResponseFormatSchema | None:
+        try:
+            tools: Final = _REQUEST_TOOLS.validate_python(self.tools)
+        except ValidationError:
+            return None
         json_tool: Final = next((tool for tool in tools if tool.get("name") == RESPONSE_FORMAT_TOOL_NAME), None)
-        return None if json_tool is None else ResponseFormatSchema.model_validate(json_tool.get("input_schema"))
-    except ValidationError:
-        return None
+        return None if json_tool is None else response_format_schema(json_tool.get("input_schema"))
 
 
 def _valid_user_id(user_id: str) -> bool:

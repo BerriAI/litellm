@@ -23,7 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messag
 from litellm.llms.anthropic.chat import ModelResponseIterator
 from litellm.llms.anthropic.common_utils import process_anthropic_headers
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.base_llm.base_utils import ResponseFormatSchema
+from litellm.llms.base_llm.base_utils import ResponseFormatSchema, response_format_schema
 from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
@@ -7278,12 +7278,30 @@ _PERSON_SCHEMA: Final = {
     "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
     "required": ["name", "age"],
 }
-_OPTIONAL_FIELDS_SCHEMA: Final = {"type": "object", "properties": {"note": {"type": "string"}, "score": {"type": "integer"}}}
+_OPTIONAL_FIELDS_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"note": {"type": "string"}, "score": {"type": "integer"}},
+}
 _TREE_SCHEMA: Final = {
     "type": "object",
     "properties": {"value": {"type": "integer"}, "child": {"type": "object"}},
     "required": ["value"],
 }
+_OPEN_SCORE_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"score": {"type": "integer"}},
+    "additionalProperties": True,
+}
+_VALUES_SCHEMA: Final = {"type": "object", "properties": {"values": {"type": "array"}}, "required": ["values"]}
+_REMOTE_REF_SCHEMA: Final = {**_PERSON_SCHEMA, "$ref": "https://schemas.example.com/person.json"}
+_LOOSE_SCHEMA: Final = {"type": "object", "properties": {"name": {"type": "string"}, "email": {"type": "string"}}}
+_CONTACT: Final = {"name": "Ada", "email": "ada@example.com"}
+
+
+def _schema(document: dict[str, object]) -> ResponseFormatSchema:
+    schema = response_format_schema(document)
+    assert schema is not None
+    return schema
 
 
 def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
@@ -7291,7 +7309,9 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
         ChatCompletionToolCallChunk(
             id="toolu_1",
             type="function",
-            function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=json.dumps(arguments)),
+            function=ChatCompletionToolCallFunctionChunk(
+                name=RESPONSE_FORMAT_TOOL_NAME, arguments=json.dumps(arguments)
+            ),
             index=0,
         )
     ]
@@ -7314,7 +7334,37 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
             {"name": "Ada", "age": 36},
             id="envelope_key_shared_with_a_schema_property",
         ),
-        pytest.param(_OPTIONAL_FIELDS_SCHEMA, {"input": {"score": 7}}, {"score": 7}, id="optional_fields_wrapper"),
+        pytest.param(
+            _OPTIONAL_FIELDS_SCHEMA,
+            {"input": {"score": 7}},
+            {"input": {"score": 7}},
+            id="wrapper_the_schema_itself_accepts",
+        ),
+        pytest.param(
+            _OPEN_SCORE_SCHEMA,
+            {"meta": {"score": 7}, "label": "keep"},
+            {"meta": {"score": 7}, "label": "keep"},
+            id="valid_answer_with_extra_keys_and_a_schema_shaped_nested_object",
+        ),
+        pytest.param(_VALUES_SCHEMA, {"values": [1, 2]}, {"values": [1, 2]}, id="values_is_a_schema_property"),
+        pytest.param(
+            _REMOTE_REF_SCHEMA,
+            {"input": {"name": "Ada", "age": 36}},
+            {"name": "Ada", "age": 36},
+            id="remote_ref_schema_falls_back_to_key_matching",
+        ),
+        pytest.param(
+            _LOOSE_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CONTACT},
+            _CONTACT,
+            id="tool_name_envelope_when_the_schema_lists_no_required_keys",
+        ),
+        pytest.param(
+            _LOOSE_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "email": "ada@example.com"},
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "email": "ada@example.com"},
+            id="tool_name_value_without_a_nested_object_stays",
+        ),
         pytest.param(_RISK_SCHEMA, _RISK_OBJECT, _RISK_OBJECT, id="plain_schema_object"),
         pytest.param(
             _TREE_SCHEMA,
@@ -7322,7 +7372,9 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
             {"value": 1, "child": {"value": 2}},
             id="schema_object_whose_property_holds_a_schema_shaped_object",
         ),
-        pytest.param(_RISK_SCHEMA, {"input": {"tier": 3}}, {"input": {"tier": 3}}, id="inner_object_missing_required_key"),
+        pytest.param(
+            _RISK_SCHEMA, {"input": {"tier": 3}}, {"input": {"tier": 3}}, id="inner_object_missing_required_key"
+        ),
         pytest.param(
             _RISK_SCHEMA,
             {"first": _RISK_OBJECT, "second": _RISK_OBJECT},
@@ -7348,7 +7400,7 @@ def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_env
 ):
     message = AnthropicConfig.convert_tool_response_to_message(
         tool_calls=_json_tool_call(tool_input),
-        response_format_schema=ResponseFormatSchema.model_validate(schema),
+        response_format_schema=_schema(schema),
     )
 
     assert message is not None
@@ -7366,7 +7418,7 @@ def test_json_mode_with_user_tool_call_unwraps_the_envelope_into_content():
     replacement, remaining_tool_calls, extra_content = AnthropicConfig()._resolve_json_mode_non_streaming(
         json_mode=True,
         tool_calls=[*_json_tool_call({"input": _RISK_OBJECT}), user_tool_call],
-        response_format_schema=ResponseFormatSchema.model_validate(_RISK_SCHEMA),
+        response_format_schema=_schema(_RISK_SCHEMA),
     )
 
     assert replacement is None
@@ -7402,6 +7454,18 @@ def test_vertex_claude_tool_emulated_response_format_returns_the_object_the_mode
         drop_params=False,
     )
     json_mode = optional_params.pop("json_mode")
+    request = config.transform_request(
+        model="claude-emulated-structured-output",
+        messages=[{"role": "user", "content": "Assess this change request"}],
+        optional_params={**optional_params, "is_vertex_request": True},
+        litellm_params={},
+        headers={},
+    )
+    json_tool = next(tool for tool in request["tools"] if tool["name"] == RESPONSE_FORMAT_TOOL_NAME)
+    assert json_tool["input_schema"]["required"] == ["tier", "summary"]
+    assert json_tool["description"]
+    assert "output_format" not in request
+    assert "output_config" not in request
     completion_response = {
         "id": "msg_1",
         "type": "message",
@@ -7425,7 +7489,7 @@ def test_vertex_claude_tool_emulated_response_format_returns_the_object_the_mode
         raw_response=httpx.Response(200, json=completion_response),
         model_response=ModelResponse(),
         logging_obj=MagicMock(),
-        request_data={},
+        request_data=request,
         messages=[{"role": "user", "content": "Assess this change request"}],
         optional_params=optional_params,
         litellm_params={},
@@ -7749,9 +7813,7 @@ async def test_anthropic_api_max_completion_tokens(model: str):
         print("request_body: ", request_body)
 
         assert request_body == {
-            "messages": [
-                {"role": "user", "content": [{"type": "text", "text": "Hello!"}]}
-            ],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "Hello!"}]}],
             "max_tokens": 10,
             "model": model.split("/")[-1],
         }
@@ -7969,9 +8031,7 @@ async def test_anthropic_api_prompt_caching_with_content_str():
             "cache_control": {"type": "ephemeral"},
         },
     ]
-    translated_system_message = litellm.AnthropicConfig().translate_system_message(
-        messages=system_message
-    )
+    translated_system_message = litellm.AnthropicConfig().translate_system_message(messages=system_message)
 
     assert translated_system_message == [
         # System Message
@@ -8041,9 +8101,9 @@ async def test_anthropic_api_prompt_caching_with_content_str():
 
     assert len(translated_messages) == len(expected_messages)
     for idx, i in enumerate(translated_messages):
-        assert (
-            i == expected_messages[idx]
-        ), "Error on idx={}. Got={}, Expected={}".format(idx, i, expected_messages[idx])
+        assert i == expected_messages[idx], "Error on idx={}. Got={}, Expected={}".format(
+            idx, i, expected_messages[idx]
+        )
 
 
 @pytest.fixture

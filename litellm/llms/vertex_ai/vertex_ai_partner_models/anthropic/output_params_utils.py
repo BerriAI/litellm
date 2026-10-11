@@ -47,7 +47,7 @@ def _as_output_config(value: object) -> Mapping[str, object] | None:
 def _fold_output_format_into_output_config(
     output_config: Mapping[str, object] | None, output_format: object
 ) -> Mapping[str, object] | None:
-    if output_format is None or (output_config is not None and "format" in output_config):
+    if output_format is None or (output_config is not None and output_config.get("format") is not None):
         return output_config
     return {**(output_config or {}), "format": output_format}
 
