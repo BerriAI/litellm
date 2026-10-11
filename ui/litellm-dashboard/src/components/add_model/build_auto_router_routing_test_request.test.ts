@@ -54,6 +54,8 @@ describe("buildAutoRouterRoutingTestRequest", () => {
     ["bespoke", "bespokelabs/Bespoke-Nimble-9B", "json"],
     ["databricks", "databricks-openjev-qwen35-4b", "object"],
     ["databricks", "databricks-openjev-qwen35-4b", "json"],
+    ["databricks", "ai_decide", "object"],
+    ["databricks", "ai_decide", "json"],
   ])("probes saved %s/%s %s configuration with custom tiers and team context", (provider, model, format) => {
     const config = {
       classifier_type: "oss_classifier",
