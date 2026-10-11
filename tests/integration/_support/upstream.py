@@ -11,13 +11,20 @@ import zlib
 from collections import deque
 from collections.abc import AsyncIterator, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
 from queue import SimpleQueue
 from typing import Final, cast
 
 import httpx
 import uvicorn
-from _fake_openai_endpoint_server import chat_completions, completions, embeddings, health, moderations
+from _fake_openai_endpoint_server import (
+    chat_completions,
+    completions,
+    embeddings,
+    health,
+    moderations,
+    triton_embeddings,
+)
+from integration.cost_calculation.cost_map import COST_MAP_ENTRIES
 from integration.cost_calculation.cost_tracking_case import (
     BinaryResponse,
     EventStreamEvent,
@@ -38,7 +45,6 @@ from starlette.routing import Route, WebSocketRoute
 from starlette.websockets import WebSocket
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
-CASES_FILE: Final = Path(__file__).resolve().parents[1] / "cost_calculation" / "cost_tracking_cases.json"
 INTERNAL_FIELDS: Final = frozenset(
     {
         "litellm_params",
@@ -269,8 +275,7 @@ class Provider:
         return JSONResponse({"deleted": deleted}, status_code=200 if deleted else 404)
 
     async def cost_map(self, _request: Request) -> Response:
-        cases_file: Final = JSON_OBJECT.validate_json(CASES_FILE.read_bytes())
-        return JSONResponse(cases_file["cost_map"])
+        return JSONResponse(COST_MAP_ENTRIES)
 
     async def oauth_token(self, _request: Request) -> Response:
         return JSONResponse(
@@ -550,6 +555,7 @@ class Provider:
                 Route("/v1/completions", completions, methods=["POST"]),
                 Route("/v1/embeddings", embeddings, methods=["POST"]),
                 Route("/v1/moderations", moderations, methods=["POST"]),
+                Route("/triton/embeddings", triton_embeddings, methods=["POST"]),
                 Route("/vector_stores/{vector_store_id}/search", self.vector_store_search, methods=["POST"]),
                 Route("/__interactions/{interaction_id}", self.interaction_state, methods=["PUT", "DELETE"]),
                 Route("/v1beta/interactions/{interaction_id}:cancel", self.cancel_interaction, methods=["POST"]),

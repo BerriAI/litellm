@@ -13,8 +13,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 from types import MappingProxyType, ModuleType, SimpleNamespace
-from typing import Final, Optional
+from typing import Final, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
+from uuid import UUID
 
 import httpx
 import pytest
@@ -862,6 +863,504 @@ def test_add_subpath_route():
     assert call_args["methods"] == ["GET", "POST", "PUT", "DELETE", "PATCH"]
     assert call_args["dependencies"] == dependencies
     assert callable(call_args["endpoint"])
+
+
+def test_add_subpath_route_on_a_loaded_lazy_app_outranks_the_builtin_prefix_route():
+    """
+    A DB pass-through endpoint created after a lazy feature loaded must still
+    dispatch ahead of that feature's overlapping built-in prefix route.
+    """
+    from fastapi import FastAPI
+    from starlette.routing import Match
+
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    try:
+        app: Final = FastAPI()
+
+        async def builtin():
+            return {"handler": "builtin"}
+
+        app.add_api_route("/typesafe/{endpoint:path}", builtin, methods=["GET"])
+        builtin_route: Final = next(
+            route for route in app.router.routes if getattr(route, "path", "") == "/typesafe/{endpoint:path}"
+        )
+        app.state.lazy_routes = MappingProxyType({"tests.fake_lazy_feature": (builtin_route,)})
+
+        InitPassThroughEndpointHelpers.add_subpath_route(
+            app=app,
+            path="/typesafe",
+            target="http://example.com",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id="test-runtime-endpoint-id",
+            methods=["GET"],
+        )
+
+        scope: Final = {
+            "type": "http",
+            "method": "GET",
+            "path": "/typesafe/health",
+            "root_path": "",
+            "headers": [],
+            "query_string": b"",
+        }
+        matched: Final = next(route for route in app.router.routes if route.matches(dict(scope))[0] is Match.FULL)
+        assert getattr(matched.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True, (
+            "the first full match under /typesafe must be the configured pass-through route"
+        )
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+
+
+def test_add_subpath_route_respects_the_builtin_routes_first_flag(monkeypatch: pytest.MonkeyPatch):
+    """
+    With LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST set, a runtime-added configured
+    route keeps losing to the loaded feature's overlapping built-in prefix route.
+    """
+    from fastapi import FastAPI
+    from starlette.routing import Match
+
+    monkeypatch.setenv("LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST", "true")
+
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    try:
+        app: Final = FastAPI()
+
+        async def builtin():
+            return {"handler": "builtin"}
+
+        app.add_api_route("/typesafe/{endpoint:path}", builtin, methods=["GET"])
+        builtin_route: Final = next(
+            route for route in app.router.routes if getattr(route, "path", "") == "/typesafe/{endpoint:path}"
+        )
+        app.state.lazy_routes = MappingProxyType({"tests.fake_lazy_feature": (builtin_route,)})
+
+        InitPassThroughEndpointHelpers.add_subpath_route(
+            app=app,
+            path="/typesafe",
+            target="http://example.com",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id="test-runtime-endpoint-id-flag",
+            methods=["GET"],
+        )
+
+        scope: Final = {
+            "type": "http",
+            "method": "GET",
+            "path": "/typesafe/health",
+            "root_path": "",
+            "headers": [],
+            "query_string": b"",
+        }
+        matched: Final = next(route for route in app.router.routes if route.matches(dict(scope))[0] is Match.FULL)
+        assert matched.endpoint is builtin, "the flag keeps the built-in prefix route first"
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+
+
+def test_deleting_a_runtime_subpath_route_hands_its_prefix_back_to_the_builtin_route(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import FastAPI
+    from starlette.routing import Match, Route
+
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    monkeypatch.delenv("LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST", raising=False)
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    try:
+        app: Final = FastAPI()
+
+        async def builtin() -> dict[str, str]:
+            return {"handler": "builtin"}
+
+        app.add_api_route("/typesafe/{endpoint:path}", builtin, methods=["GET"])
+        builtin_route: Final = next(
+            route for route in app.router.routes if getattr(route, "path", "") == "/typesafe/{endpoint:path}"
+        )
+        app.state.lazy_routes = MappingProxyType({"tests.fake_lazy_feature": (builtin_route,)})
+        endpoint_id: Final = "test-runtime-endpoint-id-deletion"
+
+        InitPassThroughEndpointHelpers.add_subpath_route(
+            app=app,
+            path="/typesafe",
+            target="http://example.com",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id=endpoint_id,
+            methods=["GET"],
+        )
+
+        scope: Final = {
+            "type": "http",
+            "method": "GET",
+            "path": "/typesafe/v1/systemone",
+            "root_path": "",
+            "headers": [],
+            "query_string": b"",
+        }
+        configured_match: Final = next(
+            route for route in app.router.routes if route.matches(dict(scope))[0] is Match.FULL
+        )
+        assert getattr(configured_match.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
+
+        InitPassThroughEndpointHelpers.remove_endpoint_routes(endpoint_id)
+        SafeRouteAdder.remove_unregistered_routes(app)
+
+        builtin_match: Final = next(route for route in app.router.routes if route.matches(dict(scope))[0] is Match.FULL)
+        assert builtin_match.endpoint is builtin
+        assert not any(
+            isinstance(route, Route)
+            and route.path == "/typesafe/{subpath:path}"
+            and getattr(route.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
+            for route in app.router.routes
+        )
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+
+
+@pytest.mark.asyncio
+async def test_sync_drops_the_route_of_an_endpoint_that_left_the_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import FastAPI
+    from starlette.routing import Route
+
+    from litellm.proxy import proxy_server
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    try:
+        _registered_pass_through_routes.clear()
+        app: Final = FastAPI()
+        monkeypatch.setattr(proxy_server, "app", app)
+        monkeypatch.setattr(proxy_server, "premium_user", True)
+        monkeypatch.setattr(proxy_server, "config_passthrough_endpoints", None)
+
+        departed_endpoint: Final = {
+            "id": "test-sync-departed-endpoint",
+            "path": "/sync-departed",
+            "target": "http://example.com",
+        }
+        retained_endpoint: Final = {
+            "id": "test-sync-retained-endpoint",
+            "path": "/sync-retained",
+            "target": "http://example.com",
+        }
+        await initialize_pass_through_endpoints([departed_endpoint, retained_endpoint])
+        await initialize_pass_through_endpoints([retained_endpoint])
+
+        marked_routes: Final = tuple(
+            route
+            for route in app.router.routes
+            if isinstance(route, Route) and getattr(route.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
+        )
+        assert not any(route.path == "/sync-departed" for route in marked_routes)
+        assert any(route.path == "/sync-retained" for route in marked_routes)
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+
+
+@pytest.mark.asyncio
+async def test_sync_keeps_a_departed_route_when_builtin_routes_come_first(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from fastapi import FastAPI
+    from starlette.routing import Route
+
+    from litellm.proxy import proxy_server
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    monkeypatch.setenv("LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST", "true")
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    try:
+        _registered_pass_through_routes.clear()
+        app: Final = FastAPI()
+        monkeypatch.setattr(proxy_server, "app", app)
+        monkeypatch.setattr(proxy_server, "premium_user", True)
+        monkeypatch.setattr(proxy_server, "config_passthrough_endpoints", None)
+
+        departed_endpoint: Final = {
+            "id": "test-sync-departed-endpoint",
+            "path": "/sync-departed",
+            "target": "http://example.com",
+        }
+        retained_endpoint: Final = {
+            "id": "test-sync-retained-endpoint",
+            "path": "/sync-retained",
+            "target": "http://example.com",
+        }
+        await initialize_pass_through_endpoints([departed_endpoint, retained_endpoint])
+        await initialize_pass_through_endpoints([retained_endpoint])
+
+        marked_routes: Final = tuple(
+            route
+            for route in app.router.routes
+            if isinstance(route, Route) and getattr(route.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
+        )
+        assert any(route.path == "/sync-departed" for route in marked_routes)
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+
+
+def test_remove_unregistered_routes_keeps_routes_still_backed_by_the_registry() -> None:
+    from fastapi import FastAPI
+    from starlette.routing import Route
+
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    try:
+        _registered_pass_through_routes.clear()
+        app: Final = FastAPI()
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=app,
+            path="/registry-exact",
+            target="http://example.com",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id="test-registry-exact",
+            methods=["GET"],
+        )
+        InitPassThroughEndpointHelpers.add_subpath_route(
+            app=app,
+            path="/registry-subpath",
+            target="http://example.com",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id="test-registry-subpath",
+            methods=["GET"],
+        )
+        before: Final = tuple(app.router.routes)
+
+        SafeRouteAdder.remove_unregistered_routes(app)
+
+        marked_routes: Final = tuple(
+            route
+            for route in app.router.routes
+            if isinstance(route, Route) and getattr(route.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
+        )
+        assert tuple(route.path for route in marked_routes) == (
+            "/registry-exact",
+            "/registry-subpath/{subpath:path}",
+        )
+        assert tuple(app.router.routes) == before
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+
+
+def test_remove_unregistered_routes_drops_unregistered_methods() -> None:
+    from fastapi import FastAPI
+    from starlette.routing import Match, Route
+
+    from litellm.proxy._types import LiteLLMRoutes
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    saved_openai_routes: Final = tuple(LiteLLMRoutes.openai_routes.value)
+    try:
+        _registered_pass_through_routes.clear()
+        app: Final = FastAPI()
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=app,
+            path="/x",
+            target="http://example.com",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id="a",
+            methods=["GET"],
+        )
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=app,
+            path="/x",
+            target="http://example.com",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id="b",
+            methods=["POST"],
+        )
+
+        InitPassThroughEndpointHelpers.remove_endpoint_routes("a")
+        SafeRouteAdder.remove_unregistered_routes(app)
+
+        marked_routes: Final = tuple(
+            route
+            for route in app.router.routes
+            if isinstance(route, Route)
+            and route.path == "/x"
+            and getattr(route.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
+        )
+        assert len(marked_routes) == 1
+        post_route: Final = marked_routes[0]
+        assert "POST" in (post_route.methods or ())
+
+        get_scope: Final = {
+            "type": "http",
+            "method": "GET",
+            "path": "/x",
+            "root_path": "",
+            "headers": [],
+            "query_string": b"",
+        }
+        post_scope: Final = {**get_scope, "method": "POST"}
+        post_match: Final = next(route for route in app.router.routes if route.matches(post_scope)[0] is Match.FULL)
+        assert post_match is post_route
+        assert getattr(post_match.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
+
+        client: Final = TestClient(app)
+        with client:
+            response: Final = client.get("/x")
+        assert response.status_code == 405
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+        LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes
+
+
+def test_remove_unregistered_routes_keeps_overlapping_method_route() -> None:
+    from fastapi import FastAPI
+    from starlette.routing import Route
+
+    from litellm.proxy._types import LiteLLMRoutes
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    saved_openai_routes: Final = tuple(LiteLLMRoutes.openai_routes.value)
+    try:
+        _registered_pass_through_routes.clear()
+        app: Final = FastAPI()
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=app,
+            path="/x",
+            target="http://example.com",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id="a",
+            methods=["GET", "POST"],
+        )
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=app,
+            path="/x",
+            target="http://example.com",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id="b",
+            methods=["POST"],
+        )
+        routes_before: Final = tuple(
+            route
+            for route in app.router.routes
+            if isinstance(route, Route)
+            and route.path == "/x"
+            and getattr(route.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
+        )
+        assert len(routes_before) == 1
+
+        InitPassThroughEndpointHelpers.remove_endpoint_routes("a")
+        SafeRouteAdder.remove_unregistered_routes(app)
+
+        marked_routes: Final = tuple(
+            route
+            for route in app.router.routes
+            if isinstance(route, Route)
+            and route.path == "/x"
+            and getattr(route.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
+        )
+        assert marked_routes == routes_before
+        assert "POST" in (marked_routes[0].methods or ())
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
+        LiteLLMRoutes.openai_routes.value[:] = saved_openai_routes
+
+
+def test_add_subpath_route_for_an_unrelated_prefix_leaves_the_route_order_untouched():
+    """
+    A runtime-added configured route under a prefix no loaded feature claims must
+    not pay for or trigger the full route-table reorder.
+    """
+    from fastapi import FastAPI
+
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    try:
+        app: Final = FastAPI()
+
+        async def builtin():
+            return {"handler": "builtin"}
+
+        app.add_api_route("/typesafe/{endpoint:path}", builtin, methods=["GET"])
+        builtin_route: Final = next(
+            route for route in app.router.routes if getattr(route, "path", "") == "/typesafe/{endpoint:path}"
+        )
+        app.state.lazy_routes = MappingProxyType({"tests.fake_lazy_feature": (builtin_route,)})
+        before: Final = list(app.router.routes)
+
+        InitPassThroughEndpointHelpers.add_subpath_route(
+            app=app,
+            path="/other",
+            target="http://example.com",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id="test-runtime-endpoint-id-unrelated",
+            methods=["GET"],
+        )
+
+        assert list(app.router.routes)[:-1] == before, "an unrelated add must not reorder existing routes"
+        assert len(app.router.routes) == len(before) + 1
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
 
 
 @pytest.mark.asyncio
@@ -1991,7 +2490,9 @@ async def test_pass_through_request_streamed_response_is_owned_by_the_caller():
     cache_dict[cache_key] = SimpleNamespace(client=httpx.AsyncClient(transport=httpx.MockTransport(transport_handler)))
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type, endpoint_type: data)
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, endpoint_type: data
+    )
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
     mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
     mock_proxy_logging.get_proxy_hook = MagicMock(return_value=MagicMock())
@@ -2554,6 +3055,64 @@ async def test_delete_pass_through_endpoint():
             remaining_endpoint = update_call_args["data"].field_value[0]
             assert remaining_endpoint["id"] == other_endpoint_id
             assert remaining_endpoint["path"] == "/other/endpoint"
+
+
+@pytest.mark.asyncio
+async def test_delete_pass_through_endpoint_removes_its_starlette_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    from fastapi import FastAPI
+    from starlette.routing import Route
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import ConfigFieldInfo, UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import delete_pass_through_endpoints
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import (
+        LITELLM_PASS_THROUGH_ENDPOINT_MARKER,
+    )
+
+    saved_registry: Final = dict(_registered_pass_through_routes)
+    try:
+        _registered_pass_through_routes.clear()
+        app: Final = FastAPI()
+        monkeypatch.setattr(proxy_server, "app", app)
+        endpoint_id: Final = "test-endpoint-route-delete"
+        InitPassThroughEndpointHelpers.add_exact_path_route(
+            app=app,
+            path="/delete-route",
+            target="http://example.com",
+            custom_headers=None,
+            forward_headers=None,
+            merge_query_params=None,
+            dependencies=None,
+            cost_per_request=None,
+            endpoint_id=endpoint_id,
+            methods=["GET"],
+        )
+        monkeypatch.setattr(
+            proxy_server,
+            "get_config_general_settings",
+            AsyncMock(
+                return_value=ConfigFieldInfo(
+                    field_name="pass_through_endpoints",
+                    field_value=[{"id": endpoint_id, "path": "/delete-route", "target": "http://example.com"}],
+                )
+            ),
+        )
+        monkeypatch.setattr(proxy_server, "update_config_general_settings", AsyncMock(return_value=None))
+
+        await delete_pass_through_endpoints(
+            endpoint_id=endpoint_id,
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+        assert not any(
+            isinstance(route, Route)
+            and route.path == "/delete-route"
+            and getattr(route.endpoint, LITELLM_PASS_THROUGH_ENDPOINT_MARKER, False) is True
+            for route in app.router.routes
+        )
+    finally:
+        _registered_pass_through_routes.clear()
+        _registered_pass_through_routes.update(saved_registry)
 
 
 @pytest.mark.asyncio
@@ -3147,12 +3706,8 @@ async def test_pass_through_request_follows_redirect_to_final_response(httpx_tra
     mock_user_api_key_dict = MagicMock()
 
     with respx.mock(assert_all_called=True) as upstream:
-        upstream.get("https://upstream.test/redirect/1").respond(
-            302, headers={"Location": "/get"}
-        )
-        upstream.get("https://upstream.test/get").respond(
-            200, json={"url": "https://upstream.test/get"}
-        )
+        upstream.get("https://upstream.test/redirect/1").respond(302, headers={"Location": "/get"})
+        upstream.get("https://upstream.test/get").respond(200, json={"url": "https://upstream.test/get"})
 
         response = await pass_through_request(
             request=mock_request,
@@ -5618,14 +6173,14 @@ def _enter_relay_logging_mocks(stack, parsed_body):
     return mock_proxy_logging, mock_success_handler
 
 
-def _relay_client_request(method="GET"):
-    mock_request = MagicMock(spec=Request)
+def _relay_client_request(method: str = "GET", headers: Mapping[str, str] | None = None) -> Request:
+    mock_request: Final = MagicMock(spec=Request)
     mock_request.method = method
     mock_request.url = httpx.URL("http://localhost:4000/passthrough-relay/results")
     mock_request.body = AsyncMock(return_value=b"")
-    mock_request.headers = Headers({})
+    mock_request.headers = Headers({} if headers is None else headers)
     mock_request.query_params = QueryParams({})
-    return mock_request
+    return cast(Request, mock_request)
 
 
 @pytest.mark.asyncio
@@ -6140,7 +6695,12 @@ def _enter_upstream_usage_mocks(stack, parsed_body):
     return mock_proxy_logging, enqueued
 
 
-async def _run_upstream_reporting_passthrough(upstream_headers, status_code=200, cost_per_request=None):
+async def _run_upstream_reporting_passthrough(
+    upstream_headers: Mapping[str, str],
+    status_code: int = 200,
+    cost_per_request: float | None = None,
+    request_headers: Mapping[str, str] | None = None,
+) -> tuple[list[object], MagicMock]:
     """Drive a generic pass-through against an upstream that reports its own
     cost/usage. Returns (recorded standard logging payloads, proxy logging mock)."""
     from litellm.proxy._types import UserAPIKeyAuth
@@ -6158,7 +6718,7 @@ async def _run_upstream_reporting_passthrough(upstream_headers, status_code=200,
             mock_proxy_logging, enqueued = _enter_upstream_usage_mocks(stack, {})
             with _recording_success_callback() as recorder:
                 await pass_through_request(
-                    request=_relay_client_request(method="POST"),
+                    request=_relay_client_request(method="POST", headers=request_headers),
                     target="http://internal-api.test/v1/summarize",
                     custom_headers={},
                     user_api_key_dict=UserAPIKeyAuth(api_key="sk-upstream-usage", team_id="team-fil"),
@@ -6170,6 +6730,22 @@ async def _run_upstream_reporting_passthrough(upstream_headers, status_code=200,
     finally:
         cleanup()
         await fake_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_pass_through_logging_uses_trace_header_and_generates_without_one() -> None:
+    trace_id: Final[str] = "4bf92f3577b34da6a3ce929d0e0e4736"
+    trace_payloads, _ = await _run_upstream_reporting_passthrough(
+        upstream_headers=MappingProxyType({}),
+        request_headers=MappingProxyType({"x-litellm-trace-id": trace_id}),
+    )
+    logged_trace_id: Final[str] = cast(types_utils.StandardLoggingPayload, trace_payloads[0])["trace_id"]
+    assert logged_trace_id == trace_id
+
+    generated_payloads, _ = await _run_upstream_reporting_passthrough(upstream_headers=MappingProxyType({}))
+    generated_trace_id: Final[str] = cast(types_utils.StandardLoggingPayload, generated_payloads[0])["trace_id"]
+    assert str(UUID(generated_trace_id)) == generated_trace_id
+    assert generated_trace_id != trace_id
 
 
 @pytest.mark.asyncio
@@ -7342,14 +7918,17 @@ def test_passthrough_carries_the_per_model_budgets():
     key_budget = {"claude-opus-4-8": {"budget_limit": 1.0, "time_period": "18h"}}
     user_budget = {"claude-opus-4-8": {"budget_limit": 2.0, "time_period": "1mo"}}
     end_user_budget = {"claude-opus-4-8": {"budget_limit": 3.0, "time_period": "1d"}}
+    team_member_budget = {"claude-opus-4-8": {"budget_limit": 4.0, "time_period": "1d"}}
 
     kwargs = _passthrough_kwargs_for_reservation(
         UserAPIKeyAuth(
             token="hash",
             user_id="u-1",
+            team_id="team-1",
             model_max_budget=key_budget,
             user_model_max_budget=user_budget,
             end_user_model_max_budget=end_user_budget,
+            team_member_model_max_budget=team_member_budget,
         )
     )
 
@@ -7357,6 +7936,7 @@ def test_passthrough_carries_the_per_model_budgets():
     assert metadata["user_api_key_model_max_budget"] == key_budget
     assert metadata["user_api_key_user_model_max_budget"] == user_budget
     assert metadata["user_api_key_end_user_model_max_budget"] == end_user_budget
+    assert metadata["user_api_key_team_member_model_max_budget"] == team_member_budget
 
 
 def test_passthrough_budget_metadata_cannot_be_forged_by_the_request_body():
@@ -7405,7 +7985,10 @@ async def test_user_defined_passthrough_is_neither_tracked_nor_enforced(metadata
     budget: Final = {"managed-model": {"budget_limit": 0.1, "time_period": "1d"}}
     limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(DualCache())
     auth: Final = UserAPIKeyAuth(
-        api_key="custom-key", token="custom-key", team_id="shared-team", team_model_max_budget=budget,
+        api_key="custom-key",
+        token="custom-key",
+        team_id="shared-team",
+        team_model_max_budget=budget,
     )
     endpoint: Final = create_pass_through_route(
         endpoint="/custom-budget-test",
@@ -8397,15 +8980,13 @@ async def test_a_deleted_db_pass_through_stops_serving_on_the_next_db_sync(tmp_p
     served_after, db_upstream = await _send_through_proxy("/db-gone", {})
     config_after, config_upstream = await _send_through_proxy("/cfg-kept", {})
 
-    assert (served_before.status_code, served_after.status_code, config_after.status_code) == (200, 401, 200)
+    assert (served_before.status_code, served_after.status_code, config_after.status_code) == (200, 404, 200)
     assert db_upstream == []
     assert [str(request.url) for request in config_upstream] == ["http://config-upstream.test/api"]
 
 
 @pytest.mark.asyncio
-async def test_config_pass_through_reads_its_custom_key_header_when_the_db_holds_pass_throughs(
-    tmp_path, monkeypatch
-):
+async def test_config_pass_through_reads_its_custom_key_header_when_the_db_holds_pass_throughs(tmp_path, monkeypatch):
     proxy: Final = await _boot_db_backed_proxy(
         tmp_path,
         monkeypatch,
@@ -8630,7 +9211,7 @@ async def test_deleting_the_stored_pass_through_field_stops_serving_its_routes_r
     served_after, db_upstream = await _send_through_proxy("/db-gone", {})
     config_after, _ = await _send_through_proxy("/cfg-kept", {})
 
-    assert (served_before.status_code, served_after.status_code, config_after.status_code) == (200, 401, 200)
+    assert (served_before.status_code, served_after.status_code, config_after.status_code) == (200, 404, 200)
     assert db_upstream == []
 
 

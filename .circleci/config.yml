@@ -243,7 +243,7 @@ commands:
             mkdir -p "$HOME/.local/bin"
             mv /tmp/codecov "$HOME/.local/bin/codecov"
   start_openai_record_replay_proxy:
-    description: "Start the record/replay proxy (tests/_openai_record_replay_proxy.py) on host port 8090 and wait until healthy. Models whose api_base points here replay recorded provider responses, so the E2E run neither pays for nor depends on the live provider. The default upstream is OpenAI; a non-OpenAI model must point its api_base at /__recorder_upstream/<host>/ so the recorder forwards there instead of defaulting to OpenAI. Run after uv deps are synced."
+    description: "Start the record/replay proxy (tests/_openai_record_replay_proxy.py) on host port 8090 and wait until healthy. Models whose api_base points here replay Redis cache hits. Cache misses call the live provider and store its response, so these legacy E2E jobs still require provider availability and may incur provider charges. The default upstream is OpenAI; a non-OpenAI model must point its api_base at /__recorder_upstream/<host>/ so the recorder forwards there instead of defaulting to OpenAI. Run after uv deps are synced."
     steps:
       - run:
           name: Start record/replay proxy
@@ -453,285 +453,9 @@ jobs:
           command: |
             python3 tests/windows_tests/check_windows_wheel_install.py --lengths-only
 
-  local_testing_part1:
-    docker:
-      - &python312_image
-        image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-      - &postgres16_sidecar
-        image: cimg/postgres:16.0@sha256:b125148bc76e8e8eee5eb3ad6020a3a14110a14e8192f1c645128afebe2e2f84
-        environment:
-          POSTGRES_USER: postgres
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: litellm_test
-    working_directory: ~/project
-    environment: &sidecar_database_url
-      DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
-    parallelism: 4
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      - save_cargo_target
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
-      - run:
-          name: Run prisma ./docker/entrypoint.sh
-          command: |
-            set +e
-            chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
-            set -e
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests (Part 1 - A-M)
-          command: |
-            mkdir test-results
-
-            # Discover test files (A-M)
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_[a-mA-M]*.py")
-
-            echo "$TEST_FILES" | circleci tests run \
-              --split-by=timings \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -vv \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise \
-                --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=20 \
-                -k \"not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache\" \
-                -n 4 \
-                --timeout=300 \
-                --timeout_method=thread"
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            # When CI reruns only the failed tests, a parallel node can receive
-            # zero tests and pytest never writes coverage. Emit empty placeholders
-            # so persist_to_workspace and the downstream coverage combine stay green.
-            if [ -f coverage.xml ]; then
-              mv coverage.xml local_testing_part1_coverage.xml
-              mv .coverage local_testing_part1_coverage
-            else
-              touch local_testing_part1_coverage.xml local_testing_part1_coverage
-            fi
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - local_testing_part1_coverage.xml
-            - local_testing_part1_coverage
-  local_testing_part2:
-    docker:
-      - *python312_image
-      - *postgres16_sidecar
-    working_directory: ~/project
-    environment: *sidecar_database_url
-    parallelism: 4
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
-      - run:
-          name: Run prisma ./docker/entrypoint.sh
-          command: |
-            set +e
-            chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
-            set -e
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests (Part 2 - N-Z)
-          command: |
-            mkdir test-results
-
-            # Discover test files (N-Z)
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_[n-zN-Z]*.py")
-
-            echo "$TEST_FILES" | circleci tests run \
-              --split-by=timings \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -vv \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise \
-                --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=20 \
-                -k \"not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache\" \
-                -n 4 \
-                --timeout=300 \
-                --timeout_method=thread"
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            # When CI reruns only the failed tests, a parallel node can receive
-            # zero tests and pytest never writes coverage. Emit empty placeholders
-            # so persist_to_workspace and the downstream coverage combine stay green.
-            if [ -f coverage.xml ]; then
-              mv coverage.xml local_testing_part2_coverage.xml
-              mv .coverage local_testing_part2_coverage
-            else
-              touch local_testing_part2_coverage.xml local_testing_part2_coverage
-            fi
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - local_testing_part2_coverage.xml
-            - local_testing_part2_coverage
-  langfuse_logging_unit_tests:
-    docker:
-      - *python312_image
-      - *postgres16_sidecar
-    working_directory: ~/project
-    environment: *sidecar_database_url
-    resource_class: medium
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
-      - run:
-          name: Run prisma ./docker/entrypoint.sh
-          command: |
-            set +e
-            chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
-            set -e
-
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -v \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -k \"langfuse\""
-          no_output_timeout: 15m
-      # Store test results
-      - store_test_results:
-          path: test-results
-  litellm_router_testing: # Runs all tests with the "router" keyword
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: large
-    parallelism: 1
-    environment:
-      FAKE_OPENAI_API_BASE: http://127.0.0.1:8190
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      - start_fake_openai_endpoint
-      # Run pytest and generate JUnit XML report
-      - setup_litellm_enterprise_pip
-      - run:
-          name: Run tests
-          command: |
-            # On a "rerun failed tests" build a parallel node can receive no
-            # tests, so the test command never creates test-results. Pre-create it
-            # so store_test_results doesn't fail the node on a missing path.
-            mkdir -p test-results
-
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
-
-            echo "$TEST_FILES" | circleci tests run \
-              --split-by=timings \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -v \
-                -k 'router' \
-                -n 4 \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                --timeout=300 --timeout_method=thread"
-          no_output_timeout: 15m
-      # Store test results
-      - store_test_results:
-          path: test-results
-
   llm_translation_testing:
     docker:
-      - *python312_image
+      - &python312_image
     working_directory: ~/project
     resource_class: xlarge
 
@@ -1178,7 +902,7 @@ jobs:
       - run:
           name: Combine Coverage
           command: |
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage local_testing_part1_coverage local_testing_part2_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -1768,10 +1492,71 @@ jobs:
             docker logs redis-cache > test-results/services-<< parameters.suite >>-<< parameters.mode >>/redis.log 2>&1 || true
             docker rm -f postgres-db redis-cache
             test -z "$(docker ps -aq --filter name=postgres-db --filter name=redis-cache)"
+      - when:
+          condition:
+            not:
+              equal: [1, << parameters.parallelism >>]
+          steps:
+            - run:
+                name: Prepare this shard's execution record
+                command: |
+                  results="test-results/integration-<< parameters.suite >>"
+                  if [ "<< parameters.mode >>" = replica ]; then
+                    results="$results-replica"
+                  fi
+                  mkdir -p "/tmp/integration-shards/<< parameters.suite >>-<< parameters.mode >>/$CIRCLE_NODE_INDEX"
+                  cp "$results/execution.json" "/tmp/integration-shards/<< parameters.suite >>-<< parameters.mode >>/$CIRCLE_NODE_INDEX/execution.json"
+                  if [ "<< parameters.suite >>" = mcp ]; then
+                    mkdir -p "/tmp/integration-shards/mcp-standard/$CIRCLE_NODE_INDEX/coverage"
+                    cp test-results/integration-mcp/coverage/data "/tmp/integration-shards/mcp-standard/$CIRCLE_NODE_INDEX/coverage/data.$CIRCLE_NODE_INDEX"
+                  fi
+            - persist_to_workspace:
+                root: /tmp/integration-shards
+                paths:
+                  - << parameters.suite >>-<< parameters.mode >>
       - store_test_results:
           path: test-results
       - store_artifacts:
           path: test-results
+
+  integration_shard_coverage:
+    parameters:
+      suite:
+        type: enum
+        enum: [management, accounting, database, extensions, providers, mcp]
+      mode:
+        type: enum
+        enum: [standard, replica]
+        default: standard
+      shards:
+        type: integer
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: medium
+    working_directory: ~/project
+    steps:
+      - setup_litellm_test_deps
+      - attach_workspace:
+          at: /tmp/integration-shards
+      - run:
+          name: Verify every << parameters.suite >> case ran exactly once
+          command: |
+            .venv/bin/python -m tests.integration._support.sharding /tmp/integration-shards/<< parameters.suite >>-<< parameters.mode >> \
+              --shards << parameters.shards >>
+      - when:
+          condition:
+            equal: [mcp, << parameters.suite >>]
+          steps:
+            - run:
+                name: Combine coverage from every MCP shard
+                command: |
+                  mkdir -p test-results/integration-mcp/coverage
+                  export COVERAGE_FILE="$PWD/test-results/integration-mcp/coverage/data"
+                  .venv/bin/python -m coverage combine --rcfile=tests/integration/mcp_coverage.toml /tmp/integration-shards/mcp-standard/*/coverage
+                  .venv/bin/python -m coverage report --rcfile=tests/integration/mcp_coverage.toml > test-results/integration-mcp/coverage/coverage.txt
+                  .venv/bin/python -m coverage html --rcfile=tests/integration/mcp_coverage.toml -d test-results/integration-mcp/coverage/html
+            - store_artifacts:
+                path: test-results/integration-mcp/coverage
 
   routing_parity:
     parameters:
@@ -1854,6 +1639,9 @@ jobs:
         default: ""
       timeout_minutes:
         type: integer
+      workers:
+        type: integer
+        default: 1
     machine:
       image: ubuntu-2204:2024.04.1
     resource_class: large
@@ -1881,12 +1669,16 @@ jobs:
           command: |
             mkdir -p test-results
             coverage_args=()
+            worker_args=()
+            if [ "<< parameters.workers >>" -gt 1 ]; then
+              worker_args=(-n << parameters.workers >> --dist=worksteal)
+            fi
             if [ -n "<< parameters.coverage_flag >>" ]; then
               coverage_args=(--cov=./litellm --cov-report=xml:coverage.xml)
             fi
             timeout --signal=TERM << parameters.timeout_minutes >>m uv run --no-sync pytest \
               << parameters.test_path >> -vv --tb=short --durations=10 -o junit_family=xunit1 \
-              --junitxml=test-results/junit.xml "${coverage_args[@]}"
+              --junitxml=test-results/junit.xml "${coverage_args[@]}" "${worker_args[@]}"
       - when:
           condition: << parameters.coverage_flag >>
           steps:
@@ -2063,21 +1855,93 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, sdk, cost, security, browser]
+              suite: [sdk, cost, browser]
+          parallelism: 1
+      - integration_contracts:
+          name: integration-security
+          suite: security
+          parallelism: 1
+          resource_class: xlarge
+      - integration_contracts:
+          name: integration-management
+          suite: management
+          parallelism: 4
+      - integration_shard_coverage:
+          name: integration-management-coverage
+          suite: management
+          shards: 4
+          requires: [integration-management]
+      - integration_contracts:
+          name: integration-accounting
+          suite: accounting
+          parallelism: 4
+      - integration_shard_coverage:
+          name: integration-accounting-coverage
+          suite: accounting
+          shards: 4
+          requires: [integration-accounting]
+      - integration_contracts:
+          name: integration-providers
+          suite: providers
+          parallelism: 8
+      - integration_shard_coverage:
+          name: integration-providers-coverage
+          suite: providers
+          shards: 8
+          requires:
+            - integration-providers
+      - integration_contracts:
+          name: integration-database
+          suite: database
+          parallelism: 2
+      - integration_shard_coverage:
+          name: integration-database-coverage
+          suite: database
+          shards: 2
+          requires: [integration-database]
       - integration_contracts:
           name: integration-mcp
           suite: mcp
           resource_class: xlarge
+          parallelism: 2
+      - integration_shard_coverage:
+          name: integration-mcp-coverage
+          suite: mcp
+          shards: 2
+          requires:
+            - integration-mcp
       - integration_contracts:
           name: integration-extensions
           suite: extensions
-          parallelism: 4
+          parallelism: 8
+      - integration_shard_coverage:
+          name: integration-extensions-coverage
+          suite: extensions
+          shards: 8
+          requires:
+            - integration-extensions
       - integration_contracts:
-          name: integration-<< matrix.suite >>-replica
-          matrix:
-            parameters:
-              suite: [management, database]
-              mode: [replica]
+          name: integration-management-replica
+          suite: management
+          mode: replica
+          parallelism: 4
+      - integration_shard_coverage:
+          name: integration-management-replica-coverage
+          suite: management
+          mode: replica
+          shards: 4
+          requires: [integration-management-replica]
+      - integration_contracts:
+          name: integration-database-replica
+          suite: database
+          mode: replica
+          parallelism: 2
+      - integration_shard_coverage:
+          name: integration-database-replica-coverage
+          suite: database
+          mode: replica
+          shards: 2
+          requires: [integration-database-replica]
       - postgres_suite:
           name: proxy-behavior
           test_path: tests/proxy_behavior
@@ -2094,6 +1958,7 @@ workflows:
           test_path: tests/proxy_migration_tests
           seed: false
           timeout_minutes: 20
+          workers: 2
       - postgres_suite:
           name: roi-database
           test_path: tests/integration/database/test_roi_observed.py
@@ -2121,10 +1986,6 @@ workflows:
             equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
       - provider_replay_harness
-      - local_testing_part1
-      - local_testing_part2
-      - langfuse_logging_unit_tests
-      - litellm_router_testing
       - build_docker_database_image
       - e2e_ui_testing
       - e2e_ui_testing_server_root_path
@@ -2139,9 +2000,6 @@ workflows:
       - upload-coverage:
           requires:
             - realtime_translation_testing
-            - langfuse_logging_unit_tests
-            - local_testing_part1
-            - local_testing_part2
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image

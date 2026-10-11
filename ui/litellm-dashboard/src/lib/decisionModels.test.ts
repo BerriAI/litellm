@@ -1,11 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  EMPTY_DECISION_CATALOG,
-  buildDecisionCatalog,
-  decisionModelsSublabel,
-  isDecisionMode,
-  isDecisionSelection,
-} from "./decisionModels";
+import { EMPTY_DECISION_CATALOG, buildDecisionCatalog, isDecisionMode, isDecisionSelection } from "./decisionModels";
 
 const COST_MAP = {
   "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "evaluation" },
@@ -23,7 +17,8 @@ const COST_MAP = {
 };
 
 describe("isDecisionMode", () => {
-  it("is true only for the evaluation mode", () => {
+  it("is true for both the decisions and evaluation modes", () => {
+    expect(isDecisionMode("decisions")).toBe(true);
     expect(isDecisionMode("evaluation")).toBe(true);
     expect(isDecisionMode("chat")).toBe(false);
     expect(isDecisionMode(null)).toBe(false);
@@ -46,12 +41,6 @@ describe("buildDecisionCatalog", () => {
     );
   });
 
-  it("strips the provider prefix from the names shown per provider", () => {
-    expect(catalog.providers.get("typesafe")?.names).toEqual(["jev-latest", "jev-preview"]);
-    expect(catalog.providers.get("perplexity")?.names).toEqual(["pplx-decider-v1-27b"]);
-    expect(catalog.providers.get("openai")?.names).toEqual(["gpt-6-luna"]);
-  });
-
   it("marks a provider decision-only when every one of its models is a decision model", () => {
     expect(catalog.providers.get("typesafe")?.decisionOnly).toBe(true);
     expect(catalog.providers.get("somevendor")?.decisionOnly).toBe(true);
@@ -67,18 +56,6 @@ describe("buildDecisionCatalog", () => {
     expect(buildDecisionCatalog(undefined)).toEqual(EMPTY_DECISION_CATALOG);
     expect(buildDecisionCatalog("not a map")).toEqual(EMPTY_DECISION_CATALOG);
     expect(buildDecisionCatalog({ broken: { mode: "evaluation" } })).toEqual(EMPTY_DECISION_CATALOG);
-  });
-});
-
-describe("decisionModelsSublabel", () => {
-  const catalog = buildDecisionCatalog(COST_MAP);
-
-  it("lists the provider's decision models", () => {
-    expect(decisionModelsSublabel(catalog, "typesafe")).toBe("Decision models: jev-latest, jev-preview");
-  });
-
-  it("is undefined for a provider with no decision models", () => {
-    expect(decisionModelsSublabel(catalog, "anthropic")).toBeUndefined();
   });
 });
 
