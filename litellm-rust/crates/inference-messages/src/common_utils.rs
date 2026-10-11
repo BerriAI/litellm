@@ -7,6 +7,7 @@ use litellm_llms::{
     base_llm::messages::transformation::BaseMessagesConfig,
     bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
     deepseek::messages::transformation::DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
+    minimax::messages::transformation::MINIMAX_MESSAGES_CONFIG,
     vertex_ai::messages::transformation::VERTEX_ANTHROPIC_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
@@ -39,6 +40,7 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
         LlmProviders::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,
         LlmProviders::Bedrock => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
         LlmProviders::Deepseek => &DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
+        LlmProviders::Minimax => &MINIMAX_MESSAGES_CONFIG,
         LlmProviders::VertexAi if model.to_ascii_lowercase().contains("claude") => {
             &VERTEX_ANTHROPIC_MESSAGES_CONFIG
         }
@@ -68,6 +70,7 @@ mod tests {
     #[case::azure_ai("azure_ai")]
     #[case::bedrock("bedrock")]
     #[case::deepseek("deepseek")]
+    #[case::minimax("minimax")]
     #[case::vertex_ai("vertex_ai")]
     fn provider_keeps_its_python_name(#[case] name: &str) {
         let provider =

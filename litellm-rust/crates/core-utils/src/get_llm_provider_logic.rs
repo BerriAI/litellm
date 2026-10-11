@@ -20,6 +20,8 @@ pub enum LlmProviders {
     Cohere,
     #[strum(serialize = "deepseek")]
     Deepseek,
+    #[strum(serialize = "minimax")]
+    Minimax,
     #[strum(serialize = "mistral")]
     Mistral,
     #[strum(serialize = "openai")]

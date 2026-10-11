@@ -6,6 +6,7 @@ pub mod bedrock;
 pub mod cohere;
 pub mod deepseek;
 mod error;
+pub mod minimax;
 pub mod mistral;
 pub mod openai;
 pub mod openai_like;

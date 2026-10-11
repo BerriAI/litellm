@@ -3189,9 +3189,17 @@ class MCPRequestHandler:
             verbose_logger.debug("prisma_client is None")
             return []
 
-        object_permission = await MCPRequestHandler._get_end_user_object_permission(user_api_key_auth, prisma_client)
+        object_permission: Final = await MCPRequestHandler._get_end_user_object_permission(
+            user_api_key_auth, prisma_client
+        )
         if object_permission is None:
             return []
+        if SpecialMCPServerNames.no_mcp_servers.value in (object_permission.mcp_servers or []):
+            return [SpecialMCPServerNames.no_mcp_servers.value]
+
+        toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(
+            object_permission, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
+        )
 
         try:
             # Permission entries may be server_ids OR names/aliases — expand to ids.
@@ -3199,7 +3207,9 @@ class MCPRequestHandler:
                 global_mcp_server_manager,
             )
 
-            direct_mcp_servers = global_mcp_server_manager.expand_permission_list(object_permission.mcp_servers or [])
+            direct_mcp_servers: Final = global_mcp_server_manager.expand_permission_list(
+                object_permission.mcp_servers or []
+            )
 
             # Get MCP servers from access groups
             access_group_servers: Final = await MCPRequestHandler.get_mcp_servers_from_access_groups(
@@ -3212,9 +3222,10 @@ class MCPRequestHandler:
                 global_mcp_server_manager.expand_tool_permissions(object_permission.mcp_tool_permissions).keys()
             )
 
-            # Combine all lists
-            all_servers: Final = direct_mcp_servers + access_group_servers + tool_perm_servers
-            return list(MCPRequestHandler._server_grants_with_group_scope(set(all_servers), object_permission))
+            all_servers: Final = frozenset(
+                (*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants)
+            )
+            return list(MCPRequestHandler._server_grants_with_group_scope(all_servers, object_permission))
         except Exception as e:
             verbose_logger.warning("Failed to get allowed MCP servers for end_user: %s", e)
             return []
