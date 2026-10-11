@@ -116,7 +116,7 @@ def test_redis_key_is_stable_across_working_directories(tmp_path, monkeypatch):
     monkeypatch.chdir(repo_root)
     key_from_root = redis_key_for(abs_cassette)
 
-    monkeypatch.chdir(os.path.join(repo_root, "tests", "audio_tests"))
+    monkeypatch.chdir(os.path.join(repo_root, "tests", "unit"))
     key_from_subdir = redis_key_for(abs_cassette)
 
     monkeypatch.chdir(tmp_path)
