@@ -1,11 +1,23 @@
+from collections.abc import Iterator
 from typing import Final
 from unittest.mock import Mock, patch
 
 import httpx
 import pytest
+import respx
 
+import litellm
 from litellm.llms.base_llm.search.transformation import SearchResponse
 from litellm.llms.searchapi.search.transformation import SearchAPIConfig
+
+
+@pytest.fixture
+def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("SEARCHAPI_API_KEY", "test-searchapi-key")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
 
 class TestSearchAPIConfig:
@@ -208,3 +220,34 @@ class TestSearchAPIConfig:
         assert "site:test.com" in result
         assert "OR" in result
         assert "AND" in result
+
+
+def test_search_request_and_result_mapping(
+    respx_mock: respx.MockRouter, httpx_transport: None
+) -> None:
+    route: Final = respx_mock.get("https://www.searchapi.io/api/v1/search").respond(
+        json={
+            "organic_results": [
+                {
+                    "title": "Search result",
+                    "link": "https://example.com/result",
+                    "snippet": "A scripted SearchAPI result.",
+                }
+            ]
+        }
+    )
+
+    response: Final = litellm.search(
+        query="how does LiteLLM search",
+        search_provider="searchapi",
+        api_key="test-searchapi-key",
+    )
+
+    assert dict(route.calls.last.request.url.params) == {
+        "engine": "google",
+        "q": "how does LiteLLM search",
+        "api_key": "test-searchapi-key",
+    }
+    assert [(item.title, item.url, item.snippet) for item in response.results] == [
+        ("Search result", "https://example.com/result", "A scripted SearchAPI result.")
+    ]
