@@ -15,6 +15,10 @@ from litellm.constants import (
     MANAGED_OBJECT_STALENESS_CUTOFF_DAYS,
     MAX_OBJECTS_PER_POLL_CYCLE,
 )
+from litellm.repositories.table_repositories import ManagedObjectRepository
+from litellm.repositories.team_repository import TeamRepository
+from litellm.repositories.user_repository import UserRepository
+from litellm.repositories.verification_token_repository import VerificationTokenRepository
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -56,27 +60,47 @@ class _ManagedObjectRow(Protocol):
     @property
     def file_object(self) -> object: ...
 
+    @property
+    def org_id(self) -> str | None: ...
+
+    @property
+    def api_key(self) -> str | None: ...
+
+    @property
+    def team_id(self) -> str | None: ...
+
+
+class _ReadableFileContent(Protocol):
+    async def read(self) -> bytes: ...
+
+
+class _HasFileContent(Protocol):
+    @property
+    def content(self) -> bytes: ...
+
+
+async def _file_content_bytes(file_content: object) -> bytes:
+    if hasattr(file_content, "content"):
+        return cast(_HasFileContent, file_content).content
+    if hasattr(file_content, "read"):
+        return await cast(_ReadableFileContent, file_content).read()
+    return cast(bytes, file_content)
+
 
 def _managed_object_table(prisma_client: "PrismaClient") -> "TableActions[_ManagedObjectRow]":
-    table: Final[TableActions[_ManagedObjectRow]] = prisma_client.db.litellm_managedobjecttable
-    return table
+    return ManagedObjectRepository(prisma_client).table
 
 
 def _user_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_UserTable]":
-    table: Final[TableActions[prisma_models.LiteLLM_UserTable]] = prisma_client.db.litellm_usertable
-    return table
+    return UserRepository(prisma_client).table
 
 
 def _token_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_VerificationToken]":
-    table: Final[TableActions[prisma_models.LiteLLM_VerificationToken]] = (
-        prisma_client.db.litellm_verificationtoken
-    )
-    return table
+    return VerificationTokenRepository(prisma_client).table
 
 
 def _team_table(prisma_client: "PrismaClient") -> "TableActions[prisma_models.LiteLLM_TeamTable]":
-    table: Final[TableActions[prisma_models.LiteLLM_TeamTable]] = prisma_client.db.litellm_teamtable
-    return table
+    return TeamRepository(prisma_client).table
 
 
 class CheckBatchCost:
@@ -177,17 +201,21 @@ class CheckBatchCost:
             return None
 
     async def _get_org_id(self, job: "_ManagedObjectRow", batch_id: str) -> str | None:
-        org_id = getattr(job, "org_id", None)
+        org_id: Final = getattr(job, "org_id", None)
         if org_id:
             return org_id
-        api_key = getattr(job, "api_key", None)
-        team_id = getattr(job, "team_id", None)
+        api_key: Final = getattr(job, "api_key", None)
+        team_id: Final = getattr(job, "team_id", None)
         if api_key:
             try:
                 key_row: prisma_models.LiteLLM_VerificationToken | None = await _token_table(
                     self.prisma_client
                 ).find_unique(where={"token": api_key})
-                key_org_id = getattr(key_row, "organization_id", None) if key_row is not None else None
+                key_org_id: Final = (
+                    cast(str | None, getattr(key_row, "organization_id", None))
+                    if key_row is not None
+                    else None
+                )
                 if key_org_id:
                     return key_org_id
             except Exception as e:
@@ -201,7 +229,7 @@ class CheckBatchCost:
             team_row: prisma_models.LiteLLM_TeamTable | None = await _team_table(self.prisma_client).find_unique(
                 where={"team_id": team_id}
             )
-            return getattr(team_row, "organization_id", None) if team_row is not None else None
+            return cast(str | None, getattr(team_row, "organization_id", None)) if team_row is not None else None
         except Exception as e:
             verbose_proxy_logger.error(f"CheckBatchCost: could not resolve the team's org for batch {batch_id}: {e}")
             return None
@@ -675,16 +703,17 @@ class CheckBatchCost:
 
         from litellm.types.utils import LiteLLMBatch
 
-        file_object = job.file_object
-        if isinstance(file_object, str):
-            try:
-                file_object = json.loads(file_object)
-            except (json.JSONDecodeError, ValueError):
-                return None
-        if not isinstance(file_object, dict):
+        file_object: Final = job.file_object
+        try:
+            parsed_file_object: Final[object] = (
+                json.loads(file_object) if isinstance(file_object, str) else file_object
+            )
+        except (json.JSONDecodeError, ValueError):
+            return None
+        if not isinstance(parsed_file_object, dict):
             return None
         try:
-            return LiteLLMBatch.model_validate(file_object).input_file_id
+            return LiteLLMBatch.model_validate(parsed_file_object).input_file_id
         except Exception:
             return None
 
@@ -703,13 +732,15 @@ class CheckBatchCost:
         another pod claimed it. Raises on results-fetch or cost-computation
         failures so the caller can leave the job unprocessed and retry it on a
         later poll.
+
         """
         from litellm.batches.batch_utils import (
             count_error_file_failed_requests,
-            _get_file_content_as_dictionary,
+            get_file_content_as_dictionary,
             calculate_batch_cost_and_usage,
         )
         from litellm.files.main import afile_content
+        from litellm.files.types import FileContentCallOptions
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
         from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
         from litellm.litellm_core_utils.litellm_logging import deployment_pricing_model_info, mask_api_base_credentials
@@ -747,30 +778,22 @@ class CheckBatchCost:
             except (IndexError, AttributeError):
                 pass
 
-        credentials = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
+        credentials: Final = self.llm_router.get_deployment_credentials_with_provider(model_id) or {}
         _file_content = await afile_content(
-            file_id=raw_output_file_id,
+            file_id=cast(str, raw_output_file_id),
             _litellm_internal_model_credentials=MappingProxyType(dict(credentials)),
-            **credentials,
+            **cast(FileContentCallOptions, credentials),
         )
 
-        # Access content - handle both direct attribute and method call
-        if hasattr(_file_content, 'content'):
-            content_bytes = _file_content.content  # type: ignore[union-attr]
-        elif hasattr(_file_content, 'read'):
-            content_bytes = await _file_content.read()  # type: ignore[misc]
-        else:
-            content_bytes = _file_content  # type: ignore[assignment]
+        content_bytes: Final = await _file_content_bytes(_file_content)
 
-        file_content_as_dict = _get_file_content_as_dictionary(
-            content_bytes  # type: ignore[arg-type]
-        )
+        file_content_as_dict = get_file_content_as_dictionary(content_bytes)
 
         # Record output file size
         if prom_logger and content_bytes:
             try:
                 prom_logger.record_managed_file_size(
-                    size_bytes=len(content_bytes),  # type: ignore
+                    size_bytes=len(content_bytes),
                     purpose="batch",
                     file_type="output",
                     model=model_id,
@@ -793,34 +816,35 @@ class CheckBatchCost:
             custom_llm_provider=custom_llm_provider,
         )
 
-        # CheckBatchCost bypasses async_post_call_success_hook, so convert raw
-        # output/error file IDs to managed base64 IDs before the DB write here.
-        managed_files_hook = self.proxy_logging_obj.get_proxy_hook("managed_files")
-        if managed_files_hook is not None:
+        from litellm.proxy.openai_files_endpoints.common_utils import ManagedBatchOutputFileWriter
+
+        managed_files_hook: Final = self.proxy_logging_obj.get_proxy_hook("managed_files")
+        if isinstance(managed_files_hook, ManagedBatchOutputFileWriter):
+            managed_file_writer: Final = managed_files_hook
             from litellm.proxy._types import UserAPIKeyAuth
 
-            managed_file_model_name = self._get_managed_file_model_name(
-                job=job, deployment_info=deployment_info
-            )
+            managed_file_model_name = self._get_managed_file_model_name(job=job, deployment_info=deployment_info)
             _minimal_auth = UserAPIKeyAuth(
                 user_id=job.created_by or "default-user-id",
                 team_id=getattr(job, "team_id", None),
             )
             for _file_attr in ["output_file_id", "error_file_id"]:
-                _raw_file_id = getattr(response, _file_attr, None)
+                _raw_file_id = cast(str | None, getattr(response, _file_attr, None))
                 if _raw_file_id and not _is_base64_encoded_unified_file_id(_raw_file_id):
                     try:
-                        _unified_file_id = managed_files_hook.get_unified_output_file_id(
+                        _unified_file_id = managed_file_writer.get_unified_output_file_id(
                             output_file_id=_raw_file_id,
                             model_id=model_id,
                             model_name=managed_file_model_name,
                         )
-                        await managed_files_hook.store_unified_file_id(
-                            file_id=_unified_file_id,
-                            file_object=None,
+                        await managed_file_writer.store_batch_output_file(
+                            unified_file_id=_unified_file_id,
+                            provider_file_id=_raw_file_id,
+                            model_id=model_id,
+                            model_name=managed_file_model_name,
+                            owner=_minimal_auth,
                             litellm_parent_otel_span=None,
-                            model_mappings={model_id: _raw_file_id},
-                            user_api_key_dict=_minimal_auth,
+                            size_bytes=len(content_bytes) if _file_attr == "output_file_id" else None,
                         )
                         setattr(response, _file_attr, _unified_file_id)
                         verbose_proxy_logger.info(

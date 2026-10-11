@@ -9,6 +9,7 @@ const { mockUsePluginMode, mockUseUISettings, mockUsePathname, state } = vi.hois
     plugins: [] as { name: string; display_name: string; url: string }[],
     activePlugin: null as { name: string; display_name: string; url: string } | null,
     enableChatUI: false,
+    moyaiUrl: undefined as string | undefined,
     pathname: "/ui/",
   };
   return {
@@ -19,7 +20,9 @@ const { mockUsePluginMode, mockUseUISettings, mockUsePathname, state } = vi.hois
       plugins: state.plugins,
       activePlugin: state.activePlugin,
     })),
-    mockUseUISettings: vi.fn(() => ({ data: { values: { enable_chat_ui: state.enableChatUI } } })),
+    mockUseUISettings: vi.fn(() => ({
+      data: { values: { enable_chat_ui: state.enableChatUI, moyai_url: state.moyaiUrl } },
+    })),
     mockUsePathname: vi.fn(() => state.pathname),
   };
 });
@@ -45,6 +48,7 @@ describe("ViewSwitcher", () => {
     state.mode = "ai-gateway";
     state.plugins = [];
     state.enableChatUI = false;
+    state.moyaiUrl = undefined;
     state.pathname = "/ui/";
     state.setMode.mockClear();
   });
@@ -133,6 +137,81 @@ describe("ViewSwitcher", () => {
     });
     expect(state.setMode).toHaveBeenCalledWith("ai-gateway");
     expect(assignSpy).toHaveBeenCalledWith("/ui/");
+  });
+
+  it("shows the Moyai entry with its description regardless of enable_chat_ui", async () => {
+    render(<ViewSwitcher />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    expect(await screen.findByText("Moyai")).toBeInTheDocument();
+    expect(screen.getByText("Cloud Coding Agent")).toBeInTheDocument();
+  });
+
+  it("navigates to the moyai route when the Moyai entry is picked", async () => {
+    render(<ViewSwitcher />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    act(() => {
+      fireEvent.click(screen.getByText("Moyai"));
+    });
+    expect(assignSpy).toHaveBeenCalledWith("/ui/moyai");
+    expect(state.setMode).not.toHaveBeenCalled();
+  });
+
+  it("labels the button Moyai on the moyai route and its subpaths", async () => {
+    state.pathname = "/ui/moyai";
+    const { unmount } = render(<ViewSwitcher />);
+    expect(screen.getByRole("button")).toHaveTextContent("Moyai");
+    unmount();
+
+    state.pathname = "/ui/moyai/anything";
+    render(<ViewSwitcher />);
+    expect(screen.getByRole("button")).toHaveTextContent("Moyai");
+  });
+
+  it("navigates back to the dashboard when AI Gateway is picked from the moyai route", async () => {
+    state.pathname = "/ui/moyai";
+    render(<ViewSwitcher />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    expect(await screen.findByText("AI Gateway")).toBeInTheDocument();
+    act(() => {
+      fireEvent.click(screen.getByText("AI Gateway"));
+    });
+    expect(state.setMode).toHaveBeenCalledWith("ai-gateway");
+    expect(assignSpy).toHaveBeenCalledWith("/ui/");
+  });
+
+  it("lists Moyai before Chat in the menu", async () => {
+    state.enableChatUI = true;
+    render(<ViewSwitcher />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    expect(await screen.findByText("Moyai")).toBeInTheDocument();
+    expect(screen.getByText("Moyai").compareDocumentPosition(screen.getByText("Chat"))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    );
+  });
+
+  it("navigates straight to the connected deployment when moyai_url is set", async () => {
+    state.moyaiUrl = "https://moyai.example.com";
+    render(<ViewSwitcher />);
+
+    act(() => {
+      fireEvent.click(screen.getByRole("button"));
+    });
+    act(() => {
+      fireEvent.click(screen.getByText("Moyai"));
+    });
+    expect(assignSpy).toHaveBeenCalledWith("https://moyai.example.com");
   });
 
   it("shows Chat as a disabled, non-navigating entry with an admin hint when disabled", async () => {

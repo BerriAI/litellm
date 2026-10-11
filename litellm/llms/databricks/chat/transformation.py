@@ -7,20 +7,23 @@ from collections.abc import AsyncIterator, Coroutine, Iterator, Mapping, Sequenc
 from typing import TYPE_CHECKING, Any, Final, Literal, cast, overload
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _handle_invalid_parallel_tool_calls,
-    _should_convert_tool_call_to_json_mode,
+    handle_invalid_parallel_tool_calls,
+    should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    _extract_reasoning_content,  # pyright: ignore[reportPrivateUsage]  # same import as the OpenAI transformation
+    extract_reasoning_content,
     merge_consecutive_system_messages,
     strip_litellm_internal_message_fields,
     strip_name_from_message,
 )
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
+from litellm.llms.base_llm.base_utils import (
+    type_to_response_format_param,  # pyright: ignore[reportUnknownVariableType]  # base_utils helper returns an untyped dict
+)
 from litellm.types.llms.anthropic import AllAnthropicToolsValues
 from litellm.types.llms.databricks import (
     AllDatabricksContentValues,
@@ -58,6 +61,10 @@ from ...anthropic.chat.transformation import (
 )
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import DatabricksBase, DatabricksException
+
+_RESPONSE_FORMAT_ADAPTER: (  # mutable-ok: mirrors the dict return contract of get_json_schema_from_pydantic_object
+    Final[TypeAdapter[dict[str, object] | None]]
+) = TypeAdapter(dict[str, object] | None)
 
 
 def _is_bare_assistant_message(message_dict: Mapping[str, object]) -> bool:
@@ -190,6 +197,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
     @classmethod
     def get_config(cls, *, model: str | None = None):
         return super().get_config()
+
+    def get_json_schema_from_pydantic_object(
+        self,
+        response_format: (  # mutable-ok: matches BaseConfig override signature
+            type[BaseModel] | dict[str, object] | None
+        ),
+    ) -> dict[str, object] | None:  # mutable-ok: BaseConfig contract returns a dict
+        return _RESPONSE_FORMAT_ADAPTER.validate_python(type_to_response_format_param(response_format=response_format))
 
     def get_required_params(self) -> list[ProviderField]:
         """For a given provider, return it's required fields with a description"""
@@ -561,7 +576,7 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
         content_str: Final = DatabricksConfig.extract_content_str(message["content"])
         if block_reasoning_content is not None:
             return block_reasoning_content, content_str
-        return _extract_reasoning_content({**message, "content": content_str})
+        return extract_reasoning_content({**message, "content": content_str})
 
     @staticmethod
     def extract_citations(
@@ -588,14 +603,14 @@ class DatabricksConfig(DatabricksBase, OpenAILikeChatConfig, AnthropicConfig):
                 for _tc in tool_calls:
                     _openai_tc = ChatCompletionMessageToolCall(**_tc)
                     _openai_tool_calls.append(_openai_tc)
-                fixed_tool_calls = _handle_invalid_parallel_tool_calls(_openai_tool_calls)
+                fixed_tool_calls = handle_invalid_parallel_tool_calls(_openai_tool_calls)
 
                 if fixed_tool_calls is not None:
                     tool_calls = fixed_tool_calls
 
             translated_message: Message | None = None
             finish_reason: str | None = None
-            if tool_calls and _should_convert_tool_call_to_json_mode(
+            if tool_calls and should_convert_tool_call_to_json_mode(
                 tool_calls=tool_calls,
                 convert_tool_call_to_json_mode=json_mode,
             ):
@@ -729,7 +744,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                     # 6. Set tool_calls to None
                     from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
                     from litellm.llms.base_llm.base_utils import (
-                        _convert_tool_response_to_message,
+                        convert_tool_response_to_message,
                     )
 
                     # Check if this chunk has a function name
@@ -744,7 +759,7 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                         or function_name == RESPONSE_FORMAT_TOOL_NAME
                     ):
                         # Convert tool calls to message format
-                        message = _convert_tool_response_to_message(tool_calls)
+                        message = convert_tool_response_to_message(tool_calls)
                         if message is not None:
                             if message.content == "{}":  # empty json
                                 message.content = ""

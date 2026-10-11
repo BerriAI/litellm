@@ -19,7 +19,7 @@
 """Database connection and data extraction for LiteLLM."""
 
 from datetime import datetime
-from typing import Any, Final
+from typing import Final
 
 import polars as pl
 
@@ -80,7 +80,7 @@ class LiteLLMDatabase:
         ORDER BY dus.date DESC, dus.created_at DESC
         """
 
-        params: Final[list[Any]] = [
+        params: Final[list[object]] = [
             start_time_utc,
             end_time_utc,
         ]
