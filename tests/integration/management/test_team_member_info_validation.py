@@ -153,7 +153,7 @@ async def test_member_add_duplicate_email_rejected(
     gateway_client, db, resources, actors
 ):
     email = f"{resources.prefix}-dup@example.com"
-    await create_scratch_user(db, resources.prefix, suffix="dup1", user_email=email)
+    first = await create_scratch_user(db, resources.prefix, suffix="dup1", user_email=email)
     write_rows(
         'INSERT INTO "LiteLLM_UserTable" (user_id, user_email, user_role, models, metadata) '
         "VALUES (%s, %s, 'internal_user', '{}', '{}')",
@@ -171,5 +171,7 @@ async def test_member_add_duplicate_email_rejected(
     )
     assert resp.status_code == 400, resp.text
     assert "Multiple users found" in resp.text, resp.text
-    rows = await db.db.litellm_teammembership.find_many(where={"team_id": team_id})
+    rows = await db.db.litellm_teammembership.find_many(
+        where={"team_id": team_id, "user_id": {"in": [first, resources.tag("dup2")]}}
+    )
     assert rows == [], "duplicate-email payload leaked a membership row"

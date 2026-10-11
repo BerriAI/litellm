@@ -1,8 +1,7 @@
-import litellm
 import pytest
 
 from tests.integration._support.actors import Actor
-from tests.integration._support.actors import create_scratch_team, create_scratch_user
+from tests.integration._support.actors import create_scratch_team, create_scratch_user, owned_settings_client
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -204,9 +203,6 @@ async def test_team_member_add_email_invite_open_to_team_admin(
     assert invited.user_id in _member_ids(row)
 
 
-# Available-team self-join: a non-admin caller may add ITSELF to a team listed
-# in litellm.default_internal_user_params["available_teams"], but the bypass
-# must not escalate to role=admin or inject another user.
 _SELF_JOIN = [
     ("self_as_user", "self", "user", 200),
     ("self_as_admin", "self", "admin", 403),
@@ -227,26 +223,23 @@ async def test_team_member_add_available_team_self_join(
     db,
     resources,
     actors,
-    monkeypatch,
+    tmp_path,
 ):
-    # Org-less team with no admins: the INTERNAL_USER caller is neither team
-    # nor org admin, so it lands on the available-team branch.
     await create_scratch_team(db, resources.prefix)
-    monkeypatch.setattr(
-        litellm, "default_internal_user_params", {"available_teams": [resources.prefix]}
-    )
-
     caller = actors.keys[Actor.INTERNAL_USER]
     member_id = caller.user_id if who == "self" else actors.keys[Actor.OWNER].user_id
 
-    resp = await gateway_client.post(
-        "/team/member_add",
-        headers={"Authorization": f"Bearer {caller.cleartext}"},
-        json={
-            "team_id": resources.prefix,
-            "member": {"user_id": member_id, "role": role},
-        },
-    )
+    with owned_settings_client(
+        gateway_client, tmp_path, {"default_internal_user_params": {"available_teams": [resources.prefix]}}
+    ) as client:
+        resp = await client.post(
+            "/team/member_add",
+            headers={"Authorization": f"Bearer {caller.cleartext}"},
+            json={
+                "team_id": resources.prefix,
+                "member": {"user_id": member_id, "role": role},
+            },
+        )
     assert (
         resp.status_code == expected_status
     ), f"{who}/{role}: {resp.status_code} {resp.text}"

@@ -1,6 +1,7 @@
 import uuid
 
 import pytest
+from prisma import Json
 
 from tests.integration._support.actors import Actor
 from tests.integration._support.actors import create_scratch_team
@@ -42,19 +43,21 @@ async def _seed_budget(db, budget_id: str, max_budget: float) -> str:
 
 async def _seed_team_with_default_budget(db, actors, shape: str, team_id: str, resources) -> str:
     default_budget_id = await _seed_budget(db, resources.tag("team-default-budget"), _TEAM_DEFAULT_MAX_BUDGET)
-    metadata = {"team_member_budget_id": default_budget_id}
     if shape == "alpha":
         await create_scratch_team(
             db,
             team_id,
             organization_id=actors.org_a_id,
             admin_user_ids=[actors.keys[Actor.TEAM_ADMIN].user_id],
-            metadata=metadata,
         )
     elif shape == "beta":
-        await create_scratch_team(db, team_id, organization_id=actors.org_b_id, metadata=metadata)
-    else:  # pragma: no cover - guard
+        await create_scratch_team(db, team_id, organization_id=actors.org_b_id)
+    else:
         pytest.fail(f"unknown shape={shape}")
+    await db.db.litellm_teamtable.update(
+        where={"team_id": team_id},
+        data={"metadata": Json({"team_member_budget_id": default_budget_id})},
+    )
     return default_budget_id
 
 

@@ -1,12 +1,7 @@
-import litellm
 import pytest
 
-from litellm.types.proxy.management_endpoints.ui_sso import (
-    LiteLLM_UpperboundKeyGenerateParams,
-)
-
 from tests.integration._support.actors import TEAM_ALPHA, TEAM_BETA, Actor
-from tests.integration._support.actors import create_scratch_key
+from tests.integration._support.actors import create_scratch_key, owned_settings_client
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -123,13 +118,8 @@ async def test_key_path_regenerate_smoke(gateway_client, resources, actors):
 
 
 async def test_key_regenerate_enforces_upperbound_key_params(
-    gateway_client, resources, actors, monkeypatch
+    gateway_client, resources, actors, tmp_path
 ):
-    """Regenerate runs _enforce_upperbound_key_params: a max_budget above
-    litellm.upperbound_key_generate_params is rejected 400, a value within the
-    bound is accepted. Pins #26340 (db8ef44323) — regenerate previously
-    bypassed the upperbound. upperbound_key_generate_params is module-level
-    litellm.* state, so monkeypatch save/restores it."""
     admin = actors.keys[Actor.PROXY_ADMIN]
     over_key = await create_scratch_key(
         gateway_client,
@@ -145,21 +135,18 @@ async def test_key_regenerate_enforces_upperbound_key_params(
         user_id=admin.user_id,
         key_alias=f"{resources.prefix}-within",
     )
-    monkeypatch.setattr(
-        litellm,
-        "upperbound_key_generate_params",
-        LiteLLM_UpperboundKeyGenerateParams(max_budget=100.0),
-    )
     headers = {"Authorization": f"Bearer {admin.cleartext}"}
 
-    over = await gateway_client.post(
-        "/key/regenerate", headers=headers, json={"key": over_key, "max_budget": 500.0}
-    )
+    with owned_settings_client(
+        gateway_client, tmp_path, {"upperbound_key_generate_params": {"max_budget": 100.0}}
+    ) as client:
+        over = await client.post(
+            "/key/regenerate", headers=headers, json={"key": over_key, "max_budget": 500.0}
+        )
+        within = await client.post(
+            "/key/regenerate",
+            headers=headers,
+            json={"key": within_key, "max_budget": 50.0},
+        )
     assert over.status_code == 400, over.text
-
-    within = await gateway_client.post(
-        "/key/regenerate",
-        headers=headers,
-        json={"key": within_key, "max_budget": 50.0},
-    )
     assert within.status_code == 200, within.text

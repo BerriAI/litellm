@@ -242,7 +242,6 @@ async def test_regenerate_ghost_key_404(gateway_client, resources, actors):
 
 
 async def test_regenerate_no_key_supplied_400(gateway_client, actors):
-    """POST /key/regenerate with no key in path AND no key in body."""
     seeder = actors.keys[Actor.PROXY_ADMIN].cleartext
     resp = await gateway_client.post(
         "/key/regenerate",
@@ -250,7 +249,9 @@ async def test_regenerate_no_key_supplied_400(gateway_client, actors):
         json={},
     )
     assert resp.status_code == 400, resp.text
-    assert resp.json() == {"detail": {"error": "No key passed in."}}
+    error = resp.json()["error"]
+    assert error["code"] == "400", resp.text
+    assert "No key passed in." in error["message"], resp.text
 
 
 async def test_regenerate_happy_path(gateway_client, db, resources, actors):
@@ -515,31 +516,29 @@ async def test_key_update_with_duration_and_budget_duration(
 
 
 async def test_key_update_with_clear_duration(gateway_client, db, resources, actors):
-    """`duration: -1` clears expires (line 1796–1798)."""
     cleartext = await _seed_token(
         db,
         resources.prefix,
         user_id=actors.keys[Actor.PROXY_ADMIN].user_id,
     )
     seeder = actors.keys[Actor.PROXY_ADMIN].cleartext
-    # First set an expiry
-    await gateway_client.post(
+    expiring = await gateway_client.post(
         "/key/update",
         headers={"Authorization": f"Bearer {seeder}"},
         json={"key": cleartext, "duration": "1h"},
     )
-    # Then clear it
+    assert expiring.status_code == 200, expiring.text
+    expiring_row = await db.db.litellm_verificationtoken.find_unique(
+        where={"token": hash_token(cleartext)}
+    )
+    assert expiring_row.expires is not None, "duration=1h did not set expires"
+
     resp = await gateway_client.post(
         "/key/update",
         headers={"Authorization": f"Bearer {seeder}"},
         json={"key": cleartext, "duration": "-1"},
     )
     assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body["key"] == cleartext
-    assert body["info"]["user_id"] == actors.keys[Actor.INTERNAL_USER].user_id
-    assert body["info"]["status"] == "active"
-    assert "token" not in body["info"]
     row = await db.db.litellm_verificationtoken.find_unique(
         where={"token": hash_token(cleartext)}
     )

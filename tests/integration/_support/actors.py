@@ -1,18 +1,21 @@
 import uuid
-from collections.abc import AsyncIterator, Mapping, Sequence
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+from contextlib import asynccontextmanager, contextmanager
 from dataclasses import dataclass
 from enum import Enum
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
 import httpx
+import yaml
 from prisma import Prisma
 from pydantic import JsonValue
 
 from litellm.proxy.utils import PrismaClient, hash_token
 from tests.integration._support.client import Gateway, Scenario, string_value
 from tests.integration._support.database import connected_proxy_prisma
+from tests.integration._support.process import owned_proxy
 
 TEAM_ALPHA: Final = "behavior-pin-team-alpha"
 TEAM_BETA: Final = "behavior-pin-team-beta"
@@ -111,6 +114,18 @@ class GatewayClient:
         json: Mapping[str, JsonValue] | None = None,
     ) -> httpx.Response:
         return await self.request("DELETE", path, headers=headers, json=json)
+
+
+@contextmanager
+def owned_settings_client(
+    client: GatewayClient, directory: Path, litellm_settings: Mapping[str, JsonValue]
+) -> Iterator[GatewayClient]:
+    base: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config: Final = {**base, "litellm_settings": {**base["litellm_settings"], **litellm_settings}}
+    path: Final = directory / "owned-settings.yaml"
+    path.write_text(yaml.safe_dump(config))
+    with owned_proxy(client.gateway, directory, {}, config=path) as candidate:
+        yield GatewayClient(candidate, client.replacements)
 
 
 @dataclass(frozen=True, slots=True)

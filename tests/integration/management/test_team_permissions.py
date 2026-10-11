@@ -1,10 +1,9 @@
-import litellm
 import pytest
 
 from litellm.proxy._types import KeyManagementRoutes
 
 from tests.integration._support.actors import Actor
-from tests.integration._support.actors import create_scratch_team
+from tests.integration._support.actors import create_scratch_team, owned_settings_client
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -92,29 +91,24 @@ async def test_team_permissions_update_authz_matrix(
 
 
 async def test_team_permissions_available_team_self_join_divergence(
-    gateway_client, db, resources, actors, monkeypatch
+    gateway_client, db, resources, actors, tmp_path
 ):
-    """permissions_list honours the available-team self-join — a non-admin can
-    READ an available team's permissions — but permissions_update deliberately
-    does not: the same caller is 403 on update. default_internal_user_params is
-    module-level litellm.* state, so monkeypatch save/restores it."""
     await create_scratch_team(db, resources.prefix, organization_id=actors.org_a_id)
-    monkeypatch.setattr(
-        litellm, "default_internal_user_params", {"available_teams": [resources.prefix]}
-    )
-    caller = actors.keys[Actor.CROSS_ORG_USER]  # non-admin, unrelated to the team
+    caller = actors.keys[Actor.CROSS_ORG_USER]
 
-    listed = await gateway_client.get(
-        f"/team/permissions_list?team_id={resources.prefix}",
-        headers={"Authorization": f"Bearer {caller.cleartext}"},
-    )
+    with owned_settings_client(
+        gateway_client, tmp_path, {"default_internal_user_params": {"available_teams": [resources.prefix]}}
+    ) as client:
+        listed = await client.get(
+            f"/team/permissions_list?team_id={resources.prefix}",
+            headers={"Authorization": f"Bearer {caller.cleartext}"},
+        )
+        updated = await client.post(
+            "/team/permissions_update",
+            headers={"Authorization": f"Bearer {caller.cleartext}"},
+            json={"team_id": resources.prefix, "team_member_permissions": [_PERM]},
+        )
     assert listed.status_code == 200, listed.text
-
-    updated = await gateway_client.post(
-        "/team/permissions_update",
-        headers={"Authorization": f"Bearer {caller.cleartext}"},
-        json={"team_id": resources.prefix, "team_member_permissions": [_PERM]},
-    )
     assert updated.status_code == 403, updated.text
 
 
