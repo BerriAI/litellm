@@ -17,7 +17,7 @@ dependencies = [
     "fastuuid>=0.14.0,<1.0",
     "filelock>=3.16.1,<4.0",
     "httpx[http2]>=0.28.0,<1.0",
-    "openai>=2.20.0,<3.0.0",
+    "openai>=2.20.0,<4.0.0",
     "python-dotenv>=1.0.0,<2.0",
     "pyyaml>=6.0.3,<7.0",
     "packaging>=24.0",
@@ -77,8 +77,8 @@ proxy = [
     "mcp>=2.2.0,<3",
     "httpx2>=2.5.0,<3",
     "pydantic>=2.12.0,<3",
-    "litellm-proxy-extras==0.4.107",
-    "litellm-enterprise==0.1.75",
+    "litellm-proxy-extras==0.4.108",
+    "litellm-enterprise==0.1.76",
     "RestrictedPython>=8.5,<9.0",
     "rich>=13.9.4,<14.0",
     "InquirerPy>=0.3.4,<1.0",
@@ -323,7 +323,6 @@ include = [
     "litellm/proxy/model_insights_tasks.json",
     "litellm/proxy/common_utils/codex_base_instructions.md",
     "litellm/proxy/common_utils/codex_bundled_models_0.159.3.json",
-    "litellm/proxy/lens/prompts/*.md",
 ]
 exclude = [
     "litellm/proxy/enterprise",

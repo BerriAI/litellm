@@ -679,6 +679,81 @@ async def test_ahealth_check_probes_strands_through_decisions_without_mode(
     assert "authorization" not in upstream.calls[0].request.headers
 
 
+@pytest.mark.asyncio
+async def test_ahealth_check_probes_hosted_vllm_with_a_choice_question(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("HOSTED_VLLM_API_KEY", raising=False)
+    monkeypatch.delenv("HOSTED_VLLM_API_BASE", raising=False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("http://vllm.local:8000/v1/systemone").respond(
+        json={
+            "model": "Qwen/Qwen3-0.6B",
+            "answers": {
+                "reachable": {
+                    "type": "choice",
+                    "choice": "yes",
+                    "confidence": 1.0,
+                    "probabilities": {"yes": 1.0, "no": 0.0},
+                }
+            },
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+        }
+    )
+
+    result: Final = await ahealth_check(
+        {
+            "model": "hosted_vllm/Qwen/Qwen3-0.6B",
+            "api_base": "http://vllm.local:8000",
+        },
+        mode="evaluation",
+    )
+
+    assert "error" not in result, result
+    assert upstream.called
+    sent: Final = json.loads(upstream.calls[0].request.content)
+    assert sent["questions"] == {
+        "reachable": {
+            "type": "choice",
+            "instructions": "Is the service reachable?",
+            "criteria": {"yes": None, "no": None},
+        }
+    }
+
+
+@pytest.mark.asyncio
+async def test_ahealth_check_keeps_the_noul_probe_for_other_decisions_providers(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    upstream: Final = respx_mock.post("https://api.typesafe.ai/v1/systemone").respond(
+        json={
+            "model": "jev-1.13",
+            "answers": {"reachable": {"type": "noul", "noul": 1.0}},
+            "usage": {"input_tokens": 12, "output_tokens": 1},
+        }
+    )
+
+    result: Final = await ahealth_check(
+        {
+            "model": "typesafe/jev-1.13",
+            "api_key": "sk-test",
+        },
+        mode="evaluation",
+    )
+
+    assert "error" not in result, result
+    assert upstream.called
+    sent: Final = json.loads(upstream.calls[0].request.content)
+    assert sent["questions"] == {
+        "reachable": {"type": "noul", "instructions": "Is the service reachable?"}
+    }
+
+
 @pytest.mark.parametrize(
     ("model", "custom_llm_provider", "expected"),
     (
