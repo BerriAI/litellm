@@ -77,7 +77,6 @@ def _build_guard_config():
     security_config_cls: Final = guard_module.SecurityConfig
 
     kwargs: dict[str, object] = {  # mutable-ok: assembled conditionally, then passed once to SecurityConfig
-
         "enable_rate_limiting": True,
         "rate_limit": _env_int("LITELLM_GUARD_RATE_LIMIT", 100),
         "rate_limit_window": _env_int("LITELLM_GUARD_RATE_LIMIT_WINDOW", 60),
