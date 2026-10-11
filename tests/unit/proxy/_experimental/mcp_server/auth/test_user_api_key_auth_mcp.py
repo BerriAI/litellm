@@ -6166,7 +6166,8 @@ class TestMCPDcrBridgeDelegateAdmission:
         policy gates re-check. ``team_blocked=True`` patches the centralized gate's
         ``get_team_object`` at the ``user_api_key_auth`` namespace it actually calls; ``owner``
         patches the SCIM gate's ``get_user_object`` (``auth_checks`` namespace); ``project_object``
-        patches the centralized gate's ``get_project_object``. Unpatched lookups hit the MagicMock
+        patches the centralized gate's ``get_project_object``. The team-membership lookup is
+        patched to "no membership row". Unpatched lookups hit the MagicMock
         prisma and are swallowed (``_safe_fetch`` / the SCIM gate's fail-open), so their checks
         skip. Yields the ``get_key_object`` mock so callers can assert the sealed ``key_hash`` was
         the reload key."""
@@ -6216,7 +6217,8 @@ class TestMCPDcrBridgeDelegateAdmission:
     def _patch_user_reload(*, return_value=None, side_effect=None):
         """Patch the user-subject reload path an interactively-minted envelope takes: the
         ``get_user_object`` lookup ``reload_admitted_user`` runs (which also drives the SCIM gate),
-        plus the ``prisma_client`` / ``user_api_key_cache`` globals. The centralized gate's own
+        plus the ``prisma_client`` / ``user_api_key_cache`` globals. The team-membership lookup is
+        patched to "no membership row". The centralized gate's own
         fetches fail-safe to None under the MagicMock prisma, so an unblocked user admits. Yields the
         ``get_user_object`` mock so a caller can assert the sealed user_id was the reload key."""
         get_user_object = AsyncMock(return_value=return_value, side_effect=side_effect)
@@ -6224,6 +6226,10 @@ class TestMCPDcrBridgeDelegateAdmission:
             patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_membership",
+                AsyncMock(return_value=None),
+            ),
         ):
             yield get_user_object
 
