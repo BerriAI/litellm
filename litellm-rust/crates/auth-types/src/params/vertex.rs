@@ -28,19 +28,16 @@ impl VertexParams {
     pub const CREDENTIALS: ParamSpec = ParamSpec {
         setting: "credentials",
         wire: &["vertex_credentials", "vertex_ai_credentials"],
-        module_global: None,
         env: &["VERTEXAI_CREDENTIALS"],
     };
     pub const PROJECT: ParamSpec = ParamSpec {
         setting: "project",
         wire: &["vertex_project", "vertex_ai_project"],
-        module_global: Some("vertex_project"),
         env: &["VERTEXAI_PROJECT"],
     };
     pub const LOCATION: ParamSpec = ParamSpec {
         setting: "location",
         wire: &["vertex_location", "vertex_ai_location"],
-        module_global: Some("vertex_location"),
         env: &["VERTEXAI_LOCATION", "VERTEX_LOCATION"],
     };
 

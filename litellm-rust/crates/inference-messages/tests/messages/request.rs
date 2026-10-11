@@ -69,6 +69,7 @@ async fn credentials_become_exactly_one_auth_header(
     run_message(MessagesCall {
         custom_llm_provider: Some(provider.into()),
         litellm_params: Default::default(),
+        runtime_defaults: Default::default(),
         api_key: api_key.map(Into::into),
         api_base: Some(upstream.uri()),
         extra_headers: headers(extra_headers.iter().copied()),
@@ -98,6 +99,7 @@ async fn a_call_without_credentials_fails_before_sending(
     let error = run(MessagesCall {
         custom_llm_provider: Some(provider.into()),
         litellm_params: Default::default(),
+        runtime_defaults: Default::default(),
         api_base: Some(upstream.uri()),
         ..call
     })
@@ -140,6 +142,7 @@ async fn each_provider_posts_to_its_messages_endpoint(
     run_message(MessagesCall {
         custom_llm_provider: provider.map(Into::into),
         litellm_params: Default::default(),
+        runtime_defaults: Default::default(),
         api_key: Some("sk".into()),
         api_base: Some(format!("{}{base_suffix}", upstream.uri())),
         ..with_model(call, model)
@@ -171,6 +174,7 @@ async fn unsupported_providers_are_rejected_before_sending(
     let error = run(MessagesCall {
         custom_llm_provider: provider.map(Into::into),
         litellm_params: Default::default(),
+        runtime_defaults: Default::default(),
         api_key: Some("sk".into()),
         api_base: Some(UNREACHABLE_BASE.into()),
         ..with_model(call, model)
@@ -224,6 +228,7 @@ async fn cache_scope_removal_is_selected_by_the_provider(
     run_message(MessagesCall {
         custom_llm_provider: Some(provider.into()),
         litellm_params: Default::default(),
+        runtime_defaults: Default::default(),
         api_key: Some("sk-azure".into()),
         api_base: Some(upstream.uri()),
         body: body(json!({
@@ -369,6 +374,7 @@ async fn caller_protocol_headers_win_over_the_defaults(call: MessagesCall, #[cas
     run_message(MessagesCall {
         custom_llm_provider: Some(provider.into()),
         litellm_params: Default::default(),
+        runtime_defaults: Default::default(),
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
         extra_headers: headers([
@@ -421,6 +427,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
                 body: call.body.clone(),
                 custom_llm_provider: call.custom_llm_provider.clone(),
                 litellm_params: Default::default(),
+                runtime_defaults: Default::default(),
                 extra_headers: None,
                 provider_specific_header: None,
                 timeout: call.timeout,
@@ -600,6 +607,7 @@ async fn metadata_is_reduced_to_the_user_id(call: MessagesCall, #[case] provider
         MessagesCall {
             custom_llm_provider: Some(provider.into()),
             litellm_params: Default::default(),
+            runtime_defaults: Default::default(),
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
             ..call
@@ -625,6 +633,7 @@ async fn deepseek_sends_neither_billing_blocks_nor_the_custom_tool_discriminator
         MessagesCall {
             custom_llm_provider: Some("deepseek".into()),
             litellm_params: Default::default(),
+            runtime_defaults: Default::default(),
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
             ..call
@@ -747,6 +756,7 @@ async fn system_message_folding_is_selected_by_the_provider(
         MessagesCall {
             custom_llm_provider: Some(provider.into()),
             litellm_params: Default::default(),
+            runtime_defaults: Default::default(),
             api_key: Some("sk-azure".into()),
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {
@@ -812,6 +822,7 @@ async fn provider_validation_runs_before_caller_parameter_removal(
         MessagesCall {
             custom_llm_provider: Some(provider.into()),
             litellm_params: Default::default(),
+            runtime_defaults: Default::default(),
             api_key: Some("sk-test".into()),
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {

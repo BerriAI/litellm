@@ -1,9 +1,9 @@
 use litellm_auth_gcp as vertex;
-use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
+use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use super::{common_utils::vertex_config, transformation::VertexAiOcrConfig};
+use super::{common_utils::vertex_connection, transformation::VertexAiOcrConfig};
 use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
@@ -16,7 +16,6 @@ use litellm_llms_types::formats::ocr::{
     LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage, OcrResponseFormat,
     OcrUsageInfo,
 };
-use litellm_llms_types::providers::vertex_ai::{DEFAULT_LOCATION, GLOBAL_API_BASE};
 
 const MODEL_PREFIX: &str = "deepseek-ai/";
 const DEEPSEEK_OCR_PARAMS: &[&str] = &["stream", "temperature", "max_tokens", "top_p", "n", "stop"];
@@ -135,15 +134,10 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         _params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, Error> {
-        let config = vertex_config(request)?;
-        let location =
-            vertex::get_vertex_ai_location(&config, &|name: &str| request.connection.secret(name))
-                .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
-        self.get_complete_url(
-            request.connection.api_base.as_deref(),
+        Ok(vertex_connection(request)?.resource_url(
             &environment.project_id,
-            &location,
-        )
+            &["endpoints", "openapi", "chat", "completions"],
+        )?)
     }
 
     async fn async_transform_ocr_request(
@@ -385,38 +379,6 @@ pub fn provider_model(model: &str) -> Result<String, Error> {
     Ok(format!("{MODEL_PREFIX}{local_model}"))
 }
 
-impl VertexAIDeepSeekOCRConfig {
-    fn get_complete_url(
-        &self,
-        api_base: Option<&str>,
-        project: &str,
-        location: &str,
-    ) -> Result<String, Error> {
-        let base = api_base
-            .map(str::trim)
-            .filter(|base| !base.is_empty())
-            .unwrap_or(GLOBAL_API_BASE);
-        ApiUrl::parse(base)
-            .and_then(|url| {
-                url.complete_path(&[
-                    "v1",
-                    "projects",
-                    project,
-                    "locations",
-                    location,
-                    "endpoints",
-                    "openapi",
-                    "chat",
-                    "completions",
-                ])
-            })
-            .map(|url| url.into_string())
-            .map_err(|_| Error::RequestField {
-                path: "api_base".into(),
-            })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use rstest::rstest;
@@ -470,12 +432,6 @@ mod tests {
         assert_eq!(
             provider_model("deepseek-ai/deepseek-ocr-maas").unwrap(),
             "deepseek-ai/deepseek-ocr-maas"
-        );
-        assert_eq!(
-            VertexAIDeepSeekOCRConfig
-                .get_complete_url(None, "proj-1", "europe-west4")
-                .unwrap(),
-            "https://aiplatform.googleapis.com/v1/projects/proj-1/locations/europe-west4/endpoints/openapi/chat/completions"
         );
     }
 

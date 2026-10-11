@@ -5,13 +5,11 @@ pub use aws::AwsParams;
 pub use vertex::VertexParams;
 
 /// One connection param of Python's `CredentialLiteLLMParams` and every place Python reads
-/// it from, in order: the wire names on a call or a deployment, the `litellm.<name>` module
-/// global a host folds in, then the environment names.
+/// it from, in order: the wire names on a call or a deployment, then the environment names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ParamSpec {
     pub setting: &'static str,
     pub wire: &'static [&'static str],
-    pub module_global: Option<&'static str>,
     pub env: &'static [&'static str],
 }
 
@@ -38,11 +36,10 @@ impl ParamSpec {
     }
 
     pub(crate) fn guidance(&self) -> String {
-        let wire = self.wire.join(" or ");
-        let env = self.env.join(" or ");
-        match self.module_global {
-            Some(global) => format!("pass {wire}, set litellm.{global}, or set {env}"),
-            None => format!("pass {wire} or set {env}"),
-        }
+        format!(
+            "pass {} or set {}",
+            self.wire.join(" or "),
+            self.env.join(" or ")
+        )
     }
 }

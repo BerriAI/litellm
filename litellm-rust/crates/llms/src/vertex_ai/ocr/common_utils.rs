@@ -5,11 +5,18 @@ use crate::base_llm::ocr::{
     error::Error,
     transformation::{OcrConnection, PreparedOcrRequest},
 };
+use crate::vertex_ai::connection::VertexConnection;
 
-pub(super) fn vertex_config(request: &PreparedOcrRequest) -> Result<VertexConfig, Error> {
-    Ok(VertexConfig::from_sourced_optional_params(
+pub(super) fn vertex_connection(request: &PreparedOcrRequest) -> Result<VertexConnection, Error> {
+    let config = VertexConfig::from_sourced_optional_params(
         &request.optional_params,
         &request.input_sources,
+    )?;
+    Ok(VertexConnection::resolve(
+        config,
+        request.connection.api_base.as_deref(),
+        &request.runtime_defaults,
+        &|name: &str| request.connection.secret(name),
     )?)
 }
 

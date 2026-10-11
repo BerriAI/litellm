@@ -50,6 +50,14 @@ impl VertexConfig {
         )
     }
 
+    pub fn with_project_and_location(self, project_id: Option<String>, location: String) -> Self {
+        Self::new(
+            self.credentials,
+            project_id.or(self.project_id),
+            Some(location),
+        )
+    }
+
     pub fn project_id(&self) -> Option<&str> {
         self.project_id.as_deref()
     }

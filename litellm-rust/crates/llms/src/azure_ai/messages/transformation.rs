@@ -36,6 +36,19 @@ pub const AZURE_ANTHROPIC_MESSAGES_CONFIG: AzureAnthropicMessagesConfig =
     AzureAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for AzureAnthropicMessagesConfig {
+    fn prepare_connection(
+        &self,
+        inputs: crate::base_llm::connection::ConnectionInputs<'_>,
+        headers: Headers,
+        model: &str,
+        stream: bool,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<crate::base_llm::connection::PreparedConnection, Error> {
+        crate::base_llm::messages::transformation::prepare_from_parts(
+            self, inputs, headers, model, stream, env_lookup,
+        )
+    }
+
     fn shape_request(
         &self,
         request: MessagesRequest,

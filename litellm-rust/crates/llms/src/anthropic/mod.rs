@@ -3,6 +3,7 @@ pub mod common_utils;
 
 pub mod batches;
 pub mod chat;
+pub mod connection;
 pub mod count_tokens;
 pub mod messages;
 

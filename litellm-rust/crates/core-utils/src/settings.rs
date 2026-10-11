@@ -53,6 +53,55 @@ pub fn resolve_non_empty(
         })
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SettingSource {
+    Explicit,
+    RuntimeDefault,
+    Environment(&'static str),
+    Derived,
+    ProviderDefault,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Selected<T> {
+    pub value: T,
+    pub source: SettingSource,
+}
+
+impl<T> Selected<T> {
+    pub fn new(value: T, source: SettingSource) -> Self {
+        Self { value, source }
+    }
+}
+
+/// The first nonblank value of an explicit argument, a runtime default, then each
+/// environment name in order, keeping which layer supplied it.
+pub fn select_non_blank(
+    explicit: Option<&str>,
+    runtime_default: Option<&str>,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+    env_names: &[&'static str],
+) -> Option<Selected<String>> {
+    [
+        (SettingSource::Explicit, explicit),
+        (SettingSource::RuntimeDefault, runtime_default),
+    ]
+    .into_iter()
+    .find_map(|(source, value)| {
+        value
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(|value| Selected::new(value.to_string(), source))
+    })
+    .or_else(|| {
+        env_names.iter().find_map(|name| {
+            env_lookup(name)
+                .filter(|value| !value.trim().is_empty())
+                .map(|value| Selected::new(value, SettingSource::Environment(name)))
+        })
+    })
+}
+
 pub trait Layer: Default {
     fn or(self, lower: Self) -> Self;
 }
@@ -158,5 +207,28 @@ mod tests {
     #[test]
     fn merging_no_layers_yields_the_empty_layer() {
         assert_eq!(merge(Vec::<Pair>::new()), Pair::default());
+    }
+
+    #[rstest::rstest]
+    #[case::explicit_beats_everything(Some("arg"), Some("default"), &[("FIRST", "env")], Some(("arg", SettingSource::Explicit)))]
+    #[case::runtime_default_beats_the_environment(None, Some("default"), &[("FIRST", "env")], Some(("default", SettingSource::RuntimeDefault)))]
+    #[case::blank_layers_are_skipped(Some(" "), Some(""), &[("FIRST", " "), ("SECOND", "env")], Some(("env", SettingSource::Environment("SECOND"))))]
+    #[case::environment_names_in_order(None, None, &[("SECOND", "b"), ("FIRST", "a")], Some(("a", SettingSource::Environment("FIRST"))))]
+    #[case::nothing_set(None, None, &[], None)]
+    fn selection_keeps_the_layer_that_supplied_the_value(
+        #[case] explicit: Option<&str>,
+        #[case] runtime_default: Option<&str>,
+        #[case] env: &'static [(&'static str, &'static str)],
+        #[case] expected: Option<(&str, SettingSource)>,
+    ) {
+        assert_eq!(
+            select_non_blank(
+                explicit,
+                runtime_default,
+                &env_of(env),
+                &["FIRST", "SECOND"]
+            ),
+            expected.map(|(value, source)| Selected::new(value.to_string(), source))
+        );
     }
 }

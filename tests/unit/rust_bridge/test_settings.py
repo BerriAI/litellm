@@ -195,11 +195,13 @@ def test_secret_manager_uses_key_management_defaults(monkeypatch: pytest.MonkeyP
 
 
 def test_provider_defaults_read_the_litellm_globals(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "api_base", "https://runtime.example")
     monkeypatch.setattr(litellm, "vertex_project", "configured-project")
     monkeypatch.setattr(litellm, "vertex_location", "europe-west4")
     monkeypatch.setattr(litellm, "enable_azure_ad_token_refresh", True)
 
     assert settings.provider_defaults() == settings.ProviderDefaults(
+        api_base="https://runtime.example",
         vertex_project="configured-project",
         vertex_location="europe-west4",
         enable_azure_ad_token_refresh=True,

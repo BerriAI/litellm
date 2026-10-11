@@ -45,6 +45,45 @@ pub const VERTEX_ANTHROPIC_MESSAGES_CONFIG: VertexAiPartnerModelsAnthropicMessag
     VertexAiPartnerModelsAnthropicMessagesConfig;
 
 impl BaseMessagesConfig for VertexAiPartnerModelsAnthropicMessagesConfig {
+    fn prepare_connection(
+        &self,
+        inputs: crate::base_llm::connection::ConnectionInputs<'_>,
+        headers: Headers,
+        model: &str,
+        stream: bool,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<crate::base_llm::connection::PreparedConnection, Error> {
+        let connection = crate::vertex_ai::connection::VertexConnection::resolve(
+            VertexConfig::from_params(&inputs.litellm_params.vertex),
+            inputs.api_base,
+            inputs.runtime_defaults,
+            env_lookup,
+        )?;
+        let auth = match has_header(&headers, "authorization") {
+            true => AuthScheme::Forwarded,
+            false => AuthScheme::GcpAccessToken {
+                config: Box::new(connection.config.clone()),
+            },
+        };
+        let project = connection
+            .project
+            .as_ref()
+            .ok_or_else(|| Error::Auth(VertexParams::PROJECT.missing("Vertex AI")))?;
+        let url = complete_vertex_anthropic_url(
+            connection.custom_api_base(),
+            &project.value,
+            connection.location(),
+            model,
+            stream,
+        )?;
+        Ok(crate::base_llm::connection::PreparedConnection {
+            url,
+            headers,
+            auth,
+            api_base_source: connection.api_base.source,
+        })
+    }
+
     fn shape_request(
         &self,
         request: MessagesRequest,
@@ -435,7 +474,7 @@ mod tests {
         ));
         assert_eq!(
             error.to_string(),
-            "Missing Vertex AI project - pass vertex_project or vertex_ai_project, set litellm.vertex_project, or set VERTEXAI_PROJECT"
+            "Missing Vertex AI project - pass vertex_project or vertex_ai_project or set VERTEXAI_PROJECT"
         );
     }
 

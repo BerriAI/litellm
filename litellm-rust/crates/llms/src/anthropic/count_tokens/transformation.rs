@@ -1,13 +1,16 @@
 use litellm_llms_types::{
     formats::messages::{Message, SystemPrompt},
     providers::anthropic::{
-        API_BASE, API_KEY_HEADER, API_VERSION, BETA_HEADER, COUNT_TOKENS_PATH, VERSION_HEADER,
+        API_KEY_HEADER, API_VERSION, BETA_HEADER, COUNT_TOKENS_PATH, VERSION_HEADER,
     },
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::{Error, anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX};
+use crate::{
+    Error,
+    anthropic::{ANTHROPIC_OAUTH_TOKEN_PREFIX, connection::AnthropicConnection},
+};
 
 const TOKEN_COUNTING_BETA: &str = "token-counting-2024-11-01";
 
@@ -27,7 +30,7 @@ pub struct AnthropicCountTokensResponse {
 }
 
 pub trait AnthropicCountTokensConfig {
-    fn endpoint(&self) -> String;
+    fn endpoint(&self, connection: &AnthropicConnection) -> Result<String, Error>;
 
     fn validate_request(&self, model: &str, messages: &[Message]) -> Result<(), Error>;
 
@@ -48,8 +51,8 @@ pub const ANTHROPIC_COUNT_TOKENS_TRANSFORMATION: AnthropicCountTokensTransformat
     AnthropicCountTokensTransformation;
 
 impl AnthropicCountTokensConfig for AnthropicCountTokensTransformation {
-    fn endpoint(&self) -> String {
-        format!("{API_BASE}{COUNT_TOKENS_PATH}")
+    fn endpoint(&self, connection: &AnthropicConnection) -> Result<String, Error> {
+        Ok(connection.endpoint(COUNT_TOKENS_PATH)?)
     }
 
     fn transform_request(
@@ -129,9 +132,89 @@ mod tests {
                 "system": "system"
             })
         );
+    }
+
+    fn connection(
+        api_base: Option<&str>,
+        runtime_default: Option<&str>,
+        env: &'static [(&'static str, &'static str)],
+    ) -> Result<AnthropicConnection, crate::base_llm::connection::InvalidApiBase> {
+        AnthropicConnection::resolve(
+            api_base,
+            &crate::base_llm::connection::RuntimeDefaults {
+                api_base: runtime_default.map(Into::into),
+                ..Default::default()
+            },
+            &|name| {
+                env.iter()
+                    .find(|(key, _)| *key == name)
+                    .map(|(_, value)| value.to_string())
+            },
+        )
+    }
+
+    #[rstest::rstest]
+    #[case::explicit_base_beats_both_aliases(
+        Some("https://explicit.test"),
+        None,
+        &[("ANTHROPIC_API_BASE", "https://a.test"), ("ANTHROPIC_BASE_URL", "https://b.test")],
+        "https://explicit.test/v1/messages/count_tokens"
+    )]
+    #[case::runtime_default_beats_the_environment(
+        None,
+        Some("https://runtime.test"),
+        &[("ANTHROPIC_API_BASE", "https://a.test"), ("ANTHROPIC_BASE_URL", "https://b.test")],
+        "https://runtime.test/v1/messages/count_tokens"
+    )]
+    #[case::api_base_alias(
+        None,
+        None,
+        &[("ANTHROPIC_API_BASE", "https://a.test"), ("ANTHROPIC_BASE_URL", "https://b.test")],
+        "https://a.test/v1/messages/count_tokens"
+    )]
+    #[case::base_url_alias(
+        None,
+        None,
+        &[("ANTHROPIC_BASE_URL", "https://b.test")],
+        "https://b.test/v1/messages/count_tokens"
+    )]
+    #[case::gateway_prefix_survives(
+        Some("https://gateway.test/anthropic/"),
+        None,
+        &[],
+        "https://gateway.test/anthropic/v1/messages/count_tokens"
+    )]
+    #[case::chat_surface_base(
+        Some("https://gateway.test/anthropic/v1/messages"),
+        None,
+        &[],
+        "https://gateway.test/anthropic/v1/messages/count_tokens"
+    )]
+    #[case::public_api_without_overrides(None, None, &[], "https://api.anthropic.com/v1/messages/count_tokens")]
+    fn the_endpoint_follows_the_resolved_anthropic_base(
+        #[case] api_base: Option<&str>,
+        #[case] runtime_default: Option<&str>,
+        #[case] env: &'static [(&'static str, &'static str)],
+        #[case] expected: &str,
+    ) {
+        let connection = connection(api_base, runtime_default, env).unwrap();
         assert_eq!(
-            ANTHROPIC_COUNT_TOKENS_TRANSFORMATION.endpoint(),
-            "https://api.anthropic.com/v1/messages/count_tokens"
+            ANTHROPIC_COUNT_TOKENS_TRANSFORMATION
+                .endpoint(&connection)
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn a_malformed_explicit_base_never_falls_back_to_the_public_api() {
+        assert!(
+            connection(
+                Some("not a url"),
+                None,
+                &[("ANTHROPIC_API_BASE", "https://a.test")]
+            )
+            .is_err()
         );
     }
 

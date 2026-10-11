@@ -1,8 +1,8 @@
 use litellm_auth_gcp::{self as vertex, VertexConfig};
-use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams, url_utils::ApiUrl};
+use litellm_core_utils::{call_arguments::CallArguments, params::OpaqueParams};
 use serde_json::Value;
 
-use super::common_utils::{validate_destination, vertex_config};
+use super::common_utils::{validate_destination, vertex_connection};
 use crate::{
     base_llm::ocr::{
         document::{inline_remote_document, validate_inline_document},
@@ -15,8 +15,6 @@ use crate::{
     mistral::ocr::transformation::{MistralOcrConfig, MistralOcrRequest},
 };
 use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
-
-use litellm_llms_types::providers::vertex_ai::DEFAULT_LOCATION;
 
 #[derive(Clone, Debug, Default)]
 pub struct VertexAiOcrConfig;
@@ -51,8 +49,8 @@ impl BaseOcrConfig for VertexAiOcrConfig {
         request: &PreparedOcrRequest,
         client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
-        let config = vertex_config(request)?;
-        self.resolve_environment(&request.connection, &config, client)
+        let connection = vertex_connection(request)?;
+        self.resolve_environment(&request.connection, &connection.config, client)
             .await
     }
 
@@ -62,16 +60,11 @@ impl BaseOcrConfig for VertexAiOcrConfig {
         _optional_params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, Error> {
-        let config = vertex_config(request)?;
-        let location =
-            vertex::get_vertex_ai_location(&config, &|name: &str| request.connection.secret(name))
-                .unwrap_or_else(|| DEFAULT_LOCATION.to_string());
-        self.build_ocr_url(
-            request.connection.api_base.as_deref(),
+        let prediction = format!("{}:rawPredict", request.model);
+        Ok(vertex_connection(request)?.resource_url(
             &environment.project_id,
-            &location,
-            &request.model,
-        )
+            &["publishers", "mistralai", "models", &prediction],
+        )?)
     }
 
     fn transform_ocr_request(
@@ -143,85 +136,5 @@ impl VertexAiOcrConfig {
             )
             .await
             .map_err(Error::from)
-    }
-
-    fn build_ocr_url(
-        &self,
-        api_base: Option<&str>,
-        project: &str,
-        location: &str,
-        model: &str,
-    ) -> Result<String, Error> {
-        validate_location(location)?;
-        let default_base = format!("https://{location}-aiplatform.googleapis.com");
-        let base = api_base
-            .map(str::trim)
-            .filter(|base| !base.is_empty())
-            .unwrap_or(&default_base);
-        let prediction = format!("{model}:rawPredict");
-        ApiUrl::parse(base)
-            .and_then(|url| {
-                url.complete_path(&[
-                    "v1",
-                    "projects",
-                    project,
-                    "locations",
-                    location,
-                    "publishers",
-                    "mistralai",
-                    "models",
-                    &prediction,
-                ])
-            })
-            .map(|url| url.into_string())
-            .map_err(|_| Error::RequestField {
-                path: "api_base".into(),
-            })
-    }
-}
-
-fn validate_location(location: &str) -> Result<(), Error> {
-    let valid = !location.is_empty()
-        && location
-            .bytes()
-            .all(|value| value.is_ascii_lowercase() || value.is_ascii_digit() || value == b'-')
-        && location
-            .as_bytes()
-            .first()
-            .is_some_and(u8::is_ascii_alphanumeric)
-        && location
-            .as_bytes()
-            .last()
-            .is_some_and(u8::is_ascii_alphanumeric);
-    if valid {
-        return Ok(());
-    }
-    Err(Error::RequestField {
-        path: "vertex_location".into(),
-    })
-}
-
-#[cfg(test)]
-mod tests {
-
-    use super::VertexAiOcrConfig;
-
-    #[test]
-    fn endpoint_uses_location_project_and_model() {
-        assert_eq!(
-            VertexAiOcrConfig
-                .build_ocr_url(None, "proj-1", "europe-west4", "mistral-ocr-maas")
-                .unwrap(),
-            "https://europe-west4-aiplatform.googleapis.com/v1/projects/proj-1/locations/europe-west4/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
-        );
-    }
-
-    #[test]
-    fn endpoint_rejects_invalid_location() {
-        assert!(
-            VertexAiOcrConfig
-                .build_ocr_url(None, "proj-1", "attacker.example/path", "model")
-                .is_err()
-        );
     }
 }

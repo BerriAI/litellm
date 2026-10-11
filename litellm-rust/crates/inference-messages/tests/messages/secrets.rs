@@ -46,6 +46,7 @@ async fn the_credential_and_base_come_from_the_secret_source(
         MessagesCall {
             custom_llm_provider: Some(provider.into()),
             litellm_params: Default::default(),
+            runtime_defaults: Default::default(),
             ..call
         },
     )
@@ -198,6 +199,7 @@ async fn azure_without_a_base_anywhere_fails_before_sending(call: MessagesCall) 
         MessagesCall {
             custom_llm_provider: Some("azure_ai".into()),
             litellm_params: Default::default(),
+            runtime_defaults: Default::default(),
             ..call
         },
     )
