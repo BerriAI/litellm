@@ -264,3 +264,25 @@ async def test_cohere_documents_options_in_request_body():
         # Validate that documents and citation_options are in the request body
         assert "documents" in request_data
         assert request_data["documents"] == test_documents
+
+
+def test_cohere_invalid_max_tokens_maps_to_bad_request_error(
+    respx_mock: respx.MockRouter, _cohere_httpx_transport: None
+) -> None:
+    route: Final = respx_mock.post(COHERE_V2_CHAT_URL).respond(
+        400, json={"message": "invalid request: max_tokens must be a number"}
+    )
+
+    with pytest.raises(litellm.BadRequestError) as error:
+        litellm.completion(
+            model="command-nightly",
+            messages=[{"content": "hey, how's it going?", "role": "user"}],
+            max_tokens="hello world",
+            api_key="cohere-test-key",
+        )
+
+    assert error.value.status_code == 400
+    assert error.value.llm_provider == "cohere"
+    assert "CohereException" in str(error.value)
+    assert "max_tokens must be a number" in str(error.value)
+    assert json.loads(route.calls.last.request.content)["max_tokens"] == "hello world"

@@ -94,8 +94,10 @@ import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import type { ListPluginsResponse, SkillRegisterRequest } from "./claude_code_plugins/types";
 import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
+import type { StoredModelMaxBudget } from "./key_team_helpers/modelMaxBudgetPayload";
 import type { ObjectPermission } from "./object_permission_types";
 import type { components } from "@/lib/http/schema";
+import type { DecisionTestBody } from "@/app/(dashboard)/guardrails/_components/decision_model/decisionModelQuestion";
 import { fetchClient } from "@/lib/http/api";
 import { toAgent, toAgentCard, type Agent, type AgentsResponse } from "./agents/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
@@ -1126,9 +1128,12 @@ export const userGetInfoV2 = async (accessToken: string, userId?: string): Promi
   }
 };
 
-export const teamInfoCall = async (accessToken: string, teamID: string | null) => {
+export const teamInfoCall = async (accessToken: string, teamID: string | null, options?: { keyLimit?: number }) => {
   try {
-    return await apiClient.get(`/team/info`, { accessToken, query: { team_id: teamID || undefined } });
+    return await apiClient.get(`/team/info`, {
+      accessToken,
+      query: { team_id: teamID || undefined, key_limit: options?.keyLimit },
+    });
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -2828,6 +2833,7 @@ export interface Member {
   allowed_models?: string[] | null;
   temp_budget_increase?: number | null;
   temp_budget_expiry?: string | null;
+  model_max_budget?: StoredModelMaxBudget | null;
 }
 
 export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {
@@ -2967,6 +2973,9 @@ export const teamMemberUpdateCall = async (
     }
     if ("temp_budget_expiry" in formValues) {
       requestBody.temp_budget_expiry = orNull(formValues.temp_budget_expiry);
+    }
+    if (formValues.model_max_budget !== undefined) {
+      requestBody.model_max_budget = formValues.model_max_budget;
     }
 
     const response = await fetch(url, {
@@ -6215,6 +6224,9 @@ export const applyGuardrail = async (
   }
 };
 
+export const decisionsTestCall = async (accessToken: string, requestBody: DecisionTestBody, signal?: AbortSignal) =>
+  apiClient.post(`/v1/decisions`, { accessToken, body: requestBody, signal });
+
 interface TestCustomCodeGuardrailRequest {
   custom_code: string;
   test_input: {
@@ -7099,7 +7111,7 @@ export const exchangeLoginCode = async (code: string, workerBaseUrl?: string | n
 
   const data = await response.json();
   if (data.token) {
-    document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
+    storeLoginToken(data.token);
   }
   return data.token;
 };

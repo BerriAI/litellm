@@ -140,6 +140,7 @@ jobs:
               tests/unit/batch_completion
               tests/unit/decisions
               tests/unit/litellm_core_utils
+              tests/unit/systemone
             python-version: "3.12"
             workers: 4
             reruns: 0
@@ -327,6 +328,7 @@ jobs:
               tests/unit/llms/sagemaker
               tests/unit/llms/sail
               tests/unit/llms/sambanova
+              tests/unit/llms/scaledown
               tests/unit/llms/sap
               tests/unit/llms/scaleway
               tests/unit/llms/searchapi

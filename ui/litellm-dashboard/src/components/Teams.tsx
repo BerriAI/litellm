@@ -51,6 +51,7 @@ import BudgetDurationDropdown, {
 import { Organization, getDefaultTeamSettings, getGuardrailsList, getPoliciesList, teamDeleteCall } from "./networking";
 import NumericalInput from "./shared/numerical_input";
 import { ModelMaxBudget, ModelMaxBudgetField } from "./key_team_helpers/ModelMaxBudgetEditor";
+import { modelMaxBudgetUpdate } from "./key_team_helpers/modelMaxBudgetPayload";
 import VectorStoreSelector from "./vector_store_management/VectorStoreSelector";
 import SearchToolSelector from "./search_tools/SearchToolSelector";
 import SkillSelector from "./skills/SkillSelector";
@@ -280,6 +281,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
   const [loggingSettings, setLoggingSettings] = useState<any[]>([]);
   const [modelAliases, setModelAliases] = useState<{ [key: string]: string }>({});
   const [modelMaxBudget, setModelMaxBudget] = useState<ModelMaxBudget>({});
+  const [teamMemberModelMaxBudget, setTeamMemberModelMaxBudget] = useState<ModelMaxBudget>({});
   const [routerSettings, setRouterSettings] = useState<RouterSettingsAccordionValue | null>(null);
   const [routerSettingsKey, setRouterSettingsKey] = useState<number>(0);
 
@@ -358,6 +360,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
     setLoggingSettings([]);
     setModelAliases({});
     setModelMaxBudget({});
+    setTeamMemberModelMaxBudget({});
     setRouterSettings(null);
     setRouterSettingsKey((prev) => prev + 1);
   };
@@ -551,9 +554,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
         }
 
         const { require_trace_id: requireTraceId, ...teamCreateValues } = formValues;
+        const teamMemberModelBudgets = modelMaxBudgetUpdate(teamMemberModelMaxBudget, {});
         await teamCreateCall(accessToken, {
           ...teamCreateValues,
           ...(requireTraceId === undefined ? {} : { require_trace_id: requireTraceId }),
+          ...(teamMemberModelBudgets !== undefined ? { team_member_model_max_budget: teamMemberModelBudgets } : {}),
           models: normalizeTeamModelSelection(formValues.models),
         });
         toast.success("Team created");
@@ -912,6 +917,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, isViewOnly 
                             />
                           )}
                         </FormField>
+                        <ModelMaxBudgetField
+                          key={`team-member-model-max-budget-${routerSettingsKey}`}
+                          label="Default Per-Model Budget"
+                          premiumUser={premiumUser}
+                          value={teamMemberModelMaxBudget}
+                          onChange={setTeamMemberModelMaxBudget}
+                          availableModels={userModels}
+                          hint="Set a default per-model spend cap for each team member, with an independent reset window."
+                        />
                         <FormField
                           control={form.control}
                           name="team_member_key_duration"
