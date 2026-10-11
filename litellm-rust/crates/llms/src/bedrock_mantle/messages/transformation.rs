@@ -32,7 +32,12 @@ use crate::{
 };
 
 const API_BASE_ENV: &str = "BEDROCK_MANTLE_API_BASE";
-const REGION_ENVS: &[&str] = &["BEDROCK_MANTLE_REGION", "AWS_REGION_NAME", "AWS_REGION"];
+const REGION_ENVS: &[&str] = &[
+    "BEDROCK_MANTLE_REGION",
+    "AWS_REGION_NAME",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+];
 const KEY_ENVS: &[&str] = &["BEDROCK_MANTLE_API_KEY", "AWS_BEARER_TOKEN_BEDROCK"];
 const MESSAGES_PATH: &str = "/anthropic/v1/messages";
 const BASE_SUFFIXES: &[&str] = &[
@@ -154,10 +159,15 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
                 "BEDROCK_MANTLE_API_KEY",
                 "AWS_BEARER_TOKEN_BEDROCK",
                 API_BASE_ENV,
-                "BEDROCK_MANTLE_REGION",
             ]
             .into_iter()
-            .chain(AwsParams::secret_names().iter().copied())
+            .chain(REGION_ENVS.iter().copied())
+            .chain(
+                AwsParams::secret_names()
+                    .iter()
+                    .copied()
+                    .filter(|name| !REGION_ENVS.contains(name)),
+            )
             .collect()
         });
         &NAMES
@@ -310,6 +320,37 @@ mod tests {
             .unwrap();
         assert!(
             matches!(environment.auth, AuthScheme::AwsSigV4 { region: actual, service: "bedrock", .. } if actual == region)
+        );
+    }
+
+    #[rstest]
+    #[case::aws_default_region("AWS_DEFAULT_REGION", "eu-west-1")]
+    fn aws_default_region_selects_mantle_endpoint(
+        #[case] env_name: &str,
+        #[case] region: &str,
+    ) {
+        let url = BEDROCK_MANTLE_MESSAGES_CONFIG
+            .get_complete_url(
+                None,
+                "claude-test",
+                &LitellmParams::default(),
+                false,
+                &|name| (name == env_name).then(|| region.into()),
+            )
+            .unwrap();
+        assert_eq!(
+            url,
+            "https://bedrock-mantle.eu-west-1.api.aws/anthropic/v1/messages"
+        );
+    }
+
+    #[rstest]
+    #[case::aws_default_region("AWS_DEFAULT_REGION")]
+    fn mantle_secret_names_include_region_fallbacks(#[case] env_name: &str) {
+        assert!(
+            BEDROCK_MANTLE_MESSAGES_CONFIG
+                .secret_names()
+                .contains(&env_name)
         );
     }
 
