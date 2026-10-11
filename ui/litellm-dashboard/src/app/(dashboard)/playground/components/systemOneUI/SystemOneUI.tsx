@@ -248,6 +248,8 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           </div>
 
           <Tabs
+            role="group"
+            aria-label="Request editor"
             value={view}
             onValueChange={(value) => (value === "form" || value === "curl") && setView(value)}
             className={cn(

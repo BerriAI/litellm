@@ -606,8 +606,9 @@ describe("SystemOneUI integration", () => {
     expect(within(question).getByText("Answer type")).toBeInTheDocument();
 
     const editor = screen.getByRole("region", { name: "Decisions request editor" });
-    const status = within(editor).getByText("Ready to send");
-    const actions = within(editor).getByRole("toolbar", { name: "Request actions" });
+    const card = within(editor).getByRole("group", { name: "Request editor" });
+    const status = within(card).getByText("Ready to send");
+    const actions = within(card).getByRole("toolbar", { name: "Request actions" });
     const clear = within(actions).getByRole("button", { name: "Clear" });
     const send = within(actions).getByRole("button", { name: "Send" });
     expect(status.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
