@@ -11,6 +11,10 @@ use litellm_llms::{
     minimax::messages::transformation::MINIMAX_MESSAGES_CONFIG,
     vertex_ai::messages::transformation::VERTEX_ANTHROPIC_MESSAGES_CONFIG,
 };
+use litellm_llms::{
+    bedrock::claude_platform::messages::transformation::BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG,
+    bedrock_mantle::messages::transformation::BEDROCK_MANTLE_MESSAGES_CONFIG,
+};
 use serde_json::{Map, Value};
 
 use super::Error;
@@ -42,7 +46,12 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
         LlmProviders::Tencent => &TENCENT_MESSAGES_CONFIG,
         LlmProviders::Anthropic => &ANTHROPIC_MESSAGES_CONFIG,
         LlmProviders::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,
+        LlmProviders::Bedrock if model.starts_with("claude_platform/") => {
+            &BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+        }
+        LlmProviders::Bedrock if model.starts_with("mantle/") => &BEDROCK_MANTLE_MESSAGES_CONFIG,
         LlmProviders::Bedrock => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+        LlmProviders::BedrockMantle => &BEDROCK_MANTLE_MESSAGES_CONFIG,
         LlmProviders::Deepseek => &DEEPSEEK_ANTHROPIC_MESSAGES_CONFIG,
         LlmProviders::Minimax => &MINIMAX_MESSAGES_CONFIG,
         LlmProviders::VertexAi if model.to_ascii_lowercase().contains("claude") => {
