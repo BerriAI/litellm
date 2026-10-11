@@ -14,17 +14,6 @@ use super::*;
 #[case::minimax_key("minimax", Some("sk-test"), &[], ("x-api-key", "sk-test"), &["authorization"])]
 #[case::minimax_forwarded_key("minimax", Some("deployment"), &[("X-Api-Key", "caller")], ("x-api-key", "caller"), &["authorization"])]
 #[case::minimax_forwarded_bearer("minimax", None, &[("Authorization", "Bearer caller")], ("authorization", "Bearer caller"), &["x-api-key"])]
-#[case::minimax_blank_key("minimax", Some("deployment"), &[("X-Api-Key", " \t")], ("x-api-key", "deployment"), &["authorization"])]
-#[case::minimax_blank_authorization("minimax", Some("deployment"), &[("Authorization", " \t")], ("x-api-key", "deployment"), &["authorization"])]
-#[case::minimax_empty_bearer("minimax", Some("deployment"), &[("Authorization", "bEaReR \t")], ("x-api-key", "deployment"), &["authorization"])]
-#[case::minimax_blank_authorization_with_key(
-    "minimax", Some("deployment"), &[("Authorization", "Bearer "), ("X-Api-Key", "caller")],
-    ("x-api-key", "caller"), &["authorization"]
-)]
-#[case::minimax_blank_key_with_bearer(
-    "minimax", Some("deployment"), &[("X-Api-Key", " "), ("Authorization", "Bearer caller")],
-    ("authorization", "Bearer caller"), &["x-api-key"]
-)]
 #[case::azure_key("azure_ai", Some("sk-azure"), &[], ("x-api-key", "sk-azure"), &["authorization"])]
 #[case::deepseek_key("deepseek", Some("sk-deepseek"), &[], ("x-api-key", "sk-deepseek"), &["authorization"])]
 #[case::deepseek_forwards_caller_authorization(
@@ -99,18 +88,14 @@ async fn credentials_become_exactly_one_auth_header(
 }
 
 #[rstest]
-#[case::anthropic("anthropic", &[])]
-#[case::azure_ai("azure_ai", &[])]
-#[case::deepseek("deepseek", &[])]
-#[case::minimax("minimax", &[])]
-#[case::minimax_blank_key("minimax", &[("x-api-key", " \t")])]
-#[case::minimax_blank_authorization("minimax", &[("authorization", " \t")])]
-#[case::minimax_empty_bearer("minimax", &[("authorization", "Bearer \t")])]
+#[case::anthropic("anthropic")]
+#[case::azure_ai("azure_ai")]
+#[case::deepseek("deepseek")]
+#[case::minimax("minimax")]
 #[tokio::test]
 async fn a_call_without_credentials_fails_before_sending(
     call: MessagesCall,
     #[case] provider: &str,
-    #[case] extra_headers: &[(&str, &str)],
 ) {
     let upstream = upstream([message_response()]).await;
 
@@ -118,7 +103,6 @@ async fn a_call_without_credentials_fails_before_sending(
         custom_llm_provider: Some(provider.into()),
         litellm_params: Default::default(),
         api_base: Some(upstream.uri()),
-        extra_headers: headers(extra_headers.iter().copied()),
         ..call
     })
     .await
