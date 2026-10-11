@@ -1,5 +1,4 @@
 import asyncio
-import os
 from pathlib import Path
 from unittest import mock
 
@@ -102,16 +101,9 @@ def test_azure_image_generation_route(client_no_auth):
 def test_azure_image_edit_route(client_no_auth):
     litellm.turn_on_debug()
     client, _, mock_aimage_edit = client_no_auth
-    image_path = os.path.join(
-        os.path.dirname(__file__),
-        "../../../image_gen_tests/test_image.png",
-    )
-    with open(image_path, "rb") as f:
-        files = {"image": ("test_image.png", f, "image/png")}
-        data = {"prompt": "A cute baby sea otter"}
-        response = client.post(
-            "/openai/deployments/dall-e-3/images/edits", files=files, data=data
-        )
+    files = {"image": ("test_image.png", b"\x89PNG\r\n\x1a\nimage-bytes", "image/png")}
+    data = {"prompt": "A cute baby sea otter"}
+    response = client.post("/openai/deployments/dall-e-3/images/edits", files=files, data=data)
 
     mock_aimage_edit.assert_called_once()
     called_kwargs = mock_aimage_edit.call_args.kwargs

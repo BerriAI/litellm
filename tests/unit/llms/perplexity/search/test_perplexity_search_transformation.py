@@ -1,4 +1,5 @@
 import json
+from collections.abc import Iterator
 from typing import Final
 
 import pytest
@@ -7,6 +8,14 @@ import respx
 import litellm
 
 PERPLEXITY_SEARCH_URL: Final = "https://api.perplexity.ai/search"
+
+
+@pytest.fixture
+def httpx_transport(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    yield
+    litellm.in_memory_llm_clients_cache.flush_cache()
 
 
 @pytest.fixture(autouse=True)
@@ -55,3 +64,46 @@ def test_search_sends_max_results_in_request_body(respx_mock: respx.MockRouter) 
     assert json.loads(route.calls.last.request.content) == {"query": "machine learning", "max_results": 5}
     assert route.calls.last.request.headers["Authorization"] == "Bearer test-perplexity-key"
     assert [result.url for result in response.results] == ["https://example.com/ml"]
+
+
+@pytest.mark.asyncio
+async def test_router_search_with_search_tools(
+    respx_mock: respx.MockRouter, httpx_transport: None
+) -> None:
+    route: Final = respx_mock.post(PERPLEXITY_SEARCH_URL).respond(
+        json={
+            "results": [
+                {
+                    "title": "AI news",
+                    "url": "https://example.com/news",
+                    "snippet": "Recent AI developments.",
+                }
+            ]
+        }
+    )
+    router: Final = litellm.Router(
+        search_tools=[
+            {
+                "search_tool_name": "litellm-search",
+                "litellm_params": {
+                    "search_provider": "perplexity",
+                    "api_key": "test-perplexity-key",
+                },
+            }
+        ]
+    )
+
+    response: Final = await router.asearch(
+        query="latest AI developments",
+        search_tool_name="litellm-search",
+        max_results=3,
+    )
+
+    assert json.loads(route.calls.last.request.content) == {
+        "query": "latest AI developments",
+        "max_results": 3,
+    }
+    assert response.object == "search"
+    assert [(result.title, result.url, result.snippet) for result in response.results] == [
+        ("AI news", "https://example.com/news", "Recent AI developments.")
+    ]

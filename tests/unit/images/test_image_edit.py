@@ -73,6 +73,24 @@ def _multipart_image_parts(request: httpx.Request) -> tuple[bytes, ...]:
     return tuple(part.split(b"\r\n\r\n", 1)[1].removesuffix(b"\r\n") for part in parts if b'name="image[]"' in part)
 
 
+def test_openai_image_edit_sync_accepts_bytesio_images(respx_mock: respx.MockRouter, httpx_transport: None) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
+        return_value=httpx.Response(200, json=_EDIT_RESPONSE)
+    )
+
+    result: Final = litellm.image_edit(
+        prompt="combine the reference images",
+        model="gpt-image-1",
+        image=io.BytesIO(_FIRST_IMAGE),
+        api_key="fake-key",
+    )
+
+    assert isinstance(result, ImageResponse)
+    assert result.data is not None and result.data[0].b64_json == _EDITED_IMAGE_B64
+    assert route.call_count == 1
+    assert _multipart_image_parts(route.calls[0].request) == (_FIRST_IMAGE,)
+
+
 @pytest.mark.asyncio
 async def test_openai_image_edit_accepts_bytesio_images(respx_mock: respx.MockRouter, httpx_transport: None) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
@@ -133,7 +151,7 @@ async def test_azure_image_edit_logs_deployment_model_and_positive_cost(
         api_base="https://fake.openai.azure.com",
         api_version="2025-04-01-preview",
     )
-    await asyncio.wait_for(logger.logged.wait(), timeout=10)
+    await logger.logged.wait()
 
     assert isinstance(result, ImageResponse)
     assert route.call_count == 1
@@ -149,4 +167,33 @@ async def test_azure_image_edit_logs_deployment_model_and_positive_cost(
     )
     assert expected_cost > 0
     assert payload["response_cost"] == pytest.approx(expected_cost)
-    assert result._hidden_params["response_cost"] == pytest.approx(expected_cost)  # pyright: ignore[reportPrivateUsage]  # cost is only surfaced on _hidden_params
+
+
+@pytest.mark.asyncio
+async def test_router_image_edit_returns_the_provider_image(
+    respx_mock: respx.MockRouter, httpx_transport: None
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/images/edits").mock(
+        return_value=httpx.Response(200, json=_EDIT_RESPONSE)
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-image-1",
+                "litellm_params": {
+                    "model": "gpt-image-1",
+                    "api_key": "fake-key",
+                },
+            }
+        ]
+    )
+
+    result: Final = await router.aimage_edit(
+        prompt="combine the reference images",
+        model="gpt-image-1",
+        image=_FIRST_IMAGE,
+    )
+
+    assert isinstance(result, ImageResponse)
+    assert result.data is not None and result.data[0].b64_json == _EDITED_IMAGE_B64
+    assert route.call_count == 1

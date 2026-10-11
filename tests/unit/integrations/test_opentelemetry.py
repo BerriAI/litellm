@@ -53,9 +53,8 @@ from litellm.types.services import ServiceLoggerPayload, ServiceTypes
 from collections.abc import AsyncIterator
 from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import ChatCompletionMessageToolCall, Function
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.logging_callback_tests.base_test import BaseLoggingCallbackTest
 
 exporter = InMemorySpanExporter()
 
@@ -7140,9 +7139,20 @@ async def test_arize_phoenix_creates_nested_spans_on_dedicated_provider():
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "drain_logging_worker", "isolate_litellm_state", "setup_and_teardown")
-class TestOpentelemetryUnitTests(BaseLoggingCallbackTest):
-    def test_parallel_tool_calls(self, mock_response_obj: ModelResponse):
-        tool_calls = mock_response_obj.choices[0].message.tool_calls
+class TestOpentelemetryUnitTests:
+    def test_parallel_tool_calls(self):
+        tool_calls: Final = [
+            ChatCompletionMessageToolCall(
+                function=Function(arguments='{"city": "New York"}', name="get_weather"),
+                id="call_weather",
+                type="function",
+            ),
+            ChatCompletionMessageToolCall(
+                function=Function(arguments='{"city": "New York"}', name="get_news"),
+                id="call_news",
+                type="function",
+            ),
+        ]
         from litellm.integrations.opentelemetry import OpenTelemetry
         from litellm.proxy._types import SpanAttributes
 
