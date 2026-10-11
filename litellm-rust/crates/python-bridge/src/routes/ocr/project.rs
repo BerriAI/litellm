@@ -12,7 +12,7 @@ use super::{document::FileDocumentInput, errors::to_pyerr as ocr_error_to_pyerr}
 use crate::{
     credentials::{self, CallerTokenProvider},
     marshal::{project_optional_fields, python_timeout_seconds, request_input_sources},
-    runtime_defaults,
+    runtime_defaults::{self, RuntimeDefault},
 };
 
 /// What the host keeps after projection: the caller's token callable that answers the
@@ -124,8 +124,16 @@ pub(super) fn project_request(
     let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
     let optional_params =
         project_optional_fields(names.iter().copied(), |name| present(kwargs, bound, name))?;
-    let runtime_defaults =
-        runtime_defaults::read(bound.py()).map_err(|error| settings_error(bound.py(), error))?;
+    let wanted = RuntimeDefault::vertex_fallbacks(|spec| {
+        spec.wire.iter().all(|name| names.contains(name))
+            && !spec
+                .wire
+                .iter()
+                .any(|name| optional_params.contains_key(*name))
+    })
+    .collect::<Vec<_>>();
+    let runtime_defaults = runtime_defaults::read(bound.py(), &wanted)
+        .map_err(|error| settings_error(bound.py(), error))?;
     let input_sources = request_input_sources(
         kwargs,
         names

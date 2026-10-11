@@ -2,6 +2,7 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
+use litellm_auth::VertexParams;
 use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
@@ -23,6 +24,7 @@ use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
     routes::RequestView,
+    runtime_defaults::RuntimeDefault,
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
@@ -143,7 +145,20 @@ impl MessagesPythonHost {
         let extra_headers = self.merged_headers(py, arguments)?;
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
         let litellm_params = project_litellm_params(argument)?;
-        let runtime_defaults = crate::runtime_defaults::read(py)?;
+        let supplied = [VertexParams::PROJECT, VertexParams::LOCATION]
+            .iter()
+            .flat_map(|spec| spec.wire.iter().copied())
+            .filter_map(|name| argument(name).map(|value| value.map(|_| name)).transpose())
+            .collect::<PyResult<Vec<_>>>()?;
+        let wanted = api_base
+            .is_none()
+            .then_some(RuntimeDefault::ApiBase)
+            .into_iter()
+            .chain(RuntimeDefault::vertex_fallbacks(|spec| {
+                !spec.wire.iter().any(|name| supplied.contains(name))
+            }))
+            .collect::<Vec<_>>();
+        let runtime_defaults = crate::runtime_defaults::read(py, &wanted)?;
         Ok(messages_body(body).and_then(|body| {
             Ok(MessagesCall {
                 body,
