@@ -51,6 +51,10 @@ DECISIONS_ENDPOINTS: Final[Mapping[str, DecisionsProviderConfig]] = MappingProxy
     }
 )
 
+
+def supported_decisions_providers() -> tuple[str, ...]:
+    return tuple(DECISIONS_ENDPOINTS)
+
 DecisionsQuestions: TypeAlias = (
     Mapping[str, DecisionQuestion | Mapping[str, object]] | Sequence[OpenAIDecisionQuestion | Mapping[str, object]]
 )
@@ -77,7 +81,7 @@ class _PreparedDecisionsRequest:
 def _resolve_provider_model(model: str, custom_llm_provider: str | None) -> tuple[str, str]:
     provider: Final = model.partition("/")[0] if custom_llm_provider is None else custom_llm_provider
     if provider not in DECISIONS_ENDPOINTS:
-        supported: Final = ", ".join(DECISIONS_ENDPOINTS)
+        supported: Final = ", ".join(supported_decisions_providers())
         raise litellm.BadRequestError(
             message=f"Unknown Decisions provider '{provider}'. Supported providers: {supported}",
             model=model,

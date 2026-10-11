@@ -266,7 +266,7 @@ async def list_guardrails_v2(
                 number_of_asterisks=4,
             )
             masked_litellm_params = (
-                BaseLitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
+                BaseLitellmParams.model_validate(masked_litellm_params_dict) if masked_litellm_params_dict else None
             )
             guardrail_configs.append(
                 GuardrailInfoResponse(
@@ -307,7 +307,9 @@ async def list_guardrails_v2(
                 number_of_asterisks=4,
             )
             masked_in_memory_litellm_params_typed = (
-                BaseLitellmParams(**masked_in_memory_litellm_params) if masked_in_memory_litellm_params else None
+                BaseLitellmParams.model_validate(masked_in_memory_litellm_params)
+                if masked_in_memory_litellm_params
+                else None
             )
             guardrail_configs.append(
                 GuardrailInfoResponse(
@@ -1369,7 +1371,9 @@ async def get_guardrail_info(guardrail_id: str):
             unmasked_length=4,
             number_of_asterisks=4,
         )
-        masked_litellm_params = BaseLitellmParams(**masked_litellm_params_dict) if masked_litellm_params_dict else None
+        masked_litellm_params = (
+            BaseLitellmParams.model_validate(masked_litellm_params_dict) if masked_litellm_params_dict else None
+        )
 
         return GuardrailInfoResponse(
             guardrail_id=result.get("guardrail_id"),
@@ -1401,6 +1405,7 @@ async def get_guardrail_ui_settings():
     - PII entity categories for UI organization
     - Content filter settings (patterns and categories)
     """
+    from litellm.decisions.main import supported_decisions_providers
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
         PATTERN_CATEGORIES,
         get_available_content_categories,
@@ -1432,6 +1437,7 @@ async def get_guardrail_ui_settings():
         supported_modes=[mode.value for mode in GuardrailEventHooks],
         supported_modes_by_provider=supported_modes_by_provider,
         pii_entity_categories=category_maps,
+        decision_model_providers=supported_decisions_providers(),
         content_filter_settings={
             "prebuilt_patterns": get_pattern_metadata(),
             "pattern_categories": list(PATTERN_CATEGORIES.keys()),
