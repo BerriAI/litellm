@@ -839,6 +839,11 @@ async def test_deployed_decision_classifier_uses_registered_connection(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setitem(litellm.model_cost, f"{provider}/{model}", {"input_cost_per_token": 0.01})
+    monkeypatch.setitem(
+        litellm.model_cost,
+        decisions_pricing_key(provider, model),
+        {"input_cost_per_token": 0.01, "litellm_provider": provider, "mode": "decisions"},
+    )
     router: Final = litellm.Router(
         model_list=[
             {
