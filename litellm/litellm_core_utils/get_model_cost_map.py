@@ -105,12 +105,14 @@ class GetModelCostMap:
         cls._loaded_catalog = MappingProxyType({key: MappingProxyType(entry) for key, entry in raw.items()})
 
     @classmethod
-    def _get_backup_model_count(cls) -> int:
+    def get_backup_model_count(cls) -> int:
         """Return the number of models in the local backup (cached int)."""
         if cls._backup_model_count < 0:
             backup: Final = cls.load_local_model_cost_map()
             cls._backup_model_count = _count_model_entries(backup)
         return cls._backup_model_count
+
+    _get_backup_model_count = get_backup_model_count
 
     @staticmethod
     def _check_is_valid_dict(fetched_map: dict) -> bool:
@@ -402,7 +404,7 @@ async def refetch_model_cost_map(
         return result
     if not GetModelCostMap.validate_model_cost_map(
         fetched_map=result.model_cost_map,
-        backup_model_count=GetModelCostMap._get_backup_model_count(),
+        backup_model_count=GetModelCostMap.get_backup_model_count(),
     ):
         return ModelCostMapReloadUnavailable(reason=f"model cost map from {url} failed integrity validation")
     _cost_map_source_info.loaded_at = datetime.now(timezone.utc)
@@ -600,7 +602,7 @@ def _retry_remote_fetch_in_background(
         _litellm_import_complete.wait()
         if not GetModelCostMap.validate_model_cost_map(
             fetched_map=result.model_cost_map,
-            backup_model_count=GetModelCostMap._get_backup_model_count(),  # pyright: ignore[reportPrivateUsage]  # integrity cache
+            backup_model_count=GetModelCostMap.get_backup_model_count(),
         ):
             verbose_logger.warning(
                 "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",
@@ -683,7 +685,7 @@ def get_model_cost_map(
     # Validate using cached count (cheap int comparison, no file I/O)
     if not GetModelCostMap.validate_model_cost_map(
         fetched_map=content,
-        backup_model_count=GetModelCostMap._get_backup_model_count(),
+        backup_model_count=GetModelCostMap.get_backup_model_count(),
     ):
         verbose_logger.warning(
             "LiteLLM: Fetched model cost map failed integrity check. Using local backup instead. url=%s",

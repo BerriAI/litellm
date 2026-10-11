@@ -91,7 +91,7 @@ def _sse_events(body: str) -> tuple[dict[str, JsonValue], ...]:
 def _spend_request_id(response_id: str, *, responses_api: bool = False) -> str:
     if not responses_api:
         return response_id
-    decoded: Final = ResponsesAPIRequestUtils._decode_responses_api_response_id(response_id)
+    decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(response_id)
     request_id: Final = decoded.get("response_id")
     return string_value(request_id) if isinstance(request_id, str) else response_id
 

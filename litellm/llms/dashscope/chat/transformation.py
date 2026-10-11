@@ -60,6 +60,13 @@ class DashScopeChatConfig(OpenAIGPTConfig):
         dynamic_api_key: Final = api_key or get_secret_str("DASHSCOPE_API_KEY")
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def _resolve_chat_api_base(self, api_base: str | None) -> str:
         return api_base or "https://dashscope.aliyuncs.com/compatible-mode/v1"
 

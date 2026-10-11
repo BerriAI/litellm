@@ -62,6 +62,48 @@ describe("SpendBudgetCell", () => {
     expect(screen.getByLabelText("question-circle")).toBeInTheDocument();
   });
 
+  it("uses membership spend against the team-member budget when the key has no own budget", () => {
+    const teamMemberGate = {
+      scope: "Team member" as const,
+      alias: "user@example.com in Team A",
+      maxBudget: 50,
+      budgetDuration: "30d",
+      spend: 45,
+    };
+    const { container } = render(
+      <SpendBudgetCell
+        spend={5}
+        maxBudget={null}
+        teamMemberGate={teamMemberGate}
+        inheritedGates={[teamMemberGate]}
+        spendDecimals={2}
+      />,
+    );
+
+    expect(screen.getByText("$5.00")).toBeInTheDocument();
+    expect(screen.getByText("· $45.00 of $50 (team member)")).toBeInTheDocument();
+    const meter = screen.getByRole("meter");
+    expect(meter).toHaveAttribute("aria-valuenow", "45");
+    expect(meter).toHaveAttribute("aria-valuemax", "50");
+    expect(meter).toHaveAttribute("aria-valuetext", "team member spend $45.00 of $50");
+    expect(indicator(container)?.className).toContain("bg-warning");
+    expect(screen.getByLabelText("question-circle")).toBeInTheDocument();
+  });
+
+  it("uses the key's own budget instead of a team-member budget", () => {
+    const teamMemberGate = {
+      scope: "Team member" as const,
+      alias: "user@example.com in Team A",
+      maxBudget: 50,
+      budgetDuration: "30d",
+    };
+    render(<SpendBudgetCell spend={10} maxBudget={100} teamMemberGate={teamMemberGate} />);
+
+    expect(screen.getByText("of $100")).toBeInTheDocument();
+    expect(screen.queryByText(/team member/)).not.toBeInTheDocument();
+    expect(screen.getByRole("meter")).toHaveAttribute("aria-valuemax", "100");
+  });
+
   it("shows no inherited-budget hint when there is nothing to inherit", () => {
     render(<SpendBudgetCell spend={10} maxBudget={null} inheritedGates={[]} />);
     expect(screen.queryByLabelText("question-circle")).not.toBeInTheDocument();

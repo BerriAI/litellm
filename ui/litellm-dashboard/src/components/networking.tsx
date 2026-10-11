@@ -94,8 +94,10 @@ import { Team } from "./key_team_helpers/key_list";
 import { EmailEventSettingsResponse, EmailEventSettingsUpdateRequest } from "./email_events/types";
 import type { ListPluginsResponse, SkillRegisterRequest } from "./claude_code_plugins/types";
 import type { ModelBudgetUsage, ModelMaxBudget } from "./key_team_helpers/ModelMaxBudgetEditor";
+import type { StoredModelMaxBudget } from "./key_team_helpers/modelMaxBudgetPayload";
 import type { ObjectPermission } from "./object_permission_types";
 import type { components } from "@/lib/http/schema";
+import type { DecisionTestBody } from "@/app/(dashboard)/guardrails/_components/decision_model/decisionModelQuestion";
 import { fetchClient } from "@/lib/http/api";
 import { toAgent, toAgentCard, type Agent, type AgentsResponse } from "./agents/types";
 import { jsonFields } from "./common_components/check_openapi_schema";
@@ -126,7 +128,7 @@ import type {
   TraceDetailQuery,
   TraceListQuery,
   TracePage,
-} from "./lens/traces/types";
+} from "@litellm/lens-ui";
 import {
   createApiClient,
   deriveErrorMessage,
@@ -141,6 +143,7 @@ import type {
   DailyActivityKeyPageResponse,
   DailyActivityKeySearchResponse,
   DailyActivityRequest,
+  DailyActivityUserPageResponse,
   ExportFormat,
   ExportType,
   ModelTopKeysResponse,
@@ -318,6 +321,8 @@ export interface Organization {
 
 export interface CredentialItem {
   credential_name: string;
+  display_name?: string | null;
+  source?: "db" | "config";
   credential_values: any;
   credential_info: {
     custom_llm_provider?: string;
@@ -553,9 +558,10 @@ export const getOpenAPISchema = async () => {
   return jsonData;
 };
 
-export const modelCostMap = async () => {
+export const modelCostMap = async (catalogOnly = false) => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/public/litellm_model_cost_map` : `/public/litellm_model_cost_map`;
+    const path = catalogOnly ? "/public/litellm_model_cost_map?catalog_only=true" : "/public/litellm_model_cost_map";
+    const url = proxyBaseUrl ? `${proxyBaseUrl}${path}` : path;
     const response = await fetch(url, {
       method: "GET",
       headers: {
@@ -1091,6 +1097,8 @@ export interface UserInfoV2Response {
   user_role: string | null;
   spend: number;
   max_budget: number | null;
+  tpm_limit?: number | null;
+  rpm_limit?: number | null;
   models: string[];
   budget_duration: string | null;
   budget_reset_at: string | null;
@@ -1120,9 +1128,12 @@ export const userGetInfoV2 = async (accessToken: string, userId?: string): Promi
   }
 };
 
-export const teamInfoCall = async (accessToken: string, teamID: string | null) => {
+export const teamInfoCall = async (accessToken: string, teamID: string | null, options?: { keyLimit?: number }) => {
   try {
-    return await apiClient.get(`/team/info`, { accessToken, query: { team_id: teamID || undefined } });
+    return await apiClient.get(`/team/info`, {
+      accessToken,
+      query: { team_id: teamID || undefined, key_limit: options?.keyLimit },
+    });
   } catch (error) {
     console.error("Failed to create key:", error);
     throw error;
@@ -1376,6 +1387,16 @@ export const dailyActivityExportCall = (
   apiClient.getBlob(`/${entity}/daily/activity/export`, {
     accessToken: req.accessToken,
     query: dailyActivityQuery(entity, req, { export_type: exportType, format }),
+  });
+
+export const userDailyActivityUserPageCall = (
+  req: DailyActivityRequest,
+  offset: number,
+  limit: number,
+): Promise<DailyActivityUserPageResponse> =>
+  apiClient.get<DailyActivityUserPageResponse>(`/user/daily/activity/aggregated/users`, {
+    accessToken: req.accessToken,
+    query: dailyActivityQuery("user", req, { offset, limit }),
   });
 
 export const cacheLeakageKeysCall = (req: DailyActivityRequest, limit?: number): Promise<CacheLeakageKeysResponse> =>
@@ -2460,6 +2481,27 @@ export const gatewayDailyActivityCall = async (accessToken: string, startTime: D
   }
 };
 
+export const requestErrorActivityCall = async (accessToken: string, startTime: Date, endTime: Date) => {
+  try {
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    return await apiClient.get(`/gateway/errors/activity`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+      },
+    });
+  } catch (error) {
+    console.error("Failed to fetch request error activity:", error);
+    throw error;
+  }
+};
+
 export const getPossibleUserRoles = async (accessToken: string) => {
   try {
     const data = (await apiClient.get(`/user/available_roles`, { accessToken })) as Record<
@@ -2572,6 +2614,59 @@ export const credentialDeleteCall = async (accessToken: string, credentialName: 
     throw error;
   }
 };
+
+export interface UserProviderConnection {
+  credential_name: string;
+  provider: string;
+  connected: boolean;
+  github_login: string | null;
+  connected_at: string | null;
+}
+
+export interface UserProviderConnectionsResponse {
+  connections: UserProviderConnection[];
+}
+
+export interface UserConnectionStartResponse {
+  user_code: string;
+  verification_uri: string;
+  expires_in: number;
+  interval: number;
+  flow_handle: string;
+}
+
+export type UserConnectionPollStatus = "pending" | "slow_down" | "expired" | "denied" | "no_copilot_seat" | "connected";
+
+export interface UserConnectionPollResponse {
+  status: UserConnectionPollStatus;
+  interval?: number | null;
+  github_login?: string | null;
+}
+
+const userConnectionPath = (credentialName: string): string =>
+  `/credentials/${encodeURIComponent(credentialName)}/user_connection`;
+
+export const userConnectionsListCall = (accessToken: string): Promise<UserProviderConnectionsResponse> =>
+  apiClient.get<UserProviderConnectionsResponse>("/credentials/user_connections", { accessToken });
+
+export const userConnectionStartCall = (
+  accessToken: string,
+  credentialName: string,
+): Promise<UserConnectionStartResponse> =>
+  apiClient.post<UserConnectionStartResponse>(`${userConnectionPath(credentialName)}/start`, { accessToken });
+
+export const userConnectionPollCall = (
+  accessToken: string,
+  credentialName: string,
+  flowHandle: string,
+): Promise<UserConnectionPollResponse> =>
+  apiClient.post<UserConnectionPollResponse>(`${userConnectionPath(credentialName)}/poll`, {
+    accessToken,
+    body: { flow_handle: flowHandle },
+  });
+
+export const userConnectionDeleteCall = (accessToken: string, credentialName: string): Promise<void> =>
+  apiClient.delete<void>(userConnectionPath(credentialName), { accessToken });
 
 export const credentialUpdateCall = async (
   accessToken: string,
@@ -2738,6 +2833,7 @@ export interface Member {
   allowed_models?: string[] | null;
   temp_budget_increase?: number | null;
   temp_budget_expiry?: string | null;
+  model_max_budget?: StoredModelMaxBudget | null;
 }
 
 export const teamMemberAddCall = async (accessToken: string, teamId: string, formValues: Member) => {
@@ -2877,6 +2973,9 @@ export const teamMemberUpdateCall = async (
     }
     if ("temp_budget_expiry" in formValues) {
       requestBody.temp_budget_expiry = orNull(formValues.temp_budget_expiry);
+    }
+    if (formValues.model_max_budget !== undefined) {
+      requestBody.model_max_budget = formValues.model_max_budget;
     }
 
     const response = await fetch(url, {
@@ -6125,6 +6224,9 @@ export const applyGuardrail = async (
   }
 };
 
+export const decisionsTestCall = async (accessToken: string, requestBody: DecisionTestBody, signal?: AbortSignal) =>
+  apiClient.post(`/v1/decisions`, { accessToken, body: requestBody, signal });
+
 interface TestCustomCodeGuardrailRequest {
   custom_code: string;
   test_input: {
@@ -7009,7 +7111,7 @@ export const exchangeLoginCode = async (code: string, workerBaseUrl?: string | n
 
   const data = await response.json();
   if (data.token) {
-    document.cookie = `token=${data.token}; path=/; SameSite=Lax`;
+    storeLoginToken(data.token);
   }
   return data.token;
 };
@@ -7047,6 +7149,13 @@ export const updateUiSettings = async (accessToken: string, settings: Record<str
   }
   const data = await response.json();
   return data;
+};
+
+export const startMoyaiQuickConnect = async (accessToken: string, moyaiUrl: string, returnTo: string) => {
+  return apiClient.post<{ connect_url: string }>("/moyai/connect/start", {
+    accessToken,
+    body: { moyai_url: moyaiUrl, return_to: returnTo },
+  });
 };
 
 export type UserBannerSeverity = "info" | "warning" | "error";

@@ -15,9 +15,9 @@ import litellm
 from litellm.constants import OPENAI_SYSTEM_MESSAGES_FIRST_PROVIDERS
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.litellm_core_utils.llm_response_utils.convert_dict_to_response import (
-    _extract_reasoning_content,
-    _handle_invalid_parallel_tool_calls,
-    _should_convert_tool_call_to_json_mode,
+    extract_reasoning_content,
+    handle_invalid_parallel_tool_calls,
+    should_convert_tool_call_to_json_mode,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     drop_non_python_regex_patterns,
@@ -387,6 +387,17 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                         )
             return hoisted_messages
 
+    def transform_messages(
+        self,
+        messages: list[AllMessageValues],  # mutable-ok: mirrors override contract
+        model: str,
+        is_async: bool = False,
+    ) -> (
+        list[AllMessageValues]  # mutable-ok: mirrors override contract
+        | Coroutine[object, object, list[AllMessageValues]]
+    ):
+        return self._transform_messages(messages, model, is_async)
+
     def remove_cache_control_flag_from_messages_and_tools(
         self,
         model: str,  # allows overrides to selectively run this
@@ -609,7 +620,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 for _tc in tool_calls:
                     _openai_tc = chat_completion_tool_call_from_dict(_tc)
                     _openai_tool_calls.append(_openai_tc)
-                fixed_tool_calls = _handle_invalid_parallel_tool_calls(_openai_tool_calls)
+                fixed_tool_calls = handle_invalid_parallel_tool_calls(_openai_tool_calls)
 
                 if fixed_tool_calls is not None:
                     new_tool_calls = fixed_tool_calls
@@ -621,7 +632,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
 
             translated_message: Message | None = None
             finish_reason: str | None = None
-            if new_tool_calls and _should_convert_tool_call_to_json_mode(
+            if new_tool_calls and should_convert_tool_call_to_json_mode(
                 tool_calls=new_tool_calls,
                 convert_tool_call_to_json_mode=json_mode,
             ):
@@ -636,7 +647,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
                 (
                     reasoning_content,
                     content_str,
-                ) = _extract_reasoning_content(cast(dict, choice["message"]))
+                ) = extract_reasoning_content(cast(dict, choice["message"]))
 
                 translated_message = Message(
                     role="assistant",

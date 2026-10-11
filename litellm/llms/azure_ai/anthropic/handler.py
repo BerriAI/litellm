@@ -177,9 +177,9 @@ class AzureAnthropicChatCompletion(AnthropicChatCompletion):
 
             else:
                 if client is None or not isinstance(client, HTTPHandler):
-                    from litellm.llms.custom_httpx.http_handler import _get_httpx_client
+                    from litellm.llms.custom_httpx.http_handler import get_httpx_client
 
-                    client = _get_httpx_client(params={"timeout": timeout})
+                    client = get_httpx_client(params={"timeout": timeout})
                 else:
                     client = client
 
