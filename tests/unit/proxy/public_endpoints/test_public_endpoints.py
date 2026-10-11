@@ -1606,8 +1606,25 @@ async def test_get_whats_new_serves_bundled_list_without_fetching_when_no_url_is
     assert len(served.launches) > 0
 
 
-def test_whats_new_url_defaults_to_unset_so_only_the_env_var_opts_into_a_remote_list() -> None:
-    assert litellm.whats_new_url == os.getenv("LITELLM_WHATS_NEW_URL")
+@pytest.mark.asyncio
+async def test_public_whats_new_route_serves_the_bundled_list_without_fetching_when_no_url_is_configured(
+    monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
+) -> None:
+    from litellm.proxy.public_endpoints import public_endpoints
+    from litellm.proxy.public_endpoints.public_endpoints import _load_bundled_whats_new, get_public_whats_new
+
+    monkeypatch.delenv("LITELLM_LOCAL_WHATS_NEW", raising=False)
+    monkeypatch.setattr(litellm, "whats_new_url", None)
+
+    async def forbidden_fetch(url: str) -> bytes:
+        raise AssertionError(f"no URL is configured, so the route may not fetch, got {url}")
+
+    monkeypatch.setattr(public_endpoints, "_fetch_remote_bytes", forbidden_fetch)
+
+    served = await get_public_whats_new()
+
+    assert served == _load_bundled_whats_new()
+    assert len(served.launches) > 0
 
 
 @pytest.mark.asyncio
