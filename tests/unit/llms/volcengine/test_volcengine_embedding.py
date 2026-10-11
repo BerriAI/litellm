@@ -1,19 +1,15 @@
-"""
-Integration tests for Volcengine embedding following LiteLLM testing patterns
-Based on the BaseLLMEmbeddingTest framework
-"""
+"""Tests for Volcengine embedding."""
 
 from unittest.mock import MagicMock, patch
 import pytest
 
 # Add parent directory to path for imports
 
-from tests.llm_translation.base_embedding_unit_tests import BaseLLMEmbeddingTest
 import litellm
 from litellm.types.utils import EmbeddingResponse
 
 
-class TestVolcEngineEmbedding(BaseLLMEmbeddingTest):
+class TestVolcEngineEmbedding:
     """Test Volcengine embedding integration following LiteLLM patterns"""
 
     def get_custom_llm_provider(self) -> litellm.LlmProviders:

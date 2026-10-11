@@ -8,10 +8,9 @@ import pytest
 
 import litellm
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
-from tests.llm_translation.base_embedding_unit_tests import BaseLLMEmbeddingTest
 
 
-class TestVoyageAI(BaseLLMEmbeddingTest):
+class TestVoyageAI:
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.VOYAGE
 

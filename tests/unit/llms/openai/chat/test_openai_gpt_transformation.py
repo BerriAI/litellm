@@ -1,14 +1,17 @@
 """
 Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation.py)
 """
-
-
-import pytest
+import base64
+import json
 from typing import Final
 
+import pytest
+import respx
+from httpx import Response
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_BOUNDARY
+from litellm.litellm_core_utils.prompt_templates.image_handling import in_memory_cache
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
 from litellm.llms.openai.chat.gpt_transformation import (
     OpenAIChatCompletionStreamingHandler,
@@ -94,6 +97,44 @@ class TestOpenAIGPTConfig:
 
         supported_params = self.config.get_supported_openai_params("gpt-4.1")
         assert "prompt_cache_key" in supported_params
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_o3_reasoning_effort_is_sent_in_chat_request(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=Response(
+            200,
+            json={
+                "id": "chatcmpl-o3",
+                "object": "chat.completion",
+                "created": 1700000000,
+                "model": "o3-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "Hello"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 4, "completion_tokens": 1, "total_tokens": 5},
+            },
+        )
+    )
+    response: Final = litellm.completion(
+        model="o3-mini",
+        messages=[{"role": "user", "content": "Hello"}],
+        reasoning_effort="high",
+        api_key="sk-openai-test",
+    )
+    request_body: Final = json.loads(route.calls[0].request.content)
+
+    assert route.call_count == 1
+    assert request_body == {
+        "model": "o3-mini",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "reasoning_effort": "high",
+    }
+    assert response.choices[0].message.content == "Hello"
 
 
 class TestGetOptionalParamsIntegration:
@@ -1025,6 +1066,89 @@ class TestToolChoiceWithoutToolsDropped:
         )
         assert body["tool_choice"] == "auto"
         assert body["tools"] == tools
+
+
+_OPENAI_CHAT_REPLY: Final = {
+    "id": "chatcmpl-media",
+    "object": "chat.completion",
+    "created": 0,
+    "model": "gpt-4o",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "seen"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+}
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.respx(assert_all_called=True)
+@pytest.mark.asyncio
+async def test_openai_pdf_url_is_downloaded_into_file_data(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter, sync_mode: bool
+) -> None:
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    pdf_url: Final = "https://files.example.test/pdf-url-download.pdf"
+    pdf_content: Final = b"%PDF-1.7\nmock-pdf"
+    in_memory_cache.delete_cache(pdf_url)
+    download: Final = respx_mock.get(pdf_url).mock(
+        return_value=Response(200, headers={"content-type": "application/pdf"}, content=pdf_content)
+    )
+    chat: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
+    )
+
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What is the first page of the PDF?"},
+                {"type": "file", "file": {"file_id": pdf_url}},
+            ],
+        }
+    ]
+    if sync_mode:
+        litellm.completion(model="gpt-4o", messages=messages, api_key="sk-openai-test")
+    else:
+        await litellm.acompletion(model="gpt-4o", messages=messages, api_key="sk-openai-test")
+
+    assert download.call_count == 1
+    assert json.loads(chat.calls[0].request.content)["messages"][0]["content"][1] == {
+        "type": "file",
+        "file": {
+            "file_data": f"data:application/pdf;base64,{base64.b64encode(pdf_content).decode('utf-8')}",
+            "filename": "my_file.pdf",
+        },
+    }
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_vision_with_custom_model_preserves_base64_image_in_request(respx_mock: respx.MockRouter) -> None:
+    image_uri: Final = f"data:image/png;base64,{base64.b64encode(b'test-image').decode('utf-8')}"
+    messages: Final = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "What's in this image?"},
+                {"type": "image_url", "image_url": {"url": image_uri}},
+            ],
+        }
+    ]
+    route: Final = respx_mock.post("https://my-custom.api.openai.com/chat/completions").mock(
+        return_value=Response(200, json=_OPENAI_CHAT_REPLY)
+    )
+
+    litellm.completion(
+        model="openai/my-custom-model",
+        max_tokens=10,
+        api_base="https://my-custom.api.openai.com",
+        messages=messages,
+        api_key="sk-openai-test",
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "my-custom-model",
+        "messages": messages,
+        "max_tokens": 10,
+    }
 
 
 class TestToolMessageImageHoisting:

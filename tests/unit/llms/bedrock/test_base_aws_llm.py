@@ -5,14 +5,18 @@ import os
 import threading
 import time
 
+import boto3
+import httpx
 import pytest
+import re
+import respx
 from fastapi.testclient import TestClient
 
 
 
 from collections.abc import Callable
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Final, Optional
 from unittest.mock import MagicMock, Mock, patch
 
 from botocore.awsrequest import AWSPreparedRequest, AWSRequest
@@ -30,7 +34,7 @@ from litellm.llms.bedrock.base_aws_llm import (
 )
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 from litellm.llms.bedrock.common_utils import BedrockModelInfo
-from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 # Global variable for the base_aws_llm.py file path
@@ -4215,3 +4219,124 @@ def test_shared_json_signer_preserves_body_and_signs_for_the_requested_service()
     )
     assert request.body == body
     assert "/us-west-2/s3/aws4_request" in request.headers["Authorization"]
+
+
+_CONVERSE_SIGNED_RESPONSE: Final = {
+    "output": {"message": {"role": "assistant", "content": [{"text": "signed"}]}},
+    "stopReason": "end_turn",
+    "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
+}
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock/mistral.mistral-large-2407-v1:0",
+    ],
+)
+@pytest.mark.respx(assert_all_called=True)
+def test_explicit_aws_credentials_sign_the_converse_request(model: str, respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(
+        re.compile(r"https://bedrock-runtime\.us-west-2\.amazonaws\.com/model/[^/]+/converse")
+    ).mock(return_value=httpx.Response(200, json=_CONVERSE_SIGNED_RESPONSE))
+    response: Final = litellm.completion(
+        model=model,
+        messages=[{"role": "user", "content": "sign this request"}],
+        aws_access_key_id="AKIAUNITTESTKEY",
+        aws_secret_access_key="unit-test-secret",
+        aws_session_token="unit-test-session",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+    sent: Final = route.calls[0].request
+
+    assert response.choices[0].message.content == "signed"
+    assert re.fullmatch(
+        r"AWS4-HMAC-SHA256 Credential=AKIAUNITTESTKEY/\d{8}/us-west-2/bedrock/aws4_request, "
+        r"SignedHeaders=[a-z0-9;-]+, Signature=[0-9a-f]{64}",
+        sent.headers["authorization"],
+    )
+    assert sent.headers["x-amz-security-token"] == "unit-test-session"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_external_boto3_client_supplies_credentials_and_region(respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(
+        re.compile(r"https://bedrock-runtime\.us-east-1\.amazonaws\.com/model/[^/]+/converse")
+    ).mock(return_value=httpx.Response(200, json=_CONVERSE_SIGNED_RESPONSE))
+    bedrock_client: Final = boto3.client(
+        "bedrock-runtime",
+        region_name="us-east-1",
+        aws_access_key_id="AKIAEXTERNALKEY",
+        aws_secret_access_key="external-client-secret",
+        aws_session_token="external-client-session",
+    )
+    response: Final = litellm.completion(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "use the external client"}],
+        aws_bedrock_client=bedrock_client,
+        client=HTTPHandler(),
+    )
+    sent: Final = route.calls[0].request
+
+    assert response.choices[0].message.content == "signed"
+    assert re.match(
+        r"AWS4-HMAC-SHA256 Credential=AKIAEXTERNALKEY/\d{8}/us-east-1/bedrock/aws4_request, ",
+        sent.headers["authorization"],
+    )
+    assert sent.headers["x-amz-security-token"] == "external-client-session"
+
+
+@pytest.mark.asyncio
+async def test_extra_headers_and_authorization_override_reach_converse_and_invoke() -> None:
+    requests: Final[list[httpx.Request]] = []
+    api_base: Final = "https://gateway.ai.cloudflare.com/v1/account/test/aws-bedrock/bedrock-runtime/us-east-1"
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        if request.url.path.endswith("/converse"):
+            return httpx.Response(200, json=_CONVERSE_SIGNED_RESPONSE, request=request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "msg_1",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": "invoke"}],
+                "model": "claude-3-sonnet",
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+            },
+            request=request,
+        )
+
+    request_args: Final = {
+        "messages": [{"role": "user", "content": "What's AWS?"}],
+        "api_base": api_base,
+        "extra_headers": {"test": "hello world", "Authorization": "my-test-key"},
+        "aws_access_key_id": "AKIAHEADERKEY",
+        "aws_secret_access_key": "header-secret",
+        "aws_region_name": "us-east-1",
+        "client": AsyncHTTPHandler(transport=httpx.MockTransport(respond)),
+    }
+    converse_response: Final = await litellm.acompletion(
+        model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0", **request_args
+    )
+    invoke_response: Final = await litellm.acompletion(
+        model="bedrock/invoke/anthropic.claude-3-sonnet-20240229-v1:0", **request_args
+    )
+    converse_request, invoke_request = requests
+
+    assert converse_response.choices[0].message.content == "signed"
+    assert invoke_response.choices[0].message.content == "invoke"
+    assert str(converse_request.url) == f"{api_base}/model/anthropic.claude-3-sonnet-20240229-v1%3A0/converse"
+    assert (invoke_request.url.host, invoke_request.url.path) == (
+        "gateway.ai.cloudflare.com",
+        "/v1/account/test/aws-bedrock/bedrock-runtime/us-east-1/model/anthropic.claude-3-sonnet-20240229-v1:0/invoke",
+    )
+    assert (converse_request.headers["test"], converse_request.headers["authorization"]) == (
+        "hello world",
+        "my-test-key",
+    )
+    assert (invoke_request.headers["test"], invoke_request.headers["authorization"]) == ("hello world", "my-test-key")

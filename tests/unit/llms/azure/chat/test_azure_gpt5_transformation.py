@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 
 import litellm
@@ -47,6 +49,30 @@ def test_azure_gpt5_maps_max_tokens(config: AzureOpenAIGPT5Config):
     )
     assert params["max_completion_tokens"] == 5
     assert "max_tokens" not in params
+
+
+def test_azure_gpt5_maps_minimal_reasoning_to_request_body(config: AzureOpenAIGPT5Config) -> None:
+    optional_params: Final = config.map_openai_params(
+        non_default_params={"max_tokens": 10, "reasoning_effort": "minimal"},
+        optional_params={},
+        model="gpt-5",
+        drop_params=False,
+        api_version="2024-05-01-preview",
+    )
+    request: Final = config.transform_request(
+        model="gpt-5",
+        messages=[{"role": "user", "content": "Solve the problem."}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request == {
+        "model": "gpt-5",
+        "messages": [{"role": "user", "content": "Solve the problem."}],
+        "max_completion_tokens": 10,
+        "reasoning_effort": "minimal",
+    }
 
 
 def test_azure_gpt5_temperature_error(config: AzureOpenAIGPT5Config):
