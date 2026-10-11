@@ -19,7 +19,6 @@ use super::{
     NativeCall,
     inference::{InferenceHost, InferenceRoute, run_inference},
 };
-use crate::errors::RustBridgeDeclined;
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.responses.route_host";
 
@@ -27,11 +26,11 @@ fn run_responses(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> Py
     let resolved = call.resolved()?;
     if let Some(reason) = py
         .import(ROUTE_HOST_MODULE)?
-        .getattr("decline_reason")?
+        .getattr("unsupported_reason")?
         .call1((&resolved,))?
         .extract::<Option<String>>()?
     {
-        return Err(RustBridgeDeclined::new_err(reason));
+        return Err(pyo3::exceptions::PyNotImplementedError::new_err(reason));
     }
     let argument = |name: &str| present(&call.kwargs, &call.base, name);
     let model = argument("model")?
@@ -48,7 +47,7 @@ fn run_responses(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> Py
             .unwrap_or(&model)
             .contains('/')
     {
-        return Err(RustBridgeDeclined::new_err(
+        return Err(pyo3::exceptions::PyNotImplementedError::new_err(
             "native HTTP responses provider",
         ));
     }
@@ -57,7 +56,7 @@ fn run_responses(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> Py
         .transpose()?
         .is_some_and(|value| value == Value::Bool(true))
     {
-        return Err(RustBridgeDeclined::new_err(
+        return Err(pyo3::exceptions::PyNotImplementedError::new_err(
             "native Python responses streaming",
         ));
     }

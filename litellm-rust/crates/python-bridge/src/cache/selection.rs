@@ -76,7 +76,7 @@ fn selected_cache<'py>(
     Ok(Some(configured))
 }
 
-pub(crate) fn admit_native(
+pub(crate) fn require_native_cache(
     py: Python<'_>,
     kwargs: &Bound<'_, PyDict>,
     call_type: &str,
@@ -84,8 +84,8 @@ pub(crate) fn admit_native(
     if let Some(configured) = selected_cache(py, kwargs, call_type)?
         && native::v2::native_handle(&configured)?.is_none()
     {
-        return Err(crate::errors::RustBridgeDeclined::new_err(
-            "the configured cache requires Python inference",
+        return Err(pyo3::exceptions::PyNotImplementedError::new_err(
+            "native inference does not implement the configured Python cache on this route",
         ));
     }
     Ok(())

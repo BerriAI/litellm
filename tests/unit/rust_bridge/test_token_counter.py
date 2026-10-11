@@ -343,7 +343,7 @@ async def test_tiktoken_counts_long_text_exactly_where_python_chunks(
     assert exact < python_count <= exact + chunks
 
 
-DECLINED_REQUESTS: Final[tuple[dict[str, object], ...]] = (
+UNSUPPORTED_REQUESTS: Final[tuple[dict[str, object], ...]] = (
     {
         "model": MODEL,
         "messages": [
@@ -358,12 +358,12 @@ DECLINED_REQUESTS: Final[tuple[dict[str, object], ...]] = (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("tokenizer", TOKENIZERS)
-@pytest.mark.parametrize("request_body", DECLINED_REQUESTS)
-async def test_native_declines_shapes_python_prices_differently(
+@pytest.mark.parametrize("request_body", UNSUPPORTED_REQUESTS)
+async def test_native_rejects_shapes_python_prices_differently(
     request_body: dict[str, object], tokenizer: bridge.RustTokenizer
 ) -> None:
     native: Final = pytest.importorskip("litellm.rust_bridge._native")
     raw, _ = _counted(request_body, MODEL_BY_TOKENIZER[tokenizer])
 
-    with pytest.raises(native.RustBridgeDeclined):
+    with pytest.raises(NotImplementedError):
         await bridge.native_count(native.TokenCounter, tokenizer, raw)

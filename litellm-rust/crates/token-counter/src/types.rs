@@ -12,8 +12,7 @@ use super::Error;
 /// Responses and embeddings carry `input`; rerank carries `query` and
 /// `documents`. The host checks key presence, not nullness, so an explicit
 /// `null` is kept distinct from an absent key. Anything outside this shape is
-/// declined so the host can fall back to its own counter instead of silently
-/// miscounting.
+/// an error instead of a silent miscount.
 #[derive(Clone, Debug, Deserialize, PartialEq)]
 pub struct CountableRequest {
     pub(crate) model: Option<String>,

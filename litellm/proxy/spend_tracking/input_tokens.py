@@ -85,20 +85,12 @@ async def _count_group(
 
     if tokenizer is None or raw_body is None:
         return await python()
-    try:
-        return await runtime.arun(
-            RouteContext(Route.TOKEN_COUNTER, provider=tokenizer),
-            binding=TOKEN_COUNTER,
-            native=lambda factory: _native_counts(factory, tokenizer, raw_body, models),
-            python=python,
-        )
-    except (RuntimeError, ValueError) as error:
-        from litellm.rust_bridge.fork_guard import ForkedAfterNativeRuntimeStarted, ProcessReservedForForking
-
-        if isinstance(error, (ForkedAfterNativeRuntimeStarted, ProcessReservedForForking)):
-            raise
-        verbose_proxy_logger.debug("Rust token counter (%s) failed, counting in Python: %s", tokenizer, error)
-        return await python()
+    return await runtime.arun(
+        RouteContext(Route.TOKEN_COUNTER, provider=tokenizer),
+        binding=TOKEN_COUNTER,
+        native=lambda factory: _native_counts(factory, tokenizer, raw_body, models),
+        python=python,
+    )
 
 
 async def _native_counts(

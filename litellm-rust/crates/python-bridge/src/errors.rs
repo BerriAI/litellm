@@ -7,13 +7,6 @@ use pyo3::{
 
 pyo3::create_exception!(
     _native,
-    RustBridgeDeclined,
-    pyo3::exceptions::PyException,
-    "The route declined before calling the provider, so the host may retry on its own path."
-);
-
-pyo3::create_exception!(
-    _native,
     RustUpstreamError,
     pyo3::exceptions::PyException,
     "The provider call was already issued and failed. Args are (status, message); status is 0 when there was no HTTP response."
@@ -52,7 +45,6 @@ mod tests {
         Python::initialize();
         Python::attach(|py| {
             let failure = route_error_to_pyerr(error);
-            assert!(!failure.is_instance_of::<RustBridgeDeclined>(py));
             assert_eq!(failure.is_instance_of::<PyValueError>(py), is_request);
             assert_eq!(failure.is_instance_of::<PyRuntimeError>(py), !is_request);
         });
