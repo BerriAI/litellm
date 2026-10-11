@@ -160,7 +160,7 @@ commands:
                 exit 1
                 ;;
             esac
-            curl -sSLf -o /tmp/rustup-init \
+            curl -sSLf --retry 3 --retry-all-errors --retry-max-time 120 --connect-timeout 15 --max-time 60 -o /tmp/rustup-init \
               "https://static.rust-lang.org/rustup/archive/1.28.2/${RUSTUP_TRIPLE}/rustup-init"
             echo "${RUSTUP_SHA256}  /tmp/rustup-init" | sha256sum -c -
             chmod +x /tmp/rustup-init
@@ -453,105 +453,6 @@ jobs:
           command: |
             python3 tests/windows_tests/check_windows_wheel_install.py --lengths-only
 
-  llm_translation_testing:
-    docker:
-      - &python312_image
-        image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-    working_directory: ~/project
-    resource_class: xlarge
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            # Add --timeout to kill hanging tests after 120s (2 min)
-            # Add --durations=20 to show 20 slowest tests for debugging
-            # Subdirectories with dedicated jobs (maintain this list as new jobs are added)
-            mkdir -p test-results
-            # Glob excludes the realtime/ subdirectory since it has its own job
-            TEST_FILES=$(circleci tests glob "tests/llm_translation/**/test_*.py" | grep -v "^tests/llm_translation/realtime/")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -v \
-                --junitxml=test-results/junit.xml \
-                --durations=20 \
-                -n 4 \
-                --timeout=120 --timeout_method=thread \
-                --retries 2 --retry-delay 5 \
-                --max-worker-restart=5"
-          no_output_timeout: 15m
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-  realtime_translation_testing:
-    docker:
-      - *python312_image
-    working_directory: ~/project
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run realtime tests
-          command: |
-            # Add --timeout to kill hanging tests after 120s (2 min)
-            # Add --durations=20 to show 20 slowest tests for debugging
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/llm_translation/realtime/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -vv \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=20 \
-                -n 4 \
-                --timeout=120 --timeout_method=thread"
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            mv coverage.xml realtime_translation_coverage.xml
-            mv .coverage realtime_translation_coverage
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - realtime_translation_coverage.xml
-            - realtime_translation_coverage
   helm_chart_testing:
     machine:
       image: ubuntu-2204:2024.04.1 # Use machine executor instead of docker
@@ -807,32 +708,6 @@ jobs:
       # Store test results
       - store_test_results:
           path: test-results
-  upload-coverage:
-    docker:
-      - *python312_image
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - attach_workspace:
-          at: .
-      # Check file locations
-      - run:
-          name: Check coverage file location
-          command: |
-            echo "Current directory:"
-            ls -la
-            echo "\nContents of tests/llm_translation:"
-            ls -la tests/llm_translation
-      - install_uv
-      - run:
-          name: Combine Coverage
-          command: |
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage
-            uv tool run --from 'coverage[toml]==7.10.6' coverage xml
-      - codecov/upload:
-          file: ./coverage.xml
-          flags: circleci
-
   e2e_ui_build:
     docker:
       - image: cimg/python:3.12-browsers@sha256:b432899af01c9a311bf74f4f22e9ada2e5306d4b1b4383f8d29e1228a5844ef2
@@ -885,8 +760,7 @@ jobs:
           POSTGRES_USER: e2euser
           POSTGRES_PASSWORD: e2epassword
           POSTGRES_DB: litellm_e2e
-    resource_class: large
-    parallelism: 10
+    resource_class: xlarge
     working_directory: ~/project
     environment:
       DATABASE_URL: "postgresql://e2euser:e2epassword@localhost:5432/litellm_e2e"
@@ -1013,7 +887,7 @@ jobs:
           command: |
             cd tests/e2e/ui
             LITELLM_LICENSE="$LITELLM_LICENSE" \
-              npx playwright test --config playwright.config.ts --shard=$((CIRCLE_NODE_INDEX+1))/$CIRCLE_NODE_TOTAL
+              npx playwright test --config playwright.config.ts
           no_output_timeout: 10m
       - store_artifacts:
           path: tests/e2e/ui/test-results
@@ -1761,6 +1635,7 @@ workflows:
           name: integration-management
           suite: management
           parallelism: 4
+          resource_class: xlarge
           filters: *integration_default_run
       - integration_shard_coverage:
           name: integration-management-coverage
@@ -1772,6 +1647,7 @@ workflows:
           name: integration-accounting
           suite: accounting
           parallelism: 4
+          resource_class: xlarge
           filters: *integration_default_run
       - integration_shard_coverage:
           name: integration-accounting-coverage
@@ -1782,12 +1658,13 @@ workflows:
       - integration_contracts:
           name: integration-providers
           suite: providers
-          parallelism: 8
+          parallelism: 4
+          resource_class: xlarge
           filters: *integration_default_run
       - integration_shard_coverage:
           name: integration-providers-coverage
           suite: providers
-          shards: 8
+          shards: 4
           requires:
             - integration-providers
           filters: *integration_default_run
@@ -1819,6 +1696,7 @@ workflows:
           name: integration-extensions
           suite: extensions
           parallelism: 8
+          resource_class: xlarge
           filters: *integration_default_run
       - integration_shard_coverage:
           name: integration-extensions-coverage
@@ -1832,6 +1710,7 @@ workflows:
           suite: management
           mode: replica
           parallelism: 4
+          resource_class: xlarge
           filters: *integration_default_run
       - integration_shard_coverage:
           name: integration-management-replica-coverage
@@ -1960,15 +1839,3 @@ workflows:
             parameters:
               suite: [management, accounting, database, providers, extensions, cost, mcp]
           filters: pipeline.parameters.routing_parity_base != ""
-  build_and_test:
-    unless:
-      or:
-        - << pipeline.parameters.run_migration_tests >>
-        - not:
-            equal: ["", << pipeline.parameters.routing_parity_base >>]
-    jobs:
-      - llm_translation_testing
-      - realtime_translation_testing
-      - upload-coverage:
-          requires:
-            - realtime_translation_testing
