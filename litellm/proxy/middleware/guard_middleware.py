@@ -30,7 +30,7 @@ Design constraints honored here:
 from __future__ import annotations
 
 import os
-from typing import Final, TYPE_CHECKING
+from typing import TYPE_CHECKING, Final
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
