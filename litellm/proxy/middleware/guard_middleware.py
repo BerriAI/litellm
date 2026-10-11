@@ -29,15 +29,13 @@ Design constraints honored here:
 
 from __future__ import annotations
 
+import importlib
 import os
-from typing import TYPE_CHECKING, Final
+from typing import Final
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from litellm._logging import verbose_proxy_logger
-
-if TYPE_CHECKING:
-    from guard import SecurityConfig
 
 GUARD_ENABLED_ENV: Final = "LITELLM_GUARD_ENABLED"
 GUARD_EXCLUDED_PATHS_ENV: Final = "LITELLM_GUARD_EXCLUDED_PATHS"
@@ -72,11 +70,13 @@ def guard_enabled() -> bool:
     return _env_bool(GUARD_ENABLED_ENV)
 
 
-def _build_guard_config() -> SecurityConfig:
-    """Build the SecurityConfig from the LITELLM_GUARD_* environment variables."""
-    from guard import SecurityConfig
+def _build_guard_config():
+    # type: () -> object
+    """Build the guard config from the LITELLM_GUARD_* environment variables."""
+    guard_module: Final = importlib.import_module("guard")
+    security_config_cls: Final = guard_module.SecurityConfig
 
-    kwargs: Final[dict[str, object]] = {  # mutable-ok: assembled conditionally, then passed once to SecurityConfig
+    kwargs: Final[dict[str, object]] = {
         "enable_rate_limiting": True,
         "rate_limit": _env_int("LITELLM_GUARD_RATE_LIMIT", 100),
         "rate_limit_window": _env_int("LITELLM_GUARD_RATE_LIMIT_WINDOW", 60),
@@ -114,7 +114,7 @@ def _build_guard_config() -> SecurityConfig:
     if ipinfo_token := _env_str("LITELLM_GUARD_IPINFO_TOKEN"):
         kwargs["ipinfo_token"] = ipinfo_token
 
-    return SecurityConfig(**kwargs)
+    return security_config_cls(**kwargs)
 
 
 class GuardMiddleware:
@@ -140,9 +140,8 @@ class GuardMiddleware:
         if self._guard_failed:
             return None
         try:
-            import guard  # pyright: ignore[reportMissingImports]  # optional dependency
-
-            self._guard_asgi = guard.PureASGISecurityMiddleware(self.app, config=_build_guard_config())  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # guard ships no type information
+            guard_module: Final = importlib.import_module("guard")
+            middleware_cls: Final = guard_module.SecurityMiddleware
         except ImportError as exc:
             self._guard_failed = True
             # Log loudly once; security misconfiguration must be visible.
@@ -153,6 +152,8 @@ class GuardMiddleware:
                 exc,
             )
             return None
+
+        self._guard_asgi = middleware_cls(self.app, config=_build_guard_config())
         return self._guard_asgi
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
