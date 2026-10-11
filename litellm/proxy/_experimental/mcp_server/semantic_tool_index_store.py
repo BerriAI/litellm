@@ -17,11 +17,9 @@ from pydantic import TypeAdapter
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
-from litellm.router_strategy.auto_router.litellm_encoder import LiteLLMRouterEncoder
 
 if TYPE_CHECKING:
     from litellm.caching.redis_cache import RedisCache
-    from litellm.router import Router
 
 _KEY_PREFIX: Final = "litellm:mcp_semantic_tool_index:v1:"
 _BUILD_LOCK_ID: Final = "mcp_semantic_tool_index_build"
@@ -120,54 +118,3 @@ def _decode_vector(value: object) -> tuple[float, ...] | None:
         return tuple(vector)
     except Exception:  # noqa: BLE001  # corrupt payloads are treated as a plain cache miss
         return None
-
-
-class CachingToolEncoder(LiteLLMRouterEncoder):
-    """LiteLLMRouterEncoder that serves document embeddings from a ToolVectorStore.
-
-    Queries are never cached; only add/aadd's document utterances go through
-    the store. Duplicate texts share one key and one embed.
-    """
-
-    _tool_vector_store: ToolVectorStore
-    _embedding_identity: str
-
-    def __init__(
-        self,
-        *,
-        store: ToolVectorStore,
-        embedding_identity: str,
-        litellm_router_instance: "Router",
-        model_name: str,
-        score_threshold: float | None = None,
-    ) -> None:
-        super().__init__(
-            litellm_router_instance=litellm_router_instance,
-            model_name=model_name,
-            score_threshold=score_threshold,
-        )
-        self._tool_vector_store = store
-        self._embedding_identity = embedding_identity
-
-    def encode_documents(  # pyright: ignore[reportIncompatibleMethodOverride]  # semantic_router calls encode_documents without kwargs
-        self, docs: Sequence[str]
-    ) -> list[list[float]]:  # mutable-ok: mirrors the parent DenseEncoder contract
-        return super().encode_documents(list(docs))
-
-    async def aencode_documents(  # pyright: ignore[reportIncompatibleMethodOverride]  # semantic_router calls aencode_documents without kwargs
-        self, docs: Sequence[str]
-    ) -> list[list[float]]:  # mutable-ok: mirrors the parent DenseEncoder contract
-        unique_docs: Final = tuple(dict.fromkeys(docs))
-        keys: Final = tuple(tool_vector_key(self._embedding_identity, text) for text in unique_docs)
-        hits: Final = await self._tool_vector_store.get_many(keys)
-
-        miss_pairs: Final = tuple((text, key) for text, key in zip(unique_docs, keys) if key not in hits)
-        embedded: Final = dict(hits)
-        if miss_pairs:
-            vectors: Final = await super().aencode_documents([text for text, _ in miss_pairs])
-            new_vectors: Final = {key: tuple(vector) for (_, key), vector in zip(miss_pairs, vectors)}
-            await self._tool_vector_store.put_many(new_vectors)
-            embedded.update(new_vectors)
-
-        vectors_by_text: Final = dict(zip(unique_docs, (embedded[key] for key in keys)))
-        return [list(vectors_by_text[text]) for text in docs]

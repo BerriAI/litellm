@@ -17,7 +17,6 @@ from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
 from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, global_manager
 from litellm.proxy._experimental.mcp_server.faults import iter_exception_tree
 from litellm.proxy._experimental.mcp_server.semantic_tool_index_store import (
-    CachingToolEncoder,
     ToolVectorStore,
     tool_vector_key,
 )
@@ -69,6 +68,7 @@ class SemanticMCPToolFilter:
         enabled: bool = True,
         vector_store: ToolVectorStore | None = None,
         lock_poll_interval_s: float = 5.0,
+        lock_wait_timeout_s: float = 300.0,
     ):
         """
         Initialize the semantic tool filter.
@@ -84,6 +84,8 @@ class SemanticMCPToolFilter:
                 until startup_index_ready flips
             lock_poll_interval_s: How often to re-check the store while another
                 pod holds the build lock
+            lock_wait_timeout_s: Give up waiting for another pod's vectors after
+                this long and embed locally (matches the build-lock TTL)
         """
         self.enabled = enabled
         self.top_k = top_k
@@ -96,6 +98,7 @@ class SemanticMCPToolFilter:
         self._index_sync_lock = asyncio.Lock()
         self._vector_store = vector_store
         self._lock_poll_interval_s = lock_poll_interval_s
+        self._lock_wait_timeout_s = lock_wait_timeout_s
         self.embedding_identity = self._compute_embedding_identity()
         self.startup_index_ready = vector_store is None
 
@@ -109,7 +112,11 @@ class SemanticMCPToolFilter:
                 for deployment in deployment_maps
             )
             deployment_models: Final = sorted(
-                {str(model) for model in (p.get("model") for p in litellm_params) if model}
+                {
+                    str(model) + ("@dimensions=" + str(dimensions) if dimensions is not None else "")
+                    for model, dimensions in ((p.get("model"), p.get("dimensions")) for p in litellm_params)
+                    if model
+                }
             )
         except (AttributeError, TypeError, KeyError, ValueError):
             return self.embedding_model
@@ -119,6 +126,7 @@ class SemanticMCPToolFilter:
 
     def _new_encoder(self) -> "LiteLLMRouterEncoder":
         """Encoder used for every index build; cached in Redis when a store is set."""
+        from litellm.proxy._experimental.mcp_server.semantic_tool_encoder import CachingToolEncoder
         from litellm.router_strategy.auto_router.litellm_encoder import (
             LiteLLMRouterEncoder,
         )
@@ -265,6 +273,8 @@ class SemanticMCPToolFilter:
         """
         from semantic_router.routers import SemanticRouter
 
+        from litellm.proxy._experimental.mcp_server.semantic_tool_encoder import CachingToolEncoder
+
         if not tools:
             self.tool_router = None
             return
@@ -283,8 +293,12 @@ class SemanticMCPToolFilter:
 
             # aadd's lazy init probes index dimensions through the sync encoder,
             # so dimensions are seeded with an async probe to keep the build async.
-            dims_probe: Final = await encoder.aencode_queries(["test"])  # pyright: ignore[reportUnknownMemberType]  # semantic_router ships no type stubs
-            router.index.dimensions = len(dims_probe[0])  # pyright: ignore[reportUnknownMemberType]  # semantic_router ships no type stubs
+            dimensions: Final = (
+                await encoder.adimensions()
+                if isinstance(encoder, CachingToolEncoder)
+                else len((await encoder.aencode_queries(["test"]))[0])  # pyright: ignore[reportUnknownMemberType]  # semantic_router ships no type stubs
+            )
+            router.index.dimensions = dimensions  # pyright: ignore[reportUnknownMemberType]  # semantic_router ships no type stubs
             await router.aadd(list(routes))  # pyright: ignore[reportUnknownMemberType]  # semantic_router ships no type stubs
 
             self._tool_map = dict(tool_map)
@@ -309,9 +323,17 @@ class SemanticMCPToolFilter:
         descriptions: Final = tuple(self.extract_tool_info(tool)[1] for tool in tools)
         keys_set: Final = frozenset(tool_vector_key(self.embedding_identity, text) for text in set(descriptions))
 
+        loop: Final = asyncio.get_running_loop()
+        deadline: Final = loop.time() + self._lock_wait_timeout_s
         while keys_set - (await store.get_many(tuple(keys_set))).keys():
             if await store.try_acquire_build_lock():
                 return True
+            if loop.time() >= deadline:
+                verbose_logger.warning(
+                    "MCP semantic tool index wait exceeded %.1fs; embedding locally",
+                    self._lock_wait_timeout_s,
+                )
+                return False
             await asyncio.sleep(self._lock_poll_interval_s)
         return False
 

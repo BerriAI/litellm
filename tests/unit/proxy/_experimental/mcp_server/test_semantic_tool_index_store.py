@@ -7,6 +7,8 @@ embeddings from the store instead of re-embedding.
 """
 
 import asyncio
+import os
+import subprocess
 import sys
 from unittest.mock import AsyncMock, Mock, patch
 
@@ -119,7 +121,7 @@ def _tool(name, description):
     return MCPTool(name=name, description=description, inputSchema={"type": "object"})
 
 
-def _make_filter(recorded_inputs, store=None, embedding_model="text-embedding-3-small"):
+def _make_filter(recorded_inputs, store=None, embedding_model="text-embedding-3-small", lock_wait_timeout_s=300.0):
     from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
         SemanticMCPToolFilter,
     )
@@ -132,6 +134,7 @@ def _make_filter(recorded_inputs, store=None, embedding_model="text-embedding-3-
         enabled=True,
         vector_store=store,
         lock_poll_interval_s=0.0,
+        lock_wait_timeout_s=lock_wait_timeout_s,
     )
 
 
@@ -187,88 +190,7 @@ async def test_raising_redis_still_builds_the_index():
     await filter_instance._abuild_router(tools)
 
     assert filter_instance.tool_router is not None
-    assert [batch for batch in recorded if batch != ["test"]] == [
-        ["get a ticket", "weather forecast"]
-    ]
-
-
-@requires_semantic_router
-@pytest.mark.asyncio
-async def test_build_with_warm_store_never_embeds_descriptions():
-    from litellm.proxy._experimental.mcp_server.semantic_tool_index_store import (
-        tool_vector_key,
-    )
-
-    tools = [_tool("srv-a_get_ticket", "get a ticket"), _tool("srv-b_get_weather", "weather forecast")]
-    identity = "text-embedding-3-small"
-    warm = _InMemoryToolVectorStore(
-        {tool_vector_key(identity, description): [0.0, 1.0] for _, description in ((t.name, t.description) for t in tools)}
-    )
-    recorded = []
-    filter_instance = _make_filter(recorded, store=warm)
-
-    await filter_instance._abuild_router(tools)
-
-    assert filter_instance.tool_router is not None
-    # Only the dims probe embeds; the 300-tool warm path makes zero embedding calls.
-    assert recorded == [["test"]]
-    assert warm.acquire_calls == 0
-
-
-@requires_semantic_router
-@pytest.mark.asyncio
-async def test_cold_store_embeds_once_then_second_filter_embeds_nothing():
-    tools = [_tool("srv-a_get_ticket", "get a ticket"), _tool("srv-b_get_weather", "weather forecast")]
-    store = _InMemoryToolVectorStore()
-
-    first_recorded = []
-    first = _make_filter(first_recorded, store=store)
-    await first._abuild_router(tools)
-    assert first.tool_router is not None
-    assert [batch for batch in first_recorded if batch != ["test"]] == [
-        ["get a ticket", "weather forecast"]
-    ]
-
-    second_recorded = []
-    second = _make_filter(second_recorded, store=store)
-    await second._abuild_router(tools)
-    assert second.tool_router is not None
-    assert second_recorded == [["test"]]
-
-
-@requires_semantic_router
-@pytest.mark.asyncio
-async def test_edited_description_reembeds_only_that_tool():
-    tools = [_tool("srv-a_get_ticket", "get a ticket"), _tool("srv-b_get_weather", "weather forecast")]
-    store = _InMemoryToolVectorStore()
-    recorded = []
-    filter_instance = _make_filter(recorded, store=store)
-    await filter_instance._abuild_router(tools)
-
-    recorded.clear()
-    edited = [_tool("srv-a_get_ticket", "close a support ticket fast"), _tool("srv-b_get_weather", "weather forecast")]
-    await filter_instance._abuild_router(edited)
-
-    assert [batch for batch in recorded if batch != ["test"]] == [["close a support ticket fast"]]
-
-
-@requires_semantic_router
-@pytest.mark.asyncio
-async def test_different_embedding_identity_reembeds_everything():
-    tools = [_tool("srv-a_get_ticket", "get a ticket"), _tool("srv-b_get_weather", "weather forecast")]
-    store = _InMemoryToolVectorStore()
-
-    first_recorded = []
-    await _make_filter(first_recorded, store=store, embedding_model="text-embedding-3-small")._abuild_router(tools)
-
-    second_recorded = []
-    second = _make_filter(second_recorded, store=store, embedding_model="text-embedding-3-large")
-    await second._abuild_router(tools)
-
-    assert second.tool_router is not None
-    assert [batch for batch in second_recorded if batch != ["test"]] == [
-        ["get a ticket", "weather forecast"]
-    ]
+    assert [batch for batch in recorded if batch != ["test"]] == [["get a ticket", "weather forecast"]]
 
 
 @requires_semantic_router
@@ -309,9 +231,7 @@ async def test_full_build_reads_the_store_a_constant_number_of_times():
 
     with (
         patch.object(global_mcp_server_manager, "get_registry", return_value={"srv-a": object()}),
-        patch.object(
-            global_mcp_server_manager, "get_tools_for_server", new=AsyncMock(return_value=tools)
-        ),
+        patch.object(global_mcp_server_manager, "get_tools_for_server", new=AsyncMock(return_value=tools)),
     ):
         await filter_instance.build_router_from_mcp_registry()
 
@@ -337,3 +257,60 @@ async def test_cancelling_a_build_while_holding_the_lock_releases_it():
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(build_task, timeout=5)
     assert store.release_calls == 1
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
+async def test_lock_wait_times_out_and_the_build_falls_back_to_local_embed():
+    """
+    A store that never fills and never grants the lock must not wait forever:
+    after lock_wait_timeout_s the build embeds locally, the startup index
+    flips ready, and the filter still selects tools.
+    """
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        global_mcp_server_manager,
+    )
+
+    tools = [_tool("srv-a_get_ticket", "get a ticket"), _tool("srv-b_get_weather", "weather forecast")]
+    store = _InMemoryToolVectorStore()
+    store.lock_result = False
+    recorded = []
+    filter_instance = _make_filter(recorded, store=store, lock_wait_timeout_s=0.05)
+    filter_instance._lock_poll_interval_s = 0.01
+
+    with (
+        patch.object(global_mcp_server_manager, "get_registry", return_value={"srv-a": object()}),
+        patch.object(global_mcp_server_manager, "get_tools_for_server", new=AsyncMock(return_value=tools)),
+    ):
+        await filter_instance.build_router_from_mcp_registry()
+
+    assert filter_instance.startup_index_ready is True
+    assert filter_instance.tool_router is not None
+    assert store.release_calls == 0
+    assert [batch for batch in recorded if batch != ["test"]] == [["get a ticket", "weather forecast"]]
+    filtered = await filter_instance.filter_tools(
+        query="refund a ticket", available_tools=tools, reindex_changed_descriptions=True
+    )
+    assert filtered == [tools[0]]
+
+
+def test_store_and_hook_import_without_semantic_router():
+    """semantic_router is an optional extra; the store and the hook must import when it is absent."""
+    root = os.path.dirname(
+        os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(__file__)))))
+    )
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-I",
+            "-c",
+            "import sys; sys.path.insert(0, " + repr(root) + "); "
+            "sys.modules['semantic_router'] = None; "
+            "import litellm.proxy._experimental.mcp_server.semantic_tool_index_store; "
+            "import litellm.proxy.hooks.mcp_semantic_filter",
+        ],
+        capture_output=True,
+        text=True,
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr

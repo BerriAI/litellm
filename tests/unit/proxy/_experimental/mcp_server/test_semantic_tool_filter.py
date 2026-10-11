@@ -2415,3 +2415,35 @@ async def test_hook_returns_before_shared_index_build_finishes():
         assert inline_hook.index_build_task is None
         assert inline_hook.filter.startup_index_ready
         assert inline_hook.filter.tool_router is not None
+
+
+def test_embedding_identity_marks_deployment_dimensions():
+    """
+    The shared-vector key identity must change when a deployment's embedding
+    dimensions change, and stay byte-identical to the pre-dimensions format
+    when no deployment sets them (warm caches must keep hitting).
+    """
+    from litellm.proxy._experimental.mcp_server.semantic_tool_filter import (
+        SemanticMCPToolFilter,
+    )
+
+    router_without = Mock()
+    router_without.get_model_list = lambda model_name: [{"litellm_params": {"model": "amazon.titan-embed-text-v2:0"}}]
+    router_with = Mock()
+    router_with.get_model_list = lambda model_name: [
+        {"litellm_params": {"model": "amazon.titan-embed-text-v2:0", "dimensions": 512}}
+    ]
+
+    base = SemanticMCPToolFilter(
+        embedding_model="titan-alias",
+        litellm_router_instance=router_without,
+        enabled=True,
+    )
+    sized = SemanticMCPToolFilter(
+        embedding_model="titan-alias",
+        litellm_router_instance=router_with,
+        enabled=True,
+    )
+
+    assert base.embedding_identity == "titan-alias|amazon.titan-embed-text-v2:0"
+    assert sized.embedding_identity == "titan-alias|amazon.titan-embed-text-v2:0@dimensions=512"
