@@ -669,7 +669,7 @@ class OpenAIGPTConfig(BaseLLMModelInfo, BaseConfig):
             )
 
             translated_choice.finish_reason = map_finish_reason(
-                self._get_finish_reason(translated_message, choice["finish_reason"])
+                self._get_finish_reason(translated_message, finish_reason)
             )
             transformed_choices.append(translated_choice)
 
