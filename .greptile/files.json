@@ -337,6 +337,11 @@
       ]
     },
     {
+      "path": "litellm-rust/crates/llms/src/openrouter/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/openrouter/messages/",
+      "scope": ["litellm-rust/crates/llms/src/openrouter/messages/**"]
+    },
+    {
       "path": "litellm-rust/crates/llms/src/vertex_ai/ocr/AGENTS.md",
       "description": "Conventions for code under litellm-rust/crates/llms/src/vertex_ai/ocr/",
       "scope": [

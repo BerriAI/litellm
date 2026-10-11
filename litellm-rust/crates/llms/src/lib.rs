@@ -10,6 +10,7 @@ pub mod minimax;
 pub mod mistral;
 pub mod openai;
 pub mod openai_like;
+pub mod openrouter;
 pub mod reducto;
 pub mod vertex_ai;
 
