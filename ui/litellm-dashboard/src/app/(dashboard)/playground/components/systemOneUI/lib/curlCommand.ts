@@ -9,6 +9,8 @@ export const CURL_KEY_PLACEHOLDER = "$LITELLM_API_KEY";
 
 const shellSingleQuote = (value: string): string => `'${value.replace(/'/g, `'\\''`)}'`;
 
+const shellDoubleQuoteLiteral = (value: string): string => value.replace(/["\\$`]/g, (char) => `\\${char}`);
+
 const prettyPayload = (payload: string): string => {
   try {
     return JSON.stringify(JSON.parse(payload), null, 2);
@@ -20,7 +22,7 @@ const prettyPayload = (payload: string): string => {
 export const buildCurlCommand = ({ baseUrl, endpoint, payload, authHeaderName }: CurlCommandInput): string =>
   [
     `curl -X POST ${shellSingleQuote(`${baseUrl.replace(/\/+$/, "")}${endpoint}`)}`,
-    `  -H ${shellSingleQuote(`${authHeaderName}: Bearer ${CURL_KEY_PLACEHOLDER}`)}`,
+    `  -H "${shellDoubleQuoteLiteral(authHeaderName)}: Bearer ${CURL_KEY_PLACEHOLDER}"`,
     `  -H "Content-Type: application/json"`,
     `  -d ${shellSingleQuote(prettyPayload(payload))}`,
   ].join(" \\\n");
