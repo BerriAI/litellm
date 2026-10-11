@@ -54,6 +54,7 @@ from litellm.llms.base_llm.managed_resources.isolation import (
     can_access_resource,
     resolve_resource_owner_id,
 )
+from litellm.llms.xai.batches.transformation import is_xai_batch_results_id
 from litellm.proxy._types import (
     CallTypes,
     LiteLLM_ManagedFileTable,
@@ -102,6 +103,7 @@ from litellm.types.utils import (
     CallTypesLiteral,
     LiteLLMBatch,
     LiteLLMFineTuningJob,
+    LlmProviders,
     LLMResponseTypes,
     SpecialEnums,
 )
@@ -212,11 +214,11 @@ def _with_measured_size(file_object: OpenAIFileObject, size_bytes: int | None) -
 
 
 def _over_stored_object(file_object: OpenAIFileObject, stored_object: OpenAIFileObject | None) -> OpenAIFileObject:
-    """Refreshed details for a stored row, keeping its size when none is reported and the earlier created_at."""
+    """Refreshed details for a stored row, keeping its size when none is reported and its stored created_at."""
     if stored_object is None:
         return file_object
     return _with_measured_size(file_object, stored_object.bytes).model_copy(
-        update={"created_at": min(file_object.created_at, stored_object.created_at)}
+        update={"created_at": stored_object.created_at}
     )
 
 
@@ -276,6 +278,23 @@ def _has_provider_file_retrieve_route(
     model_name: str | None,
 ) -> bool:
     return bool(router_credentials) or _model_name_file_retrieve_provider(model_name) is not None
+
+
+def _is_xai_batch_output(
+    *,
+    llm_router: Router | None,
+    model_id: str | None,
+    model_name: str | None,
+    provider_file_id: str,
+) -> bool:
+    """Whether a batch output row holds an xAI batch's results, from its batch id and its deployment's provider."""
+    if not is_xai_batch_results_id(provider_file_id):
+        return False
+    router_credentials: Final = _provider_file_retrieve_credentials(llm_router=llm_router, model_id=model_id)
+    provider: Final = (router_credentials or {}).get("custom_llm_provider") or _model_name_file_retrieve_provider(
+        model_name
+    )
+    return provider == LlmProviders.XAI.value
 
 
 class _ManagedFileRow(Protocol):
@@ -861,8 +880,22 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         self,
         stored: LiteLLM_ManagedFileTable,
         file_object: OpenAIFileObject,
+    ) -> None:
+        if not await ManagedFileRepository(self.prisma_client).update_file_object(stored.unified_file_id, file_object):
+            return
+        refreshed_row: Final = stored.model_copy(update={"file_object": file_object})
+        await self.internal_usage_cache.async_set_cache(
+            key=stored.unified_file_id,
+            value=refreshed_row.model_dump(),
+            litellm_parent_otel_span=None,
+        )
+
+    async def _save_xai_refreshed_file_object(
+        self,
+        stored: LiteLLM_ManagedFileTable,
+        file_object: OpenAIFileObject,
     ) -> OpenAIFileObject | None:
-        """Save refreshed details, keeping a known size, only over the row as read; drop the cached copy if a newer write won."""
+        """Save an xAI batch output's refreshed details, keeping a known size, only over the row as read; drop the cached copy if a newer write won."""
         stored_object: Final = _parse_managed_file_object(stored.file_object, stored.unified_file_id)
         sized_file_object: Final = _over_stored_object(file_object, stored_object)
         if not await ManagedFileRepository(self.prisma_client).update_file_object(
@@ -887,13 +920,13 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         file_object: OpenAIFileObject,
         size_bytes: int | None,
     ) -> None:
-        """Save a batch output's details; after losing to a refresh, size the refreshed details instead of replacing them."""
+        """Save an xAI batch output's details; after losing to a refresh, size the refreshed details instead of replacing them."""
         current_row: LiteLLM_ManagedFileTable | None = stored  # rebind-ok: the row as last read
         details: OpenAIFileObject = file_object  # rebind-ok: a concurrent refresh's details replace the job's copy
         for _ in range(_MEASURED_SIZE_SAVE_ATTEMPTS):
             if current_row is None:
                 return
-            saved = await self._save_refreshed_file_object(  # rebind-ok: per attempt
+            saved = await self._save_xai_refreshed_file_object(  # rebind-ok: per attempt
                 current_row, _with_measured_size(details, size_bytes)
             )
             if saved is not None or not size_bytes:
@@ -948,7 +981,17 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
             return
         if stored_object is not None and not stored_object.litellm_details_fallback:
-            if stored_file is not None and size_bytes and not stored_object.bytes:
+            if (
+                stored_file is not None
+                and size_bytes
+                and not stored_object.bytes
+                and _is_xai_batch_output(
+                    llm_router=_proxy_llm_router(),
+                    model_id=model_id,
+                    model_name=model_name,
+                    provider_file_id=provider_file_id,
+                )
+            ):
                 await self._save_batch_output_file_object(stored_file, stored_object, size_bytes)
             return
 
@@ -989,13 +1032,22 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             )
         )
 
-        if stored_file is not None:
+        xai_batch_output: Final = _is_xai_batch_output(
+            llm_router=_proxy_llm_router(),
+            model_id=model_id,
+            model_name=model_name,
+            provider_file_id=provider_file_id,
+        )
+        if stored_file is not None and xai_batch_output:
             await self._save_batch_output_file_object(stored_file, file_object, size_bytes)
+            return
+        if stored_file is not None:
+            await self._save_refreshed_file_object(stored_file, file_object)
             return
 
         await self.store_unified_file_id(
             file_id=unified_file_id,
-            file_object=_with_measured_size(file_object, size_bytes),
+            file_object=_with_measured_size(file_object, size_bytes) if xai_batch_output else file_object,
             litellm_parent_otel_span=litellm_parent_otel_span,
             model_mappings={model_id: provider_file_id} if model_id else {},
             user_api_key_dict=owner,
@@ -2006,7 +2058,15 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                     )
                     if refreshed_file_object is None:
                         return _public_file_object(file_object, file_id)
-                    saved_file_object: Final = await self._save_refreshed_file_object(
+                    if not _is_xai_batch_output(
+                        llm_router=llm_router if llm_router is not None else _proxy_llm_router(),
+                        model_id=model_id,
+                        model_name=model_id,
+                        provider_file_id=provider_file_id,
+                    ):
+                        await self._save_refreshed_file_object(stored_file_object, refreshed_file_object)
+                        return _public_file_object(refreshed_file_object, file_id)
+                    saved_file_object: Final = await self._save_xai_refreshed_file_object(
                         stored_file_object, refreshed_file_object
                     )
                     return _public_file_object(
