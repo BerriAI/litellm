@@ -11,7 +11,7 @@ import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Any, Final, cast  # noqa: TID251  # response_format is a plain JSON object
 
 import httpx
 
