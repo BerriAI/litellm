@@ -22,7 +22,7 @@ from litellm.proxy.middleware.guard_middleware import (
 _IP = itertools.count(1)
 
 try:
-    import guard  # noqa: F401
+    import guard  # noqa: F401  # availability probe for skip logic
 
     _GUARD_AVAILABLE = True
 except ImportError:
