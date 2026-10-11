@@ -363,14 +363,21 @@ class CustomStreamWrapper:
     def __aiter__(self) -> AsyncIterator["ModelResponseStream"]:
         return self
 
-    def close(self) -> None:
+    def close_stream(self) -> None:
         """Deterministically end a stream the consumer stopped reading early.
 
         A stream abandoned without reaching its final chunk would otherwise
         never emit its terminal success log (spans, spend, custom callbacks
-        all miss the call). ``close()`` flushes that log from the chunks
+        all miss the call). ``close_stream()`` flushes that log from the chunks
         received so far and releases the underlying provider stream; safe to
         call after the stream has been fully consumed (it is a no-op then).
+
+        Deliberately *not* named ``close``: ``Router.stream_with_fallbacks``
+        duck-types on ``hasattr(model_response, "close")`` and calls it from a
+        ``finally``, so adding a ``close`` here silently starts firing the
+        terminal success log from the fallback path, which changes how shadow
+        and fallback streams report completions. Callers that hold a concrete
+        ``CustomStreamWrapper`` use this name or the context manager below.
         """
         self._flush_abandoned_stream_logging()
         stream_to_close: Final = self.completion_stream  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # the underlying stream object is provider-specific
@@ -386,7 +393,7 @@ class CustomStreamWrapper:
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> bool:
-        self.close()
+        self.close_stream()
         return False
 
     def _restore_consumer_correlation_context(self, *, guarded: bool = False) -> None:
