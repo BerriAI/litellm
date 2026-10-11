@@ -6164,7 +6164,8 @@ class TestMCPDcrBridgeDelegateAdmission:
         policy gates re-check. ``team_blocked=True`` patches the centralized gate's
         ``get_team_object`` at the ``user_api_key_auth`` namespace it actually calls; ``owner``
         patches the SCIM gate's ``get_user_object`` (``auth_checks`` namespace); ``project_object``
-        patches the centralized gate's ``get_project_object``. Unpatched lookups hit the MagicMock
+        patches the centralized gate's ``get_project_object``. The team-membership lookup is
+        patched to "no membership row". Unpatched lookups hit the MagicMock
         prisma and are swallowed (``_safe_fetch`` / the SCIM gate's fail-open), so their checks
         skip. Yields the ``get_key_object`` mock so callers can assert the sealed ``key_hash`` was
         the reload key."""
@@ -6179,6 +6180,10 @@ class TestMCPDcrBridgeDelegateAdmission:
             ),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_membership",
+                AsyncMock(return_value=None),
+            ),
         ]
         if team_blocked:
             patchers.append(
@@ -6206,7 +6211,8 @@ class TestMCPDcrBridgeDelegateAdmission:
     def _patch_user_reload(*, return_value=None, side_effect=None):
         """Patch the user-subject reload path an interactively-minted envelope takes: the
         ``get_user_object`` lookup ``reload_admitted_user`` runs (which also drives the SCIM gate),
-        plus the ``prisma_client`` / ``user_api_key_cache`` globals. The centralized gate's own
+        plus the ``prisma_client`` / ``user_api_key_cache`` globals. The team-membership lookup is
+        patched to "no membership row". The centralized gate's own
         fetches fail-safe to None under the MagicMock prisma, so an unblocked user admits. Yields the
         ``get_user_object`` mock so a caller can assert the sealed user_id was the reload key."""
         get_user_object = AsyncMock(return_value=return_value, side_effect=side_effect)
@@ -6214,6 +6220,10 @@ class TestMCPDcrBridgeDelegateAdmission:
             patch("litellm.proxy.auth.auth_checks.get_user_object", get_user_object),
             patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
             patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch(
+                "litellm.proxy.auth.user_api_key_auth.get_team_membership",
+                AsyncMock(return_value=None),
+            ),
         ):
             yield get_user_object
 
@@ -9813,7 +9823,7 @@ class TestSessionBearerEgressScrub:
             {},
         )
 
-    async def test_caller_admission_credential_does_not_fall_back_when_custom_header_is_absent(self) -> None:
+    async def test_caller_admission_credential_falls_back_to_standard_headers_when_custom_header_is_absent(self) -> None:
         caller_value: Final = "Bearer sk-caller-admission-key-123"
         headers: Final = Headers(
             {
@@ -9837,16 +9847,12 @@ class TestSessionBearerEgressScrub:
             admitted_credential=admitted_credential,
         )
 
+        assert admitted_credential == "sk-caller-admission-key-123"
         assert result == (
-            {"Authorization": caller_value},
-            {
-                "x-litellm-api-key": caller_value,
-                "authorization": caller_value,
-                "x-mcp-auth": caller_value,
-                "x-mcp-echo_srv-authorization": caller_value,
-            },
-            caller_value,
-            {"echo_srv": {"Authorization": caller_value}},
+            None,
+            {"x-litellm-api-key": caller_value},
+            None,
+            {},
         )
 
     async def test_caller_admission_credential_uses_master_key_alias_as_admission_gate(self) -> None:
@@ -10791,3 +10797,66 @@ async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session
     assert caller.team_id == "old-team" and not caller.requires_fresh_policy
     assert refreshed.access_group_ids == current_groups
     assert caller.access_group_ids == ["original-group"]
+
+
+@pytest.mark.asyncio
+async def test_admission_request_body_serves_stashed_peek_callable():
+    from litellm.constants import MCP_PEEKED_BODY_SCOPE_KEY
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import _admission_request
+
+    admission_body: Final = b'{"method":"tools/list"}'
+
+    async def peek() -> bytes:
+        return admission_body
+
+    with_peek: Final = _admission_request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [],
+            MCP_PEEKED_BODY_SCOPE_KEY: peek,
+        }
+    )
+    assert await with_peek.body() == admission_body
+
+    without_peek: Final = _admission_request(
+        {"type": "http", "method": "POST", "path": "/mcp", "headers": []}
+    )
+    assert await without_peek.body() == b"{}"
+
+
+@pytest.mark.parametrize("bearer,api_key,claims,explicit_key,expected", [
+    (None, "sk-key", None, None, None),
+    ("sk-key", "sk-key", None, None, None),
+    ("sk-key", "sk-key", {"sub": "previous-jwt"}, "sk-key", None),
+    ("caller.jwt.assertion", "sk-key", {"sub": "caller"}, None, "caller.jwt.assertion"),
+    ("caller.jwt.assertion", None, {"sub": "caller"}, None, "caller.jwt.assertion"),
+    ("upstream", "sk-key", None, "sk-key", "upstream"),
+    ("llm_session_test", None, {"sub": "caller"}, None, None),
+    ("llm_srefresh_test", None, {"sub": "caller"}, None, None),
+    ("opaque-master", "litellm_proxy_master_key", None, None, None),
+])
+def test_guardrail_bearer_preserves_identity_without_exposing_gateway_credentials(
+    bearer: str | None, api_key: str | None, claims: dict[str, str] | None,
+    explicit_key: str | None, expected: str | None,
+) -> None:
+    headers: Final = Headers({
+        **({"Authorization": f"Bearer {bearer}"} if bearer is not None else {}),
+        **({"x-litellm-api-key": explicit_key} if explicit_key else {}),
+    })
+    token: Final = MCPRequestHandler.get_guardrail_bearer_token(
+        headers, UserAPIKeyAuth(api_key=api_key, jwt_claims=claims),
+    )
+    assert (token.get_secret_value() if token is not None else None) == expected
+
+
+def test_guardrail_bearer_respects_custom_admission_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "litellm_key_header_name", "x-gateway-key")
+    token: Final = MCPRequestHandler.get_guardrail_bearer_token(
+        Headers({"x-gateway-key": "opaque-master", "authorization": "Bearer opaque-master"}),
+        UserAPIKeyAuth(api_key="litellm_proxy_master_key"),
+    )
+    assert token is None

@@ -477,6 +477,35 @@ class ChatResponse(BaseModel):
     guardrail_information: list[GuardrailInformationEntry] | None = None
 
 
+class ResponsesInputTokensDetails(BaseModel):
+    cached_tokens: int | None = None
+
+
+class ResponsesUsage(BaseModel):
+    """`/v1/responses` usage shape: input/output tokens, not prompt/completion."""
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int | None = None
+    input_tokens_details: ResponsesInputTokensDetails | None = None
+
+
+class ResponsesApiResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str | None = None
+    usage: ResponsesUsage | None = None
+
+
+class ResponsesStreamEvent(BaseModel):
+    """One `/v1/responses` SSE event; `response.completed` carries the final response."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: str
+    response: ResponsesApiResponse | None = None
+
+
 # ---------- anthropic /v1/messages + count_tokens ----------
 
 
@@ -1206,6 +1235,48 @@ class CostMap(RootModel[dict[str, CostMapEntry]]):
     pass
 
 
+class ConfigPatchResponse(BaseModel):
+    status: str
+    values: dict[str, float | dict[str, float]]
+
+
+class CostDiscountConfig(RootModel[dict[str, float]]):
+    pass
+
+
+class CostMarginConfig(RootModel[dict[str, float | dict[str, float]]]):
+    pass
+
+
+class CostDiscountConfigResponse(BaseModel):
+    values: dict[str, float]
+
+
+class CostMarginConfigResponse(BaseModel):
+    values: dict[str, float | dict[str, float]]
+
+
+class BedrockGuardrailParams(BaseModel):
+    guardrail: Literal["bedrock"] = "bedrock"
+    mode: Literal["pre_call"] = "pre_call"
+    default_on: bool = False
+    guardrailIdentifier: str
+    guardrailVersion: str
+
+
+class BedrockGuardrailSpec(BaseModel):
+    guardrail_name: str
+    litellm_params: BedrockGuardrailParams
+
+
+class GuardrailCreateBody(BaseModel):
+    guardrail: BedrockGuardrailSpec
+
+
+class GuardrailCreateResponse(BaseModel):
+    guardrail_id: str
+
+
 class FileEntry(BaseModel):
     id: str
 
@@ -1524,6 +1595,20 @@ class TeamMemberDeleteBody(BaseModel):
 
 class TeamDeleteBody(BaseModel):
     team_ids: list[str]
+
+
+class ProjectCreateBody(BaseModel):
+    team_id: str
+    project_alias: str
+    models: list[str]
+
+
+class ProjectIdentity(BaseModel):
+    project_id: str
+
+
+class ProjectDeleteBody(BaseModel):
+    project_ids: list[str]
 
 
 class TeamListEntry(BaseModel):

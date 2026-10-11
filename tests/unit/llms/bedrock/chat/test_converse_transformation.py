@@ -4241,6 +4241,32 @@ def test_thinking_with_max_completion_tokens():
     assert result["thinking"]["budget_tokens"] == 5000
 
 
+def test_anthropic_messages_converse_thinking_budget_is_preserved_in_request_body():
+    model = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    config = AmazonConverseConfig()
+    optional_params = config.map_openai_params(
+        non_default_params={
+            "thinking": {"type": "enabled", "budget_tokens": 1025},
+            "max_tokens": 1026,
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    request = config._transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "What is 2+2?"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert request["additionalModelRequestFields"]["thinking"] == {
+        "type": "enabled",
+        "budget_tokens": 1025,
+    }
+
+
 def test_drop_thinking_param_when_thinking_blocks_missing():
     """
     Test that thinking param is dropped when modify_params=True and

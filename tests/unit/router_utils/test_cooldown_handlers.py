@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm import Router
@@ -2878,6 +2879,97 @@ def test_caller_credential_errors_never_cool_down_the_shared_deployment(single_d
     """A per-user credential failure is scoped to one caller's stored token; cooling down the
     shared deployment would punish every other user on the group."""
     assert _should_run_cooldown_logic(single_deployment_router, "dep-1", status, exception) is False
+
+
+@pytest.mark.asyncio
+async def test_bad_request_error_does_not_cool_down_a_deployment(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            400,
+            json={
+                "error": {
+                    "message": "invalid request",
+                    "type": "invalid_request_error",
+                    "param": None,
+                    "code": "invalid_request",
+                }
+            },
+        )
+    )
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/test-model", "api_key": "test-key"},
+                "model_info": {"id": "test-deployment"},
+            }
+        ],
+        allowed_fails=0,
+        num_retries=0,
+    )
+
+    with pytest.raises(litellm.BadRequestError):
+        await router.acompletion(
+            model="test-model",
+            messages=[{"role": "user", "content": "invalid request"}],
+        )
+
+    cooldown_deployments: Final = await async_get_cooldown_deployments(
+        litellm_router_instance=router,
+        parent_otel_span=None,
+    )
+
+    assert len(route.calls) == 1
+    assert tuple(cooldown_deployments) == ()
+
+
+@pytest.mark.parametrize("use_policy", [False, True], ids=["allowed_fails", "allowed_fails_policy"])
+@pytest.mark.asyncio
+async def test_allowed_fails_cools_a_single_deployment(
+    use_policy: bool,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        side_effect=httpx.ReadTimeout("upstream timeout")
+    )
+    policy_kwargs: Final = (
+        {"allowed_fails_policy": AllowedFailsPolicy(TimeoutErrorAllowedFails=1)}
+        if use_policy
+        else {"allowed_fails": 1}
+    )
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "test-model",
+                "litellm_params": {"model": "openai/test-model", "api_key": "test-key"},
+                "model_info": {"id": "test-deployment"},
+            }
+        ],
+        cooldown_time=300,
+        num_retries=0,
+        **policy_kwargs,
+    )
+
+    for _ in range(2):
+        with pytest.raises(litellm.Timeout):
+            await router.acompletion(
+                model="test-model",
+                messages=[{"role": "user", "content": "timeout test"}],
+            )
+
+    cooldown_deployments: Final = await async_get_cooldown_deployments(
+        litellm_router_instance=router,
+        parent_otel_span=None,
+    )
+
+    assert len(route.calls) == 2
+    assert tuple(cooldown_deployments) == ("test-deployment",)
 
 
 def test_per_user_session_upstream_errors_never_cool_down_the_shared_deployment(single_deployment_router):
