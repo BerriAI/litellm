@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.gigachat.utils import convert_usage, get_api_base
@@ -209,11 +210,12 @@ class GigaChatConfig(BaseConfig):
                     optional_params["function_call"] = {"name": schema_name}
                     optional_params["_structured_output"] = True
                 elif not (isinstance(value, Mapping) and (value.get("type") in (None, "text", "json_schema"))):
-                    # Only json_schema is actually mapped above; other response_format
-                    # values (e.g. json_object) would otherwise be silently ignored.
-                    if not drop_params:
-                        from litellm.utils import UnsupportedParamsError
+                    # Only json_schema is mapped above; anything else (json_object,
+                    # a missing schema, an unexpected shape) is silently dropped by
+                    # GigaChat unless we say so.
+                    from litellm.utils import UnsupportedParamsError
 
+                    if litellm.drop_params is not True and drop_params is not True:
                         raise UnsupportedParamsError(
                             status_code=400,
                             message=(

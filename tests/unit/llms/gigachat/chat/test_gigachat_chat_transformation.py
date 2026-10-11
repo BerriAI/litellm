@@ -391,6 +391,33 @@ class TestMapOpenAiParams:
         assert "functions" not in result
         assert "function_call" not in result
 
+    def test_response_format_json_object_dropped_with_global_drop_params(self, monkeypatch):
+        """The per-call flag is not the only switch: litellm.drop_params is global."""
+        import litellm
+
+        monkeypatch.setattr(litellm, "drop_params", True, raising=False)
+        result = self.config.map_openai_params(
+            non_default_params={"response_format": {"type": "json_object"}},
+            optional_params={},
+            model="GigaChat",
+            drop_params=False,
+        )
+        assert "functions" not in result
+        assert "function_call" not in result
+
+    def test_response_format_json_object_raises_when_global_drop_params_off(self, monkeypatch):
+        """A global drop_params left over from elsewhere must not mask the error."""
+        import litellm
+
+        monkeypatch.setattr(litellm, "drop_params", False, raising=False)
+        with pytest.raises(UnsupportedParamsError):
+            self.config.map_openai_params(
+                non_default_params={"response_format": {"type": "json_object"}},
+                optional_params={},
+                model="GigaChat",
+                drop_params=False,
+            )
+
     def test_response_format_text_is_a_noop(self):
         result = self.config.map_openai_params(
             non_default_params={"response_format": {"type": "text"}},
