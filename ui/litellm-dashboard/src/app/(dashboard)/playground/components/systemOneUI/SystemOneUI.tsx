@@ -281,6 +281,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                 endpoint={endpoint}
                 payload={validation.payload === undefined ? rawPayload : JSON.stringify(validation.payload)}
                 authHeaderName={getGlobalLitellmHeaderName()}
+                errorCount={validation.issues.filter((issue) => issue.severity === "error").length}
               />
             </TabsContent>
           </Tabs>

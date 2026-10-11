@@ -21,7 +21,7 @@ const prettyPayload = (payload: string): string => {
 
 export const buildCurlCommand = ({ baseUrl, endpoint, payload, authHeaderName }: CurlCommandInput): string =>
   [
-    `curl -X POST ${shellSingleQuote(`${baseUrl.replace(/\/+$/, "")}${endpoint}`)}`,
+    `curl -X POST ${shellSingleQuote(`${baseUrl.endsWith("/") ? baseUrl.slice(0, -1) : baseUrl}${endpoint}`)}`,
     `  -H "${shellDoubleQuoteLiteral(authHeaderName)}: Bearer ${CURL_KEY_PLACEHOLDER}"`,
     `  -H "Content-Type: application/json"`,
     `  -d ${shellSingleQuote(prettyPayload(payload))}`,
