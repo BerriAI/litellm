@@ -1558,7 +1558,8 @@ class MCPRequestHandler:
             auth,
             custom_key_header_name=_custom_litellm_key_header_name(),
         )
-        if not auth.jwt_claims and MCPRequestHandler._is_caller_admission_key(value, admitted_credential):
+        claims: Final = cast(object, auth.jwt_claims)  # cast-ok: only tests legacy claims presence
+        if not claims and MCPRequestHandler._is_caller_admission_key(value, admitted_credential):
             return None
         return bearer
 
