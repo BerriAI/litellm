@@ -65,11 +65,11 @@ run "metrics_sidecar_enabled" {
 
   assert {
     condition = alltrue([
-      google_cloud_run_v2_service.gateway[0].template[0].containers[1].image == local.gateway_image,
-      join(" ", google_cloud_run_v2_service.gateway[0].template[0].containers[1].command) == "python -m litellm.proxy.prometheus_metrics_server",
-      join(" ", google_cloud_run_v2_service.gateway[0].template[0].containers[1].args) == "--port 4001",
+      google_cloud_run_v2_service.gateway[0].template[0].containers[1].image == google_cloud_run_v2_service.gateway[0].template[0].containers[0].image,
+      google_cloud_run_v2_service.gateway[0].template[0].containers[1].command == null,
+      join(" ", google_cloud_run_v2_service.gateway[0].template[0].containers[1].args) == "metrics --port 4001",
     ])
-    error_message = "The metrics sidecar must run the gateway image's prometheus_metrics_server on the configured port."
+    error_message = "The metrics sidecar must run the gateway image's metrics component on the configured port."
   }
 
   assert {
