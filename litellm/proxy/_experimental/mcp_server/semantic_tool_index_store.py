@@ -86,11 +86,24 @@ class RedisToolVectorStore:
             acquired: Final = await self._lock_manager.acquire_lock(
                 _BUILD_LOCK_ID, ttl=_BUILD_LOCK_TTL_S, allow_reentrant=True
             )
-            return bool(acquired) or self._degraded
+            held_by: Final = (
+                None
+                if acquired or self._degraded
+                else await self._redis_cache.async_get_cache(
+                    PodLockManager.get_redis_lock_key(_BUILD_LOCK_ID)  # pyright: ignore[reportUnknownArgumentType]  # RedisCache declares a partially untyped signature
+                )
+            )
         except Exception as e:  # noqa: BLE001  # any redis failure must degrade to a local embed, never raise
             self._degraded = True
             verbose_logger.warning("MCP semantic tool index store lock acquire failed; embedding locally: %s", e)
             return True
+        if acquired or self._degraded:
+            return True
+        if held_by is not None:
+            return False
+        self._degraded = True
+        verbose_logger.warning("MCP semantic tool index store lock write failed with no holder; embedding locally")
+        return True
 
     async def release_build_lock(self) -> None:
         try:

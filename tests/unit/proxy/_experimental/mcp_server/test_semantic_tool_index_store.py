@@ -104,6 +104,25 @@ class _RaisingRedisCache:
         raise ConnectionError("redis is down")
 
 
+class _ReadOnlyRedisCache:
+    """Reads work; every write reports failure like a read-only replica."""
+
+    def __init__(self):
+        self.backing = {}
+
+    async def async_batch_get_cache(self, key_list, parent_otel_span=None):
+        return {key: self.backing[key] for key in key_list if key in self.backing}
+
+    async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):
+        raise ConnectionError("NOPERM read only replica")
+
+    async def async_get_cache(self, key, parent_otel_span=None, **kwargs):
+        return self.backing.get(key)
+
+    async def async_set_cache(self, key, value, **kwargs):
+        return False
+
+
 class _DictRedisCache:
     def __init__(self):
         self.backing = {}
@@ -292,6 +311,37 @@ async def test_lock_wait_times_out_and_the_build_falls_back_to_local_embed():
         query="refund a ticket", available_tools=tools, reindex_changed_descriptions=True
     )
     assert filtered == [tools[0]]
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
+async def test_lock_acquire_embeds_locally_when_writes_fail_and_no_pod_holds_the_lock():
+    from litellm.proxy._experimental.mcp_server.semantic_tool_index_store import (
+        RedisToolVectorStore,
+    )
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+
+    redis = _ReadOnlyRedisCache()
+    store = RedisToolVectorStore(redis, PodLockManager(redis))
+
+    assert await store.try_acquire_build_lock() is True
+
+
+@requires_semantic_router
+@pytest.mark.asyncio
+async def test_lock_acquire_returns_false_when_another_pod_holds_the_lock():
+    from litellm.proxy._experimental.mcp_server.semantic_tool_index_store import (
+        RedisToolVectorStore,
+    )
+    from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
+
+    redis = _ReadOnlyRedisCache()
+    lock_manager = PodLockManager(redis)
+    redis.backing[PodLockManager.get_redis_lock_key("mcp_semantic_tool_index_build")] = "other-pod"
+    store = RedisToolVectorStore(redis, lock_manager)
+
+    assert await store.try_acquire_build_lock() is False
+    assert store._degraded is False
 
 
 def test_store_and_hook_import_without_semantic_router():
