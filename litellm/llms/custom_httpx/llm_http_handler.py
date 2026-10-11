@@ -7687,6 +7687,7 @@ class BaseLLMHTTPHandler:
             return video_content_provider_config.transform_video_content_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                client=sync_httpx_client,
             )
 
         except Exception as e:
@@ -7766,6 +7767,7 @@ class BaseLLMHTTPHandler:
             return await video_content_provider_config.async_transform_video_content_response(
                 raw_response=response,
                 logging_obj=logging_obj,
+                client=async_httpx_client,
             )
 
         except Exception as e:

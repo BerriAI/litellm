@@ -14,7 +14,7 @@ import httpx
 import pytest
 
 from litellm.exceptions import UnsupportedParamsError
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.dashscope.qwen_ai_platform import QwenAIPlatformVideoConfig
 from litellm.llms.dashscope.qwencloud import QwenCloudVideoConfig
 from litellm.llms.dashscope.videos.transformation import (
@@ -28,7 +28,7 @@ from litellm.types.videos.utils import (
     decode_video_id_with_provider,
     encode_video_id_with_provider,
 )
-from litellm.videos.main import avideo_generation
+from litellm.videos.main import avideo_content, avideo_generation, video_content
 
 PNG_BYTES = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
@@ -36,6 +36,9 @@ PNG_BYTES = base64.b64decode(
 
 API_BASE = "https://dashscope.aliyuncs.com"
 SYNTHESIS_URL = f"{API_BASE}/api/v1/services/aigc/video-generation/video-synthesis"
+TASK_ID = "17ed7e50"
+OSS_URL = "https://oss.example.com/video.mp4"
+VIDEO_BYTES = b"\x00\x00\x00\x18ftypmp42"
 
 
 def _mock_response(payload: dict, status_code: int = 200) -> Mock:
@@ -44,6 +47,20 @@ def _mock_response(payload: dict, status_code: int = 200) -> Mock:
     mock_response.status_code = status_code
     mock_response.headers = httpx.Headers()
     return mock_response
+
+
+def _succeeded_task_payload() -> dict:
+    return {"output": {"task_id": TASK_ID, "task_status": "SUCCEEDED", "video_url": OSS_URL}}
+
+
+def _content_transport(sent: list[str]) -> httpx.MockTransport:
+    def respond(request: httpx.Request) -> httpx.Response:
+        sent.append(str(request.url))
+        if str(request.url) == OSS_URL:
+            return httpx.Response(200, content=VIDEO_BYTES)
+        return httpx.Response(200, json=_succeeded_task_payload())
+
+    return httpx.MockTransport(respond)
 
 
 def _write_png(tmp_path: Path) -> Path:
@@ -645,6 +662,51 @@ class TestDashScopeVideoContent:
             _video_url_from_task(_parse_task_response(response), response)
 
         assert raised.value.status_code == 404
+
+    @pytest.mark.parametrize("task_status", ["FAILED", "CANCELED"])
+    def test_terminal_task_with_no_error_detail_is_not_retryable(self, task_status):
+        """Regression: a failed or cancelled task carrying neither code nor message
+        fell through to the 502 branch, so the proxy retried a task that can never
+        produce a video."""
+        response = _mock_response({"output": {"task_id": "t1", "task_status": task_status}})
+
+        with pytest.raises(DashScopeVideoError, match=task_status) as raised:
+            _video_url_from_task(_parse_task_response(response), response)
+
+        assert raised.value.status_code == 400
+
+
+class TestDashScopeVideoContentDownload:
+    """The artifact lives on OSS, not on the DashScope host the task lookup hit, so
+    the bytes come from a second request. That request has to leave through the
+    client that served the first one, or a caller-injected client and its TLS
+    settings are silently dropped for the download."""
+
+    @pytest.mark.asyncio
+    async def test_async_download_reuses_the_client_that_served_the_task_lookup(self):
+        encoded = encode_video_id_with_provider(TASK_ID, "dashscope", "wan3.0-video")
+        sent: Final[list[str]] = []
+
+        async with httpx.AsyncClient(transport=_content_transport(sent)) as http_client:
+            handler: Final = AsyncHTTPHandler()
+            await handler.close()
+            handler.client = http_client
+            content = await avideo_content(video_id=encoded, api_key="sk-test", api_base=API_BASE, client=handler)
+
+        assert content == VIDEO_BYTES
+        assert sent == [f"{API_BASE}/api/v1/tasks/{TASK_ID}", OSS_URL]
+
+    def test_sync_download_reuses_the_client_that_served_the_task_lookup(self):
+        encoded = encode_video_id_with_provider(TASK_ID, "dashscope", "wan3.0-video")
+        sent: Final[list[str]] = []
+
+        with httpx.Client(transport=_content_transport(sent)) as http_client:
+            handler: Final = HTTPHandler()
+            handler.client = http_client
+            content = video_content(video_id=encoded, api_key="sk-test", api_base=API_BASE, client=handler)
+
+        assert content == VIDEO_BYTES
+        assert sent == [f"{API_BASE}/api/v1/tasks/{TASK_ID}", OSS_URL]
 
 
 class TestDashScopeVideoEnvironment:

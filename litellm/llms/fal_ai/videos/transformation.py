@@ -562,7 +562,12 @@ class FalAIVideoConfig(BaseVideoConfig):
             raise ValueError(f"fal.ai video result did not include a video URL: {error_message}")
         raise ValueError("fal.ai video result did not include a video URL")
 
-    def transform_video_content_response(self, raw_response: httpx.Response, logging_obj: object) -> bytes:
+    def transform_video_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: object,
+        client: "HTTPHandler | None" = None,
+    ) -> bytes:
         error: Final[str | None] = _result_error(raw_response)
         if error is not None:
             raise FalAIVideoError(
@@ -573,14 +578,19 @@ class FalAIVideoConfig(BaseVideoConfig):
                 response=raw_response,
             )
         video_url: Final[str] = self._extract_video_url(_response_data(raw_response))
-        httpx_client: Final[HTTPHandler] = self._sync_client_factory()
+        httpx_client: Final[HTTPHandler] = client if client is not None else self._sync_client_factory()
         video_response: Final[httpx.Response] = httpx_client.get(  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
             video_url
         )
         video_response.raise_for_status()
         return video_response.content
 
-    async def async_transform_video_content_response(self, raw_response: httpx.Response, logging_obj: object) -> bytes:
+    async def async_transform_video_content_response(
+        self,
+        raw_response: httpx.Response,
+        logging_obj: object,
+        client: "AsyncHTTPHandler | None" = None,
+    ) -> bytes:
         error: Final[str | None] = _result_error(raw_response)
         if error is not None:
             raise FalAIVideoError(
@@ -591,7 +601,7 @@ class FalAIVideoConfig(BaseVideoConfig):
                 response=raw_response,
             )
         video_url: Final[str] = self._extract_video_url(_response_data(raw_response))
-        async_httpx_client: Final[AsyncHTTPHandler] = self._async_client_factory()
+        async_httpx_client: Final[AsyncHTTPHandler] = client if client is not None else self._async_client_factory()
         video_response: Final[httpx.Response] = await async_httpx_client.get(  # pyright: ignore[reportUnknownMemberType]  # HTTP handler stubs are untyped
             video_url
         )

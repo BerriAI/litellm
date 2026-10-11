@@ -39,7 +39,7 @@ from litellm.utils import get_model_info
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
 class DashScopeVideoError(BaseLLMException):
@@ -99,6 +99,8 @@ _STATUS_MAP: Final = MappingProxyType(
 )
 
 _PENDING_STATUSES: Final = frozenset({"PENDING", "RUNNING"})
+
+_TERMINAL_FAILURE_STATUSES: Final = frozenset({"FAILED", "CANCELED"})
 
 _LEGACY_INPUT_KEYS: Final = (
     "img_url",
@@ -383,6 +385,8 @@ def _video_url_from_task(task: _TaskResponse, raw_response: httpx.Response) -> s
         )
     if output.code or output.message:
         raise _video_error(raw_response, 400, f"Video generation failed: {output.message or output.code}")
+    if output.task_status in _TERMINAL_FAILURE_STATUSES:
+        raise _video_error(raw_response, 400, f"Video generation ended as {output.task_status} with no video URL.")
     if output.task_status == "UNKNOWN":
         raise _video_error(raw_response, 404, "Task not found. DashScope task ids expire 24 hours after creation.")
     raise _video_error(raw_response, 502, "Video URL not found in task response. The task may not have succeeded yet.")
@@ -647,10 +651,11 @@ class DashScopeVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: "Logging",
+        client: "HTTPHandler | None" = None,
     ) -> bytes:
         video_url: Final = _video_url_from_task(_parse_task_response(raw_response), raw_response)
 
-        httpx_client: Final = _get_httpx_client()
+        httpx_client: Final[HTTPHandler] = client if client is not None else _get_httpx_client()
         video_response: Final = httpx_client.get(video_url)  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.get stub leaves params/headers untyped
         video_response.raise_for_status()
 
@@ -660,11 +665,16 @@ class DashScopeVideoConfig(BaseVideoConfig):
         self,
         raw_response: httpx.Response,
         logging_obj: "Logging",
+        client: "AsyncHTTPHandler | None" = None,
     ) -> bytes:
         video_url: Final = _video_url_from_task(_parse_task_response(raw_response), raw_response)
 
-        async_httpx_client: Final = get_async_httpx_client(
-            llm_provider=litellm.LlmProviders.DASHSCOPE,
+        async_httpx_client: Final[AsyncHTTPHandler] = (
+            client
+            if client is not None
+            else get_async_httpx_client(
+                llm_provider=litellm.LlmProviders.DASHSCOPE,
+            )
         )
         video_response: Final = await async_httpx_client.get(video_url)  # pyright: ignore[reportUnknownMemberType]  # HTTPHandler.get stub leaves params/headers untyped
         video_response.raise_for_status()
