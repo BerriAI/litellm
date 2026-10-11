@@ -10,7 +10,6 @@ from pydantic import ValidationError
 import litellm
 
 
-import litellm
 from litellm.llms.jina_ai.embedding.transformation import JinaAIEmbeddingConfig
 from litellm.types.utils import EmbeddingResponse
 
