@@ -43,12 +43,12 @@ Response format:
 import base64
 from collections.abc import Mapping, Sequence
 from io import BufferedReader, BytesIO
-from typing import TYPE_CHECKING, Any, Final, NotRequired, cast
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
 from pydantic import ConfigDict, TypeAdapter, with_config
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.images.utils import ImageEditRequestUtils
