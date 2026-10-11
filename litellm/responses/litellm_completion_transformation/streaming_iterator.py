@@ -40,6 +40,7 @@ from litellm.types.llms.openai import (
     ResponseIncompleteEvent,
     ResponseInProgressEvent,
     ResponseInputParam,
+    ResponsePartAddedEvent,
     ResponsesAPIOptionalRequestParams,
     ResponsesAPIResponse,
     ResponsesAPIStreamEvents,
@@ -998,12 +999,20 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
                         "id": self._cached_reasoning_item_id,
                         "type": "reasoning",
                         "status": "in_progress",
-                        "summary": None,
+                        "summary": [],
                     }
                 ),
             )
             event.__dict__["sequence_number"] = self._sequence_number
-            self._pending_response_events.append(event)
+            self._sequence_number += 1
+            part_added_event = ResponsePartAddedEvent(
+                type=ResponsesAPIStreamEvents.RESPONSE_PART_ADDED,
+                item_id=self._cached_reasoning_item_id,
+                output_index=self._reasoning_index(),
+                part={"type": "summary_text", "text": ""},
+            )
+            part_added_event.__dict__["sequence_number"] = self._sequence_number
+            self._pending_response_events.extend([event, part_added_event])
             return
 
         # Tool-first
