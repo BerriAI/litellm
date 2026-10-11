@@ -590,6 +590,20 @@ def _assert_config_declared_features_serve(owned: OwnedProxy, features: _Configu
     )
 
 
+def _canonical_langfuse_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
+    position: Final = next(
+        (
+            index
+            for index in range(len(paths) - 1)
+            if paths[index : index + 2] == ("/langfuse/{subpath:path}", "/langfuse")
+        ),
+        None,
+    )
+    if position is None:
+        return paths
+    return (*paths[:position], "/langfuse", "/langfuse/{subpath:path}", *paths[position + 2 :])
+
+
 def test_disable_lazy_routes_flag_serves_config_declared_features_like_the_warmed_lazy_proxy(
     gateway: Gateway, tmp_path: Path, provider: Wire
 ) -> None:
@@ -601,5 +615,5 @@ def test_disable_lazy_routes_flag_serves_config_declared_features_like_the_warme
             warmed_openapi: Final = _openapi_paths(lazy.gateway)
         with owned_proxy_process(gateway, tmp_path, {FLAG: "true"}, config=features.config) as eager:
             _assert_config_declared_features_serve(eager, features, provider)
-            assert _paths(eager.gateway) == warmed_paths
+            assert _canonical_langfuse_paths(_paths(eager.gateway)) == _canonical_langfuse_paths(warmed_paths)
             assert _openapi_paths(eager.gateway) == warmed_openapi

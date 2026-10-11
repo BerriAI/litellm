@@ -20,16 +20,19 @@ from urllib.parse import urlsplit
 
 import httpx
 import psutil
+import yaml
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
+from pydantic import TypeAdapter
 
 from tests.integration._support.client import GATEWAY_LIMITS, Gateway
 
 DB_PUSH: Final = ("--use_prisma_db_push",)
 MIGRATE_DEPLOY: Final = ()
 LEGACY_MIGRATE_DEPLOY: Final = ("--use_legacy_migration_resolver",)
+CONFIGURATION: Final = TypeAdapter(dict[str, object])
 
 
 def proxy_database_environment() -> Mapping[str, str]:
@@ -125,6 +128,7 @@ def _stop(process: subprocess.Popen[bytes]) -> None:
         signal_group(process.pid, signal.SIGKILL)
         process.wait(timeout=3)
         psutil.wait_procs(group_members(process.pid), timeout=3)
+        assert not group_members(process.pid), "Owned proxy child survived emergency cleanup"
         raise
 
 
@@ -191,12 +195,25 @@ def _lost_port_race(exit_code: int | None, log: Path) -> bool:
     return exit_code is not None and _BIND_COLLISION in log.read_text().lower()
 
 
+def _owns_listener(launch: _Launch) -> bool:
+    for member in group_members(launch.process.pid):
+        try:
+            if any(
+                connection.status == psutil.CONN_LISTEN and connection.laddr.port == launch.port
+                for connection in member.net_connections(kind="inet")
+            ):
+                return True
+        except psutil.NoSuchProcess:
+            continue
+    return False
+
+
 def _wait_until_ready(launch: _Launch) -> None:
     with httpx.Client(base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False) as client:
         deadline: Final = time.monotonic() + float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS", "70"))
         while launch.process.poll() is None:
             try:
-                if client.get("/health/readiness", timeout=2).status_code == 200:
+                if client.get("/health/readiness", timeout=2).status_code == 200 and _owns_listener(launch):
                     return
             except httpx.TransportError:
                 pass
@@ -249,7 +266,20 @@ def worker_configuration(config: Path, directory: Path) -> Path:
     contents: Final = re.sub(r"http://127[.]0[.]0[.]1:(8190|8191)(?![0-9])", endpoint, config.read_text())
     directory.mkdir(parents=True, exist_ok=True)
     destination: Final = directory / f"worker-config-{uuid.uuid4().hex}.yaml"
-    destination.write_text(contents)
+    loaded: Final[object] = yaml.safe_load(contents)
+    if not isinstance(loaded, dict):
+        destination.write_text(contents)
+        return destination
+    settings: Final = CONFIGURATION.validate_python(loaded)
+    general: Final = settings.get("general_settings", {})
+    if not isinstance(general, dict):
+        destination.write_text(contents)
+        return destination
+    configured: Final = {
+        **settings,
+        "general_settings": {"database_connection_pool_limit": 2, **CONFIGURATION.validate_python(general)},
+    }
+    destination.write_text(yaml.safe_dump(configured, sort_keys=False))
     return destination
 
 

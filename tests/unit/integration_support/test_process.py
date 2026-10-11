@@ -4,6 +4,9 @@ import asyncio
 import errno
 import importlib
 import socket
+import subprocess
+import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
@@ -11,9 +14,12 @@ from typing import Final
 
 import httpx
 import pytest
+import yaml
+from pydantic import TypeAdapter
 
 from tests.integration._support.client import Gateway
-from tests.integration._support.process import worker_configuration
+from tests.integration._support.process import _Launch, _wait_until_ready, worker_configuration
+from tests.integration._support.wire import Reply, wire_server
 
 TESTS_DIR: Final = Path(__file__).resolve().parents[2]
 UNRELATED_CRASH: Final = "Traceback (most recent call last):\nModuleNotFoundError: No module named 'litellm'\n"
@@ -32,11 +38,48 @@ def test_worker_configuration_routes_stock_edges_to_its_own_servers_and_preserve
     )
     source.write_text(original)
     configured: Final = worker_configuration(source, tmp_path / "worker")
-    assert configured.read_text() == (
-        'api_base: http://127.0.0.1:8203/v1\ntoken_url: "http://127.0.0.1:8202/_oauth/token"\n'
-        "peer: http://127.0.0.1:81910/v1\ncustom: http://127.0.0.1:9000/v1\n"
-    )
+    assert yaml.safe_load(configured.read_text()) == {
+        "api_base": "http://127.0.0.1:8203/v1",
+        "token_url": "http://127.0.0.1:8202/_oauth/token",
+        "peer": "http://127.0.0.1:81910/v1",
+        "custom": "http://127.0.0.1:9000/v1",
+        "general_settings": {"database_connection_pool_limit": 2},
+    }
     assert source.read_text() == original
+
+
+@pytest.mark.parametrize("limit", (1, 5, 0, None, "", "bad"))
+def test_worker_configuration_preserves_explicit_pool_limits(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, limit: int | str | None
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    source: Final = tmp_path / "source.yaml"
+    original: Final = {
+        "general_settings": {"database_connection_pool_limit": limit, "database_connection_timeout": 3},
+        "model_list": [{"model_name": "synthetic", "litellm_params": {"model": "openai/synthetic"}}],
+    }
+    source.write_text(yaml.safe_dump(original))
+    configured: Final = worker_configuration(source, tmp_path / "worker")
+    assert yaml.safe_load(configured.read_text()) == original
+    assert yaml.safe_load(source.read_text()) == original
+
+
+def test_worker_configuration_budgets_implicit_pools_without_changing_connection_options(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INTEGRATION_WORKER_ISOLATION", "1")
+    source: Final = tmp_path / "source.yaml"
+    original: Final = {"general_settings": {"database_extra_connection_params": {"connection_limit": "1"}}}
+    source.write_text(yaml.safe_dump(original))
+    configured: Final = worker_configuration(source, tmp_path / "worker")
+    decoded: Final = TypeAdapter(dict[str, object]).validate_python(yaml.safe_load(configured.read_text()))
+    assert decoded == {
+        "general_settings": {
+            "database_connection_pool_limit": 2,
+            "database_extra_connection_params": {"connection_limit": "1"},
+        }
+    }
+    assert yaml.safe_load(source.read_text()) == original
 
 
 def test_serial_proxy_keeps_the_requested_configuration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -45,6 +88,25 @@ def test_serial_proxy_keeps_the_requested_configuration(monkeypatch: pytest.Monk
     source.write_text("api_base: http://127.0.0.1:8191/v1\n")
     assert worker_configuration(source, tmp_path / "unused") == source
     assert source.read_text() == "api_base: http://127.0.0.1:8191/v1\n"
+
+
+def test_owned_readiness_rejects_a_healthy_listener_from_another_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INTEGRATION_PROXY_READY_SECONDS", "0")
+    with wire_server(lambda request: Reply(body=b"healthy")) as foreign:
+        with subprocess.Popen(
+            (sys.executable, "-c", "import time; time.sleep(30)"), start_new_session=True
+        ) as process:
+            try:
+                port: Final = int(foreign.url.rsplit(":", 1)[1])
+                launch: Final = _Launch(process, port, tmp_path / "proxy.log", time.monotonic())
+                with pytest.raises(AssertionError, match="readiness deadline"):
+                    _wait_until_ready(launch)
+                assert process.poll() is None
+            finally:
+                process.kill()
+                process.wait(timeout=3)
 
 
 @pytest.fixture

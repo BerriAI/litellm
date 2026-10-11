@@ -411,11 +411,11 @@ def test_an_arn_deployment_answers_on_every_decisions_route_signed_for_bedrock_a
         _assert_runtime_call(call, "audit_signed", route=route)
         assert call.headers[_SESSION_HEADER] == _default_session("audit_signed"), dict(call.headers)
         _assert_signed(call)
-    for response in responses:
-        row = _spend_row(response.headers["x-litellm-call-id"])
+    for response, route in zip(responses, _ROUTES, strict=True):
+        row: Final = _spend_row(response.headers["x-litellm-call-id"])
         assert row == {
             "status": "success",
-            "call_type": "asystemone",
+            "call_type": "asystemone" if route.path.endswith("/systemone") else "adecisions",
             "custom_llm_provider": "strands_decider",
             "model_group": _SIGNED,
             "api_base": _invocations_url("audit_signed"),

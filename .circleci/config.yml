@@ -160,7 +160,7 @@ commands:
                 exit 1
                 ;;
             esac
-            curl -sSLf -o /tmp/rustup-init \
+            curl -sSLf --retry 3 --retry-all-errors --retry-max-time 120 --connect-timeout 15 --max-time 60 -o /tmp/rustup-init \
               "https://static.rust-lang.org/rustup/archive/1.28.2/${RUSTUP_TRIPLE}/rustup-init"
             echo "${RUSTUP_SHA256}  /tmp/rustup-init" | sha256sum -c -
             chmod +x /tmp/rustup-init

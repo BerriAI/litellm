@@ -18,11 +18,13 @@ from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
 )
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
+    LiteLLM_TeamTableCachedObj,
     ProxyException,
     SpecialHeaders,
     SpecialMCPServerNames,
     UserAPIKeyAuth,
 )
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.types.agents import AgentCaller
 
 
@@ -6170,6 +6172,14 @@ class TestMCPDcrBridgeDelegateAdmission:
         the reload key."""
         from litellm.proxy.auth.auth_checks import OrganizationNotFoundError
 
+        cache: Final = UserApiKeyCache()
+        cache.set_cache(
+            key="team_id:team-restricted",
+            value=LiteLLM_TeamTableCachedObj(team_id="team-restricted"),
+            model_type=LiteLLM_TeamTableCachedObj,
+        )
+        prisma: Final = MagicMock()
+        prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
         get_key_object = AsyncMock(return_value=return_value, side_effect=side_effect)
         get_org_object = AsyncMock(side_effect=OrganizationNotFoundError("Organization doesn't exist in db."))
         patchers = [
@@ -6177,8 +6187,8 @@ class TestMCPDcrBridgeDelegateAdmission:
             patch(  # test-quality-ok: central auth now resolves org limits; this fixture models a missing org row
                 "litellm.proxy.auth.auth_checks.get_org_object", get_org_object
             ),
-            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", MagicMock()),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", cache),
         ]
         if team_blocked:
             patchers.append(
