@@ -238,10 +238,10 @@ class CliSsoTeamDetail(LiteLLMBaseModel):
 
 _CLI_SSO_TEAM_DETAILS_ADAPTER: Final = TypeAdapter(tuple[CliSsoTeamDetail, ...])
 _CLI_SSO_FLOW_JSON_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(
-    dict[str, object], config=ConfigDict(strict=True)
+    dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
 _SSO_USERINFO_RESPONSE_ADAPTER: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(
-    dict[str, object] | None, config=ConfigDict(strict=True)
+    dict[str, object] | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
 )
 _TEAMLESS_CLI_SSO_TEAM_DETAIL: Final = CliSsoTeamDetail(team_models=())
 

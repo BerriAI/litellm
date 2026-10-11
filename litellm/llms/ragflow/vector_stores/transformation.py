@@ -2,7 +2,7 @@ from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ConfigDict, RootModel, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.llms.base_llm.vector_store.transformation import BaseVectorStoreConfig
@@ -24,19 +24,22 @@ else:
     LiteLLMLoggingObj = Any
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _RAGFlowDataset(TypedDict):
     id: ReadOnly[NotRequired[str | None]]
     name: ReadOnly[NotRequired[str | None]]
     create_time: ReadOnly[NotRequired[int | float | None]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _RAGFlowCreateResponse(TypedDict):
     data: ReadOnly[NotRequired[_RAGFlowDataset]]
 
 
-_RAGFLOW_CREATE_RESPONSE_ADAPTER: Final = TypeAdapter(_RAGFlowCreateResponse)
+class _RAGFlowCreateResponseRoot(RootModel[_RAGFlowCreateResponse]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
 _RAGFLOW_EMPTY_DATA: Final[_RAGFlowDataset] = {}
 
 
@@ -203,7 +206,7 @@ class RAGFlowVectorStoreConfig(BaseVectorStoreConfig):
                     headers=response.headers,
                 )
 
-            create_response: Final = _RAGFLOW_CREATE_RESPONSE_ADAPTER.validate_python(response_json)
+            create_response: Final = _RAGFlowCreateResponseRoot.model_validate(response_json).root
             data: Final = create_response.get("data", _RAGFLOW_EMPTY_DATA)
 
             # Extract dataset ID

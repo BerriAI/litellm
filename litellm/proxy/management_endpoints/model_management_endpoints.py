@@ -245,7 +245,7 @@ class _TransactionFactory(Protocol):
 
 
 class _ModelTransactionClient(LiteLLMBaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True, hide_input_in_errors=True)
 
     tx: _TransactionFactory
 

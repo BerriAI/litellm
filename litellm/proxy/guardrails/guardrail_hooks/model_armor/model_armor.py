@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal
 
 import httpx
 from fastapi import HTTPException
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ConfigDict, RootModel, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 if TYPE_CHECKING:
@@ -68,29 +68,29 @@ from litellm.types.utils import (
 GUARDRAIL_NAME: Final = "model_armor"
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _MatchResult(TypedDict):
     matchState: NotRequired[ReadOnly[str]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _DeidentifyData(TypedDict):
     text: NotRequired[ReadOnly[str]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _DeidentifyResult(TypedDict):
     matchState: NotRequired[ReadOnly[str]]
     data: NotRequired[ReadOnly[_DeidentifyData]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _SdpResult(TypedDict):
     inspectResult: NotRequired[ReadOnly[_MatchResult]]
     deidentifyResult: NotRequired[ReadOnly[_DeidentifyResult]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _Filter(TypedDict):
     raiFilterResult: NotRequired[ReadOnly[_MatchResult]]
     piAndJailbreakFilterResult: NotRequired[ReadOnly[_MatchResult]]
@@ -100,19 +100,21 @@ class _Filter(TypedDict):
     sdpFilterResult: NotRequired[ReadOnly[_SdpResult | None]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _SanitizationResult(TypedDict):
     filterResults: NotRequired[ReadOnly[Mapping[str, _Filter] | Sequence[_Filter] | str | int | float | bool | None]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _ModelArmorResponse(TypedDict):
     sanitizationResult: NotRequired[ReadOnly[_SanitizationResult]]
     sanitizedText: NotRequired[ReadOnly[str | None]]
     text: NotRequired[ReadOnly[str | None]]
 
 
-_MODEL_ARMOR_RESPONSE: Final = TypeAdapter(_ModelArmorResponse)
+class _ModelArmorResponseRoot(RootModel[_ModelArmorResponse]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
 
 # Only these carry the finished output; response.created carries an empty body
 _RESPONSES_TERMINAL_EVENT_TYPES: Final = frozenset({"response.completed", "response.incomplete", "response.failed"})
@@ -411,8 +413,8 @@ class ModelArmorGuardrail(CustomGuardrail, VertexBase):
 
         json_response: Final = response.json()
         if hasattr(json_response, "__await__"):
-            return _MODEL_ARMOR_RESPONSE.validate_python(await json_response)
-        return _MODEL_ARMOR_RESPONSE.validate_python(json_response)
+            return _ModelArmorResponseRoot.model_validate(await json_response).root
+        return _ModelArmorResponseRoot.model_validate(json_response).root
 
     def sanitize_file_prompt(self, file_bytes: bytes, file_type: str, source: str = "user_prompt") -> dict:
         """

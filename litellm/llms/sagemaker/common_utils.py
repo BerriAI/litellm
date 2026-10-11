@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ConfigDict, RootModel, TypeAdapter, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
 
 import litellm
@@ -16,32 +16,36 @@ from litellm.types.utils import StreamingChatCompletionChunk
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _SageMakerToken(TypedDict, total=False):
     text: ReadOnly[str]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _SageMakerChunkData(TypedDict, total=False):
     token: ReadOnly[_SageMakerToken | None]
     index: ReadOnly[int | None]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _SageMakerMessagesChunkData(TypedDict, total=False):
     choices: ReadOnly[Required[list[Mapping[str, object]]]]
 
 
-_SAGEMAKER_CHUNK_DATA_ADAPTER: Final = TypeAdapter(_SageMakerChunkData)
-_SAGEMAKER_MESSAGES_CHUNK_DATA_ADAPTER: Final = TypeAdapter(_SageMakerMessagesChunkData)
+class _SageMakerChunkDataRoot(RootModel[_SageMakerChunkData]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+class _SageMakerMessagesChunkDataRoot(RootModel[_SageMakerMessagesChunkData]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 
 def _parse_sagemaker_chunk_data(data: str) -> _SageMakerChunkData:
-    return _SAGEMAKER_CHUNK_DATA_ADAPTER.validate_python(json.loads(data))
+    return _SageMakerChunkDataRoot.model_validate(json.loads(data)).root
 
 
 def _parse_sagemaker_messages_chunk_data(data: str) -> _SageMakerMessagesChunkData:
-    return _SAGEMAKER_MESSAGES_CHUNK_DATA_ADAPTER.validate_python(json.loads(data))
+    return _SageMakerMessagesChunkDataRoot.model_validate(json.loads(data)).root
 
 
 def _load_sagemaker_response_stream_shape():

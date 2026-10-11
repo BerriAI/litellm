@@ -2,7 +2,7 @@ from collections.abc import Sequence
 from typing import Final, Literal
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ConfigDict, RootModel, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -31,25 +31,29 @@ local_cache_obj: Final = Cache(type=LiteLLMCacheType.LOCAL)  # only used for cal
 MAX_PAGINATION_PAGES: Final = 100  # Reasonable upper bound for pagination
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _CachedContentItem(TypedDict):
     displayName: ReadOnly[NotRequired[object]]
     name: ReadOnly[NotRequired[str | None]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _CachedContentListBody(TypedDict):
     cachedContents: ReadOnly[NotRequired[Sequence[_CachedContentItem]]]
     nextPageToken: ReadOnly[NotRequired[str | None]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _CreatedCachedContent(TypedDict):
     name: ReadOnly[NotRequired[str | None]]
 
 
-_CACHED_CONTENT_LIST: Final = TypeAdapter(_CachedContentListBody)
-_CREATED_CACHED_CONTENT: Final = TypeAdapter(_CreatedCachedContent)
+class _CachedContentListBodyRoot(RootModel[_CachedContentListBody]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+class _CreatedCachedContentRoot(RootModel[_CreatedCachedContent]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 
 class ContextCachingEndpoints(VertexBase):
@@ -177,7 +181,7 @@ class ContextCachingEndpoints(VertexBase):
             except Exception as e:
                 raise VertexAIError(status_code=500, message=str(e))
 
-            raw_response = _CACHED_CONTENT_LIST.validate_python(resp.json())
+            raw_response = _CachedContentListBodyRoot.model_validate(resp.json()).root
             logging_obj.post_call(original_response=raw_response)
 
             if "cachedContents" not in raw_response:
@@ -267,7 +271,7 @@ class ContextCachingEndpoints(VertexBase):
             except Exception as e:
                 raise VertexAIError(status_code=500, message=str(e))
 
-            raw_response = _CACHED_CONTENT_LIST.validate_python(resp.json())
+            raw_response = _CachedContentListBodyRoot.model_validate(resp.json()).root
             logging_obj.post_call(original_response=raw_response)
 
             if "cachedContents" not in raw_response:
@@ -440,7 +444,7 @@ class ContextCachingEndpoints(VertexBase):
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        raw_response_cached: Final = _CREATED_CACHED_CONTENT.validate_python(response.json())
+        raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         return (
             non_cached_messages,
             optional_params,
@@ -593,7 +597,7 @@ class ContextCachingEndpoints(VertexBase):
         except httpx.TimeoutException:
             raise VertexAIError(status_code=408, message="Timeout error occurred.")
 
-        raw_response_cached: Final = _CREATED_CACHED_CONTENT.validate_python(response.json())
+        raw_response_cached: Final = _CreatedCachedContentRoot.model_validate(response.json()).root
         return (
             non_cached_messages,
             optional_params,

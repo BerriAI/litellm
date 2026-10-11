@@ -47,7 +47,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 from httpx._types import RequestFiles
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ConfigDict, RootModel, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -74,32 +74,32 @@ else:
     LiteLLMLoggingObj = Any
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _ImageUrl(TypedDict):
     url: ReadOnly[NotRequired[str | None]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _Image(TypedDict):
     image_url: ReadOnly[NotRequired[_ImageUrl]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _Message(TypedDict):
     images: ReadOnly[NotRequired[Sequence[_Image]]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _Choice(TypedDict):
     message: ReadOnly[NotRequired[_Message]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _TokensDetails(TypedDict):
     image_tokens: ReadOnly[NotRequired[int]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _Usage(TypedDict):
     prompt_tokens: ReadOnly[NotRequired[int]]
     total_tokens: ReadOnly[NotRequired[int]]
@@ -109,14 +109,15 @@ class _Usage(TypedDict):
     cost_details: ReadOnly[NotRequired[Mapping[str, object] | None]]
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _OpenRouterImageEditResponse(TypedDict):
     choices: ReadOnly[NotRequired[Sequence[_Choice]]]
     usage: ReadOnly[NotRequired[_Usage | None]]
     model: ReadOnly[NotRequired[object]]
 
 
-_RESPONSE_ADAPTER: Final = TypeAdapter(_OpenRouterImageEditResponse)
+class _OpenRouterImageEditResponseRoot(RootModel[_OpenRouterImageEditResponse]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 
 class OpenRouterImageEditConfig(BaseImageEditConfig):
@@ -261,7 +262,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
         model_response.data = []
 
         try:
-            payload: Final = _RESPONSE_ADAPTER.validate_python(response_json)
+            payload: Final = _OpenRouterImageEditResponseRoot.model_validate(response_json).root
             choices: Final = payload.get("choices", [])
 
             for choice in choices:

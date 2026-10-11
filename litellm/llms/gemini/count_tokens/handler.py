@@ -2,7 +2,7 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
-from pydantic import ConfigDict, TypeAdapter, with_config
+from pydantic import ConfigDict, RootModel, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -15,15 +15,14 @@ else:
     GenerateContentContentListUnionDict = Any
 
 
-@with_config(ConfigDict(extra="allow", strict=True))
+@with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _GeminiCountTokensResponse(TypedDict):
     totalTokens: NotRequired[ReadOnly[int | float]]
     tokenizer_used: NotRequired[ReadOnly[str]]
 
 
-_GEMINI_COUNT_TOKENS_RESPONSE_ADAPTER: Final[TypeAdapter[_GeminiCountTokensResponse]] = TypeAdapter(
-    _GeminiCountTokensResponse
-)
+class _GeminiCountTokensResponseRoot(RootModel[_GeminiCountTokensResponse]):
+    model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
 
 
 class GoogleAIStudioTokenCounter:
@@ -157,7 +156,7 @@ class GoogleAIStudioTokenCounter:
             response.raise_for_status()
 
             # Parse response
-            result: Final = _GEMINI_COUNT_TOKENS_RESPONSE_ADAPTER.validate_python(response.json())
+            result: Final = _GeminiCountTokensResponseRoot.model_validate(response.json()).root
             return dict(result)
 
         except httpx.HTTPStatusError as e:
