@@ -11,6 +11,7 @@ import litellm
 from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.cohere.chat.transformation import CohereChatConfig
 from litellm.llms.cohere.chat.v2_transformation import CohereV2ChatConfig
+from litellm.utils import UnsupportedParamsError, get_optional_params
 from unittest.mock import AsyncMock, patch
 
 COHERE_V1_CHAT_URL: Final = "https://api.cohere.ai/v1/chat"
