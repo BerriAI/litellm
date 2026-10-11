@@ -1460,11 +1460,12 @@ from contextlib import contextmanager as _ctx
 
 from litellm.caching.dual_cache import DualCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE
 from litellm.proxy.credential_endpoints import user_provider_credentials as upc
 
 _DEVICE_CODE_URL = "https://github.com/login/device/code"
 _ACCESS_TOKEN_URL = "https://github.com/login/oauth/access_token"
-_COPILOT_TOKEN_URL = "https://api.github.com/copilot_internal/v2/token"
+_COPILOT_MODELS_URL = f"{DEFAULT_GITHUB_COPILOT_API_BASE}/models"
 _GITHUB_USER_URL = "https://api.github.com/user"
 
 
@@ -1499,6 +1500,7 @@ def _connection_row(user_id="user-a", credential_name="copilot-cred", login="oct
 @pytest.fixture(autouse=True)
 def _connection_master_key(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-test-master")
+    monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
 
 
 @_ctx
@@ -1516,6 +1518,15 @@ def _github_http(mapping):
     client = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
     with patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=client):
         yield
+
+
+def _copilot_models_response(github_token):
+    def respond(request):
+        assert request.method == "GET"
+        assert request.headers["Authorization"] == f"Bearer {github_token}"
+        return {"data": []}
+
+    return respond
 
 
 _DEVICE_FLOW_START = {
@@ -1606,13 +1617,17 @@ def test_user_connection_poll_rejects_an_undecryptable_flow_handle(monkeypatch):
     assert response.status_code == 400
 
 
-def test_user_connection_poll_connected_persists_and_reports_login(monkeypatch):
+@pytest.mark.parametrize("api_base", [None, "http://copilot.test/gateway/"])
+def test_user_connection_poll_connected_persists_and_reports_login(monkeypatch, api_base):
     table = _patch_user_connection_env(monkeypatch, [_per_user_credential()])
+    if api_base is not None:
+        monkeypatch.setenv("GITHUB_COPILOT_API_BASE", api_base)
+    models_url = f"{(api_base or DEFAULT_GITHUB_COPILOT_API_BASE).rstrip('/')}/models"
     with _github_http(
         {
             _DEVICE_CODE_URL: _DEVICE_FLOW_START,
             _ACCESS_TOKEN_URL: {"access_token": "gho_1"},
-            _COPILOT_TOKEN_URL: {"token": "copilot-tok", "expires_at": 4102444800},
+            models_url: _copilot_models_response("gho_1"),
             _GITHUB_USER_URL: {"login": "octo"},
         }
     ):
@@ -1627,6 +1642,10 @@ def test_user_connection_poll_connected_persists_and_reports_login(monkeypatch):
     assert poll.status_code == 200, poll.text
     assert poll.json() == {"status": "connected", "interval": None, "github_login": "octo"}
     table.upsert.assert_awaited_once()
+    written = table.upsert.await_args.kwargs["data"]
+    for operation in ("create", "update"):
+        stored_connection = upc.decode_user_provider_credential(written[operation]["credential_b64"])
+        assert stored_connection == upc.GithubCopilotUserConnectionPayload(access_token="gho_1", github_login="octo")
 
 
 def test_user_connection_poll_pending(monkeypatch):
@@ -1718,7 +1737,7 @@ def test_user_connections_isolated_per_user(monkeypatch):
     table.delete_many.assert_awaited_once_with(where={"user_id": "user-a", "credential_name": "copilot-cred"})
 
 
-@pytest.mark.parametrize("seat_status", [403, 404])
+@pytest.mark.parametrize("seat_status", [401, 403, 404])
 def test_user_connection_poll_reports_no_copilot_seat(monkeypatch, seat_status):
     """A GitHub seat check that rejects the user's token maps to no_copilot_seat, stores
     nothing, and clears the in-flight device code."""
@@ -1730,7 +1749,9 @@ def test_user_connection_poll_reports_no_copilot_seat(monkeypatch, seat_status):
             return httpx.Response(200, json=_DEVICE_FLOW_START, request=request)
         if url == _ACCESS_TOKEN_URL:
             return httpx.Response(200, json={"access_token": "gho_seat"}, request=request)
-        if url == _COPILOT_TOKEN_URL:
+        if url == _COPILOT_MODELS_URL:
+            assert request.method == "GET"
+            assert request.headers["Authorization"] == "Bearer gho_seat"
             return httpx.Response(seat_status, json={}, request=request)
         pytest.fail(f"unexpected request to {url}")
 
@@ -1758,7 +1779,9 @@ def test_user_connection_poll_rate_limit_returns_429(monkeypatch):
             return httpx.Response(200, json=_DEVICE_FLOW_START, request=request)
         if url == _ACCESS_TOKEN_URL:
             return httpx.Response(200, json={"access_token": "gho_limited"}, request=request)
-        if url == _COPILOT_TOKEN_URL:
+        if url == _COPILOT_MODELS_URL:
+            assert request.method == "GET"
+            assert request.headers["Authorization"] == "Bearer gho_limited"
             return httpx.Response(429, json={}, request=request)
         pytest.fail(f"unexpected request to {url}")
 
@@ -2117,7 +2140,7 @@ def test_user_connection_poll_valid_handle_works_with_a_fresh_cache(monkeypatch)
         {
             _DEVICE_CODE_URL: _DEVICE_FLOW_START,
             _ACCESS_TOKEN_URL: {"access_token": "gho_1"},
-            _COPILOT_TOKEN_URL: {"token": "copilot-tok", "expires_at": 4102444800},
+            _COPILOT_MODELS_URL: _copilot_models_response("gho_1"),
             _GITHUB_USER_URL: {"login": "octo"},
         }
     ):
@@ -2201,7 +2224,7 @@ def test_user_connection_poll_reports_503_when_the_cache_overwrite_cannot_land(m
         {
             _DEVICE_CODE_URL: _DEVICE_FLOW_START,
             _ACCESS_TOKEN_URL: {"access_token": "gho_1"},
-            _COPILOT_TOKEN_URL: {"token": "copilot-tok", "expires_at": 4102444800},
+            _COPILOT_MODELS_URL: _copilot_models_response("gho_1"),
             _GITHUB_USER_URL: {"login": "octo"},
         }
     ):

@@ -50,7 +50,7 @@ _REFUSALS: Final[Mapping[Provider, str]] = MappingProxyType(
     {"chatgpt": dl.CHATGPT_REFUSAL, "copilot": dl.COPILOT_REFUSAL}
 )
 _STORED_BEARERS: Final[Mapping[Provider, str]] = MappingProxyType(
-    {"chatgpt": dl.CHATGPT_STORED, "copilot": dl.COPILOT_STORED_KEY}
+    {"chatgpt": dl.CHATGPT_STORED, "copilot": dl.COPILOT_ACCESS}
 )
 _CONTROL_MODEL: Final = "device-login-control"
 _EXTRA: Final[Mapping[str, JsonValue]] = MappingProxyType({"num_retries": 0, "cache": {"no-cache": True}})
@@ -152,7 +152,7 @@ class _Scene:
         if provider == "chatgpt":
             dl.write_chatgpt(self.rig.chatgpt_dir, dl.chatgpt_record(dl.CHATGPT_STORED))
             return
-        dl.write_copilot_key(self.rig.copilot_dir, dl.COPILOT_STORED_KEY, self.rig.peers.api.url)
+        dl.write_copilot_access(self.rig.copilot_dir, dl.COPILOT_ACCESS)
 
 
 def _config(peers: dl.Peers, directory: Path) -> Path:
@@ -485,7 +485,7 @@ def test_missing_token_is_refused_on_the_other_model_routes(scene: _Scene, route
     assert _describe(scene.rig.peers.api.drain()) == ()
 
 
-def test_copilot_embeddings_are_served_with_the_stored_api_key(scene: _Scene) -> None:
+def test_copilot_embeddings_are_served_with_the_stored_access_token(scene: _Scene) -> None:
     scene.store_valid_token("copilot")
     served: Final = scene.post(
         "/v1/embeddings", {"model": "github_copilot/text-embedding-3-small", "input": "login", **_EXTRA}
@@ -494,7 +494,7 @@ def test_copilot_embeddings_are_served_with_the_stored_api_key(scene: _Scene) ->
     (item,) = rv.ITEMS.validate_python(rv.JSON_OBJECT.validate_json(served.text)["data"])
     assert item["embedding"] == [0.25, 0.5, 0.75], served.text
     (forwarded,) = scene.rig.peers.api.drain()
-    assert (forwarded.method, dl.bearer(forwarded)) == ("POST", dl.COPILOT_STORED_KEY), forwarded.target
+    assert (forwarded.method, dl.bearer(forwarded)) == ("POST", dl.COPILOT_ACCESS), forwarded.target
     assert forwarded.target.endswith("/embeddings"), forwarded.target
     assert scene.rig.peers.auth_connections() == ()
 
@@ -560,59 +560,16 @@ def test_stored_token_the_provider_rejects_surfaces_its_401_without_a_login(
     if provider == "chatgpt":
         dl.write_chatgpt(scene.rig.chatgpt_dir, dl.chatgpt_record(dl.CHATGPT_REJECTED))
     else:
-        dl.write_copilot_key(scene.rig.copilot_dir, dl.COPILOT_REJECTED_KEY, scene.rig.peers.api.url)
+        dl.write_copilot_access(scene.rig.copilot_dir, dl.COPILOT_REJECTED_ACCESS)
     call: Final = scene.call(_Cell(provider, endpoint, False, "httpx"))
     served: Final = _serve(call)
     assert served.status == 401, served.text
     assert dl.REJECTED_DETAIL in served.text, served.text
     received: Final = scene.rig.peers.api.drain()
     assert {dl.bearer(request) for request in _carrying(received, call.marker)} == {
-        dl.CHATGPT_REJECTED if provider == "chatgpt" else dl.COPILOT_REJECTED_KEY
+        dl.CHATGPT_REJECTED if provider == "chatgpt" else dl.COPILOT_REJECTED_ACCESS
     }, _describe(received)
     assert scene.rig.peers.auth_connections() == ()
-
-
-@pytest.mark.parametrize("stale_key", (False, True), ids=("missing-api-key", "expired-api-key"))
-def test_copilot_api_key_is_minted_once_from_the_stored_access_token(scene: _Scene, stale_key: bool) -> None:
-    dl.write_copilot_access(scene.rig.copilot_dir, dl.COPILOT_ACCESS)
-    if stale_key:
-        dl.write_copilot_key(scene.rig.copilot_dir, dl.COPILOT_REJECTED_KEY, scene.rig.peers.api.url, -3600)
-    call: Final = scene.call(_Cell("copilot", "chat", False, "httpx"))
-    served: Final = _serve(call)
-    assert served.status == 200, served.text
-    assert set(rv.MARKER.findall(served.text)) == {call.marker}, served.text
-    (minted,) = scene.rig.peers.auth.drain()
-    assert (minted.method, minted.target, minted.headers.get("host"), minted.headers.get("authorization")) == (
-        "GET",
-        "/copilot_internal/v2/token",
-        dl.GITHUB_API_HOST,
-        f"token {dl.COPILOT_ACCESS}",
-    )
-    (forwarded,) = _carrying(scene.rig.peers.api.drain(), call.marker)
-    assert dl.bearer(forwarded) == dl.COPILOT_MINTED_KEY
-    assert json.loads((scene.rig.copilot_dir / "api-key.json").read_text())["token"] == dl.COPILOT_MINTED_KEY
-
-
-def test_copilot_access_token_github_rejects_fails_the_request_without_a_device_login(scene: _Scene) -> None:
-    dl.write_copilot_access(scene.rig.copilot_dir, dl.COPILOT_REJECTED_ACCESS)
-    served: Final = _serve(scene.call(_Cell("copilot", "chat", False, "httpx")))
-    assert served.status == 400, served.text
-    assert "Failed to refresh API key" in _error_message(served.text), served.text
-    _failure_logged(served)
-    reached: Final = scene.rig.peers.auth.drain()
-    assert {(request.method, request.target) for request in reached} == {("GET", "/copilot_internal/v2/token")}, (
-        _describe(reached)
-    )
-    assert _describe(scene.rig.peers.api.drain()) == ()
-
-
-def test_expired_copilot_api_key_with_no_access_token_is_refused_before_any_auth_host_call(scene: _Scene) -> None:
-    dl.write_copilot_key(scene.rig.copilot_dir, dl.COPILOT_STORED_KEY, scene.rig.peers.api.url, -3600)
-    served: Final = _serve(scene.call(_Cell("copilot", "responses", False, "httpx")))
-    assert served.status == 400, served.text
-    assert dl.COPILOT_REFUSAL in _error_message(served.text), served.text
-    assert scene.rig.peers.auth_connections() == ()
-    assert _describe(scene.rig.peers.api.drain()) == ()
 
 
 _UNUSABLE_CHATGPT_FILES: Final[Mapping[str, str]] = MappingProxyType(
@@ -653,41 +610,19 @@ def test_chatgpt_token_with_a_text_expiry_falls_back_to_the_expiry_inside_the_to
     assert scene.rig.peers.auth_connections() == ()
 
 
-_PROVIDER_RESOLUTION_ERROR: Final = "GetLLMProvider Exception"
-
-
-@dataclass(frozen=True, slots=True)
-class _UnusableCopilotFiles:
-    files: Mapping[str, str]
-    answer: str
-
-
-_UNUSABLE_COPILOT_FILES: Final[Mapping[str, _UnusableCopilotFiles]] = MappingProxyType(
-    {
-        "empty-access-token": _UnusableCopilotFiles(MappingProxyType({"access-token": ""}), dl.COPILOT_REFUSAL),
-        "blank-access-token": _UnusableCopilotFiles(MappingProxyType({"access-token": "  \n"}), dl.COPILOT_REFUSAL),
-        "invalid-api-key-json": _UnusableCopilotFiles(
-            MappingProxyType({"api-key.json": "{not json"}), dl.COPILOT_REFUSAL
-        ),
-        "api-key-list": _UnusableCopilotFiles(MappingProxyType({"api-key.json": "[]"}), _PROVIDER_RESOLUTION_ERROR),
-        "api-key-expiry-text": _UnusableCopilotFiles(
-            MappingProxyType({"api-key.json": json.dumps({"token": "copilot-text-expiry", "expires_at": "soon"})}),
-            _PROVIDER_RESOLUTION_ERROR,
-        ),
-    }
+_UNUSABLE_COPILOT_ACCESS_TOKENS: Final[Mapping[str, str]] = MappingProxyType(
+    {"empty-access-token": "", "blank-access-token": "  \n"}
 )
 
 
-@pytest.mark.parametrize("name", tuple(_UNUSABLE_COPILOT_FILES))
-def test_unusable_copilot_token_files_are_refused_like_missing_ones_each_time(scene: _Scene, name: str) -> None:
-    variant: Final = _UNUSABLE_COPILOT_FILES[name]
-    for file_name, content in variant.files.items():
-        (scene.rig.copilot_dir / file_name).write_text(content)
+@pytest.mark.parametrize("name", tuple(_UNUSABLE_COPILOT_ACCESS_TOKENS))
+def test_unusable_copilot_access_token_is_refused_like_a_missing_one_each_time(scene: _Scene, name: str) -> None:
+    dl.write_copilot_access(scene.rig.copilot_dir, _UNUSABLE_COPILOT_ACCESS_TOKENS[name])
     first: Final = _serve(scene.call(_Cell("copilot", "chat", False, "httpx")))
     second: Final = _serve(scene.call(_Cell("copilot", "chat", False, "httpx")))
     for served in (first, second):
         assert served.status == 400, served.text
-        assert variant.answer in _error_message(served.text), served.text
+        assert dl.COPILOT_REFUSAL in _error_message(served.text), served.text
         assert dl.COPILOT_USER_CODE not in served.text
     assert scene.rig.peers.auth_connections() == ()
     assert _describe(scene.rig.peers.api.drain()) == ()

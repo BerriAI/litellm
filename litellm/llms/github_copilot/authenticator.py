@@ -2,7 +2,6 @@ import json
 import os
 import time
 from typing import Final
-from urllib.parse import urlsplit
 
 import httpx
 from pydantic import ConfigDict, TypeAdapter, with_config
@@ -23,7 +22,6 @@ from .common_utils import (
 DEFAULT_GITHUB_CLIENT_ID: Final = "Iv1.b507a08c87ecfe98"
 DEFAULT_GITHUB_DEVICE_CODE_URL: Final = "https://github.com/login/device/code"
 DEFAULT_GITHUB_ACCESS_TOKEN_URL: Final = "https://github.com/login/oauth/access_token"
-DEFAULT_GITHUB_API_KEY_URL: Final = "https://api.github.com/copilot_internal/v2/token"
 
 
 @with_config(ConfigDict(extra="allow", strict=True))
@@ -42,40 +40,6 @@ class _AccessTokenPoll(TypedDict):
 _JSON_OBJECT: Final = TypeAdapter(dict[str, object], config=ConfigDict(strict=True))
 _DEVICE_CODE: Final = TypeAdapter(_DeviceCode)
 _ACCESS_TOKEN_POLL: Final = TypeAdapter(_AccessTokenPoll)
-
-
-def github_api_headers(
-    access_token: str | None = None,
-) -> dict[str, str]:  # mutable-ok: returned straight into httpx handlers whose headers params require dict
-    headers: Final = {
-        "accept": "application/json",
-        "editor-version": "vscode/1.85.1",
-        "editor-plugin-version": "copilot/1.155.0",
-        "user-agent": "GithubCopilot/1.155.0",
-        "accept-encoding": "gzip,deflate,br",
-        "content-type": "application/json",
-    }
-    if access_token:
-        headers["authorization"] = f"token {access_token}"
-    return headers
-
-
-def _https_hostname(url: str) -> str | None:
-    parsed_url = urlsplit(url)
-    if (
-        parsed_url.scheme.lower() != "https"
-        or parsed_url.hostname is None
-        or parsed_url.username is not None
-        or parsed_url.password is not None
-        or parsed_url.query
-        or parsed_url.fragment
-    ):
-        return None
-    return parsed_url.hostname.lower()
-
-
-def _is_secure_api_base(api_base: str) -> bool:
-    return _https_hostname(api_base) is not None
 
 
 class Authenticator:
@@ -149,22 +113,6 @@ class Authenticator:
                 message=f"Failed to get OAuth access token: {e!s}",
                 status_code=401,
             )
-
-    def get_api_base(self, api_base: str | None = None) -> str | None:
-        candidates = (
-            ("deployment api_base", api_base),
-            ("GITHUB_COPILOT_API_BASE", os.getenv("GITHUB_COPILOT_API_BASE")),
-        )
-        for source, candidate in candidates:
-            if candidate is None:
-                continue
-            if _is_secure_api_base(candidate):
-                return candidate
-            verbose_logger.warning(
-                "Ignoring %s because it must be an HTTPS URL without credentials, query, or fragment",
-                source,
-            )
-        return None
 
     def _ensure_token_dir(self) -> None:
         """Ensure the token directory exists."""

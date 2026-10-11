@@ -165,7 +165,7 @@ def clean(bench: _Bench) -> Iterator[_Bench]:
 
 
 _FIRST_LOGIN_BEARERS: Final[Mapping[Provider, str]] = MappingProxyType(
-    {"chatgpt": dl.CHATGPT_FIRST_LOGIN, "copilot": dl.COPILOT_MINTED_KEY}
+    {"chatgpt": dl.CHATGPT_FIRST_LOGIN, "copilot": dl.COPILOT_FIRST_LOGIN_ACCESS}
 )
 
 
@@ -186,7 +186,7 @@ def test_sync_call_on_the_main_thread_keeps_the_interactive_first_login(
     assert {dl.bearer(request) for request in forwarded} == {_FIRST_LOGIN_BEARERS[provider]}, [
         (request.method, request.target) for request in forwarded
     ]
-    expected_files: Final = ("auth.json",) if provider == "chatgpt" else ("access-token", "api-key.json")
+    expected_files: Final = ("auth.json",) if provider == "chatgpt" else ("access-token",)
     assert clean.token_files() == expected_files
 
 

@@ -5,9 +5,11 @@ Constants for Copilot integration
 import os
 from collections.abc import MutableMapping
 from typing import Final
+from urllib.parse import urlsplit
 
 import httpx
 
+from litellm._logging import verbose_logger
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 COPILOT_VERSION: Final = "0.26.7"
@@ -88,15 +90,49 @@ def _get_configured_copilot_headers(
     }
 
 
-def get_copilot_auth_headers() -> dict[str, str]:
-    return _get_configured_copilot_headers(_COPILOT_AUTH_HEADER_CONFIG)
+def get_copilot_auth_headers(
+    access_token: str | None = None,
+) -> dict[str, str]:  # mutable-ok: returned straight into httpx handlers whose headers params require dict
+    headers: Final = _get_configured_copilot_headers(_COPILOT_AUTH_HEADER_CONFIG)
+    return {**headers, "authorization": f"token {access_token}"} if access_token else headers
 
 
-def get_copilot_default_headers(api_key: str) -> dict[str, str]:
+def get_copilot_default_headers(
+    api_key: str,
+) -> dict[str, str]:  # mutable-ok: callers merge caller headers into the returned dict
     return {
         **_get_configured_copilot_headers(_COPILOT_REQUEST_HEADER_CONFIG),
         "Authorization": f"Bearer {api_key}",
     }
+
+
+def _is_valid_api_base(api_base: str) -> bool:
+    parsed_api_base: Final = urlsplit(api_base)
+    return (
+        parsed_api_base.scheme.lower() in ("http", "https")
+        and parsed_api_base.hostname is not None
+        and parsed_api_base.username is None
+        and parsed_api_base.password is None
+        and not parsed_api_base.query
+        and not parsed_api_base.fragment
+    )
+
+
+def get_copilot_api_base(api_base: str | None = None) -> str:
+    candidates: Final = (
+        ("deployment api_base", api_base),
+        ("GITHUB_COPILOT_API_BASE", os.getenv("GITHUB_COPILOT_API_BASE")),
+    )
+    for source, candidate in candidates:
+        if not candidate:
+            continue
+        if _is_valid_api_base(candidate):
+            return candidate
+        verbose_logger.warning(
+            "Ignoring %s because it must be an HTTP(S) URL without credentials, query, or fragment",
+            source,
+        )
+    return DEFAULT_GITHUB_COPILOT_API_BASE
 
 
 def pin_session_authorization(

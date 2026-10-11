@@ -1,15 +1,15 @@
-from unittest.mock import MagicMock, patch
+from typing import Final
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
 from pydantic import ValidationError
 
-
 from litellm.exceptions import AuthenticationError
+from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE, GetAPIKeyError
 from litellm.llms.github_copilot.embedding.transformation import (
     GithubCopilotEmbeddingConfig,
 )
-from litellm.llms.github_copilot.common_utils import GetAPIKeyError
 from litellm.types.utils import EmbeddingResponse
 
 
@@ -59,43 +59,41 @@ def test_github_copilot_embedding_config_validate_environment():
     assert "Failed to get API key" in str(excinfo.value)
 
 
-def test_github_copilot_embedding_config_get_complete_url():
-    """Test the GitHub Copilot embedding configuration URL generation."""
-    config = GithubCopilotEmbeddingConfig()
+@pytest.mark.parametrize(
+    ("deployment_base", "environment_base", "expected_base"),
+    [
+        (None, None, DEFAULT_GITHUB_COPILOT_API_BASE),
+        (None, "https://copilot.example.test/", "https://copilot.example.test"),
+        (None, "http://localhost:8080/", "http://localhost:8080"),
+        ("https://deployment.example.test/", "https://env.example.test", "https://deployment.example.test"),
+        ("http://localhost:9090/", "https://env.example.test", "http://localhost:9090"),
+        ("not-a-url", "https://env.example.test", "https://env.example.test"),
+        (None, "not-a-url", DEFAULT_GITHUB_COPILOT_API_BASE),
+    ],
+)
+def test_github_copilot_embedding_config_get_complete_url(
+    monkeypatch: pytest.MonkeyPatch,
+    deployment_base: str | None,
+    environment_base: str | None,
+    expected_base: str,
+) -> None:
+    if environment_base is None:
+        monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_COPILOT_API_BASE", environment_base)
+    config: Final = GithubCopilotEmbeddingConfig()
     config.authenticator = MagicMock()
 
-    # Test with default API base
-    config.authenticator.get_api_base.return_value = None
-    url = config.get_complete_url(
-        api_base=None,
+    url: Final = config.get_complete_url(
+        api_base=deployment_base,
         api_key=None,
         model="github_copilot/text-embedding-3-small",
         optional_params={},
         litellm_params={},
     )
-    assert url == "https://api.githubcopilot.com/embeddings"
 
-    # Test with custom API base from authenticator
-    config.authenticator.get_api_base.side_effect = lambda api_base=None: (
-        api_base or "https://api.enterprise.githubcopilot.com"
-    )
-    url = config.get_complete_url(
-        api_base=None,
-        api_key=None,
-        model="github_copilot/text-embedding-3-small",
-        optional_params={},
-        litellm_params={},
-    )
-    assert url == "https://api.enterprise.githubcopilot.com/embeddings"
-
-    url = config.get_complete_url(
-        api_base="https://api.business.githubcopilot.com",
-        api_key=None,
-        model="github_copilot/text-embedding-3-small",
-        optional_params={},
-        litellm_params={},
-    )
-    assert url == "https://api.business.githubcopilot.com/embeddings"
+    assert url == f"{expected_base}/embeddings"
+    assert config.authenticator.mock_calls == []
 
 
 def test_github_copilot_embedding_config_transform_request():
@@ -267,7 +265,7 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator():
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.side_effect = AssertionError("shared authenticator must not run")
 
-    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
+    session = GithubCopilotUserSession(token="user-copilot-token")
     headers = config.validate_environment(
         headers={},
         model="github_copilot/text-embedding-3-small",
@@ -279,33 +277,48 @@ def test_validate_environment_uses_per_user_session_and_skips_authenticator():
     config.authenticator.get_api_key.assert_not_called()
 
 
-def test_per_user_session_token_wins_over_caller_authorization():
+@pytest.mark.parametrize("authorization_header", ["Authorization", "authorization", "AUTHORIZATION"])
+def test_per_user_session_token_wins_over_caller_authorization(authorization_header: str):
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 
     config = GithubCopilotEmbeddingConfig()
     config.authenticator = MagicMock()
-    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
+    session = GithubCopilotUserSession(token="user-copilot-token")
     headers = config.validate_environment(
-        headers={"Authorization": "Bearer caller-token"},
+        headers={authorization_header: "Bearer caller-token", "x-custom": "preserved"},
         model="github_copilot/text-embedding-3-small",
         messages=[],
         optional_params={},
         litellm_params={"github_copilot_user_session": session},
     )
     assert headers["Authorization"] == "Bearer user-copilot-token"
+    assert {key: value for key, value in headers.items() if key.lower() == "authorization"} == {
+        "Authorization": "Bearer user-copilot-token"
+    }
+    assert headers["x-custom"] == "preserved"
+    assert config.authenticator.mock_calls == []
 
 
-def test_get_complete_url_prefers_per_user_session_api_base():
+@pytest.mark.parametrize(
+    ("deployment_base", "expected_base"),
+    [(None, "http://localhost:8080"), ("https://deployment.example.test/", "https://deployment.example.test")],
+)
+def test_get_complete_url_uses_configured_base_with_per_user_session(
+    monkeypatch: pytest.MonkeyPatch, deployment_base: str | None, expected_base: str
+) -> None:
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 
-    config = GithubCopilotEmbeddingConfig()
+    monkeypatch.setenv("GITHUB_COPILOT_API_BASE", "http://localhost:8080/")
+    config: Final = GithubCopilotEmbeddingConfig()
     config.authenticator = MagicMock()
-    session = GithubCopilotUserSession(token="t", api_base="https://tenant.githubcopilot.com")
-    url = config.get_complete_url(
-        api_base="https://attacker.example",
+    session: Final = GithubCopilotUserSession(token="user-oauth-token")
+    url: Final = config.get_complete_url(
+        api_base=deployment_base,
         api_key=None,
-        model="m",
+        model="github_copilot/text-embedding-3-small",
         optional_params={},
         litellm_params={"github_copilot_user_session": session},
     )
-    assert url == "https://tenant.githubcopilot.com/embeddings"
+
+    assert url == f"{expected_base}/embeddings"
+    assert config.authenticator.mock_calls == []

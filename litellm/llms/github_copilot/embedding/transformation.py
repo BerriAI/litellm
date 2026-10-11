@@ -26,8 +26,8 @@ from litellm.utils import convert_to_model_response_object
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
+    get_copilot_api_base,
     get_copilot_default_headers,
     pin_session_authorization,
 )
@@ -116,20 +116,7 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for GitHub Copilot Embedding API endpoint.
         """
-        user_session: Final = require_github_copilot_user_session(
-            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
-        )
-        effective_api_base = (
-            (user_session.api_base if user_session is not None else None)
-            or self.authenticator.get_api_base(api_base)
-            or DEFAULT_GITHUB_COPILOT_API_BASE
-        )
-
-        # Remove trailing slashes
-        effective_api_base = effective_api_base.rstrip("/")
-
-        # Return the embeddings endpoint
-        return f"{effective_api_base}/embeddings"
+        return f"{get_copilot_api_base(api_base).rstrip('/')}/embeddings"
 
     def transform_embedding_request(
         self,

@@ -7,8 +7,8 @@ from litellm.llms.anthropic.pass_through.messages.transformation import (
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
+    get_copilot_api_base,
     get_copilot_default_headers,
     pin_session_authorization,
 )
@@ -66,18 +66,13 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         request anywhere other than the authenticated Copilot endpoint would
         leak the Copilot bearer token to a caller-controlled URL.
         """
-        # Always use the Copilot endpoint resolved from the authenticated
-        # session, never the caller-supplied api_base. rstrip so a
-        # tenant-specific base with a trailing slash does not yield a
+        # Always use the configured Copilot endpoint, never the caller-supplied
+        # api_base. rstrip so a base with a trailing slash does not yield a
         # double-slash URL once "/v1/messages" is appended downstream.
         user_session: Final = require_github_copilot_user_session(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
-        dynamic_api_base: Final = (
-            user_session.api_base
-            if user_session is not None
-            else (self.authenticator.get_api_base() or DEFAULT_GITHUB_COPILOT_API_BASE)
-        ).rstrip("/")
+        dynamic_api_base: Final = get_copilot_api_base().rstrip("/")
         try:
             dynamic_api_key: Final = (
                 user_session.token if user_session is not None else self.authenticator.get_api_key()
@@ -132,13 +127,5 @@ class GithubCopilotAnthropicMessagesConfig(AnthropicMessagesConfig):
         reuse it to avoid a second authenticator read, falling back to a fresh
         resolution only if it was not provided.
         """
-        user_session: Final = require_github_copilot_user_session(
-            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
-        )
-        resolved: Final = (
-            (user_session.api_base if user_session is not None else None)
-            or api_base
-            or self.authenticator.get_api_base()
-            or DEFAULT_GITHUB_COPILOT_API_BASE
-        ).rstrip("/")
+        resolved: Final = (api_base or get_copilot_api_base()).rstrip("/")
         return resolved if resolved.endswith("/v1/messages") else f"{resolved}/v1/messages"

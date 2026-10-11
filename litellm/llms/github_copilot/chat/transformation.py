@@ -12,8 +12,8 @@ from litellm.types.utils import ModelResponse
 
 from ..authenticator import Authenticator
 from ..common_utils import (
-    DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAPIKeyError,
+    get_copilot_api_base,
     get_copilot_default_headers,
 )
 from ..per_user_auth import require_github_copilot_user_session
@@ -34,7 +34,7 @@ class GithubCopilotConfig(OpenAIConfig):
         self.authenticator = Authenticator()
 
     def api_base_without_login(self, api_base: str | None = None) -> str:
-        return self.authenticator.get_api_base(api_base) or DEFAULT_GITHUB_COPILOT_API_BASE
+        return get_copilot_api_base(api_base)
 
     def _get_openai_compatible_provider_info(
         self,

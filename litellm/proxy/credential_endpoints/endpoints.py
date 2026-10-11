@@ -72,7 +72,6 @@ from .user_provider_credentials import (
     delete_user_provider_credentials_for_credential,
     invalidate_user_provider_credential_cache,
     list_user_provider_credentials,
-    list_user_provider_credentials_for_credential,
     set_user_provider_credential_cache,
     upsert_user_provider_credential,
 )
@@ -698,7 +697,7 @@ async def poll_user_connection(
         if not github_token:
             raise HTTPException(status_code=502, detail="GitHub device flow completed without a token")
         try:
-            await acheck_copilot_seat(user_id=user_id, github_token=github_token, credential_name=credential_name)
+            await acheck_copilot_seat(github_token=github_token, credential_name=credential_name)
         except litellm.CallerCredentialAuthenticationError:
             return UserConnectionPollResponse(status="no_copilot_seat")
         github_login: Final = await afetch_github_login(github_token)
@@ -741,7 +740,6 @@ async def delete_user_connection(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI resolves the dependency from the default
 ) -> UserConnectionDeleteResponse:
     """Disconnect the calling user's stored GitHub token for a per-user credential. Idempotent."""
-    from litellm.llms.github_copilot.per_user_auth import evict_copilot_user_session
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     try:
@@ -763,9 +761,7 @@ async def delete_user_connection(
                 status_code=503,
                 detail={"error": "could not revoke cached connection, retry"},
             )
-        prior: Final = await delete_user_provider_credential(prisma_client, user_id, credential_name)
-        if prior is not None:
-            evict_copilot_user_session(user_id, prior.access_token)
+        await delete_user_provider_credential(prisma_client, user_id, credential_name)
         return UserConnectionDeleteResponse(status="disconnected")
     except Exception as e:  # noqa: BLE001  # endpoint boundary: every failure becomes the proxy error contract
         raise handle_exception_on_proxy(e)
@@ -777,29 +773,19 @@ async def _purge_user_connections_for_credential(credential_name: str) -> None:
 
     Shared cleanup for DELETE (credential removed) and PATCH (renamed or no
     longer per-user)."""
-    from litellm.llms.github_copilot.per_user_auth import evict_copilot_user_session
     from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
     if prisma_client is None:
         return
     try:
-        prior_rows: Final = await list_user_provider_credentials_for_credential(prisma_client, credential_name)
         user_ids: Final = await delete_user_provider_credentials_for_credential(prisma_client, credential_name)
     except Exception:  # noqa: BLE001  # best-effort purge must not break credential deletion
         verbose_proxy_logger.exception(
             "_purge_user_connections_for_credential: failed to drop user connections for %s", credential_name
         )
         return
-    access_tokens: Final[dict[str, str]] = {}  # mutable-ok: accumulates one entry per deleted row
-    for row in prior_rows:
-        decoded = decode_user_provider_credential(row.credential_b64)
-        if decoded is not None:
-            access_tokens[row.user_id] = decoded.access_token
     for user_id in user_ids:
         await invalidate_user_provider_credential_cache(user_api_key_cache, user_id, credential_name)
-        token = access_tokens.get(user_id)
-        if token:
-            evict_copilot_user_session(user_id, token)
 
 
 @router.delete(

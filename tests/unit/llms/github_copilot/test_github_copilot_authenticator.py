@@ -1,17 +1,21 @@
 import logging
 import os
-import time
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timedelta
 from unittest.mock import MagicMock, mock_open, patch
 
 import pytest
 
 from litellm.llms.github_copilot.authenticator import Authenticator
 from litellm.llms.github_copilot.common_utils import (
+    DEFAULT_COPILOT_EDITOR_PLUGIN_VERSION,
+    DEFAULT_COPILOT_EDITOR_VERSION,
+    DEFAULT_COPILOT_INTEGRATION_ID,
+    DEFAULT_COPILOT_USER_AGENT,
+    DEFAULT_GITHUB_COPILOT_API_BASE,
     GetAccessTokenError,
     GetAPIKeyError,
     GetDeviceCodeError,
+    get_copilot_api_base,
     get_copilot_default_headers,
 )
 
@@ -56,48 +60,63 @@ class TestGitHubCopilotAuthenticator:
             auth = Authenticator()
             mock_makedirs.assert_called_once_with(auth.token_dir, exist_ok=True)
 
-    def test_get_api_base_prefers_environment(self, authenticator):
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    def test_get_api_base_prefers_environment(self, scheme):
         with patch.dict(
             os.environ,
-            {"GITHUB_COPILOT_API_BASE": "https://configured.example.com"},
+            {"GITHUB_COPILOT_API_BASE": f"{scheme}://configured.example.com"},
             clear=True,
         ):
-            assert authenticator.get_api_base() == "https://configured.example.com"
+            assert get_copilot_api_base() == f"{scheme}://configured.example.com"
 
     @pytest.mark.parametrize(
         "api_base",
         (
-            "http://api.githubcopilot.com",
+            "ftp://api.githubcopilot.com",
             "https://user:password@api.githubcopilot.com",
             "https://api.githubcopilot.com?tenant=example",
             "https://api.githubcopilot.com#fragment",
+            "api.githubcopilot.com",
+            "https:///missing-host",
         ),
     )
-    def test_get_api_base_rejects_insecure_configuration(self, authenticator, api_base, caplog):
+    def test_get_api_base_rejects_invalid_configuration(self, api_base, caplog):
         with (
             patch.dict(os.environ, {"GITHUB_COPILOT_API_BASE": api_base}, clear=True),
             caplog.at_level(logging.WARNING, logger="LiteLLM"),
         ):
-            assert authenticator.get_api_base() is None
+            assert get_copilot_api_base() == DEFAULT_GITHUB_COPILOT_API_BASE
 
         assert (
-            "Ignoring GITHUB_COPILOT_API_BASE because it must be an HTTPS URL without credentials, query, or fragment"
+            "Ignoring GITHUB_COPILOT_API_BASE because it must be an HTTP(S) URL without credentials, query, or fragment"
             in caplog.text
         )
 
-    def test_get_api_base_uses_default_when_unconfigured(self, authenticator):
+    def test_get_api_base_uses_default_when_unconfigured(self):
         with patch.dict(os.environ, {}, clear=True):
-            assert authenticator.get_api_base() is None
+            assert get_copilot_api_base() == DEFAULT_GITHUB_COPILOT_API_BASE
 
-    def test_get_api_base_prefers_trusted_deployment_endpoint(self, authenticator):
+    @pytest.mark.parametrize("scheme", ["http", "https"])
+    def test_get_api_base_prefers_deployment_endpoint(self, scheme):
         with patch.dict(
             os.environ,
             {"GITHUB_COPILOT_API_BASE": "https://configured.example.com"},
             clear=True,
         ):
-            assert authenticator.get_api_base("https://deployment.example.com") == "https://deployment.example.com"
+            assert get_copilot_api_base(f"{scheme}://deployment.example.com") == f"{scheme}://deployment.example.com"
 
-    def test_get_api_base_falls_back_from_untrusted_deployment_endpoint(self, authenticator, caplog):
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "ftp://deployment.example.com",
+            "https://user:pw@deployment.example.com",
+            "https://deployment.example.com?q=1",
+            "https://deployment.example.com#fragment",
+            "https:///missing-host",
+            "deployment.example.com",
+        ],
+    )
+    def test_get_api_base_falls_back_from_invalid_deployment_endpoint(self, api_base, caplog):
         with (
             patch.dict(
                 os.environ,
@@ -106,22 +125,31 @@ class TestGitHubCopilotAuthenticator:
             ),
             caplog.at_level(logging.WARNING, logger="LiteLLM"),
         ):
-            assert authenticator.get_api_base("http://attacker.example.com") == "https://configured.example.com"
+            assert get_copilot_api_base(api_base) == "https://configured.example.com"
 
         assert (
-            "Ignoring deployment api_base because it must be an HTTPS URL without credentials, query, or fragment"
+            "Ignoring deployment api_base because it must be an HTTP(S) URL without credentials, query, or fragment"
             in caplog.text
         )
 
+    @pytest.mark.parametrize("deployment_base", [None, ""])
+    @pytest.mark.parametrize("environment_base", [None, ""])
+    def test_get_api_base_skips_empty_candidates_without_warning(self, deployment_base, environment_base, caplog):
+        environment = {} if environment_base is None else {"GITHUB_COPILOT_API_BASE": environment_base}
+        with patch.dict(os.environ, environment, clear=True), caplog.at_level(logging.WARNING, logger="LiteLLM"):
+            assert get_copilot_api_base(deployment_base) == DEFAULT_GITHUB_COPILOT_API_BASE
+        assert caplog.text == ""
+
     def test_get_github_headers(self, authenticator):
-        headers = authenticator._get_github_headers()
+        with patch.dict(os.environ, {}, clear=True):
+            headers = authenticator._get_github_headers()
         assert headers == {
             "accept": "application/json",
             "content-type": "application/json",
-            "copilot-integration-id": "vscode-chat",
-            "editor-version": "vscode/1.115.0",
-            "editor-plugin-version": "copilot-chat/0.26.7",
-            "user-agent": "GitHubCopilotChat/0.26.7",
+            "copilot-integration-id": DEFAULT_COPILOT_INTEGRATION_ID,
+            "editor-version": DEFAULT_COPILOT_EDITOR_VERSION,
+            "editor-plugin-version": DEFAULT_COPILOT_EDITOR_PLUGIN_VERSION,
+            "user-agent": DEFAULT_COPILOT_USER_AGENT,
         }
 
     def test_auth_requests_support_opencode_identity(self, authenticator, mock_http_client):
@@ -156,7 +184,6 @@ class TestGitHubCopilotAuthenticator:
             authenticator._get_device_code()
             assert authenticator._poll_for_access_token("dc") == "opencode-oauth-token"
             assert authenticator.get_api_key() == "opencode-oauth-token"
-            assert authenticator.get_api_base() == "https://api.githubcopilot.com"
             request_headers = get_copilot_default_headers("opencode-oauth-token")
 
         expected_auth_headers = {
@@ -183,7 +210,7 @@ class TestGitHubCopilotAuthenticator:
             **expected_auth_headers,
             "openai-intent": "conversation-edits",
             "x-github-api-version": "2026-06-01",
-            "Authorization": "Bearer opencode-oauth-token",
+            "Authorization": "Bearer " + "opencode-oauth-token",
         }
         mock_client.get.assert_not_called()
 
@@ -388,4 +415,3 @@ class TestGitHubCopilotAuthenticator:
         ):
             authenticator._poll_for_access_token("dc")
             assert mock_client.post.call_args[1]["json"]["client_id"] == custom_id
-

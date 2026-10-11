@@ -1,97 +1,60 @@
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
 
-
 from litellm.exceptions import AuthenticationError
-from litellm.llms.github_copilot.common_utils import GetAPIKeyError
+from litellm.llms.github_copilot.common_utils import DEFAULT_GITHUB_COPILOT_API_BASE, GetAPIKeyError
 from litellm.llms.github_copilot.messages.transformation import (
     GithubCopilotAnthropicMessagesConfig,
 )
 
 
-def test_github_copilot_anthropic_messages_get_complete_url():
-    """get_complete_url builds the /v1/messages URL from the base it is handed.
-
-    In the request flow that ``api_base`` is the value already resolved by
-    validate_anthropic_messages_environment (the authenticated Copilot host); the
-    caller-supplied base is discarded there, not here (see the validate tests).
-    """
-    config = GithubCopilotAnthropicMessagesConfig()
+@pytest.mark.parametrize(
+    ("resolved_base", "environment_base", "expected_base"),
+    [
+        (None, None, DEFAULT_GITHUB_COPILOT_API_BASE),
+        (None, "https://copilot.example.test/", "https://copilot.example.test"),
+        (None, "http://localhost:8080/", "http://localhost:8080"),
+        ("https://resolved.example.test", "https://env.example.test", "https://resolved.example.test"),
+        ("https://resolved.example.test/", "https://env.example.test", "https://resolved.example.test"),
+        ("https://resolved.example.test/v1/messages", None, "https://resolved.example.test"),
+    ],
+)
+def test_github_copilot_anthropic_messages_get_complete_url(
+    monkeypatch: pytest.MonkeyPatch,
+    resolved_base: str | None,
+    environment_base: str | None,
+    expected_base: str,
+) -> None:
+    if environment_base is None:
+        monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_COPILOT_API_BASE", environment_base)
+    config: Final = GithubCopilotAnthropicMessagesConfig()
     config.authenticator = MagicMock()
-    config.authenticator.get_api_base.return_value = None
 
-    # No api_base supplied and no authenticator base -> default Copilot endpoint.
-    url = config.get_complete_url(
-        api_base=None,
+    url: Final = config.get_complete_url(
+        api_base=resolved_base,
         api_key=None,
         model="github_copilot/claude-haiku-4.5",
         optional_params={},
         litellm_params={},
     )
-    assert url == "https://api.githubcopilot.com/v1/messages"
-    # Falls back to a single authenticator read, not a hard-coded second one.
-    config.authenticator.get_api_base.assert_called()
 
-    # The resolved (validated) base passed in is reused verbatim; no extra read.
-    config.authenticator.get_api_base.reset_mock()
-    url = config.get_complete_url(
-        api_base="https://api.business.githubcopilot.com",
-        api_key=None,
-        model="github_copilot/claude-haiku-4.5",
-        optional_params={},
-        litellm_params={},
-    )
-    assert url == "https://api.business.githubcopilot.com/v1/messages"
-    config.authenticator.get_api_base.assert_not_called()
-
-    # A trailing slash on the base must not produce a double-slash URL.
-    url = config.get_complete_url(
-        api_base="https://api.business.githubcopilot.com/",
-        api_key=None,
-        model="github_copilot/claude-haiku-4.5",
-        optional_params={},
-        litellm_params={},
-    )
-    assert url == "https://api.business.githubcopilot.com/v1/messages"
-
-    # An already-complete /v1/messages base is left untouched.
-    url = config.get_complete_url(
-        api_base="https://api.githubcopilot.com/v1/messages",
-        api_key=None,
-        model="github_copilot/claude-haiku-4.5",
-        optional_params={},
-        litellm_params={},
-    )
-    assert url == "https://api.githubcopilot.com/v1/messages"
+    assert url == f"{expected_base}/v1/messages"
+    assert config.authenticator.mock_calls == []
 
 
-def test_github_copilot_anthropic_messages_get_complete_url_normalizes_authenticator_trailing_slash():
-    """A tenant base with a trailing slash from the authenticator fallback must
-    not yield a double-slash URL."""
-    config = GithubCopilotAnthropicMessagesConfig()
-    config.authenticator = MagicMock()
-    config.authenticator.get_api_base.return_value = "https://api.business.githubcopilot.com/"
-
-    url = config.get_complete_url(
-        api_base=None,
-        api_key=None,
-        model="github_copilot/claude-haiku-4.5",
-        optional_params={},
-        litellm_params={},
-    )
-    assert url == "https://api.business.githubcopilot.com/v1/messages"
-
-
-def test_github_copilot_anthropic_messages_validate_environment():
+def test_github_copilot_anthropic_messages_validate_environment(monkeypatch: pytest.MonkeyPatch):
     """Test environment validation and header injection."""
+    monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
     config = GithubCopilotAnthropicMessagesConfig()
 
     # Mock the authenticator
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key-123"
-    config.authenticator.get_api_base.return_value = None
 
     headers = {}
     # Pass a hostile api_base to confirm it is ignored.
@@ -107,7 +70,7 @@ def test_github_copilot_anthropic_messages_validate_environment():
 
     assert "copilot-integration-id" in validated_headers
     assert validated_headers["copilot-integration-id"] == "vscode-chat"
-    assert "Authorization" in validated_headers
+    assert validated_headers["Authorization"] == "Bearer gh.test-key-123"
     assert "anthropic-version" in validated_headers
     assert validated_headers["anthropic-version"] == "2023-06-01"
     # /v1/messages must use the messages-proxy intent so the Copilot backend
@@ -115,7 +78,7 @@ def test_github_copilot_anthropic_messages_validate_environment():
     assert validated_headers["openai-intent"] == "messages-proxy"
     assert validated_headers["x-interaction-type"] == "messages-proxy"
     assert validated_headers["x-github-api-version"] == "2026-06-01"
-    assert api_base == "https://api.githubcopilot.com"
+    assert api_base == DEFAULT_GITHUB_COPILOT_API_BASE
 
 
 def test_github_copilot_anthropic_messages_validate_environment_injects_beta_headers():
@@ -125,7 +88,6 @@ def test_github_copilot_anthropic_messages_validate_environment_injects_beta_hea
     config = GithubCopilotAnthropicMessagesConfig()
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key"
-    config.authenticator.get_api_base.return_value = None
 
     validated_headers, _ = config.validate_anthropic_messages_environment(
         headers={},
@@ -146,7 +108,6 @@ def test_github_copilot_anthropic_messages_validate_environment_preserves_caller
     config = GithubCopilotAnthropicMessagesConfig()
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key"
-    config.authenticator.get_api_base.return_value = None
 
     validated_headers, _ = config.validate_anthropic_messages_environment(
         headers={"anthropic-version": "2024-10-22"},
@@ -167,7 +128,6 @@ def test_github_copilot_anthropic_messages_validate_environment_injects_context_
     config = GithubCopilotAnthropicMessagesConfig()
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key"
-    config.authenticator.get_api_base.return_value = None
 
     validated_headers, _ = config.validate_anthropic_messages_environment(
         headers={},
@@ -245,15 +205,27 @@ def test_provider_config_manager_skips_non_claude_copilot_models():
     assert config is None
 
 
-def test_github_copilot_anthropic_messages_validate_environment_normalizes_trailing_slash():
-    """A tenant base with a trailing slash from the authenticator must be
-    normalized so the URL built downstream has no double slash."""
-    config = GithubCopilotAnthropicMessagesConfig()
+@pytest.mark.parametrize(
+    ("environment_base", "expected_base"),
+    [
+        (None, DEFAULT_GITHUB_COPILOT_API_BASE),
+        ("https://copilot.example.test/", "https://copilot.example.test"),
+        ("http://localhost:8080/", "http://localhost:8080"),
+        ("https://user:password@copilot.example.test", DEFAULT_GITHUB_COPILOT_API_BASE),
+    ],
+)
+def test_validate_environment_ignores_deployment_base_and_resolves_configured_endpoint(
+    monkeypatch: pytest.MonkeyPatch, environment_base: str | None, expected_base: str
+) -> None:
+    if environment_base is None:
+        monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_COPILOT_API_BASE", environment_base)
+    config: Final = GithubCopilotAnthropicMessagesConfig()
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key"
-    config.authenticator.get_api_base.return_value = "https://api.business.githubcopilot.com/"
 
-    _, api_base = config.validate_anthropic_messages_environment(
+    headers, api_base = config.validate_anthropic_messages_environment(
         headers={},
         model="github_copilot/claude-haiku-4.5",
         messages=[{"role": "user", "content": "Hello"}],
@@ -263,7 +235,18 @@ def test_github_copilot_anthropic_messages_validate_environment_normalizes_trail
         api_base="https://attacker.example.com",
     )
 
-    assert api_base == "https://api.business.githubcopilot.com"
+    assert api_base == expected_base
+    assert headers["Authorization"] == "Bearer gh.test-key"
+    assert (
+        config.get_complete_url(
+            api_base=api_base,
+            api_key=None,
+            model="github_copilot/claude-haiku-4.5",
+            optional_params={},
+            litellm_params={},
+        )
+        == f"{expected_base}/v1/messages"
+    )
 
 
 def test_github_copilot_config_disables_anthropic_beta_filtering():
@@ -281,7 +264,6 @@ def test_github_copilot_config_disables_anthropic_beta_filtering():
 
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.return_value = "gh.test-key"
-    config.authenticator.get_api_base.return_value = None
 
     headers, _ = config.validate_anthropic_messages_environment(
         headers={},
@@ -325,42 +307,68 @@ def test_github_copilot_messages_config_probes_capabilities_under_copilot_namesp
     assert GithubCopilotAnthropicMessagesConfig().custom_llm_provider == "github_copilot"
 
 
-def test_validate_environment_uses_per_user_session_and_skips_authenticator():
+@pytest.mark.parametrize(
+    ("environment_base", "expected_base"),
+    [(None, DEFAULT_GITHUB_COPILOT_API_BASE), ("http://localhost:8080/", "http://localhost:8080")],
+)
+def test_validate_environment_uses_per_user_session_and_skips_authenticator(
+    monkeypatch: pytest.MonkeyPatch, environment_base: str | None, expected_base: str
+) -> None:
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
+
+    if environment_base is None:
+        monkeypatch.delenv("GITHUB_COPILOT_API_BASE", raising=False)
+    else:
+        monkeypatch.setenv("GITHUB_COPILOT_API_BASE", environment_base)
 
     config = GithubCopilotAnthropicMessagesConfig()
     config.authenticator = MagicMock()
     config.authenticator.get_api_key.side_effect = AssertionError("shared authenticator must not run")
-    config.authenticator.get_api_base.side_effect = AssertionError("shared authenticator must not run")
 
-    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://tenant.githubcopilot.com/")
+    session = GithubCopilotUserSession(token="user-copilot-token")
     headers, api_base = config.validate_anthropic_messages_environment(
         headers={},
         model="github_copilot/claude-sonnet-5.5",
         messages=[],
         optional_params={},
         litellm_params={"github_copilot_user_session": session},
+        api_base="https://attacker.example.test",
     )
     assert headers["Authorization"] == "Bearer user-copilot-token"
-    assert api_base == "https://tenant.githubcopilot.com"
-    config.authenticator.get_api_key.assert_not_called()
+    assert api_base == expected_base
+    assert config.authenticator.mock_calls == []
+    assert (
+        config.get_complete_url(
+            api_base=api_base,
+            api_key=None,
+            model="github_copilot/claude-sonnet-5.5",
+            optional_params={},
+            litellm_params={"github_copilot_user_session": session},
+        )
+        == f"{expected_base}/v1/messages"
+    )
 
 
-def test_per_user_session_token_wins_over_caller_authorization():
+@pytest.mark.parametrize("authorization_header", ["Authorization", "authorization", "AUTHORIZATION"])
+def test_per_user_session_token_wins_over_caller_authorization(authorization_header: str):
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 
     config = GithubCopilotAnthropicMessagesConfig()
     config.authenticator = MagicMock()
-    config.authenticator.get_api_base.return_value = "https://api.githubcopilot.com"
-    session = GithubCopilotUserSession(token="user-copilot-token", api_base="https://api.githubcopilot.com")
+    session = GithubCopilotUserSession(token="user-copilot-token")
     headers, _ = config.validate_anthropic_messages_environment(
-        headers={"authorization": "Bearer caller-token"},
+        headers={authorization_header: "Bearer caller-token", "x-custom": "preserved"},
         model="github_copilot/claude-sonnet-4.5",
         messages=[],
         optional_params={},
         litellm_params={"github_copilot_user_session": session},
     )
     assert headers["Authorization"] == "Bearer user-copilot-token"
+    assert {key: value for key, value in headers.items() if key.lower() == "authorization"} == {
+        "Authorization": "Bearer user-copilot-token"
+    }
+    assert headers["x-custom"] == "preserved"
+    assert config.authenticator.mock_calls == []
 
 
 def test_transform_response_carries_upstream_usage():

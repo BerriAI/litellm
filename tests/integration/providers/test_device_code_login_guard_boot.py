@@ -71,9 +71,9 @@ class _TokenDirs:
     def environment(self) -> Mapping[str, str]:
         return MappingProxyType({"CHATGPT_TOKEN_DIR": str(self.chatgpt), "GITHUB_COPILOT_TOKEN_DIR": str(self.copilot)})
 
-    def store_valid_tokens(self, api_url: str) -> None:
+    def store_valid_tokens(self) -> None:
         dl.write_chatgpt(self.chatgpt, dl.chatgpt_record(dl.CHATGPT_STORED))
-        dl.write_copilot_key(self.copilot, dl.COPILOT_STORED_KEY, api_url)
+        dl.write_copilot_access(self.copilot, dl.COPILOT_ACCESS)
 
 
 def _token_dirs(directory: Path) -> _TokenDirs:
@@ -257,7 +257,7 @@ def test_booting_without_tokens_drops_the_login_deployments_and_a_reload_after_m
                 assert peers.auth_connections() == ()
                 assert dl.bearer(peers.api.drain()[-1]) == dl.CONTROL_KEY
 
-                dirs.store_valid_tokens(peers.api.url)
+                dirs.store_valid_tokens()
                 _reload(owned)
                 _every_worker_lists(owned, workers, login_models=True)
                 for served_logins, name in enumerate(_LOGIN_NAMES, start=1):
@@ -266,7 +266,7 @@ def test_booting_without_tokens_drops_the_login_deployments_and_a_reload_after_m
                     _successes_logged(key, at_least=_CONTROL_CALLS_BEFORE_THE_RELOAD + served_logins)
                 assert peers.auth_connections() == ()
                 forwarded: Final = peers.api.drain()
-                assert {dl.bearer(request) for request in forwarded} == {dl.CHATGPT_STORED, dl.COPILOT_STORED_KEY}
+                assert {dl.bearer(request) for request in forwarded} == {dl.CHATGPT_STORED, dl.COPILOT_ACCESS}
 
                 dl.write_chatgpt(dirs.chatgpt, dl.chatgpt_record(dl.CHATGPT_EXPIRED, refresh_token=dl.GOOD_REFRESH))
                 peers.switches.hold_connect.set()
@@ -302,7 +302,7 @@ def test_a_token_removed_after_boot_turns_every_request_into_the_refusal(
 ) -> None:
     dirs: Final = _token_dirs(tmp_path)
     with dl.device_login_peers(tmp_path) as peers:
-        dirs.store_valid_tokens(peers.api.url)
+        dirs.store_valid_tokens()
         with owned_proxy_process(
             gateway,
             tmp_path,

@@ -1,5 +1,3 @@
-import json
-
 import pytest
 
 import litellm
@@ -53,17 +51,13 @@ class TestDeclaredAuthenticatingProvider:
         assert resolution_lookups == []
         assert api_base == expected
 
-    def test_copilot_ignores_the_legacy_endpoint_on_disk(self, isolated_token_dirs, resolution_lookups):
-        token_dir = isolated_token_dirs / "github_copilot"
-        token_dir.mkdir()
-        (token_dir / "api-key.json").write_text(
-            json.dumps({"endpoints": {"api": "https://api.enterprise.githubcopilot.com"}})
-        )
+    def test_copilot_reports_configured_environment_base(self, isolated_token_dirs, resolution_lookups, monkeypatch):
+        monkeypatch.setenv("GITHUB_COPILOT_API_BASE", "http://configured.example.com/v1")
 
         api_base = litellm.get_api_base(model="github_copilot/gpt-4o", optional_params={})
 
         assert resolution_lookups == []
-        assert api_base == DEFAULT_GITHUB_COPILOT_API_BASE
+        assert api_base == "http://configured.example.com/v1"
 
     def test_explicit_api_base_still_wins(self, isolated_token_dirs, resolution_lookups):
         api_base = litellm.get_api_base(
@@ -82,7 +76,10 @@ class TestDeclaredAuthenticatingProvider:
 @pytest.mark.parametrize(
     "model, expected",
     [
-        ("gemini/gemini-2.5-pro", "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent"),
+        (
+            "gemini/gemini-2.5-pro",
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent",
+        ),
         ("openai/gpt-4o", "https://api.openai.com"),
     ],
 )

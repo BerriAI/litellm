@@ -386,11 +386,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
     copilot.mkdir()
     chatgpt.mkdir()
     with gateway_from_environment() as gateway, wire_server(rv.ResponsesVendor().respond) as wire:
-        (copilot / "api-key.json").write_text(
-            json.dumps(
-                {"token": "synthetic-copilot-token", "expires_at": time.time() + 3600, "endpoints": {"api": wire.url}}
-            )
-        )
+        (copilot / "access-token").write_text("synthetic-copilot-token")
         (chatgpt / "auth.json").write_text(
             json.dumps(
                 {
@@ -402,6 +398,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
         )
         overrides: Final = {
             "GITHUB_COPILOT_TOKEN_DIR": str(copilot),
+            "GITHUB_COPILOT_API_BASE": wire.url,
             "CHATGPT_TOKEN_DIR": str(chatgpt),
             "CHATGPT_API_BASE": wire.url,
             "SSL_CERT_FILE": str(cert),
