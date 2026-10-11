@@ -61,6 +61,22 @@ def _make_structured_rewriting_guardrail(old: str, new: str) -> MagicMock:
     return g
 
 
+def _make_rows_first_guardrail(old: str, new: str) -> MagicMock:
+    def redact(inputs: dict, **_: object) -> dict:
+        rewritten = _rewrite_structured_text(inputs, old, new)
+        user_texts = [
+            part["text"]
+            for message in rewritten["structured_messages"]
+            if message["role"] == "user"
+            for part in message["content"]
+        ]
+        return {**rewritten, "texts": user_texts}
+
+    g = _make_guardrail({})
+    g.apply_guardrail = AsyncMock(side_effect=redact)
+    return g
+
+
 def _make_tool_call_rewriting_guardrail(arguments: str) -> MagicMock:
     def rewrite(inputs: dict, **_: object) -> dict:
         rewritten = copy.deepcopy(inputs["structured_messages"])
@@ -908,23 +924,58 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
             await handler.process_input_messages(data=_profile_converse_data(), guardrail_to_apply=guardrail)
 
     @pytest.mark.asyncio
-    async def test_structured_rewrite_keeps_redactions_returned_in_texts(self):
+    async def test_user_only_texts_from_a_structured_guardrail_leave_the_system_prompt_alone(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _profile_converse_data()
+        guardrail = _make_rows_first_guardrail("balcony", "[REDACTED]")
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert result["data"]["system"][0] == {"text": "You are a travel assistant."}
+        assert result["data"]["system"][2] == {"text": "Guest name: Sam"}
+        assert result["data"]["messages"][0]["content"][0] == {"text": "Explain [REDACTED] staterooms."}
+
+    @pytest.mark.asyncio
+    async def test_guard_content_redaction_with_one_user_text_leaves_the_system_prompt_alone(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _profile_converse_data()
+        data["data"]["system"] = [{"text": "You are a travel assistant."}]
+        data["data"]["messages"][0]["content"] = [{"guardContent": {"text": {"text": "My SSN is 078-05-1120"}}}]
+        del data["data"]["additionalModelRequestFields"]
+        guardrail = _make_rows_first_guardrail("078-05-1120", "[SSN]")
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert result["data"]["system"] == [{"text": "You are a travel assistant."}]
+        assert result["data"]["messages"][0]["content"] == [{"guardContent": {"text": {"text": "My SSN is [SSN]"}}}]
+
+    @pytest.mark.asyncio
+    async def test_model_field_redaction_in_texts_applies_alongside_a_structured_rewrite(self):
         handler = BedrockPassthroughGuardrailHandler()
         data = _profile_converse_data()
         guardrail = _make_guardrail({})
         guardrail.apply_guardrail = AsyncMock(
             side_effect=lambda inputs, **kwargs: {
-                **_rewrite_structured_text(inputs, "internal notice", "[REDACTED]"),
-                "texts": [text.replace("balcony", "[REDACTED]") for text in inputs["texts"]],
+                **_rewrite_structured_text(inputs, "Sam", "[NAME]"),
+                "texts": [text.replace("Sam", "[NAME]").replace("adaptive", "[X]") for text in inputs["texts"]],
             }
         )
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
-        assert result["data"]["messages"][0]["content"] == [
-            {"text": "Explain [REDACTED] staterooms."},
-            {"text": "[system] [REDACTED]"},
-        ]
+        assert result["data"]["system"][2] == {"text": "Guest name: [NAME]"}
+        assert result["data"]["additionalModelRequestFields"] == {"thinking": {"type": "[X]"}}
+
+    @pytest.mark.asyncio
+    async def test_texts_misaligned_without_a_structured_rewrite_fail_closed(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        guardrail = _make_guardrail({})
+        guardrail.apply_guardrail = AsyncMock(
+            side_effect=lambda inputs, **kwargs: {**inputs, "texts": ["Explain balcony staterooms."]}
+        )
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await handler.process_input_messages(data=_profile_converse_data(), guardrail_to_apply=guardrail)
 
     @pytest.mark.asyncio
     async def test_tool_result_text_edit_lands_in_its_item(self):

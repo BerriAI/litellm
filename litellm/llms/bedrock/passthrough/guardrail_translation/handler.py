@@ -163,10 +163,16 @@ def _extract_converse_texts(
                 _collect_strings(tool_use.get("input"), holders)
 
     if not scan_only_tool_results:
-        _collect_strings(body.get("additionalModelRequestFields"), holders)
+        holders.extend(_model_field_holders(body))
 
     texts: Final = [container[key] for container, key in holders]
     return texts, holders
+
+
+def _model_field_holders(body: Mapping[str, object]) -> tuple[_StringHolder, ...]:
+    collected: Final = list[_StringHolder]()
+    _collect_strings(body.get("additionalModelRequestFields"), collected)
+    return tuple(collected)
 
 
 class _ConverseModel(BaseModel):
@@ -858,15 +864,24 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         )
 
         guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
-        if guardrailed_texts:
-            _write_back_texts(guardrailed_texts, holders)
-
         guardrailed_messages: Final = guardrailed_inputs.get("structured_messages")
-        if guardrailed_messages is not None:
-            edits: Final = _structured_edits(converted, scoped_message_indices, guardrailed_messages)
-            if edits is None:
-                raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
-            _write_back_structured_edits(_JSON_OBJECT.validate_python(body), edits)
+        edits: Final = (
+            ()
+            if guardrailed_messages is None
+            else _structured_edits(converted, scoped_message_indices, guardrailed_messages)
+        )
+        texts_aligned: Final = len(guardrailed_texts) == len(texts)
+        if edits is None or (not edits and scoped_message_indices and guardrailed_texts and not texts_aligned):
+            raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
+        if edits:
+            # Rows are authoritative for what they carry; flat texts may be built from a subset of rows.
+            json_body: Final = _JSON_OBJECT.validate_python(body)
+            unrepresented: Final = 0 if scan_only_tool_results else len(_model_field_holders(json_body))
+            if texts_aligned and unrepresented:
+                _write_back_texts(guardrailed_texts[-unrepresented:], holders[-unrepresented:])
+            _write_back_structured_edits(json_body, edits)
+        elif guardrailed_texts:
+            _write_back_texts(guardrailed_texts, holders)
 
         return data
 
