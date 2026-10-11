@@ -461,9 +461,10 @@ def _server_fulfilled_tools(request: Mapping[str, object]) -> frozenset[str]:
 def _leaks_server_fulfilled_tool(response: object, request: Mapping[str, object]) -> bool:
     from litellm.rust_bridge.public_call import optional_mapping, optional_sequence
 
-    content: Final = optional_sequence(
-        optional_mapping(response).get("content") if optional_mapping(response) else None
-    )
+    body: Final = optional_mapping(response)
+    if body is None:
+        return False
+    content: Final = optional_sequence(body.get("content"))
     if content is None:
         return False
     names: Final = _server_fulfilled_tools(request)
