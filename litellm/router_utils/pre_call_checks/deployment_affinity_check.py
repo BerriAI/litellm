@@ -392,13 +392,10 @@ class DeploymentAffinityCheck(CustomLogger):
         candidates: Final = [
             (deployment, model_id)
             for deployment in healthy_deployments
-            if (model_id := self._deployment_model_id(deployment)) is not None
-            and model_id != pinned_model_id
+            if (model_id := self._deployment_model_id(deployment)) is not None and model_id != pinned_model_id
         ]
         idle_deployments: Final = [
-            deployment
-            for deployment, model_id in candidates
-            if await self._deployment_has_capacity(model_id)
+            deployment for deployment, model_id in candidates if await self._deployment_has_capacity(model_id)
         ]
         if not idle_deployments:
             return None
