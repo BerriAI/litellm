@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 from typing import Final
 
+from litellm.litellm_core_utils.decisions_pricing import is_decisions_pricing_key
+
 from integration.cost_calculation.cases import (
     anthropic,
     azure,
@@ -61,14 +63,18 @@ def data_errors() -> tuple[str, ...]:
         case.session_model for case in REALTIME_CASES if case.session_model is not None
     )
     unknown_models: Final = sorted(model for model in case_models if model not in COST_MAP)
-    missing_cases: Final = sorted(model for model in COST_MAP if model not in case_models)
+    missing_cases: Final = sorted(
+        model
+        for model, entry in COST_MAP.items()
+        if model not in case_models and not is_decisions_pricing_key(model, entry.litellm_provider)
+    )
     duplicate_names: Final = sorted(
         name for name in {case.name for case in _ALL_CASES} if sum(case.name == name for case in _ALL_CASES) > 1
     )
     input_rates: Final = tuple(
         (entry.litellm_provider, entry.input_cost_per_token, model)
         for model, entry in COST_MAP.items()
-        if entry.mode != "realtime"
+        if entry.mode != "realtime" and not is_decisions_pricing_key(model, entry.litellm_provider)
     )
     shared_input_rate_details: Final = tuple(
         (

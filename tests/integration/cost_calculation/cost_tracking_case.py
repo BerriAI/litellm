@@ -44,8 +44,12 @@ class CostMapEntry(BaseModel):
     max_output_tokens: int | None = None
     supports_function_calling: bool | None = None
     input_cost_per_token: float | None = None
+    input_cost_per_token_above_272k_tokens: float | None = None
     input_cost_per_query: float | None = None
     output_cost_per_token: float | None = None
+    regional_processing_uplift_multiplier_eu: float | None = None
+    regional_processing_uplift_multiplier_us: float | None = None
+    source: str | None = None
     input_cost_per_token_batches: float | None = None
     output_cost_per_token_batches: float | None = None
     output_cost_per_image_token_batches: float | None = None
@@ -249,6 +253,7 @@ class CostTrackingTestCase(BaseModel):
             "/v1/audio/speech",
             "/v1/images/generations",
             "/v1/images/edits",
+            "/v1/decisions",
             "/v1/systemone",
         ]
         | Annotated[str, Field(pattern=r"^/(gemini|anthropic|bedrock)/")]

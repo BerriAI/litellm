@@ -13,6 +13,7 @@ import pytest
 from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter
 
 import litellm
+from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_key, is_decisions_pricing_key
 from litellm.litellm_core_utils.fallback_generalizations import match_capability_generalizations
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
@@ -23,6 +24,23 @@ GENERATOR_PATH = REPO_ROOT / "ci_cd" / "generate_model_prices_schema.py"
 PRICES_PATH = REPO_ROOT / "model_prices_and_context_window.json"
 BACKUP_PRICES_PATH = REPO_ROOT / "litellm" / "model_prices_and_context_window_backup.json"
 SCHEMA_PATH = REPO_ROOT / "model_prices_and_context_window.schema.json"
+
+
+def _evaluation_decisions_row_pair(
+    key: str,
+    value: object,
+    prices: Mapping[str, object],
+) -> tuple[str, Mapping[str, object], Mapping[str, object]] | None:
+    if not isinstance(value, Mapping):
+        return None
+    provider: Final = value.get("litellm_provider")
+    if not isinstance(provider, str) or not is_decisions_pricing_key(key, provider):
+        return None
+    model: Final = key.removeprefix(decisions_pricing_key(provider, ""))
+    plain_row: Final = prices.get(f"{provider}/{model}")
+    if not isinstance(plain_row, Mapping) or plain_row.get("mode") != "evaluation":
+        return None
+    return key, value, plain_row
 
 
 def build_validator(schema: dict) -> jsonschema.Draft202012Validator:
@@ -430,6 +448,7 @@ def test_openai_reasoning_family_entries_carry_supports_reasoning(prices: dict):
         if isinstance(entry, dict)
         and entry.get("litellm_provider") == "openai"
         and is_openai_reasoning_family(name)
+        and not is_decisions_pricing_key(name, entry["litellm_provider"])
         and entry.get("supports_reasoning") is not True
     ]
     assert unflagged == [], (
@@ -437,6 +456,18 @@ def test_openai_reasoning_family_entries_carry_supports_reasoning(prices: dict):
         "models, and the Responses API drops the `reasoning` param for any mapped OpenAI model "
         "whose entry lacks supports_reasoning; flag these entries:\n" + "\n".join(unflagged)
     )
+
+
+def test_decisions_pricing_rows_match_their_plain_evaluation_rows(prices: dict) -> None:
+    matching_rows: Final = tuple(
+        row_pair
+        for key, value in prices.items()
+        if (row_pair := _evaluation_decisions_row_pair(key, value, prices)) is not None
+    )
+
+    assert matching_rows
+    for key, decisions_row, evaluation_row in matching_rows:
+        assert decisions_row == evaluation_row, f"{key} must copy its plain evaluation row"
 
 
 _ABSENT: Final = object()

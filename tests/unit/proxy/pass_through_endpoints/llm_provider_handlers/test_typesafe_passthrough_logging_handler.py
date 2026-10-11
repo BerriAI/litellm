@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_key
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.typesafe_passthrough_logging_handler import (
     TypeSafePassthroughLoggingHandler,
@@ -70,6 +71,40 @@ def test_uses_registry_pricing_and_standard_usage():
     assert response["kwargs"]["combined_usage_object"].prompt_tokens == 312
     assert response["kwargs"]["combined_usage_object"].completion_tokens == 48
     assert response["kwargs"]["combined_usage_object"].total_tokens == 360
+
+
+def test_uses_decisions_pricing_row_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+    model: Final = "nimble-latest"
+    plain_key: Final = f"bespoke/{model}"
+    decisions_key: Final = decisions_pricing_key("bespoke", model)
+    plain_pricing: Final = {
+        "input_cost_per_token": 1.0,
+        "output_cost_per_token": 1.0,
+        "litellm_provider": "bespoke",
+        "mode": "chat",
+    }
+    decisions_pricing: Final = {
+        "input_cost_per_token": 2.0,
+        "output_cost_per_token": 3.0,
+        "litellm_provider": "bespoke",
+        "mode": "evaluation",
+    }
+    monkeypatch.setitem(litellm.model_cost, plain_key, plain_pricing)
+    monkeypatch.setitem(litellm.model_cost, decisions_key, decisions_pricing)
+    result: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
+        httpx_response=_response(),
+        response_body={"model": model, "usage": {"input_tokens": 2, "output_tokens": 1}},
+        logging_obj=_logging_obj(),
+        url_route="https://api.bespoke.example/v1/systemone",
+        result='{"answers": {}}',
+        start_time=datetime(2000, 1, 1),
+        end_time=datetime(2000, 1, 1),
+        cache_hit=False,
+        request_body={"model": model},
+        custom_llm_provider="bespoke",
+    )
+
+    assert result["kwargs"]["response_cost"] == pytest.approx(7.0)
 
 
 def test_falls_back_to_request_model_when_response_model_is_missing():
@@ -142,68 +177,110 @@ def test_success_handler_dispatches_to_typesafe_handler():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("guardrail_cost", [0.0, 0.25])
 @pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
-@pytest.mark.parametrize("provider,requested,routing_model", [
-    ("laya", "english", "multilingual"), ("laya", "english", None),
-    ("bespoke", "nimble-latest", None),
-    ("bespoke", "bespokelabs/Bespoke-Nimble-9B", None),
-])
+@pytest.mark.parametrize(
+    "provider,requested,routing_model",
+    [
+        ("laya", "english", "multilingual"),
+        ("laya", "english", None),
+        ("bespoke", "nimble-latest", None),
+        ("bespoke", "bespokelabs/Bespoke-Nimble-9B", None),
+    ],
+)
 async def test_oss_gateway_accounts_for_checkpoint_usage_and_registered_cost(
-    monkeypatch: pytest.MonkeyPatch, routing_model: str | None, metadata_slot: str, guardrail_cost: float,
-    provider: str, requested: str
+    monkeypatch: pytest.MonkeyPatch,
+    routing_model: str | None,
+    metadata_slot: str,
+    guardrail_cost: float,
+    provider: str,
+    requested: str,
 ) -> None:
     checkpoint: Final = routing_model or requested
     model: Final = f"{provider}/{checkpoint}"
     input_rate: Final = 0.002
     output_rate: Final = 0.005
-    monkeypatch.setitem(litellm.model_cost, model, {
-        "input_cost_per_token": input_rate, "output_cost_per_token": output_rate,
-        "litellm_provider": provider, "mode": "evaluation",
-    })
+    pricing_row: Final = {
+        "input_cost_per_token": input_rate,
+        "output_cost_per_token": output_rate,
+        "litellm_provider": provider,
+        "mode": "evaluation",
+    }
+    monkeypatch.setitem(litellm.model_cost, model, pricing_row)
+    monkeypatch.setitem(litellm.model_cost, decisions_pricing_key(provider, checkpoint), pricing_row)
     start: Final = datetime.now()
     logging_obj: Final = Logging(
-        model=requested, messages=[], stream=False, call_type="pass_through_endpoint",
-        start_time=start, litellm_call_id="oss-accounting", function_id="oss-accounting", kwargs={},
+        model=requested,
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=start,
+        litellm_call_id="oss-accounting",
+        function_id="oss-accounting",
+        kwargs={},
     )
     from fastapi import Request
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
 
-    request: Final = Request({
-        "type": "http", "method": "POST", "path": f"/{provider}/v1/systemone",
-        "headers": [], "query_string": b"",
-    })
+    request: Final = Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": f"/{provider}/v1/systemone",
+            "headers": [],
+            "query_string": b"",
+        }
+    )
     auth: Final = UserAPIKeyAuth(
-        api_key="oss-budget-key", token="oss-budget-key",
+        api_key="oss-budget-key",
+        token="oss-budget-key",
         model_max_budget={f"{provider}/{requested}": {"budget_limit": 0.01, "time_period": "1d"}},
     )
     request_body: Final = {"model": requested, metadata_slot: {"model_group": "unbounded-client-choice"}}
     logging_kwargs: Final = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
-        request=request, user_api_key_dict=auth, logging_obj=logging_obj,
-        passthrough_logging_payload={"url": f"https://{provider}.test/v1/systemone"}, _parsed_body=request_body,
+        request=request,
+        user_api_key_dict=auth,
+        logging_obj=logging_obj,
+        passthrough_logging_payload={"url": f"https://{provider}.test/v1/systemone"},
+        _parsed_body=request_body,
     )
     logging_kwargs["litellm_params"]["metadata"]["standard_logging_guardrail_information"] = [
         {"guardrail_name": "trusted-hook", "guardrail_cost": guardrail_cost},
     ]
     logging_obj.update_environment_variables(
-        model=requested, user="unknown", optional_params={},
-        litellm_params=logging_kwargs["litellm_params"], call_type="pass_through_endpoint",
+        model=requested,
+        user="unknown",
+        optional_params={},
+        litellm_params=logging_kwargs["litellm_params"],
+        call_type="pass_through_endpoint",
     )
     body: Final = {
-        "model": "laya-rl-agent" if provider == "laya" else requested, "usage": {"input_tokens": 10, "output_tokens": 3},
+        "model": "laya-rl-agent" if provider == "laya" else requested,
+        "usage": {"input_tokens": 10, "output_tokens": 3},
         **({"routing": {"model": routing_model}} if routing_model else {}),
     }
     normalized: Final = PassThroughEndpointLogging().normalize_llm_passthrough_logging_payload(
-        httpx_response=httpx.Response(200, request=httpx.Request("POST", f"https://{provider}.test/v1/systemone"), json=body),
-        response_body=body, request_body={"model": requested}, logging_obj=logging_obj,
-        url_route=f"https://{provider}.test/v1/systemone", result="{}", start_time=start,
-        end_time=datetime.now(), cache_hit=False, custom_llm_provider=provider, **logging_kwargs,
+        httpx_response=httpx.Response(
+            200, request=httpx.Request("POST", f"https://{provider}.test/v1/systemone"), json=body
+        ),
+        response_body=body,
+        request_body={"model": requested},
+        logging_obj=logging_obj,
+        url_route=f"https://{provider}.test/v1/systemone",
+        result="{}",
+        start_time=start,
+        end_time=datetime.now(),
+        cache_hit=False,
+        custom_llm_provider=provider,
+        **logging_kwargs,
     )
     logged: Final = normalized["kwargs"]
     expected_cost: Final = 10 * input_rate + 3 * output_rate
     assert (logged["model"], logged["custom_llm_provider"]) == (model, provider)
     assert logged["response_cost"] == pytest.approx(expected_cost)
     assert logged["combined_usage_object"].model_dump(exclude_none=True) == {
-        "prompt_tokens": 10, "completion_tokens": 3, "total_tokens": 13,
+        "prompt_tokens": 10,
+        "completion_tokens": 3,
+        "total_tokens": 13,
     }
     assert logging_obj.model_call_details["model"] == model
     assert logging_obj.model_call_details["response_cost"] == pytest.approx(expected_cost)

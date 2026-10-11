@@ -40,6 +40,7 @@ from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.humanloop import HumanloopLogger
+from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_key
 from litellm.llms.base_llm.audio_transcription.transformation import BaseAudioTranscriptionConfig
 from litellm.integrations.langfuse.langfuse_prompt_management import LangfusePromptManagement
 from litellm.litellm_core_utils import litellm_logging
@@ -2212,12 +2213,15 @@ def test_completion_registers_test_owned_model_prices() -> None:
 
 
 @pytest.mark.usefixtures("isolated_openai_model_sets")
-def test_add_known_models_skips_region_scoped_bedrock_pricing_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_add_known_models_skips_non_model_pricing_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     price: Final = {"input_cost_per_token": 0.001, "output_cost_per_token": 0.002, "mode": "chat"}
+    decisions_model: Final = "migration-openai-model"
+    decisions_pricing_model: Final = decisions_pricing_key("openai", decisions_model)
     model_cost_map: Final = {
         "migration.bedrock-model-v1:0": {**price, "litellm_provider": "bedrock"},
         "bedrock/us-west-1/migration.bedrock-model-v1:0": {**price, "litellm_provider": "bedrock"},
-        "migration-openai-model": {**price, "litellm_provider": "openai"},
+        decisions_model: {**price, "litellm_provider": "openai"},
+        decisions_pricing_model: {**price, "litellm_provider": "openai", "mode": "evaluation"},
     }
     monkeypatch.setattr(litellm, "bedrock_models", set(litellm.bedrock_models))
     monkeypatch.setattr(litellm, "models_by_provider", dict(litellm.models_by_provider))
@@ -2226,7 +2230,10 @@ def test_add_known_models_skips_region_scoped_bedrock_pricing_keys(monkeypatch: 
 
     assert "migration.bedrock-model-v1:0" in litellm.bedrock_models
     assert "bedrock/us-west-1/migration.bedrock-model-v1:0" not in litellm.bedrock_models
-    assert "migration-openai-model" in litellm.models_by_provider["openai"]
+    assert decisions_model in litellm.open_ai_chat_completion_models
+    assert decisions_pricing_model not in litellm.open_ai_chat_completion_models
+    assert decisions_model in litellm.models_by_provider["openai"]
+    assert decisions_pricing_model not in litellm.models_by_provider["openai"]
 
 
 def test_utils_defines_tests_without_invoking_them_at_module_scope() -> None:
