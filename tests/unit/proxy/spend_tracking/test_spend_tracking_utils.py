@@ -6591,7 +6591,7 @@ def test_spend_logs_payload_keeps_no_requester_ip_address_when_ip_logging_is_dis
     assert ("203.0.113.9" in json.dumps(payload, default=str)) is not disabled
 
 
-def test_stored_request_without_requester_ip_address_drops_only_ip_fields_from_request_metadata() -> None:
+def test_stored_request_without_requester_ip_address_drops_or_masks_only_ip_fields_from_request_metadata() -> None:
     body: Final = {
         "model": "gpt-5-mini",
         "messages": [{"role": "user", "content": "203.0.113.9"}],
@@ -6608,10 +6608,14 @@ def test_stored_request_without_requester_ip_address_drops_only_ip_fields_from_r
                 "X-AppEngine-User-IP": "203.0.113.9",
                 "X-Vercel-Forwarded-For": "203.0.113.9",
                 "X-ARR-ClientIP": "203.0.113.9",
+                "DO-Connecting-IP": "203.0.113.9",
+                "Incap-Client-IP": "2001:db8::9",
+                "x-edge-client": "client=203.0.113.9, peer=[2001:db8::9]:443",
+                "host": "10.0.0.5:4000",
                 "user-agent": "ua",
             },
             "forwarded": "not a header",
-            "spend_logs_metadata": [{"headers": {"true-client-ip": "203.0.113.9"}}],
+            "spend_logs_metadata": [{"headers": {"true-client-ip": "203.0.113.9", "x-client": "host:2001:db8::9"}}],
             "error_information": {"error_message": "denied 203.0.113.9"},
         },
     }
@@ -6623,9 +6627,15 @@ def test_stored_request_without_requester_ip_address_drops_only_ip_fields_from_r
         "error_information": {"error_message": "203.0.113.9"},
         "litellm_metadata": {
             "requester_ip_address": None,
-            "headers": {"user-agent": "ua"},
+            "headers": {
+                "DO-Connecting-IP": "REDACTED_BY_LITELM",
+                "Incap-Client-IP": "REDACTED_BY_LITELM",
+                "x-edge-client": "client=REDACTED_BY_LITELM, peer=[REDACTED_BY_LITELM]:443",
+                "host": "REDACTED_BY_LITELM:4000",
+                "user-agent": "ua",
+            },
             "forwarded": "not a header",
-            "spend_logs_metadata": [{"headers": {}}],
+            "spend_logs_metadata": [{"headers": {"x-client": "host:REDACTED_BY_LITELM"}}],
             "error_information": {"error_message": "denied 203.0.113.9"},
         },
     }
@@ -6725,4 +6735,33 @@ def test_failure_error_information_masks_every_ip_address_form_when_ip_logging_i
         "error_code": "403",
         "error_message": "IP address REDACTED_BY_LITELM not allowed.",
         "traceback": "peer [REDACTED_BY_LITELM]:443",
+    }
+
+
+@pytest.mark.parametrize(
+    ("text", "stored"),
+    [
+        ("connect to host:2001:db8::2 failed", "connect to host:REDACTED_BY_LITELM failed"),
+        ("peer_2001:db8::2_tail", "peer_REDACTED_BY_LITELM_tail"),
+        ("upstream 1:2:3:4:5:6:7:8:443 refused", "upstream REDACTED_BY_LITELM refused"),
+        ("upstream fe80::1:2:3:4:5:6:443 refused", "upstream REDACTED_BY_LITELM refused"),
+        ("label cafe:1:2:3:4:5:6:7::", "label REDACTED_BY_LITELM"),
+        ("label cafe:1:2:3:4:5:6:7:8:443", "label REDACTED_BY_LITELM"),
+        ("socket_192.0.2.65 closed", "socket_REDACTED_BY_LITELM closed"),
+        (
+            "at 2026-10-10T18:20:09 Error::Foo aa:bb:cc:dd:ee:ff 1.2.3.4.5 1203.0.113.9 qwen2.5.1.5",
+            "at 2026-10-10T18:20:09 Error::Foo aa:bb:cc:dd:ee:ff 1.2.3.4.5 1203.0.113.9 qwen2.5.1.5",
+        ),
+    ],
+)
+def test_failure_error_information_masks_addresses_after_labels_and_before_ports(
+    monkeypatch: pytest.MonkeyPatch, text: str, stored: str
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "disable_requester_ip_address_logging", True)
+
+    assert sanitize_error_information_for_spend_logs({"error_code": "500", "error_message": text}) == {
+        "error_code": "500",
+        "error_message": stored,
     }

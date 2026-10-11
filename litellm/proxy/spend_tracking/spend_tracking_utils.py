@@ -1624,16 +1624,23 @@ _CLIENT_IP_HEADERS: Final = frozenset(
 _REQUEST_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[object, object])
 _OBJECT_LIST: Final = TypeAdapter(list[object])
-_IPV4_ADDRESS: Final = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
-_IPV6_ADDRESS_CANDIDATE: Final = re.compile(r"(?<![\w:])(?:[0-9A-Fa-f]{0,4}:){2,8}[0-9A-Fa-f]{0,4}(?![\w:])")
+_IPV4_ADDRESS: Final = re.compile(r"(?<![0-9A-Za-z])(?<!\d\.)(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Za-z]|\.\d)")
+_IPV6_ADDRESS_CANDIDATE: Final = re.compile(
+    r"(?:(?<![0-9A-Za-z:])|(?<=\w:))(?:[0-9A-Fa-f]{0,4}:){2,9}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])"
+)
 
 
 def _masked_ipv6_address(candidate: re.Match[str]) -> str:
-    try:
-        ipaddress.IPv6Address(candidate.group(0))
-    except ValueError:
-        return candidate.group(0)
-    return REDACTED_BY_LITELM_STRING
+    """Masks the candidate when it, or it without a leading label or a trailing port group, is an IPv6 address."""
+    text: Final = candidate.group(0)
+    unlabelled: Final = text.partition(":")[2]
+    for address in (text, text.rpartition(":")[0], unlabelled, unlabelled.rpartition(":")[0]):
+        try:
+            ipaddress.IPv6Address(address)
+        except ValueError:
+            continue
+        return REDACTED_BY_LITELM_STRING
+    return text
 
 
 def _without_ip_addresses(text: str) -> str:
@@ -1681,7 +1688,9 @@ def _stored_value_without_requester_ip_address(key: object, value: object) -> ob
 def _without_requester_ip_address(value: object, *, headers: bool = False) -> object:
     if isinstance(value, Mapping):
         return {
-            key: _stored_value_without_requester_ip_address(key, item)
+            key: _without_ip_addresses(item)
+            if headers and isinstance(item, str)
+            else _stored_value_without_requester_ip_address(key, item)
             for key, item in _OBJECT_MAPPING.validate_python(value).items()
             if not (headers and isinstance(key, str) and key.lower() in _CLIENT_IP_HEADERS)
         }
@@ -1691,8 +1700,8 @@ def _without_requester_ip_address(value: object, *, headers: bool = False) -> ob
 
 
 def _stored_request_without_requester_ip_address(request_body: Mapping[object, object]) -> Mapping[object, object]:
-    """The request body with `requester_ip_address` set to null and client-IP forwarding headers dropped inside its
-    metadata."""
+    """The request body with `requester_ip_address` set to null, client-IP forwarding headers dropped and every IP
+    address in the other header values masked inside its metadata."""
     return {
         key: _without_requester_ip_address(value) if key in _REQUEST_METADATA_KEYS else value
         for key, value in request_body.items()

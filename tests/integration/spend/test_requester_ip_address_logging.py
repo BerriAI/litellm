@@ -33,6 +33,22 @@ AKTO_GUARDRAIL: Final = "akto-requester-ip"
 PROVIDER_FAILURE: Final = "synthetic-requester-ip-provider-failure"
 LONG_PROVIDER_FAILURE: Final = "synthetic-requester-ip-long-provider-failure"
 UPSTREAM_IP: Final = "192.0.2.61"
+ADDRESS_FORMS_FAILURE: Final = "synthetic-requester-ip-address-forms-failure"
+UPSTREAM_ADDRESS_FORMS: Final = MappingProxyType(
+    {
+        "2001:db8::62": "connect to host:2001:db8::62 failed",
+        "2001:db8::63": "peer_2001:db8::63",
+        "2001:db8:1:2:3:4:5:64": "upstream 2001:db8:1:2:3:4:5:64:443 refused",
+        "192.0.2.65": "socket_192.0.2.65 closed",
+    }
+)
+CLIENT_IP_HEADERS: Final = MappingProxyType(
+    {
+        "203.0.113.76": ("do-connecting-ip", "203.0.113.76"),
+        "203.0.113.77": ("incap-client-ip", "203.0.113.77"),
+        "2001:db8::78": ("x-edge-client", "client=2001:db8::78"),
+    }
+)
 CALLBACK_SECRET: Final = "synthetic-callback-sink-secret"
 _ROW_COLUMNS: Final = (
     "SELECT s.request_id, s.metadata, s.requester_ip_address, row_to_json(s)::text AS row_text "
@@ -301,6 +317,13 @@ def _provider(request: Request) -> Reply:
                 {"error": {"message": f"upstream {UPSTREAM_IP} " * 400, "type": "invalid_request_error"}}
             ).encode(),
         )
+    if ADDRESS_FORMS_FAILURE.encode() in request.body:
+        return Reply(
+            status=400,
+            body=json.dumps(
+                {"error": {"message": ", ".join(UPSTREAM_ADDRESS_FORMS.values()), "type": "invalid_request_error"}}
+            ).encode(),
+        )
     if PROVIDER_FAILURE.encode() in request.body:
         return Reply(
             status=400,
@@ -528,6 +551,54 @@ def test_provider_failure_row_follows_the_setting(rigs: Mapping[bool, Rig], disa
     assert object_value(row["metadata"])["status"] == "failure", row
     assert row["requester_ip_address"] == (None if disabled else FORWARDED_IP), row
     assert _ips_in_row(row) == (() if disabled else (FORWARDED_IP, REAL_IP)), row
+
+
+@DISABLED
+def test_provider_error_row_masks_addresses_after_labels_and_before_ports(
+    rigs: Mapping[bool, Rig], disabled: bool
+) -> None:
+    rig: Final = rigs[disabled]
+    response: Final = rig.proxy.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": rig.chat_model, "messages": [{"role": "user", "content": ADDRESS_FORMS_FAILURE}]},
+        key=rig.key,
+        headers={"x-forwarded-for": FORWARDED_IP},
+    )
+    assert response.status_code == 400, response.text
+
+    row_text: Final = string_value(_row_for_call(response.headers["x-litellm-call-id"])["row_text"])
+
+    assert [ip for ip in UPSTREAM_ADDRESS_FORMS if ip in row_text] == ([] if disabled else [*UPSTREAM_ADDRESS_FORMS]), (
+        row_text
+    )
+
+
+@DISABLED
+def test_client_ip_headers_outside_the_known_list_follow_the_setting(rigs: Mapping[bool, Rig], disabled: bool) -> None:
+    rig: Final = rigs[disabled]
+    response: Final = rig.proxy.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": rig.chat_model, "messages": [{"role": "user", "content": f"requester-ip-{uuid4().hex}"}]},
+        key=rig.key,
+        headers={"x-forwarded-for": FORWARDED_IP, **dict(CLIENT_IP_HEADERS.values())},
+    )
+    assert response.status_code == 200, response.text
+
+    row: Final = _row_for_call(response.headers["x-litellm-call-id"])
+    stored_headers: Final = object_value(
+        object_value(object_value(json.loads(string_value(row["row_text"]))["proxy_server_request"])["metadata"])[
+            "headers"
+        ]
+    )
+
+    assert [name for name, _ in CLIENT_IP_HEADERS.values() if name in stored_headers] == [
+        name for name, _ in CLIENT_IP_HEADERS.values()
+    ], stored_headers
+    assert [ip for ip in CLIENT_IP_HEADERS if ip in string_value(row["row_text"])] == (
+        [] if disabled else [*CLIENT_IP_HEADERS]
+    ), row
 
 
 def test_long_provider_error_row_keeps_no_ip_fragment_at_the_truncation_cut(rigs: Mapping[bool, Rig]) -> None:
