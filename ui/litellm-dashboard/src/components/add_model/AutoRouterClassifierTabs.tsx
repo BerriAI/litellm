@@ -127,6 +127,7 @@ interface AutoRouterClassifierTabsProps {
   onChange: (value: ComplexityRouterConfigValue) => void;
   children: React.ReactNode;
   judgeModel?: React.ReactNode;
+  decisionModel?: React.ReactNode;
 }
 
 const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
@@ -134,6 +135,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
   onChange,
   children,
   judgeModel,
+  decisionModel,
 }) => {
   const id = useId();
   const availability = useContext(AutoRouterAvailabilityContext);
@@ -221,31 +223,32 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({
           ))}
         </RadioGroup>
       </fieldset>
-      {family === "jev" && (
-        <div className="space-y-2">
-          <Label htmlFor={`${id}-decision-model`}>Decision model</Label>
-          <Select
-            items={[
-              { value: "jev", label: "Jev" },
-              { value: "laya", label: "Laya" },
-              { value: "bespoke", label: "Bespoke Nimble" },
-              { value: "databricks", label: "Databricks" },
-            ]}
-            value={normalizeJevClassifierConfig(value.jev_classifier_config).provider}
-            onValueChange={changeProvider}
-          >
-            <SelectTrigger id={`${id}-decision-model`} className="w-full">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="jev">Jev</SelectItem>
-              <SelectItem value="laya">Laya</SelectItem>
-              <SelectItem value="bespoke">Bespoke Nimble</SelectItem>
-              <SelectItem value="databricks">Databricks</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      )}
+      {family === "jev" &&
+        (decisionModel ?? (
+          <div className="space-y-2">
+            <Label htmlFor={`${id}-decision-model`}>Decision model</Label>
+            <Select
+              items={[
+                { value: "jev", label: "Jev" },
+                { value: "laya", label: "Laya" },
+                { value: "bespoke", label: "Bespoke Nimble" },
+                { value: "databricks", label: "Databricks" },
+              ]}
+              value={normalizeJevClassifierConfig(value.jev_classifier_config).provider}
+              onValueChange={changeProvider}
+            >
+              <SelectTrigger id={`${id}-decision-model`} className="w-full">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="jev">Jev</SelectItem>
+                <SelectItem value="laya">Laya</SelectItem>
+                <SelectItem value="bespoke">Bespoke Nimble</SelectItem>
+                <SelectItem value="databricks">Databricks</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        ))}
       {family === "custom" && (
         <p className="text-sm text-muted-foreground">This router uses a custom classifier plugin</p>
       )}

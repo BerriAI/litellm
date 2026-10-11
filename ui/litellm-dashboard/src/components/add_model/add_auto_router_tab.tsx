@@ -1,4 +1,6 @@
 import { AutoRouterAvailabilityContext, useAutoRouterAvailability } from "./AutoRouterAvailability";
+import { decisionDeploymentName } from "./jev_classifier_config";
+import DecisionModelSelect from "./DecisionModelSelect";
 import ClassifierPrimarySettings from "./ClassifierPrimarySettings";
 import AutoRouterClassifierTabs from "./AutoRouterClassifierTabs";
 import { getForecastConfigError, isForecastClassifier } from "../add_model/forecast_classifier_config";
@@ -140,6 +142,9 @@ export const getSubmitBlockedReason = (
       : getMissingTiersError(activeTierRows(config))) ??
     getPlanModeTierError(config.plan_mode_min_tier, activeTierRows(config)) ??
     getKeywordTierRulesError(keywordTierRules, activeTierRows(config)) ??
+    (effectiveClassifierType(config) === "jev" && !config.jev_classifier_config?.deployment_name
+      ? "Please select a decision model"
+      : null) ??
     getClassifierModelError(config) ??
     getHeuristicV2SuccessThresholdError(config.heuristic_v2_success_threshold) ??
     getReminderMarkersError(config.reminder_markers) ??
@@ -376,6 +381,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     tiers: Object.fromEntries(activeTierRows(complexityRouterConfig).map((row) => [activeTierName(row), row.models])),
     classifierType: effectiveClassifierType(complexityRouterConfig),
     classifierLlmConfig: complexityRouterConfig.classifier_llm_config,
+    decisionDeploymentName: decisionDeploymentName(complexityRouterConfig.jev_classifier_config),
     semanticMatchingEnabled,
     embeddingModel,
     defaultModel: complexityRouterConfig.default_model,
@@ -599,31 +605,6 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
     <ComplexityRouterConfig
       creationFlow
       tierSetup={tierSetup}
-      beforeAdvancedSettings={
-        isAdmin && (
-          <div className="mt-6">
-            <FormField
-              control={form.control}
-              name="model_access_group"
-              label={labelWithHint(
-                "Model Access Group",
-                "Use model access groups to control who can access this auto router",
-              )}
-            >
-              {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
-                <AccessGroupTagsCombobox
-                  id={id}
-                  value={value}
-                  onChange={onChange}
-                  options={modelAccessGroups}
-                  ariaInvalid={ariaInvalid}
-                  ariaDescribedBy={ariaDescribedBy}
-                />
-              )}
-            </FormField>
-          </div>
-        )
-      }
       editingTiers={editingTiers}
       onEditingTiersChange={setEditingTiers}
       modelInfo={modelInfo}
@@ -654,7 +635,7 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
         <Card>
           <CardContent>
             <form onSubmit={form.handleSubmit(() => handleAutoRouterSubmit())} noValidate>
-              <div className="mb-6 border-b pb-6">
+              <div className="mb-4">
                 <FormField
                   control={form.control}
                   name="auto_router_name"
@@ -664,6 +645,31 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
                     <Input {...field} ref={ref} placeholder="e.g., smart_router, auto_router_1" />
                   )}
                 </FormField>
+              </div>
+              <div className="mb-6 border-b pb-6">
+                {isAdmin && (
+                  <div>
+                    <FormField
+                      control={form.control}
+                      name="model_access_group"
+                      label={labelWithHint(
+                        "Model Access Group",
+                        "Use model access groups to control who can access this auto router",
+                      )}
+                    >
+                      {({ id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy }) => (
+                        <AccessGroupTagsCombobox
+                          id={id}
+                          value={value}
+                          onChange={onChange}
+                          options={modelAccessGroups}
+                          ariaInvalid={ariaInvalid}
+                          ariaDescribedBy={ariaDescribedBy}
+                        />
+                      )}
+                    </FormField>
+                  </div>
+                )}
               </div>
               {requiresTeamScope && (
                 <FormField
@@ -688,6 +694,14 @@ const AddAutoRouterTab: React.FC<AddAutoRouterTabProps> = ({
               <AutoRouterClassifierTabs
                 value={complexityRouterConfig}
                 onChange={handleClassifierChange}
+                decisionModel={
+                  <DecisionModelSelect
+                    value={complexityRouterConfig}
+                    onChange={setComplexityRouterConfig}
+                    modelInfo={modelInfo}
+                    deployments={deployments}
+                  />
+                }
                 judgeModel={
                   <ClassifierPrimarySettings
                     section="judge"

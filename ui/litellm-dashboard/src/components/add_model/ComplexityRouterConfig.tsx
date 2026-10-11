@@ -38,7 +38,6 @@ import {
 import React from "react";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import ClassificationMethodConfig, { InactiveHeuristicV2Threshold } from "./ClassificationMethodConfig";
-import JevClassifierSettings from "./JevClassifierConfig";
 import ComplexityRouterAdvancedSections from "./ComplexityRouterAdvancedSections";
 import { type TierSetAction, applyTierSetAction, setFallbackTier } from "./tier_set_actions";
 import {
@@ -475,7 +474,6 @@ export const withClassificationFrequency = (
 interface ComplexityRouterConfigProps {
   creationFlow?: boolean;
   tierSetup?: React.ReactNode;
-  beforeAdvancedSettings?: React.ReactNode;
   modelInfo: ModelGroup[];
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
@@ -573,11 +571,6 @@ const CreationClassifierSettings = ({
   const jevCreation = isJevCreation(value, creationFlow);
   return (
     <>
-      {jevCreation && (
-        <div className="mb-4">
-          <JevClassifierSettings section="model" value={value} onChange={onChange} />
-        </div>
-      )}
       <ClassifierPrimarySettings
         section={creationFlow ? "frequency" : "all"}
         value={value}
@@ -611,7 +604,6 @@ const CreationClassifierSettings = ({
 const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
   creationFlow,
   tierSetup,
-  beforeAdvancedSettings,
   modelInfo,
   value,
   onChange,
@@ -850,7 +842,6 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         </>
       )}
       <DefaultModelField value={value} onChange={onChange} modelOptions={modelOptions} />
-      {beforeAdvancedSettings}
       <Separator className="my-6" />
 
       <RoutingOptions

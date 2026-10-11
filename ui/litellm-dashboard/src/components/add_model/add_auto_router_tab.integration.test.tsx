@@ -123,6 +123,7 @@ vi.mock("../networking", () => ({
       error: null,
     }),
   },
+  modelCostMap: vi.fn().mockResolvedValue({}),
   modelCreateCall: vi.fn().mockResolvedValue({}),
   modelAvailableCall: vi.fn().mockResolvedValue({ data: [] }),
   testAutoRouterRouting: vi.fn(),
@@ -191,11 +192,19 @@ describe("AddAutoRouterTab", () => {
   });
 
   it("shows Jev essentials before tiers and saves tuning from its own disclosure", async () => {
-    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    mockFetchAvailableModels.mockResolvedValue([
+      ...ALL_FAMILY_MODELS,
+      { model_group: "my-decision", mode: "evaluation" },
+    ]);
     renderWithProviders(<Harness />);
     await waitForAutomaticTiers();
     await userEvent.click(screen.getByRole("radio", { name: "Decisions Model" }));
-    expect(screen.getByLabelText("Classifier Model")).toHaveValue("jev-latest");
+    expect(screen.queryByLabelText("Classifier Model")).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("combobox", { name: "Decision model" }));
+    expect(
+      screen.queryByRole("option", { name: ALL_FAMILY_MODELS[0].model_group, exact: true }),
+    ).not.toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("option", { name: "my-decision", exact: true }));
     expect(screen.queryByRole("button", { name: "Routing approach" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Choose models for me" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Classifier Timeout (ms)")).not.toBeInTheDocument();
@@ -204,7 +213,6 @@ describe("AddAutoRouterTab", () => {
       "false",
     );
     await userEvent.click(screen.getByRole("button", { name: "Advanced classifier settings" }));
-    fireEvent.change(screen.getByLabelText("Classifier Model"), { target: { value: "jev-custom" } });
     fireEvent.change(screen.getByLabelText("Classifier Timeout (ms)"), { target: { value: "4200" } });
     fireEvent.change(screen.getByLabelText("Context Window Size"), { target: { value: "5" } });
     await selectAutoRouterOption("How often to classify", "Every new user message");
@@ -217,11 +225,22 @@ describe("AddAutoRouterTab", () => {
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
     const expected = {
       classifier_type: "oss_classifier",
-      opensource_classifier_config: { provider: "jev", model: "jev-custom", timeout_ms: 4200 },
+      opensource_classifier_config: { deployment_name: "my-decision", timeout_ms: 4200 },
       classifier_context_window_size: 5,
       classification_mode: "user_turn",
     };
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject(expected);
+  });
+
+  it("uses the judge picker empty state when no decision deployments exist", async () => {
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    renderWithProviders(<Harness />);
+    await waitForAutomaticTiers();
+    await userEvent.click(screen.getByRole("radio", { name: "Decisions Model" }));
+    await userEvent.click(screen.getByRole("combobox", { name: "Decision model" }));
+    expect(await screen.findByText("No results")).toBeVisible();
+    await userEvent.keyboard("{Escape}");
+    expect(screen.getByRole("button", { name: "Add Auto Router", exact: true })).toBeDisabled();
   });
 
   it("does not refill a tier cleared by the user when models refresh", async () => {
@@ -325,10 +344,15 @@ describe("AddAutoRouterTab", () => {
         error: body?.complexity_router_config?.tier_definitions ? blocked : null,
       };
     });
-    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    mockFetchAvailableModels.mockResolvedValue([
+      ...ALL_FAMILY_MODELS,
+      { model_group: "my-decision", mode: "evaluation" },
+    ]);
     renderWithProviders(<Harness />);
     await waitForAutomaticTiers();
     await user.click(screen.getByRole("radio", { name: "Decisions Model" }));
+    await userEvent.click(screen.getByRole("combobox", { name: "Decision model" }));
+    await userEvent.click(await screen.findByRole("option", { name: "my-decision", exact: true }));
     await waitFor(() =>
       expect(apiClient.post).toHaveBeenLastCalledWith(
         "/auto_router/availability",
@@ -368,10 +392,15 @@ describe("AddAutoRouterTab", () => {
 
   it("blocks button and Enter submissions until the edited draft is checked", async () => {
     const user = userEvent.setup();
-    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    mockFetchAvailableModels.mockResolvedValue([
+      ...ALL_FAMILY_MODELS,
+      { model_group: "my-decision", mode: "evaluation" },
+    ]);
     renderWithProviders(<Harness />);
     await waitForAutomaticTiers();
     await user.click(screen.getByRole("radio", { name: "Decisions Model" }));
+    await userEvent.click(screen.getByRole("combobox", { name: "Decision model" }));
+    await userEvent.click(await screen.findByRole("option", { name: "my-decision", exact: true }));
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "checked-router" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     let complete: ((result: unknown) => void) | undefined;
@@ -1995,7 +2024,10 @@ describe("preset catalog fetch states", () => {
     vi.clearAllMocks();
     testQueryClient.clear();
     vi.mocked(handleAddAutoRouterSubmit).mockReset();
-    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    mockFetchAvailableModels.mockResolvedValue([
+      ...ALL_FAMILY_MODELS,
+      { model_group: "my-decision", mode: "evaluation" },
+    ]);
     vi.mocked(useAutoRouterPresets).mockReturnValue({
       ...LOADED_PRESETS_QUERY,
       data: [
@@ -2015,6 +2047,8 @@ describe("preset catalog fetch states", () => {
     renderWithProviders(<Harness />);
     await waitForPresetEnabled("Bounded JEV");
     await selectTemplate("Bounded JEV");
+    await userEvent.click(screen.getByRole("combobox", { name: "Decision model" }));
+    await userEvent.click(await screen.findByRole("option", { name: "my-decision", exact: true }));
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "bounded-router" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
