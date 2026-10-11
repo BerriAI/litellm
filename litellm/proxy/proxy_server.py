@@ -3221,9 +3221,7 @@ def cost_tracking():
             BudgetReservationReconcileLogger,
         )
 
-        litellm.logging_callback_manager.add_litellm_async_success_callback(
-            BudgetReservationReconcileLogger()
-        )
+        litellm.logging_callback_manager.add_litellm_async_success_callback(BudgetReservationReconcileLogger())
 
 
 async def _drain_spend_event_producer_on_shutdown() -> None:
