@@ -677,6 +677,7 @@ class CapabilityClassifierConfig(BaseModel):
 class JevClassifierConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    deployment_name: str | None = Field(default=None, min_length=1)
     model: str = "jev-latest"
     api_key: str | None = Field(default=None, description="TypeSafe API key, falling back to TYPESAFE_API_KEY")
     api_base: str | None = Field(
@@ -707,6 +708,12 @@ class JevClassifierConfig(BaseModel):
 
     @model_validator(mode="after")
     def _keep_the_environment_key_on_the_environment_base(self) -> "JevClassifierConfig":
+        if self.deployment_name is not None:
+            if not self.deployment_name.strip():
+                raise ValueError("deployment_name must name a configured decision model")
+            if self.api_key is not None or self.api_base is not None:
+                raise ValueError("deployment_name uses the deployment connection; omit api_key and api_base")
+            return self
         if self.api_base is not None and self.api_key is None:
             raise ValueError(
                 "jev_classifier_config.api_base requires jev_classifier_config.api_key: TYPESAFE_API_KEY is only sent "

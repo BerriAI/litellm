@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const jevClassifierConfigFields = {
+  deployment_name: z.preprocess((value) => value ?? undefined, z.string().trim().min(1).optional()),
   model: z.string().trim().min(1).default("jev-latest"),
   timeout_ms: z.number().int().positive().default(3000),
   instructions: z
@@ -20,6 +21,7 @@ export const defaultJevClassifierConfig = (): JevClassifierConfig => jevClassifi
 export const normalizeJevClassifierConfig = (
   config: JevClassifierConfig = defaultJevClassifierConfig(),
 ): JevClassifierConfig => ({
+  ...(config.deployment_name !== undefined && { deployment_name: config.deployment_name }),
   model: config.model.trim(),
   timeout_ms: config.timeout_ms,
   ...(config.instructions?.trim() && { instructions: config.instructions.trim() }),
@@ -28,3 +30,6 @@ export const normalizeJevClassifierConfig = (
     circuit_breaker_cooldown_seconds: config.circuit_breaker_cooldown_seconds,
   }),
 });
+
+export const decisionDeploymentName = (config: JevClassifierConfig | undefined): string | undefined =>
+  config?.deployment_name;

@@ -116,6 +116,7 @@ from .jev_classifier import (
     HttpJevClassifierClient,
     JevClassifierClient,
     JevVerdict,
+    RouterJevClassifierClient,
     build_jev_request,
     jev_classifier_cost,
 )
@@ -1307,8 +1308,9 @@ class ComplexityRouter(CustomLogger):
     - Question complexity (multiple questions)
     """
 
-    @staticmethod
-    def _build_jev_client(config: JevClassifierConfig) -> JevClassifierClient:
+    def _build_jev_client(self, config: JevClassifierConfig) -> JevClassifierClient:
+        if config.deployment_name is not None:
+            return RouterJevClassifierClient(self.litellm_router_instance, config.deployment_name)
         api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
         if not api_key:
             raise ValueError("jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'")
@@ -2217,7 +2219,9 @@ class ComplexityRouter(CustomLogger):
                 probabilities=answer.probabilities,
                 confidence=answer.confidence,
                 model=model,
-                cost=jev_classifier_cost(response, config.model),
+                cost=response.classifier_cost
+                if config.deployment_name
+                else jev_classifier_cost(response, config.model),
             )
             if breaker is not None and permit is not None:
                 breaker.record_success(permit)

@@ -160,6 +160,7 @@ const HowClassificationWorks: React.FC<{ value: ComplexityRouterConfigValue }> =
 };
 
 interface ClassificationMethodConfigProps {
+  jevSection?: "all" | "advanced";
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
   modelOptions: { value: string; label: string }[];
@@ -215,6 +216,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
   showValidationErrors = false,
   defaultModel,
   advancedOnly = false,
+  jevSection,
 }) => {
   const [draft, setDraft] = React.useState<{ id: string; raw: string } | null>(null);
   const hasDefaultModel = Boolean(defaultModel);
@@ -493,7 +495,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
         </div>
       )}
 
-      {classifierType === "jev" && <JevClassifierConfig value={value} onChange={onChange} />}
+      {classifierType === "jev" && <JevClassifierConfig value={value} onChange={onChange} section={jevSection} />}
       {usesLlmClassifier(classifierType) && (
         <div className="mt-4 space-y-3">
           <ClassifierReasoningEffortSelect
@@ -642,8 +644,8 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             />
             <span className="text-xs text-muted-foreground">
               Number of prior user turns sent to the classifier provider, excluding tool output and harness reminders.
-              LLM and Jev default to 3 turns; Jev sends them to the configured TypeSafe endpoint. Set to 0 to omit
-              conversation history. The current message and selected system text are still sent.
+              LLM and decision model classifiers default to 3 turns. Set to 0 to omit conversation history. The current
+              message and selected system text are still sent.
             </span>
           </div>
           <div>

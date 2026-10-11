@@ -6,11 +6,11 @@ import pytest
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
 from litellm.router_strategy.complexity_router.jev_classifier import DEFAULT_JEV_INSTRUCTIONS
 from litellm.router_utils.auto_router_model_naming import (
-    carries_complexity_router_settings,
-    classify_strategy_router_model,
     GATED_AUTO_ROUTER_CAPABILITIES,
     capability_limit_violation,
+    carries_complexity_router_settings,
     claimed_capability,
+    classify_strategy_router_model,
     count_capability_routers,
     gated_capability_of,
     strategy_router_dependencies,
@@ -687,3 +687,20 @@ def test_capabilities_are_mutually_exclusive_on_one_config(config: Mapping[str, 
     and system_prompt only counts for the classifier types heuristic_v2 is not one of.
     """
     assert sum(1 for capability in GATED_AUTO_ROUTER_CAPABILITIES if capability.uses(config)) <= 1
+
+
+def test_deployed_decision_classifier_is_a_model_access_dependency() -> None:
+    dependencies: Final = strategy_router_dependencies(
+        {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "jev",
+                "jev_classifier_config": {"deployment_name": "decision-deployment"},
+                "tiers": {"SIMPLE": "cheap"},
+            },
+        }
+    )
+    assert tuple((dependency.model_name, dependency.role) for dependency in dependencies) == (
+        ("cheap", "tier"),
+        ("decision-deployment", "classifier"),
+    )

@@ -25,6 +25,7 @@ import type { AutoRouterCompressionState } from "./buildAutoRouterCompression";
 import { activeTierName, type TierRow } from "./tier_rows";
 
 interface ComplexityRouterAdvancedSectionsProps {
+  hideClassifier?: boolean;
   value: ComplexityRouterConfigValue;
   onChange: (value: ComplexityRouterConfigValue) => void;
   forecast: boolean;
@@ -53,6 +54,7 @@ interface ComplexityRouterAdvancedSectionsProps {
 }
 
 const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSectionsProps> = ({
+  hideClassifier,
   value,
   onChange,
   forecast,
@@ -255,7 +257,10 @@ const ComplexityRouterAdvancedSections: React.FC<ComplexityRouterAdvancedSection
     },
     { label: "Sessions and efficiency", keys: ["affinity", "adaptive", "compression"] },
     { label: "Compatibility", keys: ["response"] },
-  ];
+  ].filter(
+    (group) =>
+      !(hideClassifier && group.keys.includes("classifier")) && sections.some(({ key }) => group.keys.includes(key)),
+  );
   const [openGroups, setOpenGroups] = React.useState<string[]>(() =>
     showValidationErrors ? groups.map((group) => group.label) : [],
   );
