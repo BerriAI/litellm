@@ -110,8 +110,8 @@ class TestMidConversationSystemPlacement:
         )
         roles: Final = [message["role"] for message in result["messages"]]
         assert "system" not in roles
-        first_tool_index: Final = roles.index("tool") if "tool" in roles else -1
+        first_tool_index: Final = roles.index("tool")
         # tool content must remain attached to its own message before any converted text
-        assert first_tool_index != -1 or True
+        assert roles[first_tool_index + 1] == "user"
         wire_text: Final = str(result["messages"])
         assert "tool_result" in wire_text and "be terse" in wire_text
