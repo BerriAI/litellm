@@ -81,6 +81,8 @@ def test_config_deployment_dropped_by_stale_boot_cost_map_is_restored_after_relo
                 {
                     "path": "/v1/chat/completions",
                     "authorization": "Bearer sk-upstream",
+                    "method": "POST",
+                    "api_key": "",
                     "body": {"model": model, "messages": [{"role": "user", "content": "stale cost map control"}]},
                 }
             ]

@@ -25,8 +25,16 @@ class OwnedRedis:
     process: subprocess.Popen | None = None
     server_pid: int | None = None
 
+    def serves(self) -> bool:
+        with Redis(host=self.host, port=self.port, socket_connect_timeout=0.2, socket_timeout=0.2) as client:
+            try:
+                return bool(client.ping())
+            except RedisConnectionError:
+                return False
+
     def start(self) -> None:
         assert self.process is None
+        assert not self.serves(), f"Another Redis already serves {self.host}:{self.port} before the owned one starts"
         self.process = subprocess.Popen(self.command, stdout=self.log, stderr=subprocess.STDOUT, start_new_session=True)
         deadline: Final = time.monotonic() + 8
         with Redis(host=self.host, port=self.port, socket_connect_timeout=0.2, socket_timeout=0.2) as client:
@@ -68,14 +76,7 @@ class OwnedRedis:
                     self.process.wait(timeout=3)
         self.process = None
         self.server_pid = None
-        with Redis(host=self.host, port=self.port, socket_connect_timeout=0.2, socket_timeout=0.2) as client:
-            try:
-                client.ping()
-            except RedisConnectionError:
-                stopped = True
-            else:
-                stopped = False
-        assert stopped, "Owned Redis still serves after shutdown"
+        assert not self.serves(), "Owned Redis still serves after shutdown"
         assert failure is None and not forced, f"Owned Redis required shutdown recovery: {failure!r}"
 
     def signal(self, action: signal.Signals) -> None:
@@ -92,20 +93,19 @@ class OwnedRedis:
 @contextmanager
 def owned_redis(directory: Path) -> Iterator[OwnedRedis]:
     binary: Final = shutil.which("redis-server")
+    with socket.socket() as reservation:
+        reservation.bind(("127.0.0.1", 0))
+        port: Final = reservation.getsockname()[1]
     if binary:
-        with socket.socket() as reservation:
-            reservation.bind(("127.0.0.1", 0))
-            port = reservation.getsockname()[1]
         host = "127.0.0.1"
         prefix = (binary,)
     else:
         host = subprocess.check_output(["docker", "inspect", "--format", "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", "redis-cache"], text=True).strip()
         assert host, "CircleCI owned Redis container has no address"
-        port = 16379
         prefix = ("docker", "exec", "redis-cache", "redis-server")
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
-    with (output / "owned-redis-recovery.log").open("w") as log:
+    with (output / f"owned-redis-{uuid.uuid4().hex}.log").open("w") as log:
         pid_file: Final = str(directory / "owned-redis.pid") if binary else f"/tmp/integration-redis-{uuid.uuid4().hex}.pid"
         server: Final = OwnedRedis(host, port, (*prefix, "--port", str(port), "--set-proc-title", "no", "--pidfile", pid_file, "--bind", "0.0.0.0" if not binary else "127.0.0.1", "--protected-mode", "no", "--save", "", "--appendonly", "no"), log, pid_file)
         try:

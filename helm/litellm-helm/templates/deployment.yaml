@@ -56,7 +56,21 @@ spec:
           image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
           imagePullPolicy: {{ .Values.image.pullPolicy }}
           env:
+            {{- include "litellm.lensConnectionEnv" . | nindent 12 }}
             {{- include "litellm.proxyEnv" . | nindent 12 }}
+            {{- if .Values.liteadmin.enabled }}
+            - name: LITELLM_ADMIN_AGENT_URL
+              value: {{ printf "http://%s-liteadmin:10000" (include "litellm.fullname" . | trunc 53 | trimSuffix "-") | quote }}
+            - name: ADMIN_AGENT_SERVICE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ required "liteadmin.existingSecret is required" .Values.liteadmin.existingSecret }}
+                  key: ADMIN_AGENT_SERVICE_TOKEN
+            {{- if not (hasKey (default dict .Values.envVars) "PROXY_BASE_URL") }}
+            - name: PROXY_BASE_URL
+              value: {{ required "liteadmin.gatewayUrl is required" .Values.liteadmin.gatewayUrl | quote }}
+            {{- end }}
+            {{- end }}
             {{- include "litellm.proxyMetricsEnv" . | nindent 12 }}
             {{- if .Values.collector.enabled }}
             {{- include "litellm.collectorEnv" . | nindent 12 }}

@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Final
 
 import httpx
+import litellm
 import pytest
 from pydantic import JsonValue
 
@@ -70,8 +71,11 @@ def _clear_observations(upstream: httpx.Client) -> None:
 def _observed_request_body(upstream: httpx.Client) -> dict[str, JsonValue]:
     observations: Final = JSON_OBJECT.validate_json(upstream.get("/__observations").content)["requests"]
     assert isinstance(observations, list)
-    assert len(observations) == 1
-    return object_value(object_value(observations[0])["body"])
+    post_observations: Final = tuple(
+        observation for observation in observations if isinstance(observation, dict) and observation.get("method") == "POST"
+    )
+    assert len(post_observations) == 1
+    return object_value(object_value(post_observations[0])["body"])
 
 
 @pytest.mark.parametrize(
@@ -194,3 +198,41 @@ def test_streaming_chat_per_second_pricing_covers_the_full_stream(
             f"spend={spend}, total frame delay={total_frame_delay_seconds}s, body={body}"
         )
         assert not PRICING_FIELDS.intersection(body), body
+
+
+@pytest.mark.parametrize(
+    ("model", "custom_llm_provider", "expected_cost"),
+    (
+        ("deepgram/nova-3", "deepgram", (0.0007167, 0.0)),
+        ("mistral/voxtral-mini-transcribe-realtime-latest", "mistral", (0.001, 0.0)),
+    ),
+    ids=("deepgram_nova_3", "mistral_voxtral_realtime"),
+)
+def test_transcription_per_second_model_bills_request_time_through_cost_per_token(
+    model: str, custom_llm_provider: str, expected_cost: tuple[float, float]
+) -> None:
+    cost: Final = litellm.cost_per_token(model=model, custom_llm_provider=custom_llm_provider, response_time_ms=10_000.0)
+
+    assert cost == pytest.approx(expected_cost)
+
+
+def test_transcription_per_second_model_bills_audio_length_through_cost_per_token() -> None:
+    cost: Final = litellm.cost_per_token(
+        model="deepgram/nova-3",
+        custom_llm_provider="deepgram",
+        response_time_ms=10_000.0,
+        audio_transcription_file_duration=60.0,
+    )
+
+    assert cost == pytest.approx((0.0043002, 0.0))
+
+
+def test_transcription_response_still_bills_audio_length_through_completion_cost() -> None:
+    response: Final = litellm.TranscriptionResponse(text="hello")
+    response.duration = 60.0
+
+    cost: Final = litellm.completion_cost(
+        completion_response=response, model="deepgram/nova-3", custom_llm_provider="deepgram", total_time=10.0
+    )
+
+    assert cost == pytest.approx(0.0043002)
