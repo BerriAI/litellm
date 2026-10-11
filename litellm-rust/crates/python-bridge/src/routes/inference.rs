@@ -9,7 +9,7 @@ use litellm_host::{
     machine::ChannelInterceptors,
     protocol::Protocol,
 };
-use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, from_py};
+use litellm_host_python::{HostStep, InvokeError, PythonBinding, PythonHostCalls, from_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference::RouteError;
 use litellm_secrets::source::SecretSource;
@@ -134,16 +134,8 @@ impl InferenceHost {
         &mut self,
         py: Python<'_>,
         op: CacheCall,
-    ) -> Result<Option<Py<PyAny>>, InvokeError<RouteError>> {
-        self.cache.begin(py, op).map_err(InvokeError::Python)
-    }
-
-    pub fn resume_cache_call(
-        &mut self,
-        py: Python<'_>,
-        result: PyResult<Py<PyAny>>,
-    ) -> Result<Option<Py<PyAny>>, InvokeError<RouteError>> {
-        self.cache.resume(py, result).map_err(InvokeError::Python)
+    ) -> Result<HostStep<RouteError>, InvokeError<RouteError>> {
+        self.cache.begin(py, op)
     }
 
     pub fn close(&mut self) {

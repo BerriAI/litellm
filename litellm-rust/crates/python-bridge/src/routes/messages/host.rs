@@ -1,5 +1,5 @@
 use crate::cache::{CacheCall, Cached, PythonCache, Selection};
-use litellm_host_python::{PythonHostCalls, PythonOwned};
+use litellm_host_python::{HostStep, PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
 use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
@@ -296,26 +296,15 @@ impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
         py: Python<'_>,
         op: CacheCall,
     ) -> Result<(), InvokeError<Error>> {
-        self.cache
-            .begin(py, op)
-            .map(|_| ())
-            .map_err(InvokeError::Python)
+        self.cache.begin(py, op).map(|_| ())
     }
 
     fn begin_host_call(
         &mut self,
         py: Python<'_>,
         op: CacheCall,
-    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
-        self.cache.begin(py, op).map_err(InvokeError::Python)
-    }
-
-    fn resume_host_call(
-        &mut self,
-        py: Python<'_>,
-        result: PyResult<Py<PyAny>>,
-    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
-        self.cache.resume(py, result).map_err(InvokeError::Python)
+    ) -> Result<HostStep<Error>, InvokeError<Error>> {
+        self.cache.begin(py, op)
     }
 }
 

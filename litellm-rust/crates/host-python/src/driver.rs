@@ -14,10 +14,10 @@ use litellm_host::{
     protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery},
 };
 
-use crate::PythonHostCalls;
 use crate::handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle};
 use crate::hooks::{HookResume, HookStep, PythonCallEvent, PythonCallHooks};
 use crate::native::{NativeMachine, NativePoll};
+use crate::{HostResume, HostStep, PythonHostCalls};
 use crate::{InvokeError, PythonBinding, missing_state};
 
 type ProtocolOf<H> = <H as PythonBinding>::Protocol;
@@ -63,8 +63,8 @@ enum EventNext {
     Terminal,
 }
 
-enum Pending<L> {
-    Host,
+enum Pending<L, E> {
+    Host(HostResume<E>),
     Native,
     Arguments(HookResume<L, Py<PyDict>>),
     Wire(HookResume<L, Box<WireRequest>>, Reply<WireRequest>),
@@ -104,7 +104,7 @@ where
     started_at: f64,
     ended_at: Option<f64>,
     stage: Stage,
-    pending: Option<Pending<L>>,
+    pending: Option<Pending<L, ErrorOf<H>>>,
     interrupted: Option<Py<PyBaseException>>,
     observers: Option<ObservationSender>,
     observing: bool,
@@ -200,13 +200,13 @@ where
                     Err(error) => self.hook_failed(py, error),
                 }
             }
-            (Some(Pending::Host), Some(result)) => {
-                match self.binding.resume_host_call(py, result) {
-                    Ok(Some(awaitable)) => {
-                        self.pending = Some(Pending::Host);
+            (Some(Pending::Host(resume)), Some(result)) => {
+                match HostStep::resolve(py, result, resume) {
+                    Ok(HostStep::Await(awaitable, resume)) => {
+                        self.pending = Some(Pending::Host(resume));
                         Ok(ExecutionStep::Await(awaitable))
                     }
-                    Ok(None) => self.resume_machine(py, None),
+                    Ok(HostStep::Ready) => self.resume_machine(py, None),
                     Err(InvokeError::Python(error)) => self.interrupt(py, error),
                     Err(InvokeError::Native(error)) => {
                         self.resume_machine(py, Some(HostFailure::Error(error)))
@@ -420,8 +420,8 @@ where
         };
         let answered = match op {
             HostRequest::HostCall(op) => match self.binding.begin_host_call(py, op) {
-                Ok(Some(awaitable)) => {
-                    self.pending = Some(Pending::Host);
+                Ok(HostStep::Await(awaitable, resume)) => {
+                    self.pending = Some(Pending::Host(resume));
                     return Ok(Next::Return(ExecutionStep::Await(awaitable)));
                 }
                 result => answered(result.map(|_| ())),
@@ -635,6 +635,7 @@ where
                 });
                 self.observing = false;
             }
+            self.pending = None;
             self.native.close();
             self.start = None;
             Python::attach(|py| {
@@ -807,13 +808,15 @@ mod tests {
         RaiseRequestPython,
         AwaitAnswer,
         AwaitFailure,
+        AwaitTwice,
+        AwaitCancellation,
+        AwaitNativeFailure,
     }
 
     struct SyntheticBinding {
         log: Log,
         op: OpScript,
         classifier_fails: bool,
-        pending_reply: Option<Reply<String>>,
     }
 
     /// The fake route's public exception, kept as a value so a test sees what `classify`
@@ -830,7 +833,12 @@ mod tests {
     impl SyntheticBinding {
         fn answer(&self, value: impl FnOnce() -> String) -> Result<String, InvokeError<Error>> {
             match self.op {
-                OpScript::Answer | OpScript::AwaitAnswer | OpScript::AwaitFailure => Ok(value()),
+                OpScript::Answer
+                | OpScript::AwaitAnswer
+                | OpScript::AwaitFailure
+                | OpScript::AwaitTwice
+                | OpScript::AwaitCancellation
+                | OpScript::AwaitNativeFailure => Ok(value()),
                 OpScript::RaisePython | OpScript::RaiseRequestPython => {
                     Err(PyValueError::new_err("op failed").into())
                 }
@@ -910,35 +918,67 @@ mod tests {
             &mut self,
             py: Python<'_>,
             (op, reply): (&'static str, Reply<String>),
-        ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
-            if !matches!(self.op, OpScript::AwaitAnswer | OpScript::AwaitFailure) {
-                return self.handle_host_call(py, (op, reply)).map(|()| None);
+        ) -> Result<HostStep<Error>, InvokeError<Error>> {
+            if !matches!(
+                self.op,
+                OpScript::AwaitAnswer
+                    | OpScript::AwaitFailure
+                    | OpScript::AwaitTwice
+                    | OpScript::AwaitCancellation
+                    | OpScript::AwaitNativeFailure
+            ) {
+                return self
+                    .handle_host_call(py, (op, reply))
+                    .map(|()| HostStep::Ready);
             }
-            self.pending_reply = Some(reply);
             let module = PyModule::from_code(
                 py,
                 pyo3::ffi::c_str!(
-                    "async def answer(fail):\n    if fail:\n        raise LookupError('async host failed')\n    return 'awaited'\n"
+                    "import asyncio\nasync def answer(fail, cancel):\n    if cancel:\n        raise asyncio.CancelledError('host cancelled')\n    if fail:\n        raise LookupError('async host failed')\n    return 'awaited'\nasync def echo(value):\n    return value\n"
                 ),
                 pyo3::ffi::c_str!("host_op.py"),
                 pyo3::ffi::c_str!("host_op"),
             )?;
-            Ok(Some(
-                module
-                    .getattr("answer")?
-                    .call1((matches!(self.op, OpScript::AwaitFailure),))?
-                    .unbind(),
+            let awaitable = module
+                .getattr("answer")?
+                .call1((
+                    matches!(self.op, OpScript::AwaitFailure),
+                    matches!(self.op, OpScript::AwaitCancellation),
+                ))?
+                .unbind();
+            let log = Log(self.log.0.clone());
+            let op_script = self.op;
+            Ok(HostStep::Await(
+                awaitable,
+                Box::new(move |py, result| {
+                    log.push("host.resume");
+                    if matches!(op_script, OpScript::AwaitNativeFailure) {
+                        return Err(InvokeError::Native(Error("awaited rejection".into())));
+                    }
+                    if matches!(op_script, OpScript::AwaitCancellation) {
+                        reply.send("cancellation swallowed".into());
+                        return Ok(HostStep::Ready);
+                    }
+                    let answer = result?.extract::<String>(py)?;
+                    if matches!(op_script, OpScript::AwaitTwice) {
+                        let awaitable = py
+                            .import("host_op")?
+                            .getattr("echo")?
+                            .call1((answer,))?
+                            .unbind();
+                        return Ok(HostStep::Await(
+                            awaitable,
+                            Box::new(move |py, result| {
+                                log.push("host.resume.again");
+                                reply.send(result?.extract::<String>(py)?);
+                                Ok(HostStep::Ready)
+                            }),
+                        ));
+                    }
+                    reply.send(answer);
+                    Ok(HostStep::Ready)
+                }),
             ))
-        }
-
-        fn resume_host_call(
-            &mut self,
-            py: Python<'_>,
-            result: PyResult<Py<PyAny>>,
-        ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
-            let answer = result?.extract::<String>(py)?;
-            self.pending_reply.take().unwrap().send(answer);
-            Ok(None)
         }
     }
 
@@ -1113,7 +1153,6 @@ mod tests {
                 log: Log::default(),
                 op,
                 classifier_fails: false,
-                pending_reply: None,
             },
             script,
             asynchronous,
@@ -1140,6 +1179,9 @@ mod tests {
     #[rstest::rstest]
     #[case::success(OpScript::AwaitAnswer)]
     #[case::failure(OpScript::AwaitFailure)]
+    #[case::repeated_suspension(OpScript::AwaitTwice)]
+    #[case::cancellation(OpScript::AwaitCancellation)]
+    #[case::native_failure(OpScript::AwaitNativeFailure)]
     fn asynchronous_host_operations_resume_the_same_machine(#[case] op: OpScript) {
         let _guard = PYTHON_GLOBALS
             .lock()
@@ -1159,8 +1201,47 @@ mod tests {
                 true,
             );
             match op {
-                OpScript::AwaitAnswer => {
-                    assert_eq!(result.unwrap().extract::<String>(py).unwrap(), "awaited")
+                OpScript::AwaitAnswer | OpScript::AwaitTwice => {
+                    assert_eq!(result.unwrap().extract::<String>(py).unwrap(), "awaited");
+                    assert_eq!(
+                        log.iter().filter(|entry| *entry == "host.resume").count(),
+                        1
+                    );
+                    assert_eq!(
+                        log.iter()
+                            .filter(|entry| *entry == "host.resume.again")
+                            .count(),
+                        usize::from(matches!(op, OpScript::AwaitTwice))
+                    );
+                }
+                OpScript::AwaitNativeFailure => {
+                    assert_eq!(
+                        result.unwrap_err().value(py).to_string(),
+                        "classified: awaited rejection"
+                    );
+                    assert_eq!(
+                        log.iter()
+                            .filter(|entry| entry.starts_with("classify:"))
+                            .count(),
+                        1
+                    );
+                    assert_eq!(
+                        log.iter()
+                            .filter(|entry| entry.starts_with("failed:"))
+                            .count(),
+                        1
+                    );
+                    assert!(!log.iter().any(|entry| entry.starts_with("succeeded:")));
+                }
+                OpScript::AwaitCancellation => {
+                    let error = result.unwrap_err();
+                    assert!(error.is_instance_of::<pyo3::exceptions::asyncio::CancelledError>(py));
+                    assert_eq!(error.value(py).to_string(), "host cancelled");
+                    assert!(!log.iter().any(|entry| entry.starts_with("host.resume")
+                        || entry.starts_with("failed:")
+                        || entry.starts_with("succeeded:")
+                        || entry == "after_success"));
+                    assert_eq!(&log[log.len() - 2..], ["adapter.close", "host.close"]);
                 }
                 OpScript::AwaitFailure => {
                     assert!(
@@ -1207,7 +1288,6 @@ mod tests {
                     log: Log(log.0.clone()),
                     op: OpScript::Answer,
                     classifier_fails: false,
-                    pending_reply: None,
                 },
                 hooks,
                 PyDict::new(py).unbind(),
@@ -1345,7 +1425,6 @@ mod tests {
                     log: Log::default(),
                     op: OpScript::Answer,
                     classifier_fails: false,
-                    pending_reply: None,
                 },
                 HookScript::ReplaceResponse,
                 std::convert::identity,
@@ -1405,7 +1484,6 @@ mod tests {
                     log: Log::default(),
                     op: OpScript::Answer,
                     classifier_fails: false,
-                    pending_reply: None,
                 },
                 script,
                 std::convert::identity,
@@ -1911,7 +1989,6 @@ mod tests {
                     log: Log::default(),
                     op: OpScript::Answer,
                     classifier_fails: true,
-                    pending_reply: None,
                 },
                 HookScript::Plain,
                 false,
@@ -2027,7 +2104,6 @@ mod tests {
                     log: Log(log.0.clone()),
                     op: OpScript::Answer,
                     classifier_fails: false,
-                    pending_reply: None,
                 },
                 crate::HookChain::new()
                     .with(SyntheticHooks {
@@ -2110,7 +2186,6 @@ mod tests {
                     log: Log(log.0.clone()),
                     op: OpScript::Answer,
                     classifier_fails: false,
-                    pending_reply: None,
                 },
                 SyntheticHooks {
                     log: Log(log.0.clone()),
@@ -2147,7 +2222,6 @@ mod tests {
                     log: Log::default(),
                     op: OpScript::Answer,
                     classifier_fails: false,
-                    pending_reply: None,
                 },
                 HookScript::Plain,
                 |hooks| {
@@ -2190,7 +2264,6 @@ mod tests {
                     log: Log::default(),
                     op: OpScript::Answer,
                     classifier_fails: false,
-                    pending_reply: None,
                 },
                 HookScript::Plain,
                 |hooks| {

@@ -2,7 +2,7 @@ use crate::{
     cache::{CacheCall, Cached, Selection},
     routes::inference::InferenceHost,
 };
-use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
+use litellm_host_python::{HostStep, InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
 use litellm_inference_chat::{Error, route::ChatCompletions, types::ChatCompletionsCall};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
@@ -101,16 +101,8 @@ impl PythonHostCalls<Cached<ChatCompletions>> for ChatCompletionsPythonHost {
         &mut self,
         py: Python<'_>,
         op: CacheCall,
-    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+    ) -> Result<HostStep<Error>, InvokeError<Error>> {
         self.0.begin_cache_call(py, op)
-    }
-
-    fn resume_host_call(
-        &mut self,
-        py: Python<'_>,
-        result: PyResult<Py<PyAny>>,
-    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
-        self.0.resume_cache_call(py, result)
     }
 }
 

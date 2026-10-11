@@ -38,7 +38,7 @@ pub use runtime::{
     ready_future, reserve_process_for_forking, run_async, run_async_value, run_sync,
     run_sync_value, runtime_started,
 };
-pub use services::PythonHostCalls;
+pub use services::{HostResume, HostStep, PythonHostCalls};
 
 /// Starts the interpreter and imports the standard modules the tests share, once, so
 /// parallel test threads never race a first import of `asyncio`.
