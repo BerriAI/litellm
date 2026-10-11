@@ -1,6 +1,8 @@
 import json
 import re
 from datetime import datetime, timezone
+from importlib.resources import files
+from collections.abc import Iterator
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -17,7 +19,7 @@ from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_pres
 from litellm.types.proxy.management_endpoints.model_management_endpoints import (
     ModelGroupInfoProxy,
 )
-from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreateInfo
+from litellm.types.proxy.public_endpoints.public_endpoints import ProviderCreateInfo, WhatsNewResponse
 from litellm.types.utils import LlmProviders
 
 
@@ -67,13 +69,10 @@ def test_get_provider_create_fields():
     assert isinstance(first_provider["credential_fields"], list)
 
     has_detailed_fields = any(
-        provider.get("credential_fields")
-        and len(provider.get("credential_fields", [])) > 0
+        provider.get("credential_fields") and len(provider.get("credential_fields", [])) > 0
         for provider in response_data
     )
-    assert (
-        has_detailed_fields
-    ), "Expected at least one provider to have detailed credential fields"
+    assert has_detailed_fields, "Expected at least one provider to have detailed credential fields"
 
 
 def test_get_litellm_model_cost_map_catalog_only_excludes_runtime_registered_entries(
@@ -124,10 +123,7 @@ def test_get_litellm_model_cost_map_returns_cost_map():
     sample_model_data = payload[sample_model]
     assert isinstance(sample_model_data, dict)
     # Check for common cost fields that should be present
-    assert (
-        "input_cost_per_token" in sample_model_data
-        or "output_cost_per_token" in sample_model_data
-    )
+    assert "input_cost_per_token" in sample_model_data or "output_cost_per_token" in sample_model_data
 
 
 def test_public_ai_hub_info_is_public_by_default(monkeypatch):
@@ -218,9 +214,9 @@ def test_anthropic_provider_fields_support_byok():
         "Anthropic api_key must be optional so admins can configure BYOK models "
         "without entering a key. See BYOK tutorial."
     )
-    assert fields_by_key["api_key"].get(
-        "tooltip"
-    ), "Anthropic api_key must have a tooltip explaining the BYOK use case."
+    assert fields_by_key["api_key"].get("tooltip"), (
+        "Anthropic api_key must have a tooltip explaining the BYOK use case."
+    )
     assert "api_base" in fields_by_key, (
         "Anthropic provider form must expose api_base so cloud customers "
         "can override the upstream URL without env var access."
@@ -228,16 +224,14 @@ def test_anthropic_provider_fields_support_byok():
     api_base_field = fields_by_key["api_base"]
     assert api_base_field["required"] is False
     assert api_base_field["field_type"] == "text"
-    assert api_base_field.get(
-        "tooltip"
-    ), "api_base should have a tooltip explaining it is optional."
+    assert api_base_field.get("tooltip"), "api_base should have a tooltip explaining it is optional."
 
     # UI forms render fields in credential_fields order; api_base should come first
     # so an admin sees the URL override before the key field.
     field_order = [f["key"] for f in anthropic["credential_fields"]]
-    assert field_order.index("api_base") < field_order.index(
-        "api_key"
-    ), "api_base must appear before api_key in credential_fields (matches AI21 and ANTHROPIC_TEXT convention)."
+    assert field_order.index("api_base") < field_order.index("api_key"), (
+        "api_base must appear before api_key in credential_fields (matches AI21 and ANTHROPIC_TEXT convention)."
+    )
 
 
 def test_bedrock_mantle_provider_fields():
@@ -554,9 +548,7 @@ def test_google_ai_studio_provider_fields_expose_api_base():
     assert response.status_code == 200
     providers = response.json()
 
-    google_ai = next(
-        (p for p in providers if p["provider"] == "Google_AI_Studio"), None
-    )
+    google_ai = next((p for p in providers if p["provider"] == "Google_AI_Studio"), None)
     assert google_ai is not None, "Google_AI_Studio provider entry not found"
     assert google_ai["litellm_provider"] == "gemini"
 
@@ -576,18 +568,15 @@ def test_google_ai_studio_provider_fields_expose_api_base():
     # placeholder shows the canonical URL so users still get the visual hint.
     # (See greptileai threads on PR #30419.)
     assert api_base_field["default_value"] is None
-    assert (
-        api_base_field["placeholder"]
-        == "https://generativelanguage.googleapis.com/v1beta"
-    )
+    assert api_base_field["placeholder"] == "https://generativelanguage.googleapis.com/v1beta"
 
     # UI forms render fields in credential_fields order; api_base should come
     # first so an admin sees the URL override before the key field (matches
     # OpenAI and Anthropic conventions).
     field_order = [f["key"] for f in google_ai["credential_fields"]]
-    assert field_order.index("api_base") < field_order.index(
-        "api_key"
-    ), "api_base must appear before api_key in credential_fields."
+    assert field_order.index("api_base") < field_order.index("api_key"), (
+        "api_base must appear before api_key in credential_fields."
+    )
 
 
 def test_public_model_hub_with_healthy_model():
@@ -615,20 +604,15 @@ def test_public_model_hub_with_healthy_model():
 
     mock_llm_router = MagicMock()
     mock_prisma = MagicMock()
-    mock_prisma.get_all_latest_health_checks = AsyncMock(
-        return_value=[mock_health_check]
-    )
+    mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=[mock_health_check])
 
     with (
         patch("litellm.public_model_groups", ["gpt-3.5-turbo"]),
         patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.health_endpoints._health_endpoints.convert_health_check_to_dict"
-        ) as mock_convert,
+        patch("litellm.proxy.health_endpoints._health_endpoints.convert_health_check_to_dict") as mock_convert,
     ):
-
         mock_get_info.return_value = [mock_model_group]
         mock_convert.return_value = {
             "status": "healthy",
@@ -673,20 +657,15 @@ def test_public_model_hub_with_unhealthy_model():
 
     mock_llm_router = MagicMock()
     mock_prisma = MagicMock()
-    mock_prisma.get_all_latest_health_checks = AsyncMock(
-        return_value=[mock_health_check]
-    )
+    mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=[mock_health_check])
 
     with (
         patch("litellm.public_model_groups", ["gpt-4"]),
         patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.health_endpoints._health_endpoints.convert_health_check_to_dict"
-        ) as mock_convert,
+        patch("litellm.proxy.health_endpoints._health_endpoints.convert_health_check_to_dict") as mock_convert,
     ):
-
         mock_get_info.return_value = [mock_model_group]
         mock_convert.return_value = {
             "status": "unhealthy",
@@ -732,7 +711,6 @@ def test_public_model_hub_without_health_check():
         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
     ):
-
         mock_get_info.return_value = [mock_model_group]
 
         response = client.get(
@@ -789,9 +767,7 @@ def test_public_model_hub_mixed_health_statuses():
 
     mock_llm_router = MagicMock()
     mock_prisma = MagicMock()
-    mock_prisma.get_all_latest_health_checks = AsyncMock(
-        return_value=[healthy_check, unhealthy_check]
-    )
+    mock_prisma.get_all_latest_health_checks = AsyncMock(return_value=[healthy_check, unhealthy_check])
 
     def convert_side_effect(check):
         if check.model_name == "gpt-3.5-turbo":
@@ -813,11 +789,8 @@ def test_public_model_hub_mixed_health_statuses():
         patch("litellm.proxy.proxy_server.get_model_group_info") as mock_get_info,
         patch("litellm.proxy.proxy_server.llm_router", mock_llm_router),
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
-        patch(
-            "litellm.proxy.health_endpoints._health_endpoints.convert_health_check_to_dict"
-        ) as mock_convert,
+        patch("litellm.proxy.health_endpoints._health_endpoints.convert_health_check_to_dict") as mock_convert,
     ):
-
         mock_get_info.return_value = [
             healthy_model,
             unhealthy_model,
@@ -1066,9 +1039,7 @@ def test_get_supported_endpoints_provider_fields(reset_endpoints_cache):
 def test_get_supported_endpoints_paths_start_with_slash(reset_endpoints_cache):
     endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
     for item in endpoints:
-        assert item["endpoint"].startswith(
-            "/"
-        ), f"Expected path starting with /, got: {item['endpoint']}"
+        assert item["endpoint"].startswith("/"), f"Expected path starting with /, got: {item['endpoint']}"
 
 
 def test_get_supported_endpoints_chat_completions_present(reset_endpoints_cache):
@@ -1092,9 +1063,9 @@ def test_get_supported_endpoints_display_names_have_no_slug_suffix(
     endpoints = _make_client().get("/public/endpoints").json()["endpoints"]
     for item in endpoints:
         for provider in item["providers"]:
-            assert not suffix_re.search(
-                provider["display_name"]
-            ), f"display_name still contains slug suffix: {provider['display_name']!r}"
+            assert not suffix_re.search(provider["display_name"]), (
+                f"display_name still contains slug suffix: {provider['display_name']!r}"
+            )
 
 
 def test_get_supported_endpoints_is_cached(reset_endpoints_cache):
@@ -1320,7 +1291,6 @@ def test_public_mcp_hub_does_not_expose_upstream_url():
     app.dependency_overrides.clear()
 
 
-
 @pytest.fixture
 def reset_autorouter_presets_cache():
     from litellm.proxy.public_endpoints.public_endpoints import _AutoRouterPresetsCache
@@ -1332,9 +1302,7 @@ def reset_autorouter_presets_cache():
     _AutoRouterPresetsCache.lock = None
 
 
-def test_get_autorouter_presets_local_mode_serves_bundled_catalog(
-    monkeypatch, reset_autorouter_presets_cache
-):
+def test_get_autorouter_presets_local_mode_serves_bundled_catalog(monkeypatch, reset_autorouter_presets_cache):
     monkeypatch.setenv("LITELLM_LOCAL_AUTOROUTER_PRESETS", "True")
     app = FastAPI()
     app.include_router(router)
@@ -1362,9 +1330,7 @@ def test_get_autorouter_presets_local_mode_serves_bundled_catalog(
 
 
 @pytest.mark.asyncio
-async def test_get_autorouter_presets_fetches_once_per_process(
-    monkeypatch, reset_autorouter_presets_cache
-):
+async def test_get_autorouter_presets_fetches_once_per_process(monkeypatch, reset_autorouter_presets_cache):
     from litellm.proxy.public_endpoints.public_endpoints import (
         _AUTOROUTER_PRESETS_ADAPTER,
         get_autorouter_presets,
@@ -1376,7 +1342,9 @@ async def test_get_autorouter_presets_fetches_once_per_process(
             "remote_only": {
                 "label": "Remote Only",
                 "description": "from the remote catalog",
-                "complexity_router_config": {"tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"], "REASONING": ["m4"]}},
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"], "REASONING": ["m4"]}
+                },
             }
         }
     )
@@ -1411,7 +1379,9 @@ async def test_get_autorouter_presets_single_flight_on_concurrent_cold_start(
             "remote_only": {
                 "label": "Remote Only",
                 "description": "from the remote catalog",
-                "complexity_router_config": {"tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"], "REASONING": ["m4"]}},
+                "complexity_router_config": {
+                    "tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"], "REASONING": ["m4"]}
+                },
             }
         }
     )
@@ -1507,9 +1477,7 @@ async def test_autorouter_presets_adapter_rejects_wrong_shapes():
         )
 
 
-def test_get_autorouter_presets_passes_unknown_catalog_fields_through(
-    monkeypatch, reset_autorouter_presets_cache
-):
+def test_get_autorouter_presets_passes_unknown_catalog_fields_through(monkeypatch, reset_autorouter_presets_cache):
     from litellm.proxy.public_endpoints.public_endpoints import (
         _AUTOROUTER_PRESETS_ADAPTER,
         _AutoRouterPresetsCache,
@@ -1551,12 +1519,14 @@ async def test_fetch_remote_autorouter_presets_parses_and_rejects_empty(monkeypa
         "remote_only": {
             "label": "Remote Only",
             "description": "from the remote catalog",
-            "complexity_router_config": {"tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"], "REASONING": ["m4"]}},
+            "complexity_router_config": {
+                "tiers": {"SIMPLE": ["m1"], "MEDIUM": ["m2"], "COMPLEX": ["m3"], "REASONING": ["m4"]}
+            },
         }
     }
     response = MagicMock()
     response.raise_for_status = MagicMock()
-    response.json = MagicMock(return_value=catalog)
+    response.content = json.dumps(catalog).encode()
     client = MagicMock()
     client.get = AsyncMock(return_value=response)
     monkeypatch.setattr(http_handler_module, "get_async_httpx_client", lambda llm_provider: client)
@@ -1565,6 +1535,121 @@ async def test_fetch_remote_autorouter_presets_parses_and_rejects_empty(monkeypa
     assert presets["remote_only"].label == "Remote Only"
     response.raise_for_status.assert_called_once()
 
-    response.json = MagicMock(return_value={})
+    response.content = b"{}"
     with pytest.raises(ValueError, match="empty"):
         await _fetch_remote_autorouter_presets("https://example.test/presets.json")
+
+
+@pytest.fixture
+def reset_whats_new_cache() -> Iterator[None]:
+    from litellm.proxy.public_endpoints.public_endpoints import _WhatsNewCache
+
+    _WhatsNewCache.launches = None
+    _WhatsNewCache.lock = None
+    yield
+    _WhatsNewCache.launches = None
+    _WhatsNewCache.lock = None
+
+
+def _remote_whats_new() -> WhatsNewResponse:
+    return WhatsNewResponse.model_validate(
+        {
+            "launches": [
+                {
+                    "icon": "sparkles",
+                    "title": "Remote Launch",
+                    "description": "from the remote list",
+                    "href": "https://docs.litellm.ai/blog/remote",
+                    "published_on": "2026-10-11",
+                }
+            ]
+        }
+    )
+
+
+def test_get_whats_new_local_mode_serves_bundled_list(
+    monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_WHATS_NEW", "True")
+    app = FastAPI()
+    app.include_router(router)
+    client = TestClient(app)
+
+    response = client.get("/public/whats_new")
+
+    assert response.status_code == 200
+    served: Final = WhatsNewResponse.model_validate_json(response.content)
+    bundled: Final = WhatsNewResponse.model_validate_json(
+        files("litellm.proxy.public_endpoints").joinpath("whats_new.json").read_text(encoding="utf-8")
+    )
+    assert served == bundled
+    assert len(served.launches) > 0
+
+
+@pytest.mark.asyncio
+async def test_get_whats_new_fetches_once_per_process(
+    monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
+) -> None:
+    from litellm.proxy.public_endpoints.public_endpoints import get_whats_new
+
+    monkeypatch.delenv("LITELLM_LOCAL_WHATS_NEW", raising=False)
+    remote = _remote_whats_new()
+    calls: Final[list[str]] = []
+
+    async def fake_fetch(url: str) -> WhatsNewResponse:
+        calls.append(url)
+        return remote
+
+    first = await get_whats_new(url="https://example.test/whats_new.json", fetch=fake_fetch)
+    second = await get_whats_new(url="https://example.test/whats_new.json", fetch=fake_fetch)
+
+    assert first == remote
+    assert second == remote
+    assert calls == ["https://example.test/whats_new.json"]
+
+
+@pytest.mark.asyncio
+async def test_get_whats_new_caches_bundled_fallback_when_remote_is_unreachable(
+    monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
+) -> None:
+    from litellm.proxy.public_endpoints.public_endpoints import _load_bundled_whats_new, get_whats_new
+
+    monkeypatch.delenv("LITELLM_LOCAL_WHATS_NEW", raising=False)
+    calls: Final[list[str]] = []
+
+    async def unreachable_fetch(url: str) -> WhatsNewResponse:
+        calls.append(url)
+        raise OSError("network is unreachable")
+
+    first = await get_whats_new(url="https://example.test/whats_new.json", fetch=unreachable_fetch)
+    second = await get_whats_new(url="https://example.test/whats_new.json", fetch=unreachable_fetch)
+
+    assert first == _load_bundled_whats_new()
+    assert second == first
+    assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_fetch_remote_whats_new_rejects_a_malformed_list_so_the_bundled_one_is_served(
+    monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
+) -> None:
+    import httpx
+
+    from litellm.proxy.public_endpoints import public_endpoints
+
+    monkeypatch.delenv("LITELLM_LOCAL_WHATS_NEW", raising=False)
+    request = httpx.Request("GET", "https://example.test/whats_new.json")
+    client = MagicMock()
+    client.get = AsyncMock(
+        return_value=httpx.Response(
+            200,
+            request=request,
+            content=b'{"launches": [{"icon": "box", "title": "No date", "description": "d", "href": "https://x"}]}',
+        )
+    )
+
+    with patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client", return_value=client):
+        served = await public_endpoints.get_whats_new(url="https://example.test/whats_new.json")
+
+    assert served == public_endpoints._load_bundled_whats_new()
+    client.get.assert_awaited_once_with("https://example.test/whats_new.json", timeout=5.0)

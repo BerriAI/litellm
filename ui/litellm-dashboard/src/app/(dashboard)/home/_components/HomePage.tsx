@@ -4,21 +4,24 @@ import { ArrowRight, Plus, Sparkles } from "lucide-react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
+import { Skeleton } from "@/components/ui/skeleton";
 import { Page } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { uiHref } from "@/utils/uiHref";
 import { Leaderboard, useBreakdown } from "@/app/(dashboard)/usage/_components/components/overview/BreakdownChart";
 import { Panel } from "@/app/(dashboard)/usage/_components/components/overview/Primitives";
 import UsageStatStrip from "@/app/(dashboard)/usage/_components/components/overview/UsageStatStrip";
-import { formatPublishedOn, WHATS_NEW_ITEMS } from "./homeContent";
+import { formatPublishedOn, launchIcon } from "./homeContent";
 import UpdatesFeed from "./UpdatesFeed";
 import { HOME_USAGE_DAYS, useHomeUsage } from "./useHomeUsage";
+import { useWhatsNew } from "./useWhatsNew";
 
 const LEADERBOARD = { metric: "tokens", dimension: "model_groups" } as const;
 
 export default function HomePage() {
   const { isViewOnly } = useAuthorized();
   const usage = useHomeUsage();
+  const whatsNew = useWhatsNew();
   const { series, ranking } = useBreakdown(usage.results, LEADERBOARD, 8);
 
   return (
@@ -56,34 +59,40 @@ export default function HomePage() {
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,3fr)_minmax(16rem,1fr)]">
         <div className="flex min-w-0 flex-col gap-6">
-          <section aria-labelledby="home-whats-new" data-testid="home-whats-new" className="flex flex-col gap-3">
-            <div>
-              <h2 id="home-whats-new" className="flex items-center gap-2 text-lg font-semibold">
-                <Sparkles className="size-4 text-muted-foreground" />
-                What&apos;s new in LiteLLM?
-              </h2>
-            </div>
-            <div className="grid gap-4 sm:grid-cols-3">
-              {WHATS_NEW_ITEMS.map((item) => {
-                const Icon = item.icon;
-                return (
-                  <a key={item.title} href={item.href} target="_blank" rel="noopener noreferrer" className="group">
-                    <Card className="h-full gap-3 px-4 py-4 transition-colors hover:bg-muted/40">
-                      <div className="flex size-9 items-center justify-center rounded-md bg-muted">
-                        <Icon className="size-4" />
-                      </div>
-                      <div className="text-base font-semibold leading-tight">{item.title}</div>
-                      <p className="m-0 line-clamp-3 text-sm text-muted-foreground">{item.description}</p>
-                      <div className="mt-auto flex items-center justify-between pt-1 text-xs text-muted-foreground">
-                        <span>{formatPublishedOn(item.publishedOn)}</span>
-                        <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
-                      </div>
-                    </Card>
-                  </a>
-                );
-              })}
-            </div>
-          </section>
+          {(whatsNew.isLoading || (whatsNew.data?.length ?? 0) > 0) && (
+            <section aria-labelledby="home-whats-new" data-testid="home-whats-new" className="flex flex-col gap-3">
+              <div>
+                <h2 id="home-whats-new" className="flex items-center gap-2 text-lg font-semibold">
+                  <Sparkles className="size-4 text-muted-foreground" />
+                  What&apos;s new in LiteLLM?
+                </h2>
+              </div>
+              <div className="grid gap-4 sm:grid-cols-3">
+                {whatsNew.isLoading &&
+                  [0, 1, 2].map((i) => (
+                    <Skeleton key={i} className="h-40 rounded-xl" data-testid="home-whats-new-loading" />
+                  ))}
+                {whatsNew.data?.map((item) => {
+                  const Icon = launchIcon(item.icon);
+                  return (
+                    <a key={item.title} href={item.href} target="_blank" rel="noopener noreferrer" className="group">
+                      <Card className="h-full gap-3 px-4 py-4 transition-colors hover:bg-muted/40">
+                        <div className="flex size-9 items-center justify-center rounded-md bg-muted">
+                          <Icon className="size-4" />
+                        </div>
+                        <div className="text-base font-semibold leading-tight">{item.title}</div>
+                        <p className="m-0 line-clamp-3 text-sm text-muted-foreground">{item.description}</p>
+                        <div className="mt-auto flex items-center justify-between pt-1 text-xs text-muted-foreground">
+                          <span>{formatPublishedOn(item.published_on)}</span>
+                          <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
+                        </div>
+                      </Card>
+                    </a>
+                  );
+                })}
+              </div>
+            </section>
+          )}
 
           <Panel
             title="Leaderboard"

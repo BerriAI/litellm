@@ -6,8 +6,9 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from importlib.resources import files
 from typing import TYPE_CHECKING, Final, Protocol
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -37,6 +38,7 @@ from litellm.types.proxy.public_endpoints.public_endpoints import (
     ProviderCreateInfo,
     PublicModelHubInfo,
     SupportedEndpointsResponse,
+    WhatsNewResponse,
 )
 from litellm.types.utils import LlmProviders
 
@@ -505,14 +507,18 @@ def _load_bundled_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord]:
     )
 
 
-async def _fetch_remote_autorouter_presets(url: str) -> Mapping[str, AutoRouterPresetRecord]:
+async def _fetch_remote_bytes(url: str) -> bytes:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.UI)
     response: Final = await client.get(url, timeout=5.0)
     response.raise_for_status()
-    presets: Final = _AUTOROUTER_PRESETS_ADAPTER.validate_python(response.json())
+    return response.content
+
+
+async def _fetch_remote_autorouter_presets(url: str) -> Mapping[str, AutoRouterPresetRecord]:
+    presets: Final = _AUTOROUTER_PRESETS_ADAPTER.validate_json(await _fetch_remote_bytes(url))
     if not presets:
         raise ValueError("remote auto-router preset catalog is empty")
     return presets
@@ -573,6 +579,70 @@ async def get_public_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord
     to serve the bundled catalog only. A restart picks up a newly published catalog.
     """
     return await get_autorouter_presets(url=litellm.autorouter_presets_url)
+
+
+def _load_bundled_whats_new() -> WhatsNewResponse:
+    return WhatsNewResponse.model_validate_json(
+        files("litellm.proxy.public_endpoints").joinpath("whats_new.json").read_text(encoding="utf-8")
+    )
+
+
+async def _fetch_remote_whats_new(url: str) -> WhatsNewResponse:
+    return WhatsNewResponse.model_validate_json(await _fetch_remote_bytes(url))
+
+
+async def _resolve_whats_new(url: str, fetch: Callable[[str], Awaitable[WhatsNewResponse]]) -> WhatsNewResponse:
+    if os.getenv("LITELLM_LOCAL_WHATS_NEW", "").lower() == "true":
+        return _load_bundled_whats_new()
+    try:
+        return await fetch(url)
+    except (httpx.HTTPError, ValidationError, OSError) as e:
+        verbose_logger.warning(
+            "LiteLLM: failed to fetch What's new launches from %s: %s. Serving the bundled list for the life of this process.",
+            url,
+            str(e),
+        )
+        return _load_bundled_whats_new()
+
+
+class _WhatsNewCache:
+    launches: WhatsNewResponse | None = None
+    lock: asyncio.Lock | None = None
+
+
+async def get_whats_new(
+    url: str,
+    fetch: Callable[[str], Awaitable[WhatsNewResponse]] = _fetch_remote_whats_new,
+) -> WhatsNewResponse:
+    cached: Final = _WhatsNewCache.launches
+    if cached is not None:
+        return cached
+    if _WhatsNewCache.lock is None:
+        _WhatsNewCache.lock = asyncio.Lock()
+    async with _WhatsNewCache.lock:
+        held: Final = _WhatsNewCache.launches
+        if held is not None:
+            return held
+        resolved: Final = await _resolve_whats_new(url=url, fetch=fetch)
+        _WhatsNewCache.launches = resolved
+        return resolved
+
+
+@router.get(
+    "/public/whats_new",
+    tags=["public"],
+    response_model=WhatsNewResponse,
+)
+async def get_public_whats_new() -> WhatsNewResponse:
+    """
+    Return the launches the dashboard Home page shows under What's new.
+
+    Resolved once per process: fetched from ``litellm.whats_new_url`` (override with ``LITELLM_WHATS_NEW_URL``)
+    on the first request, falling back to the list bundled with the package on any failure, so an airgapped
+    proxy serves the bundled list without retrying. Set ``LITELLM_LOCAL_WHATS_NEW=True`` to skip the fetch.
+    A restart picks up a newly published list.
+    """
+    return await get_whats_new(url=litellm.whats_new_url)
 
 
 @router.get(
