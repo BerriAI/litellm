@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import MagicMock
 
 import httpx
@@ -175,6 +175,7 @@ def test_success_handler_dispatches_to_typesafe_handler():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("decisions", "evaluation"), ids=("decisions", "legacy-evaluation"))
 @pytest.mark.parametrize("guardrail_cost", [0.0, 0.25])
 @pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize(
@@ -193,6 +194,7 @@ async def test_oss_gateway_accounts_for_checkpoint_usage_and_registered_cost(
     guardrail_cost: float,
     provider: str,
     requested: str,
+    mode: Literal["decisions", "evaluation"],
 ) -> None:
     checkpoint: Final = routing_model or requested
     model: Final = f"{provider}/{checkpoint}"
@@ -202,10 +204,11 @@ async def test_oss_gateway_accounts_for_checkpoint_usage_and_registered_cost(
         "input_cost_per_token": input_rate,
         "output_cost_per_token": output_rate,
         "litellm_provider": provider,
-        "mode": "evaluation",
+        "mode": mode,
     }
+    decisions_pricing_row: Final = {**pricing_row, "mode": "decisions"}
     monkeypatch.setitem(litellm.model_cost, model, pricing_row)
-    monkeypatch.setitem(litellm.model_cost, decisions_pricing_key(provider, checkpoint), pricing_row)
+    monkeypatch.setitem(litellm.model_cost, decisions_pricing_key(provider, checkpoint), decisions_pricing_row)
     start: Final = datetime.now()
     logging_obj: Final = Logging(
         model=requested,
