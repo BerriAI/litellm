@@ -71,6 +71,7 @@ class _MemberJevClassifierConfig(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    deployment_name: str | None = None
     model: str
     api_key: None = None
     api_base: None = None

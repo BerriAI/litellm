@@ -164,9 +164,13 @@ def strategy_router_dependencies(
                 else ()
             )
             + (
-                _named(
-                    f"typesafe/{_mapping(complexity.get('jev_classifier_config')).get('model', 'jev-latest')}",
-                    "evaluation",
+                (
+                    _named(_mapping(complexity.get("jev_classifier_config")).get("deployment_name"), "classifier")
+                    if _mapping(complexity.get("jev_classifier_config")).get("deployment_name")
+                    else _named(
+                        f"typesafe/{_mapping(complexity.get('jev_classifier_config')).get('model', 'jev-latest')}",
+                        "evaluation",
+                    )
                 )
                 if complexity.get("classifier_type") == "jev"
                 else ()

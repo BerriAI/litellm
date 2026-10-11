@@ -31240,6 +31240,8 @@ export interface components {
              * @default true
              */
             circuit_breaker_enabled: boolean;
+            /** Deployment Name */
+            deployment_name?: string | null;
             /**
              * Instructions
              * @description Replaces the built-in Jev question instructions
