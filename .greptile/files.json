@@ -274,6 +274,20 @@
       ]
     },
     {
+      "path": "litellm-rust/crates/llms/src/bedrock/claude_platform/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/bedrock/claude_platform/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/bedrock/claude_platform/messages/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/bedrock_mantle/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/bedrock_mantle/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/bedrock_mantle/messages/**"
+      ]
+    },
+    {
       "path": "litellm-rust/crates/llms/src/cohere/ocr/AGENTS.md",
       "description": "Conventions for code under litellm-rust/crates/llms/src/cohere/ocr/",
       "scope": [
