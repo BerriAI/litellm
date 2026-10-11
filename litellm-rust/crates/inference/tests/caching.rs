@@ -12,7 +12,8 @@ use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheOptions, CachePolicy, CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService,
+    CacheKeyBuilder, CacheKeyInput, CacheOptions, CachePolicy, CacheScope, ResponseCache,
+    ResponseCacheConfig, ResponseCacheRequest, ResponseCacheService,
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
@@ -343,6 +344,15 @@ struct InvalidEntryCache(
     Value,
 );
 
+impl CacheKeyBuilder for InvalidEntryCache {
+    fn build_key<'a>(
+        &'a self,
+        input: &'a CacheKeyInput,
+    ) -> futures_util::future::BoxFuture<'a, Result<Option<String>, litellm_cache::Error>> {
+        self.0.build_key(input)
+    }
+}
+
 impl ResponseCacheService for InvalidEntryCache {
     fn config(&self) -> &ResponseCacheConfig {
         self.0.config()
@@ -460,6 +470,47 @@ async fn backend_failures_do_not_fail_inference() {
 
 struct UnaryTestRoute;
 
+struct KeyedCache {
+    service: Arc<dyn ResponseCacheService>,
+    key: Result<Option<String>, litellm_cache::Error>,
+    builds: AtomicUsize,
+}
+
+impl CacheKeyBuilder for KeyedCache {
+    fn build_key<'a>(
+        &'a self,
+        _: &'a CacheKeyInput,
+    ) -> futures_util::future::BoxFuture<'a, Result<Option<String>, litellm_cache::Error>> {
+        Box::pin(async move {
+            self.builds.fetch_add(1, Ordering::SeqCst);
+            self.key.clone()
+        })
+    }
+}
+
+impl ResponseCacheService for KeyedCache {
+    fn config(&self) -> &ResponseCacheConfig {
+        self.service.config()
+    }
+
+    fn lookup<'a>(
+        &'a self,
+        request: &'a ResponseCacheRequest,
+        now: Duration,
+    ) -> futures_util::future::BoxFuture<'a, Result<Option<Value>, litellm_cache::Error>> {
+        self.service.lookup(request, now)
+    }
+
+    fn store<'a>(
+        &'a self,
+        request: &'a ResponseCacheRequest,
+        response: Value,
+        now: Duration,
+    ) -> futures_util::future::BoxFuture<'a, Result<(), litellm_cache::Error>> {
+        self.service.store(request, response, now)
+    }
+}
+
 #[derive(Default)]
 struct CacheHitAccounting {
     calls: AtomicUsize,
@@ -508,7 +559,18 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
     cache: Arc<dyn ResponseCacheService>,
     #[case] streaming_route: bool,
     #[values(false, true)] reject: bool,
+    #[values(false, true)] custom_key: bool,
 ) {
+    let keyed = Arc::new(KeyedCache {
+        service: cache,
+        key: Ok(Some("selected-key".into())),
+        builds: AtomicUsize::new(0),
+    });
+    let selected: Arc<dyn ResponseCacheService> = if custom_key {
+        keyed.clone()
+    } else {
+        keyed.service.clone()
+    };
     let provider_calls = AtomicUsize::new(0);
     let accounting = CacheHitAccounting {
         reject,
@@ -524,7 +586,7 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
         json!(
             consume(
                 streamed(
-                    &cache,
+                    &selected,
                     &provider_calls,
                     "data: {\"type\":\"message_stop\"}\n\n",
                     false,
@@ -536,7 +598,7 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
         )
     } else {
         unary_call(
-            &cache,
+            &selected,
             Some(CacheOptions::new(CacheScope::Shared)),
             &provider_calls,
             request.clone(),
@@ -546,7 +608,7 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
     let result = if streaming_route {
         match execute_streaming::<TestRoute, _, _>(
             cache_request(request),
-            Some(cache),
+            Some(selected),
             Some(CacheOptions::new(CacheScope::Shared)),
             &accounting,
             Some(&observer),
@@ -560,7 +622,7 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
     } else {
         execute_unary::<UnaryTestRoute, _, _>(
             cache_request(request),
-            Some(cache),
+            Some(selected),
             Some(CacheOptions::new(CacheScope::Shared)),
             &accounting,
             Some(&observer),
@@ -580,11 +642,41 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
     assert_eq!(accounting.calls.load(Ordering::SeqCst), 1);
     let key = accounting.key.get().unwrap();
     assert!(!key.is_empty());
+    if custom_key {
+        assert_eq!(key, "selected-key");
+        assert_eq!(keyed.builds.load(Ordering::SeqCst), 2);
+    }
     assert!(matches!(
         events.try_recv().unwrap(),
         CallEvent::Execution(ExecutionEvent::ResultReady { facts }) if facts.source == ResultSource::Cache { key: key.clone() }
     ));
     assert!(events.try_recv().is_err());
+}
+
+#[rstest]
+#[case::missing(Ok(None))]
+#[case::unavailable(Err(litellm_cache::Error::Unavailable))]
+#[tokio::test]
+async fn an_unavailable_key_skips_cache_reads_and_writes(
+    cache: Arc<dyn ResponseCacheService>,
+    #[case] key: Result<Option<String>, litellm_cache::Error>,
+) {
+    let keyed = Arc::new(KeyedCache {
+        service: cache.clone(),
+        key,
+        builds: AtomicUsize::new(0),
+    });
+    let selected: Arc<dyn ResponseCacheService> = keyed.clone();
+    let calls = AtomicUsize::new(0);
+    let options = Some(CacheOptions::new(CacheScope::Shared));
+    let request = json!({"input":"hello"});
+    let first = unary_call(&cache, options.clone(), &calls, request.clone()).await;
+    let second = unary_call(&selected, options.clone(), &calls, request.clone()).await;
+    let third = unary_call(&cache, options, &calls, request).await;
+    assert_ne!(first, second);
+    assert_eq!(first, third);
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+    assert_eq!(keyed.builds.load(Ordering::SeqCst), 1);
 }
 
 impl Protocol for UnaryTestRoute {

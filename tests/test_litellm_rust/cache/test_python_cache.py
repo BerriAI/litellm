@@ -1,4 +1,5 @@
 import asyncio
+from collections.abc import Mapping
 from typing import Final, Literal
 
 import pytest
@@ -514,16 +515,42 @@ async def test_rust_messages_legacy_semantic_cache_preserves_python_scope(
 @pytest.mark.asyncio
 @pytest.mark.parametrize("rust_first", (False, True), ids=("python_to_rust", "rust_to_python"))
 @pytest.mark.parametrize("stream", (False, True), ids=("response", "stream"))
+@pytest.mark.parametrize(
+    "key_options",
+    (
+        {},
+        {"cache_key": "explicit-messages"},
+        {"litellm_params": {"preset_cache_key": "shared-messages"}},
+        {"metadata": {"model_group": "shared-model"}},
+        {"metadata": {"model_group": "shared-model", "caching_groups": [["shared-model", "other-model"]]}},
+    ),
+    ids=("request", "explicit", "preset", "model_group", "caching_group"),
+)
 async def test_legacy_cache_keeps_public_messages_responses_compatible(
-    recording_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, rust_first: bool, stream: bool
+    recording_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    rust_first: bool,
+    stream: bool,
+    key_options: Mapping[str, object],
 ) -> None:
     litellm.cache = Cache()
     monkeypatch.setenv("LITELLM_RUST", "0")
-    options: Final = {"litellm_params": {"preset_cache_key": "shared-messages"}, "stream": stream}
+    options: Final = {**key_options, "stream": stream}
+    parameters: Final = {
+        "model": MESSAGES_MODEL,
+        "messages": list(MESSAGES),
+        "max_tokens": 32,
+        "api_key": "test-key",
+        "api_base": recording_server.base_url,
+        **options,
+    }
+    expected_key: Final = options["cache_key"] if "cache_key" in options else litellm.cache.get_cache_key(**parameters)
     first: Final = await invoke("messages", recording_server, options, native=rust_first)
     first_payload: Final = await collect(first) if stream else payload(first)
     await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
     second: Final = await invoke("messages", recording_server, options, native=not rust_first)
     second_payload: Final = await collect(second) if stream else payload(second)
     assert second_payload == first_payload
+    if not rust_first:
+        assert cache_key(second) == expected_key
     assert len(recording_server.requests) == 1

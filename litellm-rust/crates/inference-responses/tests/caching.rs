@@ -10,8 +10,8 @@ use std::{
 
 use litellm_cache_memory::InMemoryCache;
 use litellm_cache_response::{
-    CacheOptions, CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService,
-    ResponseEnvelope, ScopedCache,
+    CacheKeyBuilder, CacheKeyInput, CacheOptions, CacheScope, ResponseCache, ResponseCacheConfig,
+    ResponseCacheService, ResponseEnvelope, ScopedCache,
 };
 use litellm_host::interceptors::{
     ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext, ResultSource,
@@ -56,6 +56,15 @@ struct InvalidEntryCache(
     ResponseCache<InMemoryCache<litellm_cache_response::CacheEntry>>,
     Value,
 );
+
+impl CacheKeyBuilder for InvalidEntryCache {
+    fn build_key<'a>(
+        &'a self,
+        input: &'a CacheKeyInput,
+    ) -> futures_util::future::BoxFuture<'a, Result<Option<String>, litellm_cache::Error>> {
+        self.0.build_key(input)
+    }
+}
 
 impl ResponseCacheService for InvalidEntryCache {
     fn config(&self) -> &ResponseCacheConfig {

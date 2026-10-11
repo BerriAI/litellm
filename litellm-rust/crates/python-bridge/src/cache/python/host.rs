@@ -31,14 +31,7 @@ impl PythonCache {
         self.arguments = Some(arguments.clone().unbind());
     }
 
-    fn invoke(
-        &self,
-        py: Python<'_>,
-        task: &PythonTask,
-        sync_method: &str,
-        async_method: &str,
-        value: Option<Py<PyAny>>,
-    ) -> PyResult<Py<PyAny>> {
+    fn selected<'py>(&self, py: Python<'py>) -> PyResult<(&Bound<'py, PyAny>, Bound<'py, PyDict>)> {
         let Some(cache) = self.cache.as_ref() else {
             return Err(pyo3::exceptions::PyRuntimeError::new_err(
                 "cache operation without configured cache",
@@ -52,16 +45,37 @@ impl PythonCache {
             })?
             .bind(py)
             .copy()?;
+        Ok((cache.bind(py), arguments))
+    }
+
+    fn build_key(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let (cache, arguments) = self.selected(py)?;
+        match arguments.get_item("cache_key")? {
+            Some(key) => Ok(key),
+            None => cache.call_method("get_cache_key", (), Some(&arguments)),
+        }
+        .map(Bound::unbind)
+    }
+
+    fn invoke(
+        &self,
+        py: Python<'_>,
+        task: &PythonTask,
+        key: &str,
+        sync_method: &str,
+        async_method: &str,
+        value: Option<Py<PyAny>>,
+    ) -> PyResult<Py<PyAny>> {
+        let (cache, arguments) = self.selected(py)?;
+        arguments.set_item("cache_key", key)?;
         let method = if task.asynchronous() {
             async_method
         } else {
             sync_method
         };
         match value {
-            Some(value) => cache
-                .bind(py)
-                .call_method(method, (value,), Some(&arguments)),
-            None => cache.bind(py).call_method(method, (), Some(&arguments)),
+            Some(value) => cache.call_method(method, (value,), Some(&arguments)),
+            None => cache.call_method(method, (), Some(&arguments)),
         }
         .map(Bound::unbind)
     }
@@ -74,9 +88,21 @@ impl PythonCache {
         call: CacheCall,
     ) -> Result<(), InvokeError<E>> {
         match call {
-            CacheCall::Lookup { reply } => {
+            CacheCall::BuildKey { reply } => {
+                let result = Python::attach(|py| self.build_key(py));
+                let result = task.settle(result).await?;
+                reply.send(Python::attach(|py| {
+                    result.map_err(|_| Error::Unavailable).and_then(|value| {
+                        value
+                            .extract::<Option<String>>(py)
+                            .map_err(|_| Error::InvalidEntry)
+                    })
+                }));
+                Ok(())
+            }
+            CacheCall::Lookup { key, reply } => {
                 let result = Python::attach(|py| {
-                    self.invoke(py, task, "get_cache", "async_get_cache", None)
+                    self.invoke(py, task, &key, "get_cache", "async_get_cache", None)
                 });
                 let result = task.settle(result).await?;
                 let answer = Python::attach(|py| {
@@ -92,10 +118,10 @@ impl PythonCache {
                 reply.send(answer);
                 Ok(())
             }
-            CacheCall::Store { value, reply } => {
+            CacheCall::Store { key, value, reply } => {
                 let result = Python::attach(|py| {
                     let value = to_py(py, &value)?;
-                    self.invoke(py, task, "add_cache", "async_add_cache", Some(value))
+                    self.invoke(py, task, &key, "add_cache", "async_add_cache", Some(value))
                 });
                 let result = task.settle(result).await?;
                 reply.send(result.map(|_| ()).map_err(|_| Error::Unavailable));

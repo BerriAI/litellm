@@ -8,8 +8,8 @@ use std::{
 use bytes::{Bytes, BytesMut};
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_response::{
-    CacheOptions, CachePolicy, ResponseCacheRequest, ResponseCacheService, ResponseEnvelope,
-    ScopedCache, cache_key,
+    CacheKeyInput, CacheOptions, CachePolicy, ResponseCacheRequest, ResponseCacheService,
+    ResponseEnvelope, ScopedCache, cache_key,
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
@@ -74,7 +74,7 @@ struct CacheSession {
 }
 
 impl CacheSession {
-    fn prepare<P: Cachable>(
+    async fn prepare<P: Cachable>(
         service: Option<Arc<dyn ResponseCacheService>>,
         options: Option<CacheOptions>,
         request: &CacheRequest,
@@ -83,7 +83,25 @@ impl CacheSession {
         let service = service?;
         let input = request.input.clone();
         let request = options.request(&service.config().namespace, P::SURFACE, input);
-        Some(Self { service, request })
+        let key = match service.build_key(&request.key).await {
+            Ok(Some(key)) => key,
+            Ok(None) => return None,
+            Err(_) => {
+                tracing::warn!("response cache key construction failed");
+                return None;
+            }
+        };
+        let prepared = ResponseCacheRequest {
+            key: CacheKeyInput {
+                preset: Some(key),
+                ..request.key
+            },
+            ..request
+        };
+        Some(Self {
+            service,
+            request: prepared,
+        })
     }
 
     async fn lookup<P: Cachable>(&self) -> Option<CachedOutput<P::Response>>
@@ -155,7 +173,7 @@ where
 {
     let identity = request.identity.clone();
     crate::diagnostic::provider(&identity.model, &identity.provider);
-    let session = CacheSession::prepare::<P>(cache, options, &request);
+    let session = CacheSession::prepare::<P>(cache, options, &request).await;
     let hit = match &session {
         Some(session) => session.lookup::<P>().await.and_then(|entry| match entry {
             CachedOutput::Response(response) => Some((response, cache_key(&session.request.key))),
@@ -199,7 +217,7 @@ where
 {
     let identity = request.identity.clone();
     crate::diagnostic::provider(&identity.model, &identity.provider);
-    let session = CacheSession::prepare::<P>(cache, options, &request);
+    let session = CacheSession::prepare::<P>(cache, options, &request).await;
     let cache = CallCache::<P> {
         session,
         protocol: PhantomData,
@@ -227,27 +245,24 @@ pub struct CallCache<P> {
 }
 
 impl<P: StreamCachable> CallCache<P> {
-    pub fn from_wire(
+    pub async fn from_wire(
         cache: Option<&ScopedCache>,
         policy: CachePolicy,
         identity: &ProviderIdentity,
         wire: &WireRequest,
     ) -> Self {
-        let session = cache.and_then(|cache| {
-            if !policy.enabled() {
-                return None;
+        let session = match cache.filter(|_| policy.enabled()) {
+            Some(cache) => {
+                let request = CacheRequest::from_wire(identity.clone(), Some(wire));
+                CacheSession::prepare::<P>(
+                    Some(cache.service.clone()),
+                    Some(cache.options(Some(policy))),
+                    &request,
+                )
+                .await
             }
-            let options = cache.options(Some(policy));
-            let request = CacheRequest::from_wire(identity.clone(), Some(wire));
-            Some(CacheSession {
-                request: options.request(
-                    &cache.service.config().namespace,
-                    P::SURFACE,
-                    request.input,
-                ),
-                service: cache.service.clone(),
-            })
-        });
+            None => None,
+        };
         Self {
             session,
             protocol: PhantomData,
