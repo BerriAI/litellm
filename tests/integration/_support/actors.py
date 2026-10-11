@@ -14,7 +14,7 @@ from pydantic import JsonValue
 
 from litellm.proxy.utils import PrismaClient, hash_token
 from tests.integration._support.client import Gateway, Scenario, string_value
-from tests.integration._support.database import connected_proxy_prisma
+from tests.integration._support.prisma_clients import connected_proxy_prisma
 from tests.integration._support.process import owned_proxy
 
 TEAM_ALPHA: Final = "behavior-pin-team-alpha"

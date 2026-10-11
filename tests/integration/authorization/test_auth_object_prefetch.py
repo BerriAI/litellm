@@ -21,7 +21,7 @@ from litellm.proxy.auth.auth_object_prefetch import AuthObjectRefs, prefetch_aut
 from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.utils import PrismaClient
-from tests.integration._support.database import connected_proxy_prisma
+from tests.integration._support.prisma_clients import connected_proxy_prisma
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 

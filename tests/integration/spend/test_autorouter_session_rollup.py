@@ -32,7 +32,7 @@ from litellm.proxy.db.autorouter_session_rollup import (
     write_autorouter_turn,
 )
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
-from tests.integration._support.database import connected_prisma
+from tests.integration._support.prisma_clients import connected_prisma
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 

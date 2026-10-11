@@ -22,7 +22,7 @@ from litellm.proxy.analytics_endpoints.cache_activity import (
     KEY_ALIAS_OPTIONS_SQL,
     MODEL_OPTIONS_SQL,
 )
-from tests.integration._support.database import connected_prisma
+from tests.integration._support.prisma_clients import connected_prisma
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 

@@ -9,7 +9,7 @@ from contextlib import ExitStack
 from copy import copy
 from importlib.metadata import version
 from pathlib import Path
-from typing import Final, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 import httpx
 import pytest
@@ -18,16 +18,6 @@ from execnet import XSpec
 from pydantic import TypeAdapter
 from redis import Redis
 
-from tests.integration._support.actors import (
-    ActorSet,
-    GatewayClient,
-    ManagementDatabase,
-    ScratchResources,
-    create_actor_set,
-    create_gateway_client,
-    management_database,
-    scratch_resources,
-)
 from tests.integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
@@ -36,6 +26,9 @@ from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
 from tests.integration._support.workers import worker_endpoints, worker_gateway
 from tests.integration.run import GITHUB_FILES
+
+if TYPE_CHECKING:
+    from tests.integration._support.actors import ActorSet, GatewayClient, ManagementDatabase, ScratchResources
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
 INVENTORY: Final = pytest.StashKey[tuple[str, ...]]()
@@ -322,17 +315,23 @@ async def actors(
     session_gateway: Gateway, db: ManagementDatabase
 ) -> AsyncIterator[ActorSet]:
     with session_gateway.scenario() as scenario:
+        from tests.integration._support.actors import create_actor_set
+
         value: Final[ActorSet] = await create_actor_set(session_gateway, scenario, db)
         yield value
 
 
 @pytest.fixture(scope="session")
 def gateway_client(session_gateway: Gateway, actors: ActorSet) -> GatewayClient:
+    from tests.integration._support.actors import create_gateway_client
+
     return create_gateway_client(session_gateway, actors)
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")
 async def db(session_gateway: Gateway) -> AsyncIterator[ManagementDatabase]:
+    from tests.integration._support.actors import management_database
+
     value: Final[ManagementDatabase]
     async with management_database(session_gateway) as value:
         yield value
@@ -340,6 +339,8 @@ async def db(session_gateway: Gateway) -> AsyncIterator[ManagementDatabase]:
 
 @pytest_asyncio.fixture(scope="function", loop_scope="session")
 async def resources(db: ManagementDatabase) -> AsyncIterator[ScratchResources]:
+    from tests.integration._support.actors import scratch_resources
+
     value: Final[ScratchResources]
     async with scratch_resources(db) as value:
         yield value

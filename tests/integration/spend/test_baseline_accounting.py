@@ -24,7 +24,7 @@ from litellm.proxy.db.create_views import SupportsRawQueries
 from litellm.proxy.spend_tracking.baseline_accounting import BaselineObservation
 from litellm.proxy.spend_tracking.savings import BaselineCostSnapshot
 from litellm.types.utils import Usage
-from tests.integration._support.database import connected_prisma
+from tests.integration._support.prisma_clients import connected_prisma
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
