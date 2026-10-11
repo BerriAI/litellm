@@ -8,14 +8,15 @@ import { SimpleTooltip } from "@/components/ui/tooltip";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { cn } from "@/lib/cva.config";
 import { DECISIONS_DOCS_URL } from "@/lib/decisionModels";
+import { getProxyBaseUrl } from "@/components/networking";
 import { uiHref } from "@/utils/uiHref";
 import { useMutation } from "@tanstack/react-query";
-import { BookOpen, Code, Eraser, LoaderCircle, Send } from "lucide-react";
+import { BookOpen, Eraser, LoaderCircle, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { makePlaygroundDecisionRequest, type PlaygroundDecisionRequest } from "../../llm_calls/system_one";
 import { DECISION_PRESETS, emptyPayload, matchPreset, presetPayload, type DecisionPreset } from "./lib/example";
 import { payloadModel, withPayloadModel } from "./lib/payloadModel";
-import JsonEditor from "./JsonEditor";
+import CurlPreview from "./CurlPreview";
 import ResponseView from "./ResponseView";
 import SystemOneForm from "./SystemOneForm";
 import OpenAIDecisionsForm from "./OpenAIDecisionsForm";
@@ -27,7 +28,7 @@ interface SystemOneUIProps {
   disabledPersonalKeyCreation?: boolean;
 }
 
-type EditorView = "form" | "json";
+type EditorView = "form" | "curl";
 
 interface SystemOneSendVariables {
   request: PlaygroundDecisionRequest;
@@ -94,7 +95,6 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
     [rawPayload, endpoint],
   );
   const validation = validated.validation;
-  const hasSyntaxError = validation.issues.some((issue) => issue.path === "syntax");
 
   const systemOne = useMutation({
     mutationFn: ({ request, apiKey, signal }: SystemOneSendVariables) =>
@@ -136,12 +136,6 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
     const next = model === null ? undefined : withPayloadModel(rawPayload, model);
     if (next !== undefined) {
       handlePayloadChange(next);
-    }
-  }
-
-  function handleFormatJson() {
-    if (rawPayload.trim() && !hasSyntaxError) {
-      handlePayloadChange(JSON.stringify(JSON.parse(rawPayload), null, 2));
     }
   }
 
@@ -196,7 +190,6 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                 onValueChange={handleModelPick}
                 placeholder={decisionModels.length > 0 ? "Pick a decision model" : "No decision models yet"}
                 emptyText="No decision models found"
-                disabled={hasSyntaxError}
                 allowClear={false}
               />
             </div>
@@ -238,13 +231,13 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
 
           <Tabs
             value={view}
-            onValueChange={(value) => (value === "form" || value === "json") && setView(value)}
+            onValueChange={(value) => (value === "form" || value === "curl") && setView(value)}
             className="min-h-0 flex-1"
           >
             <div className="flex flex-wrap items-center justify-between gap-2">
               <TabsList aria-label="Request editor view">
                 <TabsTrigger value="form">Form</TabsTrigger>
-                <TabsTrigger value="json">JSON</TabsTrigger>
+                <TabsTrigger value="curl">cURL</TabsTrigger>
               </TabsList>
               <div className="flex items-center gap-1">
                 <PresetPicker activePreset={activePreset} onPick={handlePresetPick} />
@@ -267,24 +260,22 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                   value={rawPayload}
                   onChange={handlePayloadChange}
                   validation={validated.validation}
-                  onOpenJson={() => setView("json")}
+                  onReset={() => handlePayloadChange(presetPayload(DECISION_PRESETS[0], endpoint, draftModel))}
                 />
               ) : (
                 <SystemOneForm
                   value={rawPayload}
                   onChange={handlePayloadChange}
                   validation={validated.validation}
-                  onOpenJson={() => setView("json")}
+                  onReset={() => handlePayloadChange(presetPayload(DECISION_PRESETS[0], endpoint, draftModel))}
                 />
               )}
             </TabsContent>
-            <TabsContent value="json" className="flex min-h-0 flex-col">
-              <JsonEditor
-                value={rawPayload}
-                onChange={handlePayloadChange}
-                validation={validation}
-                label={endpoint === "/v1/decisions" ? "Decisions JSON payload" : "System One JSON payload"}
-                placeholder={`Paste or write a ${endpoint} request`}
+            <TabsContent value="curl" className="flex min-h-0 flex-col">
+              <CurlPreview
+                baseUrl={getCustomProxyBaseUrl() ?? getProxyBaseUrl()}
+                endpoint={endpoint}
+                payload={rawPayload}
               />
             </TabsContent>
           </Tabs>
@@ -298,12 +289,6 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
               <Eraser />
               Clear
             </Button>
-            {view === "json" && (
-              <Button variant="ghost" onClick={handleFormatJson} disabled={!rawPayload.trim() || hasSyntaxError}>
-                <Code />
-                Format JSON
-              </Button>
-            )}
             <div className="ml-auto flex items-center gap-2">
               {isLoading && (
                 <Button variant="outline" onClick={clearRequestState}>
