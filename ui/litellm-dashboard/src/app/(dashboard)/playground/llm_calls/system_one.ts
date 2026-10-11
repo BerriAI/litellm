@@ -2,7 +2,7 @@ import { z } from "zod";
 import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 import { withRequiredHeaders } from "@/components/llm_calls/request_headers";
 import { createApiClient } from "@/lib/http/client";
-import { isDecisionMode, isDecisionModel } from "@/lib/decisionModels";
+import { isDecisionModel } from "@/lib/decisionModels";
 import {
   systemOneResponseSchema,
   type PlaygroundRequest,
@@ -36,10 +36,6 @@ const modelInfoSchema = z.object({
   ),
 });
 
-const modelGroupInfoSchema = z.object({
-  data: z.array(z.object({ model_group: z.string(), mode: z.string().nullish() })),
-});
-
 function proxyClient(customBaseUrl?: string) {
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   const normalizedBaseUrl = proxyBaseUrl.endsWith("/") ? proxyBaseUrl.slice(0, -1) : proxyBaseUrl;
@@ -61,21 +57,15 @@ export async function fetchDecisionModels(
   customBaseUrl?: string,
   signal?: AbortSignal,
 ): Promise<string[]> {
-  const client = proxyClient(customBaseUrl);
-  const options = { headers: authHeaders(accessToken), signal };
-  const [deployments, groups] = await Promise.all([
-    client.get<unknown>("/model/info", options),
-    client.get<unknown>("/model_group/info", options),
-  ]);
-  const deploymentNames = modelInfoSchema
-    .parse(deployments)
+  const body = await proxyClient(customBaseUrl).get<unknown>("/model/info", {
+    headers: authHeaders(accessToken),
+    signal,
+  });
+  const decisionModelNames = modelInfoSchema
+    .parse(body)
     .data.filter((deployment) => isDecisionModel(deployment.model_info ?? {}))
     .map((deployment) => deployment.model_name);
-  const groupNames = modelGroupInfoSchema
-    .parse(groups)
-    .data.filter((group) => isDecisionMode(group.mode))
-    .map((group) => group.model_group);
-  return [...new Set([...deploymentNames, ...groupNames])].sort((a, b) => a.localeCompare(b));
+  return [...new Set(decisionModelNames)].sort((a, b) => a.localeCompare(b));
 }
 
 async function sendDecisionRequest<T>(

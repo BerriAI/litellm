@@ -596,6 +596,30 @@ def test_model_info_team_key_cannot_see_other_teams_byok_model(
     assert _BYOK_INTERNAL_NAME not in surfaced_names
 
 
+@pytest.mark.parametrize("path", ["/v1/model/info", "/model/info"])
+def test_model_info_lists_routing_group_rows(client, auth_as, byok_team_router, monkeypatch, path):
+    """A routing group is callable by its own name, so /model/info surfaces the
+    rows the router materializes for it next to plain deployments and aliases.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+
+    group_row = {
+        "model_name": "decision-balanced",
+        "litellm_params": {"model": "openai/gpt-6-luna"},
+        "model_info": {"id": "luna-deployment-id", "db_model": True, "mode": "chat"},
+    }
+    byok_team_router.get_model_list_from_routing_groups = MagicMock(return_value=[group_row])
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    with auth_as(role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"):
+        response = client.get(path)
+
+    assert response.status_code == 200
+    surfaced = {m["model_name"]: m for m in response.json()["data"]}
+    assert surfaced["decision-balanced"]["model_info"]["mode"] == "chat"
+    byok_team_router.get_model_list_from_routing_groups.assert_called_once_with()
+
+
 # ---------------------------------------------------------------------------
 # GET /model_group/info
 # ---------------------------------------------------------------------------

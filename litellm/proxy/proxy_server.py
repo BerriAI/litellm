@@ -16401,6 +16401,8 @@ async def model_info_v1(
     all_models: list[dict] = copy.deepcopy(llm_router.model_list)
     alias_models: Final = copy.deepcopy(llm_router.get_model_list_from_model_alias())
     all_models.extend(alias_models)
+    routing_group_models: Final = copy.deepcopy(llm_router.get_model_list_from_routing_groups())
+    all_models.extend(routing_group_models)
 
     all_models = expand_wildcard_deployments_for_model_info(all_models)
 
