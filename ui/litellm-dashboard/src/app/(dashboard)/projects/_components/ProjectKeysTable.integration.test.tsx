@@ -139,14 +139,14 @@ describe("ProjectKeysTable", () => {
   it("opens a focused row with Enter and labels an alias-less key with its ID", async () => {
     const user = userEvent.setup();
     push.mockClear();
-    renderWithProviders(
-      <ProjectKeysTable
-        {...defaultProps}
-        keys={[
-          makeKey({ token: "tok-no-alias", token_id: "tid-no-alias", key_alias: null as any, user_id: "owner-1" }),
-        ]}
-      />,
-    );
+    const aliasLessKeyInput = {
+      token: "tok-no-alias",
+      token_id: "tid-no-alias",
+      key_alias: null as any,
+      user_id: "owner-1",
+    };
+    const aliasLessKey = makeKey(aliasLessKeyInput);
+    renderWithProviders(<ProjectKeysTable {...defaultProps} keys={[aliasLessKey]} />);
     const row = screen.getByRole("row", { name: "Open key tid-no-alias" });
     row.focus();
     expect(row).toHaveFocus();
