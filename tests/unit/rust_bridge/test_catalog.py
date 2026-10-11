@@ -56,6 +56,21 @@ def test_shipped_decisions(
         assert catalog.decision(context) is Decision.PYTHON
 
 
+@pytest.mark.parametrize("process", (None, False, True))
+@pytest.mark.parametrize("environment", (None, "0", "1"))
+def test_minimax_messages_requires_explicit_rust_opt_in(
+    monkeypatch: pytest.MonkeyPatch, process: bool | None, environment: str | None
+) -> None:
+    configuration.rust(process)
+    if environment is not None:
+        monkeypatch.setenv("LITELLM_RUST", environment)
+    context: Final = RouteContext(Route.MESSAGES, provider="minimax")
+    opted_in: Final = environment == "1" or (environment is None and process is True)
+
+    assert catalog.rollout(context) is Rollout.RUST_OPT_IN
+    assert catalog.decision(context) is (Decision.RUST_WITH_FALLBACK if opted_in else Decision.PYTHON)
+
+
 @pytest.mark.parametrize("route", tuple(Route))
 def test_missing_rule_stays_on_python_even_when_rust_is_enabled(monkeypatch: pytest.MonkeyPatch, route: Route) -> None:
     configuration.rust(True)
