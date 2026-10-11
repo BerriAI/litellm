@@ -114,6 +114,12 @@ _OPENAI: Final = _Route(
     "/v1/decisions", {"input": _INPUT, "questions": _OPENAI_QUESTIONS}, _OPENAI_UPSTREAM_BODY, _OPENAI_ANSWER
 )
 _ROUTES: Final = (_SYSTEMONE, _OPENAI, replace(_SYSTEMONE, path="/systemone"), replace(_OPENAI, path="/decisions"))
+_ROUTE_CALL_TYPES: Final[Mapping[str, str]] = {
+    "/v1/systemone": "asystemone",
+    "/systemone": "asystemone",
+    "/v1/decisions": "adecisions",
+    "/decisions": "adecisions",
+}
 _SPEND_QUERY: Final = (
     "SELECT status, call_type, custom_llm_provider, model_group, api_base, prompt_tokens, completion_tokens "
     'FROM "LiteLLM_SpendLogs" WHERE request_id = %s'
@@ -411,11 +417,11 @@ def test_an_arn_deployment_answers_on_every_decisions_route_signed_for_bedrock_a
         _assert_runtime_call(call, "audit_signed", route=route)
         assert call.headers[_SESSION_HEADER] == _default_session("audit_signed"), dict(call.headers)
         _assert_signed(call)
-    for response in responses:
+    for response, route in zip(responses, _ROUTES, strict=True):
         row = _spend_row(response.headers["x-litellm-call-id"])
         assert row == {
             "status": "success",
-            "call_type": "asystemone",
+            "call_type": _ROUTE_CALL_TYPES[route.path],
             "custom_llm_provider": "strands_decider",
             "model_group": _SIGNED,
             "api_base": _invocations_url("audit_signed"),

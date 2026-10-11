@@ -251,7 +251,7 @@ def test_an_openai_format_request_at_v1_decisions_reaches_the_serving_endpoint_a
             row["model_group"],
             row["api_base"],
             _number(row["spend"]),
-        ) == ("success", "asystemone", "databricks", deployment, f"{handle.api_base()}/{_ENDPOINT}/invocations", 0.0), (
+        ) == ("success", "adecisions", "databricks", deployment, f"{handle.api_base()}/{_ENDPOINT}/invocations", 0.0), (
             row
         )
 
