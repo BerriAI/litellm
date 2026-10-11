@@ -1188,6 +1188,16 @@ class AmazonConverseConfig(BaseConfig):
                 non_default_params=non_default_params, optional_params=optional_params
             )
 
+        # Bedrock applies a 4096 output-token default when maxTokens is omitted, silently truncating anthropic models
+        if (
+            not self.is_max_tokens_in_request(non_default_params)  # pyright: ignore[reportUnknownMemberType]  # is_max_tokens_in_request accepts an untyped params dict
+            and "maxTokens" not in optional_params
+            and "anthropic" in model
+        ):
+            default_max_tokens: Final = self._get_default_max_tokens_for_model(model)
+            if default_max_tokens is not None:
+                optional_params["maxTokens"] = default_max_tokens  # rebind-ok: out-param store like siblings
+
         final_is_thinking_enabled: Final = self.is_thinking_enabled(optional_params)
         if final_is_thinking_enabled and "tool_choice" in optional_params:
             tool_choice_block: Final = optional_params["tool_choice"]
@@ -1329,6 +1339,33 @@ class AmazonConverseConfig(BaseConfig):
             )
             if thinking_token_budget is not None:
                 optional_params["maxTokens"] = thinking_token_budget + DEFAULT_MAX_TOKENS
+
+    @staticmethod
+    def _get_default_max_tokens_for_model(model: str) -> int | None:
+        """
+        Resolve the model's documented max output tokens from the litellm cost map.
+
+        Returns None when the model is not mapped, so the request stays unchanged.
+        Bedrock model ids carry an optional cross-region prefix that cost map keys do
+        not include, so strip it and retry.
+        """
+
+        cost_map: Final = cast("Mapping[str, Mapping[str, object]]", litellm.model_cost)  # cast-ok: untyped cost map
+
+        def lookup(candidate: str) -> int | None:
+            entry: Final = cost_map.get(candidate)
+            if entry is None:
+                return None
+            max_output_tokens: Final = entry.get("max_output_tokens")
+            if isinstance(max_output_tokens, int):
+                return max_output_tokens
+            max_tokens: Final = entry.get("max_tokens")
+            return max_tokens if isinstance(max_tokens, int) else None
+
+        first_segment, separator, rest = model.partition(".")
+        region_prefixed: Final = separator == "." and first_segment in ("us", "eu", "apac", "global", "ca", "sa")
+        candidates: Final = (model, rest) if region_prefixed else (model,)
+        return next((value for value in map(lookup, candidates) if value is not None), None)
 
     @overload
     def get_cache_point_block(
