@@ -1,8 +1,8 @@
-from collections.abc import Mapping
 import importlib.util
 import json
 import subprocess
 import sys
+from collections.abc import Mapping
 from pathlib import Path
 from types import ModuleType
 from typing import Final

@@ -3,8 +3,8 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
-from concurrent.futures import wait
 from collections.abc import Mapping
+from concurrent.futures import wait
 from types import MappingProxyType
 from typing import Final
 
@@ -16,8 +16,8 @@ from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
 import litellm
-from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.constants import AWS_SIGNING_MAX_THREADS
+from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.bedrock.base_aws_llm import AWS_SIGNING_EXECUTOR
