@@ -1492,6 +1492,74 @@ def test_responses_api_bridge_check_azure_ai_without_foundry_responses_route_sta
     assert model_info.get("mode") != "responses"
 
 
+_DATABRICKS_FUNCTION_TOOL: Final = ({"type": "function", "function": {"name": "get_capital"}},)
+
+
+@pytest.mark.parametrize(
+    "model_name, reasoning_effort",
+    [
+        pytest.param("databricks-gpt-5-6-sol", None, id="gpt-5.6-unset-effort"),
+        pytest.param("databricks-gpt-5-6-luna", "high", id="gpt-5.6-explicit-effort"),
+        pytest.param("databricks-gpt-5-4", None, id="gpt-5.4-unset-effort"),
+        pytest.param("databricks-gpt-5-4-mini", "low", id="gpt-5.4-mini-explicit-effort"),
+        pytest.param("databricks/databricks-gpt-5-6-terra", None, id="provider-prefixed"),
+    ],
+)
+def test_responses_api_bridge_check_databricks_gpt_5_4_plus_tools_route_to_responses(model_name, reasoning_effort):
+    """Databricks forwards GPT models to OpenAI, whose Chat Completions rejects function tools while reasoning."""
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model=model_name,
+        custom_llm_provider="databricks",
+        tools=_DATABRICKS_FUNCTION_TOOL,
+        reasoning_effort=reasoning_effort,
+    )
+
+    assert model == model_name
+    assert model_info.get("mode") == "responses"
+
+
+@pytest.mark.parametrize(
+    "model_name, tools, reasoning_effort",
+    [
+        pytest.param("databricks-gpt-5-6-sol", _DATABRICKS_FUNCTION_TOOL, "none", id="explicit-none"),
+        pytest.param("databricks-gpt-5-6-sol", None, None, id="no-tools"),
+        pytest.param("databricks-gpt-5-2", _DATABRICKS_FUNCTION_TOOL, None, id="pre-5.4"),
+        pytest.param("databricks-gpt-oss-120b", _DATABRICKS_FUNCTION_TOOL, None, id="gpt-oss"),
+        pytest.param("databricks-claude-sonnet-4-5", _DATABRICKS_FUNCTION_TOOL, None, id="non-gpt"),
+    ],
+)
+def test_responses_api_bridge_check_databricks_without_rejected_tools_stays_chat(model_name, tools, reasoning_effort):
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model=model_name,
+        custom_llm_provider="databricks",
+        tools=tools,
+        reasoning_effort=reasoning_effort,
+    )
+
+    assert model == model_name
+    assert model_info.get("mode") != "responses"
+
+
+@pytest.mark.parametrize(
+    "model_name, expected",
+    [
+        ("databricks-gpt-5-6-sol", "gpt-5.6-sol"),
+        ("databricks/databricks-gpt-5-4", "gpt-5.4"),
+        ("databricks-gpt-5-4-mini", "gpt-5.4-mini"),
+        ("databricks-gpt-oss-120b", "databricks-gpt-oss-120b"),
+        ("databricks-claude-sonnet-4-5", "databricks-claude-sonnet-4-5"),
+    ],
+)
+def test_openai_name_for_databricks_model(model_name, expected):
+    from litellm.responses.bridge_check import _openai_name_for_databricks_model
+
+    assert _openai_name_for_databricks_model(model_name) == expected
+
+
 def test_responses_api_bridge_check_older_gpt_5_tools_without_reasoning_stays_chat():
     """Pre-5.4 GPT-5 names keep the old boundary: tools alone never bridge."""
     from litellm.main import responses_api_bridge_check
