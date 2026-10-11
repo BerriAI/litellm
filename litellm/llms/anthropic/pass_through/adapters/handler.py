@@ -74,7 +74,7 @@ def _record_bridged_response_cost(
     response_cost: Final = get_hidden_params_dict(completion_response).get("response_cost")
     if logging_obj is None or not isinstance(response_cost, (int, float)):
         return
-    logging_obj.model_call_details["response_cost"] = response_cost
+    logging_obj.model_call_details["response_cost"] = response_cost  # rebind-ok: the record spend logging reads
 
 
 def _proxy_router_fallback() -> "Router | None":
