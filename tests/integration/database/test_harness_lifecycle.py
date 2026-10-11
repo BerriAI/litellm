@@ -40,6 +40,7 @@ from tests.integration._support.database_relay import (
 )
 from tests.integration._support.runtime import configure_executor
 from tests.integration._support.sharding import ShardExecution, shard_errors
+from tests.integration._support.wire import Reply, wire_server
 
 
 class ExitRecord(TypedDict):
@@ -51,6 +52,25 @@ class ExitRecord(TypedDict):
 Relay = DatabaseRelay | DroppedConnectionRelay | HeldStatementRelay
 RelayFactory = Callable[[str, bytes], AbstractContextManager[tuple[Relay, str]]]
 STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
+
+
+def test_owned_readiness_rejects_a_healthy_listener_from_another_process(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setenv("INTEGRATION_PROXY_READY_SECONDS", "0")
+    with wire_server(lambda request: Reply(body=b"healthy")) as foreign:
+        with subprocess.Popen(
+            (sys.executable, "-I", "-c", "import time; time.sleep(30)"), start_new_session=True
+        ) as process:
+            try:
+                port: Final = int(foreign.url.rsplit(":", 1)[1])
+                launch: Final = process_support._Launch(process, port, tmp_path / "proxy.log", time.monotonic())
+                with pytest.raises(AssertionError, match="readiness deadline"):
+                    process_support._wait_until_ready(launch)
+                assert process.poll() is None
+            finally:
+                process.kill()
+                process.wait(timeout=3)
 
 
 @pytest.mark.parametrize("factory", (database_relay, dropped_connection_relay, held_statement_relay))

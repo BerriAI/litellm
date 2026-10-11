@@ -4,9 +4,6 @@ import asyncio
 import errno
 import importlib
 import socket
-import subprocess
-import sys
-import time
 from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
@@ -18,8 +15,7 @@ import yaml
 from pydantic import TypeAdapter
 
 from tests.integration._support.client import Gateway
-from tests.integration._support.process import _Launch, _wait_until_ready, worker_configuration
-from tests.integration._support.wire import Reply, wire_server
+from tests.integration._support.process import worker_configuration
 
 TESTS_DIR: Final = Path(__file__).resolve().parents[2]
 UNRELATED_CRASH: Final = "Traceback (most recent call last):\nModuleNotFoundError: No module named 'litellm'\n"
@@ -88,25 +84,6 @@ def test_serial_proxy_keeps_the_requested_configuration(monkeypatch: pytest.Monk
     source.write_text("api_base: http://127.0.0.1:8191/v1\n")
     assert worker_configuration(source, tmp_path / "unused") == source
     assert source.read_text() == "api_base: http://127.0.0.1:8191/v1\n"
-
-
-def test_owned_readiness_rejects_a_healthy_listener_from_another_process(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
-) -> None:
-    monkeypatch.setenv("INTEGRATION_PROXY_READY_SECONDS", "0")
-    with wire_server(lambda request: Reply(body=b"healthy")) as foreign:
-        with subprocess.Popen(
-            (sys.executable, "-c", "import time; time.sleep(30)"), start_new_session=True
-        ) as process:
-            try:
-                port: Final = int(foreign.url.rsplit(":", 1)[1])
-                launch: Final = _Launch(process, port, tmp_path / "proxy.log", time.monotonic())
-                with pytest.raises(AssertionError, match="readiness deadline"):
-                    _wait_until_ready(launch)
-                assert process.poll() is None
-            finally:
-                process.kill()
-                process.wait(timeout=3)
 
 
 @pytest.fixture

@@ -1,3 +1,4 @@
+import base64
 import json
 from collections.abc import Mapping
 from typing import Final
@@ -22,12 +23,11 @@ def expected_response_for_deployment(
     if not isinstance(identifier, str) or not ResponsesAPIRequestUtils._is_litellm_encoded_response_id(identifier):
         return expected
     assert model_id, "An encoded response ID must identify the selected deployment"
-    decoded: Final = ResponsesAPIRequestUtils.decode_responses_api_response_id(identifier)
+    provider, _, response = base64.b64decode(identifier.removeprefix("resp_")).decode().split(";", 2)
+    updated: Final = f"{provider};model_id:{model_id};{response}"
     return {
         **expected,
-        "id": ResponsesAPIRequestUtils._build_responses_api_response_id(
-            decoded["custom_llm_provider"], model_id, decoded["response_id"] or identifier
-        ),
+        "id": "resp_" + base64.b64encode(updated.encode()).decode(),
     }
 
 
