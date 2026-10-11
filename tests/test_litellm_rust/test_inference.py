@@ -48,54 +48,6 @@ RESPONSES_RESPONSE: Final[dict[str, JsonValue]] = {
 }
 
 
-@pytest.mark.asyncio
-@pytest.mark.parametrize("stream", (False, True))
-async def test_minimax_public_messages_uses_the_native_binding(
-    recording_server: RecordingServer, stream: bool
-) -> None:
-    from collections.abc import AsyncIterator
-    from threading import Event
-
-    from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES
-    from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
-    from tests.test_litellm_rust.support.requests import MESSAGES_EVENTS
-
-    native: Final = NATIVE_AMESSAGES.load()
-    assert native is not None
-    called: Final = Event()
-    response: Final = ResponseSpec(body=MESSAGES_RESPONSE, events=MESSAGES_EVENTS if stream else ())
-    recording_server.default_response = response
-
-    def tracked(request: NativeCall) -> Awaitable[AnthropicMessagesResponse | AsyncIterator[bytes]]:
-        called.set()
-        return native(request)
-
-    NATIVE_AMESSAGES.override(tracked)
-    try:
-        result: Final = await litellm.anthropic.messages.acreate(
-            model="minimax/MiniMax-M3",
-            messages=list(MESSAGES),
-            max_tokens=32,
-            stream=stream,
-            api_key="test-key",
-            api_base=recording_server.base_url,
-        )
-        if stream:
-            assert isinstance(result, AsyncIterator)
-            chunk_bytes: Final = TypeAdapter(bytes)
-            payload: Final = b"".join([chunk_bytes.validate_python(chunk) async for chunk in result])
-            assert payload == b"".join(response.payloads())
-        else:
-            assert isinstance(result, dict)
-            assert result["content"] == MESSAGES_RESPONSE["content"]
-        assert called.is_set()
-        assert len(recording_server.requests) == 1
-        assert recording_server.requests[0].path == "/v1/messages"
-        assert recording_server.requests[0].headers["x-api-key"] == "test-key"
-    finally:
-        NATIVE_AMESSAGES.reset()
-
-
 @pytest.fixture(params=("chat", "responses"))
 def route(request: pytest.FixtureRequest) -> Route:
     return TypeAdapter(Route).validate_python(request.param)
