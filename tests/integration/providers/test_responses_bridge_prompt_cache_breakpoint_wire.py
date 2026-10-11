@@ -234,6 +234,28 @@ def test_malformed_marker_is_dropped_on_every_block_kind(bridge: _Bridge, kind: 
     bridge.spend.landed(bridge.on, call_id, marker)
 
 
+def test_input_audio_block_is_forwarded_with_its_marker_without_drop_params(bridge: _Bridge) -> None:
+    marker: Final = uuid.uuid4().hex
+    content: Final[list[JsonValue]] = [pcb.text(pcb.prompt(marker)), pcb.marked(pcb.audio(), pcb.EXPLICIT)]
+    call_id: Final = _completion(_chat(bridge, bridge.off, [{"role": "user", "content": content}]), marker)
+    second: Final = _second_block_on_wire(bridge, marker)
+    assert second["type"] == "input_audio" and second["input_audio"] == pcb.AUDIO_PAYLOAD, second
+    pcb.assert_marker(second, pcb.EXPLICIT)
+    bridge.spend.landed(bridge.off, call_id, marker)
+
+
+def test_input_audio_block_is_dropped_under_drop_params_and_its_marker_moves_to_the_text(bridge: _Bridge) -> None:
+    marker: Final = uuid.uuid4().hex
+    content: Final[list[JsonValue]] = [pcb.text(pcb.prompt(marker)), pcb.marked(pcb.audio(), pcb.EXPLICIT)]
+    call_id: Final = _completion(_chat(bridge, bridge.on, [{"role": "user", "content": content}]), marker)
+    assert _user_block_on_wire(bridge, marker) == {
+        "type": "input_text",
+        "text": pcb.prompt(marker),
+        "prompt_cache_breakpoint": pcb.EXPLICIT,
+    }
+    bridge.spend.landed(bridge.on, call_id, marker)
+
+
 @pytest.mark.parametrize(("mode", "breakpoint", "expected"), _CASE_VALUES, ids=_CASE_IDS)
 def test_tool_output_marker(bridge: _Bridge, mode: Mode, breakpoint: JsonValue, expected: JsonValue) -> None:
     marker: Final = uuid.uuid4().hex
@@ -274,17 +296,14 @@ def test_assistant_list_marker(bridge: _Bridge, mode: Mode, breakpoint: JsonValu
 
 def test_injected_system_marker_survives_a_trailing_audio_block(bridge: _Bridge) -> None:
     marker: Final = uuid.uuid4().hex
-    system: Final[dict[str, JsonValue]] = {"role": "system", "content": [pcb.text("sys"), pcb.block("input_audio", "")]}
+    system: Final[dict[str, JsonValue]] = {"role": "system", "content": [pcb.text("sys"), pcb.audio()]}
     messages: Final[list[JsonValue]] = [system, {"role": "user", "content": pcb.prompt(marker)}]
     call_id: Final = _completion(_chat(bridge, bridge.injecting_on, messages), marker)
     request: Final = pcb.posted(bridge.wire, marker)
     body: Final = _wire_body(request)
     assert body["prompt_cache_options"] == {"mode": "explicit"}, body
-    first, audio = pcb.content_of(pcb.input_items(request), "system")
-    assert first == {"type": "input_text", "text": "sys"}, first
-    assert audio["type"] == "input_text", audio
-    assert string_value(audio["text"]).startswith("{'type': 'input_audio'"), audio
-    pcb.assert_marker(audio, pcb.EXPLICIT)
+    (system_block,) = pcb.content_of(pcb.input_items(request), "system")
+    assert system_block == {"type": "input_text", "text": "sys", "prompt_cache_breakpoint": pcb.EXPLICIT}, system_block
     bridge.spend.landed(bridge.injecting_on, call_id, marker)
 
 

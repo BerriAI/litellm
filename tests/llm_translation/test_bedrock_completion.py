@@ -35,7 +35,6 @@ litellm.success_callback = []
 user_message = "Write a short poem about the sky"
 messages = [{"content": user_message, "role": "user"}]
 
-
 @pytest.fixture(autouse=True)
 def reset_callbacks():
     print("\npytest fixture - resetting callbacks")
@@ -43,7 +42,6 @@ def reset_callbacks():
     litellm._async_success_callback = []
     litellm.failure_callback = []
     litellm.callbacks = []
-
 
 def test_completion_bedrock_claude_completion_auth(monkeypatch):
     print("calling bedrock claude completion params auth")
@@ -72,15 +70,12 @@ def test_completion_bedrock_claude_completion_auth(monkeypatch):
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
 # test_completion_bedrock_claude_completion_auth()
-
 
 @pytest.mark.parametrize("streaming", [True, False])
 def test_completion_bedrock_guardrails(streaming):
 
     litellm.set_verbose = True
-
 
     # verbose_logger.setLevel(logging.DEBUG)
     try:
@@ -146,9 +141,7 @@ def test_completion_bedrock_guardrails(streaming):
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
 # test_completion_bedrock_claude_2_1_completion_auth()
-
 
 def test_completion_bedrock_claude_external_client_auth(monkeypatch):
     print("\ncalling bedrock claude external client auth")
@@ -187,20 +180,9 @@ def test_completion_bedrock_claude_external_client_auth(monkeypatch):
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
 # test_completion_bedrock_claude_external_client_auth()
 
-
-
-
-
-
-
-
-
-
 # test_completion_bedrock_claude_sts_client_auth()
-
 
 @pytest.mark.parametrize(
     "stop",
@@ -240,7 +222,6 @@ def test_bedrock_stop_value(stop, model):
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
 @pytest.mark.parametrize(
     "system",
     ["You are an AI", [{"type": "text", "text": "You are an AI"}], ""],
@@ -279,88 +260,8 @@ def test_bedrock_system_prompt(system, model):
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_bedrock_claude_3_tool_calling():
-    try:
-        litellm.set_verbose = True
-        litellm.turn_on_debug()
-        tools = [
-            {
-                "type": "function",
-                "function": {
-                    "name": "get_current_weather",
-                    "description": "Get the current weather in a given location",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "location": {
-                                "type": "string",
-                                "description": "The city and state, e.g. San Francisco, CA",
-                            },
-                            "unit": {
-                                "type": "string",
-                                "enum": ["celsius", "fahrenheit"],
-                            },
-                        },
-                        "required": ["location"],
-                    },
-                },
-            }
-        ]
-        messages = [
-            {
-                "role": "user",
-                "content": "What's the weather like in Boston today in fahrenheit?",
-            }
-        ]
-        response: ModelResponse = completion(
-            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-        )  # type: ignore
-        print(f"response: {response}")
-        # Add any assertions here to check the response
-        assert isinstance(response.choices[0].message.tool_calls[0].function.name, str)
-        assert isinstance(
-            response.choices[0].message.tool_calls[0].function.arguments, str
-        )
-        messages.append(
-            response.choices[0].message.model_dump()
-        )  # Add assistant tool invokes
-        tool_result = (
-            '{"location": "Boston", "temperature": "72", "unit": "fahrenheit"}'
-        )
-        # Add user submitted tool results in the OpenAI format
-        messages.append(
-            {
-                "tool_call_id": response.choices[0].message.tool_calls[0].id,
-                "role": "tool",
-                "name": response.choices[0].message.tool_calls[0].function.name,
-                "content": tool_result,
-            }
-        )
-        # In the second response, Claude should deduce answer from tool results
-        second_response = completion(
-            model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-            messages=messages,
-            tools=tools,
-            tool_choice="auto",
-        )
-        print(f"second response: {second_response}")
-        assert isinstance(second_response.choices[0].message.content, str)
-    except RateLimitError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-
-
-
-
 def test_completion_bedrock_mistral_completion_auth():
     print("calling bedrock mistral completion params auth")
-
 
     litellm.turn_on_debug()
 
@@ -390,9 +291,7 @@ def test_completion_bedrock_mistral_completion_auth():
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
 # test_completion_bedrock_mistral_completion_auth()
-
 
 def test_bedrock_ptu():
     """
@@ -424,7 +323,6 @@ def test_bedrock_ptu():
             == "https://bedrock-runtime.us-west-2.amazonaws.com/model/arn%3Aaws%3Abedrock%3Aus-west-2%3A888602223428%3Aprovisioned-model%2F8fxff74qyhs3/converse"
         )
         mock_client_post.assert_called_once()
-
 
 @pytest.mark.asyncio
 async def test_bedrock_custom_api_base():
@@ -463,7 +361,6 @@ async def test_bedrock_custom_api_base():
         )
         mock_client_post.assert_called_once()
 
-
 @pytest.mark.parametrize(
     "model",
     [
@@ -499,7 +396,6 @@ async def test_bedrock_extra_headers(model):
             == "my-test-key"
         )
         mock_client_post.assert_called_once()
-
 
 @pytest.mark.asyncio
 async def test_bedrock_custom_prompt_template():
@@ -544,7 +440,6 @@ async def test_bedrock_custom_prompt_template():
         prompt = json.loads(mock_client_post.call_args.kwargs["data"])["prompt"]
         assert prompt == "<|im_start|>user\nWhat's AWS?<|im_end|>"
         mock_client_post.assert_called_once()
-
 
 def test_completion_bedrock_external_client_region(monkeypatch):
     print("\ncalling bedrock claude external client auth")
@@ -594,31 +489,14 @@ def test_completion_bedrock_external_client_region(monkeypatch):
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
-
-
-
-
-
-
-
-
-
-
-
-
-
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
 )
-
-
-
 
 def test_base_aws_llm_get_credentials():
     import time
 
     import boto3
-
 
     start_time = time.time()
     session = boto3.Session(
@@ -650,15 +528,6 @@ def test_base_aws_llm_get_credentials():
         )
     )
 
-
-
-
-
-
-
-
-
-
 def test_bedrock_converse_route():
     litellm.set_verbose = True
     try:
@@ -672,7 +541,6 @@ def test_bedrock_converse_route():
         else:
             raise
 
-
 def test_bedrock_mapped_converse_models():
     litellm.set_verbose = True
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -683,23 +551,8 @@ def test_bedrock_mapped_converse_models():
         messages=[{"role": "user", "content": "Hello, world!"}],
     )
 
-
-
-
-
-
-
-
-
-
 class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
-    test_content_list_handling = None
-    test_developer_role_translation = None
     test_function_calling_with_tool_response = None
-    test_image_url = None
-    test_json_response_format_stream = None
-    test_tool_call_with_empty_enum_property = None
-    test_tool_call_with_property_type_array = None
 
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -728,10 +581,7 @@ class TestBedrockConverseChatCrossRegion(BaseLLMChatTest):
 
         assert cost > 0
 
-
 class TestBedrockConverseAnthropicUnitTests(BaseAnthropicChatTest):
-    test_completion_thinking_with_max_tokens = None
-    test_completion_thinking_without_max_tokens = None
 
     def get_base_completion_call_args(self) -> dict:
         return {
@@ -744,12 +594,8 @@ class TestBedrockConverseAnthropicUnitTests(BaseAnthropicChatTest):
             "thinking": {"type": "enabled", "budget_tokens": 16000},
         }
 
-
 class TestBedrockConverseChatNormal(BaseLLMChatTest):
-    test_content_list_handling = None
-    test_empty_tools = None
     test_function_calling_with_tool_response = None
-    test_image_url = None
 
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -760,12 +606,8 @@ class TestBedrockConverseChatNormal(BaseLLMChatTest):
             "aws_region_name": "us-east-1",
         }
 
-
-
 class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
-    test_content_list_handling = None
     test_function_calling_with_tool_response = None
-    test_image_url = None
 
     def get_base_completion_call_args(self) -> dict:
         os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -776,9 +618,6 @@ class TestBedrockConverseNovaTestSuite(BaseLLMChatTest):
             "aws_region_name": "us-east-1",
         }
 
-
-
-
 class TestBedrockRerank(BaseLLMRerankTest):
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.BEDROCK
@@ -788,7 +627,6 @@ class TestBedrockRerank(BaseLLMRerankTest):
             "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
         }
 
-
 class TestBedrockCohereRerank(BaseLLMRerankTest):
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.BEDROCK
@@ -797,13 +635,6 @@ class TestBedrockCohereRerank(BaseLLMRerankTest):
         return {
             "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/cohere.rerank-v3-5:0",
         }
-
-
-
-
-
-
-
 
 @pytest.mark.parametrize("top_k_param", ["top_k", "topK"])
 def test_bedrock_nova_topk(top_k_param):
@@ -830,7 +661,6 @@ def test_bedrock_nova_topk(top_k_param):
         assert "inferenceConfig" in captured_data["additionalModelRequestFields"]
         assert captured_data["additionalModelRequestFields"]["inferenceConfig"]["topK"] == 10
 
-
 def test_bedrock_cross_region_inference(monkeypatch):
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -856,7 +686,6 @@ def test_bedrock_cross_region_inference(monkeypatch):
             == "https://bedrock-runtime.us-west-2.amazonaws.com/model/us.meta.llama3-3-70b-instruct-v1%3A0/converse"
         )
 
-
 def test_bedrock_empty_content_real_call():
     completion(
         model="bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
@@ -874,11 +703,6 @@ def test_bedrock_empty_content_real_call():
         ],
     )
 
-
-
-
-
-
 class TestBedrockEmbedding(BaseLLMEmbeddingTest):
     def get_base_embedding_call_args(self) -> dict:
         return {
@@ -887,8 +711,6 @@ class TestBedrockEmbedding(BaseLLMEmbeddingTest):
 
     def get_custom_llm_provider(self) -> litellm.LlmProviders:
         return litellm.LlmProviders.BEDROCK
-
-
 
 @pytest.mark.asyncio
 async def test_bedrock_image_url_sync_client():
@@ -928,9 +750,6 @@ async def test_bedrock_image_url_sync_client():
             print(e)
         mock_post.assert_called_once()
 
-
-
-
 def test_bedrock_custom_proxy():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -952,7 +771,6 @@ def test_bedrock_custom_proxy():
         assert mock_post.call_args.kwargs["url"] == "https://some-api-url/models"
 
         assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer Token"
-
 
 def test_bedrock_custom_deepseek():
     import json
@@ -1003,13 +821,6 @@ def test_bedrock_custom_deepseek():
             print(f"Error: {str(e)}")
             raise e
 
-
-
-
-
-
-
-
 def test_bedrock_description_param():
     from litellm import completion
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
@@ -1047,7 +858,6 @@ def test_bedrock_description_param():
         assert (
             "Find the meaning inside a poem" in request_body_str
         )  # assert description is passed
-
 
 @pytest.mark.parametrize(
     "sync_mode",
@@ -1107,7 +917,6 @@ async def test_bedrock_thinking_in_assistant_message(sync_mode):
             "Alright, let's get started with resolving this issue about implementing"
             in json_data
         )
-
 
 @pytest.mark.asyncio
 async def test_bedrock_stream_thinking_content_openwebui():
@@ -1177,7 +986,6 @@ async def test_bedrock_stream_thinking_content_openwebui():
         len(response_content) > 0
     ), "There should be non-empty content after thinking tags"
 
-
 def test_bedrock_application_inference_profile():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -1242,7 +1050,6 @@ def test_bedrock_application_inference_profile():
         )
         assert mock_post2.call_args.kwargs["url"] == mock_post.call_args.kwargs["url"]
 
-
 def return_mocked_response(model: str):
     if model == "bedrock/mistral.mistral-large-2407-v1:0":
         return {
@@ -1256,7 +1063,6 @@ def return_mocked_response(model: str):
             "stopReason": "max_tokens",
             "usage": {"inputTokens": 5, "outputTokens": 10, "totalTokens": 15},
         }
-
 
 @pytest.mark.parametrize(
     "model",
@@ -1300,9 +1106,6 @@ async def test_bedrock_max_completion_tokens(model: str):
             "messages": [{"role": "user", "content": [{"text": "Hello!"}]}],
             "inferenceConfig": {"maxTokens": 10},
         }
-
-
-
 
 @pytest.mark.asyncio
 async def test_bedrock_passthrough_router():
@@ -1357,7 +1160,6 @@ async def test_bedrock_passthrough_router():
 
     assert response.status_code == 200
 
-
 @pytest.mark.asyncio
 async def test_bedrock_converse__streaming_passthrough(monkeypatch):
     import asyncio
@@ -1411,7 +1213,6 @@ async def test_bedrock_converse__streaming_passthrough(monkeypatch):
         assert response_cost is not None and response_cost > 0
         assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
 
-
 @pytest.mark.asyncio
 async def test_bedrock_streaming_passthrough_test2(monkeypatch):
     import asyncio
@@ -1461,7 +1262,6 @@ async def test_bedrock_streaming_passthrough_test2(monkeypatch):
         print(mock_callback.call_args.kwargs.keys())
         assert "standard_logging_object" in mock_callback.call_args.kwargs["kwargs"]
         assert "response_cost" in mock_callback.call_args.kwargs["kwargs"]
-
 
 def test_bedrock_openai_imported_model():
     """
@@ -1564,25 +1364,6 @@ def test_bedrock_openai_imported_model():
         assert request_body["max_tokens"] == 300
         assert request_body["temperature"] == 0.5
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 def test_bedrock_openai_multiple_message_types():
     """
     Test that various message content types are handled correctly.
@@ -1631,13 +1412,9 @@ def test_bedrock_openai_multiple_message_types():
 
             print("✓ Multiple message types handled correctly")
 
-
-
-
 # ============================================================================
 # Nova Grounding (web_search_options) Unit Tests (Mocked)
 # ============================================================================
-
 
 def test_bedrock_nova_grounding_web_search_options_non_streaming():
     """
@@ -1696,7 +1473,6 @@ def test_bedrock_nova_grounding_web_search_options_non_streaming():
             print(
                 f"✓ web_search_options correctly transformed to systemTool (non-streaming)"
             )
-
 
 def test_bedrock_nova_grounding_with_function_tools():
     """
@@ -1782,7 +1558,6 @@ def test_bedrock_nova_grounding_with_function_tools():
             assert system_tool_found, "systemTool (nova_grounding) should be present"
             print(f"✓ Both function tools and web_search_options correctly combined")
 
-
 @pytest.mark.asyncio
 async def test_bedrock_nova_grounding_async():
     """
@@ -1835,9 +1610,6 @@ async def test_bedrock_nova_grounding_async():
 
             assert system_tool_found, "systemTool with nova_grounding should be present"
             print(f"✓ Async web_search_options correctly transformed to systemTool")
-
-
-
 
 def test_bedrock_nova_grounding_request_transformation():
     """

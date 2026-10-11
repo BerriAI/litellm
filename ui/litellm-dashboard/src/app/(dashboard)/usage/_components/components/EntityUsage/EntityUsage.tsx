@@ -36,6 +36,7 @@ import { BreakdownControls, Leaderboard, useBreakdown, type BreakdownState } fro
 import {
   bucketSeries,
   bucketTotals,
+  labelForDate,
   dailyTotals,
   formatMetricValue,
   type Granularity,
@@ -66,15 +67,16 @@ const SCALE_OPTIONS = [
   { value: "linear", label: "Linear" },
   { value: "log", label: "Log" },
 ] as const satisfies readonly { value: StackedUsageScale; label: string }[];
-/** Quiet headers: muted, regular weight, so the rows carry the emphasis. */
 const QUIET_HEADER = { headerClassName: "font-normal" };
+const FLAT_COST_KEY = "flat_cost";
 
 /** Stacks reserved-capacity flat cost on top of the per-model spend, so each bar is the day's full cost. */
 const withFlatCost = (series: Series, results: readonly DailyData[]): Series => {
   const flatByDate = new Map(results.map((day) => [day.date, day.metrics.flat_cost ?? 0]));
   return {
-    data: series.data.map((day) => ({ ...day, [FLAT_COST_SERIES]: flatByDate.get(day.date) ?? 0 })),
-    keys: [...series.keys, FLAT_COST_SERIES],
+    data: series.data.map((day) => ({ ...day, [FLAT_COST_KEY]: flatByDate.get(day.date) ?? 0 })),
+    keys: [...series.keys, FLAT_COST_KEY],
+    labels: [...series.labels, FLAT_COST_SERIES],
     colors: [...series.colors, FLAT_COST_COLOR],
   };
 };
@@ -418,7 +420,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     const trend = trendKey ? (
       <Sparkline data={dailyTrend} dataKey={trendKey} color={BRAND} className="h-12" />
     ) : undefined;
-    // The lead tile spans the row on narrow screens so five tiles never leave an empty cell.
     const span = index === 0 ? "col-span-2 lg:col-span-1" : undefined;
     if (!tile.expandable) {
       return (
@@ -499,11 +500,13 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           <StackedUsageChart
             data={chartSeries.data}
             series={chartSeries.keys}
+            labels={chartSeries.labels}
             colors={chartSeries.colors}
-            xKey="label"
+            xKey="date"
+            xLabel={(date) => labelForDate(chartSeries, date)}
             scale={scale}
             format={chartFormat}
-            totalFor={(label) => chartTotals.get(label)}
+            totalFor={(date) => chartTotals.get(date)}
             className="h-[320px]"
           />
         </div>
@@ -657,7 +660,6 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           </AlertDescription>
         </Alert>
       )}
-      {/* A compact toolbar row: the header's own bottom margin and stacked label give way to the grid gap. */}
       <div className="max-w-full [&>div:first-child]:mb-0 [&>div:first-child_label]:sr-only">
         <UsageExportHeader
           dateValue={dateValue}

@@ -8,7 +8,7 @@ const isoDay = (date: Date) => {
 };
 
 /** Per-tag spend, tokens and requests for a date range, including the `User-Agent:` tags agents are read from. */
-export const useTagSummary = (startTime: Date | null, endTime: Date | null) => {
+export const useTagSummary = (startTime: Date | null, endTime: Date | null, enabled = true) => {
   const { accessToken } = useAuthorized();
   return $api.useQuery(
     "get",
@@ -22,7 +22,7 @@ export const useTagSummary = (startTime: Date | null, endTime: Date | null) => {
       },
     },
     {
-      enabled: Boolean(accessToken && startTime && endTime),
+      enabled: enabled && Boolean(accessToken && startTime && endTime),
       select: (data) => data.results,
     },
   );

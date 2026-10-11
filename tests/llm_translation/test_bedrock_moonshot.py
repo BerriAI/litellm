@@ -15,20 +15,12 @@ from base_llm_unit_tests import BaseLLMChatTest
 
 import litellm
 
-
 class TestBedrockMoonshotInvoke(BaseLLMChatTest):
     """
     Test suite for Bedrock Moonshot via invoke route.
     Inherits all standard LLM tests from BaseLLMChatTest.
     """
 
-    test_json_response_format_stream = None
-    test_completion_cost = None
-    test_content_list_handling = None
-    test_developer_role_translation = None
-    test_message_with_name = None
-    test_pydantic_model_input = None
-    test_response_format_type_text_with_tool_calls_no_tool_choice = None
     test_streaming = None
 
     def get_base_completion_call_args(self) -> dict:

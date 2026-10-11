@@ -6,7 +6,9 @@ import re
 from typing import Final, List
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -22,6 +24,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
+    convert_to_ollama_image,
     encode_tool_call_id_with_signature,
     function_call_prompt,
     get_thought_signature_from_tool,
@@ -205,6 +208,101 @@ def test_ollama_pt_consecutive_user_messages():
     expected_prompt = "### User:\nHello\n\n### Assistant:\nHow can I help you?\n\n### User:\nHow are you?\n\n### Assistant:\nI'm good, thanks!\n\n### User:\nI am well too.\n\n"
     assert isinstance(result, dict)
     assert result["prompt"] == expected_prompt
+
+
+def _ollama_tool_turn(*results: object) -> list[dict]:
+    call: Final = {"id": "call_1", "type": "function", "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'}}
+    return [
+        {"role": "user", "content": "Weather in Paris?"},
+        {"role": "assistant", "content": None, "tool_calls": [call]},
+        *({"role": "tool", "tool_call_id": "call_1", "content": result} for result in results),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("results", "forwarded"),
+    [
+        pytest.param(("Paris: 22 degrees", "Sky: clear"), "Paris: 22 degrees\nSky: clear", id="two-tool-messages"),
+        pytest.param(
+            ([{"type": "text", "text": "Paris: 22 degrees"}, {"type": "text", "text": "clear skies"}],),
+            "Paris: 22 degrees\nclear skies",
+            id="text-parts-of-one-tool-message",
+        ),
+        pytest.param(
+            ([{"type": "text", "text": "Paris: 22 degrees"}], "Sky: clear"),
+            "Paris: 22 degrees\nSky: clear",
+            id="text-part-then-string",
+        ),
+        pytest.param(
+            ([{"type": "text", "text": ""}, {"type": "text", "text": "clear skies"}],),
+            "clear skies",
+            id="empty-text-part-adds-no-blank-line",
+        ),
+    ],
+)
+def test_ollama_pt_separates_merged_tool_results_with_a_newline(results: tuple[object, ...], forwarded: str):
+    result: Final = ollama_pt(model="llama2", messages=_ollama_tool_turn(*results))
+
+    assert isinstance(result, dict)
+    assert result["prompt"].endswith(f"### User:\n{forwarded}\n\n"), result["prompt"]
+
+
+@pytest.mark.parametrize("content", [22, 22.5, True, {"temperature": 22}], ids=type)
+def test_ollama_pt_rejects_non_text_tool_content_as_a_bad_request(content: object):
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        ollama_pt(model="llama2", messages=_ollama_tool_turn(content))
+
+    assert excinfo.value.status_code == 400
+    assert "content" in excinfo.value.message
+    assert "tool message at index 2" in excinfo.value.message
+    assert type(content).__name__ in excinfo.value.message
+
+
+@pytest.mark.parametrize(
+    ("part", "expected_detail"),
+    (
+        ({"type": "image_url", "image_url": None}, "NoneType image_url"),
+        ({"type": "text", "text": 22}, "int text part"),
+        ({"type": "text"}, "text part with no text"),
+        ({"type": "image_url"}, "image_url part with no image_url"),
+        ({"type": "image_url", "image_url": {"detail": "high"}}, "image_url object without a url string"),
+        ("hello", "str content part"),
+    ),
+    ids=(
+        "none-image-url",
+        "int-text",
+        "text-without-text",
+        "image-url-without-image-url",
+        "image-url-object-without-url",
+        "str-part",
+    ),
+)
+def test_ollama_pt_rejects_a_malformed_content_part_as_a_bad_request(part: object, expected_detail: str):
+    messages: Final = [{"role": "user", "content": [part]}]
+
+    with pytest.raises(litellm.BadRequestError) as excinfo:
+        ollama_pt(model="llava", messages=messages)
+
+    assert excinfo.value.status_code == 400
+    assert "user message at index 0" in excinfo.value.message
+    assert expected_detail in excinfo.value.message
+
+
+def test_convert_to_ollama_image_downloads_an_http_image_url_to_bare_base64(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    png_bytes: Final = base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+    )
+    image_url: Final = f"https://images.example.com/{uuid.uuid4()}.png"
+
+    with respx.mock:
+        route: Final = respx.get(image_url).mock(
+            return_value=httpx.Response(200, content=png_bytes, headers={"content-type": "image/png"})
+        )
+        result: Final = convert_to_ollama_image(image_url)
+
+    assert route.call_count == 1
+    assert result == base64.b64encode(png_bytes).decode("utf-8")
 
 
 @pytest.mark.asyncio
@@ -3184,6 +3282,41 @@ def test_convert_to_anthropic_tool_result_openai_file_pdf_becomes_document():
     assert "document" in tool_result["content"][0]
     assert tool_result["content"][0]["document"]["format"] == "pdf"
     assert tool_result["content"][0]["document"]["source"]["bytes"] == pdf_b64
+
+
+def test_convert_to_bedrock_tool_call_result_maps_tool_references_to_text() -> None:
+    tool_reference_message: Final[ChatCompletionToolMessage] = {
+        "role": "tool",
+        "tool_call_id": "toolu_1",
+        "content": [
+            {"type": "tool_reference", "tool_name": "WebFetch"},
+            {"type": "tool_reference", "tool_name": "WebSearch"},
+        ],
+    }
+    mixed_message: Final[ChatCompletionToolMessage] = {
+        "role": "tool",
+        "tool_call_id": "toolu_2",
+        "content": [
+            {"type": "text", "text": "Loaded tools:"},
+            {"type": "tool_reference", "tool_name": "WebSearch"},
+        ],
+    }
+
+    tool_reference_result: Final = _convert_to_bedrock_tool_call_result(tool_reference_message)
+    mixed_result: Final = _convert_to_bedrock_tool_call_result(mixed_message)
+
+    assert tool_reference_result == {
+        "toolResult": {
+            "toolUseId": "toolu_1",
+            "content": [{"text": "WebFetch"}, {"text": "WebSearch"}],
+        }
+    }
+    assert mixed_result == {
+        "toolResult": {
+            "toolUseId": "toolu_2",
+            "content": [{"text": "Loaded tools:"}, {"text": "WebSearch"}],
+        }
+    }
 
 
 def test_bedrock_converse_messages_pt_document_various_formats():
@@ -6947,3 +7080,20 @@ def test_has_tool_with_name_anthropic_shape_without_type_field():
 def test_has_tool_with_name_not_a_list():
     assert not has_tool_with_name(None, "my_tool")
     assert not has_tool_with_name("not a list", "my_tool")
+
+
+def test_completion_bedrock_invalid_role_exception(monkeypatch):
+    """
+    Test if litellm raises a BadRequestError for an invalid role on Bedrock
+    """
+    monkeypatch.setattr(litellm, "set_verbose", True)
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0",
+            messages=[{"role": "very-bad-role", "content": "hello"}],
+        )
+
+    assert (
+        str(exc_info.value)
+        == "litellm.BadRequestError: Invalid Message passed in {'role': 'very-bad-role', 'content': 'hello'}"
+    )

@@ -27,12 +27,16 @@ export interface StackedUsageChartProps {
   data: readonly Record<string, unknown>[];
   /** Series keys, bottom of the stack first. */
   series: readonly string[];
+  /** Display names for `series`, same order; defaults to the keys. */
+  labels?: readonly string[];
   /** Overrides the palette per series, e.g. to grey out an "Other" bucket. */
   colors?: readonly string[];
   xKey: string;
+  /** Turns an `xKey` value into its tick and tooltip text, e.g. an ISO date into "Oct 3". */
+  xLabel?: (value: string) => string;
   format: (value: number) => string;
-  /** Appended to the tooltip header as "· Total …" for the hovered bucket. */
-  totalFor?: (label: string) => number | undefined;
+  /** Appended to the tooltip header as "· Total …" for the hovered bucket, looked up by its `xKey` value. */
+  totalFor?: (xValue: string) => number | undefined;
   totalLabel?: string;
   scale?: StackedUsageScale;
   className?: string;
@@ -67,8 +71,10 @@ export function StackedUsageTooltipRow({
 export function StackedUsageChart({
   data,
   series,
+  labels,
   colors,
   xKey,
+  xLabel = String,
   format,
   totalFor,
   totalLabel = "Total",
@@ -76,15 +82,27 @@ export function StackedUsageChart({
   className,
 }: StackedUsageChartProps) {
   const fill = (index: number) => colors?.[index] ?? stackedUsageColor(index);
+  const nameOf = (index: number) => labels?.[index] ?? series[index];
   const config = Object.fromEntries(
-    series.map((key, index) => [key, { label: key, color: fill(index) }]),
+    series.map((key, index) => [key, { label: nameOf(index), color: fill(index) }]),
   ) satisfies ChartConfig;
+  const tooltipHeader = (_label: unknown, payload: readonly { payload?: Record<string, unknown> }[]) => {
+    const xValue = String(payload?.[0]?.payload?.[xKey] ?? "");
+    const total = totalFor?.(xValue);
+    return total === undefined ? xLabel(xValue) : `${xLabel(xValue)} · ${totalLabel} ${format(total)}`;
+  };
 
   return (
     <ChartContainer config={config} className={cn("aspect-auto h-[380px] w-full", className)}>
       <BarChart data={[...data]} margin={{ left: 8, right: 8 }} barCategoryGap="15%" maxBarSize={64}>
         <CartesianGrid vertical={false} />
-        <XAxis dataKey={xKey} tickLine={false} axisLine={false} minTickGap={48} />
+        <XAxis
+          dataKey={xKey}
+          tickLine={false}
+          axisLine={false}
+          minTickGap={48}
+          tickFormatter={(value) => xLabel(String(value))}
+        />
         <YAxis
           scale={scale}
           domain={scale === "log" ? [1, "auto"] : [0, "auto"]}
@@ -97,18 +115,27 @@ export function StackedUsageChart({
           content={
             <ChartTooltipContent
               className="min-w-48"
-              labelFormatter={(label) => {
-                const total = totalFor?.(String(label));
-                return total === undefined ? String(label) : `${label} · ${totalLabel} ${format(total)}`;
-              }}
-              formatter={(value, name, item) => (
-                <StackedUsageTooltipRow value={Number(value)} name={String(name)} color={item.color} format={format} />
+              labelFormatter={tooltipHeader}
+              formatter={(value, _name, item) => (
+                <StackedUsageTooltipRow
+                  value={Number(value)}
+                  name={nameOf(series.indexOf(String(item.dataKey)))}
+                  color={item.color}
+                  format={format}
+                />
               )}
             />
           }
         />
         {series.map((key, index) => (
-          <Bar key={key} dataKey={key} stackId="usage" fill={fill(index)} isAnimationActive={false} />
+          <Bar
+            key={key}
+            dataKey={key}
+            name={nameOf(index)}
+            stackId="usage"
+            fill={fill(index)}
+            isAnimationActive={false}
+          />
         ))}
       </BarChart>
     </ChartContainer>

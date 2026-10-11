@@ -28,6 +28,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 import litellm
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.types.router import Deployment, LiteLLM_Params
 from litellm.proxy.proxy_server import (
     ProxyConfig,
     _is_remote_module_url,
@@ -40,33 +41,108 @@ from litellm.proxy.proxy_server import (
     validate_deployment_complexity_router_placement,
     validate_deployment_max_agentic_loops,
 )
-from litellm.tracing.config import trace_storage_config
+from litellm.tracing.config import is_lens_tracing_enabled
 
 from .conftest import normalize
+
+
+def _deployment(model_id: str, model_name: str = "gpt-3.5-turbo") -> Deployment:
+    return Deployment(
+        model_name=model_name,
+        litellm_params=LiteLLM_Params(model="openai/gpt-3.5-turbo"),
+        model_info={"id": model_id},
+    )
+
+
+def _db_model(model_id: str, model_name: str = "gpt-3.5-turbo") -> SimpleNamespace:
+    return SimpleNamespace(
+        model_id=model_id,
+        model_name=model_name,
+        model_info={"id": model_id},
+        litellm_params={"model": encrypt_value_helper("openai/gpt-3.5-turbo")},
+        blocked=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_adds_and_deletes_stale_deployment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    router = litellm.Router(model_list=[])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"model_list": []}')
+    monkeypatch.setattr(proxy_server, "user_config_file_path", str(config_path))
+    model = _db_model("db-deployment")
+
+    assert ProxyConfig()._add_deployment(db_models=[model]) == 1
+    assert router.get_model_ids() == ["db-deployment"]
+    assert router.get_deployment(model_id="db-deployment").litellm_params.model == "openai/gpt-3.5-turbo"
+    await ProxyConfig()._delete_deployment(db_models=[])
+    assert router.get_model_ids() == []
+
+
+def test_proxy_config_upserts_existing_deployment_without_duplicating_it(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    router = litellm.Router(model_list=[_deployment("existing-deployment").to_json(exclude_none=True)])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+
+    ProxyConfig()._add_deployment(db_models=[_db_model("existing-deployment")])
+    assert len(router.model_list) == 1
+    assert router.get_model_ids() == ["existing-deployment"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_preserves_models_when_config_read_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+
+    router = litellm.Router(model_list=[_deployment("config-deployment").to_json(exclude_none=True)])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "user_config_file_path", str(tmp_path / "missing.json"))
+
+    assert await ProxyConfig()._delete_deployment(db_models=[]) is None
+    assert router.get_model_ids() == ["config-deployment"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_keeps_database_models_and_deletes_stale_models(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy import proxy_server
+
+    router = litellm.Router(
+        model_list=[
+            _deployment("kept-deployment").to_json(exclude_none=True),
+            _deployment("stale-deployment", "stale-model").to_json(exclude_none=True),
+        ]
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-proxy-config-test-salt")
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"model_list": []}')
+    monkeypatch.setattr(proxy_server, "user_config_file_path", str(config_path))
+
+    desired = await ProxyConfig()._delete_deployment(db_models=[_db_model("kept-deployment")])
+
+    assert desired == frozenset({"kept-deployment"})
+    assert router.get_model_ids() == ["kept-deployment"]
 from tests._master_key import MASTER_KEY
 
 
 @pytest.mark.asyncio
-async def test_proxy_config_loads_tracing_url_and_retention_from_yaml(tmp_path, monkeypatch) -> None:
+async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) -> None:
     config_file: Final = tmp_path / "tracing.yaml"
-    config_file.write_text(
-        "model_list: []\ngeneral_settings:\n  tracing:\n    store:\n"
-        "      type: clickhouse\n      url: os.environ/TRACING_TEST_URL\n"
-        "      database: analytics\n      retention_days: 7\n"
-    )
-    monkeypatch.setenv("TRACING_TEST_URL", "http://localhost:8123")
-    monkeypatch.setenv("CLICKHOUSE_URL", "http://unused:8123")
+    config_file.write_text("model_list: []\ngeneral_settings:\n  tracing:\n    store:\n      type: lens\n")
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
 
     _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
-    tracing = trace_storage_config(settings["tracing"])
-    assert (tracing.url, tracing.database, tracing.retention_days) == (
-        "http://localhost:8123",
-        "analytics",
-        7,
-    )
+    assert is_lens_tracing_enabled(settings["tracing"], {}) is True
+
 
 
 @pytest.mark.asyncio
@@ -1851,9 +1927,44 @@ def test_ProxyConfig_load_credential_list_returns_items():
     dumped = creds[0].model_dump()
     assert dumped == {
         "credential_name": "openai-key",
+        "display_name": None,
         "credential_info": {"provider": "openai"},
         "credential_values": {"api_key": "sk-x"},
     }
+
+
+def test_ProxyConfig_load_credential_list_tags_every_entry_as_config_defined():
+    creds = ProxyConfig().load_credential_list(
+        {
+            "credential_list": [
+                {"credential_name": "plain", "credential_info": {}, "credential_values": {"api_key": "sk-x"}},
+                {
+                    "credential_name": "claims-db",
+                    "source": "db",
+                    "credential_info": {},
+                    "credential_values": {"api_key": "sk-y"},
+                },
+            ]
+        }
+    )
+    assert [(cred.credential_name, cred.source) for cred in creds] == [("plain", "config"), ("claims-db", "config")]
+
+
+@pytest.mark.parametrize("display_name", [2024, True, "Azure Prod"])
+def test_ProxyConfig_load_credential_list_ignores_a_display_name_set_in_config(display_name):
+    creds = ProxyConfig().load_credential_list(
+        {
+            "credential_list": [
+                {
+                    "credential_name": "azure_cred",
+                    "display_name": display_name,
+                    "credential_info": {},
+                    "credential_values": {"api_key": "sk-x"},
+                }
+            ]
+        }
+    )
+    assert [(cred.credential_name, cred.display_name) for cred in creds] == [("azure_cred", None)]
 
 
 def test_ProxyConfig_load_credential_list_invalid_entry_raises():
@@ -3883,7 +3994,7 @@ async def test_ProxyConfig_add_deployment_applies_db_router_settings(monkeypatch
         return {}
 
     monkeypatch.setattr(pc, "get_config", fake_get_config)
-    monkeypatch.setattr(pc, "_get_models_from_db", AsyncMock(return_value=[]))
+    monkeypatch.setattr(pc, "get_models_from_db", AsyncMock(return_value=[]))
     monkeypatch.setattr(pc, "_init_non_llm_objects_in_db", AsyncMock())
     monkeypatch.setattr(proxy_server, "prefetch_config_params", AsyncMock())
     monkeypatch.setattr(proxy_server, "get_config_param", AsyncMock(return_value=None))
@@ -3963,7 +4074,7 @@ async def test_ProxyConfig_add_deployment_loads_db_credentials_before_reconcilin
     async def install_models(new_models: object, proxy_logging_obj: object) -> None:
         installed(credential=CredentialAccessor.get_credential_values("openai-cred"))
 
-    monkeypatch.setattr(pc, "_get_models_from_db", read_models_while_a_credential_lands)
+    monkeypatch.setattr(pc, "get_models_from_db", read_models_while_a_credential_lands)
     monkeypatch.setattr(pc, "_update_llm_router", install_models)
 
     await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
@@ -3987,7 +4098,7 @@ async def test_ProxyConfig_add_deployment_loads_db_credentials_even_when_models_
     _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
     monkeypatch.setattr(proxy_server, "general_settings", {"supported_db_objects": ["mcp"]})
     models_fetch = AsyncMock(return_value=[])
-    monkeypatch.setattr(pc, "_get_models_from_db", models_fetch)
+    monkeypatch.setattr(pc, "get_models_from_db", models_fetch)
 
     await pc.add_deployment(prisma_client=fake_prisma, proxy_logging_obj=MagicMock())
 
@@ -4019,6 +4130,30 @@ async def test_ProxyConfig_get_credentials_reads_from_writer_not_replica(monkeyp
 
     assert CredentialAccessor.get_credential_values("openai-cred") == {"api_key": "sk-from-writer"}
     reader_inner.litellm_credentialstable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_ProxyConfig_get_credentials_carries_the_stored_display_name_and_marks_rows_as_db(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.litellm_core_utils.credential_accessor import CredentialAccessor
+
+    pc = ProxyConfig()
+    fake_prisma = MagicMock()
+    fake_prisma.db.litellm_credentialstable.find_many = AsyncMock(
+        return_value=[{**_encrypted_credential_row("labeled-cred", "sk-labeled"), "display_name": "Prod OpenAI"}]
+    )
+    _stub_add_deployment_collaborators(monkeypatch, pc, fake_prisma)
+
+    await pc.get_credentials(prisma_client=fake_prisma)
+
+    loaded = CredentialAccessor.find_credential("labeled-cred")
+    assert loaded is not None
+    assert (loaded.display_name, loaded.source, loaded.credential_values) == (
+        "Prod OpenAI",
+        "db",
+        {"api_key": "sk-labeled"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -5449,14 +5584,24 @@ async def test_model_refresh_updates_availability_catalog_and_retains_it_on_db_f
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("versions", [None, ["2024-11-05"], [], ["2026-07-28"], ["unknown"]])
-async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, monkeypatch, versions):
+@pytest.mark.parametrize(
+    ("versions", "valid"),
+    [
+        (None, True),
+        (["2024-11-05"], True),
+        (["2026-07-28"], True),
+        (["2025-11-25", "2026-07-28"], True),
+        ([], False),
+        (["unknown"], False),
+    ],
+)
+async def test_proxy_config_validates_advertised_mcp_versions_at_load(tmp_path, monkeypatch, versions, valid):
     config = tmp_path / "mcp-versions.yaml"
     config.write_text(json.dumps({"model_list": [], "general_settings": {"mcp_advertised_versions": versions}}))
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", False)
     monkeypatch.delenv("LITELLM_CONFIG_BUCKET_NAME", raising=False)
-    if versions is None or versions == ["2024-11-05"]:
+    if valid:
         _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config))
         assert settings["mcp_advertised_versions"] == versions
         return

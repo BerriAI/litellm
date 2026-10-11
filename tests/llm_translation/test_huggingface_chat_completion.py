@@ -7,7 +7,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 from base_llm_unit_tests import BaseLLMChatTest
 
-
 import pytest
 
 import litellm
@@ -126,7 +125,6 @@ MOCK_STREAMING_CHUNKS = [
     },
 ]
 
-
 PROVIDER_MAPPING_RESPONSE = {
     "fireworks-ai": {
         "status": "live",
@@ -145,13 +143,11 @@ PROVIDER_MAPPING_RESPONSE = {
     },
 }
 
-
 @pytest.fixture
 def mock_provider_mapping():
     with patch("litellm.llms.huggingface.chat.transformation.fetch_inference_provider_mapping") as mock:
         mock.return_value = PROVIDER_MAPPING_RESPONSE
         yield mock
-
 
 @pytest.fixture(autouse=True)
 def clear_lru_cache():
@@ -160,7 +156,6 @@ def clear_lru_cache():
     fetch_inference_provider_mapping.cache_clear()
     yield
     fetch_inference_provider_mapping.cache_clear()
-
 
 @pytest.fixture
 def mock_http_handler():
@@ -187,7 +182,6 @@ def mock_http_handler():
 
         mock.side_effect = mock_side_effect
         yield mock
-
 
 @pytest.fixture
 def mock_http_async_handler():
@@ -219,7 +213,6 @@ def mock_http_async_handler():
 
         mock.side_effect = mock_side_effect
         yield mock
-
 
 class TestHuggingFace(BaseLLMChatTest):
     @pytest.fixture(autouse=True)
@@ -355,8 +348,6 @@ class TestHuggingFace(BaseLLMChatTest):
                 == tool_call_no_arguments["tool_calls"][0]["function"]["arguments"]
             )
 
-
-
     def test_completion_with_api_base(self):
         messages = [{"role": "user", "content": "This is a test message"}]
         api_base = "https://abcd123.us-east-1.aws.endpoints.huggingface.cloud"
@@ -421,9 +412,3 @@ class TestHuggingFace(BaseLLMChatTest):
         called_url = call_args[1]["url"]
         assert called_url == f"{api_base}/v1/chat/completions"
 
-
-
-
-    @pytest.mark.asyncio
-    async def test_completion_cost(self):
-        pass

@@ -6,8 +6,9 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from importlib.resources import files
 from typing import TYPE_CHECKING, Final, Protocol
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -18,6 +19,7 @@ from litellm.litellm_core_utils.get_blog_posts import (
     GetBlogPosts,
     get_blog_posts,
 )
+from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
 from litellm.proxy._types import (
     CommonProxyErrors,
 )
@@ -36,6 +38,7 @@ from litellm.types.proxy.public_endpoints.public_endpoints import (
     ProviderCreateInfo,
     PublicModelHubInfo,
     SupportedEndpointsResponse,
+    WhatsNewResponse,
 )
 from litellm.types.utils import LlmProviders
 
@@ -221,10 +224,10 @@ def _load_endpoints() -> list[_EndpointEntry]:
 async def public_model_hub():
     import litellm
     from litellm.proxy.health_endpoints._health_endpoints import (
-        _convert_health_check_to_dict,
+        convert_health_check_to_dict,
     )
     from litellm.proxy.proxy_server import (
-        _get_model_group_info,
+        get_model_group_info,
         llm_router,
         prisma_client,
     )
@@ -234,7 +237,7 @@ async def public_model_hub():
 
     model_groups: list[ModelGroupInfoProxy] = []
     if litellm.public_model_groups is not None:
-        model_groups = _get_model_group_info(
+        model_groups = get_model_group_info(  # rebind-ok: pre-existing rebinding on a rename-only line
             llm_router=llm_router,
             all_models_str=litellm.public_model_groups,
             model_group=None,
@@ -248,7 +251,7 @@ async def public_model_hub():
             for check in latest_checks:
                 key = check.model_id if check.model_id else check.model_name
                 if key:
-                    health_check_dict = _convert_health_check_to_dict(check)
+                    health_check_dict = convert_health_check_to_dict(check)
                     health_checks_map[key] = health_check_dict
                     if check.model_name:
                         health_checks_map[check.model_name] = health_check_dict
@@ -322,7 +325,7 @@ async def get_mcp_servers():
 async def public_skill_hub():
     """Return enabled (public) Claude Code skills — no auth required."""
     from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_marketplace import (
-        _get_prisma_client,
+        get_prisma_client,
     )
     from litellm.types.proxy.claude_code_endpoints import (
         ListPluginsResponse,
@@ -330,7 +333,7 @@ async def public_skill_hub():
     )
 
     try:
-        prisma_client: Final = await _get_prisma_client()
+        prisma_client: Final = await get_prisma_client()
         plugins: Final = await _plugin_table(prisma_client).find_many(where={"enabled": True})
         items: Final = []
         for plugin in plugins:
@@ -366,7 +369,7 @@ async def public_skill_hub():
 )
 async def public_model_hub_info():
     import litellm
-    from litellm.proxy.proxy_server import _title, version
+    from litellm.proxy.proxy_server import title, version
 
     try:
         from litellm_enterprise.proxy.proxy_server import EnterpriseProxyConfig
@@ -376,7 +379,7 @@ async def public_model_hub_info():
         custom_docs_description = None
 
     return PublicModelHubInfo(
-        docs_title=_title,
+        docs_title=title,
         custom_docs_description=custom_docs_description,
         litellm_version=version,
         useful_links=litellm.public_model_groups_links,
@@ -453,15 +456,16 @@ async def get_public_fuse_presets() -> FusePresetCatalog:
     "/public/litellm_model_cost_map",
     tags=["public", "model management"],
 )
-async def get_litellm_model_cost_map():
+async def get_litellm_model_cost_map(catalog_only: bool = False):
     """
     Public endpoint to get the LiteLLM model cost map.
     Returns pricing information for all supported models.
+    With catalog_only=true, returns the catalog as loaded, without entries registered at runtime for proxy deployments.
     """
     import litellm
 
     try:
-        _model_cost_map: Final = litellm.model_cost
+        _model_cost_map: Final = GetModelCostMap.loaded_model_cost_map() if catalog_only else litellm.model_cost
         return _model_cost_map
     except Exception as e:
         raise HTTPException(
@@ -488,7 +492,7 @@ async def get_litellm_blog_posts():
         verbose_logger.warning("LiteLLM: get_litellm_blog_posts endpoint fallback triggered: %s", str(e))
         posts_data = GetBlogPosts.load_local_blog_posts()
 
-    posts: Final = [BlogPost(**p) for p in posts_data[:5]]
+    posts: Final = [BlogPost(**p) for p in posts_data]
     return BlogPostsResponse(posts=posts)
 
 
@@ -503,14 +507,18 @@ def _load_bundled_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord]:
     )
 
 
-async def _fetch_remote_autorouter_presets(url: str) -> Mapping[str, AutoRouterPresetRecord]:
+async def _fetch_remote_bytes(url: str) -> bytes:
     from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
     from litellm.types.llms.custom_http import httpxSpecialProvider
 
     client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.UI)
     response: Final = await client.get(url, timeout=5.0)
     response.raise_for_status()
-    presets: Final = _AUTOROUTER_PRESETS_ADAPTER.validate_python(response.json())
+    return response.content
+
+
+async def _fetch_remote_autorouter_presets(url: str) -> Mapping[str, AutoRouterPresetRecord]:
+    presets: Final = _AUTOROUTER_PRESETS_ADAPTER.validate_json(await _fetch_remote_bytes(url))
     if not presets:
         raise ValueError("remote auto-router preset catalog is empty")
     return presets
@@ -571,6 +579,70 @@ async def get_public_autorouter_presets() -> Mapping[str, AutoRouterPresetRecord
     to serve the bundled catalog only. A restart picks up a newly published catalog.
     """
     return await get_autorouter_presets(url=litellm.autorouter_presets_url)
+
+
+def _load_bundled_whats_new() -> WhatsNewResponse:
+    return WhatsNewResponse.model_validate_json(
+        files("litellm.proxy.public_endpoints").joinpath("whats_new.json").read_text(encoding="utf-8")
+    )
+
+
+async def _fetch_remote_whats_new(url: str) -> WhatsNewResponse:
+    return WhatsNewResponse.model_validate_json(await _fetch_remote_bytes(url))
+
+
+async def _resolve_whats_new(url: str, fetch: Callable[[str], Awaitable[WhatsNewResponse]]) -> WhatsNewResponse:
+    if os.getenv("LITELLM_LOCAL_WHATS_NEW", "").lower() == "true":
+        return _load_bundled_whats_new()
+    try:
+        return await fetch(url)
+    except (httpx.HTTPError, ValidationError, OSError) as e:
+        verbose_logger.warning(
+            "LiteLLM: failed to fetch What's new launches from %s: %s. Serving the bundled list for the life of this process.",
+            url,
+            str(e),
+        )
+        return _load_bundled_whats_new()
+
+
+class _WhatsNewCache:
+    launches: WhatsNewResponse | None = None
+    lock: asyncio.Lock | None = None
+
+
+async def get_whats_new(
+    url: str,
+    fetch: Callable[[str], Awaitable[WhatsNewResponse]] = _fetch_remote_whats_new,
+) -> WhatsNewResponse:
+    cached: Final = _WhatsNewCache.launches
+    if cached is not None:
+        return cached
+    if _WhatsNewCache.lock is None:
+        _WhatsNewCache.lock = asyncio.Lock()
+    async with _WhatsNewCache.lock:
+        held: Final = _WhatsNewCache.launches
+        if held is not None:
+            return held
+        resolved: Final = await _resolve_whats_new(url=url, fetch=fetch)
+        _WhatsNewCache.launches = resolved
+        return resolved
+
+
+@router.get(
+    "/public/whats_new",
+    tags=["public"],
+    response_model=WhatsNewResponse,
+)
+async def get_public_whats_new() -> WhatsNewResponse:
+    """
+    Return the launches the dashboard Home page shows under What's new.
+
+    Resolved once per process: fetched from ``litellm.whats_new_url`` (override with ``LITELLM_WHATS_NEW_URL``)
+    on the first request, falling back to the list bundled with the package on any failure, so an airgapped
+    proxy serves the bundled list without retrying. Set ``LITELLM_LOCAL_WHATS_NEW=True`` to skip the fetch.
+    A restart picks up a newly published list.
+    """
+    return await get_whats_new(url=litellm.whats_new_url)
 
 
 @router.get(

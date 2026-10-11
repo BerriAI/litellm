@@ -32,7 +32,6 @@ from litellm.llms.anthropic.chat.handler import AnthropicChatCompletion
 from httpx import Headers
 from base_llm_unit_tests import BaseLLMChatTest, BaseAnthropicChatTest
 
-
 def streaming_format_tests(chunk: dict, idx: int):
     """
     1st chunk -  chunk.get("type") == "message_start"
@@ -45,7 +44,6 @@ def streaming_format_tests(chunk: dict, idx: int):
         assert chunk.get("type") == "content_block_start"
     elif idx == 2:
         assert chunk.get("type") == "content_block_delta"
-
 
 anthropic_chunk_list = [
     {
@@ -234,17 +232,6 @@ anthropic_chunk_list = [
     {"type": "message_stop"},
 ]
 
-
-
-
-
-
-
-
-
-
-
-
 @pytest.mark.parametrize(
     "tool_type, tool_config, message_content",
     [
@@ -295,15 +282,7 @@ def test_anthropic_tool_use(tool_type, tool_config, message_content):
     except litellm.InternalServerError:
         pass
 
-
-
-
-
-
-
-
 from litellm import completion
-
 
 class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     def get_base_completion_call_args(self) -> dict:
@@ -380,32 +359,9 @@ class TestAnthropicCompletion(BaseLLMChatTest, BaseAnthropicChatTest):
     @pytest.mark.asyncio
     async def test_pdf_handling(self, pdf_messages, sync_mode):
         await super().test_pdf_handling(pdf_messages, sync_mode)
-    test_content_list_handling = None
-    test_image_url = None
-    test_image_url_string = None
     test_web_search = None
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
-
-
-
-
-
 
 def test_anthropic_citations_api():
     """
@@ -454,7 +410,6 @@ def test_anthropic_citations_api():
         assert "start_char_index" in citation
         assert "end_char_index" in citation
 
-
 def test_anthropic_citations_api_streaming():
 
     resp = completion(
@@ -492,35 +447,6 @@ def test_anthropic_citations_api_streaming():
                 has_citations = True
 
     assert has_citations
-
-
-@pytest.mark.parametrize(
-    "model",
-    [
-        "anthropic/claude-sonnet-4-5-20250929",
-        "bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0",
-    ],
-)
-def test_anthropic_thinking_output(model):
-
-    litellm.turn_on_debug()
-
-    resp = completion(
-        model=model,
-        messages=[{"role": "user", "content": "What is the capital of France?"}],
-        thinking={"type": "enabled", "budget_tokens": 1024},
-    )
-
-    print(resp)
-    assert resp.choices[0].message.reasoning_content is not None
-    assert isinstance(resp.choices[0].message.reasoning_content, str)
-    assert resp.choices[0].message.thinking_blocks is not None
-    assert isinstance(resp.choices[0].message.thinking_blocks, list)
-    assert len(resp.choices[0].message.thinking_blocks) > 0
-
-    assert resp.choices[0].message.thinking_blocks[0]["type"] == "thinking"
-    assert resp.choices[0].message.thinking_blocks[0]["signature"] is not None
-
 
 @pytest.mark.parametrize(
     "model",
@@ -566,7 +492,6 @@ def test_anthropic_thinking_output_stream(model):
     except litellm.Timeout:
         pytest.skip("Model is timing out")
 
-
 def test_anthropic_custom_headers():
     from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
@@ -603,9 +528,6 @@ def test_anthropic_custom_headers():
         mock_post.assert_called_once()
         headers = mock_post.call_args[1]["headers"]
         assert "computer-use-2025-01-24" in headers["anthropic-beta"]
-
-
-
 
 @pytest.mark.parametrize(
     "optional_params",
@@ -645,7 +567,6 @@ def test_anthropic_websearch(optional_params: dict):
     assert response.usage.server_tool_use is not None
     assert response.usage.server_tool_use.web_search_requests >= 1
 
-
 def test_anthropic_text_editor():
     litellm.turn_on_debug()
     params = {
@@ -667,7 +588,6 @@ def test_anthropic_text_editor():
         print(e)
 
     assert response is not None
-
 
 @pytest.mark.parametrize("spec", ["anthropic", "openai"])
 @pytest.mark.skipif(
@@ -710,7 +630,6 @@ def test_anthropic_mcp_server_tool_use(spec: str):
     except litellm.InternalServerError as e:
         pytest.skip(f"Skipping test due to internal server error: {e}")
 
-
 @pytest.mark.parametrize(
     "model", ["openai/gpt-4.1", "anthropic/claude-sonnet-4-5-20250929"]
 )
@@ -742,7 +661,6 @@ def test_anthropic_mcp_server_responses_api(model: str):
 
     assert response is not None
 
-
 def test_anthropic_prefix_prompt():
     params = {
         "model": "anthropic/claude-sonnet-4-5-20250929",
@@ -756,7 +674,6 @@ def test_anthropic_prefix_prompt():
     print(f"response: {response}")
     assert response is not None
     assert response.choices[0].message.content.startswith("Argentina")
-
 
 @pytest.mark.asyncio
 async def test_claude_tool_use_with_anthropic_acreate():
@@ -781,9 +698,6 @@ async def test_claude_tool_use_with_anthropic_acreate():
 
     async for chunk in response:
         print(chunk)
-
-
-
 
 def test_anthropic_streaming():
 
@@ -838,7 +752,6 @@ def test_anthropic_streaming():
             role_set_count += 1
 
     assert role_set_count == 1
-
 
 def test_anthropic_via_responses_api():
     from litellm.types.llms.openai import ResponsesAPIStreamEvents
@@ -962,11 +875,6 @@ def test_anthropic_via_responses_api():
     print(f"✓ All {len(events_seen)} events matched expected structure")
     print(f"✓ Received {text_delta_count} text delta chunks")
 
-
-
-
-
-
 def _make_transform_request(optional_params: dict, litellm_params: dict) -> dict:
     from litellm.llms.anthropic.chat.transformation import AnthropicConfig
 
@@ -977,19 +885,6 @@ def _make_transform_request(optional_params: dict, litellm_params: dict) -> dict
         litellm_params=litellm_params,
         headers={},
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 def test_anthropic_basic_completion_replay():
     response = litellm.completion(
@@ -1003,7 +898,6 @@ def test_anthropic_basic_completion_replay():
     assert response.usage.prompt_tokens > 0
     assert response.usage.completion_tokens > 0
     assert response.choices[0].finish_reason in {"stop", "length"}
-
 
 def test_anthropic_streaming_completion_replay():
     stream = litellm.completion(

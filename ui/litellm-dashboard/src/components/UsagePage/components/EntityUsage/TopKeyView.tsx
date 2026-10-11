@@ -21,9 +21,7 @@ const VIEW_OPTIONS = [
   { value: "chart", label: "Chart View" },
 ] as const satisfies readonly { value: ViewMode; label: string }[];
 
-/** Brand blue, matching the single-series charts on the usage overview. */
 const BAR_COLOR = "#2b3fd6";
-/** Quiet headers: muted, regular weight, so the rows carry the emphasis. */
 const QUIET_HEADER = { headerClassName: "font-normal" };
 
 export interface TopKeyItem {

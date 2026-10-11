@@ -1,6 +1,8 @@
 "use client";
 
 import React, { type ReactNode } from "react";
+import { Radio as RadioPrimitive } from "@base-ui/react/radio";
+import { RadioGroup as RadioGroupPrimitive } from "@base-ui/react/radio-group";
 import { Area, AreaChart } from "recharts";
 import type { LucideIcon } from "lucide-react";
 import { ChartContainer } from "@/components/ui/chart";
@@ -10,7 +12,6 @@ import type { SeriesDay } from "./overviewData";
 
 const EMPTY_CONFIG = {};
 
-/** Every overview card shares this inset so titles, numbers and chart edges line up down the page. */
 export const PANEL_INSET_X = "px-5";
 
 export function Panel({
@@ -111,25 +112,22 @@ export function Segmented<T extends string>({
   label: string;
 }) {
   return (
-    <div role="radiogroup" aria-label={label} className="inline-flex items-center rounded-lg bg-muted p-0.5">
+    <RadioGroupPrimitive
+      aria-label={label}
+      value={value}
+      onValueChange={(next) => onChange(next as T)}
+      className="inline-flex items-center rounded-lg bg-muted p-0.5"
+    >
       {options.map((option) => (
-        <button
+        <RadioPrimitive.Root
           key={option.value}
-          type="button"
-          role="radio"
-          aria-checked={value === option.value}
-          onClick={() => onChange(option.value)}
-          className={cn(
-            "rounded-md px-2.5 py-1 text-xs font-medium transition-colors",
-            value === option.value
-              ? "bg-background text-foreground shadow-xs"
-              : "text-muted-foreground hover:text-foreground",
-          )}
+          value={option.value}
+          className="rounded-md px-2.5 py-1 text-xs font-medium text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 data-checked:bg-background data-checked:text-foreground data-checked:shadow-xs"
         >
           {option.label}
-        </button>
+        </RadioPrimitive.Root>
       ))}
-    </div>
+    </RadioGroupPrimitive>
   );
 }
 

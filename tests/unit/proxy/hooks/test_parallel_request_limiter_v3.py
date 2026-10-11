@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     PARALLEL_REQUEST_SLOT_TTL_SECONDS,
     ParallelSlotAcquisition,
+    PROXY_MaxParallelRequestsHandler_v3,
     RateLimitDescriptor,
     RateLimitedModel,
     RateLimitResponse,
@@ -36,7 +37,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     get_request_stash,
 )
 from litellm.proxy.hooks.parallel_request_limiter_v3 import (
-    _PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
+    PROXY_MaxParallelRequestsHandler_v3 as _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, ProxyLogging, hash_token
 from litellm.types.caching import RedisPipelineIncrementOperation
@@ -99,7 +100,7 @@ def test_api_key_descriptor_applies_budget_throttle(
         budget_throttle_pct=throttle_pct,
     )
 
-    descriptors = handler._create_rate_limit_descriptors(
+    descriptors = handler.create_rate_limit_descriptors(
         user_api_key_dict=user_api_key_dict,
         data={},
         rpm_limit_type=None,
@@ -2914,7 +2915,7 @@ class TestGetTotalTokensFromUsageCacheExclusion:
     def handler(self):
         """Create a handler instance for testing."""
         local_cache = DualCache()
-        return _PROXY_MaxParallelRequestsHandler(
+        return PROXY_MaxParallelRequestsHandler_v3(
             internal_usage_cache=InternalUsageCache(local_cache),
         )
 
@@ -3786,9 +3787,9 @@ async def test_failure_event_settles_project_itpm_otpm_at_recovered_partial_usag
 # ----------------------- Per-MCP-server rate limiting (v3) -----------------------
 
 
-def _make_mcp_handler() -> tuple[_PROXY_MaxParallelRequestsHandler, DualCache]:
+def _make_mcp_handler() -> tuple[PROXY_MaxParallelRequestsHandler_v3, DualCache]:
     local_cache: Final = DualCache()
-    handler: Final = _PROXY_MaxParallelRequestsHandler(
+    handler: Final = PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=InternalUsageCache(local_cache)
     )
     return handler, local_cache
@@ -4878,7 +4879,7 @@ async def test_per_tag_rate_limit_independent_counters_v3(monkeypatch):
 @pytest.mark.asyncio
 async def test_per_tag_descriptor_creation_v3():
     """
-    _create_rate_limit_descriptors emits a tag_per_key descriptor carrying the
+    create_rate_limit_descriptors emits a tag_per_key descriptor carrying the
     configured RPM limit only for request tags present in the configured map.
     """
     _api_key = hash_token("sk-per-tag-desc")
@@ -4890,7 +4891,7 @@ async def test_per_tag_descriptor_creation_v3():
         internal_usage_cache=InternalUsageCache(DualCache())
     )
 
-    descriptors = handler._create_rate_limit_descriptors(
+    descriptors = handler.create_rate_limit_descriptors(
         user_api_key_dict=user_api_key_dict,
         data={"model": "gpt-3.5-turbo", "metadata": {"tags": ["cell-1", "cell-2"]}},
         rpm_limit_type=None,
@@ -4916,7 +4917,7 @@ async def test_per_tag_descriptor_absent_without_config_v3():
         internal_usage_cache=InternalUsageCache(DualCache())
     )
 
-    descriptors = handler._create_rate_limit_descriptors(
+    descriptors = handler.create_rate_limit_descriptors(
         user_api_key_dict=user_api_key_dict,
         data={"model": "gpt-3.5-turbo", "metadata": {"tags": ["cell-1"]}},
         rpm_limit_type=None,
@@ -6425,7 +6426,7 @@ async def test_conflicting_token_limits_cannot_bypass_tpm_reservation():
 
 
 def _enqueued_test_handler() -> _PROXY_MaxParallelRequestsHandler:
-    return _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(DualCache(default_in_memory_ttl=60)))
+    return PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache(default_in_memory_ttl=60)))
 
 
 def _batch_response(batch_id: str, status: str):
@@ -6745,18 +6746,18 @@ def _handler_with_redis(
 ):
     internal_usage_cache = InternalUsageCache(DualCache(redis_cache=redis))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
     if fail_closed is None and force_hash_tag_grouping is None:
-        return _PROXY_MaxParallelRequestsHandler(internal_usage_cache=internal_usage_cache)
+        return PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=internal_usage_cache)
     if fail_closed is None:
-        return _PROXY_MaxParallelRequestsHandler(
+        return PROXY_MaxParallelRequestsHandler_v3(
             internal_usage_cache=internal_usage_cache,
             force_hash_tag_grouping_resolver=lambda: force_hash_tag_grouping,
         )
     if force_hash_tag_grouping is None:
-        return _PROXY_MaxParallelRequestsHandler(
+        return PROXY_MaxParallelRequestsHandler_v3(
             internal_usage_cache=internal_usage_cache,
             fail_closed_resolver=lambda: fail_closed,
         )
-    return _PROXY_MaxParallelRequestsHandler(
+    return PROXY_MaxParallelRequestsHandler_v3(
         internal_usage_cache=internal_usage_cache,
         fail_closed_resolver=lambda: fail_closed,
         force_hash_tag_grouping_resolver=lambda: force_hash_tag_grouping,
@@ -6853,7 +6854,7 @@ async def _admit(handler, auth, data=None):
 
 
 async def _read_only_check(handler, auth):
-    descriptors = handler._create_rate_limit_descriptors(
+    descriptors = handler.create_rate_limit_descriptors(
         user_api_key_dict=auth,
         data={"model": "test-model"},
         rpm_limit_type=None,
@@ -7466,6 +7467,36 @@ def test_rate_limit_error_reports_reset_time_in_utc_on_a_non_utc_proxy(process_t
     )
 
 
+def test_per_model_rate_limit_error_carries_descriptor_key() -> None:
+    handler: Final = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    over_limit: Final[RateLimitResponse] = {
+        "overall_code": "OVER_LIMIT",
+        "statuses": [
+            {
+                "code": "OVER_LIMIT",
+                "descriptor_key": "model_per_key",
+                "descriptor_value": "gpt-4o-mini",
+                "limit_remaining": 0,
+                "rate_limit_type": "requests",
+                "current_limit": 2,
+            }
+        ],
+    }
+
+    with pytest.raises(ProxyRateLimitError) as exc_info:
+        handler._handle_rate_limit_error(
+            response=over_limit,
+            descriptors=[
+                {"key": "model_per_key", "value": "gpt-4o-mini", "rate_limit": None}
+            ],
+            requested_model="gpt-4o-mini",
+        )
+
+    assert exc_info.value.descriptor_key == "model_per_key"
+
+
 def _resolve_alias_to_target(model: str) -> str | None:
     return "target" if model == "alias" else None
 
@@ -7675,7 +7706,7 @@ async def test_managed_invocations_enforce_actor_and_target_rate_policies(
     cache: Final = DualCache()
     handler: Final = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(cache))
     monkeypatch.setattr(handler, "_get_agent_from_registry", lambda _: None)
-    descriptors: Final = handler._create_rate_limit_descriptors(
+    descriptors: Final = handler.create_rate_limit_descriptors(
         user_api_key_dict=auth,
         data={"model": "a2a/target", "litellm_session_id": "session"},
         rpm_limit_type=None,

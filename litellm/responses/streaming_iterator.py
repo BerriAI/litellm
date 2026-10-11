@@ -50,7 +50,7 @@ from litellm.utils import async_post_call_success_deployment_hook
 
 if TYPE_CHECKING:
     from litellm.caching.caching_handler import LLMCachingHandler
-    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.responses.streaming_websocket import (
         PresidioGuardrailCallback,
         ResponsesBackendWebSocket,
@@ -216,6 +216,7 @@ _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
         "invalid_request_error": 400,
         "context_length_exceeded": 400,
         "content_policy_violation": 400,
+        "cyber_policy": 400,
         "model_not_found": 400,
     }
 )

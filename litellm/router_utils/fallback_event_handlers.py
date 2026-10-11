@@ -22,6 +22,7 @@ from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper, used across router_utils
     cast_exception_status_to_int,
     is_advisor_orchestration_failure,
+    is_caller_scoped_auth_failure,
     is_caller_timeout_408,
     set_cooldown_deployments,
 )
@@ -108,6 +109,14 @@ def _trigger_cooldown_for_failed_deployment(
             verbose_router_logger.debug("Cannot trigger cooldown for fallback: no failed_deployment_id on exception")
             return
 
+        deployment: Final = litellm_router.get_deployment(model_id=deployment_id)
+        if is_caller_scoped_auth_failure(deployment, exception_status):
+            verbose_router_logger.debug(
+                "Not triggering cooldown for fallback deployment %s: caller-scoped OAuth authentication failure.",
+                deployment_id,
+            )
+            return
+
         # Priority: deployment config > response header > router default, matching
         # Router.deployment_callback_on_failure's precedence for the primary path.
         deployment_dict: Final = litellm_router.get_model_info(id=deployment_id)
@@ -147,6 +156,7 @@ def _trigger_cooldown_for_failed_deployment(
             original_exception=exception,
             deployment=deployment_id,
             time_to_cooldown=time_to_cooldown,
+            request_kwargs=kwargs,
         )
 
         verbose_router_logger.debug("Triggered cooldown for fallback deployment %s", deployment_id)
@@ -335,6 +345,28 @@ def per_request_fallback_controls(kwargs: Mapping[str, object]) -> MidStreamFall
     )
 
 
+def mid_stream_fallback_snapshot_kwargs(
+    model: str,
+    controls: object,
+    kwargs: Mapping[str, object],
+) -> dict[str, object]:  # mutable-ok: the streaming iterators rewrite it in place when they re-enter the chain
+    """
+    The kwargs a completion attempt's stream re-enters the fallback chain with if it fails.
+
+    async_function_with_retries popped the per-request fallback lists before the attempt ran, so
+    the carrier restores them here and rides along into every hop this re-entry opens. A shallow
+    copy keeps the metadata buckets shared with the live kwargs, the way the attempt's own
+    in-place bucket writes expect.
+    """
+    hop_controls: Final = controls if isinstance(controls, MidStreamFallbackControls) else _NO_FALLBACK_CONTROLS
+    return {
+        **kwargs,
+        **hop_controls.overrides,
+        MID_STREAM_FALLBACK_CONTROLS_KEY: hop_controls,
+        "model": model,
+    }
+
+
 def mid_stream_fallback_hop_kwargs(
     model: str,
     original_generic_function: Callable[..., object],
@@ -342,22 +374,18 @@ def mid_stream_fallback_hop_kwargs(
     kwargs: Mapping[str, object],
 ) -> dict[str, object]:  # mutable-ok: the streaming iterators rewrite it in place when they re-enter the chain
     """
-    The kwargs one streaming attempt re-enters the fallback chain with if its stream fails.
+    The kwargs one generic-endpoint streaming attempt re-enters the fallback chain with if its stream fails.
 
     A shallow copy keeps ``attempted_targets`` shared with the outer chain, so entries this
     request already tried are never retried; the metadata buckets are copied key by key because
     the attempt writes deployment-specific fields into them in place.
     """
-    hop_controls: Final = controls if isinstance(controls, MidStreamFallbackControls) else _NO_FALLBACK_CONTROLS
     copied_buckets: Final = MappingProxyType(
         {name: safe_deep_copy(kwargs[name]) for name in _ROUTER_METADATA_BUCKETS if isinstance(kwargs.get(name), dict)}
     )
     return {
-        **kwargs,
+        **mid_stream_fallback_snapshot_kwargs(model=model, controls=controls, kwargs=kwargs),
         **copied_buckets,
-        **hop_controls.overrides,
-        MID_STREAM_FALLBACK_CONTROLS_KEY: hop_controls,
-        "model": model,
         "original_generic_function": original_generic_function,
     }
 

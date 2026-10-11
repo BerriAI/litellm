@@ -28,9 +28,17 @@ import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
+import TopUsersView from "@/components/UsagePage/components/TopUsersView";
+import UserActivityPanel from "@/components/UsagePage/components/UserActivityPanel";
 import { filterModelActivity } from "@/components/UsagePage/modelActivityFilter";
 import { Team } from "@/components/key_team_helpers/key_list";
-import { gatewayDailyActivityCall, Organization, tagListCall } from "@/components/networking";
+import {
+  gatewayDailyActivityCall,
+  Organization,
+  requestErrorActivityCall,
+  tagListCall,
+  userDailyActivityUserPageCall,
+} from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { Tag } from "@/components/tag_management/types";
 import UserAgentActivity from "@/components/user_agent_activity";
@@ -51,6 +59,8 @@ import {
   type FetchedGatewayActivity,
   type GatewayActivity,
 } from "./gatewayActivity";
+import ErrorsTab from "./errors/ErrorsTab";
+import type { RequestErrorActivity } from "./errors/errorsData";
 import EndpointUsage from "./EndpointUsage/EndpointUsage";
 import EntityUsage, { EntityList } from "./EntityUsage/EntityUsage";
 import ModelViewToggle, { ModelViewType } from "./ModelViewToggle";
@@ -188,16 +198,17 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     enabled: dailyActivityRequest !== null,
     deps: [accessToken, startTime, endTime, effectiveUserId],
   });
-  // Per-day tag activity for the Top agents chart; each day's User-Agent tags are folded into agents.
-  // Not user-scoped: tags are deployment-wide, the same as the User Agent Activity view.
+  // Tag data is deployment-wide with no per-user dimension, so Top agents only appears where the
+  // rest of the page is deployment-wide too: an admin's global view with no user selected.
+  const showTopAgents = isAdmin && usageView === "global" && effectiveUserId === null;
   const tagDailyRequest = useMemo<DailyActivityRequest | null>(
     () => (accessToken && startTime && endTime ? { accessToken, startTime, endTime, entityIds: null } : null),
     [accessToken, startTime, endTime],
   );
   const { data: tagDailyRaw, loading: tagDailyLoading } = useAggregatedDailyActivity({
     fetch: () => ENTITY_API.tag.aggregated(tagDailyRequest as DailyActivityRequest),
-    enabled: tagDailyRequest !== null && canViewTagUsage,
-    deps: [accessToken, startTime, endTime, canViewTagUsage],
+    enabled: tagDailyRequest !== null && showTopAgents,
+    deps: [accessToken, startTime, endTime, showTopAgents],
   });
   const tagDaily = useMemo(() => toDailyData(tagDailyRaw), [tagDailyRaw]);
   const [agentActivityTags, setAgentActivityTags] = useState<readonly string[] | undefined>(undefined);
@@ -229,6 +240,27 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   const gatewayActivity = selectGatewayActivity(isAdmin, gatewayActivityData, currentGatewayRangeKey);
 
+  const [requestErrorData, setRequestErrorData] = useState<FetchedForRange<RequestErrorActivity | null> | null>(null);
+  const requestErrorFetchIdRef = useRef(0);
+  useEffect(() => {
+    if (!isAdmin || !gatewayRequest) return;
+    const fetchId = ++requestErrorFetchIdRef.current;
+    requestErrorActivityCall(gatewayRequest.accessToken, gatewayRequest.startTime, gatewayRequest.endTime)
+      .then((data) => {
+        if (requestErrorFetchIdRef.current !== fetchId) return;
+        setRequestErrorData({ rangeKey: currentGatewayRangeKey, value: data as RequestErrorActivity });
+      })
+      .catch(() => {
+        if (requestErrorFetchIdRef.current !== fetchId) return;
+        setRequestErrorData({ rangeKey: currentGatewayRangeKey, value: null });
+      });
+  }, [isAdmin, gatewayRequest, currentGatewayRangeKey]);
+  const requestErrorsForRange = isAdmin ? requestErrorData : null;
+  const requestErrorsFailed =
+    requestErrorsForRange?.rangeKey === currentGatewayRangeKey && requestErrorsForRange.value === null;
+  const requestErrorActivity =
+    requestErrorsForRange?.rangeKey === currentGatewayRangeKey ? requestErrorsForRange.value : null;
+
   const userSpendData = useMemo(
     () => ({
       results: toDailyData(aggregatedRaw),
@@ -257,7 +289,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     () => rollUpBreakdown(userSpendData.results, "providers").map(({ key, ...row }) => ({ provider: key, ...row })),
     [userSpendData.results],
   );
-  const { data: tagSummary, isLoading: tagSummaryLoading } = useTagSummary(startTime, endTime);
+  const { data: tagSummary, isLoading: tagSummaryLoading } = useTagSummary(startTime, endTime, showTopAgents);
 
   // Calculate top API keys from the breakdown data
   const topKeys = useMemo<TopKeyItem[]>(
@@ -300,6 +332,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         return Promise.resolve(emptyPage);
       }
       return ENTITY_API.user.keyPage(dailyActivityRequest, offset, limit);
+    },
+    [dailyActivityRequest],
+  );
+  const fetchUserPage = useCallback(
+    (offset: number, limit: number) => {
+      if (dailyActivityRequest === null) {
+        const emptyPage = { users: [], total_users: 0, offset, limit };
+        return Promise.resolve(emptyPage);
+      }
+      return userDailyActivityUserPageCall(dailyActivityRequest, offset, limit);
     },
     [dailyActivityRequest],
   );
@@ -357,12 +399,20 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     <TabsTrigger value="keys" className="flex-none px-3">
                       Key Activity
                     </TabsTrigger>
+                    <TabsTrigger value="users" className="flex-none px-3">
+                      User Activity
+                    </TabsTrigger>
                     <TabsTrigger value="mcp" className="flex-none px-3">
                       MCP Server Activity
                     </TabsTrigger>
                     <TabsTrigger value="endpoints" className="flex-none px-3">
                       Endpoint Activity
                     </TabsTrigger>
+                    {isAdmin && (
+                      <TabsTrigger value="errors" className="flex-none px-3">
+                        Errors
+                      </TabsTrigger>
+                    )}
                   </TabsList>
                   <div className="flex items-center gap-2">
                     <Button variant="outline" size="sm" onClick={() => setIsAiChatOpen(true)}>
@@ -390,6 +440,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                         setTopKeysLimit={setTopKeysLimit}
                       />
                     }
+                    topUsers={<TopUsersView fetchUserPage={fetchUserPage} />}
                     gatewayByEndpoint={
                       gatewayActivity && gatewayActivity.by_route.length > 0 ? (
                         <Panel
@@ -414,13 +465,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       ) : null
                     }
                     topAgents={
-                      canViewTagUsage ? (
+                      showTopAgents ? (
                         <TopAgents
                           rows={tagSummary}
                           daily={tagDaily}
                           loading={tagSummaryLoading || tagDailyLoading}
                           totalTokens={totals.tokens}
-                          onOpenAgent={isAdmin ? openAgentActivity : undefined}
+                          onOpenAgent={openAgentActivity}
                         />
                       ) : null
                     }
@@ -480,12 +531,25 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     searchKeys={searchKeys}
                   />
                 </TabsContent>
+                <TabsContent value="users" keepMounted>
+                  <UserActivityPanel fetchUserPage={fetchUserPage} />
+                </TabsContent>
                 <TabsContent value="mcp" keepMounted>
                   <ActivityMetrics modelMetrics={mcpServerMetrics} />
                 </TabsContent>
                 <TabsContent value="endpoints" keepMounted>
                   <EndpointUsage userSpendData={userSpendData} />
                 </TabsContent>
+                {isAdmin && (
+                  <TabsContent value="errors">
+                    <ErrorsTab
+                      activity={requestErrorActivity}
+                      loading={requestErrorActivity === null && !requestErrorsFailed}
+                      failed={requestErrorsFailed}
+                      userScoped={effectiveUserId !== null}
+                    />
+                  </TabsContent>
+                )}
               </Tabs>
             </>
           )}

@@ -8,6 +8,7 @@ import type { DailyData } from "@/components/UsagePage/types";
 import { cn } from "@/lib/cva.config";
 import {
   bucketTotals,
+  labelForDate,
   formatCompact,
   formatCompactUsd,
   formatMetricValue,
@@ -57,13 +58,12 @@ function ClaudeSpark() {
   );
 }
 
-function AgentMark({ agent, size = "md" }: { agent: AgentRow; size?: "sm" | "md" }) {
+function AgentGlyph({ agent }: { agent: AgentRow }) {
+  if (agent.id === "claude-code") return <ClaudeSpark />;
+  if (agent.logo) return <Logo src={agent.logo} label={agent.label} className="size-5" />;
   const monogram = MONOGRAMS[agent.id];
-  let mark: React.ReactNode;
-  if (agent.id === "claude-code") mark = <ClaudeSpark />;
-  else if (agent.logo) mark = <Logo src={agent.logo} label={agent.label} className="size-5" />;
-  else if (monogram)
-    mark = (
+  if (monogram) {
+    return (
       <span
         className={cn(
           "flex size-full items-center justify-center text-xs font-semibold tracking-tight",
@@ -73,15 +73,14 @@ function AgentMark({ agent, size = "md" }: { agent: AgentRow; size?: "sm" | "md"
         {monogram.text}
       </span>
     );
-  else mark = <span className="text-sm font-semibold uppercase text-muted-foreground">{agent.label.charAt(0)}</span>;
+  }
+  return <span className="text-sm font-semibold uppercase text-muted-foreground">{agent.label.charAt(0)}</span>;
+}
+
+function AgentMark({ agent }: { agent: AgentRow }) {
   return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-background",
-        size === "sm" ? "size-6 [&_svg]:size-4" : "size-9",
-      )}
-    >
-      {mark}
+    <span className="inline-flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-lg border bg-background">
+      <AgentGlyph agent={agent} />
     </span>
   );
 }
@@ -137,6 +136,12 @@ function AgentItem({
   );
 }
 
+function TopAgentsBody({ loading, empty, children }: { loading: boolean; empty: boolean; children: React.ReactNode }) {
+  if (loading) return <ChartSkeleton className="mx-5 h-64 w-auto" />;
+  if (empty) return <p className="py-10 text-center text-xs text-muted-foreground">No agent traffic in this range</p>;
+  return <>{children}</>;
+}
+
 /**
  * The agents and clients driving traffic, read from the proxy's `User-Agent:` tags: a daily stacked
  * chart (like Top models) over a ranked list. Named agents lead the list; SDKs and scripts follow,
@@ -159,43 +164,51 @@ export default function TopAgents({
   onOpenAgent?: (agent: AgentRow) => void;
 }) {
   const [metric, setMetric] = useState<UsageMetric>("tokens");
-  const agents = useMemo(() => {
-    const all = topAgents(rows ?? []);
-    return [...all.filter((agent) => agent.kind === "agent"), ...all.filter((agent) => agent.kind === "sdk")].slice(
-      0,
-      ROWS,
-    );
-  }, [rows]);
+  const allAgents = useMemo(() => topAgents(rows ?? []), [rows]);
+  const agents = useMemo(
+    () =>
+      [
+        ...allAgents.filter((agent) => agent.kind === "agent"),
+        ...allAgents.filter((agent) => agent.kind === "sdk"),
+      ].slice(0, ROWS),
+    [allAgents],
+  );
   const series = useMemo(() => seriesBy(agentDailyData(daily), "models", metric, CHART_SERIES), [daily, metric]);
   const totalsByDay = useMemo(() => bucketTotals(series), [series]);
   const colorOf = (label: string) => {
-    const index = series.keys.indexOf(label);
+    const index = series.labels.indexOf(label);
     return index === -1 ? undefined : series.colors[index];
   };
 
   const totalShare = agents.reduce((sum, agent) => sum + agent.tokens, 0);
-  const coverage = totalTokens > 0 ? Math.min(totalShare / totalTokens, 1) : 1;
+  const attributedTokens = allAgents.reduce((sum, agent) => sum + agent.tokens, 0);
+  const coverage = totalTokens > 0 ? Math.min(attributedTokens / totalTokens, 1) : 1;
   const subtitle =
     coverage < COVERAGE_NOTE_BELOW
       ? `Daily usage by agent. ${Math.round(coverage * 100)}% of tokens came with a User-Agent; the rest is unattributed`
       : "Daily usage by agent, from each request's User-Agent";
   const half = Math.ceil(agents.length / 2);
 
-  let body: React.ReactNode;
-  if (loading) body = <ChartSkeleton className="mx-5 h-64 w-auto" />;
-  else if (agents.length === 0)
-    body = <p className="py-10 text-center text-xs text-muted-foreground">No agent traffic in this range</p>;
-  else
-    body = (
-      <>
+  return (
+    <Panel
+      icon={Bot}
+      title="Top agents"
+      subtitle={subtitle}
+      testId="top-agents"
+      action={<Segmented label="Agent metric" value={metric} options={METRICS} onChange={setMetric} />}
+      bodyClassName="px-0 pt-4 pb-0"
+    >
+      <TopAgentsBody loading={loading} empty={agents.length === 0}>
         <div className="px-2 pb-2">
           <StackedUsageChart
             data={series.data}
             series={series.keys}
+            labels={series.labels}
             colors={series.colors}
-            xKey="label"
+            xKey="date"
+            xLabel={(date) => labelForDate(series, date)}
             format={(value) => formatMetricValue(value, metric)}
-            totalFor={(label) => totalsByDay.get(label)}
+            totalFor={(date) => totalsByDay.get(date)}
             className="h-64"
           />
         </div>
@@ -215,19 +228,7 @@ export default function TopAgents({
             </ol>
           ))}
         </div>
-      </>
-    );
-
-  return (
-    <Panel
-      icon={Bot}
-      title="Top agents"
-      subtitle={subtitle}
-      testId="top-agents"
-      action={<Segmented label="Agent metric" value={metric} options={METRICS} onChange={setMetric} />}
-      bodyClassName="px-0 pt-4 pb-0"
-    >
-      {body}
+      </TopAgentsBody>
     </Panel>
   );
 }
