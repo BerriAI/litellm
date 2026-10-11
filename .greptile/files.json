@@ -288,6 +288,13 @@
       ]
     },
     {
+      "path": "litellm-rust/crates/llms/src/minimax/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/minimax/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/minimax/messages/**"
+      ]
+    },
+    {
       "path": "litellm-rust/crates/llms/src/mistral/ocr/AGENTS.md",
       "description": "Conventions for code under litellm-rust/crates/llms/src/mistral/ocr/",
       "scope": [
