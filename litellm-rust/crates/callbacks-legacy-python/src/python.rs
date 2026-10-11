@@ -97,6 +97,8 @@ pub(crate) enum Body {
     RunSync,
     #[strum(serialize = "stream_policy")]
     StreamPolicy,
+    #[strum(serialize = "short_circuit")]
+    ShortCircuit,
 }
 
 impl LegacyPython {

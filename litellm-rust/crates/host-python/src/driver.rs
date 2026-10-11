@@ -114,6 +114,13 @@ enum Setup<E> {
     Decode(InvokeError<E>),
 }
 
+/// How the argument stages ended: with the route's machine started, or with a hook's own
+/// answer and no provider request at all.
+enum Begun {
+    Started,
+    Answered(Py<PyAny>),
+}
+
 /// The call as one async body on the caller's task. Every hook and host call is awaited in
 /// place; the parts lock is held across those awaits and released around every native step
 /// and stream boundary, so the handle can traverse the call while it waits on the runtime
@@ -159,7 +166,8 @@ where
 {
     async fn run(mut self) -> PyResult<Py<PyAny>> {
         match self.begin().await {
-            Ok(()) => self.execute().await,
+            Ok(Begun::Started) => self.execute().await,
+            Ok(Begun::Answered(answer)) => self.answered(answer).await,
             Err(Setup::Host(error)) => self.failure(error, FailureOrigin::Host).await,
             Err(Setup::Decode(InvokeError::Python(error))) => {
                 self.failure(error, FailureOrigin::Call).await
@@ -168,7 +176,7 @@ where
         }
     }
 
-    async fn begin(&mut self) -> Result<(), Setup<ErrorOf<H>>> {
+    async fn begin(&mut self) -> Result<Begun, Setup<ErrorOf<H>>> {
         let started_at = epoch_seconds();
         let mut parts = self.parts.lock().await;
         parts.observation.started_at = started_at;
@@ -201,11 +209,20 @@ where
             .arguments_prepared(&self.task, &prepared)
             .await
             .map_err(Setup::Host)?;
+        let answer = parts
+            .hooks
+            .short_circuit(&self.task, &prepared)
+            .await
+            .map_err(Setup::Host)?;
         self.stream_policy = parts
             .hooks
             .stream_policy(&self.task, &prepared)
             .await
             .map_err(Setup::Host)?;
+        if let Some(answer) = answer {
+            parts.arguments = Some(prepared);
+            return Ok(Begun::Answered(answer));
+        }
         let Parts {
             binding, arguments, ..
         } = &mut *parts;
@@ -219,7 +236,23 @@ where
         let machine =
             Python::attach(|py| start(py, arguments.bind(py), request)).map_err(Setup::Host)?;
         self.native.start(machine);
-        Ok(())
+        Ok(Begun::Started)
+    }
+
+    /// A hook answered the call itself: the answer goes through the response stages as a
+    /// complete response would, and reaches the caller the way the stream policy says.
+    async fn answered(&mut self, answer: Py<PyAny>) -> PyResult<Py<PyAny>> {
+        self.start = None;
+        let transformed = {
+            let mut parts = self.parts.lock().await;
+            parts.observation.ended_at = Some(epoch_seconds());
+            let timing = parts.observation.timing();
+            parts
+                .hooks
+                .transform_response(&self.task, answer, timing)
+                .await
+        };
+        self.finish_public(transformed).await
     }
 
     async fn execute(&mut self) -> PyResult<Py<PyAny>> {
@@ -448,6 +481,12 @@ where
                     .await
             }
         };
+        self.finish_public(transformed).await
+    }
+
+    /// The transformed public response reaches the caller the way the stream policy says:
+    /// as the value for a relayed call, replayed as a stream otherwise.
+    async fn finish_public(&mut self, transformed: PyResult<Py<PyAny>>) -> PyResult<Py<PyAny>> {
         let response = match transformed {
             Ok(response) => response,
             Err(error) => return self.failure(error, FailureOrigin::Host).await,
@@ -2169,6 +2208,171 @@ mod tests {
             assert_eq!(
                 log.entries(),
                 ["opened:{'request-id': 'req_1'}", "succeeded:None"]
+            );
+        });
+    }
+
+    /// Hooks that answer the call themselves and mark every response they transform with `!`.
+    struct AnsweringHooks {
+        log: Log,
+        policy: StreamPolicy,
+    }
+
+    impl CallHooks<PythonRuntime> for AnsweringHooks {
+        async fn short_circuit(
+            &mut self,
+            _: &PythonTask,
+            _: &Py<PyDict>,
+        ) -> PyResult<Option<Py<PyAny>>> {
+            self.log.push("answered");
+            Python::attach(|py| {
+                Ok(Some(
+                    pyo3::types::PyString::new(py, "own+answer")
+                        .into_any()
+                        .unbind(),
+                ))
+            })
+        }
+
+        async fn stream_policy(
+            &mut self,
+            _: &PythonTask,
+            _: &Py<PyDict>,
+        ) -> PyResult<StreamPolicy> {
+            Ok(self.policy)
+        }
+
+        async fn transform_response(
+            &mut self,
+            _: &PythonTask,
+            response: Py<PyAny>,
+            _: Timing,
+        ) -> PyResult<Py<PyAny>> {
+            Python::attach(|py| {
+                let text: String = response.extract(py)?;
+                self.log.push(format!("transform:{text}"));
+                Ok(pyo3::types::PyString::new(py, &format!("{text}!"))
+                    .into_any()
+                    .unbind())
+            })
+        }
+
+        async fn on_event(&mut self, _: &PythonTask, event: PythonCallEvent<'_>) -> PyResult<()> {
+            if let PythonCallEvent::Succeeded { response, .. } = event {
+                self.log.push(Python::attach(|py| {
+                    format!("succeeded:{}", response.bind(py))
+                }));
+            }
+            Ok(())
+        }
+
+        async fn on_stream_chunk(&mut self, _: &PythonTask, chunk: &Py<PyAny>) -> PyResult<()> {
+            self.log
+                .push(Python::attach(|py| format!("delivered:{}", chunk.bind(py))));
+            Ok(())
+        }
+    }
+
+    impl PythonOwned for AnsweringHooks {
+        fn close(&mut self, _: Python<'_>) {}
+        fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+            Ok(())
+        }
+    }
+
+    /// A hook's own answer never starts the route's machine: the binding never decodes, no
+    /// resource factory runs, and the answer goes through the response stages like any other.
+    #[rstest::rstest]
+    #[case::sync(false)]
+    #[case::asynchronous(true)]
+    fn an_answering_hook_skips_the_machine_and_its_answer_is_transformed_and_returned(
+        #[case] asynchronous: bool,
+    ) {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            let log = Log::default();
+            let started = Arc::new(Mutex::new(false));
+            let flag = Arc::clone(&started);
+            let result = run_call(
+                py,
+                move |_, _, request| {
+                    *flag.lock().unwrap() = true;
+                    Ok(held_complete_machine()(request))
+                },
+                HeldBinding,
+                AnsweringHooks {
+                    log: Log(log.0.clone()),
+                    policy: StreamPolicy::Relay,
+                },
+                PyDict::new(py).unbind(),
+                call_options(asynchronous),
+            )
+            .unwrap();
+            let response = if asynchronous {
+                let completion = result.call_method1(py, "send", (py.None(),)).unwrap_err();
+                completion.value(py).getattr("value").unwrap().unbind()
+            } else {
+                result
+            };
+            assert_eq!(response.extract::<String>(py).unwrap(), "own+answer!");
+            assert!(
+                !*started.lock().unwrap(),
+                "the route's machine must never be built"
+            );
+            assert_eq!(
+                log.entries(),
+                ["answered", "transform:own+answer", "succeeded:own+answer!"]
+            );
+        });
+    }
+
+    /// A caller who streamed gets a hook's answer replayed as a stream.
+    #[rstest::rstest]
+    #[case::sync(false)]
+    #[case::asynchronous(true)]
+    fn an_answering_hook_streams_its_answer_to_a_streaming_caller(#[case] asynchronous: bool) {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            let log = Log::default();
+            let handed = run_call(
+                py,
+                move |_, _, request| Ok(held_complete_machine()(request)),
+                HeldBinding,
+                AnsweringHooks {
+                    log: Log(log.0.clone()),
+                    policy: StreamPolicy::Synthesize,
+                },
+                PyDict::new(py).unbind(),
+                call_options(asynchronous),
+            )
+            .unwrap();
+            let stream = if asynchronous {
+                let completion = handed.call_method1(py, "send", (py.None(),)).unwrap_err();
+                completion.value(py).getattr("value").unwrap().unbind()
+            } else {
+                handed
+            };
+            assert_eq!(
+                read_all(py, stream.bind(py), asynchronous),
+                ["own", "answer!"]
+            );
+            assert_eq!(
+                log.entries(),
+                [
+                    "answered",
+                    "transform:own+answer",
+                    "delivered:own",
+                    "delivered:answer!",
+                    "succeeded:None"
+                ]
             );
         });
     }

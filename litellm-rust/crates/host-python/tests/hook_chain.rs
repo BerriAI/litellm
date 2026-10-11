@@ -807,3 +807,63 @@ fn the_stream_policy_is_the_most_demanding_answer(
         assert_eq!(policy, expected);
     });
 }
+
+struct Answers(
+    Option<&'static str>,
+    std::sync::Arc<std::sync::Mutex<Vec<&'static str>>>,
+    &'static str,
+);
+
+impl CallHooks<PythonRuntime> for Answers {
+    async fn short_circuit(
+        &mut self,
+        _: &PythonTask,
+        _: &Py<PyDict>,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        self.1.lock().unwrap().push(self.2);
+        Python::attach(|py| {
+            Ok(self
+                .0
+                .map(|answer| pyo3::types::PyString::new(py, answer).into_any().unbind()))
+        })
+    }
+}
+
+impl PythonOwned for Answers {
+    fn close(&mut self, _: Python<'_>) {}
+
+    fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        Ok(())
+    }
+}
+
+/// The first hook with an answer ends the stage; hooks after it are never asked.
+#[rstest]
+#[case::nobody(&[None, None], None, &["a", "b"])]
+#[case::first(&[Some("first"), Some("second")], Some("first"), &["a"])]
+#[case::second(&[None, Some("second")], Some("second"), &["a", "b"])]
+fn the_first_answer_ends_the_short_circuit_stage(
+    #[case] answers: &[Option<&'static str>],
+    #[case] expected: Option<&str>,
+    #[case] asked: &[&str],
+) {
+    Python::initialize();
+    Python::attach(|py| {
+        let task = PythonTask::new(true);
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let names = ["a", "b"];
+        let mut hooks = answers
+            .iter()
+            .zip(names)
+            .fold(HookChain::new(), |chain, (&answer, name)| {
+                chain.with(Answers(answer, log.clone(), name))
+            });
+        let arguments = PyDict::new(py).unbind();
+        let answer = finish(py, &task, hooks.short_circuit(&task, &arguments)).unwrap();
+        assert_eq!(
+            answer.map(|value| value.extract::<String>(py).unwrap()),
+            expected.map(str::to_owned)
+        );
+        assert_eq!(*log.lock().unwrap(), asked);
+    });
+}

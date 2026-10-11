@@ -35,6 +35,11 @@ trait ChainHooks: PythonOwned {
         task: &'a PythonTask,
         arguments: &'a Py<PyDict>,
     ) -> BoxFuture<'a, PyResult<StreamPolicy>>;
+    fn short_circuit<'a>(
+        &'a mut self,
+        task: &'a PythonTask,
+        arguments: &'a Py<PyDict>,
+    ) -> BoxFuture<'a, PyResult<Option<Py<PyAny>>>>;
     fn before_provider_request<'a>(
         &'a mut self,
         task: &'a PythonTask,
@@ -98,6 +103,14 @@ impl<H: PythonCallHooks> ChainHooks for H {
         arguments: &'a Py<PyDict>,
     ) -> BoxFuture<'a, PyResult<StreamPolicy>> {
         Box::pin(CallHooks::stream_policy(self, task, arguments))
+    }
+
+    fn short_circuit<'a>(
+        &'a mut self,
+        task: &'a PythonTask,
+        arguments: &'a Py<PyDict>,
+    ) -> BoxFuture<'a, PyResult<Option<Py<PyAny>>>> {
+        Box::pin(CallHooks::short_circuit(self, task, arguments))
     }
 
     fn before_provider_request<'a>(
@@ -221,6 +234,20 @@ impl CallHooks<PythonRuntime> for HookChain {
             hooks.arguments_prepared(task, arguments).await?;
         }
         Ok(())
+    }
+
+    /// The first hook with an answer ends the request stage for every hook after it.
+    async fn short_circuit(
+        &mut self,
+        task: &PythonTask,
+        arguments: &Py<PyDict>,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        for hooks in &mut self.hooks {
+            if let Some(answer) = hooks.short_circuit(task, arguments).await? {
+                return Ok(Some(answer));
+            }
+        }
+        Ok(None)
     }
 
     async fn stream_policy(

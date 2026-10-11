@@ -832,3 +832,121 @@ async def test_native_messages_synthesize_a_stream_when_a_pre_request_hook_turns
     ]
     assert events[2][1]["delta"]["text"] == MESSAGES_RESPONSE["content"][0]["text"]
     assert events[4][1]["delta"]["stop_reason"] == "end_turn"
+
+
+SHORT_CIRCUIT_ANSWER: Final = {
+    **MESSAGES_RESPONSE,
+    "id": "msg_short_circuit",
+    "content": [{"type": "text", "text": "answered without the model"}],
+}
+
+
+class OwnsAdvisorTools:
+    """A `MessagesInterceptor` stand-in that owns any request carrying an `advisor` tool."""
+
+    def __init__(self) -> None:
+        self.handled: list[dict[str, object]] = []
+
+    def can_handle(self, tools, custom_llm_provider) -> bool:
+        return bool(tools) and any(tool.get("type") == "advisor" for tool in tools)
+
+    async def handle(self, **kwargs):
+        self.handled.append(kwargs)
+        return dict(SHORT_CIRCUIT_ANSWER)
+
+
+@pytest.fixture
+def advisor_interceptor() -> Iterator[OwnsAdvisorTools]:
+    from litellm.llms.anthropic.pass_through.messages import interceptors
+
+    interceptor: Final = OwnsAdvisorTools()
+    with rebound(interceptors, "_interceptors", [interceptor]):
+        yield interceptor
+
+
+@pytest.mark.asyncio
+async def test_native_messages_let_an_interceptor_answer_without_a_provider_request(
+    messages_server: RecordingServer, advisor_interceptor: OwnsAdvisorTools
+) -> None:
+    messages_server.expected_requests = 0
+    recorder: Final = RecordingLogger()
+    order: Final = []
+
+    class Observe(Gate):
+        async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+            order.append(("deployment", response["id"]))
+
+    with rebound(litellm, "callbacks", [Observe("run")]):
+        response: Final = await litellm.anthropic.messages.acreate(
+            **arguments(messages_server, tools=[{"type": "advisor", "name": "advisor"}], callbacks=[recorder])
+        )
+
+    assert messages_server.requests == []
+    assert response["id"] == "msg_short_circuit"
+    [handled] = advisor_interceptor.handled
+    assert handled["model"] == MESSAGES_MODEL
+    assert handled["stream"] is False
+    assert handled["max_tokens"] == 64
+    assert handled["api_base"] == messages_server.base_url
+    assert order == [("deployment", "msg_short_circuit")]
+    success: Final = await recorder.wait_for_async("async_log_success_event")
+    assert success[0].response.id == "msg_short_circuit"
+    assert "log_pre_api_call" not in recorder.names
+
+
+@pytest.mark.asyncio
+async def test_native_messages_replay_an_interceptor_answer_to_a_streaming_caller(
+    messages_server: RecordingServer, advisor_interceptor: OwnsAdvisorTools
+) -> None:
+    messages_server.expected_requests = 0
+
+    stream: Final = await litellm.anthropic.messages.acreate(
+        **arguments(messages_server, stream=True, tools=[{"type": "advisor", "name": "advisor"}])
+    )
+    assert isinstance(stream, AsyncIterator)
+    chunks: Final = [chunk async for chunk in stream]
+
+    assert messages_server.requests == []
+    events: Final = events_of(chunks)
+    assert [name for name, _ in events][:2] == ["message_start", "content_block_start"]
+    assert events[0][1]["message"]["id"] == "msg_short_circuit"
+    assert events[2][1]["delta"]["text"] == "answered without the model"
+    assert events[-1][0] == "message_stop"
+    [handled] = advisor_interceptor.handled
+    assert handled["stream"] is False
+
+
+@pytest.mark.asyncio
+async def test_native_messages_let_the_websearch_short_circuit_answer_before_any_interceptor(
+    messages_server: RecordingServer, advisor_interceptor: OwnsAdvisorTools, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.integrations.websearch_interception import handler as websearch
+
+    messages_server.expected_requests = 0
+
+    class SearchAnswers(CustomLogger):
+        async def try_short_circuit_search(self, model, messages, tools, custom_llm_provider, kwargs=None):
+            return {**SHORT_CIRCUIT_ANSWER, "id": "msg_searched"}
+
+    monkeypatch.setattr(websearch, "WebSearchInterceptionLogger", SearchAnswers)
+    with rebound(litellm, "callbacks", [SearchAnswers()]):
+        response: Final = await litellm.anthropic.messages.acreate(
+            **arguments(
+                messages_server, tools=[{"type": "web_search_20250305", "name": "web_search"}, {"type": "advisor"}]
+            )
+        )
+
+    assert messages_server.requests == []
+    assert response["id"] == "msg_searched"
+    assert advisor_interceptor.handled == []
+
+
+@pytest.mark.asyncio
+async def test_native_messages_reach_the_provider_when_no_short_circuit_owns_the_request(
+    messages_server: RecordingServer, advisor_interceptor: OwnsAdvisorTools
+) -> None:
+    response: Final = await litellm.anthropic.messages.acreate(**agentic_arguments(messages_server))
+
+    assert_served_natively(messages_server)
+    assert response["id"] == MESSAGES_RESPONSE["id"]
+    assert advisor_interceptor.handled == []

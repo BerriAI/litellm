@@ -71,6 +71,16 @@ pub trait CallHooks<R: HookRuntime>: Send + Sized {
         async { Ok(()) }
     }
 
+    /// A response that answers the call without a provider request, from a hook that owns
+    /// the request's shape. The driver then never starts the route's machine.
+    fn short_circuit(
+        &mut self,
+        _runtime: &R::Context,
+        _arguments: &R::Arguments,
+    ) -> impl Future<Output = Result<Option<R::Response>, R::Error>> + Send {
+        async { Ok(None) }
+    }
+
     fn stream_policy(
         &mut self,
         _runtime: &R::Context,

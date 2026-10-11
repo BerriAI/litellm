@@ -32,6 +32,8 @@ pub struct HandlerBody {
     stream_turned_off: bool,
     /// The handler asked to hold the provider stream back for its response hooks.
     holds_back: bool,
+    /// The handler answered the call itself, for a caller who asked to stream or not.
+    answered: Option<bool>,
 }
 
 fn streams(py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<bool> {
@@ -69,6 +71,7 @@ impl HandlerBody {
             request: None,
             stream_turned_off: false,
             holds_back: false,
+            answered: None,
         })
     }
 
@@ -136,13 +139,39 @@ impl CallHooks<PythonRuntime> for HandlerBody {
         })
     }
 
+    async fn short_circuit(
+        &mut self,
+        task: &PythonTask,
+        arguments: &Py<PyDict>,
+    ) -> PyResult<Option<Py<PyAny>>> {
+        if !self.prepares_request {
+            return Ok(None);
+        }
+        let (awaitable, streamed) = Python::attach(|py| -> PyResult<_> {
+            let resolved = self.resolved(py, arguments.bind(py))?;
+            let awaitable = Body::ShortCircuit
+                .call(py, (<&str>::from(self.operation), resolved))?
+                .unbind();
+            Ok((awaitable, streams(py, arguments)?))
+        })?;
+        let answer = settle(task, awaitable).await?;
+        if Python::attach(|py| answer.is_none(py)) {
+            return Ok(None);
+        }
+        self.answered = Some(streamed);
+        Ok(Some(answer))
+    }
+
     async fn stream_policy(
         &mut self,
         _: &PythonTask,
         arguments: &Py<PyDict>,
     ) -> PyResult<StreamPolicy> {
-        if self.stream_turned_off {
+        if self.stream_turned_off || self.answered == Some(true) {
             return Ok(StreamPolicy::Synthesize);
+        }
+        if self.answered.is_some() {
+            return Ok(StreamPolicy::Relay);
         }
         let holds_back = Python::attach(|py| -> PyResult<bool> {
             if !streams(py, arguments)? {
@@ -173,6 +202,9 @@ impl CallHooks<PythonRuntime> for HandlerBody {
         response: Py<PyAny>,
         _: Timing,
     ) -> PyResult<Py<PyAny>> {
+        if self.answered.is_some() {
+            return Ok(response);
+        }
         let awaitable = Python::attach(|py| -> PyResult<_> {
             let request = self.request.as_ref().ok_or_else(missing_state)?;
             let resolved = self.resolved(py, request.bind(py))?;
@@ -692,6 +724,62 @@ logger.bodies = {
                 py,
                 &locals,
                 c"assert logger.calls[-1][0] == 'transform_body' and logger.calls[-1][1][3] is True",
+            );
+        });
+    }
+
+    /// An answer from the handler's short-circuits ends the request stage, turns a streaming
+    /// caller's policy into a replay, and keeps the agentic fan-out out of the way.
+    #[rstest]
+    #[case::complete_caller(false, StreamPolicy::Relay)]
+    #[case::streaming_caller(true, StreamPolicy::Synthesize)]
+    fn an_answered_call_is_replayed_for_a_streaming_caller_and_skips_the_response_fan_out(
+        #[case] streaming: bool,
+        #[case] expected: StreamPolicy,
+        initialized_python: &InitializedPython,
+    ) {
+        initialized_python.attach(|py| {
+            let script = std::ffi::CString::new(format!(
+                "bound = {{'model': 'bound-model', 'stream': False}}\nkwargs = {{'stream': {}, 'logger': logger}}\nanswer = {{'content': [{{'type': 'text', 'text': 'searched'}}]}}\nlogger.bodies = {{'short_circuit': lambda operation, request: answer}}",
+                if streaming { "True" } else { "False" }
+            ))
+            .unwrap();
+            let (mut body, locals) = body(py, &script);
+            let task = PythonTask::new(true);
+            let kwargs = local_dict(&locals, "kwargs").unbind();
+            let answer = drive(py, &task, body.short_circuit(&task, &kwargs), echo)
+                .outcome
+                .unwrap()
+                .expect("the handler answered");
+            run(py, &locals, c"assert logger.calls[0][0] == 'short_circuit_body' and logger.calls[0][1][0] == 'messages'");
+            let policy = finish(py, &task, body.stream_policy(&task, &kwargs)).unwrap();
+            assert_eq!(policy, expected);
+            finish(py, &task, body.arguments_prepared(&task, &kwargs)).unwrap();
+            let kept = drive(py, &task, body.transform_response(&task, answer.clone_ref(py), TIMING), echo)
+                .outcome
+                .unwrap();
+            assert!(kept.is(&answer));
+            run(py, &locals, c"assert [name for name, _ in logger.calls] == ['short_circuit_body']");
+        });
+    }
+
+    #[rstest]
+    fn no_answer_continues_to_the_provider(initialized_python: &InitializedPython) {
+        initialized_python.attach(|py| {
+            let (mut body, locals) = body(
+                py,
+                c"bound = {'model': 'bound-model'}\nkwargs = {'logger': logger}",
+            );
+            let task = PythonTask::new(true);
+            let kwargs = local_dict(&locals, "kwargs").unbind();
+            let answer = drive(py, &task, body.short_circuit(&task, &kwargs), echo)
+                .outcome
+                .unwrap();
+            assert!(answer.is_none());
+            run(
+                py,
+                &locals,
+                c"assert [name for name, _ in logger.calls] == ['short_circuit_body']",
             );
         });
     }

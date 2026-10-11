@@ -434,6 +434,72 @@ async def transform_response(operation: str, response: object, request: Mapping[
             raise ValueError(f"no response body hooks for the {operation} operation")
 
 
+class WebsearchShortCircuit(Protocol):
+    def __call__(
+        self,
+        model: object,
+        messages: object,
+        tools: object,
+        custom_llm_provider: object,
+        stream: object,
+        kwargs: Mapping[str, object],
+    ) -> Awaitable[object]: ...
+
+
+class Interceptor(Protocol):
+    def can_handle(self, tools: object, custom_llm_provider: object) -> bool: ...
+
+    def handle(
+        self,
+        **kwargs: object,  # kwargs-ok: the interceptor contract takes the call's keywords
+    ) -> Awaitable[object]: ...
+
+
+async def short_circuit(operation: str, request: Mapping[str, object]) -> object | None:
+    """The handler body's answers that need no provider request: the websearch short-circuit,
+    then the first registered `MessagesInterceptor` that owns the request. `None` continues to
+    the provider. An answer is always complete; a caller who streamed gets it replayed."""
+    match operation:
+        case "messages":
+            return await _short_circuit_messages(request)
+        case _:
+            raise ValueError(f"no short-circuits for the {operation} operation")
+
+
+async def _short_circuit_messages(request: Mapping[str, object]) -> object | None:
+    from litellm.llms.anthropic.pass_through.messages import handler
+    from litellm.llms.anthropic.pass_through.messages.interceptors import get_messages_interceptors
+    from litellm.messages.dispatch import MESSAGES_PARAMETERS
+
+    search: Final = cast(  # cast-ok: the handler's own websearch short-circuit
+        WebsearchShortCircuit,
+        handler._try_websearch_short_circuit,  # pyright: ignore[reportPrivateUsage]  # the native call runs the handler's own short-circuit
+    )
+    extra: Final = _messages_extra(request)
+    tools: Final = request.get("tools")
+    provider: Final = request.get("custom_llm_provider")
+    searched: Final = await search(
+        model=request.get("model"),
+        messages=request.get("messages"),
+        tools=tools,
+        custom_llm_provider=provider,
+        stream=False,
+        kwargs={**extra, "metadata": request.get("metadata")},
+    )
+    if searched is not None:
+        return searched
+    named: Final = {
+        name: request[name] for name in MESSAGES_PARAMETERS if name in request and name not in ("client", "stream")
+    }
+    interceptors: Final = cast(  # cast-ok: the handler's own interceptor registry
+        "list[Interceptor]", get_messages_interceptors()
+    )
+    for interceptor in interceptors:
+        if interceptor.can_handle(tools, provider):
+            return await interceptor.handle(**named, **extra, stream=False)
+    return None
+
+
 def stream_policy(operation: str, request: Mapping[str, object]) -> str:
     """Whether a streaming call's provider stream is held back for the response hooks: it is
     when the request carries a tool a registered callback fulfils server-side, so the tool call

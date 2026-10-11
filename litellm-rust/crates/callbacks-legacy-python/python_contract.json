@@ -124,5 +124,9 @@
   "stream_policy": [
     "operation",
     "request"
+  ],
+  "short_circuit": [
+    "operation",
+    "request"
   ]
 }

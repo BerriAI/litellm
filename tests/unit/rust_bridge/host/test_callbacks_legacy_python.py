@@ -544,3 +544,128 @@ async def test_a_held_back_stream_whose_server_fulfilled_tool_call_nobody_fulfil
             await legacy.transform_response("messages", leaking, request, True)
     else:
         assert await legacy.transform_response("messages", leaking, request, False) is leaking
+
+
+class _SearchAnswers(CustomLogger):
+    """Stands in for the websearch logger: the handler's isinstance check is what gates it."""
+
+    def __init__(self, answer: object) -> None:
+        super().__init__()
+        self.answer = answer
+        self.seen: list[Mapping[str, object]] = []
+
+    async def try_short_circuit_search(self, model, messages, tools, custom_llm_provider, kwargs=None):
+        self.seen.append({"model": model, "tools": tools, "provider": custom_llm_provider, "kwargs": kwargs})
+        return self.answer
+
+
+class _OwnsAdvisor:
+    def __init__(self, answer: object) -> None:
+        self.answer = answer
+        self.handled: list[dict[str, object]] = []
+
+    def can_handle(self, tools, custom_llm_provider) -> bool:
+        return bool(tools) and any(tool.get("type") == "advisor" for tool in tools)
+
+    async def handle(self, **kwargs):
+        self.handled.append(kwargs)
+        return self.answer
+
+
+@pytest.fixture
+def websearch_isinstance(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.integrations.websearch_interception import handler as websearch
+
+    monkeypatch.setattr(websearch, "WebSearchInterceptionLogger", _SearchAnswers)
+
+
+@pytest.mark.asyncio
+async def test_short_circuit_answers_from_the_websearch_logger_before_any_interceptor(
+    monkeypatch: pytest.MonkeyPatch, websearch_isinstance: None
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages import interceptors
+
+    answer: Final = {"content": [{"type": "text", "text": "searched"}]}
+    searcher: Final = _SearchAnswers(answer)
+    advisor: Final = _OwnsAdvisor({"content": []})
+    monkeypatch.setattr(litellm, "callbacks", [searcher])
+    monkeypatch.setattr(interceptors, "_interceptors", [advisor])
+    request: Final[dict[str, object]] = {
+        "model": "github_copilot/claude-sonnet-5",
+        "messages": [{"role": "user", "content": "search"}],
+        "tools": [{"type": "web_search_20250305", "name": "web_search"}, {"type": "advisor"}],
+        "custom_llm_provider": "github_copilot",
+        "stream": True,
+        "max_tokens": 8,
+        "metadata": {"user": "u"},
+        "opaque": object(),
+    }
+
+    assert await legacy.short_circuit("messages", request) is answer
+    assert searcher.seen == [
+        {
+            "model": "github_copilot/claude-sonnet-5",
+            "tools": request["tools"],
+            "provider": "github_copilot",
+            "kwargs": {"opaque": request["opaque"], "metadata": {"user": "u"}},
+        }
+    ]
+    assert advisor.handled == []
+
+
+@pytest.mark.asyncio
+async def test_short_circuit_hands_the_call_to_the_first_interceptor_that_owns_it_and_never_streams(
+    monkeypatch: pytest.MonkeyPatch, websearch_isinstance: None
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages import interceptors
+
+    answer: Final = {"content": [{"type": "text", "text": "advised"}]}
+    advisor: Final = _OwnsAdvisor(answer)
+    monkeypatch.setattr(litellm, "callbacks", [_SearchAnswers(None)])
+    monkeypatch.setattr(interceptors, "_interceptors", [_OwnsAdvisor({"content": []}) if False else advisor])
+    request: Final[dict[str, object]] = {
+        "model": "openai/gpt-6",
+        "messages": [{"role": "user", "content": "plan"}],
+        "tools": [{"type": "advisor"}],
+        "custom_llm_provider": "openai",
+        "stream": True,
+        "max_tokens": 8,
+        "api_key": "k",
+        "client": object(),
+        "opaque": object(),
+    }
+
+    assert await legacy.short_circuit("messages", request) is answer
+    [handled] = advisor.handled
+    assert handled["stream"] is False
+    assert handled["model"] == "openai/gpt-6"
+    assert handled["max_tokens"] == 8
+    assert handled["api_key"] == "k"
+    assert handled["opaque"] is request["opaque"]
+    assert "client" not in handled
+
+
+@pytest.mark.asyncio
+async def test_short_circuit_continues_to_the_provider_when_nothing_owns_the_request(
+    monkeypatch: pytest.MonkeyPatch, websearch_isinstance: None
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages import interceptors
+
+    monkeypatch.setattr(litellm, "callbacks", [_SearchAnswers(None)])
+    monkeypatch.setattr(interceptors, "_interceptors", [_OwnsAdvisor({"content": []})])
+    request: Final[dict[str, object]] = {
+        "model": "anthropic/claude-sonnet-5",
+        "messages": [],
+        "tools": [{"name": "get_weather"}],
+        "custom_llm_provider": "anthropic",
+        "max_tokens": 8,
+    }
+
+    assert await legacy.short_circuit("messages", request) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ("ocr", "completion", "responses"))
+async def test_short_circuits_refuse_an_operation_whose_handler_has_none(operation: str) -> None:
+    with pytest.raises(ValueError, match=operation):
+        await legacy.short_circuit(operation, {"model": "m"})
