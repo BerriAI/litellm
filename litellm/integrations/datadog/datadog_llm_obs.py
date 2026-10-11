@@ -663,9 +663,7 @@ class DataDogLLMObsLogger(CustomBatchLogger):
         model_identity: Final[Meta] = (
             {
                 "model_name": str(standard_logging_payload.get("model") or "unknown"),
-                "model_provider": str(
-                    standard_logging_payload.get("custom_llm_provider") or "unknown"
-                ),
+                "model_provider": str(standard_logging_payload.get("custom_llm_provider") or "unknown"),
             }
             if span_kind in ("llm", "embedding")
             else {}
