@@ -2689,7 +2689,8 @@ async def _resolve_org_filter_for_user_search(
         return None  # proxy admin — see everything
 
     apply_runtime_general_settings_flags(await read_stored_ui_settings(prisma_client, use_writer=True))
-    if not coerce_bool(general_settings.get("scope_user_search_to_org", False)):
+    settings: Final = cast(Mapping[str, object], general_settings)  # cast-ok: general_settings is a bare dict
+    if not coerce_bool(settings.get("scope_user_search_to_org", False)):
         return None  # flag OFF — no filtering
 
     # Try to resolve org admin memberships
