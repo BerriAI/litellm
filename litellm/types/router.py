@@ -18,6 +18,9 @@ from typing import (
     TypeVar,
     get_type_hints,
 )
+
+if TYPE_CHECKING:
+    from litellm.router import RouterStrategySelector
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import httpx
@@ -27,6 +30,7 @@ from typing_extensions import Protocol, ReadOnly, Required, TypedDict, runtime_c
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import VIRTUAL_MODEL_ORDERED_STRATEGY
 from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.provider_affinity import validate_provider_affinity_header_name
@@ -1266,6 +1270,29 @@ class ConsumedRequestTagsStamp:
 
     model_group: str
     tags: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class VirtualModelRouterState:
+    """Router-internal state for a single virtual model."""
+
+    members: Mapping[str, int]
+    routing_strategy: str = VIRTUAL_MODEL_ORDERED_STRATEGY
+    num_retries: int | None = None
+    timeout: int | None = None
+    stream_timeout: int | None = None
+    allowed_fails: int | None = None
+    cooldown_time: int | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class VirtualModelsAggregate:
+    """Frozen aggregate holding all virtual model state in a single attribute to avoid torn reads."""
+
+    members: Mapping[str, Mapping[str, int]]
+    configs: Mapping[str, VirtualModelRouterState]
+    names: frozenset[str]
+    selectors: Mapping[str, Mapping[str, "RouterStrategySelector"]]
 
 
 @runtime_checkable

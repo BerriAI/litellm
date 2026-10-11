@@ -24399,6 +24399,49 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/virtual_model": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** List Virtual Models */
+        get: operations["list_virtual_models_virtual_model_get"];
+        put?: never;
+        /**
+         * Create Virtual Model
+         * @description Create a virtual model with ordered failover across existing deployments.
+         *
+         *     Virtual models expose a single public name that routes to member deployments
+         *     in priority order, with automatic failover on errors.
+         */
+        post: operations["create_virtual_model_virtual_model_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/virtual_model/{virtual_model_id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Virtual Model */
+        get: operations["get_virtual_model_virtual_model__virtual_model_id__get"];
+        put?: never;
+        post?: never;
+        /** Delete Virtual Model */
+        delete: operations["delete_virtual_model_virtual_model__virtual_model_id__delete"];
+        options?: never;
+        head?: never;
+        /** Patch Virtual Model */
+        patch: operations["patch_virtual_model_virtual_model__virtual_model_id__patch"];
+        trace?: never;
+    };
     "/vllm/{endpoint}": {
         parameters: {
             query?: never;
@@ -49129,6 +49172,104 @@ export interface components {
             } | null;
             /** Vector Store Name */
             vector_store_name?: string | null;
+        };
+        /** VirtualModelCreateRequest */
+        VirtualModelCreateRequest: {
+            /** Allowed Fails */
+            allowed_fails?: number | null;
+            /** Cooldown Time */
+            cooldown_time?: number | null;
+            /** Description */
+            description?: string | null;
+            /** Members */
+            members: components["schemas"]["VirtualModelMemberRequest"][];
+            /** Num Retries */
+            num_retries?: number | null;
+            /**
+             * Routing Strategy
+             * @default ordered
+             * @enum {string}
+             */
+            routing_strategy: "ordered" | "simple-shuffle" | "least-busy" | "usage-based-routing" | "usage-based-routing-v2" | "latency-based-routing" | "cost-based-routing";
+            /** Stream Timeout */
+            stream_timeout?: number | null;
+            /** Timeout */
+            timeout?: number | null;
+            /** Virtual Model Name */
+            virtual_model_name: string;
+        };
+        /** VirtualModelMemberRequest */
+        VirtualModelMemberRequest: {
+            /** Model Id */
+            model_id: string;
+            /**
+             * Priority
+             * @default 1
+             */
+            priority: number;
+        };
+        /** VirtualModelMemberResponse */
+        VirtualModelMemberResponse: {
+            /** Model Id */
+            model_id: string;
+            /** Model Name */
+            model_name?: string | null;
+            /** Priority */
+            priority: number;
+        };
+        /** VirtualModelPatchRequest */
+        VirtualModelPatchRequest: {
+            /** Add Members */
+            add_members?: components["schemas"]["VirtualModelMemberRequest"][] | null;
+            /** Allowed Fails */
+            allowed_fails?: number | null;
+            /** Cooldown Time */
+            cooldown_time?: number | null;
+            /** Description */
+            description?: string | null;
+            /** Num Retries */
+            num_retries?: number | null;
+            /** Routing Strategy */
+            routing_strategy?: ("ordered" | "simple-shuffle" | "least-busy" | "usage-based-routing" | "usage-based-routing-v2" | "latency-based-routing" | "cost-based-routing") | null;
+            /** Stream Timeout */
+            stream_timeout?: number | null;
+            /** Timeout */
+            timeout?: number | null;
+            /** Virtual Model Name */
+            virtual_model_name?: string | null;
+        };
+        /** VirtualModelResponse */
+        VirtualModelResponse: {
+            /** Allowed Fails */
+            allowed_fails?: number | null;
+            /** Cooldown Time */
+            cooldown_time?: number | null;
+            /** Created At */
+            created_at?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /** Description */
+            description?: string | null;
+            /** Live Member Count */
+            live_member_count: number;
+            /** Members */
+            members: components["schemas"]["VirtualModelMemberResponse"][];
+            /** Num Retries */
+            num_retries?: number | null;
+            /** Routing Strategy */
+            routing_strategy: string;
+            /** Stream Timeout */
+            stream_timeout?: number | null;
+            /** Timeout */
+            timeout?: number | null;
+            /** Updated At */
+            updated_at?: string | null;
+            /** Updated By */
+            updated_by?: string | null;
+            /** Virtual Model Id */
+            virtual_model_id: string;
+            /** Virtual Model Name */
+            virtual_model_name: string;
         };
         /**
          * Wait
@@ -83613,6 +83754,156 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    list_virtual_models_virtual_model_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VirtualModelResponse"][];
+                };
+            };
+        };
+    };
+    create_virtual_model_virtual_model_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VirtualModelCreateRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VirtualModelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_virtual_model_virtual_model__virtual_model_id__get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                virtual_model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VirtualModelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    delete_virtual_model_virtual_model__virtual_model_id__delete: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                virtual_model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VirtualModelResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    patch_virtual_model_virtual_model__virtual_model_id__patch: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                virtual_model_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["VirtualModelPatchRequest"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["VirtualModelResponse"];
                 };
             };
             /** @description Validation Error */

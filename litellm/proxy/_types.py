@@ -202,6 +202,7 @@ class LitellmTableNames(str, enum.Enum):
     SSO_CONFIG_TABLE_NAME = "LiteLLM_SSOConfig"
     UI_SETTINGS_TABLE_NAME = "LiteLLM_UISettings"
     AGENT_TABLE_NAME = "LiteLLM_AgentsTable"
+    VIRTUAL_MODEL_TABLE_NAME = "LiteLLM_VirtualModelTable"
 
 
 from litellm.types.integrations.slack_alerting import (
