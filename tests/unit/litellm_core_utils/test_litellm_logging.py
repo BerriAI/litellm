@@ -3228,7 +3228,9 @@ def test_header_derived_spend_tags_accept_starlette_headers_mapping(monkeypatch)
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
     monkeypatch.setattr(litellm, "disable_add_user_agent_to_request_tags", False)
-    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-custom-header"])
+    monkeypatch.setattr(
+        litellm, "extra_spend_tag_headers", ["x-custom-header"], raising=False
+    )
     proxy_server_request = {
         "headers": Headers(
             {
