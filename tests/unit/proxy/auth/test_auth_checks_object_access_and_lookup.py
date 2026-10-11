@@ -7940,17 +7940,29 @@ async def test_auth_registries_survive_management_cache_churn():
     assert await cache.async_delete_cache_pre_call(key) is None
     assert registry_memory.get_cache(key) == ("pipeline-tag",)
 
-    with (
-        patch.object(
-            cache.auth_registry_cache,
-            "async_set_cache_pre_call",
-            new=AsyncMock(return_value=object()),
-        ) as set_pre_call,
-        patch.object(cache.auth_registry_cache, "async_set_cache", new=AsyncMock()) as direct_set,
-    ):
+    from litellm.caching.redis_batch import request_redis_batch_scope
+    from tests.unit.caching.test_redis_batch import FakeClient, FakeRedisCache, replies
+
+    client = FakeClient(replies)
+    redis_cache = FakeRedisCache(client)
+    cache.attach_redis_cache(redis_cache)
+    with request_redis_batch_scope() as request:
         assert await cache.async_set_cache(key, ("queued-tag",), ttl=60) is None
-    set_pre_call.assert_awaited_once_with(key, ("queued-tag",), 60)
-    direct_set.assert_not_awaited()
+        assert request.batch(redis_cache).pending == 1
+        assert client.pipelines == []
+        assert redis_cache.alone == []
+        assert registry_memory.get_cache(key) == ("queued-tag",)
+        assert cache.in_memory_cache.get_cache(key) is None
+        assert cache.key_object_cache.in_memory_cache.get_cache(key) is None
+        assert await cache.async_get_cache(key) == ("queued-tag",)
+        assert client.pipelines == []
+        assert redis_cache.alone == []
+        await request.flush_all()
+
+    assert request.batch(redis_cache).pending == 0
+    assert [pipe.commands for pipe in client.pipelines] == [[("SET", key, json.dumps(["queued-tag"]), 60)]]
+    assert client.pipelines[0].executed
+    assert redis_cache.alone == []
 
 
 @pytest.mark.asyncio
