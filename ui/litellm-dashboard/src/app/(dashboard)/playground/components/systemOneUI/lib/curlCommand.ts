@@ -2,6 +2,7 @@ export interface CurlCommandInput {
   baseUrl: string;
   endpoint: "/v1/decisions" | "/v1/systemone";
   payload: string;
+  authHeaderName: string;
 }
 
 export const CURL_KEY_PLACEHOLDER = "$LITELLM_API_KEY";
@@ -16,10 +17,10 @@ const prettyPayload = (payload: string): string => {
   }
 };
 
-export const buildCurlCommand = ({ baseUrl, endpoint, payload }: CurlCommandInput): string =>
+export const buildCurlCommand = ({ baseUrl, endpoint, payload, authHeaderName }: CurlCommandInput): string =>
   [
     `curl -X POST ${shellSingleQuote(`${baseUrl.replace(/\/+$/, "")}${endpoint}`)}`,
-    `  -H "Authorization: Bearer ${CURL_KEY_PLACEHOLDER}"`,
+    `  -H ${shellSingleQuote(`${authHeaderName}: Bearer ${CURL_KEY_PLACEHOLDER}`)}`,
     `  -H "Content-Type: application/json"`,
     `  -d ${shellSingleQuote(prettyPayload(payload))}`,
   ].join(" \\\n");

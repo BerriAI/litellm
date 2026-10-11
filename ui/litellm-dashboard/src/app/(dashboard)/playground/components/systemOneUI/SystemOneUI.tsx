@@ -8,7 +8,7 @@ import { SimpleTooltip } from "@/components/ui/tooltip";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { cn } from "@/lib/cva.config";
 import { DECISIONS_DOCS_URL } from "@/lib/decisionModels";
-import { getProxyBaseUrl } from "@/components/networking";
+import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 import { uiHref } from "@/utils/uiHref";
 import { useMutation } from "@tanstack/react-query";
 import { BookOpen, Eraser, LoaderCircle, Send } from "lucide-react";
@@ -116,6 +116,10 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
     activeController.current?.abort();
     activeController.current = null;
     systemOne.reset();
+  }
+
+  function handleReset() {
+    handlePayloadChange(presetPayload(DECISION_PRESETS[0], endpoint, draftModel ?? decisionModels[0]));
   }
 
   function handlePayloadChange(value: string) {
@@ -260,14 +264,14 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                   value={rawPayload}
                   onChange={handlePayloadChange}
                   validation={validated.validation}
-                  onReset={() => handlePayloadChange(presetPayload(DECISION_PRESETS[0], endpoint, draftModel))}
+                  onReset={handleReset}
                 />
               ) : (
                 <SystemOneForm
                   value={rawPayload}
                   onChange={handlePayloadChange}
                   validation={validated.validation}
-                  onReset={() => handlePayloadChange(presetPayload(DECISION_PRESETS[0], endpoint, draftModel))}
+                  onReset={handleReset}
                 />
               )}
             </TabsContent>
@@ -275,7 +279,8 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
               <CurlPreview
                 baseUrl={getCustomProxyBaseUrl() ?? getProxyBaseUrl()}
                 endpoint={endpoint}
-                payload={rawPayload}
+                payload={validation.payload === undefined ? rawPayload : JSON.stringify(validation.payload)}
+                authHeaderName={getGlobalLitellmHeaderName()}
               />
             </TabsContent>
           </Tabs>
