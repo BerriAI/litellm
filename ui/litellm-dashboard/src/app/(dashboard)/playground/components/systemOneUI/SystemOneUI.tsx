@@ -36,7 +36,6 @@ interface SystemOneSendVariables {
   signal: AbortSignal;
 }
 
-export const NOUL_HELP = "noul is a yes / no question. The model returns the probability that the answer is yes.";
 const CUSTOM_PRESET = "custom";
 
 interface PresetPickerProps {
