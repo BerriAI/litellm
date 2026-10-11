@@ -18,7 +18,7 @@ _JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_i
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _SageMakerToken(TypedDict, total=False):
-    text: ReadOnly[str]
+    text: ReadOnly[str | None]
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))

@@ -96,13 +96,13 @@ class _Choice(TypedDict):
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _TokensDetails(TypedDict):
-    image_tokens: ReadOnly[NotRequired[int]]
+    image_tokens: ReadOnly[NotRequired[int | float]]
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
 class _Usage(TypedDict):
-    prompt_tokens: ReadOnly[NotRequired[int]]
-    total_tokens: ReadOnly[NotRequired[int]]
+    prompt_tokens: ReadOnly[NotRequired[int | float]]
+    total_tokens: ReadOnly[NotRequired[int | float]]
     completion_tokens_details: ReadOnly[NotRequired[_TokensDetails]]
     prompt_tokens_details: ReadOnly[NotRequired[_TokensDetails | None]]
     cost: ReadOnly[NotRequired[int | float | str | None]]
