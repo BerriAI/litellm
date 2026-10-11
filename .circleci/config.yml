@@ -887,7 +887,7 @@ jobs:
           command: |
             cd tests/e2e/ui
             LITELLM_LICENSE="$LITELLM_LICENSE" \
-              npx playwright test --config playwright.config.ts
+              npx playwright test --config playwright.config.ts --workers=3 --retries=0
           no_output_timeout: 10m
       - store_artifacts:
           path: tests/e2e/ui/test-results
