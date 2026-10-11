@@ -1,12 +1,11 @@
 #!/usr/bin/env bash
 set -uo pipefail
 
-category="${1:?usage: classify_changes.sh <backend|client|ui|provider-harness|cost-map-only|mcp-dependencies|windows-release|redis-compat>}"
+category="${1:?usage: classify_changes.sh <backend|client|ui|cost-map-only|mcp-dependencies|windows-release|redis-compat>}"
 
 has_client=false
 has_backend=false
 has_ci=false
-has_provider_harness=false
 has_cost_map=false
 has_mcp_dependencies=false
 has_windows_release=false
@@ -24,11 +23,6 @@ while IFS= read -r file || [ -n "$file" ]; do
       has_mcp_dependencies=true ;;
   esac
   case "$file" in
-    tests/e2e/*/*.py | tests/e2e_harness/*/*.py) : ;;
-    tests/e2e/*.py | tests/e2e_harness/*.py | tests/code_coverage_tests/test_provider_cache.py | tests/code_coverage_tests/test_provider_replay_harness.py | tests/unit/test_circleci_path_filter.py | .circleci/* | pyproject.toml | uv.lock)
-      has_provider_harness=true ;;
-  esac
-  case "$file" in
     litellm-rust/* | litellm/rust_bridge/* | rust-toolchain.toml | pyproject.toml | uv.lock | tests/windows_tests/* | .circleci/*)
       has_windows_release=true ;;
   esac
@@ -41,7 +35,7 @@ while IFS= read -r file || [ -n "$file" ]; do
   case "$file" in
     model_prices_and_context_window.json | litellm/model_prices_and_context_window_backup.json | model_prices_and_context_window.schema.json)
       has_cost_map=true ;;
-    tests/test_litellm/* | tests/proxy_unit_tests/* | tests/unit/proxy/*) : ;;
+    tests/unit/proxy/*) : ;;
     *) outside_cost_map_set=true ;;
   esac
 done
@@ -52,9 +46,6 @@ case "$category" in
     ;;
   cost-map-only)
     { [ "$has_cost_map" = true ] && [ "$outside_cost_map_set" = false ]; } && echo run || echo skip
-    ;;
-  provider-harness)
-    [ "$has_provider_harness" = true ] && echo run || echo skip
     ;;
   windows-release)
     [ "$has_windows_release" = true ] && echo run || echo skip
