@@ -5,8 +5,8 @@ from typing_extensions import TypedDict
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.llms.openai.openai import HttpxBinaryResponseContent
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexLLM
@@ -140,7 +140,7 @@ class VertexTextToSpeechAPI(VertexLLM):
         ####### Send the request ###################
         if _is_async is True:
             return self.async_audio_speech(logging_obj=logging_obj, url=url, headers=headers, request=request)
-        sync_handler: Final = _get_httpx_client()
+        sync_handler: Final = get_httpx_client()
 
         response = sync_handler.post(
             url=url,

@@ -12,6 +12,7 @@ from pydantic import JsonValue, TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.llms.anthropic.common_utils import AnthropicError
 from litellm.llms.anthropic.count_tokens.transformation import (
     AnthropicCountTokensConfig,
@@ -62,7 +63,7 @@ class AnthropicCountTokensHandler(AnthropicCountTokensConfig):
             verbose_logger.debug("Processing Anthropic CountTokens request for model: %s", model)
 
             # Transform request to Anthropic format
-            request_body: Final = self.transform_request_to_count_tokens(
+            request_body: Final = await asyncify(self.transform_request_to_count_tokens)(
                 model=model,
                 messages=messages,
                 tools=tools,

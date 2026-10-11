@@ -2,17 +2,18 @@
 
 import time
 from unittest.mock import MagicMock, patch
+from xml.etree import ElementTree
 
 import pytest
 
 import litellm
 from litellm.litellm_core_utils.get_blog_posts import (
+    BLOG_POSTS_MAX,
     BlogPost,
     BlogPostsResponse,
     GetBlogPosts,
     get_blog_posts,
 )
-from xml.etree import ElementTree
 
 SAMPLE_RSS = """\
 <?xml version="1.0" encoding="UTF-8"?>
@@ -71,6 +72,18 @@ def test_parse_rss_to_posts_multiple():
     assert posts[1]["title"] == "Second Post"
 
 
+def test_parse_rss_to_posts_default_cap():
+    items = "".join(
+        f"<item><title>Post {i}</title><link>https://docs.litellm.ai/blog/{i}</link>"
+        f"<description>D</description><pubDate>Thu, 0{1 + i % 9} Jan 2026 00:00:00 GMT</pubDate></item>"
+        for i in range(BLOG_POSTS_MAX + 1)
+    )
+    posts = GetBlogPosts.parse_rss_to_posts(f"<rss><channel>{items}</channel></rss>")
+    assert len(posts) == BLOG_POSTS_MAX
+    assert posts[0]["title"] == "Post 0"
+    assert posts[-1]["title"] == f"Post {BLOG_POSTS_MAX - 1}"
+
+
 def test_parse_rss_to_posts_invalid_xml():
     with pytest.raises(ElementTree.ParseError):
         GetBlogPosts.parse_rss_to_posts("not xml")
@@ -82,9 +95,7 @@ def test_parse_rss_to_posts_missing_channel():
 
 
 def test_validate_blog_posts_valid():
-    posts = [
-        {"title": "T", "description": "D", "date": "2026-01-01", "url": "https://x.com"}
-    ]
+    posts = [{"title": "T", "description": "D", "date": "2026-01-01", "url": "https://x.com"}]
     assert GetBlogPosts.validate_blog_posts(posts) is True
 
 
@@ -108,7 +119,7 @@ def test_get_blog_posts_success():
     ):
         posts = get_blog_posts(url=litellm.blog_posts_url)
 
-    assert len(posts) == 1
+    assert len(posts) == 2
     assert posts[0]["title"] == "Test Post"
 
 
@@ -163,9 +174,7 @@ def test_get_blog_posts_ttl_cache_not_refetched():
         m.raise_for_status = MagicMock()
         return m
 
-    with patch(
-        "litellm.litellm_core_utils.get_blog_posts.httpx.get", side_effect=mock_get
-    ):
+    with patch("litellm.litellm_core_utils.get_blog_posts.httpx.get", side_effect=mock_get):
         posts = get_blog_posts(url=litellm.blog_posts_url)
 
     assert call_count == 0  # cache hit, no fetch
@@ -196,7 +205,7 @@ def test_get_blog_posts_ttl_expired_refetches():
         posts = get_blog_posts(url=litellm.blog_posts_url)
 
     mock_get.assert_called_once()
-    assert len(posts) == 1
+    assert len(posts) == 2
 
 
 def test_get_blog_posts_local_env_var_skips_remote(monkeypatch):
@@ -219,9 +228,5 @@ def test_blog_post_pydantic_model():
 
 
 def test_blog_posts_response_pydantic_model():
-    resp = BlogPostsResponse(
-        posts=[
-            BlogPost(title="T", description="D", date="2026-01-01", url="https://x.com")
-        ]
-    )
+    resp = BlogPostsResponse(posts=[BlogPost(title="T", description="D", date="2026-01-01", url="https://x.com")])
     assert len(resp.posts) == 1

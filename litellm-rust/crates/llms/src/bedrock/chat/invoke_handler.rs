@@ -1,7 +1,7 @@
 use base64::Engine;
 use bytes::Buf;
 use futures_util::{Stream, StreamExt};
-use litellm_framing::{
+use litellm_framer::{
     aws_event_stream::{AwsEventStreamCodec, Message},
     frames,
 };
@@ -64,27 +64,23 @@ pub fn invoke_anthropic_event_stream(bytes: ByteStream) -> EventStream {
     Box::pin(invoke_chunk_stream(bytes).map(|chunk| decode_invoke_anthropic_chunk(chunk?)))
 }
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, strum::EnumString)]
 enum InvokeProvider {
+    #[strum(serialize = "anthropic")]
     Anthropic,
+    #[strum(serialize = "deepseek_r1")]
     DeepseekR1,
+    #[strum(serialize = "moonshot")]
     Moonshot,
+    #[strum(disabled)]
     Unsupported,
 }
 
-impl From<&str> for InvokeProvider {
-    fn from(value: &str) -> Self {
-        match value {
-            "anthropic" => Self::Anthropic,
-            "deepseek_r1" => Self::DeepseekR1,
-            "moonshot" => Self::Moonshot,
-            _ => Self::Unsupported,
-        }
-    }
-}
-
 pub fn invoke_chat_stream(invoke_provider: &str, shape: StreamShape) -> Result<ChatStream, Error> {
-    match InvokeProvider::from(invoke_provider) {
+    match invoke_provider
+        .parse()
+        .unwrap_or(InvokeProvider::Unsupported)
+    {
         InvokeProvider::Anthropic => Ok(ChatStream::new(
             invoke_anthropic_event_stream,
             ModelResponseIterator::new(shape),
@@ -115,6 +111,22 @@ mod tests {
 
     const TEXT_DELTA: &str =
         r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}"#;
+
+    #[rstest::rstest]
+    #[case::anthropic("anthropic", InvokeProvider::Anthropic)]
+    #[case::deepseek_r1("deepseek_r1", InvokeProvider::DeepseekR1)]
+    #[case::moonshot("moonshot", InvokeProvider::Moonshot)]
+    #[case::unknown("qwen", InvokeProvider::Unsupported)]
+    #[case::case_sensitive("Anthropic", InvokeProvider::Unsupported)]
+    fn invoke_provider_maps_each_model_family_name(
+        #[case] name: &str,
+        #[case] expected: InvokeProvider,
+    ) {
+        assert_eq!(
+            name.parse().unwrap_or(InvokeProvider::Unsupported),
+            expected
+        );
+    }
 
     fn aws_wire(chunk: &str) -> Vec<u8> {
         let payload = serde_json::json!({"bytes": STANDARD.encode(chunk)});

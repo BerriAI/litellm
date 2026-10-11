@@ -9,18 +9,23 @@ on:
     paths:
       - Dockerfile
       - docker/Dockerfile.non_root
+      - docker/Dockerfile.database
       - migrations/Dockerfile
       - migrations/run.py
       - gateway/Dockerfile
       - gateway/main.py
+      - gateway/routes/allowlist.py
       - backend/Dockerfile
       - backend/main.py
-      - deploy/lens/**
+      - litellm-rust/**
       - litellm/proxy/lens/**
-      - tests/e2e/migrations/lens_compose_smoke.sh
       - docker/component_entrypoint.sh
       - docker/entrypoint.sh
       - litellm/proxy/prisma_migration.py
+      - litellm/proxy/admin_mcp.py
+      - litellm/proxy/proxy_server.py
+      - backend/routes/allowlist.py
+      - pyproject.toml
       - litellm-proxy-extras/**
       - tests/proxy_migration_tests/**
       - uv.lock
@@ -40,80 +45,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  lens-worker-image:
-    name: lens-worker-image (${{ matrix.arch }})
-    runs-on: ${{ matrix.runner }}
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name == github.repository
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-latest
-            grype_sha256: edda0968d8827daab01d32b3cd7de192ae0915005e7bbfcfef9e68e79bc43343
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-            grype_sha256: 553e4c36d9d61349830ba6034d43b8700a7f10576d3e2f4981c0fd2b96086465
-    steps:
-      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
-        with:
-          persist-credentials: false
-      - name: Build the release worker
-        env:
-          RELEASE_TAG: sha-${{ github.sha }}
-        run: docker build --build-arg LITELLM_RELEASE_TAG="${RELEASE_TAG}" -f deploy/lens/Dockerfile -t lens-worker-scan .
-      - name: Verify the standalone worker on a read-only filesystem
-        env:
-          RELEASE_TAG: sha-${{ github.sha }}
-        run: |
-          docker run --rm --network none --read-only --cap-drop ALL \
-            --tmpfs /tmp:rw,noexec,nosuid,size=1g --security-opt no-new-privileges \
-            -e EXPECTED_RELEASE_TAG="${RELEASE_TAG}" --entrypoint python lens-worker-scan -c '
-          import os
-          import lens.worker
-          from lens.release import release_tag
-          from lens.trace_store import trace_store
-          assert os.getuid() == 65532
-          assert release_tag() == os.environ["EXPECTED_RELEASE_TAG"]
-          with trace_store() as store:
-              assert store.count() == 0
-          '
-      - name: Reject a dependency whose hash has changed
-        run: |
-          docker build --target builder -f deploy/lens/Dockerfile -t lens-worker-deps .
-          sed -E 's/sha256:[0-9a-f]{64}/sha256:0000000000000000000000000000000000000000000000000000000000000000/g' \
-            deploy/lens/requirements.lock > "$RUNNER_TEMP/tampered.lock"
-          if docker run --rm -v "$RUNNER_TEMP/tampered.lock:/tmp/tampered.lock:ro" \
-            --entrypoint uv lens-worker-deps pip sync --python /app/.venv/bin/python \
-            --require-hashes --only-binary :all: --reinstall --no-cache /tmp/tampered.lock \
-            > "$RUNNER_TEMP/hash-check.log" 2>&1; then
-            echo "::error::Dependency hash mismatch was accepted"
-            exit 1
-          fi
-          cat "$RUNNER_TEMP/hash-check.log"
-          grep -qi 'hash mismatch' "$RUNNER_TEMP/hash-check.log"
-      - name: Download Grype v0.114.0
-        env:
-          ARCH: ${{ matrix.arch }}
-          GRYPE_SHA256: ${{ matrix.grype_sha256 }}
-        run: |
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/grype.tar.gz" \
-            "https://github.com/anchore/grype/releases/download/v0.114.0/grype_0.114.0_linux_${ARCH}.tar.gz"
-          echo "${GRYPE_SHA256}  $RUNNER_TEMP/grype.tar.gz" | sha256sum -c -
-          tar xzf "$RUNNER_TEMP/grype.tar.gz" -C "$RUNNER_TEMP" grype
-          chmod +x "$RUNNER_TEMP/grype"
-      - name: Scan the worker for fixable HIGH/CRITICAL CVEs
-        env:
-          GRYPE_MATCH_PYTHON_USING_CPES: "true"
-        run: |
-          "$RUNNER_TEMP/grype" lens-worker-scan \
-            --config .grype.yaml --only-fixed --fail-on high --output table
-
   image-scan:
     name: image-scan
     runs-on: ubuntu-latest
@@ -142,6 +73,9 @@ jobs:
       - name: Build runtime image
         run: docker build -f docker/Dockerfile.non_root -t litellm-image-scan:${{ github.sha }} .
 
+      - name: Tag the cached builder for Admin MCP schema setup
+        run: docker build --target builder -f docker/Dockerfile.non_root -t litellm-admin-mcp-schema:${{ github.sha }} .
+
       # The prisma bake must migrate a fresh DB with no egress as an arbitrary
       # non-root uid (OpenShift restricted-v2 / air-gapped / readOnlyRootFilesystem).
       # `docker run` as the default uid with network hides a broken bake because
@@ -155,9 +89,10 @@ jobs:
       - name: Verify offline migration as a non-root uid
         env:
           LITELLM_IMAGE: litellm-image-scan:${{ github.sha }}
+          LITELLM_ADMIN_MCP_SCHEMA_IMAGE: litellm-admin-mcp-schema:${{ github.sha }}
         run: |
           python -m pip install "pytest==9.0.3"
-          python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py tests/proxy_migration_tests/test_image_bedrock_realtime_extra.py -v
+          python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py tests/proxy_migration_tests/test_image_bedrock_realtime_extra.py tests/proxy_migration_tests/test_image_admin_mcp.py -v
 
       # Scans the whole shipped artifact: OS/apk plus every language package
       # baked into the image, including ones no lockfile declares (e.g. prisma's
@@ -176,21 +111,28 @@ jobs:
             --output table
 
   runtime-image:
-    name: runtime-image
+    name: runtime-image (${{ matrix.dockerfile }})
     runs-on: ubuntu-latest
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    timeout-minutes: 30
+    timeout-minutes: 45
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        dockerfile: [Dockerfile, docker/Dockerfile.database]
     steps:
       - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
         with:
           persist-credentials: false
 
       - name: Build runtime image
-        run: docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci -f Dockerfile -t litellm-runtime-scan:${{ github.sha }} .
+        run: docker build --build-arg LITELLM_RELEASE_TAG=v0.0.0-lens-ci -f "${{ matrix.dockerfile }}" -t litellm-runtime-scan:${{ github.sha }} .
+
+      - name: Tag the cached builder for Admin MCP schema setup
+        run: docker build --target builder -f "${{ matrix.dockerfile }}" -t litellm-admin-mcp-schema:${{ github.sha }} .
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
@@ -200,14 +142,11 @@ jobs:
       - name: Verify offline migration as a non-root uid
         env:
           LITELLM_IMAGE: litellm-runtime-scan:${{ github.sha }}
+          LITELLM_ADMIN_MCP_SCHEMA_IMAGE: litellm-admin-mcp-schema:${{ github.sha }}
         run: |
           python -m pip install "pytest==9.0.3"
-          python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py tests/proxy_migration_tests/test_image_bedrock_realtime_extra.py -v
+          python -m pytest tests/proxy_migration_tests/test_offline_image_migration.py tests/proxy_migration_tests/test_image_bedrock_realtime_extra.py tests/proxy_migration_tests/test_image_admin_mcp.py -v
 
-      - name: Verify the bundled Lens Compose installation and restart
-        env:
-          LITELLM_IMAGE: litellm-runtime-scan:${{ github.sha }}
-        run: bash tests/e2e/migrations/lens_compose_smoke.sh
 
   migrations-image:
     name: migrations-image
@@ -266,9 +205,10 @@ jobs:
         env:
           LITELLM_IMAGE: litellm-gateway-scan:${{ github.sha }}
           LITELLM_COMPONENT_PORT: "4000"
+          LITELLM_IMAGE_COMPONENT: gateway
         run: |
           python -m pip install "pytest==9.0.3"
-          python -m pytest tests/proxy_migration_tests/test_component_image_serves_offline.py tests/proxy_migration_tests/test_image_bedrock_realtime_extra.py -v
+          python -m pytest tests/proxy_migration_tests/test_component_image_serves_offline.py tests/proxy_migration_tests/test_image_bedrock_realtime_extra.py tests/proxy_migration_tests/test_image_admin_mcp.py -v
 
   ui-image:
     name: ui-image
@@ -316,6 +256,9 @@ jobs:
       - name: Build backend image
         run: docker build -f backend/Dockerfile -t litellm-backend-scan:${{ github.sha }} .
 
+      - name: Tag the cached builder for Admin MCP schema setup
+        run: docker build --target builder -f backend/Dockerfile -t litellm-admin-mcp-schema:${{ github.sha }} .
+
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
@@ -324,7 +267,9 @@ jobs:
       - name: Verify the backend serves offline as a non-root uid
         env:
           LITELLM_IMAGE: litellm-backend-scan:${{ github.sha }}
+          LITELLM_ADMIN_MCP_SCHEMA_IMAGE: litellm-admin-mcp-schema:${{ github.sha }}
           LITELLM_COMPONENT_PORT: "4001"
+          LITELLM_IMAGE_COMPONENT: backend
         run: |
           python -m pip install "pytest==9.0.3"
-          python -m pytest tests/proxy_migration_tests/test_component_image_serves_offline.py -v
+          python -m pytest tests/proxy_migration_tests/test_component_image_serves_offline.py tests/proxy_migration_tests/test_image_admin_mcp.py -v

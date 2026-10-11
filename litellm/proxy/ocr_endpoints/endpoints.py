@@ -272,7 +272,7 @@ async def ocr(
     **1. JSON body** (Mistral OCR API compatible):
     ```bash
     curl -X POST "http://localhost:4000/v1/ocr" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -H "Content-Type: application/json" \
         -d '{
             "model": "mistral-ocr",
@@ -286,7 +286,7 @@ async def ocr(
     **2. Multipart form file upload**:
     ```bash
     curl -X POST "http://localhost:4000/v1/ocr" \
-        -H "Authorization: Bearer sk-1234" \
+        -H "Authorization: Bearer $LITELLM_MASTER_KEY" \
         -F "model=mistral-ocr" \
         -F "file=@document.pdf"
     ```
@@ -340,7 +340,7 @@ async def ocr(
         return _native_response(response, fastapi_response) or response
     except Exception as e:
         processor = ProxyBaseLLMRequestProcessing(data=data)
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,
