@@ -115,24 +115,29 @@ class Stream(AsyncIterator[object]):
         raise StopAsyncIteration
 
     async def _advance(self) -> Settled | Yield:
-        step = (
-            self._execution.resume_value(None) if self._waiting is None else self._waiting
-        )  # rebind-ok: protocol loop
+        if self._waiting is None:
+            return await self._settle_or_wait(self._execution.resume_value(None))
+        waiting: Final = self._waiting
         self._waiting = None
-        while True:
-            if isinstance(step, Keepalive):
-                done, _ = await asyncio.wait({step.awaitable}, timeout=KEEPALIVE_INTERVAL_SECONDS)
-                if not done:
-                    self._waiting = step
-                    return Yield(step.ping)
-                error: Final = step.awaitable.exception()
-                step = (  # rebind-ok: protocol loop
-                    self._execution.resume_error(error)
-                    if error is not None
-                    else self._execution.resume_value(step.awaitable.result())
-                )
-                continue
-            return await _settle(self._execution, step)
+        return await self._wait(waiting)
+
+    async def _settle_or_wait(self, step: Step) -> Settled | Yield:
+        if isinstance(step, Keepalive):
+            return await self._wait(step)
+        return await _settle(self._execution, step)
+
+    async def _wait(self, step: Keepalive) -> Settled | Yield:
+        done, _ = await asyncio.wait({step.awaitable}, timeout=KEEPALIVE_INTERVAL_SECONDS)
+        if not done:
+            self._waiting = step
+            return Yield(step.ping)
+        error: Final = step.awaitable.exception()
+        resumed: Final = (
+            self._execution.resume_error(error)
+            if error is not None
+            else self._execution.resume_value(step.awaitable.result())
+        )
+        return await self._settle_or_wait(resumed)
 
     async def aclose(self) -> None:
         if self._done:
