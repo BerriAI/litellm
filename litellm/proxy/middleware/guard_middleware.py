@@ -30,7 +30,7 @@ Design constraints honored here:
 from __future__ import annotations
 
 import os
-from typing import TYPE_CHECKING
+from typing import Final, TYPE_CHECKING
 
 from starlette.types import ASGIApp, Receive, Scope, Send
 
@@ -39,10 +39,10 @@ from litellm._logging import verbose_proxy_logger
 if TYPE_CHECKING:
     from guard import SecurityConfig
 
-GUARD_ENABLED_ENV = "LITELLM_GUARD_ENABLED"
-GUARD_EXCLUDED_PATHS_ENV = "LITELLM_GUARD_EXCLUDED_PATHS"
-DEFAULT_EXCLUDED_PATHS = "/health,/health/liveliness,/health/readiness,/metrics"
-DEFAULT_TRUSTED_PROXIES = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+GUARD_ENABLED_ENV: Final = "LITELLM_GUARD_ENABLED"
+GUARD_EXCLUDED_PATHS_ENV: Final = "LITELLM_GUARD_EXCLUDED_PATHS"
+DEFAULT_EXCLUDED_PATHS: Final = "/health,/health/liveliness,/health/readiness,/metrics"
+DEFAULT_TRUSTED_PROXIES: Final = "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 
 
 def _env_str(name: str, default: str = "") -> str:
@@ -50,7 +50,7 @@ def _env_str(name: str, default: str = "") -> str:
 
 
 def _env_int(name: str, default: int) -> int:
-    raw = os.getenv(name)
+    raw: Final = os.getenv(name)
     if raw is None or raw == "":
         return default
     return int(raw)
@@ -76,7 +76,7 @@ def _build_guard_config() -> SecurityConfig:
     """Build the SecurityConfig from the LITELLM_GUARD_* environment variables."""
     from guard import SecurityConfig
 
-    kwargs: dict[str, object] = {  # mutable-ok: assembled conditionally, then passed once to SecurityConfig
+    kwargs: Final[dict[str, object]] = {  # mutable-ok: assembled conditionally, then passed once to SecurityConfig
         "enable_rate_limiting": True,
         "rate_limit": _env_int("LITELLM_GUARD_RATE_LIMIT", 100),
         "rate_limit_window": _env_int("LITELLM_GUARD_RATE_LIMIT_WINDOW", 60),
