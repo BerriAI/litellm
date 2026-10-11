@@ -24,12 +24,12 @@ def may_name_litellm_mcp_gateway(tools: Iterable[object] | None) -> bool:
     ``mcp`` and from nothing else, so this is a necessary condition for it: it never returns False for a tool
     list the handler would accept.
 
-    The handler scans the same object again, so only a list or tuple is read here, the builtins that iterate
-    the same way twice. Any other iterable, a generator for instance, is left unread and reported as possibly
-    naming the gateway, which keeps the previous code path for it.
+    The handler scans the same object again, so only a plain list or tuple is read here, the builtins that
+    iterate the same way twice. Any other iterable, a generator or a subclass for instance, is left unread and
+    reported as possibly naming the gateway, which keeps the previous code path for it.
     """
     if tools is None:
         return False
-    if not isinstance(tools, (list, tuple)):
+    if type(tools) not in (list, tuple):
         return True
     return any(_is_mcp_tool(tool) for tool in tools)

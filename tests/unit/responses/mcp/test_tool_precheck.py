@@ -198,6 +198,21 @@ class _OneShotCollection:
         return self._iterator
 
 
+class _OneShotList(list):
+    """A list subclass whose iteration is consumed by the first scan."""
+
+    def __init__(self, items):
+        super().__init__(items)
+        self._iterator = iter(list(items))
+
+    def __iter__(self):
+        return self._iterator
+
+
+class _TupleSubclass(tuple):
+    pass
+
+
 @pytest.mark.parametrize(
     "make_tools",
     [
@@ -205,10 +220,12 @@ class _OneShotCollection:
         lambda items: iter(items),
         lambda items: _OneShotCollection(items),
         lambda items: deque(items),
+        lambda items: _OneShotList(items),
+        lambda items: _TupleSubclass(items),
     ],
-    ids=["generator", "iterator", "one-shot-collection", "deque"],
+    ids=["generator", "iterator", "one-shot-collection", "deque", "one-shot-list-subclass", "tuple-subclass"],
 )
-def test_precheck_leaves_anything_but_a_list_or_tuple_unread(make_tools):
+def test_precheck_leaves_anything_but_a_plain_list_or_tuple_unread(make_tools):
     items: Final = [FUNCTION_TOOL, GATEWAY_MCP_TOOL, GATEWAY_MCP_TOOL]
     tools: Final = make_tools(items)
 
