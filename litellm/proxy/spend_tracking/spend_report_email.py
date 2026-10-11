@@ -2,7 +2,7 @@ import html
 import os
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from typing import Final, Literal, cast
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
@@ -265,11 +265,7 @@ async def default_email_sender(
             )
 
             resend_logger: Final = ResendEmailLogger()
-            sender_email = (
-                os.getenv("RESEND_FROM_EMAIL")
-                or os.getenv("SMTP_SENDER_EMAIL")
-                or "notifications@alerts.litellm.ai"
-            )
+            sender_email = os.getenv("SMTP_SENDER_EMAIL") or "notifications@alerts.litellm.ai"
             await resend_logger.send_email(
                 from_email=sender_email,
                 to_email=[receiver_email],
@@ -338,7 +334,21 @@ FROM "LiteLLM_SpendLogs" s
 LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
 WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
   AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
-  /* TEAM_FILTER */
+GROUP BY COALESCE(t.team_alias, s.team_id, 'No Team')
+HAVING SUM(s.spend) > 0
+ORDER BY total_spend DESC
+"""
+
+TEAM_SPEND_WITH_TEAM_SQL: Final = """
+SELECT 
+    COALESCE(t.team_alias, s.team_id, 'No Team') AS team,
+    ROUND(SUM(s.spend)::numeric, 2) AS total_spend,
+    COUNT(*) AS request_count
+FROM "LiteLLM_SpendLogs" s
+LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
+WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+  AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+  AND (s.team_id = $3 OR t.team_alias = $3 OR t.team_id = $3)
 GROUP BY COALESCE(t.team_alias, s.team_id, 'No Team')
 HAVING SUM(s.spend) > 0
 ORDER BY total_spend DESC
@@ -355,7 +365,25 @@ LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
 LEFT JOIN "LiteLLM_VerificationToken" k ON s.api_key = k.token
 WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
   AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
-  /* TEAM_FILTER */
+GROUP BY 
+    COALESCE(t.team_alias, s.team_id, 'No Team'),
+    COALESCE(k.key_alias, k.key_name, NULLIF(s.api_key, ''), 'No Key')
+HAVING SUM(s.spend) > 0
+ORDER BY total_spend DESC
+"""
+
+TEAM_KEY_SPEND_WITH_TEAM_SQL: Final = """
+SELECT 
+    COALESCE(t.team_alias, s.team_id, 'No Team') AS team,
+    COALESCE(k.key_alias, k.key_name, NULLIF(s.api_key, ''), 'No Key') AS api_key,
+    ROUND(SUM(s.spend)::numeric, 2) AS total_spend,
+    COUNT(*) AS request_count
+FROM "LiteLLM_SpendLogs" s
+LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
+LEFT JOIN "LiteLLM_VerificationToken" k ON s.api_key = k.token
+WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+  AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+  AND (s.team_id = $3 OR t.team_alias = $3 OR t.team_id = $3)
 GROUP BY 
     COALESCE(t.team_alias, s.team_id, 'No Team'),
     COALESCE(k.key_alias, k.key_name, NULLIF(s.api_key, ''), 'No Key')
@@ -373,7 +401,24 @@ FROM "LiteLLM_SpendLogs" s
 LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
 WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
   AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
-  /* TEAM_FILTER */
+GROUP BY 
+    COALESCE(t.team_alias, s.team_id, 'No Team'),
+    COALESCE(NULLIF(s.model, ''), 'Unknown')
+HAVING SUM(s.spend) > 0
+ORDER BY total_spend DESC
+"""
+
+TEAM_MODEL_SPEND_WITH_TEAM_SQL: Final = """
+SELECT 
+    COALESCE(t.team_alias, s.team_id, 'No Team') AS team,
+    COALESCE(NULLIF(s.model, ''), 'Unknown') AS model,
+    ROUND(SUM(s.spend)::numeric, 2) AS total_spend,
+    COUNT(*) AS request_count
+FROM "LiteLLM_SpendLogs" s
+LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
+WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+  AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+  AND (s.team_id = $3 OR t.team_alias = $3 OR t.team_id = $3)
 GROUP BY 
     COALESCE(t.team_alias, s.team_id, 'No Team'),
     COALESCE(NULLIF(s.model, ''), 'Unknown')
@@ -393,7 +438,27 @@ LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
 LEFT JOIN "LiteLLM_VerificationToken" k ON s.api_key = k.token
 WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
   AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
-  /* TEAM_FILTER */
+GROUP BY 
+    COALESCE(t.team_alias, s.team_id, 'No Team'),
+    COALESCE(k.key_alias, k.key_name, NULLIF(s.api_key, ''), 'No Key'),
+    COALESCE(NULLIF(s.model, ''), 'Unknown')
+HAVING SUM(s.spend) > 0
+ORDER BY total_spend DESC
+"""
+
+TEAM_KEY_MODEL_SPEND_WITH_TEAM_SQL: Final = """
+SELECT 
+    COALESCE(t.team_alias, s.team_id, 'No Team') AS team,
+    COALESCE(k.key_alias, k.key_name, NULLIF(s.api_key, ''), 'No Key') AS api_key,
+    COALESCE(NULLIF(s.model, ''), 'Unknown') AS model,
+    ROUND(SUM(s.spend)::numeric, 2) AS total_spend,
+    COUNT(*) AS request_count
+FROM "LiteLLM_SpendLogs" s
+LEFT JOIN "LiteLLM_TeamTable" t ON s.team_id = t.team_id
+LEFT JOIN "LiteLLM_VerificationToken" k ON s.api_key = k.token
+WHERE s."startTime" >= ($1::timestamptz AT TIME ZONE 'UTC')
+  AND s."startTime" < (($2::timestamptz + INTERVAL '1 day') AT TIME ZONE 'UTC')
+  AND (s.team_id = $3 OR t.team_alias = $3 OR t.team_id = $3)
 GROUP BY 
     COALESCE(t.team_alias, s.team_id, 'No Team'),
     COALESCE(k.key_alias, k.key_name, NULLIF(s.api_key, ''), 'No Key'),
@@ -407,6 +472,13 @@ SPEND_REPORT_QUERIES: Final[Mapping[SpendReportGroupBy, str]] = {
     "team_key": TEAM_KEY_SPEND_SQL,
     "team_model": TEAM_MODEL_SPEND_SQL,
     "team_key_model": TEAM_KEY_MODEL_SPEND_SQL,
+}
+
+SPEND_REPORT_QUERIES_WITH_TEAM: Final[Mapping[SpendReportGroupBy, str]] = {
+    "team": TEAM_SPEND_WITH_TEAM_SQL,
+    "team_key": TEAM_KEY_SPEND_WITH_TEAM_SQL,
+    "team_model": TEAM_MODEL_SPEND_WITH_TEAM_SQL,
+    "team_key_model": TEAM_KEY_MODEL_SPEND_WITH_TEAM_SQL,
 }
 
 GROUP_BY_TITLES: Final[Mapping[SpendReportGroupBy, str]] = {
@@ -512,16 +584,6 @@ def get_spend_report_email_settings(
     return _normalize_settings(res)
 
 
-async def _execute_raw_query(
-    prisma_client: object,
-    query: str,
-    *args: object,
-) -> Sequence[Mapping[str, object]]:
-    client: Final = getattr(prisma_client, "db", prisma_client)
-    raw_result: Final = await client.query_raw(query, *args)
-    return cast(Sequence[Mapping[str, object]], raw_result)
-
-
 async def fetch_grouped_spend_data(
     prisma_client: object,
     group_by: SpendReportGroupBy,
@@ -529,26 +591,32 @@ async def fetch_grouped_spend_data(
     end_date: str,
     team_id: str | None = None,
 ) -> Sequence[Mapping[str, object]]:
-    base_query: Final = SPEND_REPORT_QUERIES[group_by]
-    if team_id is not None and team_id.strip():
-        clean_team_id: Final = team_id.strip()
-        team_filter_clause: Final = "AND (s.team_id = $3 OR t.team_alias = $3 OR t.team_id = $3)"
-        sql_query: Final = base_query.replace("/* TEAM_FILTER */", team_filter_clause)
-        raw_rows: Final = await _execute_raw_query(prisma_client, sql_query, start_date, end_date, clean_team_id)
-    else:
-        sql_query = base_query.replace("/* TEAM_FILTER */", "")
-        raw_rows = await _execute_raw_query(prisma_client, sql_query, start_date, end_date)
+    client: Final = getattr(prisma_client, "db", prisma_client)
+    clean_team_id: Final = team_id.strip() if team_id is not None and team_id.strip() else None
+    raw_rows: Final = (
+        cast(
+            Sequence[Mapping[str, object]],
+            await client.query_raw(SPEND_REPORT_QUERIES_WITH_TEAM[group_by], start_date, end_date, clean_team_id),
+        )
+        if clean_team_id is not None
+        else cast(
+            Sequence[Mapping[str, object]],
+            await client.query_raw(SPEND_REPORT_QUERIES[group_by], start_date, end_date),
+        )
+    )
 
-    sanitized_rows: Final[list[Mapping[str, object]]] = []
-    for r in raw_rows:
-        row_dict: Final[dict[str, object]] = dict(r)
-        spend_val: Final = float(cast(float | int | str, row_dict.get("total_spend", 0.0)))
+    def _sanitize_row(r: Mapping[str, object]) -> Mapping[str, object] | None:
+        spend_val: Final = float(cast(float | int | str, r.get("total_spend", 0.0)))
         if spend_val <= 0:
-            continue
-        row_dict["total_spend"] = round(spend_val, 2)
-        row_dict["request_count"] = int(cast(float | int | str, row_dict.get("request_count", 0)))
-        sanitized_rows.append(row_dict)
-    return tuple(sanitized_rows)
+            return None
+        return {
+            **r,
+            "total_spend": round(spend_val, 2),
+            "request_count": int(cast(float | int | str, r.get("request_count", 0))),
+        }
+
+    sanitized_items: Final = (_sanitize_row(r) for r in raw_rows)
+    return tuple(clean_row for clean_row in sanitized_items if clean_row is not None)
 
 
 def _render_table_html(
@@ -618,18 +686,12 @@ def build_spend_report_email_html(
     overall_total_requests = 0
     for rows in report_data.values():
         if rows:
-            overall_total_spend = sum(
-                float(cast(float | int | str, r.get("total_spend", 0.0))) for r in rows
-            )
-            overall_total_requests = sum(
-                int(cast(float | int | str, r.get("request_count", 0))) for r in rows
-            )
+            overall_total_spend = sum(float(cast(float | int | str, r.get("total_spend", 0.0))) for r in rows)
+            overall_total_requests = sum(int(cast(float | int | str, r.get("request_count", 0))) for r in rows)
             break
 
     frequency_title: Final = frequency.capitalize()
-    tables_html: Final = "".join(
-        _render_table_html(group_by, rows) for group_by, rows in report_data.items()
-    )
+    tables_html: Final = "".join(_render_table_html(group_by, rows) for group_by, rows in report_data.items())
     team_badge_html: Final = (
         f'<div style="font-size: 13px; color: #475569; margin-bottom: 6px;">Team Scope: <strong style="color: #0f172a;">{html.escape(team_id)}</strong></div>'
         if team_id
@@ -789,9 +851,7 @@ async def run_scheduled_email_spend_alert(
         db_writer: Final = getattr(proxy_logging_obj, "db_spend_update_writer", None)
         pod_lock_manager: Final = getattr(db_writer, "pod_lock_manager", None) if db_writer is not None else None
         if pod_lock_manager is not None:
-            has_lock: Final = await pod_lock_manager.acquire_lock(
-                cronjob_id=job_id, ttl=3600, allow_reentrant=False
-            )
+            has_lock: Final = await pod_lock_manager.acquire_lock(cronjob_id=job_id, ttl=3600, allow_reentrant=False)
             if not has_lock:
                 verbose_proxy_logger.info("Email spend report lock already acquired by another pod: %s", job_id)
                 return
@@ -812,17 +872,13 @@ async def run_scheduled_email_spend_report(
 ) -> None:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
-    job_id: Final = (
-        DAILY_EMAIL_SPEND_REPORT_JOB_ID if frequency == "daily" else MONTHLY_EMAIL_SPEND_REPORT_JOB_ID
-    )
+    job_id: Final = DAILY_EMAIL_SPEND_REPORT_JOB_ID if frequency == "daily" else MONTHLY_EMAIL_SPEND_REPORT_JOB_ID
 
     if proxy_logging_obj is not None:
         db_writer: Final = getattr(proxy_logging_obj, "db_spend_update_writer", None)
         pod_lock_manager: Final = getattr(db_writer, "pod_lock_manager", None) if db_writer is not None else None
         if pod_lock_manager is not None:
-            has_lock: Final = await pod_lock_manager.acquire_lock(
-                cronjob_id=job_id, ttl=3600, allow_reentrant=False
-            )
+            has_lock: Final = await pod_lock_manager.acquire_lock(cronjob_id=job_id, ttl=3600, allow_reentrant=False)
             if not has_lock:
                 verbose_proxy_logger.info("Email spend report lock already acquired by another pod: %s", job_id)
                 return

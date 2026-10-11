@@ -708,7 +708,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             <AlertingSettings accessToken={accessToken} premiumUser={premiumUser} />
           </TabsContent>
           <TabsContent value="email-alerts" keepMounted>
-            <EmailSettings accessToken={accessToken} premiumUser={premiumUser} alerts={alerts} />
+            <EmailSettings accessToken={accessToken} premiumUser={premiumUser} alerts={alerts} userRole={userRole} />
           </TabsContent>
           <TabsContent value="ms-teams-alerts" keepMounted>
             <MSTeamsSettings accessToken={accessToken} userID={userID} userRole={userRole} alerts={alerts} />

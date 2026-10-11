@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
@@ -58,13 +58,10 @@ export const EmailSpendSummaryModal: React.FC<EmailSpendSummaryModalProps> = ({
   const [selectedTeamId, setSelectedTeamId] = useState<string>(initialTeamId || "all");
   const [groupBy, setGroupBy] = useState<GroupByOptionId[]>(DEFAULT_GROUP_BY);
   const [isSending, setIsSending] = useState(false);
-  const [internalEmailStatus, setInternalEmailStatus] = useState<SpendReportEmailStatusResponse | null>(
-    emailStatus ?? null
-  );
+  const [internalEmailStatus, setInternalEmailStatus] = useState<SpendReportEmailStatusResponse | null>(null);
 
   useEffect(() => {
     if (emailStatus !== undefined) {
-      setInternalEmailStatus(emailStatus);
       return;
     }
     if (!isOpen || !accessToken) return;
@@ -85,10 +82,18 @@ export const EmailSpendSummaryModal: React.FC<EmailSpendSummaryModalProps> = ({
     };
   }, [isOpen, accessToken, emailStatus]);
 
-  const isEmailNotConfigured = internalEmailStatus !== null && !internalEmailStatus.configured;
+  const effectiveEmailStatus = emailStatus !== undefined ? emailStatus : internalEmailStatus;
+  const isEmailNotConfigured = effectiveEmailStatus !== null && !effectiveEmailStatus.configured;
 
-  const resolvedStartDate = startDate || formatDate(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
-  const resolvedEndDate = endDate || formatDate(new Date());
+  const fallbackStartDate = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    return formatDate(d);
+  }, []);
+  const fallbackEndDate = useMemo(() => formatDate(new Date()), []);
+
+  const resolvedStartDate = startDate || fallbackStartDate;
+  const resolvedEndDate = endDate || fallbackEndDate;
 
   const handleGroupByToggle = (optionId: GroupByOptionId, checked: boolean) => {
     setGroupBy((prev) => {
@@ -124,14 +129,15 @@ export const EmailSpendSummaryModal: React.FC<EmailSpendSummaryModalProps> = ({
     setIsSending(true);
     try {
       const teamFilter = selectedTeamId !== "all" ? selectedTeamId : undefined;
-      const result = await sendSpendReportEmailTest(accessToken, {
+      const sendPayload = {
         start_date: resolvedStartDate,
         end_date: resolvedEndDate,
         recipient_emails: parsedRecipients,
         group_by: groupBy,
         team_id: teamFilter,
-        frequency: "daily",
-      });
+        frequency: "daily" as const,
+      };
+      const result = await sendSpendReportEmailTest(accessToken, sendPayload);
 
       toast.success(
         `Spend summary email sent to ${parsedRecipients.length} recipient(s)! Total spend: $${result.total_spend ?? 0} across ${result.total_requests ?? 0} request(s).`,

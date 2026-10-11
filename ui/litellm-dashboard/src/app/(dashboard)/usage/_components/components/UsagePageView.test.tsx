@@ -1534,7 +1534,7 @@ describe("UsagePage", () => {
       renderWithProviders(<UsagePage {...defaultProps} />);
 
       const emailButton = await screen.findByRole("button", { name: /email summary/i });
-      expect(emailButton).not.toBeDisabled();
+      expect(emailButton).toBeEnabled();
     });
 
     it("should be disabled when email delivery is not configured", async () => {
@@ -1544,6 +1544,23 @@ describe("UsagePage", () => {
       await waitFor(() => {
         expect(screen.getByRole("button", { name: /email summary/i })).toBeDisabled();
       });
+    });
+
+    it("should not be visible for non-proxy-admin users", () => {
+      mockUseAuthorized.mockReturnValue({
+        isLoading: false,
+        isAuthorized: true,
+        token: "mock-token",
+        accessToken: "test-token",
+        userId: "user-123",
+        userEmail: "test@example.com",
+        userRole: "regular_user",
+        premiumUser: true,
+        disabledPersonalKeyCreation: false,
+        showSSOBanner: false,
+      });
+      renderWithProviders(<UsagePage {...defaultProps} />);
+      expect(screen.queryByRole("button", { name: /email summary/i })).not.toBeInTheDocument();
     });
   });
 });

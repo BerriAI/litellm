@@ -137,10 +137,23 @@ describe("EmailSettings", () => {
     expect(screen.getByText("email event settings")).toBeInTheDocument();
   });
 
-  it("renders the spend report email settings section", () => {
-    renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
+  it("renders the spend report email settings section for proxy admin", () => {
+    renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} userRole="proxy_admin" />);
 
     expect(screen.getByText("spend report email settings")).toBeInTheDocument();
+  });
+
+  it("does not render spend report email settings for non-proxy-admin users", () => {
+    renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} userRole="regular_user" />);
+
+    expect(screen.queryByText("spend report email settings")).not.toBeInTheDocument();
+  });
+
+  it("displays Enterprise Feature label for locked fields when not premium user", () => {
+    renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser={false} alerts={alerts} />);
+
+    expect(screen.getByText(/Enterprise Feature/)).toBeInTheDocument();
+    expect(screen.getByText(/EMAIL_LOGO_URL/)).toBeInTheDocument();
   });
 
   it("toggles credential visibility when eye icon is clicked", async () => {
@@ -170,7 +183,7 @@ describe("EmailSettings", () => {
       message: "Email delivery is not configured",
     });
 
-    renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
+    renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} userRole="proxy_admin" />);
 
     await waitFor(() => {
       expect(screen.getByRole("button", { name: "Test Email Alerts" })).toBeDisabled();

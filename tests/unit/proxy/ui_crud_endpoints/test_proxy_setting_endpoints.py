@@ -3349,8 +3349,11 @@ class TestSpendReportEmailSettingsEndpoints:
             "recipient_emails": ["reports@example.com"],
             "group_by": ["team", "team_key"],
         }
-
-        resp = client.get("/get/spend_report_email_settings")
+        self._override_auth(LitellmUserRoles.PROXY_ADMIN)
+        try:
+            resp = client.get("/get/spend_report_email_settings")
+        finally:
+            app.dependency_overrides.clear()
 
         assert resp.status_code == 200, resp.text
         data = resp.json()
@@ -3360,6 +3363,14 @@ class TestSpendReportEmailSettingsEndpoints:
         assert data["values"]["recipient_emails"] == ["reports@example.com"]
         assert data["values"]["group_by"] == ["team", "team_key"]
         assert "properties" in data["field_schema"]
+
+    def test_get_spend_report_email_settings_requires_admin(self, mock_proxy_config):
+        self._override_auth(LitellmUserRoles.INTERNAL_USER)
+        try:
+            resp = client.get("/get/spend_report_email_settings")
+        finally:
+            app.dependency_overrides.clear()
+        assert resp.status_code == 403
 
     def test_update_spend_report_email_settings_requires_admin(self, monkeypatch):
         monkeypatch.setattr("litellm.proxy.proxy_server.store_model_in_db", True)

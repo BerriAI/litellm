@@ -22,7 +22,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
 import { hasCapability } from "@/utils/capabilities";
-import { all_admin_roles, internalUserRoles } from "@/utils/roles";
+import { all_admin_roles, internalUserRoles, isProxyAdminRole } from "@/utils/roles";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
@@ -107,6 +107,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const { data: agentsResponse } = useAgents();
   const { data: currentUser } = useCurrentUser();
   const isAdmin = all_admin_roles.includes(userRole || "");
+  const isProxyAdmin = isProxyAdminRole(userRole || "");
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
   const isOrgAdmin = useIsOrgAdmin();
   const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage", isOrgAdmin);
@@ -133,13 +134,19 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   useEffect(() => {
-    if (!accessToken) return;
+    if (!accessToken || !isProxyAdmin) return;
+    let active = true;
     getSpendReportEmailStatus(accessToken)
-      .then(setEmailStatus)
+      .then((status) => {
+        if (active) setEmailStatus(status);
+      })
       .catch(() => {
-        setEmailStatus({ configured: false, provider: null });
+        if (active) setEmailStatus({ configured: false, provider: null });
       });
-  }, [accessToken]);
+    return () => {
+      active = false;
+    };
+  }, [accessToken, isProxyAdmin]);
   // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
   useEffect(() => {
     if (!isAdmin && userID) {
@@ -438,22 +445,24 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <Download />
                       Export Data
                     </Button>
-                    <SimpleTooltip
-                      content={
-                        emailStatus && !emailStatus.configured
-                          ? "Email delivery is not configured. Configure SMTP server settings in Alerts settings or set SENDGRID_API_KEY environment variable."
-                          : undefined
-                      }
-                    >
-                      <Button
-                        variant="outline"
-                        onClick={() => setIsEmailSummaryModalOpen(true)}
-                        disabled={emailStatus !== null && !emailStatus.configured}
+                    {isProxyAdmin && (
+                      <SimpleTooltip
+                        content={
+                          emailStatus && !emailStatus.configured
+                            ? "Email delivery is not configured. Configure SMTP server settings in Alerts settings or set SENDGRID_API_KEY environment variable."
+                            : undefined
+                        }
                       >
-                        <Mail />
-                        Email Summary
-                      </Button>
-                    </SimpleTooltip>
+                        <Button
+                          variant="outline"
+                          onClick={() => setIsEmailSummaryModalOpen(true)}
+                          disabled={emailStatus !== null && !emailStatus.configured}
+                        >
+                          <Mail />
+                          Email Summary
+                        </Button>
+                      </SimpleTooltip>
+                    )}
                   </div>
                 </div>
                 <TabsContent value="cost" keepMounted>
@@ -735,15 +744,17 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       />
 
       {/* Email Spend Summary Modal */}
-      <EmailSpendSummaryModal
-        isOpen={isEmailSummaryModalOpen}
-        onClose={() => setIsEmailSummaryModalOpen(false)}
-        accessToken={accessToken}
-        startDate={startTime ? formatDate(startTime) : undefined}
-        endDate={endTime ? formatDate(endTime) : undefined}
-        teams={teams}
-        emailStatus={emailStatus}
-      />
+      {isProxyAdmin && (
+        <EmailSpendSummaryModal
+          isOpen={isEmailSummaryModalOpen}
+          onClose={() => setIsEmailSummaryModalOpen(false)}
+          accessToken={accessToken}
+          startDate={startTime ? formatDate(startTime) : undefined}
+          endDate={endTime ? formatDate(endTime) : undefined}
+          teams={teams}
+          emailStatus={emailStatus}
+        />
+      )}
 
       {/* AI Chat Panel */}
       <UsageAIChatPanel open={isAiChatOpen} onClose={() => setIsAiChatOpen(false)} accessToken={accessToken} />

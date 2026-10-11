@@ -1717,10 +1717,18 @@ async def update_mcp_tool_search_settings(
     dependencies=[Depends(user_api_key_auth)],
     response_model=SpendReportEmailSettingsResponse,
 )
-async def get_spend_report_email_settings():
+async def get_spend_report_email_settings(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+):
     """
     Get email spend report settings from litellm_settings.
     """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can view spend report email settings.",
+        )
+
     from litellm.proxy.proxy_server import proxy_config
     from litellm.proxy.spend_tracking.spend_report_email import get_server_timezone
 

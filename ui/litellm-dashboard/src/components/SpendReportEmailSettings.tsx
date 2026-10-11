@@ -11,6 +11,7 @@ import { Badge } from "@/components/ui/badge";
 import { Plus, Trash2, Send, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { SimpleTooltip } from "@/components/ui/tooltip";
+import { isProxyAdminRole } from "@/utils/roles";
 import {
   getSpendReportEmailSettings,
   getSpendReportEmailStatus,
@@ -27,7 +28,15 @@ interface SpendReportEmailSettingsProps {
   accessToken: string | null;
   teams?: Team[];
   defaultExpanded?: boolean;
+  userRole?: string | null;
 }
+
+const extractTeamsList = (resObj: { teams?: Team[]; data?: Team[] } | Team[] | null): Team[] => {
+  if (Array.isArray(resObj)) return resObj;
+  if (Array.isArray(resObj?.teams)) return resObj.teams;
+  if (Array.isArray(resObj?.data)) return resObj.data;
+  return [];
+};
 
 type GroupByOptionId = "team" | "team_key" | "team_model" | "team_key_model";
 
@@ -100,7 +109,9 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
   accessToken,
   teams: initialTeams,
   defaultExpanded,
+  userRole,
 }) => {
+  const isProxyAdmin = userRole === undefined || isProxyAdminRole(userRole || "");
   const [loading, setLoading] = useState<boolean>(Boolean(accessToken));
   const [saving, setSaving] = useState(false);
   const [testingAlertId, setTestingAlertId] = useState<string | null>(null);
@@ -113,7 +124,7 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
   const [availableTeams, setAvailableTeams] = useState<Team[]>([]);
 
   useEffect(() => {
-    if (!accessToken) return;
+    if (!accessToken || !isProxyAdmin) return;
     getSpendReportEmailStatus(accessToken)
       .then((status) => {
         setEmailStatus(status);
@@ -122,11 +133,11 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
         }
       })
       .catch(() => setEmailStatus({ configured: false, provider: null }));
-  }, [accessToken]);
+  }, [accessToken, isProxyAdmin]);
 
   useEffect(() => {
     let active = true;
-    if (!accessToken) {
+    if (!accessToken || !isProxyAdmin) {
       return;
     }
 
@@ -162,13 +173,13 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
     return () => {
       active = false;
     };
-  }, [accessToken]);
+  }, [accessToken, isProxyAdmin]);
 
   useEffect(() => {
     if (initialTeams && initialTeams.length > 0) {
       return;
     }
-    if (!accessToken) {
+    if (!accessToken || !isProxyAdmin) {
       return;
     }
 
@@ -177,13 +188,7 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
       .then((response: unknown) => {
         if (!active) return;
         const resObj = response as { teams?: Team[]; data?: Team[] } | Team[] | null;
-        const list = Array.isArray(resObj)
-          ? resObj
-          : Array.isArray(resObj?.teams)
-            ? resObj.teams
-            : Array.isArray(resObj?.data)
-              ? resObj.data
-              : [];
+        const list = extractTeamsList(resObj);
         setAvailableTeams(list);
       })
       .catch(() => {});
@@ -191,7 +196,11 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
     return () => {
       active = false;
     };
-  }, [accessToken, initialTeams]);
+  }, [accessToken, initialTeams, isProxyAdmin]);
+
+  if (!isProxyAdmin) {
+    return null;
+  }
 
   const teams = initialTeams && initialTeams.length > 0 ? initialTeams : availableTeams;
   const timezoneLabel = serverTimezone || emailStatus?.server_timezone || "Server Time";
@@ -271,9 +280,16 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
       const monthlyAlert = parsedAlerts.find((a) => a.frequency === "monthly");
       const allRecipients = Array.from(new Set(parsedAlerts.flatMap((a) => a.recipient_emails)));
 
+      let derivedFrequency: "daily" | "monthly" | "both" = "daily";
+      if (dailyAlert && monthlyAlert) {
+        derivedFrequency = "both";
+      } else if (monthlyAlert) {
+        derivedFrequency = "monthly";
+      }
+
       const payload: SpendReportEmailSettingsValues = {
         enabled: anyEnabled,
-        frequency: dailyAlert && monthlyAlert ? "both" : monthlyAlert ? "monthly" : "daily",
+        frequency: derivedFrequency,
         daily_send_time: dailyAlert?.send_time || "09:00",
         monthly_send_time: monthlyAlert?.send_time || "09:00",
         recipient_emails: allRecipients,
@@ -308,12 +324,13 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
 
     setTestingAlertId(alert.id);
     try {
-      const result = await sendSpendReportEmailTest(accessToken, {
+      const testPayload = {
         frequency: alert.frequency,
         recipient_emails: parsedRecipients,
         group_by: alert.group_by,
         team_id: alert.team_id ?? null,
-      });
+      };
+      const result = await sendSpendReportEmailTest(accessToken, testPayload);
       toast.success(
         `Test spend report email sent! Total spend: $${result.total_spend ?? 0} across ${result.total_requests ?? 0} request(s).`,
       );
@@ -372,38 +389,44 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
 
       {isExpanded && (
         <CardContent>
-        <Separator className="mb-6" />
+          <Separator className="mb-6" />
 
-        {loading ? (
-          <div className="space-y-4">
-            <Skeleton className="h-10 w-full" />
-            <Skeleton className="h-28 w-full" />
-            <Skeleton className="h-28 w-full" />
-          </div>
-        ) : alerts.length === 0 ? (
-          <div className="text-center py-12 border border-dashed rounded-lg space-y-3">
-            <p className="text-sm font-medium text-foreground">No scheduled spend report alerts configured</p>
-            <p className="text-xs text-muted-foreground max-w-md mx-auto">
-              Configure daily or monthly alerts for your entire proxy or specific teams to keep stakeholders informed of
-              LLM spend.
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={handleAddAlert}
-              className="mt-2 flex items-center gap-1.5 mx-auto"
-            >
-              <Plus className="h-4 w-4" />
-              Add First Alert
-            </Button>
-          </div>
-        ) : (
-          <div className="space-y-6">
+          {loading && (
+            <div className="space-y-4">
+              <Skeleton className="h-10 w-full" />
+              <Skeleton className="h-28 w-full" />
+              <Skeleton className="h-28 w-full" />
+            </div>
+          )}
+
+          {!loading && alerts.length === 0 && (
+            <div className="text-center py-12 border border-dashed rounded-lg space-y-3">
+              <p className="text-sm font-medium text-foreground">No scheduled spend report alerts configured</p>
+              <p className="text-xs text-muted-foreground max-w-md mx-auto">
+                Configure daily or monthly alerts for your entire proxy or specific teams to keep stakeholders informed of
+                LLM spend.
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleAddAlert}
+                className="mt-2 flex items-center gap-1.5 mx-auto"
+              >
+                <Plus className="h-4 w-4" />
+                Add First Alert
+              </Button>
+            </div>
+          )}
+
+          {!loading && alerts.length > 0 && (
+            <div className="space-y-6">
             <div className="space-y-4">
               {alerts.map((alert, index) => {
                 const recipientsValue = recipientsInputs[alert.id] ?? (alert.recipient_emails || []).join(", ");
                 const isTesting = testingAlertId === alert.id;
+                const isEmailUnconfigured = emailStatus !== null && !emailStatus.configured;
+                const isTestDisabled = isTesting || saving || isEmailUnconfigured;
                 const selectedTeamLabel = alert.team_id
                   ? teams.find((t) => t.team_id === alert.team_id)?.team_alias || alert.team_id
                   : "All Teams (No filter)";
@@ -567,7 +590,7 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
                       <div className="flex justify-end pt-2">
                         <SimpleTooltip
                           content={
-                            emailStatus && !emailStatus.configured
+                            isEmailUnconfigured
                               ? "Email delivery is not configured. Configure SMTP server settings below or set SENDGRID_API_KEY environment variable."
                               : undefined
                           }
@@ -577,7 +600,7 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
                             variant="outline"
                             size="sm"
                             onClick={() => handleSendTestReport(alert)}
-                            disabled={isTesting || saving || (emailStatus !== null && !emailStatus.configured)}
+                            disabled={isTestDisabled}
                             className="flex items-center gap-1.5 text-xs h-8"
                           >
                             <Send className="h-3.5 w-3.5" />

@@ -5056,6 +5056,12 @@ async def trigger_spend_report_email(
     """
     Trigger sending a spend report email immediately.
     """
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can send spend report emails.",
+        )
+
     from litellm.proxy.spend_tracking.spend_report_email import send_spend_report_email
 
     return await send_spend_report_email(
@@ -5077,7 +5083,12 @@ async def trigger_spend_report_email(
 async def get_spend_report_email_status(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> SpendReportEmailStatusResponse:
+    if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
+        raise HTTPException(
+            status_code=403,
+            detail="Only proxy admins can view spend report email status.",
+        )
+
     from litellm.proxy.spend_tracking.spend_report_email import check_spend_report_email_status
 
     return check_spend_report_email_status()
-

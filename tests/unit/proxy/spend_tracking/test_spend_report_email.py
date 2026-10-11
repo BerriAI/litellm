@@ -73,9 +73,7 @@ def test_spend_report_email_settings_validation() -> None:
     string_group_by: Final = SpendReportEmailSettings(group_by="team_key")  # pyright: ignore[reportArgumentType]
     assert string_group_by.group_by == ["team_key"]
 
-    multiple_group_by: Final = SpendReportEmailSettings(
-        group_by=["team", "team_key", "team_model", "team_key_model"]
-    )
+    multiple_group_by: Final = SpendReportEmailSettings(group_by=["team", "team_key", "team_model", "team_key_model"])
     assert multiple_group_by.group_by == ["team", "team_key", "team_model", "team_key_model"]
 
     invalid_filtered: Final = SpendReportEmailSettings(group_by=["invalid", "team_model"])  # pyright: ignore[reportArgumentType]
@@ -390,6 +388,56 @@ def test_trigger_spend_report_email_endpoint(monkeypatch: pytest.MonkeyPatch) ->
         app.dependency_overrides.pop(user_api_key_auth, None)
 
 
+def test_trigger_spend_report_email_requires_admin() -> None:
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    async def mock_non_admin_auth() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-test")
+
+    app.dependency_overrides[user_api_key_auth] = mock_non_admin_auth
+    try:
+        client: Final = TestClient(app)
+        response: Final = client.post("/spend/report/email/send", json={"frequency": "daily"})
+        assert response.status_code == 403
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def test_get_spend_report_email_status_endpoint() -> None:
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.proxy_server import app
+
+    async def mock_admin_auth() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-test")
+
+    async def mock_non_admin_auth() -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, api_key="sk-test")
+
+    client: Final = TestClient(app)
+
+    app.dependency_overrides[user_api_key_auth] = mock_non_admin_auth
+    try:
+        non_admin_response: Final = client.get("/spend/report/email/status")
+        assert non_admin_response.status_code == 403
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+    app.dependency_overrides[user_api_key_auth] = mock_admin_auth
+    try:
+        admin_response: Final = client.get("/spend/report/email/status")
+        assert admin_response.status_code == 200
+        assert "configured" in admin_response.json()
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
 @pytest.mark.asyncio
 async def test_fetch_grouped_spend_data_with_team_id() -> None:
     captured_queries: Final[list[tuple[str, tuple[object, ...]]]] = []
@@ -400,9 +448,7 @@ async def test_fetch_grouped_spend_data_with_team_id() -> None:
             return [{"team": "engineering", "total_spend": 25.5, "request_count": 10}]
 
     mock_prisma = MockPrismaDb()
-    rows = await fetch_grouped_spend_data(
-        mock_prisma, "team", "2026-10-01", "2026-10-08", team_id="engineering"
-    )
+    rows = await fetch_grouped_spend_data(mock_prisma, "team", "2026-10-01", "2026-10-08", team_id="engineering")
     assert len(rows) == 1
     assert rows[0]["team"] == "engineering"
     assert rows[0]["total_spend"] == 25.5
@@ -555,5 +601,3 @@ async def test_default_email_sender_smtp(monkeypatch: pytest.MonkeyPatch) -> Non
         subject="SMTP Report",
         html="<p>SMTP</p>",
     )
-
-

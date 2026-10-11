@@ -6,6 +6,7 @@ import * as networking from "./networking";
 vi.mock("./networking", () => ({
   sendSpendReportEmailTest: vi.fn(),
   getSpendReportEmailStatus: vi.fn(),
+  formatDate: (d: Date) => d.toISOString().split("T")[0],
 }));
 
 describe("EmailSpendSummaryModal", () => {

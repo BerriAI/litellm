@@ -408,4 +408,12 @@ describe("SpendReportEmailSettings", () => {
       expect(screen.getByText("Send Time (CEST)")).toBeInTheDocument();
     });
   });
+
+  it("renders null for non-proxy-admin users", () => {
+    const { container } = renderWithProviders(
+      <SpendReportEmailSettings accessToken="test-token" userRole="regular_user" defaultExpanded />,
+    );
+
+    expect(container).toBeEmptyDOMElement();
+  });
 });

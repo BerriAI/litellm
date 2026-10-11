@@ -5828,51 +5828,17 @@ export interface SpendReportEmailSettingsResponse {
 }
 
 export const getSpendReportEmailSettings = async (accessToken: string): Promise<SpendReportEmailSettingsResponse> => {
-  try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/get/spend_report_email_settings` : `/get/spend_report_email_settings`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Failed to get spend report email settings");
-    }
-    return await response.json();
-  } catch (error) {
-    console.error("Failed to get spend report email settings:", error);
-    throw error;
-  }
+  return await apiClient.get<SpendReportEmailSettingsResponse>("/get/spend_report_email_settings", { accessToken });
 };
 
 export const updateSpendReportEmailSettings = async (
   accessToken: string,
   settings: SpendReportEmailSettingsValues,
 ): Promise<any> => {
-  try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/update/spend_report_email_settings` : `/update/spend_report_email_settings`;
-    const response = await fetch(url, {
-      method: "PATCH",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(settings),
-    });
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Failed to update spend report email settings");
-    }
-    return await response.json();
-  } catch (error) {
-    console.error("Failed to update spend report email settings:", error);
-    throw error;
-  }
+  return await apiClient.patch("/update/spend_report_email_settings", {
+    accessToken,
+    body: settings,
+  });
 };
 
 export const sendSpendReportEmailTest = async (
@@ -5886,26 +5852,10 @@ export const sendSpendReportEmailTest = async (
     team_id?: string | null;
   },
 ): Promise<any> => {
-  try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/spend/report/email/send` : `/spend/report/email/send`;
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-    if (!response.ok) {
-      const errorData = await response.text();
-      handleError(errorData);
-      throw new Error("Failed to trigger spend report email");
-    }
-    return await response.json();
-  } catch (error) {
-    console.error("Failed to trigger spend report email:", error);
-    throw error;
-  }
+  return await apiClient.post("/spend/report/email/send", {
+    accessToken,
+    body: payload,
+  });
 };
 
 export interface SpendReportEmailStatusResponse {
@@ -5917,20 +5867,8 @@ export interface SpendReportEmailStatusResponse {
 
 export const getSpendReportEmailStatus = async (accessToken: string): Promise<SpendReportEmailStatusResponse> => {
   try {
-    const url = proxyBaseUrl ? `${proxyBaseUrl}/spend/report/email/status` : `/spend/report/email/status`;
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-    });
-    if (!response.ok) {
-      return { configured: false, provider: null, message: "Unable to verify email configuration" };
-    }
-    return await response.json();
-  } catch (error) {
-    console.error("Failed to fetch spend report email status:", error);
+    return await apiClient.get<SpendReportEmailStatusResponse>("/spend/report/email/status", { accessToken });
+  } catch {
     return { configured: false, provider: null, message: "Unable to verify email configuration" };
   }
 };

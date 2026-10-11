@@ -15591,6 +15591,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/spend/report/email/status": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Spend Report Email Status */
+        get: operations["get_spend_report_email_status_spend_report_email_status_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/spend/tags": {
         parameters: {
             query?: never;
@@ -45113,6 +45130,54 @@ export interface components {
              */
             total_tokens: number;
         };
+        /** SpendReportEmailAlert */
+        SpendReportEmailAlert: {
+            /**
+             * Enabled
+             * @description Whether this alert is enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Frequency
+             * @description Alert frequency: 'daily' or 'monthly'
+             * @default daily
+             * @enum {string}
+             */
+            frequency: "daily" | "monthly";
+            /**
+             * Group By
+             * @description Cumulative groupings to include: 'team', 'team_key', 'team_model', 'team_key_model'
+             */
+            group_by?: ("team" | "team_key" | "team_model" | "team_key_model")[];
+            /**
+             * Id
+             * @description Unique identifier for this alert
+             */
+            id?: string;
+            /**
+             * Name
+             * @description Descriptive name for the alert
+             * @default Spend Report Alert
+             */
+            name: string;
+            /**
+             * Recipient Emails
+             * @description Target email addresses for this alert
+             */
+            recipient_emails?: string[];
+            /**
+             * Send Time
+             * @description Send time in HH:MM (24-hour server format)
+             * @default 09:00
+             */
+            send_time: string;
+            /**
+             * Team Id
+             * @description Optional team filter to report only on a specific team
+             */
+            team_id?: string | null;
+        };
         /** SpendReportEmailSendRequest */
         SpendReportEmailSendRequest: {
             /**
@@ -45142,12 +45207,22 @@ export interface components {
              * @description Optional YYYY-MM-DD start date override
              */
             start_date?: string | null;
+            /**
+             * Team Id
+             * @description Optional team filter to report only on a specific team
+             */
+            team_id?: string | null;
         };
         /** SpendReportEmailSettings */
         SpendReportEmailSettings: {
             /**
+             * Alerts
+             * @description Configured spend report alert instances
+             */
+            alerts?: components["schemas"]["SpendReportEmailAlert"][];
+            /**
              * Daily Send Time
-             * @description Daily spend report send time in HH:MM (24-hour UTC format)
+             * @description Daily spend report send time in HH:MM (24-hour server format)
              * @default 09:00
              */
             daily_send_time: string;
@@ -45171,7 +45246,7 @@ export interface components {
             group_by?: ("team" | "team_key" | "team_model" | "team_key_model")[];
             /**
              * Monthly Send Time
-             * @description Monthly spend report send time in HH:MM (24-hour UTC format), sent on the 1st of each month
+             * @description Monthly spend report send time in HH:MM (24-hour server format), sent on the 1st of each month
              * @default 09:00
              */
             monthly_send_time: string;
@@ -45190,10 +45265,37 @@ export interface components {
             field_schema: {
                 [key: string]: unknown;
             };
+            /** Server Timezone */
+            server_timezone?: string | null;
             /** Values */
             values: {
                 [key: string]: unknown;
             };
+        };
+        /** SpendReportEmailStatusResponse */
+        SpendReportEmailStatusResponse: {
+            /**
+             * Configured
+             * @description Whether email delivery (SMTP, SendGrid, or Resend) is configured
+             * @default false
+             */
+            configured: boolean;
+            /**
+             * Message
+             * @description Informational message about email delivery readiness
+             * @default
+             */
+            message: string;
+            /**
+             * Provider
+             * @description Active email provider being used
+             */
+            provider?: ("smtp" | "sendgrid" | "resend") | null;
+            /**
+             * Server Timezone
+             * @description Server or container local timezone name or abbreviation
+             */
+            server_timezone?: string;
         };
         /** SpendReportSendResult */
         SpendReportSendResult: {
@@ -45209,6 +45311,8 @@ export interface components {
             start_date: string;
             /** Status */
             status: string;
+            /** Team Id */
+            team_id?: string | null;
             /** Total Requests */
             total_requests: number;
             /** Total Spend */
@@ -71051,6 +71155,26 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_spend_report_email_status_spend_report_email_status_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendReportEmailStatusResponse"];
                 };
             };
         };
