@@ -388,7 +388,6 @@ def test_completion_cohere_command_r_plus_function_call(respx_mock: respx.MockRo
         model="cohere_chat/v1/command-r-plus",
         messages=[{"role": "user", "content": "What's the weather like in Boston today in Fahrenheit?"}],
         tools=[WEATHER_TOOL],
-        tool_choice="auto",
         api_key="cohere-test-key",
     )
 
@@ -526,7 +525,6 @@ def test_cohere_v2_tool_calling(respx_mock: respx.MockRouter) -> None:
         model="cohere_chat/v2/command-a-03-2025",
         messages=[{"role": "user", "content": "What's the weather like in New York?"}],
         tools=[tool],
-        tool_choice="auto",
         max_tokens=100,
         api_key="cohere-test-key",
     )
@@ -666,3 +664,24 @@ def test_cohere_v2_error_handling(respx_mock: respx.MockRouter) -> None:
     assert error.value.status_code == 400
     assert error.value.llm_provider == "cohere"
     assert "invalid request: model 'invalid-model' not found" in error.value.message
+
+
+def test_cohere_tool_choice_raises_unsupported_params_error() -> None:
+    with pytest.raises(UnsupportedParamsError):
+        get_optional_params(
+            model="command-r",
+            custom_llm_provider="cohere",
+            tool_choice="auto",
+            request_timeout=10,
+            num_retries=0,
+        )
+
+
+def test_cohere_stop_still_maps_to_stop_sequences() -> None:
+    result = CohereChatConfig().map_openai_params(
+        non_default_params={"stop": ["X"]},
+        optional_params={},
+        model="command-r",
+        drop_params=False,
+    )
+    assert result["stop_sequences"] == ["X"]
