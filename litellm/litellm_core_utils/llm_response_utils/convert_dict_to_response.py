@@ -180,10 +180,10 @@ def _coerce_missing_choices_status(value: object) -> int | None:
 def _get_nested_error_values(
     error: object,
 ) -> tuple[tuple[object, ...], tuple[object, ...]]:
+    nested_error: Final = cast(Mapping[str, object], error)  # cast-ok: JSON keys are strings
     if not isinstance(error, Mapping):
         return (), (error,) if isinstance(error, str) else ()
 
-    nested_error: Final = cast(Mapping[str, object], error)  # cast-ok: JSON keys are strings
     nested_code: Final = nested_error.get("code")
     nested_status: Final = nested_error.get("status")
     nested_status_code: Final = nested_error.get("status_code")
@@ -197,25 +197,27 @@ def _get_nested_error_values(
 
 def _get_missing_choices_error_args(response_object: Mapping[str, object]) -> tuple[int, str]:
     error: Final = response_object.get("error")
-    top_level_status_values: Final = tuple(response_object.get(field) for field in ("status", "status_code"))
-    nested_values: Final = _get_nested_error_values(error)
-    nested_status_values: Final = nested_values[0]
-    nested_message_values: Final = nested_values[1]
+    top_level_status_values: Final[tuple[object, ...]] = tuple(
+        response_object.get(field) for field in ("status", "status_code")
+    )
+    nested_values: Final[tuple[tuple[object, ...], tuple[object, ...]]] = _get_nested_error_values(error)
+    nested_status_values: Final[tuple[object, ...]] = nested_values[0]
+    nested_message_values: Final[tuple[object, ...]] = nested_values[1]
 
-    status_values: Final = (
+    status_values: Final[tuple[object, ...]] = (
         *(value for value in top_level_status_values if isinstance(value, int) and not isinstance(value, bool)),
         *(value for value in top_level_status_values if isinstance(value, str)),
         *nested_status_values,
     )
-    status_code: Final = next(
+    status_code: Final[int] = next(
         (value for candidate in status_values if (value := _coerce_missing_choices_status(candidate)) is not None),
         500,
     )
-    message_values: Final = (
+    message_values: Final[tuple[object, ...]] = (
         *(response_object.get(field) for field in ("response", "message")),
         *nested_message_values,
     )
-    message: Final = next(
+    message: Final[str] = next(
         (value for value in message_values if isinstance(value, str) and value.strip()),
         _invalid_choices_message(response_object),
     )
@@ -699,8 +701,10 @@ def convert_to_model_response_object(
                 error_status, error_message = _get_choices_error_args(response_object)
                 error_args["status_code"] = error_status
                 error_args["message"] = error_message
-                if isinstance(error_obj, dict) and isinstance(error_obj.get("message"), dict):
-                    error_args["message"] = json.dumps(error_obj["message"])
+                if isinstance(error_obj, dict) and "message" in error_obj:
+                    nested_error_message: Final[object] = error_obj["message"]
+                    if isinstance(nested_error_message, dict):
+                        error_args["message"] = json.dumps(nested_error_message)
             else:
                 if isinstance(error_obj, dict):
                     if "code" in error_obj:
