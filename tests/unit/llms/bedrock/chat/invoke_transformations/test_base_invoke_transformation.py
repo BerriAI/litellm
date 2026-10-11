@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
+import respx
 
 import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
@@ -417,3 +418,52 @@ def test_transform_request_meta_llama(monkeypatch, respx_mock):
 
     expected_result = {"prompt": "Hello", "max_gen_len": 2048}
     assert result == expected_result
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_custom_prompt_roles_wrap_the_mistral_invoke_prompt(respx_mock: respx.Router) -> None:
+    route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-west-2.amazonaws.com/model/mistral.OpenOrca/invoke"
+    ).mock(return_value=httpx.Response(200, json={"outputs": [{"text": "ok", "stop_reason": "stop"}]}))
+    response: Final = litellm.completion(
+        model="bedrock/mistral.OpenOrca",
+        messages=[{"role": "user", "content": "What's AWS?"}],
+        roles={
+            "system": {"pre_message": "<|im_start|>system\n", "post_message": "<|im_end|>"},
+            "assistant": {"pre_message": "<|im_start|>assistant\n", "post_message": "<|im_end|>"},
+            "user": {"pre_message": "<|im_start|>user\n", "post_message": "<|im_end|>"},
+        },
+        bos_token="<s>",
+        eos_token="<|im_end|>",
+        aws_access_key_id="AKIAEXAMPLEKEY",
+        aws_secret_access_key="example-secret-key",
+        aws_region_name="us-west-2",
+        client=HTTPHandler(),
+    )
+
+    assert json.loads(route.calls[0].request.content)["prompt"] == "<|im_start|>user\nWhat's AWS?<|im_end|>"
+    assert response.choices[0].message.content == "ok"
+
+
+@pytest.mark.respx(assert_all_called=True)
+def test_imported_llama_model_arn_is_encoded_and_max_tokens_become_max_gen_len(respx_mock: respx.Router) -> None:
+    expected_url: Final = (
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/"
+        "arn%3Aaws%3Abedrock%3Aus-east-1%3A086734376398%3Aimported-model%2Fr4c4kewx2s0n/invoke"
+    )
+    route: Final = respx_mock.post(expected_url).mock(
+        return_value=httpx.Response(200, json={"generation": "Here's a joke...", "stop_reason": "stop"})
+    )
+
+    response: Final = litellm.completion(
+        model="bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n",
+        messages=[{"role": "user", "content": "Tell me a joke"}],
+        max_tokens=100,
+        aws_access_key_id="AKIALLAMAKEY",
+        aws_secret_access_key="llama-secret",
+        client=HTTPHandler(),
+    )
+
+    assert response.choices[0].message.content == "Here's a joke..."
+    assert str(route.calls[0].request.url) == expected_url
+    assert json.loads(route.calls[0].request.content) == {"prompt": "Tell me a joke", "max_gen_len": 100}
