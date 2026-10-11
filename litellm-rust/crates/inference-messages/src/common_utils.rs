@@ -36,6 +36,8 @@ impl MessagesProvider {
 /// Python's `get_provider_anthropic_messages_config`: Vertex AI serves only its Claude
 /// partner models on this route.
 pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<MessagesProvider> {
+    use litellm_llms::openrouter::messages::transformation::OPENROUTER_MESSAGES_CONFIG;
+
     let config: &'static dyn BaseMessagesConfig = match provider {
         LlmProviders::Tencent => &TENCENT_MESSAGES_CONFIG,
         LlmProviders::Anthropic => &ANTHROPIC_MESSAGES_CONFIG,
@@ -46,6 +48,7 @@ pub(crate) fn messages_provider(provider: LlmProviders, model: &str) -> Option<M
         LlmProviders::VertexAi if model.to_ascii_lowercase().contains("claude") => {
             &VERTEX_ANTHROPIC_MESSAGES_CONFIG
         }
+        LlmProviders::Openrouter => &OPENROUTER_MESSAGES_CONFIG,
         _ => return None,
     };
     Some(MessagesProvider { provider, config })
