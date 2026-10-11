@@ -659,7 +659,10 @@ def test_oauth_passthrough_probe_uses_server_token_without_admission_key(
         assert probes, "expected an upstream initialize authentication probe"
         assert all(_header(probe, b"authorization") == f"Bearer {upstream_token}".encode() for probe in probes)
         assert len(tool_calls(observed)) == 1
-        assert all(_header(request, b"authorization") == f"Bearer {upstream_token}".encode() for request in observed)
+        foreign: Final = tuple(
+            request for request in observed if _header(request, b"authorization") != f"Bearer {upstream_token}".encode()
+        )
+        assert foreign == (), foreign
         header_sets: Final = tuple(
             TypeAdapter(dict[bytes, bytes]).validate_python(request["headers"]) for request in observed
         )

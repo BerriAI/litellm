@@ -2150,3 +2150,12 @@ def test_redact_command_error_masks_password_in_tuple_url_argument(
     assert message.startswith("Command '('")
     assert password not in message
     assert "postgresql://REDACTED@db:5432/litellm" in message
+
+
+def test_repair_survives_an_unreachable_database(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DIRECT_URL", raising=False)
+    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@127.0.0.1:9/x?schema=whatever")
+
+    assert ProxyExtrasDBManager.repair_invalid_indexes() is False
+
+

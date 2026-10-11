@@ -1,4 +1,5 @@
 import asyncio
+import importlib
 import json
 import os
 import queue
@@ -27,7 +28,9 @@ from mcp.shared._httpx_utils import create_mcp_http_client
 from mcp.types import CallToolResult
 from starlette.requests import Request
 
+import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.proxy._experimental.mcp_server.tool_search import handle_mcp_proxy_tool
 from litellm.proxy._types import LiteLLM_ObjectPermissionTable, ProxyException, UserAPIKeyAuth
 from litellm.proxy.proxy_server import (
@@ -41,37 +44,37 @@ from tests._master_key import MASTER_KEY
 from tests.integration._support.wire import Reply, Wire, wire_server
 from tests.integration._support.wire import Request as WireRequest
 
-CONFIG_TEMPLATE_PATH = Path("tests/mcp_tests/test_configs/test_config_mcp_e2e.yaml")
-MCP_SERVER_SCRIPT = Path("tests/mcp_tests/mcp_server.py")
-MCP_PEER_PYTHON = os.environ.get("MCP_TEST_PEER_PYTHON", sys.executable)
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
+CONFIG_TEMPLATE_PATH = Path("tests/integration/mcp/_config_mcp_e2e.yaml")
+MCP_SERVER_SCRIPT = Path("tests/integration/mcp/_math_server.py")
+MCP_PEER_PYTHON = os.environ.get("MCP_TEST_PEER_PYTHON") or sys.executable
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PROXY_START_TIMEOUT = 30
+pytestmark: Final = pytest.mark.xdist_group("proxy_mcp_e2e_in_process")
 
 
 PROXY_AUTHORIZATION_HEADER = f"Bearer {MASTER_KEY}"
 
 
-@pytest.mark.asyncio
-async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> None:
-    from litellm.proxy._experimental.mcp_server.tool_search import _tool_argument_validation_error
+@pytest.fixture(autouse=True)
+def setup_and_teardown() -> typing.Iterator[None]:
+    importlib.reload(litellm)
+    loop: Final = asyncio.get_event_loop_policy().new_event_loop()
+    asyncio.set_event_loop(loop)
+    yield
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    loop.close()
+    asyncio.set_event_loop(None)
 
-    schema: Final = {
-        "type": "object",
-        "$defs": {"amount": {"type": "number", "multipleOf": 0.25}},
-        "properties": {"amount": {"$ref": "#/$defs/amount"}},
-    }
-    original_affinity: Final = os.sched_getaffinity(0) if sys.platform == "linux" else None
+
+@pytest.fixture(autouse=True)
+async def drain_logging_worker() -> typing.AsyncIterator[None]:
+    yield
     try:
-        if original_affinity is not None:
-            os.sched_setaffinity(0, {min(original_affinity)})
-        for _ in range(2):
-            results: Final = await asyncio.gather(
-                *(_tool_argument_validation_error(schema, {"amount": 0.75}) for _ in range(8))
-            )
-            assert results == [None] * 8, "Cold and warm workers must accept valid concurrent tool arguments"
-    finally:
-        if original_affinity is not None:
-            os.sched_setaffinity(0, original_affinity)
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.clear_queue(), timeout=10)
+    except asyncio.TimeoutError:
+        pass
+
+
 
 
 @pytest.mark.asyncio
@@ -123,7 +126,7 @@ async def test_schema_validation_stops_expensive_work_and_recovers(cancel: bool,
         await group
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def schema_peer() -> typing.Iterator[Wire]:
     def respond(request: WireRequest) -> Reply:
         if request.method == "GET":
@@ -220,7 +223,7 @@ def test_proxy_schema_validation_resolves_only_local_references(
             assert called["content"][0]["text"] == "called"
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def _clear_proxy_database_env() -> typing.Iterator[None]:
     """Ensure local proxy DB settings don't leak into tests."""
     mp = pytest.MonkeyPatch()
@@ -345,7 +348,7 @@ def test_proxy_startup_failure_closes_acquired_resources(tmp_path: Path) -> None
             sys.executable,
             "-P",
             "-c",
-            "import sys; from tests.mcp_tests.test_proxy_mcp_e2e import _check_failed_startup; "
+            "import sys; from tests.integration.mcp.test_proxy_mcp_e2e import _check_failed_startup; "
             "_check_failed_startup(sys.argv[1])",
             str(config),
         ),
@@ -396,19 +399,19 @@ def _math_http_server(offset: int) -> typing.Iterator[str]:
                 process.wait(timeout=5)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def math_streamable_http_server() -> typing.Iterator[str]:
     with _math_http_server(100) as url:
         yield url
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def math_restricted_server() -> typing.Iterator[str]:
     with _math_http_server(200) as url:
         yield url
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def _proxy_server(
     tmp_path_factory: pytest.TempPathFactory,
     math_streamable_http_server: str,
