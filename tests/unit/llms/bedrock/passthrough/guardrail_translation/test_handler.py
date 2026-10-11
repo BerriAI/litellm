@@ -950,6 +950,20 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
         assert result["data"]["messages"][0]["content"] == [{"guardContent": {"text": {"text": "My SSN is [SSN]"}}}]
 
     @pytest.mark.asyncio
+    async def test_unchanged_rows_returned_with_user_only_texts_leave_the_system_prompt_alone(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _profile_converse_data()
+        data["data"]["system"] = [{"text": "You are a travel assistant."}]
+        data["data"]["messages"][0]["content"] = [{"guardContent": {"text": {"text": "Book the March sailing"}}}]
+        del data["data"]["additionalModelRequestFields"]
+        original_body = copy.deepcopy(data["data"])
+        guardrail = _make_rows_first_guardrail("078-05-1120", "[SSN]")
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert result["data"] == original_body
+
+    @pytest.mark.asyncio
     async def test_model_field_redaction_in_texts_applies_alongside_a_structured_rewrite(self):
         handler = BedrockPassthroughGuardrailHandler()
         data = _profile_converse_data()

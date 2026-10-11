@@ -856,6 +856,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         if model:
             inputs["model"] = model
 
+        sent_messages: Final = inputs.get("structured_messages")
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=inputs,
             request_data=data,
@@ -870,10 +871,13 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             if guardrailed_messages is None
             else _structured_edits(converted, scoped_message_indices, guardrailed_messages)
         )
+        rows_returned: Final = bool(edits) or (
+            sent_messages is not None and guardrailed_messages is not None and guardrailed_messages is not sent_messages
+        )
         texts_aligned: Final = len(guardrailed_texts) == len(texts)
-        if edits is None or (not edits and scoped_message_indices and guardrailed_texts and not texts_aligned):
+        if edits is None or (not rows_returned and scoped_message_indices and guardrailed_texts and not texts_aligned):
             raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
-        if edits:
+        if rows_returned:
             # Rows are authoritative for what they carry; flat texts may be built from a subset of rows.
             json_body: Final = _JSON_OBJECT.validate_python(body)
             unrepresented: Final = 0 if scan_only_tool_results else len(_model_field_holders(json_body))
