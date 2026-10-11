@@ -486,7 +486,11 @@ class LiteLLMCompletionResponsesConfig:
             tools=tools,
             web_search_options=web_search_options,
             api_base=kwargs.get("api_base"),
-            deployment_mode=router_deployment_mode(kwargs),
+            deployment_mode=router_deployment_mode(
+                cast(  # cast-ok: request kwargs; only read via isinstance-checked lookups
+                    "Mapping[str, object]", kwargs
+                )
+            ),
         )
 
         litellm_completion_request: dict = {

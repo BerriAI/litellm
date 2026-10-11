@@ -175,6 +175,7 @@ from litellm.utils import (
     mode_register_model_would_merge_into,
     pre_process_non_default_params,
     read_config_args,
+    registered_model_cost_mode,
     should_run_mock_completion,
     supports_httpx_timeout,
     validate_and_fix_openai_messages,
@@ -1174,8 +1175,7 @@ def router_deployment_mode(kwargs: Mapping[str, object]) -> str | None:
     router's own registration, so a caller can't hand-write one into their metadata.
     """
     deployment_id: Final = _get_router_deployment_id(kwargs)
-    registered: Final = litellm.model_cost.get(deployment_id) if deployment_id is not None else None
-    mode: Final = registered.get("mode") if isinstance(registered, dict) else None
+    mode: Final = registered_model_cost_mode(deployment_id) if deployment_id is not None else None
     return mode if isinstance(mode, str) else None
 
 
@@ -5499,7 +5499,11 @@ def completion(
         )
 
         ## RESPONSES API BRIDGE LOGIC ## - check early and normalize model name
-        _deployment_mode: Final = router_deployment_mode(kwargs)
+        _deployment_mode: Final = router_deployment_mode(
+            cast(  # cast-ok: completion()'s kwargs; only read via isinstance-checked lookups
+                "Mapping[str, object]", kwargs
+            )
+        )
         responses_api_model_info, model = responses_api_bridge_check(
             model=model,
             custom_llm_provider=custom_llm_provider,

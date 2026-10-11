@@ -3287,6 +3287,14 @@ def _get_builtin_model_info_for_registration(model: str, custom_llm_provider: st
     return None if is_generalized_model_info(info) else info
 
 
+def registered_model_cost_mode(key: str) -> object:
+    """The ``mode`` on ``litellm.model_cost[key]``, or None when the key has no entry."""
+    entry: Final = cast(  # cast-ok: cost-map entries are JSON objects; only ``mode`` is read, as ``object``
+        "Mapping[str, object] | None", litellm.model_cost.get(key)
+    )
+    return entry.get("mode") if entry is not None else None
+
+
 def mode_register_model_would_merge_into(key: str, provider: object, *, custom_llm_provider: str | None) -> object:
     """The ``mode`` already on the entry that ``register_model({key: ...})`` merges into.
 
@@ -3305,8 +3313,7 @@ def mode_register_model_would_merge_into(key: str, provider: object, *, custom_l
     )
     if builtin_model_info is not None:
         return builtin_model_info.get("mode")
-    entry: Final = litellm.model_cost.get(key)
-    return entry.get("mode") if isinstance(entry, dict) else None
+    return registered_model_cost_mode(key)
 
 
 _runtime_registered_model_cost: Final[dict[str, dict[str, object]]] = {}  # mutable-ok: replayed on reload
