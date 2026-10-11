@@ -44,12 +44,13 @@ describe("jevClassifierConfigSchema", () => {
 });
 
 it("preserves legacy classifier tuning when the backend returns a null deployment reference", () => {
-  const parsed = jevClassifierConfigSchema.parse({
+  const legacyConfig = {
     deployment_name: null,
     provider: "laya",
     model: "english",
     timeout_ms: 4100,
-  });
+  };
+  const parsed = jevClassifierConfigSchema.parse(legacyConfig);
   expect(parsed).toMatchObject({ provider: "laya", model: "english", timeout_ms: 4100 });
   expect(parsed.deployment_name).toBeUndefined();
 });

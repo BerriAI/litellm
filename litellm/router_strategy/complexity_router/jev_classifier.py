@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Protocol, TypeAlias
 from uuid import uuid4
 
 import httpx
@@ -88,7 +88,19 @@ class JevClassifierClient(Protocol):
 
 class _DecisionsRouter(Protocol):
     async def adecisions(
-        self, *, model: str, state: str, questions: Mapping[str, object], **kwargs: object
+        self,
+        *,
+        model: str,
+        state: str,
+        questions: Mapping[str, object],
+        timeout: float,
+        num_retries: int,
+        disable_fallbacks: bool,
+        metadata: Mapping[str, object],
+        proxy_server_request: Mapping[str, object],
+        turn_off_message_logging: bool | None,
+        litellm_session_id: str = "",
+        litellm_trace_id: str = "",
     ) -> object: ...
 
 
@@ -97,7 +109,7 @@ _PARENT_METADATA: Final = TypeAdapter[Mapping[str, object] | None](Mapping[str, 
 
 class RouterJevClassifierClient:
     def __init__(self, router: "Router", deployment_name: str) -> None:
-        self._router = cast(_DecisionsRouter, router)
+        self._router: _DecisionsRouter = router
         self._deployment_name = deployment_name
 
     async def evaluate(

@@ -39,11 +39,11 @@ export default function ClassifierPrimarySettings({
   return (
     <div
       className={
-        section === "all"
-          ? "mb-6 grid gap-4 sm:grid-cols-2"
-          : section === "frequency"
-            ? "mb-6 grid gap-4"
-            : "grid gap-4"
+        {
+          all: "mb-6 grid gap-4 sm:grid-cols-2",
+          frequency: "mb-6 grid gap-4",
+          judge: "grid gap-4",
+        }[section]
       }
     >
       {section !== "judge" && (

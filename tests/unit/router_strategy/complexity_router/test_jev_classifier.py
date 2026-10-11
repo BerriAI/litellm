@@ -819,6 +819,12 @@ async def test_deployed_decision_classifier_uses_registered_connection(
         assert outcome.jev_verdict.label == _answer().choice
 
 
+@pytest.mark.parametrize("deployment_name", ["", "   "])
+def test_deployed_decision_classifier_rejects_blank_deployment_name(deployment_name: str) -> None:
+    with pytest.raises(ValueError, match="deployment_name"):
+        JevClassifierConfig.model_validate({"deployment_name": deployment_name})
+
+
 @pytest.mark.parametrize("connection", [{"api_key": "secret"}, {"api_base": "https://override.test"}])
 def test_deployed_decision_classifier_rejects_connection_overrides(connection: Mapping[str, str]) -> None:
     with pytest.raises(ValueError, match="deployment connection"):
