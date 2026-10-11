@@ -122,6 +122,38 @@ async def test_org_team_guaranteed_throughput_model_tpm_over_bound_rejected(
     assert rows == []
 
 
+
+@pytest.mark.parametrize("requested_tpm,expected_status", [(50, 400), (20, 200)], ids=["over", "within"])
+async def test_org_team_guaranteed_throughput_counts_sibling_allocations(
+    requested_tpm: int, expected_status: int, gateway_client, db, resources, actors
+):
+    org_id = await create_scratch_org(db, resources.prefix, models=["m"], tpm_limit=120)
+    await create_scratch_team(
+        db,
+        team_id=resources.tag("sibling"),
+        organization_id=org_id,
+        models=["m"],
+        tpm_limit=100,
+    )
+    team_id = resources.tag("new")
+    resp = await gateway_client.post(
+        "/team/new",
+        headers={"Authorization": f"Bearer {actors.keys[Actor.PROXY_ADMIN].cleartext}"},
+        json={
+            "team_id": team_id,
+            "team_alias": team_id,
+            "organization_id": org_id,
+            "models": ["m"],
+            "tpm_limit": requested_tpm,
+            "tpm_limit_type": "guaranteed_throughput",
+        },
+    )
+    assert resp.status_code == expected_status, resp.text
+    rows = await db.db.litellm_teamtable.find_many(where={"team_id": team_id})
+    assert len(rows) == (1 if expected_status == 200 else 0)
+    if expected_status == 400:
+        assert "Allocated TPM limit=100" in resp.text, resp.text
+
 # ---------------------------------------------------------------------------
 # /key/generate — _check_project_key_limits project-not-found branch
 # (lines 1147–1156). Hitting it requires a project_id that doesn't resolve;
