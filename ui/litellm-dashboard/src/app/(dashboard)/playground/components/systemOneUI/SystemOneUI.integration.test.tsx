@@ -558,7 +558,7 @@ describe("SystemOneUI integration", () => {
     await user.click(screen.getByRole("tab", { name: "cURL" }));
 
     const command = screen.getByLabelText("cURL request");
-    expect(command).toHaveTextContent("curl -X POST https://proxy.example/v1/systemone");
+    expect(command).toHaveTextContent("curl -X POST 'https://proxy.example/v1/systemone'");
     expect(command).toHaveTextContent("Authorization: Bearer $LITELLM_API_KEY");
     expect(command).not.toHaveTextContent("session-key");
     expect(JSON.parse(curlPayload(command.textContent ?? "") ?? "")).toMatchObject({
