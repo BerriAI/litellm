@@ -38,6 +38,7 @@ from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
 from litellm.responses.mcp.request_context import MCPRequestContext
+from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     PromptObject,
@@ -1051,11 +1052,14 @@ def _responses_try_dispatch_mcp_gateway(
     | None
 ):
     """Return a response when MCP gateway handles the call; otherwise None."""
+    if skip_mcp_handler or not may_name_litellm_mcp_gateway(tools):
+        return None
+
     from litellm.responses.mcp.litellm_proxy_mcp_handler import (
         LiteLLM_Proxy_MCP_Handler,
     )
 
-    if skip_mcp_handler or not LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools):
+    if not LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=tools):
         return None
     mcp_call_kwargs: Final = {
         "model": model,

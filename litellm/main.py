@@ -128,6 +128,7 @@ from litellm.llms.vertex_ai.common_utils import (
     get_vertex_ai_model_route,
 )
 from litellm.realtime_api.main import realtime_health_check
+from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 from litellm.secret_managers.main import get_secret_bool, get_secret_str
 from litellm.types.completion import (
     CompletionDispatchContext,
@@ -5243,7 +5244,7 @@ def completion(
 
     control_options: Final = _resolve_control_options(kwargs, model)
     skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
-    if not skip_mcp_handler and tools:
+    if not skip_mcp_handler and tools and may_name_litellm_mcp_gateway(tools):  # pyright: ignore[reportUnknownArgumentType]  # untyped tools list
         from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
