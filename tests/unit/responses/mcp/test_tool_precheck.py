@@ -5,6 +5,7 @@ neither, so ordinary tools must never make ``completion()`` or ``responses()`` i
 """
 
 import sys
+from collections import deque
 from typing import Final
 
 import httpx
@@ -12,6 +13,7 @@ import pytest
 import respx
 
 import litellm
+from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 
 GATEWAY_HANDLER_MODULES: Final = (
     "litellm.responses.mcp.litellm_proxy_mcp_handler",
@@ -176,17 +178,42 @@ async def test_anthropic_messages_with_function_tool_does_not_import_the_gateway
     ],
 )
 def test_may_name_litellm_mcp_gateway_keeps_only_mcp_tools(tools, expected):
-    from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
-
     assert may_name_litellm_mcp_gateway(tools) is expected
 
 
-def test_precheck_leaves_a_one_shot_iterable_unread():
-    tools: Final = (tool for tool in [FUNCTION_TOOL, GATEWAY_MCP_TOOL, GATEWAY_MCP_TOOL])
-    from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
+class _OneShotCollection:
+    """Sized and iterable like a Collection, but yields its items only once."""
+
+    def __init__(self, items):
+        self._items = list(items)
+        self._iterator = iter(self._items)
+
+    def __len__(self):
+        return len(self._items)
+
+    def __contains__(self, item):
+        return item in self._items
+
+    def __iter__(self):
+        return self._iterator
+
+
+@pytest.mark.parametrize(
+    "make_tools",
+    [
+        lambda items: (item for item in items),
+        lambda items: iter(items),
+        lambda items: _OneShotCollection(items),
+        lambda items: deque(items),
+    ],
+    ids=["generator", "iterator", "one-shot-collection", "deque"],
+)
+def test_precheck_leaves_anything_but_a_list_or_tuple_unread(make_tools):
+    items: Final = [FUNCTION_TOOL, GATEWAY_MCP_TOOL, GATEWAY_MCP_TOOL]
+    tools: Final = make_tools(items)
 
     assert may_name_litellm_mcp_gateway(tools) is True
-    assert list(tools) == [FUNCTION_TOOL, GATEWAY_MCP_TOOL, GATEWAY_MCP_TOOL]
+    assert list(tools) == items
 
 
 @pytest.mark.parametrize(
@@ -207,7 +234,6 @@ def test_precheck_leaves_a_one_shot_iterable_unread():
 def test_precheck_never_rejects_a_tool_the_gateway_handler_accepts(tool):
     pytest.importorskip("mcp")
     from litellm.responses.mcp.litellm_proxy_mcp_handler import LiteLLM_Proxy_MCP_Handler
-    from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 
     if LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway(tools=[tool]):
         assert may_name_litellm_mcp_gateway([tool])

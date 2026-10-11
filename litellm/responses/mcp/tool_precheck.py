@@ -6,7 +6,7 @@ extras fails on any call that passes ordinary tools. This module imports only th
 reason.
 """
 
-from collections.abc import Collection, Iterable
+from collections.abc import Iterable
 
 
 def _is_mcp_tool(tool: object) -> bool:
@@ -24,11 +24,12 @@ def may_name_litellm_mcp_gateway(tools: Iterable[object] | None) -> bool:
     ``mcp`` and from nothing else, so this is a necessary condition for it: it never returns False for a tool
     list the handler would accept.
 
-    A one-shot iterable such as a generator cannot be scanned twice, and the handler scans it again, so it is
-    left unread and reported as possibly naming the gateway. Those inputs keep the previous code path.
+    The handler scans the same object again, so only a list or tuple is read here, the builtins that iterate
+    the same way twice. Any other iterable, a generator for instance, is left unread and reported as possibly
+    naming the gateway, which keeps the previous code path for it.
     """
     if tools is None:
         return False
-    if not isinstance(tools, Collection):
+    if not isinstance(tools, (list, tuple)):
         return True
     return any(_is_mcp_tool(tool) for tool in tools)
