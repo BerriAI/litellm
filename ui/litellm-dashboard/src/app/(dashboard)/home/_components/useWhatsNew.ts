@@ -1,10 +1,10 @@
 import { $api } from "@/lib/http/api";
-import { newestFirst } from "./homeContent";
+import { latestLaunches } from "./homeContent";
 
 export const useWhatsNew = () =>
   $api.useQuery(
     "get",
     "/public/whats_new",
     {},
-    { staleTime: 60 * 60 * 1000, select: (data) => newestFirst(data.launches) },
+    { staleTime: 60 * 60 * 1000, select: (data) => latestLaunches(data.launches) },
   );

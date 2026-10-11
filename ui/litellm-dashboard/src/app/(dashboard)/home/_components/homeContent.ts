@@ -17,8 +17,10 @@ const LAUNCH_ICONS: ReadonlyMap<string, LucideIcon> = new Map([
 
 export const launchIcon = (name: string): LucideIcon => LAUNCH_ICONS.get(name) ?? Sparkles;
 
-export const newestFirst = (launches: readonly WhatsNewLaunch[]): readonly WhatsNewLaunch[] =>
-  [...launches].sort((a, b) => b.published_on.localeCompare(a.published_on));
+export const WHATS_NEW_MAX = 3;
+
+export const latestLaunches = (launches: readonly WhatsNewLaunch[]): readonly WhatsNewLaunch[] =>
+  [...launches].sort((a, b) => b.published_on.localeCompare(a.published_on)).slice(0, WHATS_NEW_MAX);
 
 export const formatPublishedOn = (isoDate: string): string =>
   new Date(`${isoDate}T00:00:00`).toLocaleDateString("en-US", { month: "short", day: "numeric" });
