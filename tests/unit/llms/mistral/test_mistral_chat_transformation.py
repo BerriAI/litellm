@@ -805,7 +805,7 @@ class TestMistralStripsOutputOnlyFields:
     Regression for https://github.com/BerriAI/litellm/issues/30835.
     """
 
-    def test_assistant_reasoning_content_is_dropped(self):
+    def test_assistant_reasoning_content_is_translated_to_thinking_chunk(self):
         messages = cast(
             List[AllMessageValues],
             [
@@ -825,9 +825,15 @@ class TestMistralStripsOutputOnlyFields:
         )
 
         assistant_message = result[-1]
+        # output-only top-level keys must not reach the API (422 extra_forbidden)
         assert "reasoning_content" not in assistant_message
         assert "thinking_blocks" not in assistant_message
-        assert assistant_message["content"] == "Follow-up"
+        # ...but the reasoning itself is preserved as a Mistral ThinkChunk,
+        # because stripping it breaks multi-turn reasoning (see #45546)
+        assert assistant_message["content"] == [
+            {"type": "thinking", "thinking": [{"type": "text", "text": "Some internal reasoning text."}]},
+            {"type": "text", "text": "Follow-up"},
+        ]
         assert assistant_message["role"] == "assistant"
 
     def test_non_assistant_messages_are_untouched(self):
@@ -916,3 +922,89 @@ def test_mistral_transform_request_hoists_tool_message_image():
         {"type": "text", "text": TOOL_RESULT_IMAGE_BOUNDARY},
         {"type": "image_url", "image_url": {"url": data_uri}},
     ]
+
+
+class TestMistralReplayedReasoning:
+    """#45546: replayed reasoning must reach the model, not be stripped."""
+
+    def _transform(self, messages):
+        return MistralConfig().transform_request(
+            model="mistral/mistral-large-4",
+            messages=messages,
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )["messages"]
+
+    def test_reasoning_content_becomes_thinking_chunk(self):
+        out = self._transform(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "My code word is PELICAN.",
+                    "tool_calls": [
+                        {
+                            "id": "abc",
+                            "type": "function",
+                            "function": {"name": "get_number", "arguments": "{}"},
+                        }
+                    ],
+                }
+            ]
+        )
+        msg = out[0]
+        # reasoning moved into a Mistral ThinkChunk in content
+        assert isinstance(msg["content"], list)
+        assert msg["content"][0]["type"] == "thinking"
+        assert msg["content"][0]["thinking"][0]["text"] == "My code word is PELICAN."
+        # top-level output-only keys removed (Mistral schema forbids them)
+        assert "reasoning_content" not in msg
+        assert "thinking_blocks" not in msg
+        # empty text content adds no text chunk; tool call stays top-level
+        assert len(msg["content"]) == 1
+        assert msg["tool_calls"][0]["function"]["name"] == "get_number"
+
+    def test_thinking_chunk_in_content_is_preserved(self):
+        """A client-replayed ThinkChunk inside content must not be flattened away."""
+        out = self._transform(
+            [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "thinking", "thinking": [{"type": "text", "text": "PELICAN"}]},
+                        {"type": "text", "text": "tool result summary"},
+                    ],
+                }
+            ]
+        )
+        msg = out[0]
+        assert isinstance(msg["content"], list)
+        assert any(c.get("type") == "thinking" for c in msg["content"])
+
+    def test_plain_text_assistant_message_unchanged(self):
+        out = self._transform(
+            [{"role": "assistant", "content": "The answer is 391."}]
+        )
+        assert out[0]["content"] == "The answer is 391."
+
+    def test_no_reasoning_still_strips_output_only_keys(self):
+        out = self._transform(
+            [
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "reasoning_content": "",
+                    "tool_calls": [
+                        {
+                            "id": "abc",
+                            "type": "function",
+                            "function": {"name": "get_number", "arguments": "{}"},
+                        }
+                    ],
+                }
+            ]
+        )
+        msg = out[0]
+        assert "reasoning_content" not in msg
+        assert "thinking_blocks" not in msg

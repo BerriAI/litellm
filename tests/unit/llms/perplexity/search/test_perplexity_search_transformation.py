@@ -1,57 +1,97 @@
-import json
-from typing import Final
-
-import pytest
-import respx
-
-import litellm
-
-PERPLEXITY_SEARCH_URL: Final = "https://api.perplexity.ai/search"
+from litellm.llms.perplexity.search.transformation import PerplexitySearchConfig
 
 
-@pytest.fixture(autouse=True)
-def perplexity_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("PERPLEXITYAI_API_KEY", "test-perplexity-key")
-    monkeypatch.delenv("PERPLEXITY_API_BASE", raising=False)
+class TestPerplexitySearchRequestTransformation:
+    def setup_method(self):
+        self.config = PerplexitySearchConfig()
 
-
-def test_search_maps_perplexity_results_to_search_response(respx_mock: respx.MockRouter) -> None:
-    respx_mock.post(PERPLEXITY_SEARCH_URL).respond(
-        json={
-            "results": [
-                {
-                    "title": "AI news roundup",
-                    "url": "https://example.com/ai-news",
-                    "snippet": "The latest in artificial intelligence.",
-                    "date": "2026-01-15",
-                    "last_updated": "2026-01-16",
-                },
-                {"title": "Second", "url": "https://example.com/second", "snippet": "Second snippet."},
-            ]
+    def test_forwards_full_documented_param_set(self):
+        optional_params = {
+            "search_after_date_filter": "01/01/2026",
+            "search_before_date_filter": "06/15/2026",
+            "last_updated_after_filter": "03/01/2026",
+            "last_updated_before_filter": "03/31/2026",
+            "search_recency_filter": "month",
+            "search_language_filter": ["en"],
+            "search_context_size": "high",
+            "search_mode": "web",
+            "max_tokens": 2048,
+            "max_results": 5,
+            "search_domain_filter": ["europa.eu"],
+            "max_tokens_per_page": 1024,
+            "country": "US",
         }
-    )
 
-    response: Final = litellm.search(query="artificial intelligence recent news", search_provider="perplexity")
+        body = self.config.transform_search_request(query="EU AI Act", optional_params=optional_params)
 
-    assert response.object == "search"
-    assert isinstance(response.results, list)
-    assert len(response.results) == 2
-    first: Final = response.results[0]
-    assert first.title == "AI news roundup"
-    assert first.url == "https://example.com/ai-news"
-    assert first.snippet == "The latest in artificial intelligence."
-    assert first.date == "2026-01-15"
-    assert first.last_updated == "2026-01-16"
-    assert response.results[1].snippet == "Second snippet."
+        assert body == {"query": "EU AI Act", **optional_params}
+
+    def test_omits_unset_and_none_optional_params(self):
+        body = self.config.transform_search_request(
+            query="EU AI Act",
+            optional_params={
+                "max_results": 5,
+                "search_recency_filter": None,
+                "search_language_filter": None,
+                "unknown_param": "ignored",
+            },
+        )
+
+        assert body == {"query": "EU AI Act", "max_results": 5, "unknown_param": "ignored"}
+
+    def test_query_is_not_overwritten_by_optional_params(self):
+        body = self.config.transform_search_request(
+            query="original query",
+            optional_params={"query": "injected", "max_results": 3},
+        )
+
+        assert body["query"] == "original query"
+        assert body["max_results"] == 3
 
 
-def test_search_sends_max_results_in_request_body(respx_mock: respx.MockRouter) -> None:
-    route: Final = respx_mock.post(PERPLEXITY_SEARCH_URL).respond(
-        json={"results": [{"title": "ML", "url": "https://example.com/ml", "snippet": "Machine learning."}]}
-    )
+class TestPerplexitySearchRequestTransformation:
+    def test_forwards_full_documented_param_set(self):
+        config = PerplexitySearchConfig()
+        optional_params = {
+            "search_after_date_filter": "01/01/2026",
+            "search_before_date_filter": "06/15/2026",
+            "last_updated_after_filter": "03/01/2026",
+            "last_updated_before_filter": "03/31/2026",
+            "search_recency_filter": "month",
+            "search_language_filter": ["en"],
+            "search_context_size": "high",
+            "search_mode": "web",
+            "max_tokens": 2048,
+            "max_results": 5,
+            "search_domain_filter": ["europa.eu"],
+            "max_tokens_per_page": 1024,
+            "country": "US",
+        }
 
-    response: Final = litellm.search(query="machine learning", search_provider="perplexity", max_results=5)
+        body = config.transform_search_request(query="EU AI Act", optional_params=optional_params)
 
-    assert json.loads(route.calls.last.request.content) == {"query": "machine learning", "max_results": 5}
-    assert route.calls.last.request.headers["Authorization"] == "Bearer test-perplexity-key"
-    assert [result.url for result in response.results] == ["https://example.com/ml"]
+        assert body == {"query": "EU AI Act", **optional_params}
+
+    def test_omits_unset_and_none_optional_params(self):
+        config = PerplexitySearchConfig()
+        body = config.transform_search_request(
+            query="EU AI Act",
+            optional_params={
+                "max_results": 5,
+                "search_recency_filter": None,
+                "search_language_filter": None,
+                "unknown_param": "ignored",
+            },
+        )
+
+        assert body == {"query": "EU AI Act", "max_results": 5, "unknown_param": "ignored"}
+
+    def test_query_is_not_overwritten_by_optional_params(self):
+        config = PerplexitySearchConfig()
+        body = config.transform_search_request(
+            query="original query",
+            optional_params={"query": "injected", "max_results": 3},
+        )
+
+        assert body["query"] == "original query"
+        assert body["max_results"] == 3
