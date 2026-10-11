@@ -3,6 +3,7 @@ from typing import Final
 from litellm.secret_managers.main import get_secret_str
 
 from .chat.transformation import DashScopeChatConfig
+from .common_utils import resolve_dashscope_family_rerank_api_base
 from .embed.transformation import DashScopeEmbeddingConfig
 from .image_generation.transformation import DashScopeImageGenerationConfig
 from .rerank.transformation import DashScopeRerankConfig
@@ -51,7 +52,9 @@ class QwenCloudRerankConfig(DashScopeRerankConfig):
         return _require_qwencloud_api_key(api_key)
 
     def _resolve_rerank_api_base(self, api_base: str | None) -> str:
-        return api_base or get_secret_str("QWENCLOUD_API_BASE_RERANK") or QWENCLOUD_RERANK_API_BASE
+        return resolve_dashscope_family_rerank_api_base(
+            api_base, "QWENCLOUD_API_BASE_RERANK", QWENCLOUD_RERANK_API_BASE
+        )
 
 
 class QwenCloudImageGenerationConfig(DashScopeImageGenerationConfig):

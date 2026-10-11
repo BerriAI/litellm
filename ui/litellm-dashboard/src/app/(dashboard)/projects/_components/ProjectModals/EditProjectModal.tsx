@@ -10,7 +10,7 @@ import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { useUpdateProject, ProjectUpdateParams } from "@/app/(dashboard)/hooks/projects/useUpdateProject";
 import { ProjectBaseForm } from "./ProjectBaseForm";
-import { projectFormSchema, type ProjectFormValues } from "./projectFormSchema";
+import { projectFormSchema, type ProjectFormValues, type ProjectSubmitValues } from "./projectFormSchema";
 import { buildProjectUpdateParams } from "./projectFormUtils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -58,7 +58,7 @@ export const toFormValues = (project: ProjectResponse): ProjectFormValues => {
 
   return {
     project_alias: project.project_alias ?? "",
-    team_id: project.team_id ?? "",
+    team_id: project.team_id ?? null,
     description: project.description ?? "",
     models: project.models ?? [],
     max_budget: project.litellm_budget_table?.max_budget ?? undefined,
@@ -81,12 +81,12 @@ function EditProjectForm({ project, onClose, onSuccess }: Omit<EditProjectModalP
   };
 
   const handleSubmit = form.handleSubmit((values) => {
-    const submitted: ProjectFormValues = advancedEverOpened
+    const submitted: ProjectSubmitValues = advancedEverOpened
       ? values
       : { ...values, guardrails: undefined, modelLimits: undefined, metadata: undefined };
 
     const params: ProjectUpdateParams = {
-      ...buildProjectUpdateParams(submitted),
+      ...buildProjectUpdateParams(submitted, project.litellm_budget_table?.max_budget),
       team_id: submitted.team_id,
     };
 

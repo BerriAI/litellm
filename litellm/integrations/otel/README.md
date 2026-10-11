@@ -11,11 +11,15 @@ A traced proxy request produces one trace with two kinds of spans:
 ```
 SERVER span  "POST /v1/chat/completions"        ← FastAPI instrumentation
 ├── INTERNAL span  "auth /v1/chat/completions"   ← auth phase     ┐
-│   ├── CLIENT span  "postgres get_key_object"    ← datastore call │
-│   └── CLIENT span  "postgres get_team_membership"                │
+│   ├── CLIENT span  "postgres.select LiteLLM_VerificationToken"  │
+│   └── CLIENT span  "postgres.select LiteLLM_TeamMembership"      │
 ├── INTERNAL span  "execute_guardrail …"         ← guardrail       │ this package
+├── INTERNAL span  "cache.get llm_response"       ← response cache  │
+│   └── CLIENT span  "redis.get llm_response"                      │
+├── INTERNAL span  "route gpt-4o"                 ← deployment pick │
+│   └── CLIENT span  "redis.mget router_cooldowns"                 │
 ├── CLIENT span    "chat gpt-4o"                  ← LLM call        │
-└── CLIENT span    "batch_write_to_db …"          ← spend write    ┘
+└── CLIENT span    "postgres.update LiteLLM_UserTable" ← spend flush┘
 ```
 
 The gen-ai spans are siblings under the server span. In particular the guardrail
@@ -59,17 +63,127 @@ traceable units of work:
   the trace. `auth` is also excluded here because it gets a **live phase span**
   instead (see below).
 
-Spans are named `"{service} {call_type}"` (e.g. `"redis set"`) so repeated calls
-to one service stay distinguishable. Like every other span they parent to the
+Redis spans are named `"{service}.{verb} {target}"` (e.g. `"redis.get llm_response"`,
+`"redis.mget auth_objects"`), the `{db.operation.name} {target}` shape of the OTel
+database conventions: the verb comes from the cache method
+(`spans._SERVICE_VERB_BY_CALL_TYPE`), the target from the producer running the
+call inside `litellm._internal_context.service_target(...)` and is a key family
+(`llm_response`, `auth_objects`, `router_cooldowns`, `router_cooldowns_usage`,
+`router_usage`, `router_budgets`, `router_session_pins`, `rate_limits`,
+`model_budgets`, `session_budgets`, `session_iterations`, `sensitive_route_pins`,
+`prompt_cache_pins`, `prompt_cache_predictions`, `spend_counters`, `config_params`,
+`daily_report_schedule`), never a key. The whole `auth` phase runs under
+`auth_objects`, so every cache read it triggers is `redis.get auth_objects` /
+`redis.mget auth_objects`, and so does the post-call spend write-back into the
+same auth objects. A proxy hook or routing strategy declares its family once, on
+its entrypoints, with `@with_service_target("rate_limits")`, so every read and
+write it issues (helpers included) carries it; the response-cache facade
+(`Cache.get_cache` / `async_get_cache` / `add_cache` / `async_add_cache` /
+`async_add_cache_pipeline`) opens the `cache.get llm_response` /
+`cache.set llm_response` phase itself, so a lookup issued by the native bridge
+is phased and targeted like one issued by `caching_handler.py`. The verb is the
+Redis command the method issues (`get`, `mget`, `set`, `sadd`, `incr`, `ttl`,
+`expire`, `delete`, `rpush`, `lpop`, `scan`, `ping`), so the cooldown fail counter
+shows as `redis.incr router_cooldowns` followed by `redis.ttl router_cooldowns` /
+`redis.expire router_cooldowns`. Background producers declare a family the same
+way (`pod_lock`, `budget_reset`, `spend_queue`, `health_check`, `scheduler_queue`,
+`managed_files`, `mcp_servers`, ...), so a job tick renders `redis.set pod_lock`
+rather than a bare `redis.set`; `tests/unit/test_internal_context.py` scans every
+module under `litellm/` and `enterprise/` that calls a shared cache or declares a
+read or write on the request batch (`reserve_redis_batch_reads`,
+`declare_batch_get`, `batch.mget`, `batch.set`, `batch.script`) and fails when
+one has no declared family, with the process-local `InMemoryCache` callers listed
+as the only exemptions. A batch op carries the family that was active when it was
+declared, so the routing prefetch armed before deployment selection
+(`RoutingPrefetch.arm`) is `router_cooldowns` when only cooldown keys go out,
+`router_usage` when only usage counters do, and `router_cooldowns_usage` when both
+ride the same MGET, whichever pipeline or standalone read later settles it. A
+per-request pipeline (`RedisBatch`) that carries ops of
+one family is `"redis.pipeline auth_objects"`; one that carries several owners'
+ops is `"redis.pipeline mixed"` with the sorted family list on
+`litellm.redis.families` and the op count on `litellm.metadata.op_count` (an int,
+never stringified). A cluster client cannot pipeline across slots, so there every
+batch op settles on its own and one write-back of three auth objects shows as three
+parallel `redis.set auth_objects` spans with the same caller, not one pipeline
+span. Every `call_type` the Redis cache layer emits maps to a verb,
+so the `{service} {call_type}` fallback is unreachable for Redis (a test asserts
+it). Postgres helpers are `postgres.{verb} {table}`
+(`"postgres.select LiteLLM_VerificationToken"`, `"postgres.update LiteLLM_TeamTable"`,
+`"postgres.insert LiteLLM_SpendLogs"`): the SQL verb comes from
+`_POSTGRES_OPERATION_BY_CALL_TYPE` in `model/spans.py`, the table from that map when
+the helper only touches one model and from the event's `table_name` metadata (the
+`PrismaClient` CRUD literals, or a `LiteLLM_*` model name from `db_span`)
+otherwise. A helper the map does not know, or one whose table did not resolve,
+keeps `"postgres {call_type}"`, so a half-named `"postgres.select"` never ships;
+every `PrismaClient` CRUD call site passes a literal `table_name` and a static scan
+in the unit tests holds that line. A raw statement no producer wraps is
+named by `_TrackedPrismaEngine` itself from the Prisma payload (`postgres.select
+LiteLLM_UserTable` for `query_raw`, `postgres.set statement_timeout`, `postgres.ping`
+for the health probes), see https://github.com/BerriAI/litellm/pull/44240. The verb
+lands on `db.operation.name`, the table on `db.collection.name` and `"{VERB} {table}"`
+on `db.query.summary`. Every other non-Redis service keeps `"{service} {call_type}"`
+(`"reset_budget_job reset_budget"`): one scheme, `{service}.{verb} {target}`
+when the method maps to a verb and `{service} {call_type}` otherwise, and never a
+count, key or id in the name. Either way the raw method name stays on
+`litellm.service.call_type` (and the bare `call_type` the metrics are keyed by; for
+Redis it is also `db.operation.name`), the target lands on
+`litellm.service.target`, and the litellm call chain that issued the call
+(`_retrieve_from_cache <- _async_get_cache`) travels as
+`ServiceLoggerPayload.caller` onto `litellm.service.caller`, with the forwarding
+frames (cache facades, circuit-breaker guards, batch retry wrappers, the native
+execution's `lifecycle`/`streams` drivers) skipped so it names the code that wanted
+the call. A call whose own frames are all forwarders
+(a batch op settled in a task of its own, on a cluster client or a NOSCRIPT retry)
+reports the chain its declaring code captured and threaded through
+`service_caller(...)`, never the forwarders, and `unknown` when there is none.
+The cache key itself is never on the span: it is unbounded and carries key hashes
+and session ids, and the span is already named by key family. Like every other
+span they parent to the
 **ambient** context, falling back to the threaded `litellm_parent_otel_span` only
 when ambient has no live span; a background job with neither starts its own root
-trace. Caller-supplied `event_metadata` is **sanitized** before it reaches a span
+trace.
+
+**Post-response work is its own trace.** Spend tracking, the response cache write
+and the spend-counter increment all run after the response is on the wire, so they
+add nothing to the request's latency. Parenting them under the (already ended)
+server span stretched the request trace past the request itself, which is what a
+viewer shows as trace duration. `context.resolve_service_span_context` detaches
+a call in two cases: it was logged from the post-response phase
+(`litellm._internal_context.post_response_phase`, entered by the success
+handlers and by the response-cache write task, inherited by every task spawned
+inside), or it finished after the resolved parent ended. Either way it starts a
+**new root trace** carrying a **span link** back to the request span (the
+`FollowsFrom` relationship of OpenTracing; the default `:link` propagation style
+of the OTel Ruby ActiveJob and Sidekiq instrumentations). The phase check matters
+for streaming: the stream-finished callbacks run before the ASGI server span
+closes, so by end time alone the cache write would look like request latency.
+Identity Baggage still rides along, so the detached span keeps its team / key /
+user attributes. Only an SDK span detaches: a sampled-out or remote
+`NonRecordingSpan` is never recording but is still the right parent. A call that
+ended before the server span did stays a child even when its
+`asyncio.create_task`-dispatched hook runs after the response.
+
+Caller-supplied `event_metadata` is **sanitized** before it reaches a span
 (primitives only, no live objects, no secrets/headers, bounded) — see
 `payloads.sanitize_event_metadata`.
 
 **Live phase spans.** `auth` is wrapped in a real, active span
 (`logger.phase_span`) for the duration of authentication, so the DB lookups it
-triggers nest **under** it instead of flattening onto the server span. Identity
+triggers nest **under** it instead of flattening onto the server span. The
+response cache does the same: the lookup runs inside `cache.get llm_response`
+(a child of the server span, so its Redis read sits before `chat {model}` in
+causal order) and the write inside `cache.set llm_response`. Deployment selection
+runs inside `route {model_group}` (`Router.async_get_available_deployment`, the
+requested group, never the deployment it picks), so the cooldown, usage and
+model-id reads the router issues nest under it, before `chat {model}`; the phase
+is opened in Python, never inside the native lifecycle. The one known ordering
+limitation is the native path (`LITELLM_RUST`): its lifecycle fires pre-call
+logging before it yields the cache await, so `cache.get llm_response` starts after
+`chat {model}` there, and moving it needs native changes that
+`litellm/rust_bridge/AGENTS.md` forbids. The write runs from
+the post-response phase, so that span is a linked root rather than a child that
+would stretch the request, and the Redis write it issues nests under it instead
+of starting a third trace (`context.post_response_root`). Identity
 Baggage (team/key/user) is seeded once the key resolves, so every post-auth span
 inherits it; auth-internal DB lookups that run before the key is known stay
 unlabeled, which is correct.
@@ -138,7 +252,9 @@ becomes the global, so server spans export to that backend too.
    sync-only provider driven through a thread pool, where contextvars (and so the
    anchor) don't follow — no parent is visible there, so creation is **deferred**
    to the async callback, whose worker context was copied from the request task at
-   enqueue and so still carries the anchor. **Pass-through** endpoints call
+   enqueue and so still carries the anchor. A deferred span starts at the provider
+   handoff (`api_call_start_time`), not at the logging object's creation, so it
+   bounds the provider attempt rather than the whole request. **Pass-through** endpoints call
    `logging_obj.pre_call` in the request task too, then close from a detached
    `asyncio.create_task`; the anchor (not the by-then-inactive server span) keeps
    their LLM-call span in the request's trace. `pre_call` is litellm's generic
@@ -179,7 +295,9 @@ nothing here imports outside it:
 - [`config.py`](./model/config.py) — `OpenTelemetryV2Config`, a pydantic-settings
   model that reads `OTEL_*` / `LITELLM_OTEL_*` env vars, plus the feature gate.
   `capture_span_content` gates whether prompt/response bodies may be written as
-  span attributes; it defaults **off** (`no_content`). The Baggage allowlists are
+  span attributes; it defaults **off** (`no_content`). A team or key can override
+  the global mode per OTel v2 destination with `capture_message_content`; omitted
+  values follow the proxy's own callback for that backend, else the global mode. The Baggage allowlists are
   configurable, not hard-coded: set `LITELLM_OTEL_BAGGAGE_PROMOTED_KEYS` /
   `LITELLM_OTEL_BAGGAGE_METADATA_KEYS` /
   `LITELLM_OTEL_BAGGAGE_TEAM_METADATA_KEYS` (comma-separated) as env vars, or
@@ -188,6 +306,15 @@ nothing here imports outside it:
   `config.yaml` — the latter reach the config through the logger's constructor
   kwargs. `baggage_team_metadata_keys` is empty by default, so none of a team's
   free-form metadata is promoted until each sub-key is explicitly allowlisted.
+  `excluded_services` withholds datastore spans from key/team `callback_vars`
+  destinations while the operator's own exporters keep them: set
+  `LITELLM_OTEL_EXCLUDED_SERVICES` (comma-separated) or `excluded_services`
+  (a YAML list) under `callback_settings.otel`, naming the datastore services
+  to withhold (`redis`, `postgres`, `batch_write_to_db`, `redis_*`, or their
+  `db.system.name` spellings `redis` / `postgresql`). Unknown names are logged
+  as an error and ignored. A span is withheld when its `db.system.name` /
+  `db.system` attribute is in the set, so request root, auth, guardrail and
+  model spans can never be excluded.
 - [`baggage.py`](./model/baggage.py) — the single definition of which request-identity
   values are promoted into Baggage (so child spans inherit them) and under which
   attribute keys.
@@ -292,7 +419,13 @@ lives in [`plumbing/`](./plumbing):
   (`DYNAMIC_HEADERS_BY_CALLBACK`). Presets do **no** network I/O at build time:
   AgentOps, for example, mints its JWT lazily inside a custom exporter on the
   first export (in the `BatchSpanProcessor` worker thread), never on the event
-  loop.
+  loop. A preset built while another `OpenTelemetryV2` logger is already
+  registered (a key or team `logging` entry naming `arize`, say, beside the
+  operator's `otel`) keeps only the exporters it contributed itself: the
+  registered logger already delivers every call to the operator's collector, so
+  a copy of those base exporters would emit each `chat` span there twice. A
+  preset that contributes no exporter of its own (Langtrace is a mapper over the
+  operator's collector) keeps the base exporters it has nothing to replace with.
 
 ## Extending
 

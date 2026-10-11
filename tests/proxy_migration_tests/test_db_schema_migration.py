@@ -5,6 +5,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
+from litellm_proxy_extras.request_log_indexes import filter_request_log_index_diff
 
 
 @pytest.mark.skipif(
@@ -16,7 +17,9 @@ def test_schema_migration_in_sync():
 
     Applies every committed migration to an empty database, then diffs the result
     against schema.prisma. A non-empty diff means the schema was changed without a
-    matching migration being generated.
+    matching migration being generated. The request-log indexes the migration job
+    builds are declared in the schema and deliberately absent from the migrations,
+    so those statements are filtered out before the diff is judged.
     """
     db_url = os.environ["DATABASE_URL"]
     source_migrations_dir = Path(
@@ -60,11 +63,14 @@ def test_schema_migration_in_sync():
         )
 
         if diff.returncode == 2:
-            pytest.fail(
-                "Schema changes detected that no migration captures. Run "
-                "`python litellm/ci_cd/run_migration.py <migration_name>`.\n\n"
-                + diff.stdout
-            )
-        assert diff.returncode == 0, f"prisma migrate diff errored: {diff.stderr}"
+            drift = filter_request_log_index_diff(diff.stdout)
+            if drift.strip():
+                pytest.fail(
+                    "Schema changes detected that no migration captures. Run "
+                    "`python litellm/ci_cd/run_migration.py <migration_name>`.\n\n"
+                    + drift
+                )
+        else:
+            assert diff.returncode == 0, f"prisma migrate diff errored: {diff.stderr}"
     finally:
         shutil.rmtree(temp_base, ignore_errors=True)

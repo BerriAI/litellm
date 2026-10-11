@@ -28,6 +28,7 @@ from litellm.types.videos.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     from ...base_llm.chat.transformation import BaseLLMException as _BaseLLMException
 
@@ -237,7 +238,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         api_base: str,
         litellm_params: GenericLiteLLMParams,
         headers: dict,
-        extra_body: dict[str, Any] | None = None,
+        extra_body: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform the video remix request for OpenAI API.
@@ -252,7 +253,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         url: Final = f"{api_base.rstrip('/')}/{encoded_video_id}/remix"
 
         # Prepare the request data
-        data: Final = {"prompt": prompt}
+        data: Final[dict[str, object]] = {"prompt": prompt}
 
         # Add any extra body parameters
         if extra_body:
@@ -305,7 +306,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         after: str | None = None,
         limit: int | None = None,
         order: str | None = None,
-        extra_query: dict[str, Any] | None = None,
+        extra_query: dict[str, object] | None = None,
     ) -> tuple[str, dict]:
         """
         Transform the video list request for OpenAI API.
@@ -437,6 +438,7 @@ class OpenAIVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
+        client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         """
         Transform the OpenAI video retrieve response.

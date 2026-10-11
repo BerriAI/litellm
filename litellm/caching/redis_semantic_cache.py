@@ -19,8 +19,9 @@ from typing import TYPE_CHECKING, Any, Final, cast
 import litellm
 from litellm._logging import print_verbose, verbose_logger
 from litellm.constants import SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS
+from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
-    get_str_from_messages,
+    get_semantic_cache_prompt_from_messages,
 )
 from litellm.types.utils import EmbeddingResponse
 
@@ -262,7 +263,7 @@ class RedisSemanticCache(BaseCache):
         """
         messages: Final = kwargs.get("messages")
         if messages:
-            return get_str_from_messages(messages)
+            return get_semantic_cache_prompt_from_messages(messages)
 
         if "input" not in kwargs:
             return None
@@ -273,7 +274,7 @@ class RedisSemanticCache(BaseCache):
         return prompt or None
 
     @classmethod
-    def _collect_responses_input_text(cls, value: object, prompt_parts: list[str]) -> None:
+    def _collect_responses_input_text(cls, value: object, prompt_parts: list[str]) -> None:  # noqa: C901  # one branch per Responses input shape
         value = cls._coerce_response_input_value(value)
         if value is None:
             return
@@ -293,6 +294,11 @@ class RedisSemanticCache(BaseCache):
             content = value.get("content")
             if content is not None:
                 cls._collect_responses_input_text(content, prompt_parts)
+                return
+
+            output = value.get("output")
+            if isinstance(output, list):
+                cls._collect_responses_input_text(output, prompt_parts)
                 return
 
             for text_key in ("text", "output", "input_text", "output_text"):
@@ -522,7 +528,7 @@ class RedisSemanticCache(BaseCache):
             llm_router = None
 
         router: Final = resolve_embedding_router(self.embedding_model, llm_router, llm_model_list)
-        embedding_input: Final = self._embedding_input(prompt, router)
+        embedding_input: Final = await asyncify(self._embedding_input)(prompt, router)
         embedding_call: Final = (
             router.aembedding(
                 model=self.embedding_model,

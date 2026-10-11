@@ -59,6 +59,61 @@ describe("VectorStoreInfoView", () => {
     expect(await screen.findByText("Vector Store ID: vs-1")).toBeInTheDocument();
   });
 
+  it("should render a config-defined store read-only for an admin, even when opened in edit mode", async () => {
+    mockVectorStoreInfoCall.mockResolvedValue({
+      vector_store: {
+        vector_store_id: "vs-config",
+        vector_store_name: "config-store",
+        custom_llm_provider: "openai",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+        is_config: true,
+      },
+    });
+    render(
+      <VectorStoreInfoView
+        vectorStoreId="vs-config"
+        onClose={vi.fn()}
+        accessToken="sk-test"
+        is_admin={true}
+        editVectorStore={true}
+      />,
+    );
+    expect(await screen.findByText("Vector Store ID: vs-config")).toBeInTheDocument();
+    expect(screen.getByText("Read only: defined in the config file")).toBeInTheDocument();
+    expect(screen.getByText("Config")).toBeInTheDocument();
+    expect(screen.queryByText("DB")).not.toBeInTheDocument();
+    expect(screen.getByText("Vector Store Details")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Edit Vector Store" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Save/ })).not.toBeInTheDocument();
+  });
+
+  it("should still offer editing for a database-backed store", async () => {
+    mockVectorStoreInfoCall.mockResolvedValue({
+      vector_store: {
+        vector_store_id: "vs-db",
+        vector_store_name: "db-store",
+        custom_llm_provider: "openai",
+        created_at: "2024-01-01T00:00:00Z",
+        updated_at: "2024-01-01T00:00:00Z",
+        is_config: false,
+      },
+    });
+    render(
+      <VectorStoreInfoView
+        vectorStoreId="vs-db"
+        onClose={vi.fn()}
+        accessToken="sk-test"
+        is_admin={true}
+        editVectorStore={false}
+      />,
+    );
+    expect(await screen.findByText("Vector Store ID: vs-db")).toBeInTheDocument();
+    expect(screen.queryByText("Read only: defined in the config file")).not.toBeInTheDocument();
+    expect(screen.getByText("DB")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: "Edit Vector Store" }).length).toBeGreaterThan(0);
+  });
+
   it("should show a not-found state with a working back button when the fetch fails instead of loading forever", async () => {
     const user = userEvent.setup();
     const onClose = vi.fn();

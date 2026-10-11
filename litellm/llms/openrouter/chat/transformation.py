@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
-import litellm
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, set_hidden_params
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
@@ -23,9 +23,8 @@ from ...openai.chat.gpt_transformation import OpenAIGPTConfig
 from ..common_utils import OpenRouterException
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class CacheControlSupportedModels(str, Enum):
@@ -41,18 +40,10 @@ class CacheControlSupportedModels(str, Enum):
 class OpenrouterConfig(OpenAIGPTConfig):
     def get_supported_openai_params(self, model: str) -> list:
         """
-        Allow reasoning parameters for models flagged as reasoning-capable.
+        Include reasoning parameters regardless of model-map capabilities.
         """
         supported_params: Final = super().get_supported_openai_params(model=model)
-        try:
-            if litellm.supports_reasoning(model=model, custom_llm_provider="openrouter") or litellm.supports_reasoning(
-                model=model
-            ):
-                supported_params.append("reasoning_effort")
-                supported_params.append("thinking")
-        except Exception:
-            pass
-        return list(dict.fromkeys(supported_params))
+        return list(dict.fromkeys([*supported_params, "reasoning_effort", "thinking"]))
 
     def map_openai_params(
         self,
@@ -182,7 +173,7 @@ class OpenrouterConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -217,13 +208,17 @@ class OpenrouterConfig(OpenAIGPTConfig):
                 response_cost: Final = response_json["usage"].get("cost")
                 if response_cost is not None:
                     # Store cost in hidden params for the cost calculator to use
-                    if not hasattr(model_response, "_hidden_params"):
-                        model_response._hidden_params = {}
-                    if "additional_headers" not in model_response._hidden_params:
-                        model_response._hidden_params["additional_headers"] = {}
-                    model_response._hidden_params["additional_headers"]["llm_provider-x-litellm-response-cost"] = float(
-                        response_cost
+                    if not hasattr(model_response, HIDDEN_PARAMS_ATTR):
+                        set_hidden_params(model_response, {})
+                    hidden_params: Final = cast(  # cast-ok: preserve mapping operations on dynamic response metadata
+                        dict[str, object], getattr(model_response, HIDDEN_PARAMS_ATTR)
                     )
+                    if "additional_headers" not in hidden_params:
+                        hidden_params["additional_headers"] = {}
+                    additional_headers: Final = cast(  # cast-ok: preserve mapping operations on response metadata
+                        dict[str, object], hidden_params["additional_headers"]
+                    )
+                    additional_headers["llm_provider-x-litellm-response-cost"] = float(response_cost)
         except Exception:
             # If we can't extract cost, continue without it - don't fail the response
             pass

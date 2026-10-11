@@ -9,13 +9,15 @@ import json
 import uuid as uuid_lib
 from typing import Final, cast
 
-from pydantic import BaseModel
+import httpx
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.realtime.trigger_audio import ready_trigger_pcm
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     OpenAIRealtimeContentPartDone,
     OpenAIRealtimeDoneEvent,
@@ -43,25 +45,25 @@ from litellm.types.realtime import (
 )
 
 
-class BedrockContentEnd(BaseModel):
+class BedrockContentEnd(LiteLLMBaseModel):
     stopReason: str | None = None
 
 
-class BedrockUsageTokenDetails(BaseModel):
+class BedrockUsageTokenDetails(LiteLLMBaseModel):
     speechTokens: int = 0
     textTokens: int = 0
 
 
-class BedrockUsageDetailsTotal(BaseModel):
+class BedrockUsageDetailsTotal(LiteLLMBaseModel):
     input: BedrockUsageTokenDetails = BedrockUsageTokenDetails()
     output: BedrockUsageTokenDetails = BedrockUsageTokenDetails()
 
 
-class BedrockUsageDetails(BaseModel):
+class BedrockUsageDetails(LiteLLMBaseModel):
     total: BedrockUsageDetailsTotal = BedrockUsageDetailsTotal()
 
 
-class BedrockUsageEvent(BaseModel):
+class BedrockUsageEvent(LiteLLMBaseModel):
     totalInputTokens: int = 0
     totalOutputTokens: int = 0
     totalTokens: int = 0
@@ -116,10 +118,19 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         # so the USER/ASSISTANT split from contentStart is tracked here)
         self._user_transcript_active = False
         self._user_transcript_generation_stage: str | None = None
+        self._assistant_final_text_active = False
         self._user_item_id: str | None = None
         self._user_transcript_buffer = ""
         self._cumulative_usage = BedrockUsageEvent()
         self._reported_usage = BedrockUsageEvent()
+
+    def get_error_class(
+        self,
+        error_message: str,
+        status_code: int,
+        headers: dict[str, object] | httpx.Headers,  # mutable-ok: base passes response headers as a dict
+    ) -> BedrockError:
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)
 
     def validate_environment(self, headers: dict, model: str, api_key: str | None = None) -> dict:
         """Validate environment - no special validation needed for Bedrock."""
@@ -738,6 +749,20 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 None,
             )
 
+        generation_stage: Final = self._parse_generation_stage(content_start.get("additionalModelFields"))
+        if content_start.get("type") == "TEXT" and generation_stage == "FINAL":
+            verbose_logger.debug(
+                "Dropping FINAL ASSISTANT text block: the SPECULATIVE block already carried its sentences"
+            )
+            self._assistant_final_text_active = True
+            return (
+                [],
+                current_response_id,
+                current_output_item_id,
+                current_conversation_id,
+                None,
+            )
+
         verbose_logger.debug("Handling ASSISTANT contentStart")
         is_new_response: Final = current_response_id is None
 
@@ -877,7 +902,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 id=f"resp_{uuid.uuid4()}",
                 status="completed",
                 conversation_id=f"conv_{uuid.uuid4()}",
-                usage=dict(usage),  # mutable-ok: OpenAIRealtimeResponseDoneObject types usage as plain dict
+                usage=dict(usage),
             ),
         )
         return (leftover_done,)
@@ -933,6 +958,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         verbose_logger.debug("Handling textOutput")
         text_content: Final = event["textOutput"].get("content", "")
 
+        if self._assistant_final_text_active:
+            return [], current_delta_chunks
         if not current_output_item_id or not current_response_id:
             return [], current_delta_chunks
 
@@ -1012,6 +1039,9 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         content_end: Final = event["contentEnd"]
         verbose_logger.debug("Handling contentEnd: %s", content_end)
 
+        if self._assistant_final_text_active:
+            self._assistant_final_text_active = False
+            return [], current_delta_chunks
         if not current_output_item_id or not current_response_id:
             return [], current_delta_chunks
 

@@ -6,7 +6,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import ConfigDict, ValidationError
 
 from litellm.proxy.common_utils.semantic_text_index import (
     Embedder,
@@ -15,9 +15,11 @@ from litellm.proxy.common_utils.semantic_text_index import (
     router_embedder,
 )
 from litellm.types.agents import AgentResponse
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
 
 DEFAULT_AGENT_SEARCH_TOP_K: Final = 5
@@ -47,7 +49,7 @@ class AgentSearchEmbeddingFailed:
 AgentSearchOutcome: TypeAlias = AgentSearchHits | AgentSearchNotConfigured | AgentSearchEmbeddingFailed
 
 
-class _SearchableSkill(BaseModel):
+class _SearchableSkill(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     name: str = ""
@@ -55,14 +57,14 @@ class _SearchableSkill(BaseModel):
     tags: tuple[str, ...] = ()
 
 
-class _SearchableCard(BaseModel):
+class _SearchableCard(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     description: str = ""
     skills: tuple[_SearchableSkill, ...] = ()
 
 
-class AgentSearchResult(BaseModel):
+class AgentSearchResult(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True)
 
     agent_id: str
@@ -132,6 +134,7 @@ async def search_agents(
     embedding_model: str | None,
     index: AgentSearchIndex,
     user_api_key_dict: UserAPIKeyAuth,
+    proxy_logging_obj: ProxyLogging,
 ) -> AgentSearchOutcome:
     if embedding_model is None:
         return AgentSearchNotConfigured(
@@ -139,6 +142,5 @@ async def search_agents(
         )
     if router is None:
         return AgentSearchNotConfigured(reason="agent search needs a model_list so the embedding model can be called")
-    return await index.search(
-        query, agents, top_k, router_embedder(router, embedding_model, user_api_key_dict), embedding_model
-    )
+    embed: Final = router_embedder(router, embedding_model, user_api_key_dict, proxy_logging_obj)
+    return await index.search(query, agents, top_k, embed, embedding_model)
