@@ -138,7 +138,6 @@ class GuardMiddleware:
             from guard import PureASGISecurityMiddleware
 
             self._guard_asgi = PureASGISecurityMiddleware(self.app, config=_build_guard_config())
-            return True
         except ImportError as exc:
             self._guard_failed = True
             # Log loudly once; security misconfiguration must be visible.
