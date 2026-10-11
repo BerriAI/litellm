@@ -272,6 +272,7 @@ jobs:
               tests/unit/llms/gigachat
               tests/unit/llms/github_copilot
               tests/unit/llms/gradient_ai
+              tests/unit/llms/greenpt
               tests/unit/llms/groq
               tests/unit/llms/heroku
               tests/unit/llms/hosted_vllm
