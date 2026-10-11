@@ -126,14 +126,12 @@ class AnthropicCountTokensConfig:
         # path places it, so count_tokens never sends a role the API rejects (the
         # chat path's placement exists because the API answers 400 there). A
         # malformed ``system`` is the provider's to judge: nothing is rearranged.
-        if system is None or isinstance(system, (str, list)):
-            counted_messages = cast(  # cast-ok: placement returns the same provider message dicts it was given
+        placed_messages: Final = (
+            cast(  # cast-ok: placement returns the same provider message dicts it was given
                 tuple[Mapping[str, JsonValue], ...],
                 place_mid_conversation_system(
-                    cast(
-                        tuple[
-                            AllMessageValues, ...
-                        ],  # cast-ok: provider messages arrive as the typed chat message dicts
+                    cast(  # cast-ok: provider messages arrive as the typed chat message dicts
+                        tuple[AllMessageValues, ...],
                         counted_messages,
                     ),
                     supports_mid_conversation_system=supports_mid_conversation_system(
@@ -141,12 +139,15 @@ class AnthropicCountTokensConfig:
                     ),
                 ),
             )
+            if system is None or isinstance(system, (str, list))
+            else counted_messages
+        )
         return _COUNT_REQUEST.validate_python(
             MappingProxyType(
                 {
                     "model": model,
                     "messages": [
-                        {**message, "content": _count_content(message["content"])} for message in counted_messages
+                        {**message, "content": _count_content(message["content"])} for message in placed_messages
                     ],
                     **MappingProxyType(
                         {
