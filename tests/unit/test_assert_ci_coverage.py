@@ -461,3 +461,50 @@ def test_a_workflow_does_not_credit_a_file_it_never_names(
     assert not any(
         coverage._token_covers(token, "tests/local_testing/test_unrun.py") for token in named
     )
+
+
+def test_slice_audit_rechecks_changed_and_new_files_between_calls(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    workflows: Final = tmp_path / ".github/workflows"
+    workflows.mkdir(parents=True)
+    tests: Final = tmp_path / "tests/local_testing"
+    tests.mkdir(parents=True)
+    circle: Final = tmp_path / ".circleci/config.yml"
+    circle.parent.mkdir()
+    circle.write_text(
+        yaml.safe_dump(
+            {
+                "jobs": {
+                    selector: {
+                        "steps": [
+                            {
+                                "run": f'circleci tests glob "tests/local_testing/test_*.py" | xargs pytest -k "{selector}"'
+                            }
+                        ]
+                    }
+                    for selector in ("selected", "neighbor")
+                }
+            }
+        )
+    )
+    monkeypatch.setattr(coverage, "REPO_ROOT", tmp_path)
+    monkeypatch.setattr(coverage, "TESTS_ROOT", tmp_path / "tests")
+    monkeypatch.setattr(coverage, "WORKFLOW_DIR", workflows)
+    monkeypatch.setattr(coverage, "CIRCLECI_CONFIG", circle)
+    allowlist: Final = coverage.Allowlist((), ())
+    existing: Final = tests / "test_existing.py"
+    existing.write_text("def test_selected(): pass\n")
+    assert coverage._deselected_everywhere(allowlist) == ()
+
+    existing.write_text("def test_uncovered(): pass\n")
+    assert tuple(finding.subject for finding in coverage._deselected_everywhere(allowlist)) == (
+        "tests/local_testing/test_existing.py",
+    )
+
+    existing.write_text("def test_selected(): pass\n")
+    added: Final = tests / "test_added.py"
+    added.write_text("def test_uncovered(): pass\n")
+    assert tuple(finding.subject for finding in coverage._deselected_everywhere(allowlist)) == (
+        "tests/local_testing/test_added.py",
+    )

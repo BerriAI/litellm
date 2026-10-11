@@ -14,7 +14,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import PassThroughEndp
 
 
 @pytest.fixture(autouse=True)
-def local_model_cost_map(monkeypatch: pytest.MonkeyPatch):
+def local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
@@ -222,14 +222,17 @@ async def test_oss_gateway_accounts_for_checkpoint_usage_and_registered_cost(
         await budget_limiter.is_key_within_model_budget(auth, f"{provider}/{requested}")
 
 
-def test_openrouter_decisions_response_is_priced_from_request_model_registry_row():
+def test_openrouter_decisions_response_uses_provider_cost_without_cost_map_row(
+    monkeypatch: pytest.MonkeyPatch,
+):
     logging_obj = _logging_obj()
-    model_cost = litellm.model_cost["openrouter/typesafe/jev-1.13"]
+    cost: Final = 1.5834e-5
+    monkeypatch.delitem(litellm.model_cost, "openrouter/typesafe/jev-1.13", raising=False)
     response = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
         httpx_response=_response(),
         response_body={
             "model": "typesafe/jev-1.13-20260917",
-            "usage": {"input_tokens": 282, "output_tokens": 20},
+            "usage": {"input_tokens": 282, "output_tokens": 20, "cost": cost},
         },
         logging_obj=logging_obj,
         url_route="https://openrouter.ai/api/alpha/decisions",
@@ -241,10 +244,9 @@ def test_openrouter_decisions_response_is_priced_from_request_model_registry_row
         custom_llm_provider="openrouter",
     )
 
-    expected_cost = 282 * model_cost["input_cost_per_token"] + 20 * model_cost["output_cost_per_token"]
     assert response["kwargs"]["model"] == "openrouter/typesafe/jev-1.13-20260917"
     assert response["kwargs"]["custom_llm_provider"] == "openrouter"
-    assert response["kwargs"]["response_cost"] == pytest.approx(expected_cost)
+    assert response["kwargs"]["response_cost"] == cost
     assert response["kwargs"]["combined_usage_object"].prompt_tokens == 282
     assert response["kwargs"]["combined_usage_object"].completion_tokens == 20
     assert response["kwargs"]["combined_usage_object"].total_tokens == 302

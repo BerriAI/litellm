@@ -1,7 +1,5 @@
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { cn } from "@/lib/cva.config";
-import { ROOT_BLOCK_STYLES } from "./lib/rootBlocks";
 import type { PlaygroundQuestion, PlaygroundRequest } from "./lib/schemas";
 
 function formatState(state: unknown): string {
@@ -74,10 +72,7 @@ export default function QuestionBreakdown({ payload }: { payload?: PlaygroundReq
         <CardDescription>Review the state and criteria that will be sent.</CardDescription>
       </CardHeader>
       <CardContent className="grid gap-4 wrap-anywhere">
-        <section
-          aria-labelledby="system-one-state-heading"
-          className={cn("grid gap-2 border-l-2 pl-3", ROOT_BLOCK_STYLES.state.accent)}
-        >
+        <section aria-labelledby="system-one-state-heading" className="grid gap-2">
           <h3 id="system-one-state-heading" className="text-sm font-medium">
             State
           </h3>
@@ -85,7 +80,7 @@ export default function QuestionBreakdown({ payload }: { payload?: PlaygroundReq
             {formatState(payload.state)}
           </pre>
         </section>
-        <div className={cn("grid gap-3 border-l-2 pl-3", ROOT_BLOCK_STYLES.questions.accent)}>
+        <div className="grid gap-3">
           {Object.entries(payload.questions).map(([id, question]) => (
             <section key={id} className="grid gap-3 rounded-md border p-3" aria-labelledby={`question-${id}`}>
               <div className="flex flex-wrap items-center justify-between gap-2">

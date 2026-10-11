@@ -239,3 +239,35 @@ async def test_native_messages_stream_success_log_carries_usage_rebuilt_from_the
     assert usage.completion_tokens == MESSAGES_EVENTS[4][1]["usage"]["output_tokens"]
     assert usage.prompt_tokens == MESSAGES_RESPONSE["usage"]["input_tokens"]
     assert success[0].response.choices[0].message.content == "Hello from native Messages"
+
+
+@pytest.mark.asyncio
+async def test_native_messages_does_not_restore_keywords_deleted_by_a_pre_call_hook(
+    messages_server: RecordingServer,
+) -> None:
+    class DropKeywords(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: object
+        ) -> dict[str, object]:
+            return {name: value for name, value in kwargs.items() if name not in ("system", "extra_headers")}
+
+    call_arguments: Final = arguments(
+        messages_server,
+        system="remove this instruction",
+        extra_headers={"x-deleted": "remove this header"},
+        headers={"x-kept": "keep this header"},
+        stream=False,
+    )
+    with rebound(litellm, "callbacks", [DropKeywords()]):
+        await litellm.anthropic.messages.acreate(**call_arguments)
+
+    assert_served_natively(messages_server)
+    sent: Final = messages_server.requests[0]
+    assert sent.body == {
+        "model": MESSAGES_MODEL.removeprefix("anthropic/"),
+        "messages": call_arguments["messages"],
+        "max_tokens": call_arguments["max_tokens"],
+        "stream": call_arguments["stream"],
+    }
+    assert sent.headers.get("x-deleted") is None
+    assert sent.headers.get("x-kept") == "keep this header"
