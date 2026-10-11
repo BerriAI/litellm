@@ -321,11 +321,25 @@ class CustomStreamWrapper:
         the proxy bills a partial stream on client disconnect.
 
         Only reachable through ``close_stream()`` / the context manager. It is
-        deliberately not wired into ``__del__``: a finalizer runs at an
-        arbitrary point on an arbitrary thread, possibly during interpreter
-        shutdown or after the event loop it needs is gone, so submitting
-        logging from there is neither reliable nor testable. A caller that
-        abandons a stream has to say so.
+        deliberately not wired into either of the other two hooks this class
+        already had:
+
+        - ``__del__`` runs at an arbitrary point on an arbitrary thread,
+          possibly during interpreter shutdown or after the event loop it
+          needs is gone, so submitting logging from there is neither reliable
+          nor testable. It also races the success callbacks of a stream that is
+          still being drained.
+        - ``aclose()`` is litellm's own cleanup path. `Router` calls it on
+          fallback and shutdown paths (`hasattr(model_response, "aclose")`), so
+          treating it as "the consumer abandoned this stream" would assemble a
+          response and submit a success log on behalf of every internal
+          teardown. Measured cost: with the flush in ``aclose()`` the
+          ``tests/unit/test_router`` suite went from 150s to over 25 minutes,
+          because each one runs `stream_chunk_builder` (token counting)
+          synchronously.
+
+        So a caller that abandons a stream has to say so, through
+        ``close_stream()``.
         """
         if self._abandonment_logged or self.sent_last_chunk:
             return
@@ -469,9 +483,6 @@ class CustomStreamWrapper:
         self._restore_consumer_correlation_context(guarded=True)
 
     async def aclose(self):
-        # Emit the abandoned-stream log before closing the provider stream:
-        # the chunks collected so far are what this call actually served.
-        self._flush_abandoned_stream_logging()
         # Restore the consumer's outer context only after the underlying
         # provider stream's own close (and its diagnostic logging below, if
         # closing fails) completes - not before - so those log lines still
