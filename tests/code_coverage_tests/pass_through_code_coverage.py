@@ -30,11 +30,11 @@ def get_function_names_from_file(file_path):
 def get_all_functions_called_in_tests(base_dir):
     """
     Returns a set of function names that are called in test functions
-    inside tests/unit/proxy/pass_through_endpoints,
+    inside 'local_testing' and 'router_unit_test' directories,
     specifically in files containing the word 'router'.
     """
     called_functions = set()
-    test_dirs = ["unit/proxy/pass_through_endpoints"]
+    test_dirs = ["pass_through_unit_tests"]
 
     for test_dir in test_dirs:
         dir_path = os.path.join(base_dir, test_dir)
@@ -79,19 +79,6 @@ def get_functions_from_router(file_path):
 
 ignored_function_names = [
     "__init__",
-    "_cost_relevant_speed",
-    "_resolve_costing_model",
-    "_resolve_logged_model",
-    "_usage_only_response_or_none",
-    "_assemble_streaming_response",
-    "_build_streaming_response_for_logging",
-    "_cost_partial_stream_or_zero",
-    "_compute_response_cost",
-    "_extract_message_start_field",
-    "_extract_response_id_from_anthropic_chunks",
-    "_recover_interrupted_stream_output_tokens",
-    "_clear_placeholder_cost",
-    "get_actual_model_id_from_router",
 ]
 
 
