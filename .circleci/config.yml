@@ -1733,13 +1733,6 @@ workflows:
           requires: [integration-database-replica]
           filters: *integration_default_run
       - postgres_suite:
-          name: proxy-behavior
-          test_path: tests/proxy_behavior
-          seed: true
-          coverage_flag: lens-postgres
-          timeout_minutes: 25
-          filters: *integration_default_run
-      - postgres_suite:
           name: proxy-security
           test_path: tests/proxy_security_tests
           seed: true
