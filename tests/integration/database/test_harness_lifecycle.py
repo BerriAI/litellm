@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 from collections import Counter
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, ExitStack
 from pathlib import Path
@@ -54,6 +54,25 @@ class ExitRecord(TypedDict):
 Relay = DatabaseRelay | DroppedConnectionRelay | HeldStatementRelay
 RelayFactory = Callable[[str, bytes], AbstractContextManager[tuple[Relay, str]]]
 STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
+
+
+def _nested_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]:
+    inherited_run_settings: Final = frozenset(
+        (
+            "INTEGRATION_RESULTS_DIR",
+            "INTEGRATION_ROUTING",
+            "INTEGRATION_WORKER_ISOLATION",
+            "INTEGRATION_CASE_SHARDS",
+            "INTEGRATION_CASE_SHARD_INDEX",
+            "CIRCLE_NODE_TOTAL",
+            "CIRCLE_NODE_INDEX",
+            "PYTEST_XDIST_WORKER",
+            "PYTEST_XDIST_WORKER_COUNT",
+            "PYTEST_XDIST_TESTRUNUID",
+            "GITHUB_ACTIONS",
+        )
+    )
+    return {name: value for name, value in environment.items() if name not in inherited_run_settings}
 
 
 def test_owned_readiness_rejects_a_healthy_listener_from_another_process(
@@ -298,11 +317,7 @@ def test_seeded_collection_reuses_scoped_fixtures_and_executes_every_case(tmp_pa
             "--timeout=15",
             "-q",
         ),
-        env={
-            name: value
-            for name, value in os.environ.items()
-            if name not in ("INTEGRATION_RESULTS_DIR", "INTEGRATION_ROUTING")
-        },
+        env=_nested_pytest_environment(os.environ),
         capture_output=True,
         text=True,
         timeout=30,
@@ -397,17 +412,7 @@ def test_native_file_selection_reuses_fixtures_and_qualifies_an_empty_shard(
                 ),
                 cwd=root,
                 env={
-                    **{
-                        name: value
-                        for name, value in os.environ.items()
-                        if name
-                        not in (
-                            "INTEGRATION_RESULTS_DIR",
-                            "INTEGRATION_ROUTING",
-                            "GITHUB_ACTIONS",
-                            "PYTEST_XDIST_WORKER",
-                        )
-                    },
+                    **_nested_pytest_environment(os.environ),
                     "INTEGRATION_RESULTS_DIR": str(outputs[index]),
                     "PYTHONPATH": os.pathsep.join((str(root), str(root / "tests"), str(root / "tests/e2e"))),
                 },
@@ -503,11 +508,7 @@ def test_mixed_fixture_scopes_reuse_outer_and_inner_configurations(
                 str(probe.relative_to(root)),
             ),
             cwd=root,
-            env={
-                name: value
-                for name, value in os.environ.items()
-                if name not in ("PYTEST_XDIST_WORKER", "INTEGRATION_WORKER_ISOLATION", "INTEGRATION_ROUTING")
-            },
+            env=_nested_pytest_environment(os.environ),
             capture_output=True,
             text=True,
             timeout=60,
@@ -597,11 +598,15 @@ def test_direct_and_dependent_consumers_reuse_the_same_module_parameter(tmp_path
             str(probe.relative_to(root)),
         ),
         cwd=root,
-        env={
-            name: value
-            for name, value in os.environ.items()
-            if name not in ("PYTEST_XDIST_WORKER", "INTEGRATION_WORKER_ISOLATION", "INTEGRATION_ROUTING")
-        },
+        env=_nested_pytest_environment(
+            {
+                **os.environ,
+                "INTEGRATION_CASE_SHARDS": "2",
+                "INTEGRATION_CASE_SHARD_INDEX": "1",
+                "CIRCLE_NODE_TOTAL": "2",
+                "CIRCLE_NODE_INDEX": "1",
+            }
+        ),
         capture_output=True,
         text=True,
         timeout=60,
@@ -656,11 +661,7 @@ def test_worker_crash_keeps_the_original_junit_identity_and_an_incomplete_execut
             ),
             cwd=root,
             env={
-                **{
-                    name: value
-                    for name, value in os.environ.items()
-                    if name not in ("PYTEST_XDIST_WORKER", "INTEGRATION_WORKER_ISOLATION", "INTEGRATION_ROUTING")
-                },
+                **_nested_pytest_environment(os.environ),
                 "INTEGRATION_RESULTS_DIR": str(tmp_path),
             },
             capture_output=True,
@@ -710,11 +711,7 @@ def test_invalid_native_selections_fail_before_any_case_runs(
             ),
             cwd=root,
             env={
-                **{
-                    name: value
-                    for name, value in os.environ.items()
-                    if name not in ("INTEGRATION_RESULTS_DIR", "INTEGRATION_ROUTING", "GITHUB_ACTIONS")
-                },
+                **_nested_pytest_environment(os.environ),
                 "PYTHONPATH": os.pathsep.join((str(root), str(root / "tests"), str(root / "tests/e2e"))),
             },
             capture_output=True,
