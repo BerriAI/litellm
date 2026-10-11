@@ -40,3 +40,16 @@ Same isolated fake deployments and controlled local upstream as the main gate, o
 104-edit-deployment-after.png shows a saved deployment-backed router reopened in edit with the Decision model picker listing only decision deployments
 
 104-edit-legacy-before.png and 104-edit-legacy-after.png show a legacy direct Jev router in edit. The routing approach select moved under the LLM card on the candidate, and saving keeps the stored connection on both sides
+
+## Release 1.105 gate
+
+Baseline: fcbb02231b284ade286b47348efeb866f097c2df
+Candidate: 0a77b11c306823f55ef41f4c82ff685fba58b630
+
+Same isolated fake deployments and controlled local upstream as the earlier gates, on a separate database for this release line. Each capture carries a source label in the page corner. This line keeps the classifier_type jev and jev_classifier_config wire names
+
+105-before.png and 105-after.png show the Add Auto Router modal on the same data, with changed controls outlined in red
+
+105-edit-deployment-after.png shows a saved deployment-backed router reopened in edit with the Decision model picker listing only decision deployments
+
+105-edit-legacy-before.png and 105-edit-legacy-after.png show a legacy direct Jev router in edit, and saving keeps the stored connection on both sides
