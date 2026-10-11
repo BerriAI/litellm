@@ -4,7 +4,7 @@ from enum import Enum
 from os import PathLike
 from typing import IO, Any, Final, Generic, Literal, Optional, TypeAlias, Union
 
-import httpx
+import http
 from openai import Omit
 from openai._legacy_response import (
     HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
@@ -1671,6 +1671,7 @@ class ResponsePartAddedEvent(BaseLiteLLMOpenAIResponseObject):
     type: Literal[ResponsesAPIStreamEvents.RESPONSE_PART_ADDED]
     item_id: str
     output_index: int
+    sequence_number: int
     part: dict
     summary_index: int = 0
 
