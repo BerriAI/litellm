@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime, time, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Final
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
@@ -375,3 +375,71 @@ class TestGetBudgetWindowStart(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestMultiDayHourDurations(unittest.TestCase):
+    """Hour durations of a day or more must not collapse onto the next midnight.
+
+    The overnight branch used to wrap the next boundary hour mod 24 into the
+    following day, so "48h" reset at the next midnight (a <24h window) and
+    chained resets kept enforcing ~daily windows. Sub-day grids are unchanged:
+    for <24h values the carried boundary is wall-clock identical to the old wrap.
+    """
+
+    def test_48h_resets_two_days_from_midnight_not_next_midnight(self):
+        base = datetime(2023, 5, 15, 10, 30, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time("48h", base, "UTC"),
+            datetime(2023, 5, 17, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_72h_from_late_evening(self):
+        base = datetime(2023, 5, 15, 23, 30, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time("72h", base, "UTC"),
+            datetime(2023, 5, 18, 0, 0, tzinfo=timezone.utc),
+        )
+
+    def test_25h_carries_past_midnight(self):
+        base = datetime(2023, 5, 15, 10, 30, tzinfo=timezone.utc)
+        self.assertEqual(
+            get_next_standardized_reset_time("25h", base, "UTC"),
+            datetime(2023, 5, 16, 1, 0, tzinfo=timezone.utc),
+        )
+
+    def test_chained_48h_resets_stay_48_hours_apart(self):
+        first = get_next_standardized_reset_time("48h", datetime(2023, 5, 15, 10, 30, tzinfo=timezone.utc), "UTC")
+        second = get_next_standardized_reset_time("48h", first, "UTC")
+        self.assertEqual(second - first, timedelta(hours=48))
+
+    def test_window_start_matches_the_reset_schedule(self):
+        reset_at = get_next_standardized_reset_time("48h", datetime(2023, 5, 15, 10, 30, tzinfo=timezone.utc), "UTC")
+        self.assertEqual(get_budget_window_start("48h", reset_at), reset_at - timedelta(hours=48))
+
+    def test_multi_day_hours_respect_configured_timezone(self):
+        base = datetime(2023, 5, 15, 10, 30, tzinfo=timezone.utc)
+        reset_at = get_next_standardized_reset_time("48h", base, "Asia/Kolkata")
+        self.assertEqual((reset_at.utcoffset(),), (timedelta(hours=5, minutes=30),))
+        self.assertEqual((reset_at.hour, reset_at.minute), (0, 0))
+
+    def test_sub_day_hour_grids_unchanged(self):
+        # 5h at 20:30 crosses midnight onto 01:00, as before
+        self.assertEqual(
+            get_next_standardized_reset_time("5h", datetime(2023, 5, 15, 20, 30, tzinfo=timezone.utc), "UTC"),
+            datetime(2023, 5, 16, 1, 0, tzinfo=timezone.utc),
+        )
+        # 2h mid-afternoon
+        self.assertEqual(
+            get_next_standardized_reset_time("2h", datetime(2023, 5, 15, 15, 20, 30, tzinfo=timezone.utc), "UTC"),
+            datetime(2023, 5, 15, 16, 0, tzinfo=timezone.utc),
+        )
+        # 24h still lands on the next midnight
+        self.assertEqual(
+            get_next_standardized_reset_time("24h", datetime(2023, 5, 15, 10, 30, tzinfo=timezone.utc), "UTC"),
+            datetime(2023, 5, 16, 0, 0, tzinfo=timezone.utc),
+        )
+        # exact boundary rolls to the next grid point, as before
+        self.assertEqual(
+            get_next_standardized_reset_time("7h", datetime(2023, 5, 15, 14, 0, tzinfo=timezone.utc), "UTC"),
+            datetime(2023, 5, 15, 21, 0, tzinfo=timezone.utc),
+        )
