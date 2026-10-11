@@ -191,8 +191,36 @@ jobs:
       - name: Install the test client dependencies
         run: .github/scripts/uv_sync_with_retries.sh --frozen --no-install-workspace --extra proxy --group dev --python 3.12
 
-      - name: Build the image from the published package
-        run: docker build -t litellm-build-from-pip:smoke -f docker/build_from_pip/Dockerfile.build_from_pip .
+      - name: Cache Prisma binaries
+        timeout-minutes: 3
+        uses: ./.github/actions/cache-prisma-binaries
+
+      - name: Install the published proxy into its own venv
+        run: |
+          uv venv --python 3.13 /tmp/litellm-pip
+          uv pip install --python /tmp/litellm-pip/bin/python \
+            "litellm[proxy,proxy-runtime]==1.83.0" \
+            "google-cloud-aiplatform==1.133.0" \
+            "google-genai==1.37.0" \
+            "anthropic[vertex]==0.84.0" \
+            "grpcio==1.78.0" \
+            "prometheus-client==0.20.0" \
+            "langfuse==2.59.7" \
+            "opentelemetry-api==1.28.0" \
+            "opentelemetry-sdk==1.28.0" \
+            "opentelemetry-exporter-otlp==1.28.0" \
+            "ddtrace==4.11.0" \
+            "sentry-sdk==2.21.0" \
+            "mangum==0.17.0" \
+            "azure-ai-contentsafety==1.0.0" \
+            "azure-storage-file-datalake==12.20.0" \
+            "pypdf==6.7.5" \
+            "llm-sandbox==0.3.31" \
+            "detect-secrets==1.5.0" \
+            "prisma==0.11.0" \
+            "openai==2.24.0"
+          export PATH="/tmp/litellm-pip/bin:$PATH"
+          /tmp/litellm-pip/bin/prisma generate --schema=schema.prisma
 
       - name: Start the fake OpenAI endpoint
         run: |
@@ -210,23 +238,21 @@ jobs:
           echo "::add-mask::${key}"
           echo "LITELLM_MASTER_KEY=${key}" >> "${GITHUB_ENV}"
 
-      - name: Start the proxy container
+      - name: Start the published proxy
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/circle_test
+          LITELLM_LICENSE: bad-license
+          FAKE_OPENAI_API_BASE: http://localhost:8190
+          OTEL_EXPORTER: in_memory
+          USE_DDTRACE: "True"
+          DD_TRACE_OPENAI_ENABLED: "False"
+          GCS_FLUSH_INTERVAL: "1"
+          LITELLM_LOG: ERROR
         run: |
-          docker run -d \
-            -p 4000:4000 \
-            -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-            -e LITELLM_MASTER_KEY \
-            -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
-            -e OTEL_EXPORTER=in_memory \
-            -e USE_DDTRACE=True \
-            -e GCS_FLUSH_INTERVAL=1 \
-            -e LITELLM_LOG=ERROR \
-            --add-host host.docker.internal:host-gateway \
-            --name litellm-build-from-pip \
-            -v "${GITHUB_WORKSPACE}/docker/build_from_pip/litellm_config.yaml:/app/config.yaml" \
-            litellm-build-from-pip:smoke \
-            --config /app/config.yaml \
-            --port 4000
+          cd /tmp/litellm-pip
+          nohup /tmp/litellm-pip/bin/ddtrace-run /tmp/litellm-pip/bin/litellm \
+            --config "${GITHUB_WORKSPACE}/tests/basic_proxy_startup_tests/build_from_pip_config.yaml" \
+            --port 4000 > /tmp/litellm-pip.log 2>&1 &
           for _ in $(seq 1 150); do
             curl -sf --max-time 5 -o /dev/null http://localhost:4000 && exit 0
             sleep 2
@@ -238,7 +264,7 @@ jobs:
 
       - name: Show the proxy logs
         if: always()
-        run: docker logs litellm-build-from-pip || true
+        run: cat /tmp/litellm-pip.log || true
 
   smoke-passed:
     name: smoke passed
