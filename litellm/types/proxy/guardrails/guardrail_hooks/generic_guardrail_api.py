@@ -14,12 +14,6 @@ from litellm.types.utils import ChatCompletionMessageToolCall
 
 
 class GuardrailToolParam(LiteLLMBaseModel):
-    """A tool forwarded verbatim to the guardrail for inspection.
-
-    ``extra="allow"`` keeps provider-specific keys. ``type`` is optional for
-    provider-native tools such as Gemini ``{"googleSearch": {}}``.
-    """
-
     model_config = ConfigDict(extra="allow")
     type: str | None = None
 

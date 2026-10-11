@@ -2058,7 +2058,6 @@ class TestToolSupport:
     async def test_gemini_native_tools_without_type_do_not_crash(
         self, generic_guardrail
     ):
-        """Gemini-native tools without type are forwarded unchanged."""
         tools = [
             {"googleSearch": {}},
             {"codeExecution": {}},
