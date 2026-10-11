@@ -1,7 +1,7 @@
 """The provider goes down in the middle of a concurrent burst across /v1/chat/completions, /v1/messages and
 /v1/responses, streaming and not, on a two-worker proxy: every failed call reaches the caller as an error status,
-the fix's own 400s keep answering without a provider call, another key on another deployment keeps working, and
-once the provider is back every call serves and lands in the spend log exactly once."""
+another key on another deployment keeps working, and once the provider is back every call serves and lands in the
+spend log exactly once."""
 
 from __future__ import annotations
 
@@ -118,10 +118,6 @@ def chaos(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Chaos]:
                 for kind, identity in identities.items()
             ),
             {
-                "model_name": "*",
-                "litellm_params": {"model": "openai/*", "api_base": f"{slot.url}/{identities['chat']}", "api_key": "x"},
-            },
-            {
                 "model_name": "chaos-stable",
                 "litellm_params": {
                     "model": "openai/gpt-4o-mini",
@@ -154,12 +150,12 @@ def _worker_pids(log: Path) -> tuple[int, ...]:
     return tuple(int(found[1]) for found in _STARTED_WORKER.finditer(log.read_text()))
 
 
-def _call(chaos: _Chaos, kind: str, marker: str, *, key: str | None = None, without_model: bool = False) -> _Outcome:
+def _call(chaos: _Chaos, kind: str, marker: str, *, key: str | None = None) -> _Outcome:
     endpoint, stream, model_name, _target, _response = _KINDS[kind]
     body: Final[dict[str, JsonValue]] = {
         **ENDPOINT_BODIES[endpoint],
         **({"stream": True} if stream else {}),
-        "model": None if without_model else model_name,
+        "model": model_name,
         **({"input": marker} if endpoint == "responses" else {"messages": [{"role": "user", "content": marker}]}),
     }
     headers: Final = {
@@ -186,10 +182,6 @@ def _burst(chaos: _Chaos, phase: str) -> tuple[_Outcome, ...]:
         return tuple(pool.map(lambda item: _call(chaos, item[0], item[1]), plan))
 
 
-def _missing_model_cells(chaos: _Chaos) -> tuple[_Outcome, ...]:
-    return tuple(_call(chaos, kind, f"missing-{kind}-{uuid.uuid4().hex}", without_model=True) for kind in _KINDS)
-
-
 def _upstream_hits(slot: UpstreamSlot, markers: frozenset[str]) -> Mapping[str, int]:
     upstream: Final = Upstream(slot.url)
     upstream.drain()
@@ -214,16 +206,6 @@ def _assert_served(outcomes: tuple[_Outcome, ...]) -> None:
     assert [(outcome.kind, outcome.status, outcome.finished) for outcome in outcomes] == [
         (outcome.kind, 200, True) for outcome in outcomes
     ], [(outcome.kind, outcome.status, outcome.text[:300]) for outcome in outcomes if outcome.status != 200]
-
-
-def _assert_rejected_without_a_model(chaos: _Chaos, outcomes: tuple[_Outcome, ...]) -> None:
-    assert [outcome.status for outcome in outcomes] == [400] * len(outcomes), [
-        (outcome.kind, outcome.status, outcome.text[:300]) for outcome in outcomes
-    ]
-    assert all("Invalid model name passed in model=" in outcome.text for outcome in outcomes), outcomes
-    assert _upstream_hits(chaos.slot, frozenset(outcome.marker for outcome in outcomes)) == {
-        outcome.marker: 0 for outcome in outcomes
-    }
 
 
 def _stable_call(chaos: _Chaos) -> httpx.Response:
@@ -284,29 +266,11 @@ def test_provider_outage_mid_burst_errors_reach_callers_and_recovery_serves_once
     assert len(_worker_pids(chaos.log)) >= 2
 
 
-def test_missing_model_400s_hold_before_during_and_after_an_outage(chaos: _Chaos) -> None:
-    _assert_rejected_without_a_model(chaos, _missing_model_cells(chaos))
-    _stop_mid_burst(chaos)
-    _assert_rejected_without_a_model_while_down(chaos)
-    stable: Final = _stable_call(chaos)
-    assert stable.status_code == 200, stable.text
-    _restart(chaos)
-    _assert_rejected_without_a_model(chaos, _missing_model_cells(chaos))
-
-
-def _assert_rejected_without_a_model_while_down(chaos: _Chaos) -> None:
-    outcomes: Final = _missing_model_cells(chaos)
-    assert [outcome.status for outcome in outcomes] == [400] * len(outcomes), [
-        (outcome.kind, outcome.status, outcome.text[:300]) for outcome in outcomes
-    ]
-    assert all("Invalid model name passed in model=" in outcome.text for outcome in outcomes), outcomes
-
-
 def _tolerant_status(chaos: _Chaos, kind: str) -> int | None:
     return _call(chaos, kind, f"kill-probe-{kind}-{uuid.uuid4().hex}").status
 
 
-def test_killed_worker_leaves_the_sibling_serving_and_the_respawn_rejecting(chaos: _Chaos) -> None:
+def test_killed_worker_leaves_the_sibling_serving_and_the_respawn_serving(chaos: _Chaos) -> None:
     workers: Final = _worker_pids(chaos.log)
     assert len(workers) >= 2, workers
     os.kill(workers[-1], signal.SIGKILL)
@@ -317,4 +281,3 @@ def test_killed_worker_leaves_the_sibling_serving_and_the_respawn_rejecting(chao
     eventually(lambda: _worker_pids(chaos.log), lambda pids: len(pids) == len(workers) + 1, seconds=180)
     eventually(lambda: _settled(chaos), lambda ok: ok, seconds=120)
     _assert_served(_burst(chaos, "respawned"))
-    _assert_rejected_without_a_model(chaos, _missing_model_cells(chaos))

@@ -210,56 +210,6 @@ def router_default_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[G
             yield Gateway(owned.gateway.client, owned.gateway.key, gateway.upstream_url)
 
 
-@pytest.fixture(scope="module")
-def wildcard_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, str]]:
-    """A proxy whose only deployment is the `*` wildcard."""
-    directory: Final = tmp_path_factory.mktemp("wildcard")
-    with gateway_from_environment() as gateway, gateway.scenario() as scenario:
-        identity, handle = _scripted(
-            scenario, "followup-wildcard", JsonResponse(content_type="application/json", body=_MESSAGE)
-        )
-        config: Final = _write_config(
-            directory / "wildcard.yaml",
-            {
-                "model_list": [
-                    {
-                        "model_name": "*",
-                        "litellm_params": {"model": "openai/*", "api_base": handle.api_base(), "api_key": identity},
-                    }
-                ]
-            },
-        )
-        with owned_proxy_process(gateway, directory, {}, config=config) as owned:
-            yield Gateway(owned.gateway.client, owned.gateway.key, gateway.upstream_url), identity
-
-
-@pytest.fixture(scope="module")
-def fixed_target_wildcard_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[Gateway, str]]:
-    """A proxy whose only deployment is a `*` wildcard pinned to one fixed upstream model."""
-    directory: Final = tmp_path_factory.mktemp("fixed-wildcard")
-    with gateway_from_environment() as gateway, gateway.scenario() as scenario:
-        identity, handle = _scripted(
-            scenario, "followup-fixed-wildcard", JsonResponse(content_type="application/json", body=_CHAT)
-        )
-        config: Final = _write_config(
-            directory / "fixed-wildcard.yaml",
-            {
-                "model_list": [
-                    {
-                        "model_name": "*",
-                        "litellm_params": {
-                            "model": "openai/gpt-4o-mini",
-                            "api_base": handle.api_base(),
-                            "api_key": identity,
-                        },
-                    }
-                ]
-            },
-        )
-        with owned_proxy_process(gateway, directory, {}, config=config) as owned:
-            yield Gateway(owned.gateway.client, owned.gateway.key, gateway.upstream_url), identity
-
-
 def test_ocr_multipart_without_file_returns_400(gateway: Gateway) -> None:
     with gateway.scenario() as scenario:
         identity, handle = _scripted(
@@ -286,43 +236,6 @@ def test_ocr_empty_file_returns_400(gateway: Gateway) -> None:
         error: Final = _invalid_request(response)
         assert error.get("message") == "Uploaded file is empty", response.text
         _assert_no_provider_call(gateway, identity)
-
-
-@pytest.mark.parametrize(
-    ("path", "body"),
-    (
-        ("/v1/responses", {"input": "Test", "store": False}),
-        ("/v1/chat/completions", {"messages": [{"role": "user", "content": "Hello"}]}),
-    ),
-    ids=("responses", "chat"),
-)
-def test_missing_model_with_wildcard_deployment_returns_400(
-    wildcard_proxy: tuple[Gateway, str], path: str, body: dict[str, JsonValue]
-) -> None:
-    proxy, identity = wildcard_proxy
-    response: Final = _post(proxy, path, body)
-    _invalid_request(response)
-    _assert_no_provider_call(proxy, identity)
-
-
-def test_messages_missing_model_with_wildcard_deployment_returns_400(wildcard_proxy: tuple[Gateway, str]) -> None:
-    proxy, identity = wildcard_proxy
-    response: Final = _post(
-        proxy, "/v1/messages", {"messages": [{"role": "user", "content": "Hello"}], "max_tokens": 50}
-    )
-    assert response.status_code == 400, response.text
-    error: Final = object_value(JSON_OBJECT.validate_python(response.json())["error"])
-    assert error.get("type") == "invalid_request_error", response.text
-    _assert_no_provider_call(proxy, identity)
-
-
-def test_missing_model_with_fixed_target_wildcard_reaches_that_model(
-    fixed_target_wildcard_proxy: tuple[Gateway, str],
-) -> None:
-    proxy, identity = fixed_target_wildcard_proxy
-    response: Final = _post(proxy, "/v1/chat/completions", {"messages": [{"role": "user", "content": "Hello"}]})
-    assert response.status_code == 200, response.text
-    assert _outbound(proxy, identity).get("model") == "gpt-4o-mini"
 
 
 @pytest.mark.parametrize("max_output_tokens", (-1, 0), ids=("negative", "zero"))

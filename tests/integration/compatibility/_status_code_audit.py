@@ -65,12 +65,6 @@ MESSAGE: Final[dict[str, JsonValue]] = {
     "stop_sequence": None,
     "usage": {"input_tokens": 1, "output_tokens": 1},
 }
-EMBEDDING: Final[dict[str, JsonValue]] = {
-    "object": "list",
-    "data": [{"object": "embedding", "index": 0, "embedding": [0.1]}],
-    "model": "text-embedding-3-small",
-    "usage": {"prompt_tokens": 1, "total_tokens": 1},
-}
 MODERATION: Final[dict[str, JsonValue]] = {
     "id": "modr-$UNIQUE_ID",
     "model": "omni-moderation-latest",

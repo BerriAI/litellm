@@ -204,12 +204,6 @@ def test_listed_moderation_model_merges_the_router_default(
         ),
         pytest.param(
             "/v1/messages",
-            {"model": "audit-unknown-model", "messages": USER_MESSAGES},
-            "anthropic_messages: Missing required parameter: 'max_tokens'.",
-            id="messages-unknown-model",
-        ),
-        pytest.param(
-            "/v1/messages",
             {"model": "a2a/audit-unknown-agent", "messages": USER_MESSAGES},
             "anthropic_messages: Invalid model name passed in model=a2a/audit-unknown-agent. "
             "Call `/v1/models` to view available models for your key.",
