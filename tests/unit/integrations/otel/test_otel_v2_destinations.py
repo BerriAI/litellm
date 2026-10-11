@@ -5,19 +5,23 @@ import contextvars
 import time
 from base64 import b64encode
 from collections.abc import Mapping
+from dataclasses import replace
 from datetime import datetime, timezone
 from functools import reduce
 from types import MappingProxyType
+from typing import Final
 
 import pytest
+from opentelemetry import trace as trace_api
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
 from opentelemetry.trace import Status, StatusCode
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.otel import GenAIOperation
 from litellm.integrations.otel import logger as otel_logger
 from litellm.integrations.otel.logger import (
     OpenTelemetryV2,
@@ -25,13 +29,24 @@ from litellm.integrations.otel.logger import (
     fan_out_provider,
     publish_global_otel_v2_provider,
 )
+from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.model.config import (
+    CaptureMessageContent,
     ExporterOwner,
     ExporterSpec,
     OpenTelemetryV2Config,
     is_otel_v2_enabled,
 )
 from litellm.integrations.otel.model.destination import OtelDestination
+from litellm.integrations.otel.model.payloads import (
+    LLMCallSpanData,
+    LLMRequestParams,
+    LLMUsage,
+    MCPToolCallSpanData,
+    RequestIdentity,
+    ServerInfo,
+    ToolDefinition,
+)
 from litellm.integrations.otel.plumbing import providers as otel_providers
 from litellm.integrations.otel.plumbing.context import (
     destination_backends,
@@ -42,9 +57,11 @@ from litellm.integrations.otel.plumbing.providers import (
     TenantFanOutSpanProcessor,
     _OverriddenBackendFilter,
     _sink_key,
+    attach_tenant_fan_out,
     build_tracer_provider,
     deliverable_destinations,
     operator_sink_scopes,
+    register_exporter_factory,
 )
 from litellm.integrations.otel.plumbing.routing import TenantTracerCache, get_tracer
 from litellm.integrations.otel.presets.arize import arize_preset
@@ -53,7 +70,7 @@ from litellm.integrations.otel.presets.destinations import (
     destination_for,
 )
 from litellm.integrations.otel.presets.langfuse import langfuse_preset
-from litellm.proxy._types import AddTeamCallback, UserAPIKeyAuth
+from litellm.proxy._types import AddTeamCallback, TeamCallbackMetadata, UserAPIKeyAuth
 from litellm.proxy.litellm_pre_call_utils import (
     convert_key_logging_metadata_to_callback,
     resolve_tenant_otel_destinations,
@@ -1040,6 +1057,468 @@ class TestFanOut:
         in_fresh_context(run)
 
         assert len(built) == 1
+
+
+ARIZE_TEAM_PARAMS = {"arize_space_id": "space-team", "arize_api_key": "key-team"}
+
+
+def arize_destination(**rates: str) -> OtelDestination:
+    destination = destination_for("arize", {**ARIZE_TEAM_PARAMS, **rates})
+    assert destination is not None, "the fixture must resolve for the test to mean anything"
+    return destination
+
+
+class TestTenantSampling:
+    """A team's ``arize_success_sampling_rate`` and ``arize_error_sampling_rate`` decide how
+    much of its traffic the fan-out delivers to its space, the way they already decide what
+    the legacy Arize callback exports."""
+
+    NAMES = {"POST /v1/chat/completions", "auth /v1/chat/completions", "chat gpt-4"}
+
+    @staticmethod
+    def _fan_out(dest_exporter, draw=None, global_exporter=None):
+        provider = TracerProvider()
+        if global_exporter is not None:
+            provider.add_span_processor(_OverriddenBackendFilter(SimpleSpanProcessor(global_exporter), "arize"))
+        kwargs = {"processor_factory": lambda _d: SimpleSpanProcessor(dest_exporter)}
+        if draw is not None:
+            kwargs["sampling_draw"] = draw
+        provider.add_span_processor(TenantFanOutSpanProcessor(**kwargs))
+        return provider
+
+    @staticmethod
+    def _tree(provider, *, failed=False):
+        tracer = get_tracer(provider, "litellm")
+        with tracer.start_as_current_span("POST /v1/chat/completions"):
+            with tracer.start_as_current_span("auth /v1/chat/completions"):
+                pass
+            with tracer.start_as_current_span("chat gpt-4") as span:
+                if failed:
+                    span.set_status(Status(StatusCode.ERROR, "upstream 500"))
+
+    def _run(self, provider, destinations, *, failed=False, trees=1):
+        def run():
+            set_request_destinations(destinations)
+            for _ in range(trees):
+                self._tree(provider, failed=failed)
+
+        in_fresh_context(run)
+
+    def test_a_zero_rate_keeps_the_whole_tree_out_of_the_teams_space(self):
+        """The reported case: override mode, both rates 0.0, so the team's traffic goes nowhere."""
+        global_exporter, dest_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, global_exporter=global_exporter)
+
+        self._run(
+            provider,
+            (arize_destination(arize_success_sampling_rate="0.0", arize_error_sampling_rate="0.0"),),
+        )
+
+        assert dest_exporter.get_finished_spans() == ()
+        assert global_exporter.get_finished_spans() == ()
+
+    def test_a_rate_of_one_exports_the_whole_tree(self):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+
+        self._run(provider, (arize_destination(arize_success_sampling_rate="1.0"),))
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == self.NAMES
+
+    def test_an_unset_rate_exports_everything(self):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, draw=lambda: 0.99)
+
+        self._run(provider, (arize_destination(),))
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == self.NAMES
+
+    def test_a_failed_request_is_kept_whole_by_the_error_rate_when_the_success_rate_drops_the_rest(self):
+        """Mirrors the legacy callback, where a failed call answers to the error rate, at the
+        size of a request tree: the failed model call arrives with its parents."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+
+        self._run(
+            provider,
+            (arize_destination(arize_success_sampling_rate="0.0", arize_error_sampling_rate="1.0"),),
+            failed=True,
+        )
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == self.NAMES
+
+    def test_a_zero_error_rate_drops_the_whole_failed_request_the_success_rate_would_keep(self):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+
+        self._run(
+            provider,
+            (arize_destination(arize_success_sampling_rate="1.0", arize_error_sampling_rate="0.0"),),
+            failed=True,
+        )
+
+        assert dest_exporter.get_finished_spans() == ()
+
+    def test_a_model_call_that_fails_after_the_server_span_ended_answers_to_the_error_rate(self):
+        """The model-call span is closed in the post-call callback, after the FastAPI server
+        span has ended, so a request whose only failed span ends late is still a failed
+        request: it is kept by an error rate of 1.0 that a success rate of 0.0 would drop."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+        destinations = (arize_destination(arize_success_sampling_rate="0.0", arize_error_sampling_rate="1.0"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                call = tracer.start_span("chat gpt-4")
+            assert dest_exporter.get_finished_spans() == (), "undecided while the model call is open"
+            call.set_status(Status(StatusCode.ERROR, "upstream 500"))
+            call.end()
+
+        in_fresh_context(run)
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == {"POST /v1/chat/completions", "chat gpt-4"}
+
+    def test_the_span_that_fills_a_tree_to_its_bound_still_counts_as_failed(self):
+        """A tree decided early because it hit the per-tree cap answers to the error rate
+        when the span that tripped the cap is the one that failed."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+        destinations = (arize_destination(arize_success_sampling_rate="1.0", arize_error_sampling_rate="0.0"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                for index in range(otel_providers._MAX_PENDING_SPANS_PER_TREE - 1):
+                    with tracer.start_as_current_span(f"chat {index}"):
+                        pass
+                with tracer.start_as_current_span("chat gpt-4") as call:
+                    call.set_status(Status(StatusCode.ERROR, "upstream 500"))
+
+        in_fresh_context(run)
+
+        assert dest_exporter.get_finished_spans() == ()
+
+    def test_a_span_that_ends_after_the_root_follows_the_requests_verdict(self):
+        """A post-call database write that starts after the whole request tree has ended
+        goes where the rest of the tree went, without a second draw."""
+        kept_exporter, dropped_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        kept = self._fan_out(kept_exporter, draw=lambda: 0.1)
+        dropped = self._fan_out(dropped_exporter, draw=lambda: 0.9)
+        destinations = (arize_destination(arize_success_sampling_rate="0.5"),)
+
+        def late_tree(provider):
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions") as root:
+                root_context = trace_api.set_span_in_context(root)
+            with tracer.start_as_current_span("postgres INSERT LiteLLM_SpendLogs", context=root_context):
+                pass
+
+        for provider in (kept, dropped):
+
+            def run(provider=provider):
+                set_request_destinations(destinations)
+                late_tree(provider)
+
+            in_fresh_context(run)
+
+        assert {s.name for s in kept_exporter.get_finished_spans()} == {
+            "POST /v1/chat/completions",
+            "postgres INSERT LiteLLM_SpendLogs",
+        }
+        assert dropped_exporter.get_finished_spans() == ()
+
+    def test_a_late_span_whose_verdict_was_forgotten_is_decided_on_its_own_not_stranded(self):
+        """Once enough other requests have been decided to evict a request's verdict, a span
+        of it that starts late (a post-call database write) opens and closes its own count,
+        so it is decided on a draw of its own as soon as it ends instead of waiting in a tree
+        nothing would ever close."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, draw=lambda: 0.1)
+        destinations = (arize_destination(arize_success_sampling_rate="0.5"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions") as root:
+                root_context = trace_api.set_span_in_context(root)
+            for index in range(otel_providers._MAX_REMEMBERED_VERDICTS):
+                with tracer.start_as_current_span(f"POST {index}", context=trace_api.Context()):
+                    pass
+            with tracer.start_as_current_span("postgres INSERT LiteLLM_SpendLogs", context=root_context):
+                pass
+
+        in_fresh_context(run)
+
+        names = [s.name for s in dest_exporter.get_finished_spans()]
+        assert names[0] == "POST /v1/chat/completions"
+        assert names[-1] == "postgres INSERT LiteLLM_SpendLogs", "exported as it ended, not held for a root"
+
+    def test_a_callers_traceparent_neither_steers_the_draw_nor_hides_the_root(self):
+        """The draw is random, not read from the trace id a caller may have chosen, and the
+        server span under a remote parent still closes the tree."""
+        dest_exporter = InMemorySpanExporter()
+        draws = iter([0.9, 0.1])
+        provider = self._fan_out(dest_exporter, draw=lambda: next(draws))
+        destinations = (arize_destination(arize_success_sampling_rate="0.5"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            for trace_id in (1, 2):
+                remote = trace_api.SpanContext(
+                    trace_id=trace_id, span_id=1, is_remote=True, trace_flags=trace_api.TraceFlags(0x01)
+                )
+                parent = trace_api.set_span_in_context(trace_api.NonRecordingSpan(remote))
+                with tracer.start_as_current_span("POST /v1/chat/completions", context=parent):
+                    with tracer.start_as_current_span("chat gpt-4"):
+                        pass
+
+        in_fresh_context(run)
+
+        kept = dest_exporter.get_finished_spans()
+        assert [s.name for s in kept] == ["chat gpt-4", "POST /v1/chat/completions"]
+        assert all(s.context.trace_id == 2 for s in kept), "the second request, whose draw of 0.1 passed"
+
+    def test_a_root_that_never_ends_holds_the_tree_only_up_to_the_bound(self):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, draw=lambda: 0.0)
+        destinations = (arize_destination(arize_success_sampling_rate="0.5"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                for index in range(otel_providers._MAX_PENDING_SPANS_PER_TREE):
+                    with tracer.start_as_current_span(f"chat {index}"):
+                        pass
+                assert len(dest_exporter.get_finished_spans()) == otel_providers._MAX_PENDING_SPANS_PER_TREE
+
+        in_fresh_context(run)
+
+    def test_a_flood_of_waiting_trees_decides_the_oldest_on_what_it_has(self):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, draw=lambda: 0.0)
+        destinations = (arize_destination(arize_success_sampling_rate="0.5"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            for index in range(otel_providers._MAX_PENDING_TREES + 1):
+                root = tracer.start_span(f"POST {index}", context=trace_api.Context())
+                tracer.start_span(f"chat {index}", context=trace_api.set_span_in_context(root)).end()
+                if index < otel_providers._MAX_PENDING_TREES:
+                    assert dest_exporter.get_finished_spans() == (), f"tree {index} is held while its root is open"
+
+        in_fresh_context(run)
+
+        assert [s.name for s in dest_exporter.get_finished_spans()] == ["chat 0"]
+
+    def test_a_flood_of_open_traces_forgets_the_oldest_and_decides_it_as_its_spans_end(self):
+        """The fan-out counts open spans for a bounded number of traces, a bound far above
+        what one process keeps in flight, since every trace of the provider is counted, not
+        only the sampled ones. A trace pushed out of that count is decided on what it has as
+        its next span ends, root still open, rather than held until a bound gets to it."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, draw=lambda: 0.0)
+        destinations = (arize_destination(arize_success_sampling_rate="0.5"),)
+
+        def run():
+            set_request_destinations(destinations)
+            tracer = get_tracer(provider, "litellm")
+            root = tracer.start_span("POST /v1/chat/completions", context=trace_api.Context())
+            tracer.start_span("auth /v1/chat/completions", context=trace_api.set_span_in_context(root)).end()
+            for index in range(otel_providers._MAX_OPEN_TRACES):
+                tracer.start_span(f"POST {index}", context=trace_api.Context())
+            assert dest_exporter.get_finished_spans() == (), "still held before the count is forgotten"
+            tracer.start_span("chat gpt-4", context=trace_api.set_span_in_context(root)).end()
+            assert {s.name for s in dest_exporter.get_finished_spans()} == {
+                "auth /v1/chat/completions",
+                "chat gpt-4",
+            }
+            root.end()
+
+        in_fresh_context(run)
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == self.NAMES
+
+    def test_shutdown_decides_what_is_still_held(self):
+        dest_exporter = InMemorySpanExporter()
+        fan_out = TenantFanOutSpanProcessor(
+            processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter), sampling_draw=lambda: 0.0
+        )
+        provider = TracerProvider()
+        provider.add_span_processor(fan_out)
+
+        def run():
+            set_request_destinations((arize_destination(arize_success_sampling_rate="0.5"),))
+            tracer = get_tracer(provider, "litellm")
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                with tracer.start_as_current_span("chat gpt-4"):
+                    pass
+                assert dest_exporter.get_finished_spans() == ()
+                fan_out.shutdown()
+
+        in_fresh_context(run)
+
+        assert [s.name for s in dest_exporter.get_finished_spans()] == ["chat gpt-4"]
+
+    def test_a_span_that_ends_while_shutdown_flushes_is_decided_at_once_not_dropped(self):
+        """Shutdown decides the trees it finds, then closes. A sampled span of a trace it
+        did not find, ending while it flushes with its root still open, is decided on the
+        spot rather than held by a fan-out that will never forward again."""
+        dest_exporter = InMemorySpanExporter()
+        stragglers = []  # mutable-ok: the span the first export ends, mid-shutdown
+
+        class _EndsAStragglerOnExport(SimpleSpanProcessor):
+            def on_end(self, span):
+                for straggler in stragglers:
+                    if straggler.is_recording():
+                        straggler.end()
+                super().on_end(span)
+
+        fan_out = TenantFanOutSpanProcessor(
+            processor_factory=lambda _d: _EndsAStragglerOnExport(dest_exporter), sampling_draw=lambda: 0.0
+        )
+        provider = TracerProvider()
+        provider.add_span_processor(fan_out)
+
+        def run():
+            set_request_destinations((arize_destination(arize_success_sampling_rate="0.5"),))
+            tracer = get_tracer(provider, "litellm")
+            root = tracer.start_span("POST /v1/chat/completions", context=trace_api.Context())
+            tracer.start_span("chat gpt-4", context=trace_api.set_span_in_context(root)).end()
+            late_root = tracer.start_span("POST /v1/embeddings", context=trace_api.Context())
+            stragglers.append(tracer.start_span("embed ada", context=trace_api.set_span_in_context(late_root)))
+            fan_out.shutdown()
+
+        in_fresh_context(run)
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == {"chat gpt-4", "embed ada"}
+
+    def test_a_zero_rate_drops_even_a_draw_of_zero(self):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, draw=lambda: 0.0)
+
+        self._run(provider, (arize_destination(arize_success_sampling_rate="0.0"),))
+
+        assert dest_exporter.get_finished_spans() == ()
+
+    def test_the_draw_is_compared_to_the_rate_the_way_the_legacy_callback_compares_it(self):
+        dropped_exporter, kept_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        destinations = (arize_destination(arize_success_sampling_rate="0.2"),)
+
+        self._run(self._fan_out(dropped_exporter, draw=lambda: 0.3), destinations)
+        self._run(self._fan_out(kept_exporter, draw=lambda: 0.2), destinations)
+
+        assert dropped_exporter.get_finished_spans() == ()
+        assert {s.name for s in kept_exporter.get_finished_spans()} == self.NAMES
+
+    def test_a_trace_is_kept_or_dropped_whole(self):
+        """One decision per request tree, not one per span, so the team never sees a trace with
+        its root missing."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+
+        self._run(provider, (arize_destination(arize_success_sampling_rate="0.5"),), trees=64)
+
+        by_trace = {}
+        for span in dest_exporter.get_finished_spans():
+            by_trace.setdefault(span.context.trace_id, set()).add(span.name)
+        assert all(names == self.NAMES for names in by_trace.values())
+        assert 0 < len(by_trace) < 64
+
+    def test_in_additive_mode_the_operators_own_copy_is_not_sampled(self, monkeypatch):
+        """The rates are the team's setting for the team's space; the operator's backbone keeps
+        every span."""
+        monkeypatch.setattr(litellm, "otel_tenant_destination_mode", "additive", raising=False)
+        global_exporter, dest_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, global_exporter=global_exporter)
+
+        self._run(provider, (arize_destination(arize_success_sampling_rate="0.0"),))
+
+        assert dest_exporter.get_finished_spans() == ()
+        assert {s.name for s in global_exporter.get_finished_spans()} == self.NAMES
+
+    def test_a_rate_applies_only_to_the_destination_that_carries_it(self):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+
+        self._run(provider, (arize_destination(arize_success_sampling_rate="0.0"), LANGFUSE_DEST))
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == self.NAMES
+
+    def test_two_views_of_one_exporter_each_draw_at_their_own_rate(self):
+        """Two destinations to the same space with different rates share an exporter, not a
+        verdict: the 1.0 view gets the tree once and the 0.0 view adds nothing."""
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+
+        self._run(
+            provider,
+            (
+                arize_destination(arize_success_sampling_rate="1.0"),
+                arize_destination(arize_success_sampling_rate="0.0"),
+            ),
+        )
+
+        assert sorted(s.name for s in dest_exporter.get_finished_spans()) == sorted(self.NAMES)
+
+    def test_a_rate_does_not_split_the_teams_exporter(self):
+        """Sampling decides which spans reach the processor, not how it exports, so two views of
+        one account with different rates share one exporter."""
+        built = []
+
+        def factory(destination):
+            built.append(destination)
+            return SimpleSpanProcessor(InMemorySpanExporter())
+
+        provider = TracerProvider()
+        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=factory))
+
+        self._run(provider, (arize_destination(arize_success_sampling_rate="1.0"), arize_destination()))
+
+        assert len(built) == 1
+
+    @pytest.mark.parametrize("bad", ["abc", "-0.1", "1.5", "nan"])
+    def test_an_unusable_rate_exports_rather_than_dropping(self, bad):
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter, draw=lambda: 0.99)
+
+        self._run(provider, (arize_destination(arize_success_sampling_rate=bad),))
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == self.NAMES
+
+    def test_a_team_entry_with_rates_is_sampled_from_auth_to_the_fan_out(self, monkeypatch):
+        """The whole path the ticket names: the team's callback vars resolve at auth, and the
+        fan-out honours them."""
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        auth = UserAPIKeyAuth(
+            team_metadata={
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            **ARIZE_TEAM_PARAMS,
+                            "arize_success_sampling_rate": "0.0",
+                            "arize_error_sampling_rate": "0.0",
+                        },
+                    }
+                ]
+            }
+        )
+        destinations = resolve_tenant_otel_destinations(auth)
+        assert destinations, "the fixture must resolve to a destination for the test to mean anything"
+        dest_exporter = InMemorySpanExporter()
+        provider = self._fan_out(dest_exporter)
+
+        self._run(provider, destinations)
+
+        assert dest_exporter.get_finished_spans() == ()
 
 
 class TestProviderWiring:
@@ -2370,6 +2849,188 @@ class TestPresetDegradation:
         assert "http://collector.local:4318" in {spec.endpoint for spec in langtrace.config.exporters}
 
 
+def credential_less_arize(monkeypatch) -> None:
+    """An operator with no Arize account and no generic OTLP collector or headers."""
+    for name in (
+        "ARIZE_SPACE_ID",
+        "ARIZE_SPACE_KEY",
+        "ARIZE_API_KEY",
+        "ARIZE_ENDPOINT",
+        "ARIZE_HTTP_ENDPOINT",
+        "OTEL_EXPORTER_OTLP_TRACES_HEADERS",
+        *_OTEL_SHORTHAND_ENV,
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+
+ARIZE_DEST = OtelDestination(
+    endpoint="https://otlp.arize.com/v1",
+    headers={"arize-space-id": "space-team", "api_key": "key-team"},
+    callback_name="arize",
+    protocol="otlp_grpc",
+)
+
+
+class _ExporterCapture:
+    """Stands an in-memory exporter in for every exporter the provider builds, keyed
+    by the headers it would have sent (``None`` for the stdout placeholder), so a test
+    reads what each account received rather than which processors were wired."""
+
+    def __init__(self) -> None:
+        self.built: tuple[tuple[str | None, InMemorySpanExporter], ...] = ()
+
+    def build(self, spec: ExporterSpec) -> InMemorySpanExporter:
+        exporter: Final = InMemorySpanExporter()
+        self.built = (*self.built, (spec.headers, exporter))
+        return exporter
+
+    def received(self) -> Mapping[str | None, tuple[str, ...]]:
+        """Every span name each set of headers received; an exporter that got nothing is absent."""
+        return MappingProxyType(
+            {
+                headers: tuple(span.name for span in exporter.get_finished_spans())
+                for headers, exporter in self.built
+                if exporter.get_finished_spans()
+            }
+        )
+
+
+class TestArizeTenantOnly:
+    """An operator whose teams each bring their own Arize space keeps no Arize
+    credentials of their own; the preset then exports nowhere for traffic without a
+    team destination instead of posting it keyless to Arize."""
+
+    @staticmethod
+    def _capture_exporters(monkeypatch) -> "_ExporterCapture":
+        capture: Final = _ExporterCapture()
+        for kind in ("otlp_grpc", "otlp_http", "console"):
+            monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, kind, capture.build)
+        return capture
+
+    def test_a_credential_less_arize_exports_nowhere(self, monkeypatch):
+        credential_less_arize(monkeypatch)
+        capture = self._capture_exporters(monkeypatch)
+        config = arize_preset(allow_missing_credentials=True)
+        provider = build_tracer_provider(config, tenant_overrides=True)
+
+        emit(provider)
+        provider.force_flush()
+
+        assert capture.received() == {}, "not to Arize, and not to the stdout placeholder either"
+        assert "openinference" in config.mapper_names
+
+    def test_a_blank_otlp_headers_variable_is_no_credential_either(self, monkeypatch):
+        """``OTEL_EXPORTER_OTLP_TRACES_HEADERS=`` left empty in a compose file must not
+        turn into an Arize exporter that posts keyless."""
+        credential_less_arize(monkeypatch)
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", " ")
+        capture = self._capture_exporters(monkeypatch)
+        provider = build_tracer_provider(arize_preset(allow_missing_credentials=True), tenant_overrides=True)
+
+        emit(provider)
+        provider.force_flush()
+
+        assert capture.received() == {}, "a blank header string is no credential: nothing leaves"
+
+    def test_the_operators_own_credentials_still_reach_the_operators_space(self, monkeypatch):
+        credential_less_arize(monkeypatch)
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-operator")
+        monkeypatch.setenv("ARIZE_API_KEY", "key-operator")
+        capture = self._capture_exporters(monkeypatch)
+        provider = build_tracer_provider(arize_preset(allow_missing_credentials=True), tenant_overrides=True)
+
+        emit(provider)
+        provider.force_flush()
+
+        assert capture.received() == {
+            "space_id=space-operator,api_key=key-operator": ("chat gpt-4",),
+            None: ("chat gpt-4",),
+        }, "the operator's space, plus the stdout placeholder every credentialed preset keeps today"
+
+    def test_the_standard_otlp_headers_still_reach_the_operators_space(self, monkeypatch):
+        credential_less_arize(monkeypatch)
+        monkeypatch.setenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", "space_id=space-operator,api_key=key-operator")
+        capture = self._capture_exporters(monkeypatch)
+        provider = build_tracer_provider(arize_preset(allow_missing_credentials=True), tenant_overrides=True)
+
+        emit(provider)
+        provider.force_flush()
+
+        assert capture.received() == {
+            "space_id=space-operator,api_key=key-operator": ("chat gpt-4",),
+            None: ("chat gpt-4",),
+        }, "the operator's space, plus the stdout placeholder every credentialed preset keeps today"
+
+    def test_a_credential_less_arize_still_delivers_a_team_destination(self, monkeypatch):
+        from litellm.integrations.otel.plumbing.providers import attach_tenant_fan_out
+
+        credential_less_arize(monkeypatch)
+        capture = self._capture_exporters(monkeypatch)
+        config = arize_preset(allow_missing_credentials=True)
+        provider = build_tracer_provider(config, tenant_overrides=True)
+        attach_tenant_fan_out(provider, config)
+
+        def run():
+            set_request_destinations(deliverable_destinations((ARIZE_DEST,), provider))
+            emit(provider)
+
+        in_fresh_context(run)
+        provider.force_flush()
+
+        assert capture.received() == {ARIZE_DEST.header_string(): ("chat gpt-4",)}
+
+    def test_a_credential_less_proxy_builds_the_gated_arize_logger_beside_a_v2_carrier(self, monkeypatch):
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        credential_less_arize(monkeypatch)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        carrier = build_otel_v2_logger(OpenTelemetryV2Config(exporter="in_memory"))
+
+        def run():
+            set_request_destinations((ARIZE_DEST,))
+            return _maybe_construct_otel_v2("arize", [carrier])
+
+        is_otel_v2_enabled.cache_clear()
+        logger = in_fresh_context(run)
+        is_otel_v2_enabled.cache_clear()
+
+        assert logger is not None
+        assert all(spec.requires_headers and not spec.headers for spec in logger.config.exporters)
+
+    def test_a_credential_less_arize_stays_on_v2_at_startup_instead_of_the_keyless_legacy_logger(self, monkeypatch):
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        credential_less_arize(monkeypatch)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        capture = self._capture_exporters(monkeypatch)
+
+        is_otel_v2_enabled.cache_clear()
+        logger = in_fresh_context(_maybe_construct_otel_v2, "arize", [])
+        is_otel_v2_enabled.cache_clear()
+
+        assert isinstance(logger, OpenTelemetryV2), "None hands 'arize' to the legacy logger, which posts keyless"
+        emit(logger.tracer_provider)
+        logger.tracer_provider.force_flush()
+        assert capture.received() == {}, "no operator credentials: nothing leaves until a team destination exists"
+
+    def test_the_startup_logger_is_reused_by_later_requests_without_a_destination(self, monkeypatch):
+        """Every master-key request re-initialises the callback; building a fresh
+        provider each time would grow ``_in_memory_loggers`` for the life of the proxy."""
+        from litellm.litellm_core_utils.litellm_logging import _maybe_construct_otel_v2
+
+        credential_less_arize(monkeypatch)
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        loggers = []
+
+        is_otel_v2_enabled.cache_clear()
+        at_startup = in_fresh_context(_maybe_construct_otel_v2, "arize", loggers)
+        later = in_fresh_context(_maybe_construct_otel_v2, "arize", loggers)
+        is_otel_v2_enabled.cache_clear()
+
+        assert later is at_startup
+        assert loggers == [at_startup]
+
+
 class TestContextIsolation:
     def test_destinations_do_not_leak_between_requests(self):
         def first():
@@ -2433,6 +3094,126 @@ class TestBackendEndpointParity:
         destination = destination_for("weave_otel", {"wandb_api_key": "k", "weave_project_id": "e/p"})
 
         assert destination.endpoint == "https://trace.wandb.ai/otel/v1/traces"
+
+
+class TestArizeOtlpProtocol:
+    @staticmethod
+    def _arize(monkeypatch, endpoint_env, **env):
+        monkeypatch.delenv("ARIZE_ENDPOINT", raising=False)
+        monkeypatch.delenv("ARIZE_HTTP_ENDPOINT", raising=False)
+        for name, value in env.items():
+            monkeypatch.setenv(name, value)
+        return destination_for("arize", {"arize_space_id": "s", "arize_api_key": "k", **endpoint_env})
+
+    def test_http_transport_rewrites_the_grpc_endpoint_to_the_traces_path(self, monkeypatch):
+        destination = self._arize(
+            monkeypatch,
+            {"arize_otlp_protocol": "http/protobuf"},
+            ARIZE_ENDPOINT="https://arize.internal.example/v1",
+        )
+
+        assert destination.protocol == "otlp_http"
+        assert destination.endpoint == "https://arize.internal.example/v1/traces"
+
+    def test_http_transport_prefers_the_http_endpoint(self, monkeypatch):
+        destination = self._arize(
+            monkeypatch,
+            {"arize_otlp_protocol": "http/protobuf"},
+            ARIZE_ENDPOINT="https://arize.internal.example/v1",
+            ARIZE_HTTP_ENDPOINT="https://http.arize.internal.example/v1/traces",
+        )
+
+        assert destination.protocol == "otlp_http"
+        assert destination.endpoint == "https://http.arize.internal.example/v1/traces"
+
+    def test_http_transport_falls_back_to_the_arize_cloud_http_endpoint(self, monkeypatch):
+        destination = self._arize(monkeypatch, {"arize_otlp_protocol": "http/protobuf"})
+
+        assert destination.protocol == "otlp_http"
+        assert destination.endpoint == "https://otlp.arize.com/v1/traces"
+
+    def test_grpc_transport_accepts_the_http_endpoint_as_the_grpc_target(self, monkeypatch):
+        destination = self._arize(
+            monkeypatch,
+            {"arize_otlp_protocol": "grpc"},
+            ARIZE_HTTP_ENDPOINT="https://http.arize.internal.example/v1/traces",
+        )
+
+        assert destination.protocol == "otlp_grpc"
+        assert destination.endpoint == "https://http.arize.internal.example/v1/traces"
+
+    def test_no_transport_var_keeps_the_grpc_env_default(self, monkeypatch):
+        destination = self._arize(monkeypatch, {}, ARIZE_ENDPOINT="https://arize.internal.example")
+
+        assert destination.protocol == "otlp_grpc"
+        assert destination.endpoint == "https://arize.internal.example"
+
+    def test_the_http_destination_builds_an_http_exporter_on_the_traces_path(self, monkeypatch):
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import (
+            OTLPSpanExporter as HTTPSpanExporter,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        from litellm.integrations.otel.plumbing.providers import _destination_processor
+
+        destination = self._arize(
+            monkeypatch,
+            {"arize_otlp_protocol": "http/protobuf"},
+            ARIZE_ENDPOINT="https://arize.internal.example/v1",
+        )
+        processor = _destination_processor(destination)
+        try:
+            assert isinstance(processor, BatchSpanProcessor)
+            assert isinstance(processor.span_exporter, HTTPSpanExporter)
+            assert processor.span_exporter._endpoint == "https://arize.internal.example/v1/traces"
+        finally:
+            processor.shutdown()
+
+    def test_the_grpc_destination_builds_a_grpc_exporter(self, monkeypatch):
+        from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import (
+            OTLPSpanExporter as GRPCSpanExporter,
+        )
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+
+        from litellm.integrations.otel.plumbing.providers import _destination_processor
+
+        destination = self._arize(
+            monkeypatch,
+            {"arize_otlp_protocol": "grpc"},
+            ARIZE_ENDPOINT="https://arize.internal.example",
+        )
+        processor = _destination_processor(destination)
+        try:
+            assert isinstance(processor, BatchSpanProcessor)
+            assert isinstance(processor.span_exporter, GRPCSpanExporter)
+        finally:
+            processor.shutdown()
+
+    def test_a_team_metadata_protocol_reaches_the_destination(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setenv("ARIZE_ENDPOINT", "https://arize.internal.example/v1")
+        monkeypatch.delenv("ARIZE_HTTP_ENDPOINT", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        auth = UserAPIKeyAuth(
+            team_metadata={
+                "logging": [
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "arize_space_id": "s",
+                            "arize_api_key": "k",
+                            "arize_otlp_protocol": "http/protobuf",
+                        },
+                    }
+                ]
+            }
+        )
+
+        destinations = resolve_tenant_otel_destinations(auth)
+
+        assert [d.protocol for d in destinations] == ["otlp_http"]
+        assert destinations[0].endpoint == "https://arize.internal.example/v1/traces"
 
 
 class TestIncompleteCredentials:
@@ -3460,3 +4241,638 @@ class TestTenantHostSsrfGuard:
                 destination_for("langfuse_otel", self._langfuse("http://10.0.0.5:3000"))
 
         assert sum("provider_url_destination_allowed_hosts" in record.message for record in caplog.records) == 1
+
+
+_ALL_MAPPERS: Final = ("genai", "legacy", "openinference", "langfuse", "weave", "langtrace")
+_SECRET: Final = "SECRET-MARKER"
+_MODEL_CALL_WITH_CONTENT: Final = LLMCallSpanData(
+    operation=GenAIOperation.CHAT,
+    provider="openai",
+    request_model="gpt-4o",
+    response_model="gpt-4o-2024",
+    response_id="resp_1",
+    request_params=LLMRequestParams(temperature=0.5, max_tokens=128),
+    usage=LLMUsage(input_tokens=12, output_tokens=8, total_tokens=20),
+    finish_reasons=("tool_calls",),
+    error=None,
+    response_cost=0.001,
+    server=ServerInfo("api.openai.com", 443),
+    identity=RequestIdentity(call_id="c1", team_id="t1"),
+    tools=(ToolDefinition(name="lookup", description="Find a city", parameters_json='{"type":"object"}'),),
+    messages_in=(
+        {"role": "system", "content": f"system {_SECRET}"},
+        {"role": "user", "content": f"prompt {_SECRET}"},
+    ),
+    choices_out=(
+        {
+            "finish_reason": "tool_calls",
+            "message": {
+                "role": "assistant",
+                "content": f"answer {_SECRET}",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "lookup", "arguments": f'{{"city": "{_SECRET}"}}'},
+                    }
+                ],
+            },
+        },
+    ),
+)
+_MODEL_CALL_WITHOUT_CONTENT: Final = replace(_MODEL_CALL_WITH_CONTENT, messages_in=(), choices_out=())
+_TOOL_CALL_WITH_CONTENT: Final = MCPToolCallSpanData(
+    operation=GenAIOperation.EXECUTE_TOOL,
+    method="tools/call",
+    tool_name="lookup",
+    server_name="maps",
+    server_address="maps.local",
+    server_port=443,
+    session_id="s1",
+    arguments_json=f'{{"city": "{_SECRET}"}}',
+    result_json=f'{{"weather": "{_SECRET}"}}',
+    error=None,
+    response_cost=None,
+    identity=RequestIdentity(call_id="c2", team_id="t1"),
+)
+_TOOL_CALL_WITHOUT_CONTENT: Final = replace(_TOOL_CALL_WITH_CONTENT, arguments_json=None, result_json=None)
+
+NO_CONTENT_DEST = OtelDestination(
+    endpoint="http://team-a.local/api/public/otel",
+    headers=MappingProxyType({"Authorization": "Basic YQ=="}),
+    callback_name="langfuse_otel",
+    capture_message_content="no_content",
+)
+INHERITING_DEST = OtelDestination(
+    endpoint="http://team-b.local/v1",
+    headers=MappingProxyType({"api_key": "k", "arize-space-id": "s"}),
+    callback_name="arize",
+)
+
+
+def mapped(data: LLMCallSpanData | MCPToolCallSpanData) -> Mapping[str, object]:
+    """What the configured mappers write on the span, the way the logger stamps it."""
+    return MappingProxyType(reduce(lambda acc, mapper: {**acc, **mapper.map(data)}, resolve_mappers(_ALL_MAPPERS), {}))
+
+
+def recorded(attributes: Mapping[str, object]) -> dict[str, object]:
+    """``attributes`` the way the SDK records them, sequences frozen into tuples."""
+    return {key: tuple(value) if isinstance(value, list) else value for key, value in attributes.items()}
+
+
+def model_call_tree(provider: TracerProvider, attributes: Mapping[str, object]) -> None:
+    tracer: Final = get_tracer(provider, "litellm")
+    with tracer.start_as_current_span("POST /v1/chat/completions"):
+        with tracer.start_as_current_span("chat gpt-4o") as llm:
+            llm.set_attributes(attributes)
+            llm.add_event("gen_ai.content.first_chunk", {"gen_ai.response.model": "gpt-4o-2024"})
+
+
+def by_name(exporter: InMemorySpanExporter) -> dict[str, ReadableSpan]:
+    return {span.name: span for span in exporter.get_finished_spans()}
+
+
+def carries_content(span: ReadableSpan) -> bool:
+    return any(_SECRET in str(value) for value in span.attributes.values())
+
+
+class TestCaptureMessageContent:
+    """A destination's explicit capture mode overrides the global default."""
+
+    @staticmethod
+    def _fan_out(
+        operator: InMemorySpanExporter,
+        exporters: Mapping[str, InMemorySpanExporter],
+        default_capture: CaptureMessageContent = CaptureMessageContent.SPAN_ONLY,
+    ) -> TracerProvider:
+        provider: Final = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(operator))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda d: SimpleSpanProcessor(exporters[d.endpoint]),
+                default_capture=default_capture,
+            )
+        )
+        return provider
+
+    @staticmethod
+    def _run(
+        provider: TracerProvider, destinations: tuple[OtelDestination, ...], attributes: Mapping[str, object]
+    ) -> None:
+        def run() -> None:
+            set_request_destinations(destinations)
+            model_call_tree(provider, attributes)
+
+        in_fresh_context(run)
+
+    @pytest.mark.parametrize(
+        ("setting", "content_exported"),
+        [
+            (None, True),
+            ("no_content", False),
+            ("span_only", True),
+            ("event_only", False),
+            ("span_and_event", True),
+        ],
+    )
+    def test_a_destination_setting_controls_its_copy_and_omission_uses_the_global_default(
+        self, setting: str | None, content_exported: bool
+    ) -> None:
+        attributes: Final = mapped(_MODEL_CALL_WITH_CONTENT)
+        destination: Final = OtelDestination(
+            endpoint="http://team.local/api/public/otel",
+            headers=MappingProxyType({"Authorization": "Basic dA=="}),
+            callback_name="langfuse_otel",
+            capture_message_content=setting,
+        )
+        operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
+
+        self._run(self._fan_out(operator, {destination.endpoint: tenant}), (destination,), attributes)
+
+        exported: Final = by_name(tenant)["chat gpt-4o"]
+        assert carries_content(exported) is content_exported
+        assert carries_content(by_name(operator)["chat gpt-4o"])
+        assert exported.attributes["gen_ai.request.model"] == "gpt-4o"
+        assert exported.attributes["gen_ai.usage.input_tokens"] == 12
+        assert exported.attributes["gen_ai.usage.output_tokens"] == 8
+
+    def test_a_span_only_team_lifts_global_no_content_only_for_its_destination(self) -> None:
+        operator_exporter, team_exporter, sibling_exporter = (
+            InMemorySpanExporter(),
+            InMemorySpanExporter(),
+            InMemorySpanExporter(),
+        )
+        kind: Final = "lit8244_global_no_content_capture"
+        register_exporter_factory(kind, lambda _spec: operator_exporter)
+        config: Final = OpenTelemetryV2Config(
+            capture_message_content=CaptureMessageContent.NO_CONTENT,
+            exporters=[ExporterSpec(kind=kind)],
+        )
+        provider: Final = build_tracer_provider(config, use_simple_processor=True, tenant_overrides=True)
+        team: Final = OtelDestination(
+            endpoint="http://team.local/api/public/otel",
+            headers=MappingProxyType({"Authorization": "Basic dA=="}),
+            callback_name="langfuse_otel",
+            capture_message_content="span_only",
+        )
+        sibling: Final = INHERITING_DEST
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda destination: SimpleSpanProcessor(
+                    team_exporter if destination.endpoint == team.endpoint else sibling_exporter
+                ),
+                default_capture=config.capture_message_content,
+            )
+        )
+
+        self._run(
+            provider,
+            (team, sibling),
+            mapped(_MODEL_CALL_WITH_CONTENT),
+        )
+
+        assert carries_content(by_name(team_exporter)["chat gpt-4o"])
+        assert not any(carries_content(span) for span in operator_exporter.get_finished_spans())
+        assert not any(carries_content(span) for span in sibling_exporter.get_finished_spans())
+
+    @pytest.mark.parametrize(
+        ("with_content", "without_content"),
+        [
+            (_MODEL_CALL_WITH_CONTENT, _MODEL_CALL_WITHOUT_CONTENT),
+            (_TOOL_CALL_WITH_CONTENT, _TOOL_CALL_WITHOUT_CONTENT),
+        ],
+        ids=["model_call", "mcp_tool_call"],
+    )
+    def test_no_content_removes_exactly_what_global_capture_adds_in_every_mapper_vocabulary(
+        self,
+        with_content: LLMCallSpanData | MCPToolCallSpanData,
+        without_content: LLMCallSpanData | MCPToolCallSpanData,
+    ) -> None:
+        captured, uncaptured = mapped(with_content), mapped(without_content)
+        assert frozenset(captured) - frozenset(uncaptured), "the fixture must exercise captured content"
+        operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
+
+        self._run(self._fan_out(operator, {NO_CONTENT_DEST.endpoint: tenant}), (NO_CONTENT_DEST,), captured)
+
+        exported: Final = by_name(tenant)["chat gpt-4o"]
+        assert dict(exported.attributes) == recorded(uncaptured), "only content goes, every other attribute stays"
+        assert not carries_content(exported)
+
+    def test_restricting_one_destination_leaves_the_original_span_and_the_other_destination_alone(self) -> None:
+        attributes: Final = mapped(_MODEL_CALL_WITH_CONTENT)
+        operator, restricted, inheriting = InMemorySpanExporter(), InMemorySpanExporter(), InMemorySpanExporter()
+        exporters: Final = {NO_CONTENT_DEST.endpoint: restricted, INHERITING_DEST.endpoint: inheriting}
+
+        self._run(self._fan_out(operator, exporters), (NO_CONTENT_DEST, INHERITING_DEST), attributes)
+
+        original: Final = by_name(operator)
+        kept: Final = by_name(inheriting)
+        stripped: Final = by_name(restricted)
+        assert dict(original["chat gpt-4o"].attributes) == recorded(attributes)
+        assert dict(kept["chat gpt-4o"].attributes) == recorded(attributes)
+        assert not carries_content(stripped["chat gpt-4o"])
+        for copy in (kept, stripped):
+            for name, span in copy.items():
+                assert span.context == original[name].context, "same trace id and span id"
+                assert span.parent == original[name].parent, "same place in the tree"
+            assert [e.name for e in copy["chat gpt-4o"].events] == [e.name for e in original["chat gpt-4o"].events]
+
+    def test_an_omitted_setting_and_span_only_export_the_same_span(self) -> None:
+        attributes: Final = mapped(_MODEL_CALL_WITH_CONTENT)
+        span_only: Final = INHERITING_DEST.model_copy(
+            update={"capture_message_content": CaptureMessageContent.SPAN_ONLY}
+        )
+        omitted_exporter, span_only_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+
+        for destination, exporter in ((INHERITING_DEST, omitted_exporter), (span_only, span_only_exporter)):
+            self._run(
+                self._fan_out(InMemorySpanExporter(), {destination.endpoint: exporter}), (destination,), attributes
+            )
+
+        assert {n: dict(s.attributes) for n, s in by_name(omitted_exporter).items()} == {
+            n: dict(s.attributes) for n, s in by_name(span_only_exporter).items()
+        }
+
+    @pytest.mark.parametrize(
+        ("globally_captured", "setting", "content_exported"),
+        [
+            (True, "no_content", False),
+            (True, None, True),
+            (False, "span_only", True),
+            (False, None, False),
+        ],
+    )
+    def test_the_operators_exporter_on_the_same_account_honors_the_teams_setting_once(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        globally_captured: bool,
+        setting: str | None,
+        content_exported: bool,
+    ) -> None:
+        """The fan-out skips a destination the operator already writes to, so the operator's
+        copy is the one that account receives and must not bypass the team's restriction."""
+        monkeypatch.setattr(litellm, "otel_tenant_destination_mode", "additive", raising=False)
+        shared: Final = InMemorySpanExporter()
+        provider: Final = TracerProvider()
+        provider.add_span_processor(
+            _OverriddenBackendFilter(
+                SimpleSpanProcessor(shared),
+                "langfuse_otel",
+                "full",
+                TestRoutingMode.OPERATOR_SINK,
+                global_captures=globally_captured,
+            )
+        )
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda _d: SimpleSpanProcessor(shared),
+                operator_sinks=MappingProxyType({TestRoutingMode.OPERATOR_SINK: "full"}),
+            )
+        )
+        destination: Final = OtelDestination(
+            endpoint=TestRoutingMode.SAME_ACCOUNT_ENDPOINT,
+            headers=MappingProxyType({"Authorization": "Basic op"}),
+            callback_name="langfuse_otel",
+            capture_message_content=setting,
+        )
+
+        self._run(provider, (destination,), mapped(_MODEL_CALL_WITH_CONTENT))
+
+        model_calls: Final = [s for s in shared.get_finished_spans() if s.name == "chat gpt-4o"]
+        assert len(model_calls) == 1, "the same account received the span twice"
+        assert carries_content(model_calls[0]) is content_exported
+
+    @pytest.mark.parametrize("mode", ["override", "additive"])
+    def test_an_operator_collector_on_the_teams_account_does_not_bypass_no_content(
+        self, monkeypatch: pytest.MonkeyPatch, mode: str
+    ) -> None:
+        monkeypatch.setattr(litellm, "otel_tenant_destination_mode", mode, raising=False)
+        shared: Final = InMemorySpanExporter()
+        kind: Final = f"lit8244_collector_{mode}"
+        register_exporter_factory(kind, lambda _spec: shared)
+        config: Final = OpenTelemetryV2Config(
+            exporters=[
+                ExporterSpec(
+                    kind=kind,
+                    endpoint=TestRoutingMode.OPERATOR_SINK[0],
+                    headers="authorization=Basic op",
+                )
+            ]
+        )
+        provider: Final = build_tracer_provider(config, use_simple_processor=True, tenant_overrides=True)
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda _d: SimpleSpanProcessor(shared),
+                operator_sinks=operator_sink_scopes(config),
+            )
+        )
+        destination: Final = OtelDestination(
+            endpoint=TestRoutingMode.SAME_ACCOUNT_ENDPOINT,
+            headers=MappingProxyType({"Authorization": "Basic op"}),
+            callback_name="langfuse_otel",
+            capture_message_content="no_content",
+        )
+
+        self._run(provider, (destination,), mapped(_MODEL_CALL_WITH_CONTENT))
+
+        model_calls: Final = [s for s in shared.get_finished_spans() if s.name == "chat gpt-4o"]
+        assert model_calls, "the account must receive the model call before its content can be judged absent"
+        assert not any(carries_content(span) for span in model_calls)
+
+    @pytest.mark.parametrize(
+        ("global_capture", "content_exported"),
+        [(CaptureMessageContent.NO_CONTENT, False), (CaptureMessageContent.SPAN_ONLY, True)],
+    )
+    def test_a_routed_provider_exports_content_only_when_the_global_setting_captures(
+        self, global_capture: str, content_exported: bool
+    ) -> None:
+        """A sibling destination's span_only makes the logger collect content, and a request
+        routed to this callback's team credentials must not carry it under a global no_content."""
+        exporters: dict[ExporterOwner | None, InMemorySpanExporter] = {}
+        kind: Final = f"lit8244_routed_{global_capture}"
+        register_exporter_factory(kind, lambda spec: exporters.setdefault(spec.owner, InMemorySpanExporter()))
+        config: Final = OpenTelemetryV2Config(
+            capture_message_content=global_capture,
+            exporters=[
+                ExporterSpec(
+                    kind=kind,
+                    endpoint="http://op.local",
+                    owner=ExporterOwner.LANGFUSE_OTEL,
+                    use_simple_processor=True,
+                ),
+                ExporterSpec(kind=kind),
+            ],
+        )
+        cache: Final = TenantTracerCache(config, "langfuse_otel", "litellm")
+
+        route: Final = cache.route_for(
+            get_tracer(TracerProvider(), "litellm"),
+            {"langfuse_public_key": "pk-team", "langfuse_secret_key": "sk-team"},
+        )
+        with route.tracer.start_as_current_span("chat gpt-4o") as llm:
+            llm.set_attributes(mapped(_MODEL_CALL_WITH_CONTENT))
+        cache.release(route.provider)
+
+        assert route.detached is True
+        for exporter in (exporters[ExporterOwner.LANGFUSE_OTEL], exporters[None]):
+            copy = by_name(exporter)["chat gpt-4o"]
+            assert carries_content(copy) is content_exported
+            assert copy.attributes["gen_ai.usage.input_tokens"] == 12
+
+    @pytest.mark.parametrize("first", ["newrelic", "langfuse_otel"])
+    def test_an_omitted_setting_follows_its_own_callbacks_mode_whatever_the_callback_order(
+        self, monkeypatch: pytest.MonkeyPatch, first: str
+    ) -> None:
+        monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+        tenant: Final = InMemorySpanExporter()
+        monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, "otlp_http", lambda _spec: tenant)
+        langfuse: Final = OpenTelemetryV2Config(
+            capture_message_content=CaptureMessageContent.SPAN_ONLY,
+            exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.LANGFUSE_OTEL)],
+        )
+        newrelic: Final = OpenTelemetryV2Config(
+            capture_message_content=CaptureMessageContent.NO_CONTENT,
+            exporters=[ExporterSpec(kind="in_memory", owner=ExporterOwner.NEWRELIC)],
+        )
+        provider: Final = TracerProvider()
+        attach_tenant_fan_out(provider, *((newrelic, langfuse) if first == "newrelic" else (langfuse, newrelic)))
+        destination: Final = OtelDestination(
+            endpoint="http://team.local/api/public/otel",
+            headers=MappingProxyType({"Authorization": "Basic dA=="}),
+            callback_name="langfuse_otel",
+        )
+
+        self._run(provider, (destination,), mapped(_MODEL_CALL_WITH_CONTENT))
+        provider.force_flush()
+
+        assert carries_content(by_name(tenant)["chat gpt-4o"])
+
+    def test_an_omitted_setting_follows_the_capture_mode_set_in_callback_settings_otel(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+        tenant: Final = InMemorySpanExporter()
+        monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, "otlp_http", lambda _spec: tenant)
+        operator: Final = OpenTelemetryV2Config(**{"capture_message_content": "span_only", "exporter": "in_memory"})
+        provider: Final = TracerProvider()
+        attach_tenant_fan_out(provider, operator)
+        destination: Final = OtelDestination(
+            endpoint="http://team.local/api/public/otel",
+            headers=MappingProxyType({"Authorization": "Basic dA=="}),
+            callback_name="langfuse_otel",
+        )
+
+        self._run(provider, (destination,), mapped(_MODEL_CALL_WITH_CONTENT))
+        provider.force_flush()
+
+        assert carries_content(by_name(tenant)["chat gpt-4o"]), "the YAML value is the global default, not only the env"
+
+    def test_a_published_presets_capture_mode_is_the_default_for_an_unowned_destination(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A destination for a backend the proxy does not export to itself falls back to the published logger's mode,
+        here New Relic with record_content on, so it keeps the content."""
+        monkeypatch.delenv("OTEL_INSTRUMENTATION_GENAI_CAPTURE_MESSAGE_CONTENT", raising=False)
+        tenant: Final = InMemorySpanExporter()
+        monkeypatch.setitem(otel_providers._EXPORTER_FACTORIES, "otlp_http", lambda _spec: tenant)
+        newrelic: Final = OpenTelemetryV2Config(
+            capture_message_content=CaptureMessageContent.SPAN_ONLY,
+            exporters=[
+                ExporterSpec(kind="console"),
+                ExporterSpec(kind="in_memory", owner=ExporterOwner.NEWRELIC),
+            ],
+        )
+        provider: Final = TracerProvider()
+        attach_tenant_fan_out(provider, newrelic)
+        destination: Final = OtelDestination(
+            endpoint="http://team.local/api/public/otel",
+            headers=MappingProxyType({"Authorization": "Basic dA=="}),
+            callback_name="langfuse_otel",
+        )
+
+        self._run(provider, (destination,), mapped(_MODEL_CALL_WITH_CONTENT))
+        provider.force_flush()
+
+        assert carries_content(by_name(tenant)["chat gpt-4o"])
+
+    @pytest.mark.usefixtures("allow_test_hosts")
+    @pytest.mark.parametrize("setting", ["no_content", "span_only", None])
+    def test_the_setting_rides_the_teams_destination_and_omission_stays_omitted(
+        self, monkeypatch: pytest.MonkeyPatch, setting: str | None
+    ) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        callback_vars: Final = {
+            "langfuse_public_key": "pk-team",
+            "langfuse_secret_key": "sk-team",
+            "langfuse_host": "http://team.local",
+        }
+        if setting is not None:
+            callback_vars["capture_message_content"] = setting
+        auth: Final = UserAPIKeyAuth(
+            team_metadata={
+                "logging": [
+                    {"callback_name": "langfuse_otel", "callback_type": "success", "callback_vars": callback_vars},
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {"arize_api_key": "k", "arize_space_id": "s"},
+                    },
+                ]
+            }
+        )
+
+        destinations: Final = {d.callback_name: d for d in resolve_tenant_otel_destinations(auth)}
+
+        assert destinations["langfuse_otel"].capture_message_content == setting
+        assert destinations["arize"].capture_message_content is None, "the setting stays on its own callback"
+
+    @pytest.mark.usefixtures("allow_test_hosts")
+    @pytest.mark.parametrize("setting", ["event_only", "span_and_event"])
+    def test_a_stored_event_mode_is_skipped_like_any_invalid_entry(
+        self, monkeypatch: pytest.MonkeyPatch, setting: str
+    ) -> None:
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        auth: Final = UserAPIKeyAuth(
+            team_metadata={
+                "logging": [
+                    {
+                        "callback_name": "langfuse_otel",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "langfuse_public_key": "pk-team",
+                            "langfuse_secret_key": "sk-team",
+                            "langfuse_host": "http://team.local",
+                            "capture_message_content": setting,
+                        },
+                    },
+                    {
+                        "callback_name": "arize",
+                        "callback_type": "success",
+                        "callback_vars": {"arize_api_key": "k", "arize_space_id": "s"},
+                    },
+                ]
+            }
+        )
+
+        destinations: Final = [d.callback_name for d in resolve_tenant_otel_destinations(auth)]
+
+        assert destinations == ["arize"]
+
+    @pytest.mark.parametrize("value", ["full", "NO_CONTENT", "", "true", "event_only", "span_and_event"])
+    def test_an_unsupported_value_fails_registration(self, value: str) -> None:
+        with pytest.raises(
+            ValueError,
+            match=r"Invalid capture_message_content .*\['no_content', 'span_only'\]",
+        ):
+            AddTeamCallback(
+                callback_name="langfuse_otel",
+                callback_type="success",
+                callback_vars={
+                    "langfuse_public_key": "pk",
+                    "langfuse_secret_key": "sk",
+                    "capture_message_content": value,
+                },
+            )
+
+    @pytest.mark.parametrize("value", ["no_content", "span_only"])
+    def test_a_supported_value_is_stored_as_given(self, value: str) -> None:
+        saved: Final = AddTeamCallback(
+            callback_name="langfuse_otel",
+            callback_type="success",
+            callback_vars={"langfuse_public_key": "pk", "langfuse_secret_key": "sk", "capture_message_content": value},
+        )
+
+        assert saved.callback_vars["capture_message_content"] == value
+
+    def test_a_team_wide_callback_vars_map_cannot_carry_the_setting(self) -> None:
+        """The flattened map is shared by every callback, so a value there would apply to all of them."""
+        with pytest.raises(ValueError, match="Invalid callback variable: capture_message_content"):
+            TeamCallbackMetadata(
+                success_callback=["langfuse_otel", "signoz"], callback_vars={"capture_message_content": "span_only"}
+            )
+
+    def test_flattening_the_entries_leaves_the_setting_on_its_own_entry(self) -> None:
+        flattened: Final = convert_key_logging_metadata_to_callback(
+            AddTeamCallback(
+                callback_name="langfuse_otel",
+                callback_type="success",
+                callback_vars={"langfuse_public_key": "pk", "capture_message_content": "span_only"},
+            ),
+            None,
+        )
+
+        assert flattened.callback_vars == {"langfuse_public_key": "pk"}
+
+
+class TestArizeProjectRouting:
+    """Arize rejects an export that names no project (400: set x-project-name,
+    arize.project.name, openinference.project.name, or model_id), so an Arize
+    destination carries ``model_id`` the way the operator's own preset does."""
+
+    TEAM_PARAMS: Final = MappingProxyType({"arize_space_id": "space-team", "arize_api_key": "key-team"})
+
+    @pytest.fixture(autouse=True)
+    def _operator_arize(self, monkeypatch):
+        for name in ("ARIZE_SPACE_KEY", "ARIZE_ENDPOINT", "ARIZE_HTTP_ENDPOINT", "ARIZE_PROJECT_NAME"):
+            monkeypatch.delenv(name, raising=False)
+        monkeypatch.setenv("ARIZE_SPACE_ID", "space-operator")
+        monkeypatch.setenv("ARIZE_API_KEY", "key-operator")
+
+    @classmethod
+    def _team_destination(cls, service_name: str | None = None) -> OtelDestination:
+        destination: Final = destination_for("arize", dict(cls.TEAM_PARAMS), service_name=service_name)
+        assert destination is not None, "the team names a space and a key, so it must resolve"
+        return destination
+
+    def test_a_team_destination_lands_in_the_operators_arize_project(self, monkeypatch):
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "gateway-prod")
+
+        assert dict(self._team_destination().resource_attributes) == {"model_id": "gateway-prod"}
+
+    @classmethod
+    def _forwarded_projects(cls, resource: Resource | None = None) -> set[str]:
+        dest = InMemorySpanExporter()
+        provider = TracerProvider(resource=resource)
+        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=lambda _d: SimpleSpanProcessor(dest)))
+
+        def run():
+            set_request_destinations((cls._team_destination(),))
+            emit(provider)
+
+        in_fresh_context(run)
+        spans = dest.get_finished_spans()
+        assert spans, "the team destination must receive the request"
+        return {s.resource.attributes["model_id"] for s in spans}
+
+    def test_a_team_export_names_a_project_even_when_the_operator_set_none(self):
+        assert self._forwarded_projects() == {"litellm"}
+
+    def test_a_project_the_operators_own_resource_names_is_kept_for_the_team(self):
+        assert self._forwarded_projects(Resource({"model_id": "chosen"})) == {"chosen"}
+
+    def test_arize_project_name_wins_over_the_project_the_operators_resource_names(self, monkeypatch):
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "gateway-prod")
+
+        assert self._forwarded_projects(Resource({"model_id": "chosen"})) == {"gateway-prod"}
+
+    def test_the_teams_service_name_rides_beside_the_project(self, monkeypatch):
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "gateway-prod")
+
+        destination = self._team_destination(service_name="team-checkout")
+
+        assert dict(destination.resource_attributes) == {"service.name": "team-checkout", "model_id": "gateway-prod"}
+
+    def test_the_operators_exporter_names_a_project_even_without_arize_project_name(self):
+        assert arize_preset().resource_attributes["model_id"] == "litellm"
+
+    def test_the_operators_exporter_keeps_the_project_its_config_overrides_name(self):
+        chosen = OpenTelemetryV2Config(resource_attributes={"model_id": "chosen"})
+
+        assert arize_preset(config_overrides=chosen).resource_attributes["model_id"] == "chosen"
+
+    def test_every_span_forwarded_to_the_team_carries_the_project(self, monkeypatch):
+        monkeypatch.setenv("ARIZE_PROJECT_NAME", "gateway-prod")
+
+        assert self._forwarded_projects() == {"gateway-prod"}
