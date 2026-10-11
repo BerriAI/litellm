@@ -143,7 +143,6 @@ class GuardMiddleware:
             import guard  # pyright: ignore[reportMissingImports]  # optional dependency
 
             self._guard_asgi = guard.PureASGISecurityMiddleware(self.app, config=_build_guard_config())  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # guard ships no type information
-            return self._guard_asgi
         except ImportError as exc:
             self._guard_failed = True
             # Log loudly once; security misconfiguration must be visible.
@@ -154,6 +153,7 @@ class GuardMiddleware:
                 exc,
             )
             return None
+        return self._guard_asgi
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not guard_enabled():
