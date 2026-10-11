@@ -553,13 +553,15 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         (the safety classifier uses ``temperature=0``). Preserving the thinking the
         caller asked for wins over a sampling value the API would refuse, so drop it
         and let the API default apply. On a non-adaptive model a bare
-        ``output_config.effort`` (kept natively on Opus 4.5) also means thinking is on.
+        ``output_config.effort`` (kept natively on Opus 4.5) also means thinking is on,
+        unless the caller explicitly disabled thinking.
         """
         thinking: Final = optional_params.get("thinking")
         output_config: Final = optional_params.get("output_config")
         thinking_on: Final = isinstance(thinking, dict) and thinking.get("type") in ("enabled", "adaptive")
         effort_on: Final = (
-            isinstance(output_config, dict)
+            thinking != {"type": "disabled"}
+            and isinstance(output_config, dict)
             and output_config.get("effort") is not None
             and not AnthropicModelInfo.is_adaptive_thinking_model(model, custom_llm_provider)
         )

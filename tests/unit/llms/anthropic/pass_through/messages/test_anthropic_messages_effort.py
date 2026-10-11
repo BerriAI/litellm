@@ -255,6 +255,7 @@ def test_pinned_temperature_preserved_when_thinking_dropped():
         ({"temperature": 1}, {"temperature": 1}),
         ({"top_k": 5}, {}),
         ({"top_p": 0.5}, {}),
+        ({"top_p": 0.95}, {"top_p": 0.95}),
         ({"top_p": 0.97}, {"top_p": 0.97}),
         ({"temperature": 0, "top_k": 5, "top_p": 0.5}, {}),
     ],
@@ -296,6 +297,24 @@ def test_pinned_temperature_dropped_for_opus_4_5_effort():
 
     assert result["output_config"] == {"effort": "medium"}
     assert "temperature" not in result
+
+
+def test_explicitly_disabled_thinking_keeps_sampling_params_for_opus_4_5_effort():
+    """Effort alone counts as thinking on Opus 4.5, but not when the caller turned
+    thinking off, so their sampling values must pass through."""
+    result = _transform(
+        "claude-opus-4-5",
+        {
+            "max_tokens": 1024,
+            "thinking": {"type": "disabled"},
+            "output_config": {"effort": "medium"},
+            "temperature": 0,
+            "top_k": 5,
+            "top_p": 0.5,
+        },
+    )
+
+    assert (result["temperature"], result["top_k"], result["top_p"]) == (0, 5, 0.5)
 
 
 def test_reasoning_effort_with_pinned_temperature_drops_temperature():
