@@ -3,8 +3,7 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.rust_bridge.model_capabilities import anthropic_model_capabilities
-
+from litellm.rust_bridge.host.model_capabilities import anthropic_model_capabilities
 
 pytestmark = pytest.mark.usefixtures("local_model_cost_map")
 

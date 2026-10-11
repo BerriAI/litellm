@@ -6,7 +6,7 @@ import pytest
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
 from litellm.llms.custom_httpx.http_handler import default_user_agent
-from litellm.rust_bridge import settings
+from litellm.rust_bridge.host import settings
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem
 
