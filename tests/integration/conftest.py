@@ -19,7 +19,7 @@ from tests.integration._support.manifest import OWNED_DIRECTORIES
 from tests.integration._support.ordering import collected_case, fixture_groups
 from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
-from tests.integration.run import GITHUB_FILES
+from tests.integration.run import GITHUB_FILES, GITHUB_SHARED_FILES
 
 COLLECTED: Final = pytest.StashKey[tuple[str, ...]]()
 INVENTORY: Final = pytest.StashKey[tuple[str, ...]]()
@@ -128,7 +128,9 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         if item.path.is_relative_to(root) and item.path.relative_to(root).parts[0] in OWNED_DIRECTORIES
     )
     circleci_only: Final = tuple(
-        item for item in owned if item.path.relative_to(root.parents[1]).as_posix() not in GITHUB_FILES
+        item
+        for item in owned
+        if item.path.relative_to(root.parents[1]).as_posix() not in GITHUB_FILES | GITHUB_SHARED_FILES
     )
     if circleci_only and os.environ.get("GITHUB_ACTIONS") == "true":
         raise pytest.UsageError("Integration contracts are owned by CircleCI")
