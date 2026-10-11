@@ -1,7 +1,7 @@
 use litellm_auth::VertexParams;
 use litellm_auth_gcp::{VertexConfig, get_vertex_ai_project_from_credentials};
 use litellm_core_utils::settings::{Selected, SettingSource, select_non_blank};
-use litellm_llms_types::providers::vertex_ai::DEFAULT_LOCATION;
+use litellm_llms_types::providers::vertex_ai::{DEFAULT_LOCATION, GLOBAL_API_BASE};
 
 use super::common_utils::{get_vertex_base_url, invalid_location, validate_vertex_location};
 use crate::base_llm::{
@@ -107,13 +107,33 @@ impl VertexConnection {
         project: &str,
         resource: &[&str],
     ) -> Result<String, VertexConnectionError> {
+        self.resource_url_on(&self.api_base.value, project, resource)
+    }
+
+    /// [`Self::resource_url`] for a publisher model Vertex serves only from the global host,
+    /// whatever location the path names; a custom base still wins.
+    pub fn global_resource_url(
+        &self,
+        project: &str,
+        resource: &[&str],
+    ) -> Result<String, VertexConnectionError> {
+        let base = self.custom_api_base().unwrap_or(GLOBAL_API_BASE);
+        self.resource_url_on(base, project, resource)
+    }
+
+    fn resource_url_on(
+        &self,
+        base: &str,
+        project: &str,
+        resource: &[&str],
+    ) -> Result<String, VertexConnectionError> {
         validate_vertex_location(self.location())
             .map_err(|_| VertexConnectionError::InvalidLocation)?;
         let path = ["v1", "projects", project, "locations", self.location()]
             .into_iter()
             .chain(resource.iter().copied())
             .collect::<Vec<_>>();
-        Ok(complete_url(&self.api_base.value, &path)?)
+        Ok(complete_url(base, &path)?)
     }
 }
 
@@ -277,6 +297,52 @@ mod tests {
             )
             .unwrap_err(),
             expected
+        );
+    }
+
+    #[rstest]
+    #[case::regional_location_keeps_the_global_host(
+        None,
+        "us-central1",
+        "https://aiplatform.googleapis.com/v1/projects/p/locations/us-central1/endpoints/openapi"
+    )]
+    #[case::global_location(
+        None,
+        "global",
+        "https://aiplatform.googleapis.com/v1/projects/p/locations/global/endpoints/openapi"
+    )]
+    #[case::custom_base_wins(
+        Some("https://gateway.test/vertex"),
+        "us-central1",
+        "https://gateway.test/vertex/v1/projects/p/locations/us-central1/endpoints/openapi"
+    )]
+    fn global_only_models_use_the_global_host_with_the_resolved_location(
+        #[case] api_base: Option<&str>,
+        #[case] location: &str,
+        #[case] expected: &str,
+    ) {
+        let connection = VertexConnection::resolve(
+            explicit(Some("p"), Some(location)),
+            api_base,
+            &RuntimeDefaults::default(),
+            &env(&[]),
+        )
+        .unwrap();
+        assert_eq!(
+            connection
+                .global_resource_url("p", &["endpoints", "openapi"])
+                .unwrap(),
+            expected
+        );
+    }
+
+    #[test]
+    fn global_only_models_still_reject_an_invalid_location() {
+        let config = explicit(Some("p"), Some("evil.com#"));
+        assert_eq!(
+            VertexConnection::resolve(config, None, &RuntimeDefaults::default(), &env(&[]))
+                .unwrap_err(),
+            VertexConnectionError::InvalidLocation
         );
     }
 }

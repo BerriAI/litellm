@@ -134,7 +134,7 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         _params: &Self::OcrParams,
         environment: &Self::Environment,
     ) -> Result<String, Error> {
-        Ok(vertex_connection(request)?.resource_url(
+        Ok(vertex_connection(request)?.global_resource_url(
             &environment.project_id,
             &["endpoints", "openapi", "chat", "completions"],
         )?)
