@@ -109,12 +109,12 @@ def scrub_json_strings(value: JsonValue, scrub: Callable[[str], str], path: Json
         return scrub(value)
     if isinstance(value, dict):
         unscrubbed_keys: Final = SOURCE_CONTEXT_KEYS if path in STACK_FRAME_PATHS else frozenset[str]()
-        return {  # mutable-ok: JSON object
+        return {
             key: item if key in unscrubbed_keys else scrub_json_strings(item, scrub, (*path, key))
             for key, item in value.items()
         }
     if isinstance(value, list):
-        return [scrub_json_strings(item, scrub, (*path, "*")) for item in value]  # mutable-ok: JSON array
+        return [scrub_json_strings(item, scrub, (*path, "*")) for item in value]
     return value
 
 
@@ -141,8 +141,8 @@ def build_sentry_init_options(env: Mapping[str, str]) -> SentryInitOptions:
         sample_rate=float(env.get("SENTRY_API_SAMPLE_RATE") or "1.0"),
         send_default_pii=send_default_pii,
         event_scrubber=EventScrubber(
-            denylist=list(SECRET_FIELD_NAMES),  # mutable-ok: EventScrubber appends pii_denylist onto denylist in place
-            pii_denylist=list(PII_FIELD_NAMES),  # mutable-ok: EventScrubber takes List[str]
+            denylist=list(SECRET_FIELD_NAMES),
+            pii_denylist=list(PII_FIELD_NAMES),
             recursive=True,
             send_default_pii=send_default_pii,
         ),

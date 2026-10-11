@@ -4,25 +4,27 @@ import asyncio
 from collections.abc import Sequence
 from typing import Final
 
-from litellm.rust_bridge.lifecycle import Await, Complete, drive
+import pytest
+
+from litellm.rust_bridge.lifecycle import Await, Complete, Execution, Open, Step, drive
 
 
 class ScriptedExecution:
     """Plays scripted steps and records how it was resumed and whether it was closed."""
 
-    def __init__(self, steps: Sequence[Await | Complete]) -> None:
+    def __init__(self, steps: Sequence[Step]) -> None:
         self._steps: Final = list(steps)
         self.resumed: list[tuple[str, object]] = []
         self.closed = False
 
-    def start(self) -> Await | Complete:
+    def start(self) -> Step:
         return self._steps.pop(0)
 
-    def resume_value(self, value: object) -> Await | Complete:
+    def resume_value(self, value: object) -> Step:
         self.resumed.append(("value", value))
         return self._steps.pop(0)
 
-    def resume_error(self, error: BaseException) -> Await | Complete:
+    def resume_error(self, error: BaseException) -> Step:
         self.resumed.append(("error", type(error)))
         return self._steps.pop(0)
 
@@ -45,3 +47,28 @@ def test_drive_resumes_each_await_with_its_result_or_error_and_returns_the_compl
 
     assert execution.resumed == [("value", 1), ("error", ValueError)]
     assert execution.closed
+
+
+@pytest.mark.parametrize("factory_fails", (False, True))
+def test_stream_handoff_preserves_head_identity_and_closes_on_construction_failure(factory_fails: bool) -> None:
+    head: Final = object()
+    stream: Final = object()
+    execution: Final = ScriptedExecution([Open(head)])
+    failure: Final = ValueError("stream construction failed")
+
+    def construct(owner: Execution, received: object) -> object:
+        assert owner is execution
+        assert received is head
+        if factory_fails:
+            raise failure
+        return stream
+
+    if factory_fails:
+        with pytest.raises(ValueError, match="stream construction failed") as caught:
+            asyncio.run(drive(execution, construct))
+        assert caught.value is failure
+        assert execution.closed
+    else:
+        assert asyncio.run(drive(execution, construct)) is stream
+        assert not execution.closed
+        execution.close()

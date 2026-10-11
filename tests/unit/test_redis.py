@@ -1,6 +1,7 @@
 import inspect
 import json
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -1143,7 +1144,7 @@ def test_gcp_iam_credential_provider_get_credentials():
     service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
 
     with patch(
-        "litellm._redis_credential_provider._generate_gcp_iam_access_token",
+        "litellm._redis_credential_provider.generate_gcp_iam_access_token",
         return_value="tok-1",
     ) as mock_gen:
         provider = GCPIAMCredentialProvider(service_account)
@@ -1161,7 +1162,7 @@ def test_gcp_iam_credential_provider_caches_token():
     service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
 
     with patch(
-        "litellm._redis_credential_provider._generate_gcp_iam_access_token",
+        "litellm._redis_credential_provider.generate_gcp_iam_access_token",
         return_value="tok-cached",
     ) as mock_gen:
         provider = GCPIAMCredentialProvider(service_account)
@@ -1184,7 +1185,7 @@ def test_gcp_iam_credential_provider_refreshes_on_expiry():
     service_account = "projects/-/serviceAccounts/test@project.iam.gserviceaccount.com"
 
     with patch(
-        "litellm._redis_credential_provider._generate_gcp_iam_access_token",
+        "litellm._redis_credential_provider.generate_gcp_iam_access_token",
         side_effect=["tok-1", "tok-2"],
     ) as mock_gen:
         provider = GCPIAMCredentialProvider(service_account)
@@ -1210,7 +1211,7 @@ def test_gcp_iam_credential_provider_cache_shared_across_instances():
     service_account = "projects/-/serviceAccounts/shared@project.iam.gserviceaccount.com"
 
     with patch(
-        "litellm._redis_credential_provider._generate_gcp_iam_access_token",
+        "litellm._redis_credential_provider.generate_gcp_iam_access_token",
         return_value="tok-shared",
     ) as mock_gen:
         p1 = GCPIAMCredentialProvider(service_account)
@@ -1551,6 +1552,22 @@ def test_environment_redis_url_used_when_caller_names_no_target(mock_from_url, m
     get_redis_client()
 
     mock_from_url.assert_called_once()
+
+
+def test_redis_client_resolves_environment_override_before_creation(
+    monkeypatch: pytest.MonkeyPatch,
+    clean_redis_environment: None,
+    clear_llm_client_cache: None,
+) -> None:
+    monkeypatch.setenv("LITELLM_TEST_REDIS_PASSWORD", "resolved-redis-password")
+
+    client: Final = get_redis_client(
+        host="redis-host",
+        port=6379,
+        password="os.environ/LITELLM_TEST_REDIS_PASSWORD",
+    )
+
+    assert client.connection_pool.connection_kwargs["password"] == "resolved-redis-password"
 
 
 @pytest.mark.parametrize("falsy_ssl", [False, None, 0, ""])

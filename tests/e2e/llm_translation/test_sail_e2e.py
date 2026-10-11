@@ -13,9 +13,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final, Literal
 
-import openai
 import pytest
 from e2e_config import SLOW_PROVIDER_TIMEOUT_SECONDS, unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import LiteLLMParamsBody, SpendLogRow
 from openai import OpenAI
@@ -117,8 +117,17 @@ def _assert_spend_row_matches(proxy: ProxyClient, key: str, header_cost: float) 
 
 class TestSailChatCompletions:
     @pytest.mark.covers("llm.chat_completions.sail.service_tier.nonstream.cost_logged")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.SAIL,),
+            models=(BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     @pytest.mark.parametrize(
-        ("service_tier", "billed_tier"), [("flex", "flex"), ("balanced", "balanced"), ("auto", "base")]
+        ("service_tier", "billed_tier"), [("balanced", "balanced"), ("auto", "base")]
     )
     def test_service_tier_bills_the_matching_completion_window(
         self,
@@ -150,25 +159,52 @@ class TestSailChatCompletions:
         )
         _assert_spend_row_matches(proxy, key, header_cost)
 
-    @pytest.mark.covers("llm.chat_completions.sail.service_tier.nonstream.rejects_unknown_tier")
-    def test_unknown_service_tier_is_rejected(
-        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    @pytest.mark.covers("llm.chat_completions.sail.service_tier.nonstream.drops_unknown_tier_and_bills_asap")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.SAIL,),
+            models=(BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    @pytest.mark.parametrize("service_tier", ["bogus", 5])
+    def test_unknown_service_tier_is_dropped_and_billed_asap(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients, service_tier: str | int
     ) -> None:
         model, key = _register(proxy, resources)
 
-        with pytest.raises(openai.BadRequestError) as raised:
-            _ = _openai(sdk, key).chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": PROMPT}],
-                max_completion_tokens=MAX_TOKENS,
-                extra_body={**NO_PROXY_CACHE, "service_tier": "bogus"},
-            )
-        assert "service_tier" in raised.value.message, f"400 does not name service_tier: {raised.value.message}"
+        raw: Final = _openai(sdk, key).chat.completions.with_raw_response.create(
+            model=model,
+            messages=[{"role": "user", "content": f"{PROMPT} {unique_marker()}"}],
+            max_completion_tokens=MAX_TOKENS,
+            extra_body={**NO_PROXY_CACHE, "service_tier": service_tier, "drop_params": True},
+        )
+        usage: Final = raw.parse().usage
+        assert usage is not None, "chat response carries no usage"
+        details: Final = usage.prompt_tokens_details
+        tokens: Final = _Tokens(
+            prompt=usage.prompt_tokens,
+            cached=(details.cached_tokens or 0) if details else 0,
+            completion=usage.completion_tokens,
+        )
+        header_cost: Final = _assert_billed_at("base", tokens, response_header(raw.headers, "x-litellm-response-cost"))
+        _assert_spend_row_matches(proxy, key, header_cost)
 
 
 class TestSailResponses:
     @pytest.mark.covers("llm.responses.sail.service_tier.nonstream.cost_logged")
-    def test_flex_completion_window_bills_flex_rates(
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.RESPONSES,
+            providers=(Provider.SAIL,),
+            models=(BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_caller_completion_window_bills_its_rates(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
         model, key = _register(proxy, resources)
@@ -177,7 +213,7 @@ class TestSailResponses:
             model=model,
             input=f"{PROMPT} {unique_marker()}",
             max_output_tokens=MAX_TOKENS,
-            metadata={"completion_window": "flex"},
+            metadata={"completion_window": "balanced"},
             extra_body=NO_PROXY_CACHE,
         )
         usage: Final = raw.parse().usage
@@ -188,12 +224,23 @@ class TestSailResponses:
             completion=usage.output_tokens,
         )
 
-        header_cost: Final = _assert_billed_at("flex", tokens, response_header(raw.headers, "x-litellm-response-cost"))
+        header_cost: Final = _assert_billed_at(
+            "balanced", tokens, response_header(raw.headers, "x-litellm-response-cost")
+        )
         _assert_spend_row_matches(proxy, key, header_cost)
 
 
 class TestSailMessages:
     @pytest.mark.covers("llm.messages.sail.basic.nonstream.works")
+    @meta(
+        Subject(
+            domain=Domain.LLM_TRANSLATION,
+            route=Route.MESSAGES,
+            providers=(Provider.SAIL,),
+            models=(BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_plain_call_returns_a_message(
         self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
     ) -> None:
