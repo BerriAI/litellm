@@ -71,7 +71,7 @@ async def test_mapped_caller_bearer_reaches_agent_evaluation(
         "headers": [] if verdict == "missing" else [(b"authorization", f"Bearer {bearer}".encode())],
     })
     auth: Final = UserAPIKeyAuth(
-        api_key="stored-key-hash", user_id="mapped-caller",
+        api_key="stored-key-hash", user_id="mapped-caller", jwt_claims={"sub": "mapped-caller"},
         object_permission={"object_permission_id": "mapped", "mcp_servers": ["guarded"], "mcp_tool_search_enabled": mode == "virtual"},
     )
     oauth, raw, _, _ = MCPRequestHandler.scrub_gateway_admission_credentials(
@@ -1552,3 +1552,41 @@ def test_discovery_extra_headers_exclude_gateway_admission_key(header_name: str)
     assert auth_header is None
     assert extra_headers == {"X-Tenant": "tenant-control"}
     assert raw_headers == {"x-litellm-api-key": caller_key, "x-tenant": "tenant-control"}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_kind", ["absent", "non_starlette", "without_bearer", "admission_key"])
+async def test_guardrail_context_never_recovers_a_previous_request_bearer(
+    _mcp_request_ctx: Callable[..., ServerRequestContext], request_kind: str, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mcp.server.auth.middleware.auth_context import auth_context_var
+    from starlette.requests import Request
+    from litellm.proxy._experimental.mcp_server import server as gateway
+
+    request: Final = (
+        None if request_kind == "absent" else object() if request_kind == "non_starlette" else Request({
+            "type": "http", "method": "POST", "path": "/mcp",
+            "headers": [(b"authorization", b"Bearer sk-current-key")] if request_kind == "admission_key" else [],
+        })
+    )
+    previous: Final = auth_context_var.set(None)
+    try:
+        gateway.set_auth_context(
+            UserAPIKeyAuth(api_key="sk-current-key"),
+            raw_headers={"authorization": "Bearer previous.caller.assertion"},
+        )
+        capture: Final = _CatalogHookCapture()
+        monkeypatch.setattr(litellm, "callbacks", [capture])
+        async with gateway._legacy_operation_context(_mcp_request_ctx(request=request), trace=False) as context:
+            await operations.global_mcp_server_manager.pre_call_tool_check(
+                name="echo", arguments={}, server_name="guarded",
+                user_api_key_auth=context.user_api_key_auth,
+                proxy_logging_obj=ProxyLogging(user_api_key_cache=UserApiKeyCache()),
+                server=MCPServer(server_id="guarded", name="guarded", transport=MCPTransport.http, allow_all_keys=True),
+                raw_headers=dict(context.raw_headers or {}),
+                incoming_bearer_token=context.incoming_bearer_token,
+            )
+        assert capture.data is not None
+        assert capture.data["incoming_bearer_token"] is None
+    finally:
+        auth_context_var.reset(previous)
