@@ -785,6 +785,7 @@ from litellm.proxy.middleware.per_request_root_path_middleware import (
 from litellm.proxy.middleware.prometheus_auth_middleware import PrometheusAuthMiddleware
 from litellm.proxy.middleware.request_size_limit_middleware import (
     RequestSizeLimitMiddleware,
+    is_request_size_limit_enabled,
 )
 from litellm.proxy.middleware.security_headers_middleware import (
     SecurityHeadersMiddleware,
@@ -20225,7 +20226,7 @@ app.router.routes = hot_routes_first(app.router.routes)
 app.add_middleware(
     RequestSizeLimitMiddleware,
     get_max_request_size_mb=lambda: general_settings.get("max_request_size_mb"),
-    is_request_size_limit_enabled=lambda: premium_user is True,
+    is_request_size_limit_enabled=lambda: is_request_size_limit_enabled(general_settings_view()),
 )
 app.add_middleware(
     AdmissionControlMiddleware,
