@@ -593,6 +593,25 @@ describe("SystemOneUI integration", () => {
     expect(screen.queryByRole("region", { name: "Decisions results" })).not.toBeInTheDocument();
   });
 
+  it("ties each setup label to its control, numbers question cards and keeps the actions in the editor footer", () => {
+    render(<SystemOneUI accessToken="session-key" />);
+
+    expect(screen.getByText("Endpoint")).toHaveAttribute("for", screen.getByLabelText("Decision endpoint").id);
+    expect(screen.getByText("Model")).toHaveAttribute("for", screen.getByLabelText("Decision model").id);
+    expect(screen.getByText("API key")).toHaveAttribute("for", screen.getByLabelText("Virtual Key Source").id);
+
+    const question = screen.getByRole("group", { name: "Question area" });
+    expect(within(question).getByText("Question 1")).toBeInTheDocument();
+    expect(within(question).getByText("Name")).toBeInTheDocument();
+    expect(within(question).getByText("Answer type")).toBeInTheDocument();
+
+    const status = screen.getByText("Ready to send");
+    const clear = screen.getByRole("button", { name: "Clear" });
+    const send = screen.getByRole("button", { name: "Send" });
+    expect(status.compareDocumentPosition(clear) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(clear.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("sends to /v1/systemone even without discovered models and renders calibrated answers", async () => {
     const user = userEvent.setup();
     sessionStorage.setItem("customProxyBaseUrl", "https://stale.example.com/");

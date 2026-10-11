@@ -38,10 +38,12 @@ interface SystemOneSendVariables {
 
 const CUSTOM_PRESET = "custom";
 
-function SetupField({ label, children }: { label: string; children: ReactNode }) {
+function SetupField({ label, htmlFor, children }: { label: string; htmlFor: string; children: ReactNode }) {
   return (
     <div className="grid min-w-0 content-start gap-1.5">
-      <span className="text-xs font-medium text-muted-foreground">{label}</span>
+      <label htmlFor={htmlFor} className="text-xs font-medium text-muted-foreground">
+        {label}
+      </label>
       {children}
     </div>
   );
@@ -177,7 +179,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
       >
         <section className="flex min-h-96 flex-col gap-4 xl:min-h-0" aria-label="Decisions request editor">
           <div className="grid gap-3 rounded-lg border bg-card p-3 sm:grid-cols-3">
-            <SetupField label="Endpoint">
+            <SetupField label="Endpoint" htmlFor="decision-endpoint">
               <Select
                 value={endpoint}
                 onValueChange={(value) => {
@@ -187,7 +189,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                   }
                 }}
               >
-                <SelectTrigger className="w-full" aria-label="Decision endpoint">
+                <SelectTrigger id="decision-endpoint" className="w-full" aria-label="Decision endpoint">
                   <SelectValue>{endpoint}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
@@ -196,8 +198,9 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                 </SelectContent>
               </Select>
             </SetupField>
-            <SetupField label="Model">
+            <SetupField label="Model" htmlFor="decision-model">
               <SearchSelect
+                id="decision-model"
                 aria-label="Decision model"
                 options={decisionModels.map((model) => ({ label: model, value: model }))}
                 value={payloadModel(rawPayload) ?? null}
@@ -212,7 +215,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                 </a>
               )}
             </SetupField>
-            <SetupField label="API key">
+            <SetupField label="API key" htmlFor="decision-key-source">
               <Select
                 value={apiKeySource}
                 onValueChange={(value) => {
@@ -222,7 +225,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                 }}
                 disabled={disabledPersonalKeyCreation}
               >
-                <SelectTrigger className="w-full" aria-label="Virtual Key Source">
+                <SelectTrigger id="decision-key-source" className="w-full" aria-label="Virtual Key Source">
                   <SelectValue>{apiKeySource === "custom" ? "Virtual Key" : "Current UI Session"}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
