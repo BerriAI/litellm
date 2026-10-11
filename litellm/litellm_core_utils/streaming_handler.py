@@ -332,7 +332,7 @@ class CustomStreamWrapper:
                 logging_obj=self.logging_obj,
                 count_prompt_tokens=self.count_prompt_tokens,
             )
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # an abandoned stream must still emit whatever telemetry was built; the failure is logged, not raised
             verbose_logger.warning(
                 "stream_chunk_builder raised for an abandoned stream (%s); the partial call is not logged.",
                 str(e),
@@ -378,7 +378,7 @@ class CustomStreamWrapper:
         if stream_to_close is not None and hasattr(stream_to_close, "close"):  # pyright: ignore[reportUnknownArgumentType]  # provider-specific stream object
             try:
                 stream_to_close.close()  # pyright: ignore[reportUnknownMemberType]  # provider-specific stream object
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001  # closing a provider stream must not mask the caller's own error
                 verbose_logger.debug("closing the underlying stream failed: %s", str(e))
         self._restore_consumer_correlation_context()
 
@@ -454,7 +454,7 @@ class CustomStreamWrapper:
         self._restore_consumer_correlation_context(guarded=True)
         try:
             self._flush_abandoned_stream_logging()
-        except Exception:
+        except Exception:  # noqa: BLE001  # __del__ must never raise; logging here is best-effort
             verbose_logger.debug("abandoned-stream logging failed in __del__", exc_info=True)
 
     async def aclose(self):
