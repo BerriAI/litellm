@@ -44,7 +44,7 @@ class BudgetWindowState(BudgetWindow):
 class KeyLoggingCallbackVars(BaseModel):
     langfuse_public_key: str | None = Field(default=None, repr=False)
     langfuse_secret_key: str | None = Field(default=None, repr=False)
-    langfuse_host: str | None = None
+    langfuse_host: str | None = Field(default=None, repr=False)
     wandb_api_key: str | None = Field(default=None, repr=False)
     weave_project_id: str | None = None
 
@@ -477,6 +477,35 @@ class ChatResponse(BaseModel):
     guardrail_information: list[GuardrailInformationEntry] | None = None
 
 
+class ResponsesInputTokensDetails(BaseModel):
+    cached_tokens: int | None = None
+
+
+class ResponsesUsage(BaseModel):
+    """`/v1/responses` usage shape: input/output tokens, not prompt/completion."""
+
+    input_tokens: int
+    output_tokens: int
+    total_tokens: int | None = None
+    input_tokens_details: ResponsesInputTokensDetails | None = None
+
+
+class ResponsesApiResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    id: str | None = None
+    usage: ResponsesUsage | None = None
+
+
+class ResponsesStreamEvent(BaseModel):
+    """One `/v1/responses` SSE event; `response.completed` carries the final response."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    type: str
+    response: ResponsesApiResponse | None = None
+
+
 # ---------- anthropic /v1/messages + count_tokens ----------
 
 
@@ -658,10 +687,11 @@ class McpServerCreateBody(BaseModel):
     auth_type: str | None = None
     oauth2_flow: Literal["client_credentials", "authorization_code"] | None = None
     per_server_oauth_discovery: bool | None = None
+    issuer: str | None = None
     authorization_url: str | None = None
     token_url: str | None = None
     registration_url: str | None = None
-    credentials: McpOauthCredentials | None = None
+    credentials: McpOauthCredentials | None = Field(default=None, repr=False)
     server_name: str | None = None
     description: str | None = None
     mcp_info: McpInfo | None = None
@@ -1205,6 +1235,48 @@ class CostMap(RootModel[dict[str, CostMapEntry]]):
     pass
 
 
+class ConfigPatchResponse(BaseModel):
+    status: str
+    values: dict[str, float | dict[str, float]]
+
+
+class CostDiscountConfig(RootModel[dict[str, float]]):
+    pass
+
+
+class CostMarginConfig(RootModel[dict[str, float | dict[str, float]]]):
+    pass
+
+
+class CostDiscountConfigResponse(BaseModel):
+    values: dict[str, float]
+
+
+class CostMarginConfigResponse(BaseModel):
+    values: dict[str, float | dict[str, float]]
+
+
+class BedrockGuardrailParams(BaseModel):
+    guardrail: Literal["bedrock"] = "bedrock"
+    mode: Literal["pre_call"] = "pre_call"
+    default_on: bool = False
+    guardrailIdentifier: str
+    guardrailVersion: str
+
+
+class BedrockGuardrailSpec(BaseModel):
+    guardrail_name: str
+    litellm_params: BedrockGuardrailParams
+
+
+class GuardrailCreateBody(BaseModel):
+    guardrail: BedrockGuardrailSpec
+
+
+class GuardrailCreateResponse(BaseModel):
+    guardrail_id: str
+
+
 class FileEntry(BaseModel):
     id: str
 
@@ -1252,14 +1324,15 @@ class LiteLLMParamsBody(BaseModel):
     model: str
     api_key: str | None = Field(default=None, repr=False)
     litellm_credential_name: str | None = None
-    api_base: str | None = None
+    api_base: str | None = Field(default=None, repr=False)
     api_version: str | None = None
     realtime_protocol: str | None = None
     allowed_openai_params: list[str] | None = None
+    drop_params: bool | None = None
     aws_access_key_id: str | None = Field(default=None, repr=False)
     aws_secret_access_key: str | None = Field(default=None, repr=False)
     aws_region_name: str | None = None
-    aws_bedrock_runtime_endpoint: str | None = None
+    aws_bedrock_runtime_endpoint: str | None = Field(default=None, repr=False)
     vertex_project: str | None = None
     vertex_location: str | None = None
     vertex_credentials: str | None = Field(default=None, repr=False)
@@ -1286,7 +1359,7 @@ class LiteLLMParamsBody(BaseModel):
     input_cost_per_token_flex: float | None = None
     output_cost_per_token_flex: float | None = None
     cache_read_input_token_cost_flex: float | None = None
-    extra_headers: dict[str, str] | None = None
+    extra_headers: dict[str, str] | None = Field(default=None, repr=False)
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
     auto_router_config: str | None = None
@@ -1421,7 +1494,7 @@ class KeyUpdateBody(BaseModel):
     keeps its stored value, `CLEAR` sends an explicit null that clears it (`budget_duration`
     clears `budget_reset_at` with it), and `metadata` replaces the stored metadata wholesale."""
 
-    key: str
+    key: str = Field(repr=False)
     project_id: str | Cleared | None = None
     models: list[str] | None = None
     key_alias: str | None = None
@@ -1522,6 +1595,20 @@ class TeamMemberDeleteBody(BaseModel):
 
 class TeamDeleteBody(BaseModel):
     team_ids: list[str]
+
+
+class ProjectCreateBody(BaseModel):
+    team_id: str
+    project_alias: str
+    models: list[str]
+
+
+class ProjectIdentity(BaseModel):
+    project_id: str
+
+
+class ProjectDeleteBody(BaseModel):
+    project_ids: list[str]
 
 
 class TeamListEntry(BaseModel):

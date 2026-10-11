@@ -1,6 +1,7 @@
 import re
 from collections.abc import Mapping
 from copy import deepcopy
+from datetime import datetime, timezone
 from enum import Enum
 from functools import lru_cache
 from types import MappingProxyType
@@ -24,6 +25,22 @@ from litellm.types.llms.vertex_ai import (
 )
 from litellm.types.utils import TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
+
+GEMINI_VIDEO_METADATA_KEYS: Final = MappingProxyType(
+    {"fps": "fps", "start_offset": "startOffset", "end_offset": "endOffset"}
+)
+
+
+GEMINI_FILES_API_URI_PREFIX: Final = "https://generativelanguage.googleapis.com/v1beta/files/"
+
+
+def gemini_video_metadata_from_openai(video_metadata: Mapping[str, object]) -> dict[str, object]:
+    return {
+        gemini_key: video_metadata[openai_key]
+        for openai_key, gemini_key in GEMINI_VIDEO_METADATA_KEYS.items()
+        if openai_key in video_metadata
+    }
+
 
 VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS: Final = frozenset(
     {
@@ -292,7 +309,7 @@ def get_supports_system_message(
         supports_system_message = supports_system_messages(model=model, custom_llm_provider=_custom_llm_provider)
 
         # Vertex Models called in the `/gemini` request/response format also support system messages
-        if litellm.VertexGeminiConfig._is_model_gemini_spec_model(model):
+        if litellm.VertexGeminiConfig.is_model_gemini_spec_model(model):
             supports_system_message = True
     except Exception as e:
         verbose_logger.warning(
@@ -498,7 +515,7 @@ def _get_embedding_url(
     return url, endpoint
 
 
-def _get_vertex_url(
+def get_vertex_url(
     mode: all_gemini_url_modes,
     model: str,
     stream: bool | None,
@@ -556,7 +573,10 @@ def _get_vertex_url(
     return url, endpoint
 
 
-def _get_gemini_url(
+_get_vertex_url = get_vertex_url
+
+
+def get_gemini_url(
     mode: all_gemini_url_modes,
     model: str,
     stream: bool | None,
@@ -572,7 +592,7 @@ def _get_gemini_url(
     )
 
     _gemini_model_name: Final = f"models/{model}"
-    api_version: Final = "v1alpha" if VertexGeminiConfig._is_gemini_3_or_newer(model) else "v1beta"
+    api_version: Final = "v1alpha" if VertexGeminiConfig.is_gemini_3_or_newer(model) else "v1beta"
 
     if mode == "chat":
         endpoint = "generateContent"
@@ -600,7 +620,10 @@ def _get_gemini_url(
     return url, endpoint
 
 
-def _check_text_in_content(parts: list[PartType]) -> bool:
+_get_gemini_url = get_gemini_url
+
+
+def check_text_in_content(parts: list[PartType]) -> bool:
     """
     check that user_content has 'text' parameter.
         - Known Vertex Error: Unable to submit request because it must have a text parameter.
@@ -613,6 +636,9 @@ def _check_text_in_content(parts: list[PartType]) -> bool:
             has_text_param = True
 
     return has_text_param
+
+
+_check_text_in_content = check_text_in_content
 
 
 def _fix_enum_empty_strings(schema, depth=0):
@@ -683,7 +709,7 @@ def _fix_enum_types(schema, depth=0):
                 _fix_enum_types(item, depth=depth + 1)
 
 
-def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
+def build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     """
     This is a modified version of https://github.com/google-gemini/generative-ai-python/blob/8f77cc6ac99937cd3a81299ecf79608b91b06bbb/google/generativeai/types/content_types.py#L419
 
@@ -734,7 +760,10 @@ def _build_vertex_schema(parameters: dict, add_property_ordering: bool = False):
     return parameters
 
 
-def _build_json_schema(parameters: dict) -> dict:
+_build_vertex_schema = build_vertex_schema
+
+
+def build_json_schema(parameters: dict) -> dict:
     """
     Build a JSON Schema for use with Gemini's responseJsonSchema parameter.
 
@@ -758,6 +787,9 @@ def _build_json_schema(parameters: dict) -> dict:
     # See: https://blog.google/technology/developers/gemini-api-structured-outputs/
 
     return parameters
+
+
+_build_json_schema = build_json_schema
 
 
 def _filter_anyof_fields(schema_dict: dict[str, object]) -> dict[str, object]:
@@ -969,19 +1001,22 @@ def strip_field(schema, field_name: str):
         strip_field(items, field_name)
 
 
-def _convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
+_VERTEX_DATETIME_FRACTION: Final = re.compile(r"\.\d+(?=Z$)", re.IGNORECASE)
+
+
+def convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
     """
-    Converts a Vertex AI datetime string to an OpenAI datetime integer
+    Converts a Vertex AI / GCS RFC 3339 UTC timestamp to Unix epoch seconds
 
     vertex_datetime: str = "2024-12-04T21:53:12.120184Z"
-    returns: int = 1722729192
+    returns: int = 1733349192
     """
-    from datetime import datetime
-
-    # Parse the ISO format string to datetime object
-    dt: Final = datetime.strptime(vertex_datetime, "%Y-%m-%dT%H:%M:%S.%fZ")
-    # Convert to Unix timestamp (seconds since epoch)
+    whole_seconds: Final = _VERTEX_DATETIME_FRACTION.sub("", vertex_datetime)
+    dt: Final = datetime.strptime(whole_seconds, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     return int(dt.timestamp())
+
+
+_convert_vertex_datetime_to_openai_datetime = convert_vertex_datetime_to_openai_datetime
 
 
 def _convert_schema_types(schema, depth=0):
@@ -1310,11 +1345,11 @@ class VertexAITokenCounter(BaseTokenCounter):
         else:
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
             from litellm.llms.vertex_ai.gemini.transformation import (
-                _gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
+                gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
             )
 
             resolved_contents: Final = (
-                contents if contents is not None else _gemini_convert_messages_with_history(messages=messages or [])
+                contents if contents is not None else gemini_convert_messages_with_history(messages=messages or [])
             )
 
             count_tokens_params: Final = {

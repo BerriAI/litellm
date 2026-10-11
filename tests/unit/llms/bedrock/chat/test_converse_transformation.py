@@ -2,16 +2,23 @@ import copy
 import json
 import os
 from typing import Final
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, Mock, patch
 
 import httpx
 import pytest
 
 import litellm
-from litellm import ModelResponse
+from litellm import ModelResponse, completion
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    _bedrock_converse_messages_pt,
+    _bedrock_tools_pt,
+)
 from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import CONVERTED_SYSTEM_NOTE
+from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
-from litellm.types.llms.bedrock import ConverseTokenUsageBlock
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.llms.bedrock import ContentBlock, ConverseTokenUsageBlock
+from litellm.types.llms.openai import AllMessageValues
 
 
 def test_transform_usage():
@@ -406,7 +413,7 @@ def test_transform_tool_call_with_cache_control():
         },
     ]
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
@@ -736,7 +743,7 @@ def _tool_schema_properties(model, tool, litellm_params=None):
         "us.xai.grok-4.6",
         "us-gov.xai.grok-4.6",
         "global.xai.grok-4.7",
-        "xai.grok-4.7",
+        "us.xai.grok-4.7",
     ],
 )
 def test_transform_request_drops_lookaround_regex_for_models_the_cost_map_flags(tool, model):
@@ -2073,7 +2080,7 @@ async def test_transformation_directly():
     messages = [{"role": "user", "content": "run ls command and find all python files"}]
 
     # Transform request
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
@@ -2177,7 +2184,7 @@ def test_transform_request_with_multiple_tools():
     messages = [{"role": "user", "content": "run ls command and find all python files"}]
 
     # Transform request
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
@@ -2237,7 +2244,7 @@ def test_transform_request_with_computer_tool_only():
     ]
 
     # Transform request
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
@@ -2273,7 +2280,7 @@ def test_transform_request_with_bash_tool_only():
     messages = [{"role": "user", "content": "run ls command and find all python files"}]
 
     # Transform request
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
@@ -2309,7 +2316,7 @@ def test_transform_request_with_text_editor_tool():
     messages = [{"role": "user", "content": "Edit this text file"}]
 
     # Transform request
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
@@ -2361,7 +2368,7 @@ def test_transform_request_with_function_tool():
     ]
 
     # Transform request
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"tools": tools},
@@ -3755,7 +3762,7 @@ def test_request_metadata_transformation():
     ]
 
     # Transform request with requestMetadata
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": request_metadata},
@@ -3781,7 +3788,7 @@ def test_request_metadata_validation():
     }
 
     # Should not raise exception
-    config.transform_request(
+    config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": valid_metadata},
@@ -3793,7 +3800,7 @@ def test_request_metadata_validation():
     too_many_items = {f"key_{i}": f"value_{i}" for i in range(17)}
 
     with pytest.raises(Exception, match="maximum of 16 items") as exc_info:
-        config.transform_request(
+        config._transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": too_many_items},
@@ -3815,7 +3822,7 @@ def test_request_metadata_key_constraints():
     invalid_metadata = {long_key: "value"}
 
     with pytest.raises(Exception, match=r"(?i)key length|256 characters"):
-        config.transform_request(
+        config._transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": invalid_metadata},
@@ -3827,7 +3834,7 @@ def test_request_metadata_key_constraints():
     invalid_metadata = {"": "value"}
 
     with pytest.raises(Exception, match=r"(?i)key length|empty"):
-        config.transform_request(
+        config._transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": invalid_metadata},
@@ -3847,7 +3854,7 @@ def test_request_metadata_value_constraints():
     invalid_metadata = {"key": long_value}
 
     with pytest.raises(Exception, match=r"(?i)value length|256 characters"):
-        config.transform_request(
+        config._transform_request(
             model="anthropic.claude-haiku-4-5-20251001-v1:0",
             messages=messages,
             optional_params={"requestMetadata": invalid_metadata},
@@ -3859,7 +3866,7 @@ def test_request_metadata_value_constraints():
     valid_metadata = {"key": ""}
 
     # Should not raise exception
-    config.transform_request(
+    config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": valid_metadata},
@@ -3882,7 +3889,7 @@ def test_request_metadata_character_pattern():
     }
 
     # Should not raise exception
-    config.transform_request(
+    config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": valid_metadata},
@@ -3917,7 +3924,7 @@ def test_request_metadata_with_other_params():
     ]
 
     # Transform request with multiple parameters including request_metadata
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={
@@ -3947,7 +3954,7 @@ def test_request_metadata_empty():
     messages = [{"role": "user", "content": "Hello!"}]
 
     # Empty dict should be allowed
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={"requestMetadata": {}},
@@ -3966,7 +3973,7 @@ def test_request_metadata_not_provided():
     messages = [{"role": "user", "content": "Hello!"}]
 
     # No requestMetadata provided
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model="anthropic.claude-haiku-4-5-20251001-v1:0",
         messages=messages,
         optional_params={},
@@ -5005,7 +5012,7 @@ def test_parallel_tool_calls_newer_model_adds_disable_flag():
         drop_params=False,
     )
 
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -5044,7 +5051,7 @@ def test_parallel_tool_calls_flag_decoupled_from_ttl_pricing(monkeypatch):
         drop_params=False,
     )
 
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -5073,7 +5080,7 @@ def test_parallel_tool_calls_older_model_drops_disable_flag():
         drop_params=False,
     )
 
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -5102,7 +5109,7 @@ def test_parallel_tool_calls_emits_typed_auto_tool_choice(parallel_tool_calls, e
         drop_params=False,
     )
 
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -5136,7 +5143,7 @@ def test_parallel_tool_calls_with_explicit_tool_choice_omits_conflicting_type(to
         drop_params=False,
     )
 
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model=model,
         messages=messages,
         optional_params=optional_params,
@@ -5159,7 +5166,7 @@ def test_tool_choice_type_kept_when_no_tool_config_choice_conflicts():
         drop_params=False,
     )
 
-    request_data = config.transform_request(
+    request_data = config._transform_request(
         model=model,
         messages=[{"role": "user", "content": "What's the weather in SF and NYC?"}],
         optional_params=optional_params,
@@ -5786,7 +5793,7 @@ def test_cache_points_emitted_only_for_models_that_support_prompt_caching(model,
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
 
-    body = AmazonConverseConfig().transform_request(
+    body = AmazonConverseConfig()._transform_request(
         model=model,
         messages=[
             {"role": "system", "content": [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]},
@@ -5947,6 +5954,67 @@ def test_transform_response_finish_reason_stop_when_json_mode_filters_all_tools(
 
     # finish_reason must be "stop", not "tool_calls"
     assert result.choices[0].finish_reason == "stop"
+
+
+def test_transform_response_json_mode_truncated_tool_call_keeps_length_finish_reason():
+    """
+    When json_mode filters out the synthetic json_tool_call but Bedrock
+    stopped on max_tokens, finish_reason must stay "length", not be
+    downgraded to "stop" — otherwise truncated structured output looks
+    completed.
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+    from litellm.types.utils import ModelResponse
+
+    response_json = {
+        "metrics": {"latencyMs": 100},
+        "output": {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {
+                        "toolUse": {
+                            "toolUseId": "tooluse_001",
+                            "name": "json_tool_call",
+                            "input": {"a": "cut"},
+                        }
+                    }
+                ],
+            }
+        },
+        "stopReason": "max_tokens",
+        "usage": {
+            "inputTokens": 10,
+            "outputTokens": 60,
+            "totalTokens": 70,
+        },
+    }
+
+    class MockResponse:
+        def json(self) -> dict[str, object]:
+            return response_json
+
+        @property
+        def text(self) -> str:
+            return json.dumps(response_json)
+
+    config = AmazonConverseConfig()
+    model_response = ModelResponse()
+
+    result = config._transform_response(
+        model="bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        response=MockResponse(),
+        model_response=model_response,
+        stream=False,
+        logging_obj=None,
+        optional_params={"json_mode": True},
+        api_key=None,
+        data=None,
+        messages=[],
+        encoding=None,
+    )
+
+    assert result.choices[0].finish_reason == "length"
 
 
 def test_transform_response_citations_content_maps_to_annotations():
@@ -6491,6 +6559,81 @@ def test_bedrock_tool_message_image_url_png_still_becomes_image():
     assert block["image"]["source"]["bytes"] == png_b64
 
 
+def _png_tool_messages(text: str | None = None) -> list[AllMessageValues]:
+    from litellm.types.llms.openai import (
+        ChatCompletionImageObject,
+        ChatCompletionImageUrlObject,
+        ChatCompletionTextObject,
+        ChatCompletionToolMessage,
+        ChatCompletionUserMessage,
+    )
+
+    png_b64: Final = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGBgAAAABQABXvMqOgAAAABJRU5ErkJggg=="
+    image: Final = ChatCompletionImageObject(
+        type="image_url",
+        image_url=ChatCompletionImageUrlObject(url=f"data:image/png;base64,{png_b64}"),
+    )
+    parts: Final = (
+        (ChatCompletionTextObject(type="text", text=text), image) if text is not None else (image,)
+    )
+    user: Final = ChatCompletionUserMessage(role="user", content="Describe the attached image.")
+    tool: Final = ChatCompletionToolMessage(role="tool", tool_call_id="tooluse_png_gpt", content=list(parts))
+    return [user, tool]
+
+
+def _gpt_tool_turn(text: str | None) -> list[ContentBlock]:
+    from litellm.types.llms.openai import ChatCompletionToolParam, ChatCompletionToolParamFunctionChunk
+
+    fetch_tool: Final = ChatCompletionToolParam(
+        type="function",
+        function=ChatCompletionToolParamFunctionChunk(
+            name="fetch_image",
+            description="Returns an image",
+            parameters={"type": "object", "properties": {}},
+        ),
+    )
+    body: Final = AmazonConverseConfig()._transform_request(
+        model="bedrock/global.openai.gpt-6.1-sol",
+        messages=_png_tool_messages(text),
+        optional_params={"tools": [fetch_tool]},
+        litellm_params={},
+        headers={},
+    )
+    messages: Final = body["messages"]
+    assert isinstance(messages, list)
+    last: Final = messages[-1]
+    assert isinstance(last, dict)
+    content: Final = last["content"]
+    assert isinstance(content, list)
+    return [ContentBlock(**block) for block in content if isinstance(block, dict)]
+
+
+def test_openai_gpt_tool_result_image_sits_beside_the_tool_result():
+    """gpt-6.1-sol rejects an image nested in toolResult.content. The image has to be a sibling block."""
+    turn: Final = _gpt_tool_turn("tool image")
+    tool_index: Final = next(i for i, block in enumerate(turn) if "toolResult" in block)
+    tool_result: Final = turn[tool_index]["toolResult"]
+    assert isinstance(tool_result, dict)
+    assert tool_result["toolUseId"] == "tooluse_png_gpt"
+    assert tool_result["content"] == [{"text": "tool image"}]
+    image: Final = turn[tool_index + 1]["image"]
+    assert isinstance(image, dict)
+    assert image["format"] == "png"
+
+
+def test_openai_gpt_image_only_tool_result_keeps_a_text_block():
+    from litellm.litellm_core_utils.prompt_templates.common_utils import TOOL_RESULT_IMAGE_PLACEHOLDER
+
+    turn: Final = _gpt_tool_turn(None)
+    tool_index: Final = next(i for i, block in enumerate(turn) if "toolResult" in block)
+    tool_result: Final = turn[tool_index]["toolResult"]
+    assert isinstance(tool_result, dict)
+    assert tool_result["content"] == [{"text": TOOL_RESULT_IMAGE_PLACEHOLDER}]
+    image: Final = turn[tool_index + 1]["image"]
+    assert isinstance(image, dict)
+    assert image["format"] == "png"
+
+
 def test_transform_response_does_not_leak_body_on_parse_failure():
     from litellm.llms.bedrock.common_utils import BedrockError
 
@@ -6579,7 +6722,7 @@ def test_converse_top_k_dropped_for_models_that_removed_it():
     transform must strip it for models that removed sampling params (#30064)."""
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-fable-5",
         messages=[{"role": "user", "content": "hello"}],
         optional_params={"top_k": 40},
@@ -6595,7 +6738,7 @@ def test_converse_top_k_raises_without_drop_params(monkeypatch):
     config = AmazonConverseConfig()
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
-        config.transform_request(
+        config._transform_request(
             model="us.anthropic.claude-fable-5",
             messages=[{"role": "user", "content": "hello"}],
             optional_params={"top_k": 40},
@@ -6607,7 +6750,7 @@ def test_converse_top_k_raises_without_drop_params(monkeypatch):
 def test_converse_top_k_forwarded_on_models_that_accept_it():
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-sonnet-4-6",
         messages=[{"role": "user", "content": "hello"}],
         optional_params={"top_k": 40},
@@ -6626,7 +6769,7 @@ def test_converse_top_k_zero_raises_without_drop_params(monkeypatch):
     config = AmazonConverseConfig()
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="drop_params"):
-        config.transform_request(
+        config._transform_request(
             model="us.anthropic.claude-fable-5",
             messages=[{"role": "user", "content": "hello"}],
             optional_params={"top_k": 0},
@@ -6638,7 +6781,7 @@ def test_converse_top_k_zero_raises_without_drop_params(monkeypatch):
 def test_converse_top_k_zero_forwarded_on_models_that_accept_it():
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-sonnet-4-6",
         messages=[{"role": "user", "content": "hello"}],
         optional_params={"top_k": 0},
@@ -6874,7 +7017,7 @@ def test_transform_request_no_tools_with_tool_history_succeeds_24158(monkeypatch
     monkeypatch.setattr(litellm, "modify_params", False)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=_orphaned_tool_history_messages(),
         optional_params={},
@@ -6895,7 +7038,7 @@ def test_transform_request_tool_unsupported_model_no_toolconfig_27138(monkeypatc
     monkeypatch.setattr(litellm, "modify_params", True)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="meta.llama3-2-3b-instruct-v1:0",
         messages=_orphaned_tool_history_messages(),
         optional_params={},
@@ -6914,7 +7057,7 @@ def test_transform_request_empty_tools_with_tool_history(monkeypatch, tools_valu
     monkeypatch.setattr(litellm, "modify_params", False)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=_orphaned_tool_history_messages(),
         optional_params={"tools": tools_value},
@@ -6931,7 +7074,7 @@ def test_transform_request_tool_result_only_history(monkeypatch):
     monkeypatch.setattr(litellm, "modify_params", False)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=[
             {"role": "user", "content": "hi"},
@@ -6954,7 +7097,7 @@ def test_transform_request_neutralized_tool_output_is_guarded(monkeypatch):
     monkeypatch.setattr(litellm, "modify_params", False)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=[
             {"role": "user", "content": "look it up"},
@@ -6994,7 +7137,7 @@ def test_transform_request_neutralized_tool_output_guarded_mid_history(monkeypat
     monkeypatch.setattr(litellm, "modify_params", False)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=[
             {"role": "user", "content": "look it up"},
@@ -7056,7 +7199,7 @@ def test_transform_request_with_tools_still_builds_toolconfig(monkeypatch):
     monkeypatch.setattr(litellm, "modify_params", False)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=_orphaned_tool_history_messages(),
         optional_params={
@@ -7086,7 +7229,7 @@ def test_transform_request_flag_off_restores_raise(monkeypatch):
     config = AmazonConverseConfig()
 
     with pytest.raises(litellm.utils.UnsupportedParamsError, match="without `tools="):
-        config.transform_request(
+        config._transform_request(
             model="us.anthropic.claude-opus-4-5-20251101-v1:0",
             messages=_orphaned_tool_history_messages(),
             optional_params={},
@@ -7102,7 +7245,7 @@ def test_transform_request_flag_off_with_modify_params_restores_dummy_tool(monke
     monkeypatch.setattr(litellm, "modify_params", True)
     config = AmazonConverseConfig()
 
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=_orphaned_tool_history_messages(),
         optional_params={},
@@ -7120,7 +7263,7 @@ def test_transform_request_flag_on_is_default(monkeypatch):
     config = AmazonConverseConfig()
 
     assert litellm.bedrock_neutralize_orphaned_tool_blocks is True
-    result = config.transform_request(
+    result = config._transform_request(
         model="us.anthropic.claude-opus-4-5-20251101-v1:0",
         messages=_orphaned_tool_history_messages(),
         optional_params={},
@@ -7299,7 +7442,7 @@ def test_legacy_thinking_translated_to_adaptive_on_adaptive_only_converse(model,
         model=model,
         drop_params=False,
     )
-    request = config.transform_request(
+    request = config._transform_request(
         model=model,
         messages=[{"role": "user", "content": "hi"}],
         optional_params=optional_params,
@@ -8006,7 +8149,7 @@ def test_flagged_model_replays_a_byte_identical_prefix_around_a_mid_conversation
     user turn in place; hoisting it into ``system`` would change the prefix every
     signed thinking block in the history is bound to."""
     requests = [
-        AmazonConverseConfig().transform_request(
+        AmazonConverseConfig()._transform_request(
             model="bedrock/us.anthropic.claude-fable-5-1",
             messages=copy.deepcopy(turn),
             optional_params={},
@@ -8109,3 +8252,1309 @@ def test_supports_sampling_params_prefixed_and_anthropic_fallback(monkeypatch: p
     )
     assert AmazonConverseConfig._supports_sampling_params("custom-test-reasoning-model") is False
     assert AmazonConverseConfig._supports_sampling_params("anthropic.claude-custom-unregistered") is True
+
+
+
+
+
+
+
+
+
+
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_bedrock_tools_pt_valid_names():
+    """
+    # related issue: https://github.com/BerriAI/litellm/issues/5007
+    # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
+
+    """
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {"type": "string"},
+                    },
+                    "required": ["location"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "search_restaurants",
+                "description": "Search for restaurants",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "cuisine": {"type": "string"},
+                    },
+                    "required": ["cuisine"],
+                },
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    assert len(result) == 2
+    assert result[0]["toolSpec"]["name"] == "get_current_weather"
+    assert result[1]["toolSpec"]["name"] == "search_restaurants"
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_bedrock_tools_pt_invalid_names():
+    """
+    # related issue: https://github.com/BerriAI/litellm/issues/5007
+    # Bedrock tool names must satisfy regular expression pattern: [a-zA-Z][a-zA-Z0-9_]* ensure this is true
+
+    """
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "123-invalid@name",
+                "description": "Invalid name test",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "test": {"type": "string"},
+                    },
+                    "required": ["test"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "another@invalid#name",
+                "description": "Another invalid name test",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "test": {"type": "string"},
+                    },
+                    "required": ["test"],
+                },
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    print("bedrock tools after prompt formatting=", result)
+
+    assert len(result) == 2
+    assert result[0]["toolSpec"]["name"] == "a123-invalid_name"
+    assert result[1]["toolSpec"]["name"] == "another_invalid_name"
+
+
+def test_bedrock_converse_tools_pt_converts_custom_schema_type_to_object():
+    """
+    Bedrock Converse ``toolSpec.inputSchema.json`` must use standard JSON Schema
+    types. Anthropic / Claude Code use ``type: \"custom\"`` in ``input_schema`` (or
+    OpenAI ``parameters``); ``_bedrock_tools_pt`` must convert ``custom`` → ``object``
+    at the root and inside nested ``properties``.
+    """
+    tools = [
+        {
+            "name": "Agent",
+            "description": "Subagent tool",
+            "type": "custom",
+            "input_schema": {
+                "type": "custom",
+                "additionalProperties": False,
+                "properties": {
+                    "prompt": {"type": "string"},
+                    "nested": {
+                        "type": "custom",
+                        "properties": {"x": {"type": "string"}},
+                        "required": ["x"],
+                    },
+                },
+                "required": ["prompt"],
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "other",
+                "description": "x",
+                "parameters": {
+                    "type": "custom",
+                    "properties": {
+                        "a": {"type": "integer"},
+                        "nested_obj": {
+                            "type": "custom",
+                            "properties": {"b": {"type": "string"}},
+                        },
+                    },
+                    "required": ["a"],
+                },
+            },
+        },
+        {
+            "input_schema": {
+                "type": "object",
+                "properties": {"q": {"type": "string"}},
+            },
+        },
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    assert result[0]["toolSpec"]["name"] == "Agent"
+    j0 = result[0]["toolSpec"]["inputSchema"]["json"]
+    assert j0["type"] == "object"
+    assert j0["properties"]["nested"]["type"] == "object"
+
+    j1 = result[1]["toolSpec"]["inputSchema"]["json"]
+    assert j1["type"] == "object"
+    assert j1["properties"]["nested_obj"]["type"] == "object"
+
+    assert result[2]["toolSpec"]["name"] == "litellm_unnamed_tool_2"
+
+
+def test_bedrock_tools_transformation_valid_params():
+    from litellm.types.llms.bedrock import ToolJsonSchemaBlock
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "123-invalid@name",
+                "description": "Invalid name test",
+                "parameters": {
+                    "$id": "https://some/internal/name",
+                    "type": "object",
+                    "$schema": "https://json-schema.org/draft/2020-12/schema",
+                    "properties": {
+                        "test": {"type": "string"},
+                    },
+                    "required": ["test"],
+                },
+            },
+        }
+    ]
+
+    result = _bedrock_tools_pt(tools)
+
+    print("bedrock tools after prompt formatting=", result)
+    toolJsonSchema = result[0]["toolSpec"]["inputSchema"]["json"]
+    assert toolJsonSchema is not None
+    print("transformed toolJsonSchema keys=", toolJsonSchema.keys())
+    print("allowed ToolJsonSchemaBlock keys=", ToolJsonSchemaBlock.__annotations__.keys())
+    assert set(toolJsonSchema.keys()).issubset(set(ToolJsonSchemaBlock.__annotations__.keys()))
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert "toolSpec" in result[0]
+    assert result[0]["toolSpec"]["name"] == "a123-invalid_name"
+    assert result[0]["toolSpec"]["description"] == "Invalid name test"
+    assert "inputSchema" in result[0]["toolSpec"]
+    assert "json" in result[0]["toolSpec"]["inputSchema"]
+    assert result[0]["toolSpec"]["inputSchema"]["json"]["properties"]["test"]["type"] == "string"
+    assert "test" in result[0]["toolSpec"]["inputSchema"]["json"]["required"]
+
+
+def test_not_found_error():
+    with pytest.raises(litellm.NotFoundError):
+        completion(
+            model="bedrock/bad_model",
+            messages=[
+                {
+                    "role": "user",
+                    "content": "What is the meaning of life",
+                }
+            ],
+        )
+
+
+@pytest.mark.parametrize(
+    "model, expected_base_model",
+    [
+        (
+            "apac.anthropic.claude-haiku-4-5-20251001-v1:0",
+            "anthropic.claude-haiku-4-5-20251001-v1:0",
+        ),
+    ],
+)
+def test_bedrock_get_base_model(model, expected_base_model):
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    assert BedrockModelInfo.get_base_model(model) == expected_base_model
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_bedrock_converse_translation_tool_message():
+
+    litellm.set_verbose = True
+
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+        },
+        {
+            "tool_call_id": "tooluse_DnqEmD5qR6y2-aJ-Xd05xw",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": [
+                {
+                    "text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}',
+                    "type": "text",
+                }
+            ],
+        },
+    ]
+
+    translated_msg = _bedrock_converse_messages_pt(
+        messages=messages, model="", llm_provider=""
+    )
+
+    print(translated_msg)
+    assert translated_msg == [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "text": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses"
+                },
+                {
+                    "toolResult": {
+                        "content": [
+                            {
+                                "text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'
+                            }
+                        ],
+                        "toolUseId": "tooluse_DnqEmD5qR6y2-aJ-Xd05xw",
+                    }
+                },
+            ],
+        }
+    ]
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_bedrock_completion_test_2():
+    litellm.set_verbose = True
+    data = {
+        "model": "bedrock/anthropic.claude-sonnet-4-5-20250929-v1:0",
+        "messages": [
+            {
+                "role": "system",
+                "content": "You are Claude Dev, a highly skilled software developer with extensive knowledge in many programming languages, frameworks, design patterns, and best practices.\n\n====\n \nCAPABILITIES\n\n- You can read and analyze code in various programming languages, and can write clean, efficient, and well-documented code.\n- You can debug complex issues and providing detailed explanations, offering architectural insights and design patterns.\n- You have access to tools that let you execute CLI commands on the user's computer, list files, view source code definitions, regex search, inspect websites, read and write files, and ask follow-up questions. These tools help you effectively accomplish a wide range of tasks, such as writing code, making edits or improvements to existing files, understanding the current state of a project, performing system operations, and much more.\n- When the user initially gives you a task, a recursive list of all filepaths in the current working directory ('/Users/hongbo-miao/Clouds/Git/hongbomiao.com') will be included in environment_details. This provides an overview of the project's file structure, offering key insights into the project from directory/file names (how developers conceptualize and organize their code) and file extensions (the language used). This can also guide decision-making on which files to explore further. If you need to further explore directories such as outside the current working directory, you can use the list_files tool. If you pass 'true' for the recursive parameter, it will list files recursively. Otherwise, it will list files at the top level, which is better suited for generic directories where you don't necessarily need the nested structure, like the Desktop.\n- You can use search_files to perform regex searches across files in a specified directory, outputting context-rich results that include surrounding lines. This is particularly useful for understanding code patterns, finding specific implementations, or identifying areas that need refactoring.\n- You can use the list_code_definition_names tool to get an overview of source code definitions for all files at the top level of a specified directory. This can be particularly useful when you need to understand the broader context and relationships between certain parts of the code. You may need to call this tool multiple times to understand various parts of the codebase related to the task.\n\t- For example, when asked to make edits or improvements you might analyze the file structure in the initial environment_details to get an overview of the project, then use list_code_definition_names to get further insight using source code definitions for files located in relevant directories, then read_file to examine the contents of relevant files, analyze the code and suggest improvements or make necessary edits, then use the write_to_file tool to implement changes. If you refactored code that could affect other parts of the codebase, you could use search_files to ensure you update other files as needed.\n- You can use the execute_command tool to run commands on the user's computer whenever you feel it can help accomplish the user's task. When you need to execute a CLI command, you must provide a clear explanation of what the command does. Prefer to execute complex CLI commands over creating executable scripts, since they are more flexible and easier to run. Interactive and long-running commands are allowed, since the commands are run in the user's VSCode terminal. The user may keep commands running in the background and you will be kept updated on their status along the way. Each command you execute is run in a new terminal instance.\n- You can use the inspect_site tool to capture a screenshot and console logs of the initial state of a website (including html files and locally running development servers) when you feel it is necessary in accomplishing the user's task. This tool may be useful at key stages of web development tasks-such as after implementing new features, making substantial changes, when troubleshooting issues, or to verify the result of your work. You can analyze the provided screenshot to ensure correct rendering or identify errors, and review console logs for runtime issues.\n\t- For example, if asked to add a component to a react website, you might create the necessary files, use execute_command to run the site locally, then use inspect_site to verify there are no runtime errors on page load.\n\n====\n\nRULES\n\n- Your current working directory is: /Users/hongbo-miao/Clouds/Git/hongbomiao.com\n- You cannot `cd` into a different directory to complete a task. You are stuck operating from '/Users/hongbo-miao/Clouds/Git/hongbomiao.com', so be sure to pass in the correct 'path' parameter when using tools that require a path.\n- Do not use the ~ character or $HOME to refer to the home directory.\n- Before using the execute_command tool, you must first think about the SYSTEM INFORMATION context provided to understand the user's environment and tailor your commands to ensure they are compatible with their system. You must also consider if the command you need to run should be executed in a specific directory outside of the current working directory '/Users/hongbo-miao/Clouds/Git/hongbomiao.com', and if so prepend with `cd`'ing into that directory && then executing the command (as one command since you are stuck operating from '/Users/hongbo-miao/Clouds/Git/hongbomiao.com'). For example, if you needed to run `npm install` in a project outside of '/Users/hongbo-miao/Clouds/Git/hongbomiao.com', you would need to prepend with a `cd` i.e. pseudocode for this would be `cd (path to project) && (command, in this case npm install)`.\n- When using the search_files tool, craft your regex patterns carefully to balance specificity and flexibility. Based on the user's task you may use it to find code patterns, TODO comments, function definitions, or any text-based information across the project. The results include context, so analyze the surrounding code to better understand the matches. Leverage the search_files tool in combination with other tools for more comprehensive analysis. For example, use it to find specific code patterns, then use read_file to examine the full context of interesting matches before using write_to_file to make informed changes.\n- When creating a new project (such as an app, website, or any software project), organize all new files within a dedicated project directory unless the user specifies otherwise. Use appropriate file paths when writing files, as the write_to_file tool will automatically create any necessary directories. Structure the project logically, adhering to best practices for the specific type of project being created. Unless otherwise specified, new projects should be easily run without additional setup, for example most projects can be built in HTML, CSS, and JavaScript - which you can open in a browser.\n- You must try to use multiple tools in one request when possible. For example if you were to create a website, you would use the write_to_file tool to create the necessary files with their appropriate contents all at once. Or if you wanted to analyze a project, you could use the read_file tool multiple times to look at several key files. This will help you accomplish the user's task more efficiently.\n- Be sure to consider the type of project (e.g. Python, JavaScript, web application) when determining the appropriate structure and files to include. Also consider what files may be most relevant to accomplishing the task, for example looking at a project's manifest file would help you understand the project's dependencies, which you could incorporate into any code you write.\n- When making changes to code, always consider the context in which the code is being used. Ensure that your changes are compatible with the existing codebase and that they follow the project's coding standards and best practices.\n- Do not ask for more information than necessary. Use the tools provided to accomplish the user's request efficiently and effectively. When you've completed your task, you must use the attempt_completion tool to present the result to the user. The user may provide feedback, which you can use to make improvements and try again.\n- You are only allowed to ask the user questions using the ask_followup_question tool. Use this tool only when you need additional details to complete a task, and be sure to use a clear and concise question that will help you move forward with the task. However if you can use the available tools to avoid having to ask the user questions, you should do so. For example, if the user mentions a file that may be in an outside directory like the Desktop, you should use the list_files tool to list the files in the Desktop and check if the file they are talking about is there, rather than asking the user to provide the file path themselves.\n- When executing commands, if you don't see the expected output, assume the terminal executed the command successfully and proceed with the task. The user's terminal may be unable to stream the output back properly. If you absolutely need to see the actual terminal output, use the ask_followup_question tool to request the user to copy and paste it back to you.\n- Your goal is to try to accomplish the user's task, NOT engage in a back and forth conversation.\n- NEVER end completion_attempt with a question or request to engage in further conversation! Formulate the end of your result in a way that is final and does not require further input from the user. \n- NEVER start your responses with affirmations like \"Certainly\", \"Okay\", \"Sure\", \"Great\", etc. You should NOT be conversational in your responses, but rather direct and to the point.\n- Feel free to use markdown as much as you'd like in your responses. When using code blocks, always include a language specifier.\n- When presented with images, utilize your vision capabilities to thoroughly examine them and extract meaningful information. Incorporate these insights into your thought process as you accomplish the user's task.\n- At the end of each user message, you will automatically receive environment_details. This information is not written by the user themselves, but is auto-generated to provide potentially relevant context about the project structure and environment. While this information can be valuable for understanding the project context, do not treat it as a direct part of the user's request or response. Use it to inform your actions and decisions, but don't assume the user is explicitly asking about or referring to this information unless they clearly do so in their message. When using environment_details, explain your actions clearly to ensure the user understands, as they may not be aware of these details.\n- CRITICAL: When editing files with write_to_file, ALWAYS provide the COMPLETE file content in your response. This is NON-NEGOTIABLE. Partial updates or placeholders like '// rest of code unchanged' are STRICTLY FORBIDDEN. You MUST include ALL parts of the file, even if they haven't been modified. Failure to do so will result in incomplete or broken code, severely impacting the user's project.\n\n====\n\nOBJECTIVE\n\nYou accomplish a given task iteratively, breaking it down into clear steps and working through them methodically.\n\n1. Analyze the user's task and set clear, achievable goals to accomplish it. Prioritize these goals in a logical order.\n2. Work through these goals sequentially, utilizing available tools as necessary. Each goal should correspond to a distinct step in your problem-solving process. It is okay for certain steps to take multiple iterations, i.e. if you need to create many files, it's okay to create a few files at a time as each subsequent iteration will keep you informed on the work completed and what's remaining. \n3. Remember, you have extensive capabilities with access to a wide range of tools that can be used in powerful and clever ways as necessary to accomplish each goal. Before calling a tool, do some analysis within <thinking></thinking> tags. First, analyze the file structure provided in environment_details to gain context and insights for proceeding effectively. Then, think about which of the provided tools is the most relevant tool to accomplish the user's task. Next, go through each of the required parameters of the relevant tool and determine if the user has directly provided or given enough information to infer a value. When deciding if the parameter can be inferred, carefully consider all the context to see if it supports a specific value. If all of the required parameters are present or can be reasonably inferred, close the thinking tag and proceed with the tool call. BUT, if one of the values for a required parameter is missing, DO NOT invoke the function (not even with fillers for the missing params) and instead, ask the user to provide the missing parameters using the ask_followup_question tool. DO NOT ask for more information on optional parameters if it is not provided.\n4. Once you've completed the user's task, you must use the attempt_completion tool to present the result of the task to the user. You may also provide a CLI command to showcase the result of your task; this can be particularly useful for web development tasks, where you can run e.g. `open index.html` to show the website you've built.\n5. The user may provide feedback, which you can use to make improvements and try again. But DO NOT continue in pointless back and forth conversations, i.e. don't end your responses with questions or offers for further assistance.\n\n====\n\nSYSTEM INFORMATION\n\nOperating System: macOS\nDefault Shell: /bin/zsh\nHome Directory: /Users/hongbo-miao\nCurrent Working Directory: /Users/hongbo-miao/Clouds/Git/hongbomiao.com\n",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "<task>\nHello\n</task>"},
+                    {
+                        "type": "text",
+                        "text": "<environment_details>\n# VSCode Visible Files\ncomputer-vision/hm-open3d/src/main.py\n\n# VSCode Open Tabs\ncomputer-vision/hm-open3d/src/main.py\n../../../.vscode/extensions/continue.continue-0.8.52-darwin-arm64/continue_tutorial.py\n\n# Current Working Directory (/Users/hongbo-miao/Clouds/Git/hongbomiao.com) Files\n.ansible-lint\n.clang-format\n.cmakelintrc\n.dockerignore\n.editorconfig\n.gitignore\n.gitmodules\n.hadolint.yaml\n.isort.cfg\n.markdownlint-cli2.jsonc\n.mergify.yml\n.npmrc\n.nvmrc\n.prettierignore\n.rubocop.yml\n.ruby-version\n.ruff.toml\n.shellcheckrc\n.solhint.json\n.solhintignore\n.sqlfluff\n.sqlfluffignore\n.stylelintignore\n.yamllint.yaml\nCODE_OF_CONDUCT.md\ncommitlint.config.js\nGemfile\nGemfile.lock\nLICENSE\nlint-staged.config.js\nMakefile\nmiss_hit.cfg\nmypy.ini\npackage-lock.json\npackage.json\npoetry.lock\npoetry.toml\nprettier.config.js\npyproject.toml\nREADME.md\nrelease.config.js\nrenovate.json\nSECURITY.md\nstylelint.config.js\naerospace/\naerospace/air-defense-system/\naerospace/hm-aerosandbox/\naerospace/hm-openaerostruct/\naerospace/px4/\naerospace/quadcopter-pd-controller/\naerospace/simulate-satellite/\naerospace/simulated-and-actual-flights/\naerospace/toroidal-propeller/\nansible/\nansible/inventory.yaml\nansible/Makefile\nansible/requirements.yml\nansible/hm_macos_group/\nansible/hm_ubuntu_group/\nansible/hm_windows_group/\napi-go/\napi-go/buf.yaml\napi-go/go.mod\napi-go/go.sum\napi-go/Makefile\napi-go/api/\napi-go/build/\napi-go/cmd/\napi-go/config/\napi-go/internal/\napi-node/\napi-node/.env.development\napi-node/.env.development.local.example\napi-node/.env.development.local.example.docker\napi-node/.env.production\napi-node/.env.production.local.example\napi-node/.env.test\napi-node/.eslintignore\napi-node/.eslintrc.js\napi-node/.npmrc\napi-node/.nvmrc\napi-node/babel.config.js\napi-node/docker-compose.cypress.yaml\napi-node/docker-compose.development.yaml\napi-node/Dockerfile\napi-node/Dockerfile.development\napi-node/jest.config.js\napi-node/Makefile\napi-node/package-lock.json\napi-node/package.json\napi-node/Procfile\napi-node/stryker.conf.js\napi-node/tsconfig.json\napi-node/bin/\napi-node/postgres/\napi-node/scripts/\napi-node/src/\napi-python/\napi-python/.flaskenv\napi-python/docker-entrypoint.sh\napi-python/Dockerfile\napi-python/Makefile\napi-python/poetry.lock\napi-python/poetry.toml\napi-python/pyproject.toml\napi-python/flaskr/\nasterios/\nasterios/led-blinker/\nauthorization/\nauthorization/hm-opal-client/\nauthorization/ory-hydra/\nautomobile/\nautomobile/build-map-by-lidar-point-cloud/\nautomobile/detect-lane-by-lidar-point-cloud/\nbin/\nbin/clean.sh\nbin/count_code_lines.sh\nbin/lint_javascript_fix.sh\nbin/lint_javascript.sh\nbin/set_up.sh\nbiology/\nbiology/compare-nucleotide-sequences/\nbusybox/\nbusybox/Makefile\ncaddy/\ncaddy/Caddyfile\ncaddy/Makefile\ncaddy/bin/\ncloud-computing/\ncloud-computing/hm-ray/\ncloud-computing/hm-skypilot/\ncloud-cost/\ncloud-cost/komiser/\ncloud-infrastructure/\ncloud-infrastructure/hm-pulumi/\ncloud-infrastructure/karpenter/\ncloud-infrastructure/terraform/\ncloud-platform/\ncloud-platform/aws/\ncloud-platform/google-cloud/\ncloud-security/\ncloud-security/hm-prowler/\ncomputational-fluid-dynamics/\ncomputational-fluid-dynamics/matlab/\ncomputational-fluid-dynamics/openfoam/\ncomputer-vision/\ncomputer-vision/hm-open3d/\ncomputer-vision/hm-pyvista/\ndata-analytics/\ndata-analytics/hm-geopandas/\ndata-distribution-service/\ndata-distribution-service/dummy_test.py\ndata-distribution-service/hm_message.idl\ndata-distribution-service/hm_message.xml\ndata-distribution-service/Makefile\ndata-distribution-service/poetry.lock\ndata-distribution-service/poetry.toml\ndata-distribution-service/publish.py\ndata-ingestion/\ndata-orchestration/\ndata-processing/\ndata-storage/\ndata-transformation/\ndata-visualization/\ndesktop-qt/\nembedded/\nethereum/\ngit/\ngolang-migrate/\nhardware-in-the-loop/\nhasura-graphql-engine/\nhigh-performance-computing/\nhm-alpine/\nhm-kafka/\nhm-locust/\nhm-rust/\nhm-traefik/\nhm-xxhash/\nkubernetes/\nmachine-learning/\nmatlab/\nmobile/\nnetwork-programmability/\noperating-system/\nparallel-computing/\nphysics/\nquantum-computing/\nrclone/\nrestic/\nreverse-engineering/\nrobotics/\nsubmodules/\ntrino/\nvagrant/\nvalgrind/\nvhdl/\nvim/\nweb/\nweb-cypress/\nwireless-network/\n\n(File list truncated. Use list_files on specific subdirectories if you need to explore further.)\n</environment_details>",
+                    },
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": '<thinking>\nThe user has simply said "Hello" without providing any specific task or request. There is not enough information to determine which tools would be relevant or necessary to respond.\n\nThe environment details show a list of files and directories in the current working directory, but without a clear task from the user, it\'s not apparent which of these, if any, are relevant.\n\nSince no specific request has been made, there are no required parameters to analyze for any of the available tools. Asking a follow-up question seems to be the most appropriate action to get clarification on what the user needs help with.\n</thinking>',
+                "tool_calls": [
+                    {
+                        "id": "tooluse_OPznXwZaRzCfPaQF2dxRSA",
+                        "type": "function",
+                        "function": {
+                            "name": "ask_followup_question",
+                            "arguments": '{"question":"Hello! How can I assist you today? Do you have a specific task or request you need help with? I\'d be happy to help, but I\'ll need some more details on what you\'re looking to accomplish."}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "tooluse_OPznXwZaRzCfPaQF2dxRSA",
+                "content": "<answer>\nExplain this file\n</answer>",
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "<environment_details>\n# VSCode Visible Files\ncomputer-vision/hm-open3d/src/main.py\n\n# VSCode Open Tabs\ncomputer-vision/hm-open3d/src/main.py\n../../../.vscode/extensions/continue.continue-0.8.52-darwin-arm64/continue_tutorial.py\n</environment_details>",
+                    }
+                ],
+            },
+        ],
+        "tools": [
+            {
+                "type": "function",
+                "function": {
+                    "name": "execute_command",
+                    "description": "Execute a CLI command on the system. Use this when you need to perform system operations or run specific commands to accomplish any step in the user's task. You must tailor your command to the user's system and provide a clear explanation of what the command does. Prefer to execute complex CLI commands over creating executable scripts, as they are more flexible and easier to run. Commands will be executed in the current working directory: /Users/hongbo-miao/Clouds/Git/hongbomiao.com",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "The CLI command to execute. This should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions.",
+                            }
+                        },
+                        "required": ["command"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "read_file",
+                    "description": "Read the contents of a file at the specified path. Use this when you need to examine the contents of an existing file, for example to analyze code, review text files, or extract information from configuration files. Automatically extracts raw text from PDF and DOCX files. May not be suitable for other types of binary files, as it returns the raw content as a string.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The path of the file to read (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com)",
+                            }
+                        },
+                        "required": ["path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "write_to_file",
+                    "description": "Write content to a file at the specified path. If the file exists, it will be overwritten with the provided content. If the file doesn't exist, it will be created. Always provide the full intended content of the file, without any truncation. This tool will automatically create any directories needed to write the file.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The path of the file to write to (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com)",
+                            },
+                            "content": {
+                                "type": "string",
+                                "description": "The full content to write to the file.",
+                            },
+                        },
+                        "required": ["path", "content"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "search_files",
+                    "description": "Perform a regex search across files in a specified directory, providing context-rich results. This tool searches for patterns or specific content across multiple files, displaying each match with encapsulating context.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The path of the directory to search in (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com). This directory will be recursively searched.",
+                            },
+                            "regex": {
+                                "type": "string",
+                                "description": "The regular expression pattern to search for. Uses Rust regex syntax.",
+                            },
+                            "filePattern": {
+                                "type": "string",
+                                "description": "Optional glob pattern to filter files (e.g., '*.ts' for TypeScript files). If not provided, it will search all files (*).",
+                            },
+                        },
+                        "required": ["path", "regex"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_files",
+                    "description": "List files and directories within the specified directory. If recursive is true, it will list all files and directories recursively. If recursive is false or not provided, it will only list the top-level contents.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The path of the directory to list contents for (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com)",
+                            },
+                            "recursive": {
+                                "type": "string",
+                                "enum": ["true", "false"],
+                                "description": "Whether to list files recursively. Use 'true' for recursive listing, 'false' or omit for top-level only.",
+                            },
+                        },
+                        "required": ["path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "list_code_definition_names",
+                    "description": "Lists definition names (classes, functions, methods, etc.) used in source code files at the top level of the specified directory. This tool provides insights into the codebase structure and important constructs, encapsulating high-level concepts and relationships that are crucial for understanding the overall architecture.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "path": {
+                                "type": "string",
+                                "description": "The path of the directory (relative to the current working directory /Users/hongbo-miao/Clouds/Git/hongbomiao.com) to list top level source code definitions for",
+                            }
+                        },
+                        "required": ["path"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "inspect_site",
+                    "description": "Captures a screenshot and console logs of the initial state of a website. This tool navigates to the specified URL, takes a screenshot of the entire page as it appears immediately after loading, and collects any console logs or errors that occur during page load. It does not interact with the page or capture any state changes after the initial load.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "url": {
+                                "type": "string",
+                                "description": "The URL of the site to inspect. This should be a valid URL including the protocol (e.g. http://localhost:3000/page, file:///path/to/file.html, etc.)",
+                            }
+                        },
+                        "required": ["url"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "ask_followup_question",
+                    "description": "Ask the user a question to gather additional information needed to complete the task. This tool should be used when you encounter ambiguities, need clarification, or require more details to proceed effectively. It allows for interactive problem-solving by enabling direct communication with the user. Use this tool judiciously to maintain a balance between gathering necessary information and avoiding excessive back-and-forth.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "question": {
+                                "type": "string",
+                                "description": "The question to ask the user. This should be a clear, specific question that addresses the information you need.",
+                            }
+                        },
+                        "required": ["question"],
+                    },
+                },
+            },
+            {
+                "type": "function",
+                "function": {
+                    "name": "attempt_completion",
+                    "description": "Once you've completed the task, use this tool to present the result to the user. Optionally you may provide a CLI command to showcase the result of your work, but avoid using commands like 'echo' or 'cat' that merely print text. They may respond with feedback if they are not satisfied with the result, which you can use to make improvements and try again.",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "command": {
+                                "type": "string",
+                                "description": "A CLI command to execute to show a live demo of the result to the user. For example, use 'open index.html' to display a created website. This command should be valid for the current operating system. Ensure the command is properly formatted and does not contain any harmful instructions.",
+                            },
+                            "result": {
+                                "type": "string",
+                                "description": "The result of the task. Formulate this result in a way that is final and does not require further input from the user. Don't end your result with questions or offers for further assistance.",
+                            },
+                        },
+                        "required": ["result"],
+                    },
+                },
+            },
+        ],
+    }
+
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    request = AmazonConverseConfig()._transform_request(
+        model=data["model"],
+        messages=data["messages"],
+        optional_params={"tools": data["tools"]},
+        litellm_params={},
+    )
+
+    """
+    Iterate through the messages
+
+    ensure 'role' is always alternating b/w 'user' and 'assistant'
+    """
+    _messages = request["messages"]
+    for i in range(len(_messages) - 1):
+        assert _messages[i]["role"] != _messages[i + 1]["role"]
+
+
+def test_bedrock_completion_test_3():
+    """
+    Check if content in tool result is formatted correctly
+    """
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        _bedrock_converse_messages_pt,
+    )
+    from litellm.types.utils import ChatCompletionMessageToolCall, Function, Message
+
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in San Francisco, Tokyo, and Paris? - give me 3 responses",
+        },
+        Message(
+            content="Here are the current weather conditions for San Francisco, Tokyo, and Paris:",
+            role="assistant",
+            tool_calls=[
+                ChatCompletionMessageToolCall(
+                    index=1,
+                    function=Function(
+                        arguments='{"location": "San Francisco, CA", "unit": "fahrenheit"}',
+                        name="get_current_weather",
+                    ),
+                    id="tooluse_EF8PwJ1dSMSh6tLGKu9VdA",
+                    type="function",
+                )
+            ],
+            function_call=None,
+        ).model_dump(),
+        {
+            "tool_call_id": "tooluse_EF8PwJ1dSMSh6tLGKu9VdA",
+            "role": "tool",
+            "name": "get_current_weather",
+            "content": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}',
+        },
+    ]
+
+    transformed_messages = _bedrock_converse_messages_pt(messages=messages, model="", llm_provider="")
+    print(transformed_messages)
+
+    assert transformed_messages[-1]["role"] == "user"
+    assert transformed_messages[-1]["content"] == [
+        {
+            "toolResult": {
+                "content": [{"text": '{"location": "San Francisco", "temperature": "72", "unit": "fahrenheit"}'}],
+                "toolUseId": "tooluse_EF8PwJ1dSMSh6tLGKu9VdA",
+            }
+        }
+    ]
+
+
+def test_bedrock_context_window_error():
+    with pytest.raises(litellm.ContextWindowExceededError) as e:
+        litellm.completion(
+            model="bedrock/claude-3-5-sonnet-20240620",
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            mock_response=Exception("prompt is too long"),
+        )
+
+
+def test_bedrock_base_model_helper():
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    model = "us.amazon.nova-pro-v1:0"
+    base_model = BedrockModelInfo.get_base_model(model)
+    assert base_model == "amazon.nova-pro-v1:0"
+
+    assert (
+        BedrockModelInfo.get_base_model("invoke/anthropic.claude-haiku-4-5-20251001-v1:0")
+        == "anthropic.claude-haiku-4-5-20251001-v1:0"
+    )
+
+
+@pytest.mark.parametrize(
+    "model,expected_route",
+    [
+        ("invoke/anthropic.claude-3-sonnet-20240229-v1:0", "invoke"),
+        ("converse/anthropic.claude-3-sonnet-20240229-v1:0", "converse"),
+        ("converse_like/anthropic.claude-3-sonnet-20240229-v1:0", "converse_like"),
+        ("anthropic.claude-3-5-haiku-20241022-v1:0", "converse"),
+        ("anthropic.claude-v2", "converse"),
+        ("meta.llama3-70b-instruct-v1:0", "converse"),
+        ("mistral.mistral-large-2407-v1:0", "converse"),
+        ("us.anthropic.claude-3-sonnet-20240229-v1:0", "converse"),
+        ("us.meta.llama3-70b-instruct-v1:0", "converse"),
+        ("amazon.titan-text-express-v1", "invoke"),
+        ("cohere.command-text-v14", "invoke"),
+        ("cohere.command-r-v1:0", "invoke"),
+    ],
+)
+def test_bedrock_route_detection(model, expected_route):
+    """Test all scenarios for BedrockModelInfo.get_bedrock_route"""
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    route = BedrockModelInfo.get_bedrock_route(model)
+    assert route == expected_route, f"Expected route '{expected_route}' for model '{model}', but got '{route}'"
+
+
+@pytest.mark.parametrize(
+    "messages, expected_cache_control",
+    [
+        (
+            [
+                {
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "You are an AI assistant tasked with analyzing legal documents.",
+                        },
+                        {
+                            "type": "text",
+                            "text": "Here is the full text of a complex legal agreement",
+                            "cache_control": {"type": "ephemeral"},
+                        },
+                    ],
+                },
+                {
+                    "role": "user",
+                    "content": "what are the key terms and conditions in this agreement?",
+                },
+            ],
+            True,
+        ),
+        (
+            [
+                {
+                    "role": "user",
+                    "content": "what are the key terms and conditions in this agreement?",
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+            True,
+        ),
+    ],
+)
+def test_bedrock_prompt_caching_message(messages, expected_cache_control):
+    import json
+
+    import litellm
+
+    transformed_messages = litellm.AmazonConverseConfig()._transform_request(
+        model="bedrock/anthropic.claude-3-5-haiku-20241022-v1:0",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+    )
+    if expected_cache_control:
+        assert "cachePoint" in json.dumps(transformed_messages)
+    else:
+        assert "cachePoint" not in json.dumps(transformed_messages)
+
+
+@pytest.mark.parametrize(
+    "model, expected_supports_tool_call",
+    [
+        ("bedrock/us.amazon.nova-pro-v1:0", True),
+        ("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0", True),
+        ("bedrock/mistral.mistral-7b-instruct-v0.1:0", True),
+        ("bedrock/meta.llama3-1-8b-instruct:0", True),
+        ("bedrock/meta.llama3-2-70b-instruct:0", True),
+        ("bedrock/meta.llama3-3-70b-instruct-v1:0", True),
+        ("bedrock/amazon.titan-embed-text-v1:0", False),
+    ],
+)
+def test_bedrock_supports_tool_call(model, expected_supports_tool_call):
+    supported_openai_params = litellm.AmazonConverseConfig().get_supported_openai_params(model=model)
+    if expected_supports_tool_call:
+        assert "tools" in supported_openai_params
+    else:
+        assert "tools" not in supported_openai_params
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize(
+    "messages, continue_message_index",
+    [
+        (
+            [
+                {"role": "user", "content": [{"type": "text", "text": ""}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "Hello!"}]},
+            ],
+            0,
+        ),
+        (
+            [
+                {"role": "user", "content": [{"type": "text", "text": "Hello!"}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "   "}]},
+            ],
+            1,
+        ),
+    ],
+)
+def test_bedrock_empty_content_handling(messages, continue_message_index):
+    """
+    Test that empty content in messages is handled correctly with default messages
+    """
+    # Test with default behavior (modify_params=True)
+    litellm.modify_params = True
+    formatted_messages = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        llm_provider="bedrock",
+    )
+    print(formatted_messages)
+    # Verify assistant message with default text was inserted
+    assert formatted_messages[0]["role"] == "user"
+    assert formatted_messages[1]["role"] == "assistant"
+    assert (
+        formatted_messages[continue_message_index]["content"][0]["text"]
+        == "Please continue."
+    )
+
+
+def test_bedrock_custom_continue_message():
+    """
+    Test that custom continue messages are used when provided
+    """
+    messages = [
+        {"role": "user", "content": [{"type": "text", "text": "Hello!"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "   "}]},
+    ]
+
+    custom_continue = {
+        "role": "assistant",
+        "content": [{"text": "Custom continue message", "type": "text"}],
+    }
+
+    formatted_messages = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        llm_provider="bedrock",
+        assistant_continue_message=custom_continue,
+    )
+
+    assert formatted_messages[1]["role"] == "assistant"
+    assert formatted_messages[1]["content"][0]["text"] == "Custom continue message"
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_bedrock_no_default_message():
+    """
+    Test that empty content is replaced with placeholder when modify_params=False.
+    AWS Bedrock doesn't allow empty or whitespace-only text content.
+    """
+    messages = [
+        {"role": "user", "content": "Hello!"},
+        {"role": "assistant", "content": ""},
+        {"role": "user", "content": "Hi again"},
+        {"role": "assistant", "content": "Valid response"},
+    ]
+
+    litellm.modify_params = False
+    formatted_messages = _bedrock_converse_messages_pt(
+        messages=messages,
+        model="anthropic.claude-3-sonnet-20240229-v1:0",
+        llm_provider="bedrock",
+    )
+
+    # Verify empty message is replaced with placeholder and valid message remains
+    assistant_messages = [
+        msg for msg in formatted_messages if msg["role"] == "assistant"
+    ]
+    assert len(assistant_messages) == 1
+    assert assistant_messages[0]["content"][0]["text"] == "Valid response"
+
+
+def test_bedrock_process_empty_text_blocks():
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        process_empty_text_blocks,
+    )
+
+    message = {
+        "message": {"role": "assistant", "content": [{"type": "text", "text": "   "}]},
+        "assistant_continue_message": None,
+    }
+    modified_message = process_empty_text_blocks(**message)
+    assert modified_message["content"][0]["text"] == "Please continue."
+
+
+def test_bedrock_image_embedding_transformation():
+    from litellm.llms.bedrock.embed.amazon_titan_multimodal_transformation import (
+        AmazonTitanMultimodalEmbeddingG1Config,
+    )
+
+    args = {
+        "input": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII=",
+        "inference_params": {},
+    }
+
+    transformed_request = AmazonTitanMultimodalEmbeddingG1Config().transform_request(**args)
+    assert (
+        transformed_request["inputImage"]
+        == "iVBORw0KGgoAAAANSUhEUgAAAGQAAABkBAMAAACCzIhnAAAAG1BMVEURAAD///+ln5/h39/Dv79qX18uHx+If39MPz9oMSdmAAAACXBIWXMAAA7EAAAOxAGVKw4bAAABB0lEQVRYhe2SzWrEIBCAh2A0jxEs4j6GLDS9hqWmV5Flt0cJS+lRwv742DXpEjY1kOZW6HwHFZnPmVEBEARBEARB/jd0KYA/bcUYbPrRLh6amXHJ/K+ypMoyUaGthILzw0l+xI0jsO7ZcmCcm4ILd+QuVYgpHOmDmz6jBeJImdcUCmeBqQpuqRIbVmQsLCrAalrGpfoEqEogqbLTWuXCPCo+Ki1XGqgQ+jVVuhB8bOaHkvmYuzm/b0KYLWwoK58oFqi6XfxQ4Uz7d6WeKpna6ytUs5e8betMcqAv5YPC5EZB2Lm9FIn0/VP6R58+/GEY1X1egVoZ/3bt/EqF6malgSAIgiDIH+QL41409QMY0LMAAAAASUVORK5CYII="
+    )
+
+
+@pytest.mark.parametrize(
+    "exception_type, expected_status_code",
+    [
+        ("internalServerException", 500),
+        ("serviceUnavailableException", 503),
+        ("modelTimeoutException", 408),
+        ("modelStreamErrorException", 424),
+        ("validationException", 400),
+    ],
+)
+def test_bedrock_error_handling_streaming(exception_type, expected_status_code):
+    """Bedrock event-stream error events arrive with botocore's hard-coded
+    status_code=400; the decoder must surface the modeled HTTP status instead
+    (e.g. internalServerException -> 500). For 5xx this is what makes the error
+    retryable downstream; for all types it replaces the misleading 400 with the
+    true code. Regression for #24608."""
+    from unittest.mock import Mock
+
+    from litellm.llms.bedrock.chat.invoke_handler import (
+        AWSEventStreamDecoder,
+        BedrockError,
+    )
+
+    event = Mock()
+    event.to_response_dict = Mock(
+        return_value={
+            "status_code": 400,
+            "headers": {
+                ":exception-type": exception_type,
+                ":content-type": "application/json",
+                ":message-type": "exception",
+            },
+            "body": b'{"message":"Bedrock is unable to process your request."}',
+        }
+    )
+
+    decoder = AWSEventStreamDecoder(model="bedrock/anthropic.claude-3-sonnet-20240229-v1:0")
+    with pytest.raises(BedrockError) as e:
+        decoder._parse_message_from_event(event)
+    assert "Bedrock is unable to process your request." in e.value.message
+    assert e.value.status_code == expected_status_code
+
+
+@pytest.mark.parametrize(
+    "model, expected_output",
+    [
+        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", {"top_k": 3}),
+        ("bedrock/converse/us.amazon.nova-pro-v1:0", {"inferenceConfig": {"topK": 3}}),
+        ("bedrock/meta.llama3-70b-instruct-v1:0", {}),
+    ],
+)
+def test_handle_top_k_value_helper(model, expected_output):
+    assert litellm.AmazonConverseConfig()._handle_top_k_value(model, {"topK": 3}) == expected_output
+    assert litellm.AmazonConverseConfig()._handle_top_k_value(model, {"top_k": 3}) == expected_output
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+@pytest.mark.parametrize(
+    "model, expected_params",
+    [
+        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", {"top_k": 2}),
+        ("bedrock/converse/us.amazon.nova-pro-v1:0", {"inferenceConfig": {"topK": 2}}),
+        ("bedrock/meta.llama3-70b-instruct-v1:0", {}),
+        ("bedrock/mistral.mistral-7b-instruct-v0:2", {}),
+    ],
+)
+def test_bedrock_top_k_param(model, expected_params):
+    import json
+
+    client = HTTPHandler()
+
+    with patch.object(client, "post") as mock_post:
+        mock_response = Mock()
+
+        if "mistral" in model:
+            mock_response.text = json.dumps(
+                {"outputs": [{"text": "Here's a joke...", "stop_reason": "stop"}]}
+            )
+        else:
+            mock_response.text = json.dumps(
+                {
+                    "output": {
+                        "message": {
+                            "role": "assistant",
+                            "content": [{"text": "Here's a joke..."}],
+                        }
+                    },
+                    "usage": {"inputTokens": 12, "outputTokens": 6, "totalTokens": 18},
+                    "stopReason": "stop",
+                }
+            )
+
+        mock_response.status_code = 200
+        # Add required response attributes
+        mock_response.headers = {"Content-Type": "application/json"}
+        mock_response.json = lambda: json.loads(mock_response.text)
+        mock_post.return_value = mock_response
+
+        litellm.completion(
+            model=model,
+            messages=[{"role": "user", "content": "Hello, world!"}],
+            top_k=2,
+            client=client,
+        )
+        data = json.loads(mock_post.call_args.kwargs["data"])
+        if "mistral" in model:
+            assert data["top_k"] == 2
+        elif expected_params == {}:
+            # Models that don't support top_k produce no additionalModelRequestFields;
+            # the empty block is now omitted entirely rather than sent as `{}`.
+            assert "additionalModelRequestFields" not in data
+        else:
+            assert data["additionalModelRequestFields"] == expected_params
+
+
+def test_bedrock_invoke_provider():
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+        )
+        == "anthropic"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0")
+        == "anthropic"
+    )
+    assert (
+        litellm.AmazonInvokeConfig().get_bedrock_invoke_provider(
+            "bedrock/llama/arn:aws:bedrock:us-east-1:086734376398:imported-model/r4c4kewx2s0n"
+        )
+        == "llama"
+    )
+    assert litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("us.amazon.nova-pro-v1:0") == "nova"
+    assert litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("amazon.nova-pro-v1:0") == "nova"
+    assert litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("amazon.nova-lite-v1:0") == "nova"
+    assert litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("amazon.nova-micro-v1:0") == "nova"
+    assert litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("amazon.nova-premier-v1:0") == "nova"
+    assert litellm.AmazonInvokeConfig().get_bedrock_invoke_provider("amazon.nova-2-lite-v1:0") == "nova"
+
+
+@pytest.mark.usefixtures("fake_provider_credentials")
+def test_bedrock_meta_llama_function_calling():
+    """
+    Tests that:
+    - meta llama models support function calling
+    """
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
+
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "get_current_weather",
+                "description": "Get the current weather in a given location",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "location": {
+                            "type": "string",
+                            "description": "The city and state, e.g. San Francisco, CA",
+                        },
+                        "unit": {
+                            "type": "string",
+                            "enum": ["celsius", "fahrenheit"],
+                        },
+                    },
+                    "required": ["location"],
+                },
+            },
+        }
+    ]
+    messages = [
+        {
+            "role": "user",
+            "content": "What's the weather like in Boston today in fahrenheit?",
+        }
+    ]
+    request_args = {
+        "messages": messages,
+        "tools": tools,
+        "model": "bedrock/us.meta.llama4-scout-17b-instruct-v1:0",
+    }
+
+    response = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs=request_args,
+    )
+
+    print(response)
+    assert response["raw_request_body"]["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_current_weather"
+
+
+def test_bedrock_nova_provider_detection():
+    """
+    Test that Nova models are correctly detected even when prefixed with "amazon."
+    Regression test for issue #17910 where models like "amazon.nova-pro-v1:0"
+    were incorrectly identified as "amazon" (Titan) instead of "nova".
+    """
+
+    nova_test_cases = [
+        ("us.amazon.nova-pro-v1:0", "nova"),
+        ("us.amazon.nova-lite-v1:0", "nova"),
+        ("us.amazon.nova-micro-v1:0", "nova"),
+        ("amazon.nova-pro-v1:0", "nova"),
+        ("amazon.nova-lite-v1:0", "nova"),
+        ("amazon.nova-micro-v1:0", "nova"),
+        ("amazon.nova-premier-v1:0", "nova"),
+        ("amazon.nova-2-lite-v1:0", "nova"),
+        ("bedrock/amazon.nova-pro-v1:0", "nova"),
+        ("bedrock/invoke/amazon.nova-pro-v1:0", "nova"),
+        ("amazon.Nova-pro-v1:0", "nova"),
+        ("amazon.NOVA-pro-v1:0", "nova"),
+    ]
+
+    for model, expected in nova_test_cases:
+        provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+        assert provider == expected, f"Failed for model: {model}, expected: {expected}, got: {provider}"
+
+    titan_test_cases = [
+        ("amazon.titan-text-express-v1", "amazon"),
+        ("us.amazon.titan-text-lite-v1", "amazon"),
+    ]
+
+    for model, expected in titan_test_cases:
+        provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+        assert provider == expected, f"Failed for model: {model}, expected: {expected}, got: {provider}"
+
+
+def test_bedrock_openai_provider_detection():
+    """
+    Test that the OpenAI provider is correctly detected from model strings.
+    """
+
+    test_cases = [
+        "openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/abc123",
+        "bedrock/openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/xyz789",
+    ]
+
+    for model in test_cases:
+        provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+        assert provider == "openai", f"Failed for model: {model}, got provider: {provider}"
+        print(f"✓ Provider detection works for: {model}")
+
+
+def test_bedrock_openai_model_id_extraction():
+    """
+    Test that the model ID (ARN) is correctly extracted and encoded for OpenAI models.
+    """
+
+    model = "openai/arn:aws:bedrock:us-east-1:123456789012:imported-model/test-model-123"
+    provider = BaseAWSLLM.get_bedrock_invoke_provider(model)
+
+    model_id = BaseAWSLLM.get_bedrock_model_id(model=model, provider=provider, optional_params={})
+
+    assert "arn" in model_id
+    assert "imported-model" in model_id
+    print(f"✓ Model ID extracted and encoded: {model_id}")
+
+
+def test_bedrock_openai_response_parsing():
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
+
+    openai_response = {
+        "choices": [
+            {
+                "message": {
+                    "content": "The capital of France is Paris.",
+                    "role": "assistant",
+                },
+                "finish_reason": "stop",
+                "index": 0,
+            }
+        ],
+        "usage": {"prompt_tokens": 10, "completion_tokens": 8, "total_tokens": 18},
+    }
+
+    mock_response = Mock()
+    mock_response.json.return_value = openai_response
+    mock_response.text = json.dumps(openai_response)
+    mock_response.status_code = 200
+    mock_response.headers = {}
+
+    result = AmazonBedrockOpenAIConfig().transform_response(
+        model="openai/arn:aws:bedrock:us-east-1:123:imported-model/test",
+        raw_response=mock_response,
+        model_response=ModelResponse(),
+        logging_obj=Mock(),
+        request_data={},
+        messages=[{"role": "user", "content": "What is the capital of France?"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].message.content == "The capital of France is Paris."
+    assert result.choices[0].finish_reason == "stop"
+    assert result.usage.prompt_tokens == 10
+    assert result.usage.completion_tokens == 8
+    assert result.usage.total_tokens == 18
+
+
+def test_bedrock_openai_request_transformation():
+    """
+    Test that the request is correctly transformed for OpenAI models.
+    """
+    from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
+        AmazonInvokeConfig,
+    )
+
+    config = AmazonInvokeConfig()
+
+    model = "openai/arn:aws:bedrock:us-east-1:123:imported-model/test"
+    messages = [
+        {"role": "system", "content": "You are helpful"},
+        {"role": "user", "content": "Hello"},
+    ]
+
+    optional_params = {
+        "max_tokens": 100,
+        "temperature": 0.7,
+        "top_p": 0.9,
+        "stream": False,
+    }
+
+    litellm_params = {}
+    headers = {}
+
+    with patch.object(config, "get_bedrock_invoke_provider", return_value="openai"):
+        result = config.transform_request(
+            model=model,
+            messages=messages,
+            optional_params=optional_params.copy(),
+            litellm_params=litellm_params,
+            headers=headers,
+        )
+
+    assert "messages" in result
+    assert len(result["messages"]) == 2
+    assert result["messages"][0]["role"] == "system"
+    assert result["messages"][1]["role"] == "user"
+
+    assert "max_tokens" in result
+    assert "temperature" in result
+
+    print("✓ Request transformation works correctly")
+
+
+def test_bedrock_openai_parameter_filtering():
+    """
+    Test that only supported OpenAI parameters are included in the request.
+    """
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
+
+    config = AmazonBedrockOpenAIConfig()
+    model = "test-model"
+
+    supported_params = config.get_supported_openai_params(model=model)
+
+    assert "max_tokens" in supported_params
+    assert "temperature" in supported_params
+    assert "top_p" in supported_params
+    assert "stream" in supported_params
+    assert "stop" in supported_params
+
+    print(f"✓ Parameter filtering supports: {len(supported_params)} parameters")
+    print(f"  Supported params: {supported_params}")
+
+
+def test_bedrock_openai_route_detection():
+    """
+    Test that the OpenAI route is correctly detected.
+    """
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    test_cases = [
+        ("openai/arn:aws:bedrock:us-east-1:123:imported-model/test", "openai"),
+        ("bedrock/openai/arn:aws:bedrock:us-east-1:123:imported-model/test", "openai"),
+    ]
+
+    for model, expected_route in test_cases:
+        route = BedrockModelInfo.get_bedrock_route(model)
+        assert route == expected_route, f"Failed for model: {model}, got route: {route}"
+        print(f"✓ Route detection works for: {model} -> {route}")
+
+
+def test_bedrock_openai_explicit_route_check():
+    """
+    Test the explicit OpenAI route checker helper method.
+    """
+    from litellm.llms.bedrock.common_utils import BedrockModelInfo
+
+    assert BedrockModelInfo._explicit_openai_route("openai/arn:aws:bedrock:us-east-1:123:imported-model/test") is True
+    assert (
+        BedrockModelInfo._explicit_openai_route("bedrock/openai/arn:aws:bedrock:us-east-1:123:imported-model/test")
+        is True
+    )
+
+    assert BedrockModelInfo._explicit_openai_route("anthropic.claude-3-sonnet") is False
+    assert BedrockModelInfo._explicit_openai_route("arn:aws:bedrock:us-east-1:123:imported-model/test") is False
+
+    print("✓ Explicit route check works correctly")
+
+
+def test_bedrock_openai_config_initialization():
+    """
+    Test that AmazonBedrockOpenAIConfig can be properly initialized.
+    """
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
+
+    config = AmazonBedrockOpenAIConfig()
+
+    assert hasattr(config, "get_supported_openai_params")
+    assert hasattr(config, "transform_request")
+    assert hasattr(config, "transform_response")
+    assert hasattr(config, "map_openai_params")
+
+    print("✓ AmazonBedrockOpenAIConfig initializes correctly")
+
+
+def test_bedrock_openai_error_handling():
+    from litellm.llms.bedrock.chat.invoke_transformations.amazon_openai_transformation import (
+        AmazonBedrockOpenAIConfig,
+    )
+    from litellm.llms.bedrock.common_utils import BedrockError
+
+    error = AmazonBedrockOpenAIConfig().get_error_class(
+        error_message="ValidationException: bad request",
+        status_code=422,
+        headers={},
+    )
+
+    assert isinstance(error, BedrockError)
+    assert error.status_code == 422
+    assert "ValidationException: bad request" in str(error)
+
+
+def test_bedrock_nova_web_search_options_ignored_for_non_nova():
+    """
+    Test that web_search_options is ignored for non-Nova Bedrock models.
+
+    Nova grounding is only supported on Nova models. For other models,
+    the parameter should be silently ignored.
+    """
+    from litellm.llms.bedrock.chat.converse_transformation import AmazonConverseConfig
+
+    config = AmazonConverseConfig()
+
+    result = config._map_web_search_options({}, "anthropic.claude-3-sonnet-v1")
+    assert result is None
+
+    result = config._map_web_search_options({}, "amazon.titan-text-express-v1")
+    assert result is None
+
+    result = config._map_web_search_options({}, "amazon.nova-pro-v1:0")
+    assert result is not None
+    system_tool = result.get("systemTool")
+    assert system_tool is not None
+    assert system_tool["name"] == "nova_grounding"
+
+    result2 = config._map_web_search_options({}, "us.amazon.nova-premier-v1:0")
+    assert result2 is not None
+    system_tool2 = result2.get("systemTool")
+    assert system_tool2 is not None
+    assert system_tool2["name"] == "nova_grounding"

@@ -6,7 +6,7 @@ codecov:
 ignore:
   - "litellm-rust/**"
 
-# Uploads are flagged per workflow/shard (GHA) or "circleci". carryforward makes
+# Uploads are flagged per workflow tier (GHA) or "circleci". carryforward makes
 # a re-upload of a flag replace its prior session instead of accumulating a
 # conflicting one, and lets a commit reuse a flag from its parent when that flag
 # was not re-uploaded. Required because the same commit can receive the
@@ -26,6 +26,76 @@ flag_management:
     - name: proxy-db-schema-migration
       carryforward: false
     - name: circleci
+      carryforward: false
+    - name: core-utils
+      carryforward: false
+    - name: enterprise-routing
+      carryforward: false
+    - name: integrations
+      carryforward: false
+    - name: llm-vertex-ai
+      carryforward: false
+    - name: llm-other-providers
+      carryforward: false
+    - name: llm-openai-meta
+      carryforward: false
+    - name: misc
+      carryforward: false
+    - name: misc-dirs
+      carryforward: false
+    - name: proxy-auth
+      carryforward: false
+    - name: proxy-hooks-client
+      carryforward: false
+    - name: proxy-endpoints
+      carryforward: false
+    - name: proxy-feature-endpoints
+      carryforward: false
+    - name: proxy-server
+      carryforward: false
+    - name: mcp-elicitation
+      carryforward: false
+    - name: proxy-infra
+      carryforward: false
+    - name: proxy-infra-root
+      carryforward: false
+    - name: caching-local
+      carryforward: false
+    - name: proxy-extras
+      carryforward: false
+    - name: enterprise-package
+      carryforward: false
+    - name: enterprise-managed-files
+      carryforward: false
+    - name: responses-caching-types
+      carryforward: false
+    - name: lens-python-310
+      carryforward: false
+    - name: proxy-db-key-generation
+      carryforward: false
+    - name: proxy-db-auth-checks
+      carryforward: false
+    - name: proxy-db-jwt-and-keys
+      carryforward: false
+    - name: proxy-db-proxy-utils
+      carryforward: false
+    - name: proxy-db-proxy-server-core
+      carryforward: false
+    - name: proxy-db-proxy-runtime
+      carryforward: false
+    - name: proxy-db-mcp-oauth
+      carryforward: false
+    - name: proxy-db-custom-logging
+      carryforward: false
+    - name: proxy-db-logging-misc
+      carryforward: false
+    - name: proxy-db-db-and-spend
+      carryforward: false
+    - name: proxy-db-guardrails-hooks
+      carryforward: false
+    - name: proxy-db-budgets
+      carryforward: false
+    - name: proxy-db-endpoints-and-responses
       carryforward: false
 
 component_management:

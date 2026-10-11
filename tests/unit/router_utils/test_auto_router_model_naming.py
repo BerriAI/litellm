@@ -9,10 +9,10 @@ from litellm.router_utils.auto_router_model_naming import (
     GATED_AUTO_ROUTER_CAPABILITIES,
     capability_limit_violation,
     carries_complexity_router_settings,
-    claimed_capability,
+    claimed_capabilities,
     classify_strategy_router_model,
     count_capability_routers,
-    gated_capability_of,
+    gated_capabilities_of,
     strategy_router_dependencies,
     validate_complexity_router_config_placement,
     validate_complexity_router_config_write,
@@ -74,11 +74,11 @@ def test_open_source_classifier_enumerates_its_accounting_model(
 def test_only_non_default_open_source_instructions_claim_the_shared_customization_slot(
     instructions: str | None, classifier_type: str, config_key: str
 ) -> None:
-    capability: Final = claimed_capability(
+    capabilities: Final = claimed_capabilities(
         {"classifier_type": classifier_type, config_key: {"instructions": instructions}}
     )
-    assert (capability.key if capability else None) == (
-        "tier_or_classifier_prompt" if instructions == "Route conservatively" else None
+    assert tuple(capability.key for capability in capabilities) == (
+        ("tier_or_classifier_prompt",) if instructions == "Route conservatively" else ()
     )
 
 
@@ -273,8 +273,8 @@ def test_fuse_write_accepts_presets_and_custom_text_with_the_same_entitlement() 
     )
     assert validate_complexity_router_config_write(presets) is None
     assert validate_complexity_router_config_write(custom) is None
-    assert claimed_capability(presets) is claimed_capability(custom)
-    assert claimed_capability(presets) is not None
+    assert claimed_capabilities(presets) == claimed_capabilities(custom)
+    assert claimed_capabilities(presets)
 
 
 @pytest.mark.parametrize("field", ("efficient_profile", "capable_profile", "harness"))
@@ -579,8 +579,8 @@ def test_custom_classifier_prompt_capability(config: Mapping[str, object], expec
     A shipped rubric preset stays free, and the heuristic scorers never read system_prompt, so a
     value sitting on one is inert and claims nothing (heuristic_v2 still claims its own capability).
     """
-    claimed = claimed_capability(config)
-    assert (None if claimed is None else claimed.key) == expected_key
+    claimed: Final = claimed_capabilities(config)
+    assert tuple(capability.key for capability in claimed) == (() if expected_key is None else (expected_key,))
 
 
 @pytest.mark.parametrize(
@@ -640,13 +640,13 @@ def test_is_complexity_router_model(model: str | None, expected: bool) -> None:
         ({}, None),
     ],
 )
-def test_gated_capability_of(litellm_params: Mapping[str, object], expected_key: str | None) -> None:
+def test_gated_capabilities_of(litellm_params: Mapping[str, object], expected_key: str | None) -> None:
     """Only a complexity router claiming a licensed capability counts toward that capability's limit.
 
     Renaming the built-in tiers through tier_labels is not a custom tier set, so it stays ungated.
     """
-    capability = gated_capability_of(litellm_params)
-    assert (None if capability is None else capability.key) == expected_key
+    capabilities: Final = gated_capabilities_of(litellm_params)
+    assert tuple(capability.key for capability in capabilities) == (() if expected_key is None else (expected_key,))
 
 
 @pytest.mark.parametrize("capability", GATED_AUTO_ROUTER_CAPABILITIES, ids=lambda c: c.key)
@@ -729,11 +729,29 @@ def test_every_gated_capability_has_a_distinct_predicate_and_sql_spelling() -> N
         },
     ],
 )
-def test_capabilities_are_mutually_exclusive_on_one_config(config: Mapping[str, object]) -> None:
-    """No config claims two capabilities, which is what lets one lock and one count serve them all.
-
-    The config validator is what makes this true and is pinned separately in test_complexity_router:
-    tier_definitions rejects every heuristic classifier_type and rejects the classifier system_prompt,
-    and system_prompt only counts for the classifier types heuristic_v2 is not one of.
-    """
+def test_standalone_classifiers_claim_at_most_one_capability(config: Mapping[str, object]) -> None:
     assert sum(1 for capability in GATED_AUTO_ROUTER_CAPABILITIES if capability.uses(config)) <= 1
+
+
+@pytest.mark.parametrize("classifier", ("heuristic_first", "hybrid"))
+@pytest.mark.parametrize("local_heuristic", (None, "heuristic", "heuristic_v2"))
+@pytest.mark.parametrize("custom_prompt", (False, True))
+def test_chained_heuristic_and_judge_prompt_claim_each_active_capability(
+    classifier: str, local_heuristic: str | None, custom_prompt: bool
+) -> None:
+    config: Final = {
+        "classifier_type": classifier,
+        **({"local_heuristic": local_heuristic} if local_heuristic is not None else {}),
+        **({"classification_prompt": "Grade by difficulty"} if custom_prompt else {}),
+    }
+    params: Final = {"model": "auto_router/complexity_router", "complexity_router_config": config}
+    expected: Final = (
+        *(("heuristic_v2",) if local_heuristic == "heuristic_v2" else ()),
+        *(("tier_or_classifier_prompt",) if custom_prompt else ()),
+    )
+    assert tuple(capability.key for capability in claimed_capabilities(config)) == expected
+    assert tuple(capability.key for capability in gated_capabilities_of(params)) == expected
+    for capability in GATED_AUTO_ROUTER_CAPABILITIES:
+        assert count_capability_routers(({"litellm_params": params},), capability=capability) == (
+            1 if capability.key in expected else 0
+        )

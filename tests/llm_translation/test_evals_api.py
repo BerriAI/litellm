@@ -260,23 +260,6 @@ class BaseEvalsAPITest(ABC):
         assert response.name == updated_name
         print(f"Updated eval: {response}")
 
-    def test_delete_eval(self):
-        """
-        Test deleting an evaluation.
-
-        Real delete coverage now lives in the ``managed_eval`` fixture
-        teardown and in ``test_create_eval``'s ``finally`` block, so
-        this stays a no-op skip rather than creating a fresh resource
-        just to delete it.
-        """
-        custom_llm_provider = self.get_custom_llm_provider()
-        api_key = self.get_api_key()
-        api_base = self.get_api_base()
-
-        if not api_key:
-            pytest.skip(f"No API key provided for {custom_llm_provider}")
-
-        pytest.skip("Delete is exercised via managed_eval fixture teardown.")
 
 
 class TestOpenAIEvalsAPI(BaseEvalsAPITest):

@@ -1,6 +1,16 @@
 import { describe, expect, it } from "vitest";
 
-import { type Note, note, NOTE_INDEX, type NoteField, NOTE_QUERY, notes } from "./__fixtures__/notes";
+import {
+  EXACT_NOTE_QUERY,
+  NEGATION_NOTE_QUERY,
+  type Note,
+  note,
+  NOTE_INDEX,
+  type NoteField,
+  NOTE_QUERY,
+  notes,
+  WILDCARD_NOTE_QUERY,
+} from "./__fixtures__/notes";
 import { fieldValues } from "./evaluate";
 import { completingField, completingPrefix, suggest, type Suggestion, type SuggestionMenu } from "./suggestions";
 import type { FieldValues } from "./valueSource";
@@ -84,6 +94,35 @@ describe("suggest", () => {
     expect(menu?.groups).toEqual([]);
     expect(menu?.showOperators).toBe(true);
     expect(atEnd("body:x")).toBeNull();
+  });
+
+  it("skips the operator help and the negated key for an equality-only language", () => {
+    const exact = (text: string) => suggest(EXACT_NOTE_QUERY, text, text.length, lookupIn(notes));
+    expect(exact("tag:")?.showOperators).toBe(false);
+    expect(labels(exact("tag:"))).toEqual(["billing", "cron", "researcher", "triage"]);
+    expect(exact("-ta")).toBeNull();
+    expect(completingPrefix(EXACT_NOTE_QUERY, "tag:a*", 6)).toBe("a*");
+    expect(completingPrefix(NOTE_QUERY, "tag:a*", 6)).toBe("a");
+    expect(labels(exact("tag:*"))).toEqual([]);
+  });
+
+  it("keeps a literal star in the value prefix unless the language has wildcards", () => {
+    const starred = [...notes, note({ tags: ["a*b", "ab"] })];
+    const menu = (language: typeof NOTE_QUERY) => suggest(language, "tag:a*", 6, lookupIn(starred));
+    expect(labels(menu(NEGATION_NOTE_QUERY))).toEqual(["a*b"]);
+    expect(labels(menu(EXACT_NOTE_QUERY))).toEqual(["a*b"]);
+    expect(labels(menu(WILDCARD_NOTE_QUERY))).toEqual(["a*b", "ab", "researcher", "triage"]);
+    expect(completingPrefix(NEGATION_NOTE_QUERY, "tag:a*", 6)).toBe("a*");
+    expect(completingPrefix(WILDCARD_NOTE_QUERY, "tag:a*", 6)).toBe("a");
+  });
+
+  it("offers a negated key only when the language can negate", () => {
+    const fields = (language: typeof NOTE_QUERY) => suggest(language, "-ta", 3, lookupIn(notes));
+    expect(apply("-ta", items(fields(NEGATION_NOTE_QUERY))[0])).toBe("-tag:");
+    expect(fields(WILDCARD_NOTE_QUERY)).toBeNull();
+    expect(suggest(WILDCARD_NOTE_QUERY, "-tag:", 5, lookupIn(notes))).toBeNull();
+    expect(suggest(NEGATION_NOTE_QUERY, "tag:", 4, lookupIn(notes))?.showOperators).toBe(true);
+    expect(suggest(WILDCARD_NOTE_QUERY, "tag:", 4, lookupIn(notes))?.showOperators).toBe(true);
   });
 
   it("offers fields in the gap between tokens, but nothing mid-token", () => {

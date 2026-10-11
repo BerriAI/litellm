@@ -631,7 +631,7 @@ async def test_health_check_reaches_servers_without_forwarding_per_user_env_vars
     manager: Final = MCPServerManager()
     manager.registry[mock_server.server_id] = mock_server
     create_client: Final = AsyncMock()
-    monkeypatch.setattr(manager, "_create_mcp_client", create_client)
+    monkeypatch.setattr(manager, "create_mcp_client", create_client)
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     route: Final = respx_mock.get(mock_server.url).respond(401)
 
@@ -1014,6 +1014,34 @@ async def test_get_user_env_vars_returns_empty_for_missing_row():
 
     prisma = _mock_env_vars_prisma(row=None)
     assert await get_user_env_vars(prisma, "alice", "srv-1") == {}
+
+
+@pytest.mark.asyncio
+async def test_get_user_env_vars_stringifies_non_string_json_values(env_vars_salt_key):
+    from types import SimpleNamespace
+
+    from litellm.proxy._experimental.mcp_server.db import get_user_env_vars
+
+    row: Final = SimpleNamespace(values_b64=_encrypted_user_env_blob({"PORT": 8080, "DEBUG": True, "EMPTY": None}))
+
+    assert await get_user_env_vars(_mock_env_vars_prisma(row=row), "alice", "srv-1") == {
+        "PORT": "8080",
+        "DEBUG": "True",
+        "EMPTY": "None",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stored_json", ["[]", '[{"TOKEN": "t"}]', '"TOKEN"', "5", "null", "true", "not json"])
+async def test_get_user_env_vars_treats_a_blob_that_is_not_a_json_object_as_unset(env_vars_salt_key, stored_json):
+    from types import SimpleNamespace
+
+    from litellm.proxy._experimental.mcp_server.db import get_user_env_vars
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+
+    row: Final = SimpleNamespace(values_b64=encrypt_value_helper(stored_json))
+
+    assert await get_user_env_vars(_mock_env_vars_prisma(row=row), "alice", "srv-1") == {}
 
 
 @pytest.mark.asyncio

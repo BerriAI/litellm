@@ -23,7 +23,7 @@ Tests cover:
 
 import json
 import time
-from typing import Optional
+from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -41,7 +41,7 @@ from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import (
 from litellm.proxy.spend_tracking.compression_savings import (
     extract_compression_saved_tokens,
 )
-from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY
+from litellm.types.integrations.custom_logger import HEADROOM_CONVERTED_STREAM_KEY, HEADROOM_STREAM_OPTIONS_KEY
 from litellm.types.utils import (
     CallTypes,
     GenericGuardrailAPIInputs,
@@ -2169,6 +2169,28 @@ async def test_pre_call_deployment_hook_converts_stream_only_for_ccr_chat_comple
     assert result["stream"] is False
     assert result[HEADROOM_CONVERTED_STREAM_KEY] is True
     assert kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type", (CallTypes.acompletion, CallTypes.aresponses))
+async def test_pre_call_deployment_hook_moves_stream_options_off_the_forced_non_stream_call(
+    guardrail: HeadroomGuardrail, call_type: CallTypes
+):
+    stream_options: Final = {"include_usage": True}
+    kwargs: Final[dict[str, object]] = {
+        "model": "gpt-4o",
+        "stream": True,
+        "stream_options": stream_options,
+        "tools": [_retrieve_tool_definition()],
+    }
+
+    result: Final = await guardrail.async_pre_call_deployment_hook(kwargs=kwargs, call_type=call_type)
+
+    assert result is not None
+    assert result["stream"] is False
+    assert "stream_options" not in result
+    assert result[HEADROOM_STREAM_OPTIONS_KEY] == stream_options
+    assert kwargs["stream_options"] == stream_options
 
 
 @pytest.mark.asyncio

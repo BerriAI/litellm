@@ -5,6 +5,7 @@
 
 // Page descriptions for UI Settings configuration
 export const pageDescriptions: Record<string, string> = {
+  home: "Usage at a glance, recent launches and blog updates",
   "api-keys": "Manage virtual keys for API access and authentication",
   "llm-playground": "Interactive playground for testing LLM requests",
   models: "Configure and manage LLM models and endpoints",
@@ -21,7 +22,6 @@ export const pageDescriptions: Record<string, string> = {
   new_usage: "View usage analytics and metrics",
   "cost-optimization": "Track and configure cost-saving features: prompt compression, caching, and auto routing",
   "model-insights": "Model Leaderboard: compare usage, spend, tokens, and task mix across this gateway",
-  "roi-calculator": "Compare gateway spend with estimated engineering effort for merged pull requests",
   logs: "Access request and response logs",
   lens: "Review agent activity and investigate patterns with supporting evidence",
   "guardrails-monitor": "Monitor guardrail performance and view logs",

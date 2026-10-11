@@ -173,7 +173,7 @@ class BaseGoogleGenAITest:
         if temp_file_path:
             self._temp_files_to_cleanup.append(temp_file_path)
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         print(
             f"Testing {'async' if is_async else 'sync'} non-streaming with model config: {request_params}"
@@ -197,7 +197,7 @@ class BaseGoogleGenAITest:
     @pytest.mark.asyncio
     async def test_async_non_streaming_with_logging(self):
         """Test async non-streaming Google GenAI generate content with logging"""
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.logging_callback_manager._reset_all_callbacks()
         litellm.set_verbose = True
         test_custom_logger = TestCustomLogger()
@@ -236,7 +236,7 @@ class BaseGoogleGenAITest:
     @pytest.mark.asyncio
     async def test_async_streaming_with_logging(self):
         """Test async streaming Google GenAI generate content with logging"""
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
         litellm.set_verbose = True
         litellm.logging_callback_manager._reset_all_callbacks()
         test_custom_logger = TestCustomLogger()

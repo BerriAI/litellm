@@ -19,6 +19,7 @@ from litellm.router_strategy.complexity_router.config import (
     COMPLEXITY_ROUTER_CONFIG_KEYS,
     DEFAULT_JEV_INSTRUCTIONS,
     LLM_CLASSIFIER_TYPES,
+    configured_local_heuristic,
     normalize_classifier_config_aliases,
 )
 
@@ -186,7 +187,7 @@ def strategy_router_dependencies(
 
 def uses_heuristic_v2_classifier(complexity_router_config: object) -> bool:
     """Whether this complexity config classifies with the bundled heuristic_v2 model."""
-    return _mapping(complexity_router_config).get("classifier_type") == "heuristic_v2"
+    return configured_local_heuristic(_mapping(complexity_router_config)) == "heuristic_v2"
 
 
 def defines_custom_tiers(complexity_router_config: object) -> bool:
@@ -237,8 +238,8 @@ class GatedAutoRouterCapability:
     stored ``litellm_params`` (``{config}`` is the caller's expression for the normalized
     ``complexity_router_config`` jsonb, substituted as many times as the predicate needs); they live
     on one record so they cannot drift apart. ``subject`` and ``remedy`` build the shared refusal
-    message. A validated config claims at most one capability: gated classifier types cannot be
-    combined with operator-defined tiers or classifier prompts.
+    message. A router chaining heuristic_v2 with an operator-written judge prompt claims both
+    capabilities.
     """
 
     key: str
@@ -250,10 +251,14 @@ class GatedAutoRouterCapability:
 
 HEURISTIC_V2_CAPABILITY: Final = GatedAutoRouterCapability(
     key="heuristic_v2",
-    subject="with classifier_type 'heuristic_v2'",
-    remedy="Use classifier_type 'heuristic' for this router or remove an existing heuristic_v2 router.",
+    subject="using the heuristic_v2 classifier",
+    remedy="Choose the heuristic v1 classifier for this router or remove an existing heuristic_v2 router.",
     uses=uses_heuristic_v2_classifier,
-    sql_config_predicate="{config} ->> 'classifier_type' = 'heuristic_v2'",
+    sql_config_predicate=(
+        "{config} ->> 'classifier_type' = 'heuristic_v2' OR "
+        "({config} ->> 'classifier_type' IN ('heuristic_first', 'hybrid') AND "
+        "{config} ->> 'local_heuristic' = 'heuristic_v2')"
+    ),
 )
 
 CAPABILITY_CLASSIFIER_CAPABILITY: Final = GatedAutoRouterCapability(
@@ -307,20 +312,19 @@ GATED_AUTO_ROUTER_CAPABILITIES: Final = (
 )
 
 
-def claimed_capability(complexity_router_config: object) -> GatedAutoRouterCapability | None:
-    """The licensed capability this complexity config claims, or None."""
-    return next(
-        (capability for capability in GATED_AUTO_ROUTER_CAPABILITIES if capability.uses(complexity_router_config)),
-        None,
+def claimed_capabilities(complexity_router_config: object) -> tuple[GatedAutoRouterCapability, ...]:
+    """The licensed capabilities this complexity config claims."""
+    return tuple(
+        capability for capability in GATED_AUTO_ROUTER_CAPABILITIES if capability.uses(complexity_router_config)
     )
 
 
-def gated_capability_of(litellm_params: Mapping[str, object]) -> GatedAutoRouterCapability | None:
-    """The licensed capability this deployment claims, or None unless it is a complexity router."""
+def gated_capabilities_of(litellm_params: Mapping[str, object]) -> tuple[GatedAutoRouterCapability, ...]:
+    """The licensed capabilities this deployment claims, or empty unless it is a complexity router."""
     model: Final = litellm_params.get("model")
     if not is_complexity_router_model(model if isinstance(model, str) else None):
-        return None
-    return claimed_capability(litellm_params.get("complexity_router_config"))
+        return ()
+    return claimed_capabilities(litellm_params.get("complexity_router_config"))
 
 
 def count_capability_routers(
@@ -328,7 +332,9 @@ def count_capability_routers(
 ) -> int:
     """How many of ``deployments`` (router model_list entries or config.yaml rows) claim ``capability``."""
     return sum(
-        1 for deployment in deployments if gated_capability_of(_mapping(deployment.get("litellm_params"))) is capability
+        1
+        for deployment in deployments
+        if capability in gated_capabilities_of(_mapping(deployment.get("litellm_params")))
     )
 
 

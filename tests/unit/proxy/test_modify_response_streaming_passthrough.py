@@ -40,7 +40,7 @@ async def _run_streaming_block_and_get_wrapper(exception):
     outer_body = {"model": "gpt-4o", "messages": [], "stream": True}
 
     with patch(
-        "litellm.proxy.proxy_server._read_request_body",
+        "litellm.proxy.proxy_server.read_request_body",
         new_callable=AsyncMock,
         return_value=outer_body,
     ), patch(
