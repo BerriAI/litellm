@@ -522,7 +522,7 @@ async def test_create_still_writes_defaults():
 
 @pytest.fixture(autouse=True)
 def _salt_key(monkeypatch):
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-1234")
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-9876")
 
 
 def _existing_row(auth_type: str, credentials: dict | None = None):

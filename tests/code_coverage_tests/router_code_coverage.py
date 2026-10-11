@@ -42,7 +42,7 @@ def get_all_functions_called_in_tests(base_dir):
         print("dir_path: ", dir_path)
         for root, _, files in os.walk(dir_path):
             for file in files:
-                if file.endswith(".py") and "router" in file.lower():
+                if file.endswith(".py") and ("router" in file.lower() or test_dir == "unit"):
                     print("file: ", file)
                     file_path = os.path.join(root, file)
                     with open(file_path, "r", encoding="utf-8") as f:
@@ -71,6 +71,8 @@ def get_functions_from_router(file_path):
 
 ignored_function_names = [
     "_acancel_batch",
+    "_acreate_batch",
+    "_acreate_file",
     "__init__",
     "avector_store_create",  # Tested via proxy vector_store_endpoints (files lack "router" in name)
     "_override_vector_store_methods_for_router",  # No-op placeholder, called during Router init
@@ -80,12 +82,14 @@ ignored_function_names = [
     "chunks",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
     "messages",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
     "model",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
+    "_routing_groups",  # Property getter and setter reads are never ast.Call nodes
     "_request_header",  # Tested through Claude Code session routing in test_router.py
     "_claude_code_session_router_cache_key",  # Tested through Claude Code session routing in test_router.py
     "_delete_claude_code_session_router_binding",  # Tested through Redis cleanup failure in test_router.py
     "_resolve_claude_code_session_router",  # Tested through Claude Code session routing in test_router.py
     "_get_claude_code_session_router_binding",  # Tested through the two-worker session routing test in test_router.py
     "_apply_updated_routing_strategy_args",  # Tested via update_settings in test_lowest_latency.py (file lacks "router" in name)
+    "_wait_for_scheduler_turn",  # Tested through prioritized acompletion and atext_completion in test_router.py
     "arm_routing_read_prefetch",  # Tested in tests/unit/caching/test_request_redis_batch_pre_call.py (file lacks "router" in name)
     "_configured_model_info",  # Tested through get_configured_service_tiers in test_router.py
     "_routable_deployments",  # Tested through get_configured_service_tiers and get_routable_upstream_model in test_router.py
@@ -106,6 +110,8 @@ ignored_function_names = [
     "_aanthropic_messages_yield_recovered",  # Tested through every mid-stream retry and fallback test in test_router.py
     "_anthropic_messages_policy_retries",  # Tested through the retry budget precedence test in test_router.py
     "_get_wildcard_deployments",  # Tested through the get_model_list_of_routed_group wildcard test in test_router.py
+    "_is_fallback_hop",  # Tested through the order fallback hop tests in test_router_order_fallback.py
+    "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
 ]
 
 

@@ -26,6 +26,7 @@ from e2e_http import Success, UnauthorizedError, UnknownApiError, unwrap
 from lifecycle import ResourceManager
 from models import ChatBody, ChatMessage, ChatResponse, EmbedBody, LiteLLMParamsBody
 from proxy_client import ProxyClient
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 
 pytestmark = pytest.mark.e2e
 
@@ -36,6 +37,14 @@ EMBEDDING_MODEL = "openai-text-embedding-3-small"
 
 
 class TestAccessControl:
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.GEMINI,),
+            models=(ALLOWED_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_allowed_model_is_permitted(
         self, client: AccessControlClient, resources: ResourceManager
     ) -> None:
@@ -57,6 +66,13 @@ class TestAccessControl:
             f"200 must carry a real completion, not an error envelope: {result.body[:300]}"
         )
 
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(DISALLOWED_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_disallowed_model_is_denied_403(
         self, client: AccessControlClient, resources: ResourceManager
     ) -> None:
@@ -73,6 +89,13 @@ class TestAccessControl:
         )
 
     @pytest.mark.covers("other.auth.virtual_key.route_group_allowed")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.GEMINI, Provider.OPENAI,),
+            models=(ALLOWED_MODEL, EMBEDDING_MODEL,),
+        )
+    )
     def test_llm_api_routes_group_grants_every_llm_endpoint(
         self, client: AccessControlClient, resources: ResourceManager
     ) -> None:
@@ -97,6 +120,12 @@ class TestAccessControl:
             f"the same key must still be shut out of /model/new, got {denied.status_code}: {denied.body[:300]}"
         )
 
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            route=Route.MODEL_MANAGEMENT,
+        )
+    )
     def test_llm_only_key_forbidden_from_management_route_403(
         self, client: AccessControlClient, resources: ResourceManager
     ) -> None:
@@ -111,6 +140,12 @@ class TestAccessControl:
             f"403 body must be a route-permission denial, got: {result.body[:300]}"
         )
 
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_unknown_model_returns_400(
         self, client: AccessControlClient, resources: ResourceManager
     ) -> None:
@@ -139,6 +174,14 @@ class TestVirtualKeyAuth:
         "mgmt.virtual_key.valid_allows",
         "mgmt.virtual_key.invalid_denied",
         exercised_on=[],
+    )
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.ANTHROPIC,),
+            models=(VIRTUAL_KEY_BACKEND,),
+            mode=Mode.NONSTREAM,
+        )
     )
     def test_valid_key_allows_and_invalid_key_denied(
         self, proxy: ProxyClient, resources: ResourceManager

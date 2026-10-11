@@ -19,7 +19,8 @@ import functools
 import importlib
 import json
 import os
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Iterable, Mapping, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import (
@@ -46,6 +47,8 @@ from fastapi import (
 from fastapi.responses import JSONResponse
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
+
+from litellm.proxy._experimental.mcp_server.catalog import catalog_operation, public_catalog_operation
 
 try:
     from prisma.errors import RecordNotFoundError, UniqueViolationError
@@ -173,12 +176,14 @@ if MCP_AVAILABLE:
         store_user_oauth_credential,
         update_mcp_server,
     )
-    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _raise_if_not_oauth2,
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (  # noqa: F401  # legacy module exports
+        _raise_if_not_oauth2,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
         authorize_with_server,
+        client_supplied_application_type,
         client_supplied_redirect_uris,
         exchange_token_with_server,
         get_request_base_url,
+        raise_if_not_oauth2,
         redeem_passthrough_authorization_code,
         register_client_with_server,
         resolve_ephemeral_dcr_client,
@@ -221,15 +226,20 @@ if MCP_AVAILABLE:
         UserMCPManagementMode,
         is_per_server_oauth_discovery_eligible,
     )
-    from litellm.proxy.auth.user_api_key_auth import (
-        _user_api_key_auth_builder,
+    from litellm.proxy.auth.user_api_key_auth import (  # noqa: F401  # legacy module exports
+        _user_api_key_auth_builder,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
         user_api_key_auth,
+        user_api_key_auth_builder,
     )
-    from litellm.proxy.common_utils.http_parsing_utils import (
-        _read_request_body,
+    from litellm.proxy.common_utils.http_parsing_utils import (  # noqa: F401  # legacy module exports
+        _read_request_body,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
         populate_request_with_path_params,
+        read_request_body,
     )
-    from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
+    from litellm.proxy.management_endpoints.common_utils import (  # noqa: F401  # legacy module exports
+        _user_has_admin_view,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+        user_api_key_has_admin_view,
+    )
     from litellm.proxy.management_endpoints.mcp_connector_import import (
         ConnectorConversionError,
         ConvertedConnector,
@@ -909,7 +919,7 @@ if MCP_AVAILABLE:
             or (payload.auth_type is not None and payload.auth_type != existing.auth_type)
         )
 
-    def _inherit_credentials_from_existing_server(
+    def inherit_credentials_from_existing_server(
         payload: NewMCPServerRequest,
     ) -> NewMCPServerRequest:
         if not payload.server_id:
@@ -978,6 +988,8 @@ if MCP_AVAILABLE:
         payload_dict["credentials"] = inherited_credentials
         return NewMCPServerRequest.model_validate(payload_dict)
 
+    _inherit_credentials_from_existing_server: Final = inherit_credentials_from_existing_server
+
     async def _resolve_session_server_id(payload: NewMCPServerRequest) -> str:
         """Decide the id an OAuth session runs under.
 
@@ -1044,6 +1056,7 @@ if MCP_AVAILABLE:
             available_on_public_internet=payload.available_on_public_internet,
             timeout=payload.timeout,
             max_concurrent_requests=payload.max_concurrent_requests,
+            rpm=payload.rpm,
         )
 
     def get_prisma_client_or_throw(message: str):
@@ -1139,6 +1152,7 @@ if MCP_AVAILABLE:
         tags=["mcp"],
         description="MCP registry endpoint. Spec: https://github.com/modelcontextprotocol/registry",
     )
+    @public_catalog_operation
     async def get_mcp_registry(request: Request):
         if not _is_public_registry_enabled():
             raise HTTPException(
@@ -1157,7 +1171,8 @@ if MCP_AVAILABLE:
         registry_servers.append({"server": _build_builtin_registry_entry(base_url)})
 
         # Centralized IP-based filtering: external callers only see public servers
-        registered_servers: Final = list(global_mcp_server_manager.get_filtered_registry(client_ip).values())
+        async with global_mcp_server_manager.catalog.operation():
+            registered_servers: Final = list(global_mcp_server_manager.get_filtered_registry(client_ip).values())
 
         registered_servers.sort(key=_build_mcp_registry_server_name)
 
@@ -1187,6 +1202,7 @@ if MCP_AVAILABLE:
             return "view_all"
         return "restricted"
 
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def _get_team_scoped_mcp_server_list(
         team_id: str,
     ) -> list[LiteLLM_MCPServerTable]:
@@ -1196,8 +1212,8 @@ if MCP_AVAILABLE:
         """
         from litellm.proxy.auth.auth_checks import get_team_object
         from litellm.proxy.management_helpers.object_permission_utils import (
-            _get_allow_all_keys_server_ids,
-            _get_team_allowed_mcp_servers,
+            get_allow_all_keys_server_ids,
+            get_team_allowed_mcp_servers,
         )
         from litellm.proxy.proxy_server import prisma_client, user_api_key_cache
 
@@ -1208,8 +1224,8 @@ if MCP_AVAILABLE:
             check_db_only=True,
         )
 
-        team_server_ids: Final = await _get_team_allowed_mcp_servers(team_obj)
-        allow_all_server_ids: Final = _get_allow_all_keys_server_ids()
+        team_server_ids: Final = await get_team_allowed_mcp_servers(team_obj)
+        allow_all_server_ids: Final = get_allow_all_keys_server_ids()
         all_allowed_ids: Final = team_server_ids | allow_all_server_ids
 
         if not all_allowed_ids:
@@ -1220,11 +1236,12 @@ if MCP_AVAILABLE:
         for server_id in all_allowed_ids:
             server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
             if server is not None:
-                mcp_server_table = global_mcp_server_manager._build_mcp_server_table(server)
+                mcp_server_table = global_mcp_server_manager.build_mcp_server_table(server)
                 servers.append(mcp_server_table)
 
         return _redact_mcp_credentials_list(servers)
 
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def _resolve_accessible_mcp_servers(
         user_api_key_dict: UserAPIKeyAuth,
     ) -> list[LiteLLM_MCPServerTable]:
@@ -1246,6 +1263,7 @@ if MCP_AVAILABLE:
                 aggregated.setdefault(server.server_id, server)
         return list(aggregated.values())
 
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def _connected_app_reachable_server_ids(user_api_key_dict: UserAPIKeyAuth) -> frozenset[str]:
         """Server ids a connected app authorized by this dashboard user is served on the aggregate
         MCP endpoint, resolved through the one owner of the admitted subject so the page and the
@@ -1262,6 +1280,7 @@ if MCP_AVAILABLE:
         dependencies=[Depends(user_api_key_auth)],
         response_model=list[LiteLLM_MCPServerTable],
     )
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def fetch_all_mcp_servers(
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
         team_id: str | None = Query(
@@ -1303,7 +1322,7 @@ if MCP_AVAILABLE:
             # Only proxy admins may query another team's MCP servers.
             # Non-admins must belong to the requested team.
             sanitized_team_id: Final = team_id.strip()
-            is_admin: Final = _user_has_admin_view(user_api_key_dict)
+            is_admin: Final = user_api_key_has_admin_view(user_api_key_dict)
             if not is_admin:
                 from litellm.proxy.auth.auth_checks import get_team_object
                 from litellm.proxy.proxy_server import (
@@ -1378,6 +1397,7 @@ if MCP_AVAILABLE:
         description="Health check for MCP servers",
         dependencies=[Depends(user_api_key_auth)],
     )
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def health_check_servers(
         server_ids: list[str] | None = Query(
             None,
@@ -1784,6 +1804,7 @@ if MCP_AVAILABLE:
         dependencies=[Depends(user_api_key_auth)],
         response_model=LiteLLM_MCPServerTable,
     )
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def fetch_mcp_server(
         request: Request,
         server_id: str,
@@ -1807,7 +1828,7 @@ if MCP_AVAILABLE:
         from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
         client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
-        is_admin_view: Final = _user_has_admin_view(user_api_key_dict)
+        is_admin_view: Final = user_api_key_has_admin_view(user_api_key_dict)
         is_restricted_virtual_key: Final = _is_restricted_virtual_key_request(user_api_key_dict)
         resolved: Final = await resolve_mcp_server(
             server_id,
@@ -2111,7 +2132,7 @@ if MCP_AVAILABLE:
             )
 
         created_by: Final = user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME
-        payload_with_credentials: Final = _inherit_credentials_from_existing_server(payload)
+        payload_with_credentials: Final = inherit_credentials_from_existing_server(payload)
         temp_record: Final = _build_temporary_mcp_server_record(
             payload_with_credentials,
             created_by,
@@ -2145,6 +2166,7 @@ if MCP_AVAILABLE:
 
         return _redact_mcp_credentials(temp_record)
 
+    @public_catalog_operation
     async def _mcp_oauth_user_api_key_auth(request: Request) -> UserAPIKeyAuth:
         """
         Auth dependency for MCP OAuth browser-navigation endpoints (/authorize, /token).
@@ -2202,9 +2224,7 @@ if MCP_AVAILABLE:
 
             server_id: Final[str] = request.path_params.get("server_id", "")
             if server_id:
-                _s = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-                if not _s:
-                    _s = global_mcp_server_manager.get_mcp_server_by_name(server_id)
+                _s = await global_mcp_server_manager.catalog.resolve(server_id)
                 if (
                     _s
                     and getattr(_s, "auth_type", None) == MCPAuth.oauth2
@@ -2217,7 +2237,7 @@ if MCP_AVAILABLE:
                     # grants must NOT bypass auth (see comment above).
                     path_lower: Final = get_request_route(request).rstrip("/").lower()
                     if path_lower.endswith("/token"):
-                        body_data: Final = await _read_request_body(request=request)
+                        body_data: Final = await read_request_body(request=request)
                         grant_type: Final = (body_data or {}).get("grant_type", "")
                         if grant_type != "authorization_code":
                             # Fall through to normal LiteLLM auth (will 401 if
@@ -2232,10 +2252,12 @@ if MCP_AVAILABLE:
                         # token can be minted via the redirect alone.
                         return UserAPIKeyAuth()
 
-        request_data = await _read_request_body(request=request)
+        request_data = await read_request_body(  # rebind-ok: pre-existing rebinding on a rename-only line
+            request=request
+        )
         request_data = populate_request_with_path_params(request_data=request_data, request=request)
 
-        return await _user_api_key_auth_builder(
+        return await user_api_key_auth_builder(
             request=request,
             api_key=api_key,
             azure_api_key_header="",
@@ -2263,13 +2285,25 @@ if MCP_AVAILABLE:
         authorized: Final = await catalog.resolve(
             server_id,
             user_api_key_dict,
-            is_admin_view=_user_has_admin_view(user_api_key_dict),
+            is_admin_view=user_api_key_has_admin_view(user_api_key_dict),
             not_found_detail={"error": f"MCP server {server_id} not found"},
             forbidden_detail={"error": f"Access denied to MCP server {server_id}"},
             non_admin_missing="not_found",
         )
         assert authorized.runtime is not None
         return authorized.runtime
+
+    @asynccontextmanager
+    async def _oauth_server_operation(
+        server_id: str,
+        user_api_key_dict: UserAPIKeyAuth,
+        request: Request | None = None,
+    ) -> AsyncGenerator[MCPServer]:
+        if await get_cached_temporary_mcp_server(server_id) is not None:
+            yield await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request)
+            return
+        async with global_mcp_server_manager.catalog.operation():
+            yield await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request)
 
     @router.get(
         "/server/oauth/{server_id}/authorize",
@@ -2288,47 +2322,47 @@ if MCP_AVAILABLE:
         response_type: str | None = None,
         scope: str | None = None,
     ):
-        mcp_server: Final = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
-        _raise_if_not_oauth2(mcp_server)
-        # Use the server's stored client_id when the caller doesn't supply one
-        stored_or_supplied_client_id: Final = mcp_server.client_id or client_id or ""
-        ephemeral_dcr_client: Final = (
-            await resolve_ephemeral_dcr_client(
+        async with _oauth_server_operation(server_id, user_api_key_dict, request=request) as mcp_server:
+            raise_if_not_oauth2(mcp_server)
+            # Use the server's stored client_id when the caller doesn't supply one
+            stored_or_supplied_client_id: Final = mcp_server.client_id or client_id or ""
+            ephemeral_dcr_client: Final = (
+                await resolve_ephemeral_dcr_client(
+                    request=request,
+                    mcp_server=mcp_server,
+                    code_challenge=code_challenge,
+                    code_challenge_method=code_challenge_method,
+                    redirect_uri=redirect_uri,
+                )
+                if not stored_or_supplied_client_id
+                else None
+            )
+            resolved_client_id: Final = stored_or_supplied_client_id or (
+                ephemeral_dcr_client.client_id if ephemeral_dcr_client else ""
+            )
+            if not resolved_client_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "missing_client_id",
+                        "message": (
+                            "No client_id available for this MCP server. "
+                            "Either configure the server with a client_id or supply one in the request."
+                        ),
+                    },
+                )
+            return await authorize_with_server(
                 request=request,
                 mcp_server=mcp_server,
+                client_id=resolved_client_id,
+                redirect_uri=redirect_uri,
+                state=state,
                 code_challenge=code_challenge,
                 code_challenge_method=code_challenge_method,
-                redirect_uri=redirect_uri,
+                response_type=response_type,
+                scope=scope,
+                ephemeral_dcr_client=ephemeral_dcr_client,
             )
-            if not stored_or_supplied_client_id
-            else None
-        )
-        resolved_client_id: Final = stored_or_supplied_client_id or (
-            ephemeral_dcr_client.client_id if ephemeral_dcr_client else ""
-        )
-        if not resolved_client_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "missing_client_id",
-                    "message": (
-                        "No client_id available for this MCP server. "
-                        "Either configure the server with a client_id or supply one in the request."
-                    ),
-                },
-            )
-        return await authorize_with_server(
-            request=request,
-            mcp_server=mcp_server,
-            client_id=resolved_client_id,
-            redirect_uri=redirect_uri,
-            state=state,
-            code_challenge=code_challenge,
-            code_challenge_method=code_challenge_method,
-            response_type=response_type,
-            scope=scope,
-            ephemeral_dcr_client=ephemeral_dcr_client,
-        )
 
     @router.post(
         "/server/oauth/{server_id}/token",
@@ -2348,47 +2382,47 @@ if MCP_AVAILABLE:
         refresh_token: str | None = Form(None),
         scope: str | None = Form(None),
     ):
-        mcp_server: Final = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
-        _raise_if_not_oauth2(mcp_server)
-        # Sealed passthrough codes exist only for the authorization_code grant. A refresh_token
-        # grant must never open one: the minted client is unrecoverable after the single flow by
-        # contract, so an expired browser-held token re-runs authorize instead.
-        sealed_code: Final = (
-            redeem_passthrough_authorization_code(code=code, mcp_server=mcp_server, code_verifier=code_verifier)
-            if grant_type == "authorization_code"
-            else None
-        )
-        resolved_code: Final = sealed_code.upstream_code if sealed_code else code
-        # A sealed flow ran the gateway /callback as its upstream redirect (bridge short-circuit
-        # or plain flow alike), so the exchange must present that binding, not the browser page.
-        resolved_redirect_uri: Final = f"{get_request_base_url(request)}/callback" if sealed_code else redirect_uri
-        caller_client_id: Final = sealed_code.client_id if sealed_code else client_id
-        caller_client_secret: Final = sealed_code.client_secret if sealed_code else client_secret
-        resolved_client_id: Final = mcp_server.client_id or caller_client_id or ""
-        if not resolved_client_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail={
-                    "error": "missing_client_id",
-                    "message": (
-                        "No client_id available for this MCP server. "
-                        "Either configure the server with a client_id or supply one in the request."
-                    ),
-                },
+        async with _oauth_server_operation(server_id, user_api_key_dict, request=request) as mcp_server:
+            raise_if_not_oauth2(mcp_server)
+            # Sealed passthrough codes exist only for the authorization_code grant. A refresh_token
+            # grant must never open one: the minted client is unrecoverable after the single flow by
+            # contract, so an expired browser-held token re-runs authorize instead.
+            sealed_code: Final = (
+                redeem_passthrough_authorization_code(code=code, mcp_server=mcp_server, code_verifier=code_verifier)
+                if grant_type == "authorization_code"
+                else None
             )
-        return await exchange_token_with_server(
-            request=request,
-            mcp_server=mcp_server,
-            grant_type=grant_type,
-            code=resolved_code,
-            redirect_uri=resolved_redirect_uri,
-            client_id=resolved_client_id,
-            client_secret=caller_client_secret,
-            code_verifier=code_verifier,
-            refresh_token=refresh_token,
-            scope=scope,
-            client_token_endpoint_auth_method=sealed_code.token_endpoint_auth_method if sealed_code else None,
-        )
+            resolved_code: Final = sealed_code.upstream_code if sealed_code else code
+            # A sealed flow ran the gateway /callback as its upstream redirect (bridge short-circuit
+            # or plain flow alike), so the exchange must present that binding, not the browser page.
+            resolved_redirect_uri: Final = f"{get_request_base_url(request)}/callback" if sealed_code else redirect_uri
+            caller_client_id: Final = sealed_code.client_id if sealed_code else client_id
+            caller_client_secret: Final = sealed_code.client_secret if sealed_code else client_secret
+            resolved_client_id: Final = mcp_server.client_id or caller_client_id or ""
+            if not resolved_client_id:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail={
+                        "error": "missing_client_id",
+                        "message": (
+                            "No client_id available for this MCP server. "
+                            "Either configure the server with a client_id or supply one in the request."
+                        ),
+                    },
+                )
+            return await exchange_token_with_server(
+                request=request,
+                mcp_server=mcp_server,
+                grant_type=grant_type,
+                code=resolved_code,
+                redirect_uri=resolved_redirect_uri,
+                client_id=resolved_client_id,
+                client_secret=caller_client_secret,
+                code_verifier=code_verifier,
+                refresh_token=refresh_token,
+                scope=scope,
+                client_token_endpoint_auth_method=sealed_code.token_endpoint_auth_method if sealed_code else None,
+            )
 
     @router.post(
         "/server/oauth/{server_id}/register",
@@ -2400,22 +2434,24 @@ if MCP_AVAILABLE:
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
-        mcp_server: Final = await _get_cached_temporary_mcp_server_or_404(server_id, user_api_key_dict, request=request)
-        request_data: Final = await _read_request_body(request=request)
-        data: Final[dict] = {**request_data}
-        client_redirect_uris: Final = client_supplied_redirect_uris(data.get("redirect_uris"))
+        async with _oauth_server_operation(server_id, user_api_key_dict, request=request) as mcp_server:
+            request_data: Final = await read_request_body(request=request)
+            data: Final[Mapping[str, object]] = {**request_data}
+            client_redirect_uris: Final = client_supplied_redirect_uris(data.get("redirect_uris"))
+            client_application_type: Final = client_supplied_application_type(data.get("application_type"))
 
-        return await register_client_with_server(
-            request=request,
-            mcp_server=mcp_server,
-            client_name=data.get("client_name", ""),
-            grant_types=data.get("grant_types", []),
-            response_types=data.get("response_types", []),
-            token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
-            fallback_client_id=server_id,
-            persist_credentials=_user_is_full_admin(user_api_key_dict),
-            client_redirect_uris=client_redirect_uris,
-        )
+            return await register_client_with_server(
+                request=request,
+                mcp_server=mcp_server,
+                client_name=data.get("client_name", ""),
+                grant_types=data.get("grant_types", []),
+                response_types=data.get("response_types", []),
+                token_endpoint_auth_method=data.get("token_endpoint_auth_method", ""),
+                fallback_client_id=server_id,
+                persist_credentials=_user_is_full_admin(user_api_key_dict),
+                client_redirect_uris=client_redirect_uris,
+                client_application_type=client_application_type,
+            )
 
     @router.delete(
         "/server/{server_id}",
@@ -2722,7 +2758,7 @@ if MCP_AVAILABLE:
         servers: Final = {srv.server_id: srv for srv in await get_mcp_servers(prisma_client, server_ids)}
         allowed_server_ids: Final = (
             None
-            if _user_has_admin_view(user_api_key_dict)
+            if user_api_key_has_admin_view(user_api_key_dict)
             else frozenset[str]().union(
                 *[
                     await global_mcp_server_manager.get_allowed_mcp_servers(context)
@@ -2791,6 +2827,7 @@ if MCP_AVAILABLE:
 
     # ── Per-user MCP env var endpoints ────────────────────────────────────────
 
+    @catalog_operation(lambda: global_mcp_server_manager)
     async def _authorize_and_fetch_mcp_server(
         prisma_client,
         user_api_key_dict: UserAPIKeyAuth,
@@ -2812,7 +2849,7 @@ if MCP_AVAILABLE:
         authorized: Final = await catalog.resolve(
             server_id,
             user_api_key_dict,
-            is_admin_view=_user_has_admin_view(user_api_key_dict),
+            is_admin_view=user_api_key_has_admin_view(user_api_key_dict),
             not_found_detail={"error": f"MCP Server {server_id} not found"},
             forbidden_detail={
                 "error": (
@@ -3290,7 +3327,7 @@ if MCP_AVAILABLE:
         Used by the UI to show a discovery grid when adding new MCP servers.
         """
         # Admin Viewer follows the read-parity rule.
-        if not _user_has_admin_view(user_api_key_dict):
+        if not user_api_key_has_admin_view(user_api_key_dict):
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -3346,7 +3383,7 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         # Admin Viewer follows the read-parity rule.
-        if not _user_has_admin_view(user_api_key_dict):
+        if not user_api_key_has_admin_view(user_api_key_dict):
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -3425,7 +3462,7 @@ if MCP_AVAILABLE:
     ):
         """Return toolsets the calling key is allowed to access."""
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-        if _user_has_admin_view(user_api_key_dict):
+        if user_api_key_has_admin_view(user_api_key_dict):
             op: Final = user_api_key_dict.object_permission
             if op is None or not op.mcp_toolsets:
                 return await list_mcp_toolsets(prisma_client)
@@ -3445,7 +3482,7 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     ):
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
-        if not _user_has_admin_view(user_api_key_dict) and toolset_id not in await granted_toolset_ids(
+        if not user_api_key_has_admin_view(user_api_key_dict) and toolset_id not in await granted_toolset_ids(
             user_api_key_dict
         ):
             raise HTTPException(

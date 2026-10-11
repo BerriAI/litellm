@@ -125,8 +125,11 @@ else:
     VectorStoreSearchResponse = Any
 
 
-def _generate_id():  # private helper function
+def generate_id() -> str:
     return "chatcmpl-" + str(uuid.uuid4())
+
+
+_generate_id = generate_id
 
 
 class SafeAttributeModel:
@@ -155,6 +158,10 @@ class SafeAttributeModel:
 class LiteLLMCommonStrings(Enum):
     redacted_by_litellm = "redacted by litellm. 'litellm.turn_off_message_logging=True'"
     llm_provider_not_provided = "Unmapped LLM provider for this endpoint. You passed model={model}, custom_llm_provider={custom_llm_provider}. Check supported provider and route: https://docs.litellm.ai/docs/providers"
+
+
+def is_decisions_model_mode(mode: str | None) -> bool:
+    return mode in ("decisions", "evaluation")
 
 
 SupportedCacheControls: Final = ["ttl", "s-maxage", "no-cache", "no-store"]
@@ -288,6 +295,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_creation_input_token_cost: float | None
     cache_creation_input_token_cost_above_200k_tokens: float | None
+    cache_creation_input_token_cost_above_100k_tokens: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_1hr_above_100k_tokens: ReadOnly[float | None]
     cache_creation_input_token_cost_above_272k_tokens: float | None
     cache_creation_input_token_cost_above_272k_tokens_priority: float | None
     cache_creation_input_token_cost_above_272k_tokens_flex: float | None
@@ -304,6 +313,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_balanced: ReadOnly[float | None]
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost_above_200k_tokens: float | None
+    cache_read_input_token_cost_above_100k_tokens: ReadOnly[float | None]
     cache_read_input_token_cost_above_200k_tokens_priority: float | None
     cache_read_input_token_cost_above_272k_tokens: float | None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None
@@ -312,9 +322,11 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_512k_tokens: float | None
     cache_read_input_token_cost_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
+    cache_read_input_token_cost_above_100k_tokens_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_100k_tokens_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
@@ -324,6 +336,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_audio_token: float | None
     input_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
     input_cost_per_token_above_200k_tokens: float | None  # only for vertex ai gemini-2.5-pro models
+    input_cost_per_token_above_100k_tokens: ReadOnly[float | None]
     input_cost_per_token_above_200k_tokens_priority: float | None
     input_cost_per_token_above_272k_tokens: float | None  # GPT-5.4/5.4-pro: prompts >272K priced at 2x input
     input_cost_per_token_above_272k_tokens_priority: float | None
@@ -344,9 +357,11 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
     input_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
+    input_cost_per_token_above_100k_tokens_batches: ReadOnly[float | None]
     input_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_batches: float | None
     output_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
+    output_cost_per_token_above_100k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token: Required[float | None]
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
@@ -366,6 +381,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_audio_token: float | None
     output_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
     output_cost_per_token_above_200k_tokens: float | None  # only for vertex ai gemini-2.5-pro models
+    output_cost_per_token_above_100k_tokens: ReadOnly[float | None]
     output_cost_per_token_above_200k_tokens_priority: float | None
     output_cost_per_token_above_272k_tokens: float | None  # GPT-5.4/5.4-pro: prompts >272K priced at 1.5x output
     output_cost_per_token_above_272k_tokens_priority: float | None
@@ -376,6 +392,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_image: float | None
     output_cost_per_pixel: ReadOnly[float | None]
     output_cost_per_image_token: float | None
+    output_cost_per_image_token_batches: ReadOnly[float | None]
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
     output_cost_per_reasoning_token: float | None
@@ -417,6 +434,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "audio_transcription",
             "audio_speech",
             "responses",
+            "decisions",
             "evaluation",
             "ocr",
             "realtime",
@@ -476,6 +494,8 @@ class CallTypes(str, Enum):
     asearch = "asearch"
     decisions = "decisions"
     adecisions = "adecisions"
+    systemone = "systemone"
+    asystemone = "asystemone"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
@@ -664,6 +684,8 @@ CallTypesLiteral = Literal[
     "asearch",
     "decisions",
     "adecisions",
+    "systemone",
+    "asystemone",
     "_arealtime",
     "_aresponses_websocket",
     "create_batch",
@@ -775,6 +797,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/search": [CallTypes.asearch, CallTypes.search],
     "/decisions": [CallTypes.adecisions, CallTypes.decisions],
     "/v1/decisions": [CallTypes.adecisions, CallTypes.decisions],
+    "/systemone": [CallTypes.asystemone, CallTypes.systemone],
+    "/v1/systemone": [CallTypes.asystemone, CallTypes.systemone],
     # Batches
     "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
     "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
@@ -2088,6 +2112,14 @@ class ModelResponseBase(OpenAIObject):
 
     _hidden_params: dict = {}
 
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     _response_headers: dict | None = None
 
     def set_provider_response_headers(self, headers: httpx.Headers) -> None:
@@ -2129,7 +2161,7 @@ class ModelResponseStream(ModelResponseBase):
             kwargs["choices"] = [StreamingChoices()]
 
         if id is None:
-            id = _generate_id()
+            id = generate_id()
         else:
             id = id
         if created is None:
@@ -2217,7 +2249,7 @@ class ModelResponse(ModelResponseBase):
         else:
             choices = [Choices()]
         if id is None:
-            id = _generate_id()
+            id = generate_id()
         else:
             id = id
         if created is None:
@@ -2310,6 +2342,15 @@ class EmbeddingResponse(OpenAIObject):
     """Usage statistics for the embedding request."""
 
     _hidden_params: dict = {}
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     _response_headers: dict | None = None
     _response_ms: float | None = None
 
@@ -2450,6 +2491,14 @@ class TextCompletionResponse(OpenAIObject):
     _response_ms: int | None = None
     _hidden_params: HiddenParams
 
+    @property
+    def hidden_params(self) -> HiddenParams:
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: HiddenParams) -> None:
+        self._hidden_params = hidden_params
+
     def __init__(
         self,
         id=None,
@@ -2482,7 +2531,7 @@ class TextCompletionResponse(OpenAIObject):
         if object is not None:
             object = object
         if id is None:
-            id = _generate_id()
+            id = generate_id()
         else:
             id = id
         if created is None:
@@ -2613,6 +2662,14 @@ from openai.types.images_response import ImagesResponse as OpenAIImageResponse
 
 class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
     _hidden_params: dict = {}
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     usage: ImageUsage | None = None
     """
@@ -2748,6 +2805,14 @@ class TranscriptionResponse(OpenAIObject):
 
     _hidden_params: dict = {}
     _response_headers: dict | None = None
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     def __init__(self, text=None) -> None:
         super().__init__(text=text)
@@ -3060,6 +3125,14 @@ RoutingDecisionCause = Literal[
     "keyword",
     "quality_tier",
     "bandit",
+    "semantic_match",
+    "semantic_no_match",
+    "semantic_error",
+]
+
+
+ClassifierFailureReason = Literal[
+    "timeout", "circuit_open", "not_configured", "unsupported_input", "invalid_response", "declined", "classifier_error"
 ]
 
 
@@ -3092,7 +3165,10 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     """Per-request provenance for a pre-routing strategy (auto-router) decision."""
 
     router_model_name: str
-    router_type: Literal["complexity", "adaptive", "quality"]
+    router_type: ReadOnly[Literal["complexity", "adaptive", "quality", "semantic"]]
+    router_config_id: ReadOnly[str]
+    router_config_updated_at: ReadOnly[str]
+    router_config_fingerprint: ReadOnly[str]
     routed_model: str
     cause: RoutingDecisionCause
     tier: str
@@ -3104,6 +3180,8 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalation_keyword: str
     classifier_model: str
     classifier_cost: float
+    classifier_failure_reason: ReadOnly[ClassifierFailureReason]
+    classifier_error_type: ReadOnly[str]
     classifier_probabilities: ReadOnly[Mapping[str, float]]
     classifier_confidence: ReadOnly[float]
     heuristic_v2_forecast: ReadOnly[StandardLoggingHeuristicV2Forecast]
@@ -3142,6 +3220,9 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "router_model_name",
         "router_type",
+        "router_config_id",
+        "router_config_updated_at",
+        "router_config_fingerprint",
         "routed_model",
         "cause",
         "tier",
@@ -3150,6 +3231,8 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "score",
         "classifier_model",
         "classifier_cost",
+        "classifier_failure_reason",
+        "classifier_error_type",
         "classifier_probabilities",
         "classifier_confidence",
         "heuristic_v2_forecast",
@@ -3648,6 +3731,31 @@ OPENAI_RESPONSE_HEADERS: Final = [
 OtelSpanScope = Literal["full", "llm_only"]
 OTEL_SPAN_SCOPES: Final[frozenset[str]] = frozenset(get_args(OtelSpanScope))
 
+ArizeOtlpProtocol = Literal["grpc", "http/protobuf"]
+ARIZE_OTLP_PROTOCOLS: Final[frozenset[str]] = frozenset(get_args(ArizeOtlpProtocol))
+
+
+CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
+
+
+class CaptureMessageContent(str):
+    NO_CONTENT = "no_content"
+    SPAN_ONLY = "span_only"
+    EVENT_ONLY = "event_only"
+    SPAN_AND_EVENT = "span_and_event"
+
+
+# The values a team or key destination may set. OTel v2 writes content only to span attributes,
+# so the event modes stay global-only settings
+CAPTURE_MESSAGE_CONTENT_VALUES: Final[frozenset[str]] = frozenset(
+    {CaptureMessageContent.NO_CONTENT, CaptureMessageContent.SPAN_ONLY}
+)
+
+
+def captures_span_content(mode: str | None) -> bool:
+    """Whether a capture mode puts prompt and response content on spans"""
+    return mode in (CaptureMessageContent.SPAN_ONLY, CaptureMessageContent.SPAN_AND_EVENT)
+
 
 class StandardCallbackDynamicParams(TypedDict, total=False):
     # Langfuse dynamic params
@@ -3681,6 +3789,7 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     arize_space_id: str | None
     arize_success_sampling_rate: ReadOnly[float | None]
     arize_error_sampling_rate: ReadOnly[float | None]
+    arize_otlp_protocol: ReadOnly[ArizeOtlpProtocol | None]
 
     # PostHog dynamic params
     posthog_api_key: str | None
@@ -3749,6 +3858,8 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_balanced: float | None = None
     input_cost_per_token_ultrafast: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
+    cache_creation_input_token_cost_above_100k_tokens: float | None = None
+    cache_creation_input_token_cost_above_1hr_above_100k_tokens: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
     cache_creation_input_token_cost_above_272k_tokens: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_priority: float | None = None
@@ -3762,15 +3873,18 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_priority: float | None = None
     cache_read_input_token_cost_balanced: float | None = None
     cache_read_input_token_cost_ultrafast: float | None = None
+    cache_read_input_token_cost_above_100k_tokens: float | None = None
     cache_read_input_token_cost_above_200k_tokens: float | None = None
     cache_read_input_token_cost_above_200k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
     cache_read_input_token_cost_above_272k_tokens_ultrafast: float | None = None
     cache_read_input_token_cost_batches: float | None = None
+    cache_read_input_token_cost_above_100k_tokens_batches: float | None = None
     cache_read_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_creation_input_token_cost_batches: float | None = None
+    cache_creation_input_token_cost_above_100k_tokens_batches: float | None = None
     cache_creation_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_read_input_audio_token_cost: float | None = None
@@ -3779,12 +3893,14 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_audio_token: float | None = None
     input_cost_per_token_cache_hit: float | None = None
     input_cost_per_token_above_128k_tokens: float | None = None
+    input_cost_per_token_above_100k_tokens: float | None = None
     input_cost_per_token_above_200k_tokens: float | None = None
     input_cost_per_token_above_200k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_flex: float | None = None
     input_cost_per_token_above_272k_tokens_ultrafast: float | None = None
     input_cost_per_token_above_200k_tokens_batches: float | None = None
+    input_cost_per_token_above_100k_tokens_batches: float | None = None
     input_cost_per_token_above_272k_tokens_batches: float | None = None
     input_cost_per_query: float | None = None
     input_cost_per_image: float | None = None
@@ -3806,16 +3922,19 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_ultrafast: float | None = None
     output_cost_per_audio_token: float | None = None
     output_cost_per_token_above_128k_tokens: float | None = None
+    output_cost_per_token_above_100k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens: float | None = None
     output_cost_per_token_above_200k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_flex: float | None = None
     output_cost_per_token_above_272k_tokens_ultrafast: float | None = None
     output_cost_per_token_above_200k_tokens_batches: float | None = None
+    output_cost_per_token_above_100k_tokens_batches: float | None = None
     output_cost_per_token_above_272k_tokens_batches: float | None = None
     output_cost_per_character_above_128k_tokens: float | None = None
     output_cost_per_image: float | None = None
     output_cost_per_image_token: float | None = None
+    output_cost_per_image_token_batches: float | None = None
     output_cost_per_video_token: float | None = None
     output_cost_per_reasoning_token: float | None = None
     output_cost_per_reasoning_token_flex: float | None = None
@@ -3878,7 +3997,7 @@ def shared_backend_model_info(model_info: dict[str, Any]) -> dict[str, Any]:
     return {k: v for k, v in model_info.items() if k in SHARED_BACKEND_MODEL_INFO_FIELDS}
 
 
-ABOVE_THRESHOLD_COST_KEY_PATTERN: Final = re.compile(r"_above_\d+k?_tokens$")
+ABOVE_THRESHOLD_COST_KEY_PATTERN: Final = re.compile(r"_above_\d+k?_tokens(?:_batches)?$")
 
 _PRICING_FIELD_EXEMPTIONS: Final[frozenset[str]] = frozenset({"output_vector_size"})
 
@@ -3966,7 +4085,19 @@ ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
 
 anthropic_wif_litellm_params: Final = tuple(sorted(ANTHROPIC_WIF_KWARGS_KEYS))
 openai_wif_litellm_params: Final = tuple(sorted(OPENAI_WIF_KWARGS_KEYS))
-server_owned_wif_litellm_params: Final = anthropic_wif_litellm_params + openai_wif_litellm_params
+oauth_token_exchange_litellm_params: Final = (
+    "token_exchange_audience",
+    "token_exchange_endpoint",
+    "token_exchange_profile",
+    "token_exchange_scope",
+)
+github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type",)
+server_owned_wif_litellm_params: Final = (
+    anthropic_wif_litellm_params
+    + openai_wif_litellm_params
+    + oauth_token_exchange_litellm_params
+    + github_copilot_oauth_litellm_params
+)
 secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
 
 all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
@@ -4102,6 +4233,7 @@ class LlmProviders(str, Enum):
     FRIENDLIAI = "friendliai"
     FEATHERLESS_AI = "featherless_ai"
     WATSONX = "watsonx"
+    SCALEDOWN = "scaledown"
     WATSONX_TEXT = "watsonx_text"
     TRITON = "triton"
     PREDIBASE = "predibase"
@@ -4162,6 +4294,7 @@ class LlmProviders(str, Enum):
     A2A_AGENT = "a2a_agent"
     LANGGRAPH = "langgraph"
     LANGFLOW = "langflow"
+    MICROSOFT_365_COPILOT = "microsoft_365_copilot"
     MINIMAX = "minimax"
     SYNTHETIC = "synthetic"
     APERTIS = "apertis"
@@ -4317,6 +4450,15 @@ class SelectTokenizerResponse(TypedDict):
 
 class LiteLLMFineTuningJob(FineTuningJob):
     _hidden_params: dict = {}
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     seed: int | None = None
 
     def __init__(self, **kwargs) -> None:
@@ -4330,6 +4472,15 @@ class LiteLLMFineTuningJob(FineTuningJob):
 
 class LiteLLMBatch(Batch):
     _hidden_params: dict = {}
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
+
     usage: Usage | None = None
 
     def __contains__(self, key) -> bool:
@@ -4361,6 +4512,14 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
     usage: Usage
     service_tier: str | None = None
     _hidden_params: dict = {}
+
+    @property
+    def hidden_params(self) -> dict[str, object]:  # mutable-ok: API requires mutation
+        return self._hidden_params
+
+    @hidden_params.setter
+    def hidden_params(self, hidden_params: dict[str, object]) -> None:  # mutable-ok: API requires mutation
+        self._hidden_params = hidden_params
 
     @field_serializer("results")
     def _serialize_results(self, results: OpenAIRealtimeStreamList) -> list[dict[str, Any]]:
