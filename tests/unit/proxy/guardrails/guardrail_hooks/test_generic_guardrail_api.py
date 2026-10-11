@@ -6,6 +6,7 @@ specifically focusing on metadata extraction and passing.
 """
 
 import os
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -1331,6 +1332,44 @@ class TestGenericGuardrailAPIStreamingConfig:
 
         assert guardrail.streaming_end_of_stream_only is False
         assert guardrail.streaming_sampling_rate == 3
+
+    @pytest.mark.parametrize(
+        ("configured", "streams_live"),
+        [
+            pytest.param(None, False, id="unset-keeps-the-pipeline-buffered"),
+            pytest.param(True, False, id="true-keeps-the-pipeline-buffered"),
+            pytest.param(False, True, id="false-streams-the-pipeline-live"),
+        ],
+    )
+    def test_initialize_guardrail_streaming_buffer_until_moderated_reaches_the_pipeline_live_check(
+        self, monkeypatch: pytest.MonkeyPatch, configured: bool | None, streams_live: bool
+    ) -> None:
+        from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
+            initialize_guardrail,
+        )
+        from litellm.proxy.utils import _pipelines_stream_live
+        from litellm.types.guardrails import LitellmParams
+        from litellm.types.proxy.policy_engine.pipeline_types import GuardrailPipeline, PipelineStep
+
+        litellm_params: Final = LitellmParams.model_validate(
+            {
+                "guardrail": "generic_guardrail_api",
+                "mode": "post_call",
+                "api_base": "https://api.test.guardrail.com",
+                "default_on": False,
+                **({} if configured is None else {"streaming_buffer_until_moderated": configured}),
+            }
+        )
+
+        with patch("litellm.logging_callback_manager.add_litellm_callback"):
+            guardrail: Final = initialize_guardrail(litellm_params, {"guardrail_name": "pipeline-scanner"})
+        monkeypatch.setattr(litellm, "callbacks", [guardrail])
+        pipeline: Final = GuardrailPipeline(
+            mode="post_call",
+            steps=[PipelineStep(guardrail="pipeline-scanner", on_pass="allow", on_fail="next")],
+        )
+
+        assert _pipelines_stream_live((("detect-only", pipeline),)) is streams_live
 
     def test_initialize_guardrail_optional_params_defaults_do_not_shadow_top_level(
         self,
