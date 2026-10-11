@@ -180,34 +180,31 @@ def _coerce_missing_choices_status(value: object) -> int | None:
 def _get_missing_choices_error_args(response_object: Mapping[str, object]) -> tuple[int, str]:
     error: Final = response_object.get("error")
     top_level_status_values: Final = tuple(response_object.get(field) for field in ("status", "status_code"))
-    nested_error: Final = (
-        {key: value for key, value in error.items() if isinstance(key, str)} if isinstance(error, Mapping) else None
-    )
-    nested_status_values: Final = (
-        tuple(nested_error.get(field) for field in ("code", "status", "status_code"))
-        if nested_error is not None
-        else ()
-    )
-    status_values: Final = (
+    nested_status_values: Final[list[object]] = []
+    nested_message_values: Final[list[object]] = []
+    if isinstance(error, Mapping):
+        for field in ("code", "status", "status_code"):
+            value: object = error.get(field)
+            nested_status_values.append(value)
+        for field in ("message", "response"):
+            value: object = error.get(field)
+            nested_message_values.append(value)
+    elif isinstance(error, str):
+        nested_message_values.append(error)
+
+    status_values: Final[list[object]] = [
         *(value for value in top_level_status_values if isinstance(value, int) and not isinstance(value, bool)),
         *(value for value in top_level_status_values if isinstance(value, str)),
         *nested_status_values,
-    )
+    ]
     status_code: Final = next(
         (value for candidate in status_values if (value := _coerce_missing_choices_status(candidate)) is not None),
         500,
     )
-    nested_message_values: Final = (
-        tuple(nested_error.get(field) for field in ("message", "response"))
-        if nested_error is not None
-        else (error,)
-        if isinstance(error, str)
-        else ()
-    )
-    message_values: Final = (
+    message_values: Final[list[object]] = [
         *(response_object.get(field) for field in ("response", "message")),
         *nested_message_values,
-    )
+    ]
     message: Final = next(
         (value for value in message_values if isinstance(value, str) and value.strip()),
         _invalid_choices_message(response_object),
@@ -674,7 +671,6 @@ def convert_to_model_response_object(
         response_object is not None
         and "error" in response_object
         and response_object["error"] is not None
-        and not (response_type == "completion" and not response_object.get("choices"))
     ):
         error_obj: Final = response_object["error"]
         has_meaningful_error = False
@@ -693,15 +689,21 @@ def convert_to_model_response_object(
 
         if has_meaningful_error:
             error_args: Final = {"status_code": 422, "message": "Error in response object"}
-            if isinstance(error_obj, dict):
-                if "code" in error_obj:
-                    error_args["status_code"] = error_obj["code"]
-                if "message" in error_obj:
-                    if isinstance(error_obj["message"], dict):
-                        message_str = json.dumps(error_obj["message"])
-                    else:
-                        message_str = str(error_obj["message"])
-                    error_args["message"] = message_str
+            if response_type == "completion" and not response_object.get("choices"):
+                error_status, error_message = _get_choices_error_args(response_object)
+                error_args["status_code"] = error_status
+                error_args["message"] = error_message
+                if isinstance(error_obj, dict) and isinstance(error_obj.get("message"), dict):
+                    error_args["message"] = json.dumps(error_obj["message"])
+            else:
+                if isinstance(error_obj, dict):
+                    if "code" in error_obj:
+                        error_args["status_code"] = error_obj["code"]
+                    if "message" in error_obj:
+                        if isinstance(error_obj["message"], dict):
+                            error_args["message"] = json.dumps(error_obj["message"])
+                        else:
+                            error_args["message"] = str(error_obj["message"])
             raised_exception: Final = Exception()
             setattr(raised_exception, "status_code", error_args["status_code"])
             setattr(raised_exception, "message", error_args["message"])
