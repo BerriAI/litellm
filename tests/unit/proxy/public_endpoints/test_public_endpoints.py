@@ -1587,6 +1587,23 @@ def test_get_whats_new_local_mode_serves_bundled_list(
 
 
 @pytest.mark.asyncio
+async def test_get_whats_new_serves_bundled_list_without_fetching_when_no_url_is_configured(
+    monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
+) -> None:
+    from litellm.proxy.public_endpoints.public_endpoints import _load_bundled_whats_new, get_whats_new
+
+    monkeypatch.delenv("LITELLM_LOCAL_WHATS_NEW", raising=False)
+
+    async def forbidden_fetch(url: str) -> WhatsNewResponse:
+        raise AssertionError(f"no URL is configured, so nothing may be fetched, got {url}")
+
+    served = await get_whats_new(url=None, fetch=forbidden_fetch)
+
+    assert served == _load_bundled_whats_new()
+    assert len(served.launches) > 0
+
+
+@pytest.mark.asyncio
 async def test_get_whats_new_fetches_once_per_process(
     monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
 ) -> None:
