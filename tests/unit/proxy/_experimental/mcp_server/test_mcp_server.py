@@ -1,11 +1,14 @@
 # Create server parameters for stdio connection
 import asyncio
+import json
 import os
 from typing import Final
 
 import pytest
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 from contextlib import asynccontextmanager, nullcontext
+
+from starlette.types import Receive, Scope, Send
 
 
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -3134,7 +3137,8 @@ async def test_mcp_admission_body_peek_times_out_without_losing_the_body(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_mcp_routing_stashes_peeked_body_for_auth():
+@pytest.mark.parametrize("method", ["tools/list", "tools/call", ["tools/list"]])
+async def test_mcp_routing_stashes_only_method_for_auth_and_replays_full_body(method: str | list[str]):
     try:
         from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
             MCP_PEEKED_BODY_SCOPE_KEY,
@@ -3149,7 +3153,15 @@ async def test_mcp_routing_stashes_peeked_body_for_auth():
     except ImportError:
         pytest.skip("MCP server not available")
 
-    jsonrpc_body: Final = b'{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+    jsonrpc_body: Final = json.dumps(
+        {
+            "jsonrpc": "2.0",
+            "id": 2,
+            "method": method,
+            "model": "zero-cost-model",
+            "params": {},
+        }
+    ).encode()
     scope = {
         "type": "http",
         "method": "POST",
@@ -3161,10 +3173,15 @@ async def test_mcp_routing_stashes_peeked_body_for_auth():
     }
     receive = AsyncMock(side_effect=[{"type": "http.request", "body": jsonrpc_body, "more_body": False}])
     send = AsyncMock()
-    stateless_called = []
 
-    async def stateless_handle(s, r, se) -> None:
-        stateless_called.append(1)  # mutable-ok: records the manager the handler dispatched to
+    async def stateless_handle(_scope: Scope, downstream_receive: Receive, _send: Send) -> None:
+        assert await downstream_receive() == {
+            "type": "http.request",
+            "body": jsonrpc_body,
+            "more_body": False,
+        }
+
+    stateless_handle_mock: Final = AsyncMock(side_effect=stateless_handle)
 
     with (
         patch(  # test-quality-ok: the ASGI handler reads auth from a module-level helper; the suite's only seam
@@ -3182,7 +3199,7 @@ async def test_mcp_routing_stashes_peeked_body_for_auth():
             True,
         ),
         patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
-            session_manager_stateless, "handle_request", side_effect=stateless_handle
+            session_manager_stateless, "handle_request", side_effect=stateless_handle_mock
         ),
         patch.object(  # test-quality-ok: session managers are module-level singletons; the suite's only seam
             session_manager_stateless, "_server_instances", {}
@@ -3193,10 +3210,10 @@ async def test_mcp_routing_stashes_peeked_body_for_auth():
     ):
         await handle_streamable_http_mcp(scope, receive, send)
 
-    assert stateless_called, "tools/list without a session should route to the stateless manager"
-    assert await scope[MCP_PEEKED_BODY_SCOPE_KEY]() == jsonrpc_body
-    request_data: Final = await _read_request_body(_admission_request(scope))
-    assert request_data.get("method") == "tools/list"
+    stateless_handle_mock.assert_awaited_once()
+    assert await _read_request_body(_admission_request(scope)) == (
+        {"method": method} if isinstance(method, str) else {}
+    )
 
 
 @pytest.mark.asyncio

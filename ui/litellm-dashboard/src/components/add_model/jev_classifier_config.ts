@@ -27,6 +27,7 @@ const isSupportedClassifierModel = (provider: OssClassifierProvider | undefined,
 };
 
 const jevClassifierConfigFields = {
+  deployment_name: z.preprocess((value) => value ?? undefined, z.string().trim().min(1).optional()),
   provider: z.preprocess(
     (value) => (value === "typesafe" ? "jev" : value),
     z.enum(["jev", "laya", "bespoke", "databricks"]).optional(),
@@ -45,10 +46,13 @@ const jevClassifierConfigFields = {
 export const jevClassifierConfigSchema = z
   .object(jevClassifierConfigFields)
   .transform((config) => ({ ...config, model: config.model ?? defaultClassifierModel(config.provider) }))
-  .refine((config) => isSupportedClassifierModel(config.provider, config.model), {
-    error: "Select a supported classifier model, or enter the bare Databricks serving endpoint name",
-    path: ["model"],
-  });
+  .refine(
+    (config) => config.deployment_name !== undefined || isSupportedClassifierModel(config.provider, config.model),
+    {
+      error: "Select a supported classifier model, or enter the bare Databricks serving endpoint name",
+      path: ["model"],
+    },
+  );
 
 export type JevClassifierConfig = z.infer<typeof jevClassifierConfigSchema>;
 
@@ -73,6 +77,7 @@ export const hydrateOssClassifier = (config: {
 export const normalizeJevClassifierConfig = (
   config: JevClassifierConfig = defaultJevClassifierConfig(),
 ): JevClassifierConfig => ({
+  ...(config.deployment_name !== undefined && { deployment_name: config.deployment_name }),
   provider: config.provider ?? "jev",
   model: config.model.trim(),
   timeout_ms: config.timeout_ms,
@@ -82,3 +87,6 @@ export const normalizeJevClassifierConfig = (
     circuit_breaker_cooldown_seconds: config.circuit_breaker_cooldown_seconds,
   }),
 });
+
+export const decisionDeploymentName = (config: JevClassifierConfig | undefined): string | undefined =>
+  config?.deployment_name;

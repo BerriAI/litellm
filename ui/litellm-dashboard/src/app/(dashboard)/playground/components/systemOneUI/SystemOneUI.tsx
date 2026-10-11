@@ -5,6 +5,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { DECISIONS_DOCS_URL } from "@/lib/decisionModels";
 import { uiHref } from "@/utils/uiHref";
@@ -35,6 +36,7 @@ interface SystemOneSendVariables {
   signal: AbortSignal;
 }
 
+export const NOUL_HELP = "noul is a yes / no question. The model returns the probability that the answer is yes.";
 const CUSTOM_PRESET = "custom";
 const DECISION_MODELS_DISCUSSION_URL = "https://github.com/BerriAI/litellm/discussions/44231";
 
@@ -265,9 +267,17 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           <Info />
           <AlertTitle>{endpoint}</AlertTitle>
           <AlertDescription>
-            {endpoint === "/v1/decisions"
-              ? "Uses input and a questions array with predicate, choice, and score questions. Edit the form or JSON and inspect the response JSON in the OpenAI Decisions format."
-              : "Uses state and a questions object with noul, choice, and score questions in the System One format."}{" "}
+            {endpoint === "/v1/decisions" ? (
+              "Uses input and a questions array with predicate, choice, and score questions. Edit the form or JSON and inspect the response JSON in the OpenAI Decisions format."
+            ) : (
+              <>
+                Uses state and a questions object with{" "}
+                <SimpleTooltip content={NOUL_HELP} className="underline decoration-dotted underline-offset-2">
+                  noul
+                </SimpleTooltip>
+                , choice, and score questions in the System One format.
+              </>
+            )}{" "}
             Pick a decision model under Model, or omit model to use the proxy&apos;s configured default.{" "}
             <a href={DECISIONS_DOCS_URL} target="_blank" rel="noopener noreferrer" className="underline">
               How to call /v1/decisions and /v1/systemone

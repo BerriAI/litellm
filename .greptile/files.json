@@ -197,6 +197,13 @@
       ]
     },
     {
+      "path": "litellm-rust/crates/llms/src/anthropic/chat/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/anthropic/chat/",
+      "scope": [
+        "litellm-rust/crates/llms/src/anthropic/chat/**"
+      ]
+    },
+    {
       "path": "litellm-rust/crates/llms/src/anthropic/count_tokens/AGENTS.md",
       "description": "Conventions for code under litellm-rust/crates/llms/src/anthropic/count_tokens/",
       "scope": [
@@ -225,10 +232,38 @@
       ]
     },
     {
+      "path": "litellm-rust/crates/llms/src/azure_ai/ocr/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/azure_ai/ocr/",
+      "scope": [
+        "litellm-rust/crates/llms/src/azure_ai/ocr/**"
+      ]
+    },
+    {
       "path": "litellm-rust/crates/llms/src/base_llm/messages/AGENTS.md",
       "description": "Conventions for code under litellm-rust/crates/llms/src/base_llm/messages/",
       "scope": [
         "litellm-rust/crates/llms/src/base_llm/messages/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/bedrock/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/bedrock/",
+      "scope": [
+        "litellm-rust/crates/llms/src/bedrock/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/bedrock/audio_transcription/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/bedrock/audio_transcription/",
+      "scope": [
+        "litellm-rust/crates/llms/src/bedrock/audio_transcription/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/bedrock/chat/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/bedrock/chat/",
+      "scope": [
+        "litellm-rust/crates/llms/src/bedrock/chat/**"
       ]
     },
     {
@@ -239,6 +274,62 @@
       ]
     },
     {
+      "path": "litellm-rust/crates/llms/src/cohere/ocr/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/cohere/ocr/",
+      "scope": [
+        "litellm-rust/crates/llms/src/cohere/ocr/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/deepseek/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/deepseek/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/deepseek/messages/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/mistral/ocr/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/mistral/ocr/",
+      "scope": [
+        "litellm-rust/crates/llms/src/mistral/ocr/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/openai/responses/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/openai/responses/",
+      "scope": [
+        "litellm-rust/crates/llms/src/openai/responses/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/openai_like/chat/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/openai_like/chat/",
+      "scope": [
+        "litellm-rust/crates/llms/src/openai_like/chat/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/reducto/ocr/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/reducto/ocr/",
+      "scope": [
+        "litellm-rust/crates/llms/src/reducto/ocr/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/vertex_ai/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/vertex_ai/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/vertex_ai/messages/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/vertex_ai/ocr/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/vertex_ai/ocr/",
+      "scope": [
+        "litellm-rust/crates/llms/src/vertex_ai/ocr/**"
+      ]
+    },
+    {
       "path": "litellm-rust/crates/llms-types/AGENTS.md",
       "description": "Conventions for code under litellm-rust/crates/llms-types/",
       "scope": [
@@ -246,10 +337,24 @@
       ]
     },
     {
-      "path": "litellm-rust/crates/llms-types/src/formats/AGENTS.md",
-      "description": "Conventions for code under litellm-rust/crates/llms-types/src/formats/",
+      "path": "litellm-rust/crates/llms-types/src/formats/audio_transcription/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms-types/src/formats/audio_transcription/",
       "scope": [
-        "litellm-rust/crates/llms-types/src/formats/**"
+        "litellm-rust/crates/llms-types/src/formats/audio_transcription/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms-types/src/formats/batches/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms-types/src/formats/batches/",
+      "scope": [
+        "litellm-rust/crates/llms-types/src/formats/batches/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms-types/src/formats/chat_completions/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms-types/src/formats/chat_completions/",
+      "scope": [
+        "litellm-rust/crates/llms-types/src/formats/chat_completions/**"
       ]
     },
     {
@@ -260,10 +365,45 @@
       ]
     },
     {
-      "path": "litellm-rust/crates/llms-types/src/providers/AGENTS.md",
-      "description": "Conventions for code under litellm-rust/crates/llms-types/src/providers/",
+      "path": "litellm-rust/crates/llms-types/src/formats/ocr/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms-types/src/formats/ocr/",
       "scope": [
-        "litellm-rust/crates/llms-types/src/providers/**"
+        "litellm-rust/crates/llms-types/src/formats/ocr/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms-types/src/formats/responses/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms-types/src/formats/responses/",
+      "scope": [
+        "litellm-rust/crates/llms-types/src/formats/responses/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms-types/src/providers/anthropic/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms-types/src/providers/anthropic/",
+      "scope": [
+        "litellm-rust/crates/llms-types/src/providers/anthropic/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms-types/src/providers/bedrock/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms-types/src/providers/bedrock/",
+      "scope": [
+        "litellm-rust/crates/llms-types/src/providers/bedrock/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms-types/src/providers/minimax/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms-types/src/providers/minimax/",
+      "scope": [
+        "litellm-rust/crates/llms-types/src/providers/minimax/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms-types/src/providers/vertex_ai/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms-types/src/providers/vertex_ai/",
+      "scope": [
+        "litellm-rust/crates/llms-types/src/providers/vertex_ai/**"
       ]
     },
     {
