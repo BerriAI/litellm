@@ -11,7 +11,7 @@ import {
 import type { ReactElement } from "react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import SystemOneUI, { NOUL_HELP } from "./SystemOneUI";
+import SystemOneUI from "./SystemOneUI";
 import type { SystemOneResponse } from "./lib/schemas";
 import type { OpenAIDecisionsResponse } from "./lib/openAIDecisions";
 
@@ -194,17 +194,11 @@ describe("SystemOneUI integration", () => {
     expect(screen.queryByText(/TypeSafe/)).not.toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
 
-    expect(screen.getByRole("note", { name: "Decision endpoint notice" })).toHaveTextContent(
-      "omit model to use the proxy's configured default.",
-    );
     expect(screen.getByRole("link", { name: "How to call /v1/decisions and /v1/systemone" })).toHaveAttribute(
       "href",
       "https://docs.litellm.ai/docs/decisions",
     );
-    expect(screen.getByRole("link", { name: "Give us feedback on what you want for decision models" })).toHaveAttribute(
-      "href",
-      "https://github.com/BerriAI/litellm/discussions/44231",
-    );
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
@@ -653,6 +647,27 @@ describe("SystemOneUI integration", () => {
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 
+  it("keeps Send below the form and shows results only after a request", async () => {
+    const user = userEvent.setup();
+    render(<SystemOneUI accessToken="session-key" />);
+
+    const send = screen.getByRole("button", { name: "Send" });
+    const editor = screen.getByRole("region", { name: "Decisions request editor" });
+    const form = within(editor).getByRole("textbox", { name: "Input" });
+    expect(form.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("region", { name: "Decisions results" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+
+    await user.click(send);
+
+    const results = await screen.findByRole("region", { name: "Decisions results" });
+    expect(within(results).getByText("Calibrated probabilities")).toBeInTheDocument();
+    expect(editor.compareDocumentPosition(results) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    fireEvent.change(within(editor).getByRole("textbox", { name: "Input" }), { target: { value: "Edited state" } });
+    expect(screen.queryByRole("region", { name: "Decisions results" })).not.toBeInTheDocument();
+  });
+
   it("sends to /v1/systemone even without discovered models and renders calibrated answers", async () => {
     const user = userEvent.setup();
     sessionStorage.setItem("customProxyBaseUrl", "https://stale.example.com/");
@@ -712,7 +727,8 @@ describe("SystemOneUI integration", () => {
 
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     await userEvent.click(screen.getByRole("tab", { name: "Form" }));
-    expect(screen.getByText("Enter a valid request to preview its state and questions.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
+    expect(screen.queryByRole("region", { name: "Decisions results" })).not.toBeInTheDocument();
   });
 
   it("sends structured native questions without changing their payload", async () => {
@@ -729,7 +745,6 @@ describe("SystemOneUI integration", () => {
     fireEvent.change(editor, { target: { value: draft } });
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
     await user.click(screen.getByRole("tab", { name: "Form" }));
-    expect(screen.getByText(/"text": "Help"/)).toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("Selected choice")).toBeInTheDocument();
@@ -920,12 +935,9 @@ describe("SystemOneUI integration", () => {
       fireEvent.blur(field);
     }
 
-    it("explains noul on hover in the banner and on the answer type option", async () => {
+    it("explains noul on the answer type option", async () => {
       const user = userEvent.setup();
       render(<SystemOneUI accessToken="session-key" />);
-
-      await user.hover(screen.getByText("noul", { selector: "span.cursor-help" }));
-      expect(await screen.findByText(NOUL_HELP)).toBeInTheDocument();
 
       question("has_repro_steps").getByRole("combobox", { name: "Answer type" }).focus();
       await user.keyboard("{ArrowDown}");
