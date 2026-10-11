@@ -1,7 +1,11 @@
+import json
+from unittest.mock import Mock, patch
+
 import pytest
 
 import litellm
 from litellm.cost_calculator import rerank_cost
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.greenpt.rerank.transformation import GreenPTRerankConfig
 
 
@@ -102,3 +106,28 @@ def test_calculate_rerank_cost_missing_usage_or_pricing(billed_units, model_info
         billed_units=billed_units,
         model_info=model_info,
     ) == (0.0, 0.0)
+
+
+def test_public_rerank_call_sends_request_and_costs_tokens():
+    response = Mock()
+    response.raise_for_status = Mock()
+    response.json.return_value = {
+        "id": "rerank-1",
+        "results": [{"index": 0, "relevance_score": 0.9}],
+        "usage": {"total_tokens": 1000},
+    }
+
+    with patch.object(HTTPHandler, "post", return_value=response) as mock_post:
+        result = litellm.rerank(
+            model="greenpt/green-rerank",
+            query="low-carbon inference",
+            documents=["GreenPT", "Other provider"],
+            api_key="test-key",
+            client=HTTPHandler(),
+        )
+
+    assert mock_post.call_args.kwargs["url"] == "https://api.greenpt.ai/v1/rerank"
+    assert mock_post.call_args.kwargs["headers"]["Authorization"] == "Bearer test-key"
+    assert json.loads(mock_post.call_args.kwargs["data"])["top_n"] == 2
+    assert result.results[0]["index"] == 0
+    assert result._hidden_params["response_cost"] == pytest.approx(0.000136524)

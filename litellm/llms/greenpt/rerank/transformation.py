@@ -1,3 +1,4 @@
+from collections.abc import Mapping, Sized
 from typing import Final
 
 from litellm.llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
@@ -7,41 +8,43 @@ from litellm.types.utils import ModelInfo
 
 
 class GreenPTRerankConfig(HostedVLLMRerankConfig):
-    def get_supported_cohere_rerank_params(self, model: str) -> list:  # mutable-ok: mirrors override contract
+    def get_supported_cohere_rerank_params(self, model: str) -> list[str]:  # mutable-ok: mirrors override contract
         return ["query", "documents", "top_n", "return_documents"]
 
     def validate_environment(
         self,
-        headers: dict,  # mutable-ok: mirrors override contract
+        headers: dict[str, str],  # mutable-ok: mirrors override contract
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,  # mutable-ok: mirrors override contract
-    ) -> dict:  # mutable-ok: mirrors override contract
+        optional_params: dict[str, object] | None = None,  # mutable-ok: mirrors override contract
+        litellm_params: Mapping[str, object] | None = None,
+    ) -> dict[str, str]:  # mutable-ok: mirrors override contract
         resolved_api_key: Final = api_key or get_secret_str("GREENPT_API_KEY")
         if resolved_api_key is None:
             raise ValueError("GreenPT API key is required. Set GREENPT_API_KEY.")
-        return super().validate_environment(
-            headers=headers,
-            model=model,
-            api_key=resolved_api_key,
-            optional_params=optional_params,
-        )
+        return {
+            "Authorization": f"Bearer {resolved_api_key}",
+            "accept": "application/json",
+            "content-type": "application/json",
+            **headers,
+        }
 
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,  # mutable-ok: mirrors override contract
-        headers: dict,  # mutable-ok: mirrors override contract
-        litellm_params: dict | None = None,  # mutable-ok: mirrors override contract
-    ) -> dict:  # mutable-ok: mirrors override contract
-        request: Final = super().transform_rerank_request(
+        optional_rerank_params: dict[str, object],  # mutable-ok: mirrors override contract
+        headers: dict[str, str],  # mutable-ok: mirrors override contract
+        litellm_params: dict[str, object] | None = None,  # mutable-ok: mirrors override contract
+    ) -> dict[str, object]:  # mutable-ok: mirrors override contract
+        request: Final[Mapping[str, object]] = super().transform_rerank_request(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # HostedVLLMRerankConfig returns an untyped dict
             model=model,
             optional_rerank_params=optional_rerank_params,
             headers=headers,
             litellm_params=litellm_params,
         )
-        request.setdefault("top_n", len(request["documents"]))
-        return request
+        documents: Final = optional_rerank_params["documents"]
+        top_n_default: Final = len(documents) if isinstance(documents, Sized) else None
+        return {"top_n": top_n_default, **request} if top_n_default is not None else {**request}
 
     def calculate_rerank_cost(
         self,
