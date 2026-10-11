@@ -26,7 +26,9 @@ from starlette.types import Message, Receive, Scope, Send
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
+    MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS,
     MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH,
+    MCP_PEEKED_BODY_SCOPE_KEY,
 )
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -81,6 +83,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     LITELLM_MCP_SERVER_DESCRIPTION,
     LITELLM_MCP_SERVER_NAME,
     LITELLM_MCP_SERVER_VERSION,
+    merge_mcp_headers,
 )
 from litellm.proxy._types import (
     ProxyException,
@@ -655,6 +658,7 @@ if MCP_AVAILABLE:
         _stateful_session_locks.pop(session_id, None)
         _stateful_session_active_request_counts.pop(session_id, None)
         _stateful_session_client_info.pop(session_id, None)
+        operations.global_mcp_server_manager.release_upstream_sessions(session_id)
 
     # Keep this alias so existing references to session_manager still work
     session_manager: Final = session_manager_stateless
@@ -790,6 +794,7 @@ if MCP_AVAILABLE:
                     _stateful_auth_context_cleanup_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
                         await _stateful_auth_context_cleanup_task
+                await operations.global_mcp_server_manager.close_all_upstream_sessions()
                 if _session_manager_stateful_cm:
                     await _session_manager_stateful_cm.__aexit__(None, None, None)
                 if _session_manager_cm:
@@ -837,6 +842,7 @@ if MCP_AVAILABLE:
                 headers,
                 client_ip,
             ) = await get_or_extract_auth_context()
+            request: Final[object] = getattr(ctx, "request", None)
             yield operations.prepare_context(
                 auth,
                 token,
@@ -848,6 +854,11 @@ if MCP_AVAILABLE:
                 _mcp_proxy_mode.get(),
                 wire_compat_for(ctx.protocol_version),
                 ctx.protocol_version,
+                incoming_bearer_token=(
+                    MCPRequestHandler.get_guardrail_bearer_token(request.headers, auth)
+                    if isinstance(request, StarletteRequest)
+                    else None
+                ),
             )
 
     async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListToolsResult:
@@ -1255,6 +1266,17 @@ if MCP_AVAILABLE:
             return f"ip:{hashlib.sha256(client_ip.encode('utf-8')).hexdigest()}"
         return "anonymous"
 
+    def _admission_auth_body(body: bytes) -> bytes:
+        """Return only the JSON-RPC method for admission auth."""
+        try:
+            data: Final = TypeAdapter(dict[str, object]).validate_json(body)
+        except (ValueError, TypeError):
+            return b"{}"
+        method: Final = data.get("method")
+        if not isinstance(method, str):
+            return b"{}"
+        return json.dumps({"method": method}).encode()
+
     def _is_initialize_request(body: bytes) -> bool:
         """
         Check if the request body is a JSON-RPC initialize method.
@@ -1395,6 +1417,7 @@ if MCP_AVAILABLE:
         receive: Receive,
         *,
         full_body: bool = False,
+        already_read: int = 0,
     ) -> tuple[list[Message], bytes]:
         """
         Read just enough of the request body to decide whether this is a
@@ -1405,14 +1428,14 @@ if MCP_AVAILABLE:
         Stops reading from the wire as soon as either (a) we have peeked
         ``_MCP_ROUTING_PEEK_MAX_BYTES`` of body, or (b) the body is complete.
         The remainder of an oversized body is streamed lazily through
-        ``wrapped_receive`` in the caller — so an authenticated client cannot
+        ``_LazyPeekedBody.receive`` in the caller — so an authenticated client cannot
         force the proxy to buffer an arbitrarily large payload just to make a
         routing decision. Modern interaction preflight requests the full body,
         which the SDK's single-exchange transport also requires.
         """
         consumed_messages: Final[list[Message]] = []
         body_chunks: Final[list[bytes]] = []
-        peeked_bytes = 0
+        peeked_bytes = already_read
 
         while True:
             message = await receive()
@@ -1449,6 +1472,60 @@ if MCP_AVAILABLE:
                 break
 
         return consumed_messages, b"".join(body_chunks)
+
+    _PeekedRead = tuple[list[Message], bytes]
+
+    class _LazyPeekedBody:
+        """Reads the POST body for routing and auth only when first asked, so an
+        allowlist rejection never touches the receive channel. Whatever it
+        consumed is replayed to the downstream handler through ``receive``,
+        which falls through to the wire once the replay buffer is drained."""
+
+        __slots__ = ("_consumed_messages", "_peeked_body", "_read", "_receive")
+
+        def __init__(self, receive: Receive) -> None:
+            self._receive = receive
+            self._read: asyncio.Future[_PeekedRead] | None = None
+            self._consumed_messages: list[Message] | None = None
+            self._peeked_body: bytes = b""
+
+        def _start_read(self) -> asyncio.Future[_PeekedRead]:
+            if self._read is None:
+                self._read = asyncio.ensure_future(_read_request_body_for_routing(self._receive))
+            return self._read
+
+        async def body(self) -> bytes:
+            if self._consumed_messages is None:
+                self._consumed_messages, self._peeked_body = await self._start_read()
+            return self._peeked_body
+
+        async def admission_body(self) -> bytes:
+            try:
+                await asyncio.wait_for(
+                    asyncio.shield(self._start_read()), timeout=MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS
+                )
+            except asyncio.TimeoutError:
+                return b""
+            return await self.body()
+
+        async def full_body(self) -> bytes:
+            await self.body()
+            consumed: Final = self._consumed_messages or []
+            consumed_body: Final = b"".join(message.get("body", b"") or b"" for message in consumed)
+            if len(consumed_body) > session_manager_stateless.max_request_body_size:
+                raise HTTPException(status_code=413, detail="Request body too large")
+            if not consumed or consumed[-1].get("type") != "http.request" or not consumed[-1].get("more_body", False):
+                return consumed_body
+            rest_messages, rest_body = await _read_request_body_for_routing(
+                self._receive, full_body=True, already_read=len(consumed_body)
+            )
+            self._consumed_messages = [*consumed, *rest_messages]
+            return consumed_body + rest_body
+
+        async def receive(self) -> Message:
+            if self._consumed_messages:
+                return self._consumed_messages.pop(0)
+            return await self._receive()
 
     async def _handle_stale_mcp_session(
         scope: Scope,
@@ -1941,6 +2018,10 @@ if MCP_AVAILABLE:
         user_api_key_auth: UserAPIKeyAuth | None,
         mcp_servers: list[str] | None,
         client_ip: str | None,
+        *,
+        oauth2_headers: Mapping[str, str] | None,
+        mcp_server_auth_headers: dict[str, dict[str, str]] | None,
+        raw_headers: Mapping[str, str] | None,
     ) -> None:
         """Probe pass-through upstream servers in parallel before the MCP session starts.
 
@@ -1955,8 +2036,7 @@ if MCP_AVAILABLE:
         Fails-open: network errors are logged and the request is allowed through.
 
         """
-        forwarded_auth: Final = _get_forwarded_auth_from_scope(scope)
-        if not forwarded_auth:
+        if not oauth2_headers and not mcp_server_auth_headers:
             return
 
         # Use the authorized server set, not the raw user-supplied names, so that
@@ -1966,27 +2046,48 @@ if MCP_AVAILABLE:
             mcp_servers=mcp_servers,
             client_ip=client_ip,
         )
-        passthrough_targets: Final[tuple[tuple[MCPServer, str, str], ...]] = tuple(
-            (srv, forwarded_auth, srv.name)
+        prepared_headers: Final = tuple(
+            (
+                srv,
+                operations._prepare_mcp_server_headers(
+                    server=srv,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    mcp_auth_header=None,
+                    oauth2_headers=dict(oauth2_headers) if oauth2_headers is not None else None,
+                    raw_headers=dict(raw_headers) if raw_headers is not None else None,
+                    user_api_key_auth=user_api_key_auth,
+                    scope_servers=allowed_servers,
+                ),
+            )
             for srv in allowed_servers
-            # Restrict to genuine OAuth pass-through servers (auth_type none +
-            # Authorization in extra_headers). Gateway-managed OAuth2 servers
-            # must not receive the ``resource_metadata=`` challenge emitted
-            # below — they require ``authorization_uri=`` pointing at the
-            # gateway AS metadata. ``is_oauth_passthrough`` already requires
-            # ``auth_type in (None, MCPAuth.none)``, which is mutually
-            # exclusive with ``has_client_credentials`` (oauth2 + M2M flow),
-            # so M2M servers are implicitly excluded here.
             if srv.is_oauth_passthrough
         )
-        probe_targets: Final = passthrough_targets
+        probe_headers: Final = tuple(
+            (
+                srv,
+                merge_mcp_headers(
+                    extra_headers=auth if isinstance(auth, dict) else None,
+                    static_headers=extra,
+                ),
+            )
+            for srv, (auth, extra) in prepared_headers
+        )
+        probe_targets: Final[tuple[tuple[MCPServer, str, str], ...]] = tuple(
+            (srv, auth_header, srv.name)
+            for srv, headers in probe_headers
+            if (
+                auth_header := next(
+                    (value for name, value in (headers or {}).items() if name.lower() == "authorization"), None
+                )
+            )
+        )
         if not probe_targets:
             return
 
         probe_results: Final = await asyncio.gather(
             *[_probe_upstream_auth(srv.url or "", auth_header) for srv, auth_header, _ in probe_targets]
         )
-        for (srv, _, challenge_server_name), (probe_status, _) in zip(probe_targets, probe_results):
+        for (_srv, _, challenge_server_name), (probe_status, _) in zip(probe_targets, probe_results):
             if probe_status == 401:
                 # Token is missing or expired: keep pass-through clients on the
                 # protected-resource discovery flow so they re-authorize against
@@ -2060,7 +2161,17 @@ if MCP_AVAILABLE:
             allowed_server_ids={target.server_id for target in allowed},
             raw_headers=context.raw_headers,
         )
-        await _check_passthrough_upstream_auth(scope, context.user_api_key_auth, authorized_names, context.client_ip)
+        await _check_passthrough_upstream_auth(
+            scope,
+            context.user_api_key_auth,
+            authorized_names,
+            context.client_ip,
+            oauth2_headers=context.oauth2_headers,
+            mcp_server_auth_headers={key: dict(value) for key, value in context.mcp_server_auth_headers.items()}
+            if context.mcp_server_auth_headers is not None
+            else None,
+            raw_headers=context.raw_headers,
+        )
         return None
 
     async def handle_streamable_http_mcp(scope: Scope, receive: Receive, send: Send) -> None:
@@ -2083,6 +2194,14 @@ if MCP_AVAILABLE:
                 )(scope, receive, send)
                 return
             path: Final[str] = scope.get("path", "")
+            peek: Final = _LazyPeekedBody(receive) if scope.get("method") == "POST" else None
+            if peek is not None:
+                receive = peek.receive  # rebind-ok: replay peeked ASGI messages to the downstream handler
+
+                async def admission_auth_body() -> bytes:
+                    return _admission_auth_body(await peek.admission_body())
+
+                scope[MCP_PEEKED_BODY_SCOPE_KEY] = admission_auth_body
             (
                 user_api_key_auth,
                 mcp_auth_header,
@@ -2092,6 +2211,8 @@ if MCP_AVAILABLE:
                 raw_headers,
             ) = await extract_mcp_auth_context(scope, path)
             reject_disallowed_mcp_client(StarletteRequest(scope).headers, user_api_key_auth)
+            body: Final = await peek.body() if peek is not None else b""
+            is_initialize: Final = _is_initialize_request(body)
             scoped_server_endpoint: Final = len(_get_mcp_servers_in_path(path) or []) == 1
             request_headers: Final = StarletteRequest(scope).headers
             defer_upstream_probes: Final = request_headers.get(
@@ -2140,7 +2261,15 @@ if MCP_AVAILABLE:
                 # Pre-flight auth check for pass-through servers.  Must run after
                 # toolset scoping so the probe list is derived from the fully-authorized
                 # server set, not the raw user-supplied names.
-                await _check_passthrough_upstream_auth(scope, user_api_key_auth, mcp_servers, _client_ip)
+                await _check_passthrough_upstream_auth(
+                    scope,
+                    user_api_key_auth,
+                    mcp_servers,
+                    _client_ip,
+                    oauth2_headers=oauth2_headers,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    raw_headers=raw_headers,
+                )
 
             # Inject masked debug headers when client sends x-litellm-mcp-debug: true
             _debug_headers: Final = MCPDebug.maybe_build_debug_headers(
@@ -2168,8 +2297,6 @@ if MCP_AVAILABLE:
             # - No session ID + initialize → stateful (so client gets mcp-session-id)
             # - No session ID + other → stateless (curl, Inspector, Notion)
             session_id = _get_session_id_from_scope(scope)
-            is_initialize = False
-            consumed_messages: list[Message] = []
 
             # Owner-binding: a live stateful session may only be driven by the
             # caller that created it. Reject mismatches with 403 so a leaked
@@ -2177,8 +2304,7 @@ if MCP_AVAILABLE:
             #
             # Run before ``_handle_stale_mcp_session`` so a non-owner cannot
             # force-clean another caller's residual tracking entries via a
-            # stale DELETE, and before peeking the request body so the 403
-            # response sees a pristine ``receive`` channel.
+            # stale DELETE.
             if session_id:
                 expected_owner: Final = _stateful_session_owners.get(session_id)
                 request_owner = _owner_fingerprint_for(user_api_key_auth, oauth2_headers, _client_ip)
@@ -2207,27 +2333,23 @@ if MCP_AVAILABLE:
                     return
                 session_id = _get_session_id_from_scope(scope)
 
-            body = b""
-            if scope.get("method") == "POST":
-                consumed_messages, body = await _read_request_body_for_routing(receive, full_body=defer_upstream_probes)
-                if defer_upstream_probes:
-                    rejection: Final = await _preflight_modern_interaction(
-                        scope,
-                        body,
-                        OperationContext(
-                            _caller=user_api_key_auth,
-                            mcp_auth_header=mcp_auth_header,
-                            mcp_servers=tuple(mcp_servers) if mcp_servers is not None else None,
-                            mcp_server_auth_headers=mcp_server_auth_headers,
-                            oauth2_headers=oauth2_headers,
-                            raw_headers=raw_headers,
-                            client_ip=_client_ip,
-                        ),
-                    )
-                    if rejection is not None:
-                        await rejection(scope, receive, send)
-                        return
-                is_initialize = _is_initialize_request(body)
+            if peek is not None and defer_upstream_probes:
+                rejection: Final = await _preflight_modern_interaction(
+                    scope,
+                    await peek.full_body(),
+                    OperationContext(
+                        _caller=user_api_key_auth,
+                        mcp_auth_header=mcp_auth_header,
+                        mcp_servers=tuple(mcp_servers) if mcp_servers is not None else None,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
+                        oauth2_headers=oauth2_headers,
+                        raw_headers=raw_headers,
+                        client_ip=_client_ip,
+                    ),
+                )
+                if rejection is not None:
+                    await rejection(scope, receive, send)
+                    return
 
             use_stateful: Final = bool(session_id or is_initialize)
             target_manager: Final = session_manager_stateful if use_stateful else session_manager_stateless
@@ -2256,17 +2378,6 @@ if MCP_AVAILABLE:
                     )
                     await too_many_response(scope, receive, send)
                     return
-
-            # Replay body messages if we consumed them for peeking
-            original_receive: Final = receive
-            if consumed_messages:
-
-                async def wrapped_receive():
-                    if consumed_messages:
-                        return consumed_messages.pop(0)
-                    return await original_receive()
-
-                receive = wrapped_receive
 
             # Serialize requests on the same stateful session so concurrent
             # callers don't clobber each other's auth context mid-flight.
@@ -2513,7 +2624,15 @@ if MCP_AVAILABLE:
             # being stuck with a silently empty tool list. Must run after
             # toolset scoping so the probe list is derived from the fully-
             # authorized server set, not the raw user-supplied names.
-            await _check_passthrough_upstream_auth(scope, user_api_key_auth, mcp_servers, _sse_client_ip)
+            await _check_passthrough_upstream_auth(
+                scope,
+                user_api_key_auth,
+                mcp_servers,
+                _sse_client_ip,
+                oauth2_headers=oauth2_headers,
+                mcp_server_auth_headers=mcp_server_auth_headers,
+                raw_headers=raw_headers,
+            )
             set_auth_context(
                 user_api_key_auth=user_api_key_auth,
                 mcp_auth_header=mcp_auth_header,
@@ -2742,6 +2861,7 @@ if MCP_AVAILABLE:
                         _stateful_session_auth_contexts[session_id] = auth_user
                         _stateful_session_auth_context_last_seen[session_id] = time.monotonic()
                         _stateful_session_owners[session_id] = owner_fingerprint
+                        operations.global_mcp_server_manager.track_gateway_session(session_id)
                         if client_info is not None:
                             _stateful_session_client_info[session_id] = client_info
                         break

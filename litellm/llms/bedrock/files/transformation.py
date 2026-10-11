@@ -84,6 +84,13 @@ LIST_FILES_PURPOSE_PARAM: Final = "_s3_list_files_purpose"
 LIST_FILES_LOCATION_PARAM: Final = "_s3_list_files_location"
 
 
+def _header_or_empty(headers: Headers, name: str) -> str:
+    try:
+        return headers[name]
+    except KeyError:
+        return ""
+
+
 def _is_empty_s3_object_range_error(raw_response: Response) -> bool:
     if raw_response.status_code != 416:
         return False
@@ -101,7 +108,7 @@ def _retrieved_s3_file_size(raw_response: Response) -> int:
     if _is_empty_s3_object_range_error(raw_response):
         return 0
     if status_code == 206:
-        content_range: Final = raw_response.headers.get("Content-Range", "")
+        content_range: Final = _header_or_empty(raw_response.headers, "Content-Range")
         range_parts: Final = content_range.removeprefix("bytes 0-0/")
         if content_range.startswith("bytes 0-0/") and range_parts.isdigit():
             return int(range_parts)
@@ -112,7 +119,7 @@ def _retrieved_s3_file_size(raw_response: Response) -> int:
             response=raw_response,
         )
     if status_code == 200:
-        content_length: Final = raw_response.headers.get("Content-Length", "")
+        content_length: Final = _header_or_empty(raw_response.headers, "Content-Length")
         if content_length.isdigit():
             return int(content_length)
         raise BedrockError(
@@ -1400,7 +1407,7 @@ class BedrockFilesConfig(BaseAWSLLM, BaseFilesConfig):
 
         file_size: Final = _retrieved_s3_file_size(raw_response)
 
-        last_modified: Final = raw_response.headers.get("Last-Modified", "")
+        last_modified: Final = _header_or_empty(raw_response.headers, "Last-Modified")
         created_at: Final = int(parsedate_to_datetime(last_modified).timestamp()) if last_modified else 0
         return OpenAIFileObject(
             id=file_id,
