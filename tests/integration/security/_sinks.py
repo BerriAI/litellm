@@ -55,8 +55,8 @@ import uuid
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from types import MappingProxyType
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import yaml
@@ -77,6 +77,7 @@ LOCAL_CATALOGS: Final = MappingProxyType(
         for name in (
             "LITELLM_LOCAL_MODEL_COST_MAP",
             "LITELLM_LOCAL_BLOG_POSTS",
+            "LITELLM_LOCAL_WHATS_NEW",
             "LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS",
             "LITELLM_LOCAL_AUTOROUTER_PRESETS",
             "LITELLM_LOCAL_POLICY_TEMPLATES",

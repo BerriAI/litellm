@@ -6,7 +6,7 @@ from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import pytest
@@ -39,9 +39,7 @@ def _b64(raw: bytes) -> str:
 
 @dataclass(frozen=True, slots=True)
 class _Rig:
-    strict: Gateway
-    lenient: Gateway
-    checks: Gateway
+    gateway: Gateway
     policy: Wire
     upstream: Wire
     outage: threading.Event
@@ -212,34 +210,60 @@ def _config(
     return path
 
 
+@dataclass(frozen=True, slots=True)
+class _Wires:
+    directory: Path
+    policy: Wire
+    upstream: Wire
+    outage: threading.Event
+
+
 @pytest.fixture(scope="module")
-def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Rig]:
+def wires(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Wires]:
     directory: Final = tmp_path_factory.mktemp("bedrock-guardrail-attachments")
     outage: Final = threading.Event()
+    with wire_server(_guardrail(outage)) as policy, wire_server(_upstream) as upstream:
+        yield _Wires(directory, policy, upstream, outage)
+
+
+def _attachment_proxy(wires: _Wires, mode: Literal["strict", "lenient", "checks"]) -> Iterator[_Rig]:
     with (
-        wire_server(_guardrail(outage)) as policy,
-        wire_server(_upstream) as upstream,
         gateway_from_environment() as shared,
         owned_proxy(
-            shared, directory, {}, config=_config(directory, "strict", policy, upstream, False), workers=2
-        ) as strict,
-        owned_proxy(
-            shared, directory, {}, config=_config(directory, "lenient", policy, upstream, True), workers=2
-        ) as lenient,
-        owned_proxy(
-            shared, directory, {}, config=_config(directory, "checks", policy, upstream, False, checks=True), workers=2
-        ) as checks,
+            shared,
+            wires.directory,
+            {},
+            config=_config(
+                wires.directory, mode, wires.policy, wires.upstream, mode == "lenient", checks=mode == "checks"
+            ),
+            workers=2,
+        ) as gateway,
     ):
-        yield _Rig(strict, lenient, checks, policy, upstream, outage)
+        yield _Rig(gateway, wires.policy, wires.upstream, wires.outage)
+
+
+@pytest.fixture(scope="module")
+def rig(wires: _Wires) -> Iterator[_Rig]:
+    yield from _attachment_proxy(wires, "strict")
+
+
+@pytest.fixture(scope="module")
+def lenient_rig(wires: _Wires) -> Iterator[_Rig]:
+    yield from _attachment_proxy(wires, "lenient")
+
+
+@pytest.fixture(scope="module")
+def checks_rig(wires: _Wires) -> Iterator[_Rig]:
+    yield from _attachment_proxy(wires, "checks")
 
 
 @pytest.fixture(autouse=True)
-def _drained(rig: _Rig) -> Iterator[None]:
-    rig.policy.drain()
-    rig.upstream.drain()
-    rig.outage.clear()
+def _drained(wires: _Wires) -> Iterator[None]:
+    wires.policy.drain()
+    wires.upstream.drain()
+    wires.outage.clear()
     yield
-    rig.outage.clear()
+    wires.outage.clear()
 
 
 def _image_block(endpoint: str, encoded: str, mime: str = "image/png") -> dict[str, JsonValue]:
@@ -306,7 +330,7 @@ def _forwarded(upstream: Wire) -> list[dict[str, JsonValue]]:
 
 @pytest.mark.parametrize("endpoint", _ENDPOINTS)
 def test_an_image_only_turn_is_scanned_and_a_threat_image_is_blocked(rig: _Rig, endpoint: str) -> None:
-    response: Final = _send(rig.strict, endpoint, _image_block(endpoint, _b64(_THREAT_PNG)))
+    response: Final = _send(rig.gateway, endpoint, _image_block(endpoint, _b64(_THREAT_PNG)))
 
     assert response.status_code == 400, response.text
     assert "VIOLENCE" in response.text, response.text
@@ -316,7 +340,7 @@ def test_an_image_only_turn_is_scanned_and_a_threat_image_is_blocked(rig: _Rig, 
 
 @pytest.mark.parametrize("endpoint", _ENDPOINTS)
 def test_a_harmless_image_is_scanned_and_reaches_the_model(rig: _Rig, endpoint: str) -> None:
-    response: Final = _send(rig.strict, endpoint, _image_block(endpoint, _b64(_PLAIN_PNG)))
+    response: Final = _send(rig.gateway, endpoint, _image_block(endpoint, _b64(_PLAIN_PNG)))
 
     assert response.status_code == 200, response.text
     assert _image_scans(_scans(rig.policy)) == [[{"format": "png", "source": {"bytes": _b64(_PLAIN_PNG)}}]]
@@ -326,7 +350,7 @@ def test_a_harmless_image_is_scanned_and_reaches_the_model(rig: _Rig, endpoint: 
 @pytest.mark.parametrize("endpoint", _ENDPOINTS)
 def test_a_pdf_is_refused_without_calling_bedrock_or_the_model(rig: _Rig, endpoint: str) -> None:
     question: Final = f"What is in the attachment {uuid.uuid4().hex}?"
-    response: Final = _send(rig.strict, endpoint, _text_block(endpoint, question), _pdf_block(endpoint))
+    response: Final = _send(rig.gateway, endpoint, _text_block(endpoint, question), _pdf_block(endpoint))
 
     assert response.status_code == 400, response.text
     assert "Bedrock guardrail cannot scan 1 attachment(s)" in response.text, response.text
@@ -335,39 +359,41 @@ def test_a_pdf_is_refused_without_calling_bedrock_or_the_model(rig: _Rig, endpoi
 
 
 @pytest.mark.parametrize("endpoint", _ENDPOINTS)
-def test_skip_unscannable_attachments_lets_a_pdf_through_and_still_scans_the_text(rig: _Rig, endpoint: str) -> None:
+def test_skip_unscannable_attachments_lets_a_pdf_through_and_still_scans_the_text(
+    lenient_rig: _Rig, endpoint: str
+) -> None:
     question: Final = f"What is in the attachment {uuid.uuid4().hex}?"
-    response: Final = _send(rig.lenient, endpoint, _text_block(endpoint, question), _pdf_block(endpoint))
+    response: Final = _send(lenient_rig.gateway, endpoint, _text_block(endpoint, question), _pdf_block(endpoint))
 
     assert response.status_code == 200, response.text
-    assert question in _text_scans(_scans(rig.policy))
-    (forwarded,) = _forwarded(rig.upstream)
+    assert question in _text_scans(_scans(lenient_rig.policy))
+    (forwarded,) = _forwarded(lenient_rig.upstream)
     assert _b64(_PDF) in json.dumps(forwarded)
 
 
 @pytest.mark.parametrize("endpoint", _ENDPOINTS)
-def test_skip_unscannable_attachments_still_blocks_a_threat_image(rig: _Rig, endpoint: str) -> None:
-    response: Final = _send(rig.lenient, endpoint, _image_block(endpoint, _b64(_THREAT_PNG)))
+def test_skip_unscannable_attachments_still_blocks_a_threat_image(lenient_rig: _Rig, endpoint: str) -> None:
+    response: Final = _send(lenient_rig.gateway, endpoint, _image_block(endpoint, _b64(_THREAT_PNG)))
 
     assert response.status_code == 400, response.text
     assert "VIOLENCE" in response.text, response.text
-    assert _forwarded(rig.upstream) == []
+    assert _forwarded(lenient_rig.upstream) == []
 
 
-def test_skip_unscannable_attachments_still_scans_a_converse_pdf_name_and_context(rig: _Rig) -> None:
+def test_skip_unscannable_attachments_still_scans_a_converse_pdf_name_and_context(lenient_rig: _Rig) -> None:
     context: Final = f"Employee SSN {_SSN} {uuid.uuid4().hex}"
     document: Final = {
         "document": {"format": "pdf", "name": "record", "context": context, "source": {"bytes": _b64(_PDF)}}
     }
-    response: Final = _send(rig.lenient, "converse", _text_block("converse", "summarize"), document)
+    response: Final = _send(lenient_rig.gateway, "converse", _text_block("converse", "summarize"), document)
 
     assert response.status_code == 400, response.text
-    assert f"record\n{context}" in _text_scans(_scans(rig.policy))
-    assert _forwarded(rig.upstream) == []
+    assert f"record\n{context}" in _text_scans(_scans(lenient_rig.policy))
+    assert _forwarded(lenient_rig.upstream) == []
 
 
 def test_a_streaming_chat_request_with_a_pdf_is_refused_before_streaming(rig: _Rig) -> None:
-    response: Final = _send(rig.strict, "chat", _text_block("chat", "summarize"), _pdf_block("chat"), stream=True)
+    response: Final = _send(rig.gateway, "chat", _text_block("chat", "summarize"), _pdf_block("chat"), stream=True)
 
     assert response.status_code == 400, response.text
     assert "Bedrock guardrail cannot scan 1 attachment(s)" in response.text, response.text
@@ -398,7 +424,7 @@ def test_a_text_document_with_an_ssn_is_scanned_as_text_and_blocked(
     rig: _Rig, endpoint: str, document: Callable[[str], dict[str, JsonValue]]
 ) -> None:
     secret: Final = f"Employee SSN {_SSN} {uuid.uuid4().hex}"
-    response: Final = _send(rig.strict, endpoint, _text_block(endpoint, "summarize"), document(secret))
+    response: Final = _send(rig.gateway, endpoint, _text_block(endpoint, "summarize"), document(secret))
 
     assert response.status_code == 400, response.text
     assert any(secret in text for text in _text_scans(_scans(rig.policy)))
@@ -410,7 +436,7 @@ def test_a_harmless_text_document_is_scanned_as_text_and_reaches_the_model(
     rig: _Rig, endpoint: str, document: Callable[[str], dict[str, JsonValue]]
 ) -> None:
     note: Final = f"The meeting is at noon {uuid.uuid4().hex}"
-    response: Final = _send(rig.strict, endpoint, _text_block(endpoint, "summarize"), document(note))
+    response: Final = _send(rig.gateway, endpoint, _text_block(endpoint, "summarize"), document(note))
 
     assert response.status_code == 200, response.text
     assert any(note in text for text in _text_scans(_scans(rig.policy)))
@@ -420,7 +446,7 @@ def test_a_harmless_text_document_is_scanned_as_text_and_reaches_the_model(
 
 def test_a_converse_txt_document_sent_as_bytes_stays_unscannable(rig: _Rig) -> None:
     document: Final = {"document": {"format": "txt", "name": "record", "source": {"bytes": _b64(b"notes")}}}
-    response: Final = _send(rig.strict, "converse", _text_block("converse", "summarize"), document)
+    response: Final = _send(rig.gateway, "converse", _text_block("converse", "summarize"), document)
 
     assert response.status_code == 400, response.text
     assert "cannot scan 1 attachment(s) (document)" in response.text, response.text
@@ -429,7 +455,7 @@ def test_a_converse_txt_document_sent_as_bytes_stays_unscannable(rig: _Rig) -> N
 
 def test_a_converse_guard_content_threat_image_is_scanned_and_blocked(rig: _Rig) -> None:
     guarded: Final = {"guardContent": {"image": {"format": "png", "source": {"bytes": _b64(_THREAT_PNG)}}}}
-    response: Final = _send(rig.strict, "converse", _text_block("converse", "describe"), guarded)
+    response: Final = _send(rig.gateway, "converse", _text_block("converse", "describe"), guarded)
 
     assert response.status_code == 400, response.text
     assert "VIOLENCE" in response.text, response.text
@@ -437,24 +463,24 @@ def test_a_converse_guard_content_threat_image_is_scanned_and_blocked(rig: _Rig)
 
 
 @pytest.mark.parametrize("endpoint", _ENDPOINTS)
-def test_checks_mode_refuses_an_image_without_calling_bedrock(rig: _Rig, endpoint: str) -> None:
-    response: Final = _send(rig.checks, endpoint, _image_block(endpoint, _b64(_PLAIN_PNG)))
+def test_checks_mode_refuses_an_image_without_calling_bedrock(checks_rig: _Rig, endpoint: str) -> None:
+    response: Final = _send(checks_rig.gateway, endpoint, _image_block(endpoint, _b64(_PLAIN_PNG)))
 
     assert response.status_code == 400, response.text
     assert "cannot scan 1 attachment(s) (image)" in response.text, response.text
-    assert list(rig.policy.drain()) == []
-    assert _forwarded(rig.upstream) == []
+    assert list(checks_rig.policy.drain()) == []
+    assert _forwarded(checks_rig.upstream) == []
 
 
-def test_checks_mode_sends_a_converse_text_document_to_invoke_guardrail_checks(rig: _Rig) -> None:
+def test_checks_mode_sends_a_converse_text_document_to_invoke_guardrail_checks(checks_rig: _Rig) -> None:
     note: Final = f"The meeting is at noon {uuid.uuid4().hex}"
-    response: Final = _send(rig.checks, "converse", _converse_text_document({"text": note}))
+    response: Final = _send(checks_rig.gateway, "converse", _converse_text_document({"text": note}))
 
     assert response.status_code == 200, response.text
-    calls: Final = list(rig.policy.drain())
+    calls: Final = list(checks_rig.policy.drain())
     assert [call.target for call in calls] == [_CHECKS_PATH]
     assert note in calls[0].body.decode()
-    (forwarded,) = _forwarded(rig.upstream)
+    (forwarded,) = _forwarded(checks_rig.upstream)
     assert note in json.dumps(forwarded)
 
 
@@ -466,14 +492,14 @@ def test_checks_mode_sends_a_converse_text_document_to_invoke_guardrail_checks(r
     ],
 )
 def test_non_standard_base64_is_normalized_before_the_scan(rig: _Rig, encoded: str) -> None:
-    response: Final = _send(rig.strict, "chat", _image_block("chat", encoded))
+    response: Final = _send(rig.gateway, "chat", _image_block("chat", encoded))
 
     assert response.status_code == 400, response.text
     assert _image_scans(_scans(rig.policy)) == [[{"format": "png", "source": {"bytes": _b64(_THREAT_PNG)}}]]
 
 
 def test_the_image_format_sent_to_bedrock_comes_from_the_bytes(rig: _Rig) -> None:
-    response: Final = _send(rig.strict, "chat", _image_block("chat", _b64(_PLAIN_PNG), mime="image/jpeg"))
+    response: Final = _send(rig.gateway, "chat", _image_block("chat", _b64(_PLAIN_PNG), mime="image/jpeg"))
 
     assert response.status_code == 200, response.text
     assert _image_scans(_scans(rig.policy)) == [[{"format": "png", "source": {"bytes": _b64(_PLAIN_PNG)}}]]
@@ -482,7 +508,7 @@ def test_the_image_format_sent_to_bedrock_comes_from_the_bytes(rig: _Rig) -> Non
 @pytest.mark.parametrize("endpoint", ("chat", "converse"))
 def test_a_guardrail_outage_fails_closed_on_an_image_turn(rig: _Rig, endpoint: str) -> None:
     rig.outage.set()
-    response: Final = _send(rig.strict, endpoint, _image_block(endpoint, _b64(_PLAIN_PNG)))
+    response: Final = _send(rig.gateway, endpoint, _image_block(endpoint, _b64(_PLAIN_PNG)))
 
     assert response.status_code == 500, response.text
     assert "synthetic guardrail outage" in response.text, response.text
@@ -500,17 +526,17 @@ def test_a_concurrent_mixed_burst_across_two_workers_keeps_each_verdict(rig: _Ri
     def send(case: tuple[str, str]) -> tuple[str, str, int]:
         kind, tag = case
         if kind == "threat":
-            response = _send(rig.strict, "chat", _text_block("chat", tag), _image_block("chat", _b64(_THREAT_PNG)))
+            response = _send(rig.gateway, "chat", _text_block("chat", tag), _image_block("chat", _b64(_THREAT_PNG)))
         elif kind == "plain":
             response = _send(
-                rig.strict, "messages", _text_block("messages", tag), _image_block("messages", _b64(_PLAIN_PNG))
+                rig.gateway, "messages", _text_block("messages", tag), _image_block("messages", _b64(_PLAIN_PNG))
             )
         elif kind == "pdf":
-            response = _send(rig.strict, "responses", _text_block("responses", tag), _pdf_block("responses"))
+            response = _send(rig.gateway, "responses", _text_block("responses", tag), _pdf_block("responses"))
         elif kind == "converse-note":
-            response = _send(rig.strict, "converse", _converse_text_document({"text": f"note {tag}"}))
+            response = _send(rig.gateway, "converse", _converse_text_document({"text": f"note {tag}"}))
         else:
-            response = _send(rig.strict, "converse", _converse_text_document({"text": f"SSN {_SSN} {tag}"}))
+            response = _send(rig.gateway, "converse", _converse_text_document({"text": f"SSN {_SSN} {tag}"}))
         return kind, tag, response.status_code
 
     with ThreadPoolExecutor(max_workers=12) as pool:

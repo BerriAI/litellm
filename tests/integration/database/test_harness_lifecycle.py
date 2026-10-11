@@ -4,6 +4,7 @@ import asyncio
 import errno
 import os
 import re
+import shutil
 import signal
 import socket
 import subprocess
@@ -15,10 +16,11 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import AbstractContextManager, ExitStack
 from pathlib import Path
 from queue import SimpleQueue
-from threading import Event
 from tempfile import TemporaryDirectory
+from threading import Event
 from types import FrameType
 from typing import Final, Literal
+from xml.etree import ElementTree
 
 import httpx
 import psutil
@@ -149,17 +151,29 @@ def test_slow_worker_startup_survives_healthchecks_and_a_stalled_worker_is_repla
     gateway: Gateway, tmp_path: Path
 ) -> None:
     hook: Final = tmp_path / "slow_worker_startup.py"
-    hook.write_text("from threading import Event\n\ndef configure():\n    Event().wait(6)\n")
+    receipts: Final = tmp_path / "startup-receipts"
+    receipts.mkdir()
+    hook.write_text(
+        "import os\nfrom pathlib import Path\nfrom threading import Event\n\ndef configure():\n"
+        f"    root = Path({str(receipts)!r})\n"
+        "    try:\n"
+        "        with (root / 'first').open('x'):\n"
+        "            pass\n"
+        "    except FileExistsError:\n"
+        "        Event().wait(6)\n"
+        "    (root / str(os.getpid())).touch()\n"
+    )
     overrides: Final = {
         "PYTHONPATH": os.pathsep.join((str(tmp_path), os.environ.get("PYTHONPATH", ""))),
         "LITELLM_WORKER_STARTUP_HOOKS": "slow_worker_startup:configure",
     }
     with process_support.owned_proxy_process(gateway, tmp_path, overrides, workers=2) as owned:
-        workers: Final = eventually(
-            lambda: tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text())),
-            lambda pids: len(pids) == 2 and owned.log.read_text().count("Application startup complete.") == 2,
-            seconds=30,
+        workers: Final = tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text()))
+        assert len(workers) == 2, owned.log.read_text()
+        assert all((receipts / str(pid)).exists() for pid in workers), (
+            "Proxy yielded before both workers finished startup"
         )
+        assert owned.log.read_text().count("Application startup complete.") == 2
         victim: Final = psutil.Process(workers[0])
         victim.suspend()
         try:
@@ -326,7 +340,6 @@ def test_native_file_selection_reuses_fixtures_and_qualifies_an_empty_shard(
             "    yield 'shared'\n"
             "    record('stop shared')\n"
             "@pytest.mark.parametrize('number', range(4))\n"
-            "@pytest.mark.xdist_group('shared')\n"
             "def test_shared(shared, number):\n"
             "    assert shared == 'shared'\n"
             "    record('shared ' + str(number))\n"
@@ -378,6 +391,7 @@ def test_native_file_selection_reuses_fixtures_and_qualifies_an_empty_shard(
                     "--integration-order-seed=1848224111",
                     "--hypothesis-seed=4106601",
                     "--timeout=15",
+                    f"--junitxml={outputs[index] / 'junit.xml'}",
                     *(("-n", str(workers), "--dist=loadgroup") if workers > 1 else ()),
                     "-q",
                 ),
@@ -411,6 +425,12 @@ def test_native_file_selection_reuses_fixtures_and_qualifies_an_empty_shard(
             ShardExecution.model_validate_json((output / "execution.json").read_text()) for output in outputs
         )
         assert shard_errors(executions, 3) == ()
+        for output, execution in zip(outputs, executions, strict=True):
+            cases: Final = ElementTree.parse(output / "junit.xml").findall(".//testcase")
+            assert sorted(case.attrib["name"] for case in cases) == sorted(
+                nodeid.rsplit("::", 1)[-1] for nodeid in execution.collected
+            )
+            assert all("@integration_fixture_" not in nodeid for nodeid in execution.inventory)
         assert len(executions[0].inventory) == (2 if subset else 13)
         assert executions[2].collected == ()
         assert executions[2].complete
@@ -424,6 +444,239 @@ def test_native_file_selection_reuses_fixtures_and_qualifies_an_empty_shard(
     assert sorted(event for event in observed if event.startswith("plain ")) == (
         [] if subset else [f"plain {index}" for index in range(8)]
     )
+
+
+@pytest.mark.parametrize(("workers", "seed"), ((1, 1848224111), (2, 0), (2, 984872314)))
+@pytest.mark.parametrize("class_parameters", (False, True))
+def test_mixed_fixture_scopes_reuse_outer_and_inner_configurations(
+    tmp_path: Path, workers: int, seed: int, class_parameters: bool
+) -> None:
+    events: Final = tmp_path / "events.txt"
+    root: Final = Path(__file__).resolve().parents[3]
+    with TemporaryDirectory(prefix="mixed-scopes-", dir=Path(__file__).parent) as directory:
+        probe: Final = Path(directory) / "test_fixture_probe.py"
+        probe.write_text(
+            "import pytest\nfrom pathlib import Path\n"
+            f"EVENTS = Path({str(events)!r})\n"
+            "def record(value):\n"
+            "    with EVENTS.open('a') as output:\n"
+            "        output.write(value + '\\n')\n"
+            "@pytest.fixture(scope='module', params=('M0', 'M1'))\n"
+            "def module_rig(request):\n"
+            "    record('start ' + request.param)\n"
+            "    yield request.param\n"
+            "    record('stop ' + request.param)\n"
+            f"@pytest.fixture(scope='class', params={('C0', 'C1') if class_parameters else None!r})\n"
+            "def class_rig(request, module_rig):\n"
+            "    identity = (\n"
+            "        module_rig + '/' + request.cls.__name__\n"
+            "        + ('/' + request.param if hasattr(request, 'param') else '')\n"
+            "    )\n"
+            "    record('start ' + identity)\n"
+            "    yield identity\n"
+            "    record('stop ' + identity)\n"
+            "class TestFirst:\n"
+            "    @pytest.mark.parametrize('number', range(3))\n"
+            "    def test_case(self, module_rig, class_rig, number):\n"
+            "        assert class_rig.startswith(module_rig + '/')\n"
+            "        record('case ' + class_rig + '/' + str(number))\n"
+            "    def test_skip(self, class_rig):\n"
+            "        pytest.skip('retained mixed-scope skip')\n"
+            "class TestSecond:\n"
+            "    @pytest.mark.parametrize('number', range(3))\n"
+            "    def test_case(self, module_rig, class_rig, number):\n"
+            "        assert class_rig.startswith(module_rig + '/')\n"
+            "        record('case ' + class_rig + '/' + str(number))\n"
+        )
+        result: Final = subprocess.run(
+            (
+                sys.executable,
+                "-P",
+                "tests/integration/run.py",
+                "database",
+                "--results",
+                str(tmp_path),
+                "--workers",
+                str(workers),
+                "--order-seed",
+                str(seed),
+                str(probe.relative_to(root)),
+            ),
+            cwd=root,
+            env={
+                name: value
+                for name, value in os.environ.items()
+                if name not in ("PYTEST_XDIST_WORKER", "INTEGRATION_WORKER_ISOLATION", "INTEGRATION_ROUTING")
+            },
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+        execution: Final = ShardExecution.model_validate_json((tmp_path / "execution.json").read_text())
+        assert execution.complete
+        expected_passes: Final = 24 if class_parameters else 12
+        expected_skips: Final = 4 if class_parameters else 2
+        assert len(execution.collected) == expected_passes + expected_skips
+        assert len(execution.passed) == expected_passes
+        assert len(execution.skipped) == expected_skips
+        cases: Final = ElementTree.parse(tmp_path / "junit.xml").findall(".//testcase")
+        assert sorted(case.attrib["name"] for case in cases) == sorted(
+            nodeid.rsplit("::", 1)[-1] for nodeid in execution.collected
+        )
+    observed: Final = tuple(events.read_text().splitlines())
+    starts: Final = Counter(event.removeprefix("start ") for event in observed if event.startswith("start "))
+    stops: Final = Counter(event.removeprefix("stop ") for event in observed if event.startswith("stop "))
+    assert starts == stops
+    assert len(starts) == (10 if class_parameters else 6)
+    assert all(count == 1 for count in starts.values()), observed
+    executed: Final = tuple(event for event in observed if event.startswith("case "))
+    assert len(executed) == len(frozenset(executed)) == expected_passes
+
+
+@pytest.mark.parametrize("workers", (1, 2))
+def test_direct_and_dependent_consumers_reuse_the_same_module_parameter(tmp_path: Path, workers: int) -> None:
+    source: Final = Path(__file__).resolve().parents[3]
+    root: Final = tmp_path / "probe-root"
+    for relative in (
+        "pyproject.toml",
+        "tests/__init__.py",
+        "tests/integration/__init__.py",
+        "tests/integration/conftest.py",
+        "tests/integration/run.py",
+    ):
+        destination: Final = root / relative
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source / relative, destination)
+    shutil.copytree(
+        source / "tests/integration/_support",
+        root / "tests/integration/_support",
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
+    events: Final = tmp_path / "events.txt"
+    results: Final = tmp_path / "results"
+    probe: Final = root / "tests/integration/database/test_fixture_probe.py"
+    probe.parent.mkdir(parents=True, exist_ok=True)
+    probe.write_text(
+        "import pytest\nfrom pathlib import Path\n"
+        f"EVENTS = Path({str(events)!r})\n"
+        "def record(value):\n"
+        "    with EVENTS.open('a') as output:\n"
+        "        output.write(value + '\\n')\n"
+        "@pytest.fixture(scope='module', params=('A', 'B'))\n"
+        "def outer(request):\n"
+        "    record('start ' + request.param)\n"
+        "    yield request.param\n"
+        "    record('stop ' + request.param)\n"
+        "@pytest.fixture(scope='module')\n"
+        "def dependent(outer):\n"
+        "    return outer\n"
+        "@pytest.mark.parametrize('number', range(5))\n"
+        "def test_parent(outer, number):\n"
+        "    record(f'case {outer}-parent-{number}')\n"
+        "@pytest.mark.parametrize('number', range(5))\n"
+        "def test_child(outer, dependent, number):\n"
+        "    assert dependent == outer\n"
+        "    record(f'case {outer}-child-{number}')\n"
+        "def test_retained_skip(outer):\n"
+        "    pytest.skip('retained shared consumer skip')\n"
+    )
+    result: Final = subprocess.run(
+        (
+            sys.executable,
+            "-P",
+            str(root / "tests/integration/run.py"),
+            "database",
+            "--workers",
+            str(workers),
+            "--order-seed",
+            "1",
+            "--results",
+            str(results),
+            str(probe.relative_to(root)),
+        ),
+        cwd=root,
+        env={
+            name: value
+            for name, value in os.environ.items()
+            if name not in ("PYTEST_XDIST_WORKER", "INTEGRATION_WORKER_ISOLATION", "INTEGRATION_ROUTING")
+        },
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    execution: Final = ShardExecution.model_validate_json((results / "execution.json").read_bytes())
+    assert execution.complete and len(execution.collected) == 22
+    assert len(execution.passed) == 20 and len(execution.skipped) == 2
+    assert all("::test_retained_skip[" in node for node in execution.skipped)
+    junit: Final = ElementTree.parse(results / "junit.xml")
+    assert len(junit.findall(".//testcase")) == 22 and len(junit.findall(".//skipped")) == 2
+    assert all("@integration_fixture_" not in node.attrib["name"] for node in junit.findall(".//testcase"))
+    observed: Final = tuple(events.read_text().splitlines())
+    assert Counter(event for event in observed if event.startswith("start ")) == Counter({"start A": 1, "start B": 1})
+    assert Counter(event for event in observed if event.startswith("stop ")) == Counter({"stop A": 1, "stop B": 1})
+    executed: Final = tuple(event for event in observed if event.startswith("case "))
+    assert len(executed) == len(frozenset(executed)) == 20
+
+
+def test_worker_crash_keeps_the_original_junit_identity_and_an_incomplete_execution(tmp_path: Path) -> None:
+    root: Final = Path(__file__).resolve().parents[3]
+    with TemporaryDirectory(prefix="worker-crash-", dir=Path(__file__).parent) as directory:
+        probe: Final = Path(directory) / "test_fixture_probe.py"
+        probe.write_text(
+            "import os, pytest\n"
+            "@pytest.fixture(scope='module')\n"
+            "def shared():\n"
+            "    yield 'shared'\n"
+            "def test_worker_crash(shared):\n"
+            "    assert shared == 'shared'\n"
+            "    os._exit(7)\n"
+        )
+        result: Final = subprocess.run(
+            (
+                sys.executable,
+                "-P",
+                "-m",
+                "pytest",
+                str(probe.relative_to(root)),
+                "--noconftest",
+                "-p",
+                "tests.integration.conftest",
+                "-o",
+                "addopts=",
+                "-n",
+                "2",
+                "--dist=loadgroup",
+                "--max-worker-restart=0",
+                f"--junitxml={tmp_path / 'junit.xml'}",
+                "-q",
+            ),
+            cwd=root,
+            env={
+                **{
+                    name: value
+                    for name, value in os.environ.items()
+                    if name not in ("PYTEST_XDIST_WORKER", "INTEGRATION_WORKER_ISOLATION", "INTEGRATION_ROUTING")
+                },
+                "INTEGRATION_RESULTS_DIR": str(tmp_path),
+            },
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+        assert result.returncode == 1, result.stdout + result.stderr
+        execution: Final = ShardExecution.model_validate_json((tmp_path / "execution.json").read_text())
+        assert not execution.complete
+        assert execution.passed == ()
+        assert execution.skipped == ()
+        assert execution.collected == (str(probe.relative_to(root)) + "::test_worker_crash",)
+        cases: Final = ElementTree.parse(tmp_path / "junit.xml").findall(".//testcase")
+        assert tuple(case.attrib.get("name") for case in cases) == ("test_worker_crash",)
+        assert cases[0].find("error") is not None
 
 
 @pytest.mark.parametrize("assignment", ("absent", "missing", "foreign"))
@@ -473,9 +726,12 @@ def test_invalid_native_selections_fail_before_any_case_runs(
         assert not events.exists()
 
 
-@pytest.mark.parametrize("entrypoint", ("gateway", "refused"))
+@pytest.mark.parametrize("entrypoint", ("gateway", "refused", "zero-workers"))
 def test_owned_entrypoints_record_exit_and_reap_the_process_group(
-    gateway: Gateway, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, entrypoint: Literal["gateway", "refused"]
+    gateway: Gateway,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    entrypoint: Literal["gateway", "refused", "zero-workers"],
 ) -> None:
     monkeypatch.setenv("INTEGRATION_RESULTS_DIR", str(tmp_path))
     config: Final = tmp_path / "config.yaml"
@@ -491,7 +747,9 @@ def test_owned_entrypoints_record_exit_and_reap_the_process_group(
             "model_list: []\ngeneral_settings:\n  master_key: os.environ/LITELLM_MASTER_KEY\n"
             "  database_url: os.environ/DATABASE_URL\n"
         )
-        with process_support.owned_gateway_image(gateway, tmp_path, {}, config=config, workers=1) as owned:
+        with process_support.owned_gateway_image(
+            gateway, tmp_path, {}, config=config, workers=0 if entrypoint == "zero-workers" else 1
+        ) as owned:
             response: Final = owned.gateway.request("GET", "/health/readiness")
             assert response.status_code == 200, response.text
         completed: Final = TypeAdapter(ExitRecord).validate_json(owned.log.with_suffix(".exit.json").read_text())

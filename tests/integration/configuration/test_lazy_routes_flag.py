@@ -582,6 +582,12 @@ def _assert_config_declared_features_serve(owned: OwnedProxy, features: _Configu
         ]
         assert [(params["name"], params["arguments"]) for params in reached_peer] == [("add", {"marker": marker})]
 
+    bare: Final = owned.gateway.request("GET", "/langfuse")
+    assert bare.status_code == 200, bare.text
+    assert JSON.validate_json(bare.content) == {"status": "OK"}, bare.text
+    reached_bare: Final = tuple(request.target for request in features.langfuse.drain())
+    assert reached_bare == (SELF_HOSTED_LANGFUSE,), reached_bare
+
     forwarded: Final = owned.gateway.request("GET", "/langfuse/api/public/health")
     assert forwarded.status_code == 200, forwarded.text
     reached_langfuse: Final = tuple(request.target for request in features.langfuse.drain())
@@ -591,17 +597,10 @@ def _assert_config_declared_features_serve(owned: OwnedProxy, features: _Configu
 
 
 def _canonical_langfuse_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
-    position: Final = next(
-        (
-            index
-            for index in range(len(paths) - 1)
-            if paths[index : index + 2] == ("/langfuse/{subpath:path}", "/langfuse")
-        ),
-        None,
-    )
-    if position is None:
-        return paths
-    return (*paths[:position], "/langfuse", "/langfuse/{subpath:path}", *paths[position + 2 :])
+    configured: Final = ("/langfuse", "/langfuse/{subpath:path}")
+    remaining: Final = tuple(path for path in paths if path not in configured)
+    langfuse: Final = tuple(sorted(path for path in paths if path in configured))
+    return (*remaining, *langfuse)
 
 
 def test_disable_lazy_routes_flag_serves_config_declared_features_like_the_warmed_lazy_proxy(

@@ -245,7 +245,10 @@ def test_booting_without_tokens_drops_the_login_deployments_and_a_reload_after_m
             boot_log: Final = owned.log.read_text()
             assert peers.auth_connections() == ()
             assert dl.CHATGPT_USER_CODE not in boot_log and dl.COPILOT_USER_CODE not in boot_log, boot_log[-3000:]
-            assert sorted(_DROPPED.findall(boot_log)) == sorted([*_FIXED.values(), *_WILDCARDS] * 2), boot_log[-3000:]
+            dropped_models: Final = _DROPPED.findall(boot_log)
+            expected_drops: Final = frozenset((*_FIXED.values(), *_WILDCARDS))
+            assert frozenset(dropped_models) == expected_drops, boot_log[-3000:]
+            assert all(dropped_models.count(model) >= len(workers) for model in expected_drops), boot_log[-3000:]
             with owned.gateway.scenario() as scenario:
                 key: Final = scenario.key()
                 for name in _LOGIN_NAMES:

@@ -178,5 +178,11 @@ def test_owned_runtime_configuration_preserves_custom_worker_startup_hooks(
         )
     expected: Final = "custom:configure" if explicit else ("" if remove else "ambient:configure")
     assert environment["LITELLM_WORKER_STARTUP_HOOKS"] == ",".join(
-        hook for hook in ("integration._support.runtime:configure_executor", expected) if hook
+        hook
+        for hook in (
+            "integration._support.runtime:configure_executor",
+            "integration._support.runtime:configure_readiness",
+            expected,
+        )
+        if hook
     )

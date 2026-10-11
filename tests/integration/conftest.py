@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Iterator, Mapping, Sequence
+import re
+from collections.abc import Generator, Iterator, Mapping, Sequence
 from contextlib import ExitStack
+from copy import copy
 from importlib.metadata import version
 from pathlib import Path
 from typing import Final, Protocol, runtime_checkable
@@ -18,7 +20,7 @@ from redis import Redis
 from tests.integration._support.client import Gateway, eventually, gateway_from_environment
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
-from tests.integration._support.ordering import collected_case, fixture_groups
+from tests.integration._support.ordering import collected_case, fixture_groups, scheduling_groups
 from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
 from tests.integration._support.workers import worker_endpoints, worker_gateway
@@ -30,6 +32,7 @@ REPORTS: Final = pytest.StashKey[list[pytest.TestReport]]()
 WORKER_INVENTORY: Final = TypeAdapter(tuple[str, ...])
 SHARD_PATH: Final[TypeAdapter[Path | None]] = TypeAdapter(Path | None)
 SHARD_FILES: Final = pytest.StashKey[frozenset[str] | None]()
+GROUP_SUFFIX: Final = re.compile(r"@integration_fixture_[0-9a-f]{64}$")
 INTEGER_OPTION: Final = TypeAdapter(int)
 STRING_ENVIRONMENT: Final = TypeAdapter(dict[str, str])
 
@@ -106,7 +109,7 @@ class IntegrationReportPlugin:
 
     @pytest.hookimpl(optionalhook=True)
     def pytest_xdist_node_collection_finished(self, node: object, ids: Sequence[str]) -> None:
-        self.config.stash[COLLECTED] = tuple(nodeid for nodeid in ids if _owned(nodeid))
+        self.config.stash[COLLECTED] = tuple(_case_identity(nodeid) for nodeid in ids if _owned(nodeid))
 
     @pytest.hookimpl(optionalhook=True)
     def pytest_testnodedown(self, node: WorkerNode, error: object) -> None:
@@ -124,6 +127,29 @@ class IntegrationReportPlugin:
             output["integration_inventory"] = self.config.stash.get(INVENTORY, ())
 
 
+def _case_identity(nodeid: str) -> str:
+    return GROUP_SUFFIX.sub("", nodeid)
+
+
+@pytest.hookimpl(wrapper=True, optionalhook=True)
+def pytest_report_from_serializable() -> Generator[
+    None, pytest.TestReport | pytest.CollectReport | None, pytest.TestReport | pytest.CollectReport | None
+]:
+    report: Final = yield
+    if not isinstance(report, pytest.TestReport):
+        return report
+    normalized: Final = copy(report)
+    normalized.nodeid = _case_identity(report.nodeid)
+    return normalized
+
+
+@pytest.hookimpl(wrapper=True, optionalhook=True)
+def pytest_handlecrashitem(report: pytest.TestReport) -> Generator[None, None, None]:
+    result: Final = yield
+    report.nodeid = _case_identity(report.nodeid)  # rebind-ok: xdist forwards this same report after the crash hook
+    return result
+
+
 def _owned(nodeid: str) -> bool:
     parts: Final = Path(nodeid.split("::", 1)[0]).parts
     return parts[:2] == ("tests", "integration") and len(parts) > 3 and parts[2] in OWNED_DIRECTORIES
@@ -133,8 +159,13 @@ def _digest(seed: int, identity: str) -> bytes:
     return hashlib.sha256(f"{seed}:{identity}".encode()).digest()
 
 
-def _order_key(seed: int, nodeid: str, group: str = "") -> tuple[bytes, bytes, bytes]:
-    return _digest(seed, nodeid.split("::", 1)[0]), _digest(seed, group or nodeid), _digest(seed, nodeid)
+def _order_key(seed: int, nodeid: str, group: str = "", inner_group: str = "") -> tuple[bytes, bytes, bytes, bytes]:
+    return (
+        _digest(seed, nodeid.split("::", 1)[0]),
+        _digest(seed, group or nodeid),
+        _digest(seed, inner_group or group or nodeid),
+        _digest(seed, nodeid),
+    )
 
 
 def _shard_files(path: Path | None) -> frozenset[str] | None:
@@ -151,11 +182,28 @@ def _shard_files(path: Path | None) -> frozenset[str] | None:
 
 @pytest.hookimpl(wrapper=True)
 def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item]) -> Iterator[None]:
+    if config.getoption("dist", default="no") == "loadgroup" or config.getoption("loadgroup", default=False):
+        automatic_groups: Final = scheduling_groups(tuple(collected_case(item) for item in items))
+        for item in items:
+            fixture_group: Final = automatic_groups[item.nodeid]
+            if fixture_group and not tuple(item.iter_markers("xdist_group")):
+                item.add_marker(
+                    pytest.mark.xdist_group("integration_fixture_" + hashlib.sha256(fixture_group.encode()).hexdigest())
+                )
     yield
     order_seed: Final = INTEGER_OPTION.validate_python(config.getoption("integration_order_seed"))
     if order_seed:
-        groups: Final = fixture_groups(tuple(collected_case(item) for item in items))
-        items.sort(key=lambda item: _order_key(order_seed, item.nodeid, groups[item.nodeid]))
+        cases: Final = tuple(collected_case(item) for item in items)
+        groups: Final = scheduling_groups(cases)
+        inner_groups: Final = fixture_groups(cases)
+        items.sort(
+            key=lambda item: _order_key(
+                order_seed,
+                _case_identity(item.nodeid),
+                _case_identity(groups[item.nodeid]),
+                _case_identity(inner_groups[item.nodeid]),
+            )
+        )
     root: Final = Path(__file__).parent
     owned: Final = tuple(
         item
@@ -169,7 +217,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         raise pytest.UsageError("Integration contracts are owned by CircleCI")
     for item in owned:
         item.add_marker(pytest.mark.integration)
-    config.stash[INVENTORY] = tuple(item.nodeid for item in owned)
+    config.stash[INVENTORY] = tuple(_case_identity(item.nodeid) for item in owned)
     count: Final = INTEGER_OPTION.validate_python(config.getoption("integration_shard_count"))
     index: Final = INTEGER_OPTION.validate_python(config.getoption("integration_shard_index"))
     if count < 1 or not 0 <= index < count:
@@ -185,7 +233,7 @@ def pytest_collection_modifyitems(config: pytest.Config, items: list[pytest.Item
         deselected: Final = tuple(item for item in owned if item.nodeid.split("::", 1)[0] not in files)
         config.hook.pytest_deselected(items=deselected)
         items[:] = selected
-    config.stash[COLLECTED] = tuple(item.nodeid for item in items if item in owned)
+    config.stash[COLLECTED] = tuple(_case_identity(item.nodeid) for item in items if item in owned)
 
 
 def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:

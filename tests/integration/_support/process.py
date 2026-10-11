@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from ipaddress import IPv4Address
+from itertools import accumulate
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -208,25 +209,43 @@ def _owns_listener(launch: _Launch) -> bool:
     return False
 
 
-def _wait_until_ready(launch: _Launch) -> None:
-    with httpx.Client(base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False) as client:
+def _readiness_pids(launch: _Launch) -> Iterator[int]:
+    with httpx.Client(
+        base_url=f"http://127.0.0.1:{launch.port}",
+        timeout=15,
+        trust_env=False,
+        limits=httpx.Limits(max_keepalive_connections=0),
+    ) as client:
         deadline: Final = time.monotonic() + float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS", "70"))
         while launch.process.poll() is None:
             try:
-                if client.get("/health/readiness", timeout=2).status_code == 200 and _owns_listener(launch):
-                    return
+                response: Final = client.get("/health/integration-readiness", timeout=2)
+                identity: Final = response.headers.get("x-integration-worker-pid", "")
+                if response.status_code == 200 and identity.isdecimal() and _owns_listener(launch):
+                    yield int(identity)
             except httpx.TransportError:
                 pass
             assert time.monotonic() < deadline, "Owned proxy readiness deadline exceeded"
             time.sleep(0.1)
 
 
+def _ready_workers(pids: frozenset[int], pid: int) -> frozenset[int]:
+    return pids | frozenset((pid,))
+
+
+def _wait_until_ready(launch: _Launch, workers: int = 1) -> None:
+    for ready in accumulate(_readiness_pids(launch), _ready_workers, initial=frozenset[int]()):
+        members: Final = frozenset(member.pid for member in group_members(launch.process.pid))
+        if len(ready & members) >= max(1, workers):
+            return
+
+
 def _launch_until_bound(
-    command: tuple[str, ...], root: Path, environment: Mapping[str, str], output: Path, attempts: int
+    command: tuple[str, ...], root: Path, environment: Mapping[str, str], output: Path, attempts: int, workers: int
 ) -> _Launch:
     launch: Final = _launch(command, root, environment, output)
     try:
-        _wait_until_ready(launch)
+        _wait_until_ready(launch, workers)
         exit_code: Final = launch.process.poll()
         assert exit_code is None or (attempts > 1 and _lost_port_race(exit_code, launch.log)), (
             "Owned proxy exited before readiness"
@@ -247,7 +266,7 @@ def _launch_until_bound(
         )
         return launch
     _stop_launch(launch)
-    return _launch_until_bound(command, root, environment, output, attempts - 1)
+    return _launch_until_bound(command, root, environment, output, attempts - 1, workers)
 
 
 def _proxy_root() -> Path:
@@ -309,7 +328,13 @@ def _proxy_environment(
             "PYTHON_DOTENV_DISABLED": "1",
             **overrides,
             "LITELLM_WORKER_STARTUP_HOOKS": ",".join(
-                hook for hook in ("integration._support.runtime:configure_executor", configured_hooks) if hook
+                hook
+                for hook in (
+                    "integration._support.runtime:configure_executor",
+                    "integration._support.runtime:configure_readiness",
+                    configured_hooks,
+                )
+                if hook
             ),
         }
     )
@@ -372,7 +397,7 @@ def owned_proxy_process(
         *database_setup,
         *extra_arguments,
     )
-    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS)
+    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS, workers)
     process: Final = launch.process
     try:
         with httpx.Client(
@@ -406,7 +431,7 @@ def owned_gateway_image(
         "--timeout-worker-healthcheck",
         str(int(graceful_stop_seconds())),
     )
-    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS)
+    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS, workers)
     try:
         with httpx.Client(
             base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS

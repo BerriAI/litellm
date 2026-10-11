@@ -133,8 +133,8 @@ if [ "$mode" = parity ]; then
   export INTEGRATION_WORKERS=1
 else
   case "$suite" in
-    management) export INTEGRATION_WORKERS=2; isolated_workers=true ;;
-    accounting|providers|extensions) export INTEGRATION_WORKERS=4; isolated_workers=true ;;
+    management|accounting) export INTEGRATION_WORKERS=2; isolated_workers=true ;;
+    providers|extensions) export INTEGRATION_WORKERS=4; isolated_workers=true ;;
   esac
 fi
 if [ "$isolated_workers" = false ]; then
