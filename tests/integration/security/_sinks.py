@@ -81,6 +81,7 @@ LOCAL_CATALOGS: Final = MappingProxyType(
             "LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS",
             "LITELLM_LOCAL_AUTOROUTER_PRESETS",
             "LITELLM_LOCAL_POLICY_TEMPLATES",
+            "LITELLM_LOCAL_WHATS_NEW",
         )
     }
 )
