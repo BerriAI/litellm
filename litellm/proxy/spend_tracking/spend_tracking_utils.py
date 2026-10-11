@@ -9,7 +9,7 @@ from functools import reduce
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal, Protocol, cast, runtime_checkable
 
-from pydantic import BaseModel, JsonValue
+from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -47,7 +47,12 @@ from litellm.litellm_core_utils.ptu_pricing import azure_spillover
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps, strip_null_bytes
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.llms.anthropic.common_utils import resolve_used_client_oauth_token
-from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsRouterMetadata
+from litellm.proxy._types import (
+    SpendLogsMetadata,
+    SpendLogsMetadataFields,
+    SpendLogsPayload,
+    SpendLogsRouterMetadata,
+)
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
@@ -1724,6 +1729,35 @@ def should_store_prompts_and_responses_in_spend_logs() -> bool:
 
     # Also check environment variable
     return get_secret_bool("STORE_PROMPTS_IN_SPEND_LOGS") is True
+
+
+_SPEND_LOGS_METADATA_FIELDS_ADAPTER: Final[TypeAdapter[SpendLogsMetadataFields | None]] = TypeAdapter(
+    SpendLogsMetadataFields | None
+)
+_SPEND_LOGS_METADATA_ADAPTER: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def configured_spend_logs_metadata_fields() -> SpendLogsMetadataFields | None:
+    from litellm.proxy.proxy_server import general_settings_view
+
+    try:
+        return _SPEND_LOGS_METADATA_FIELDS_ADAPTER.validate_python(
+            general_settings_view().get("spend_logs_metadata_fields")
+        )
+    except ValidationError as e:
+        verbose_proxy_logger.error("Ignoring invalid general_settings.spend_logs_metadata_fields: %s", e)
+        return None
+
+
+def spend_log_row_with_retained_metadata(
+    row: Mapping[str, object], fields: SpendLogsMetadataFields | None
+) -> Mapping[str, object]:
+    metadata_json: Final = row.get("metadata")
+    if fields is None or not isinstance(metadata_json, str):
+        return row
+    metadata: Final = _SPEND_LOGS_METADATA_ADAPTER.validate_json(metadata_json)
+    retained: Final = {name: value for name, value in metadata.items() if fields.keeps(name)}
+    return {**row, "metadata": safe_dumps(retained)}
 
 
 def _get_status_for_spend_log(

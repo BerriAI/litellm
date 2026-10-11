@@ -1,6 +1,8 @@
 import os
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from typing import Final
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 from tests._master_key import MASTER_KEY
 
@@ -24,10 +26,13 @@ from fastapi.testclient import TestClient
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.management_endpoints.gateway_request_endpoints import (
+    _ACTIVITY_SQL,
     _AggregateRow,
     _default_range,
     _fold_by_date,
     _fold_by_route,
+    _fold_by_status_code,
+    _StatusCodeAggregateRow,
     get_gateway_daily_activity,
     router,
 )
@@ -64,6 +69,7 @@ def _row(
     failed: int = 0,
 ) -> _AggregateRow:
     return _AggregateRow(
+        kind="route",
         date=date,
         category=category,
         route=route,
@@ -76,10 +82,16 @@ def _admin() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN)
 
 
-def _prisma_returning(rows: list) -> MagicMock:
-    client = MagicMock()
+def _prisma_returning(rows: Sequence[Mapping[str, str | int | None]] | None) -> MagicMock:
+    client: Final = MagicMock()
     client.db = MagicMock()
-    client.db.query_raw = AsyncMock(return_value=rows)
+
+    async def query_raw(query: str, *_args: str) -> Sequence[Mapping[str, str | int | None]] | None:
+        if query != _ACTIVITY_SQL:
+            raise AssertionError(f"Unexpected gateway activity query: {query}")
+        return rows
+
+    client.db.query_raw = AsyncMock(side_effect=query_raw)
     return client
 
 
@@ -155,6 +167,18 @@ class TestFoldByRoute:
         assert [entry.route for entry in _fold_by_route(tuple(reversed(rows)))] == expected
 
 
+class TestFoldByStatusCode:
+    def test_orders_by_failed_count_then_status_code(self):
+        folded: Final = _fold_by_status_code(
+            (
+                _StatusCodeAggregateRow(kind="status", status_code=503, failed_requests=1),
+                _StatusCodeAggregateRow(kind="status", status_code=500, failed_requests=2),
+                _StatusCodeAggregateRow(kind="status", status_code=429, failed_requests=2),
+            )
+        )
+        assert [(entry.status_code, entry.failed_requests) for entry in folded] == [(429, 2), (500, 2), (503, 1)]
+
+
 class TestGatewayDailyActivityEndpoint:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
@@ -194,39 +218,66 @@ class TestGatewayDailyActivityEndpoint:
         assert exc.value.status_code == 500
 
     @pytest.mark.asyncio
-    async def test_totals_and_breakdowns_come_from_the_same_rows(self):
-        rows = [
+    async def test_mixed_route_and_status_rows_fold_into_totals_and_breakdowns(self):
+        rows: Final = (
             {
+                "kind": "route",
                 "date": "2026-08-03",
                 "category": "llm",
                 "route": "/chat/completions",
                 "successful_requests": 5,
                 "failed_requests": 1,
+                "status_code": None,
             },
             {
+                "kind": "route",
                 "date": "2026-08-04",
                 "category": "llm",
                 "route": "/chat/completions",
                 "successful_requests": 7,
                 "failed_requests": 3,
+                "status_code": None,
             },
             {
+                "kind": "route",
                 "date": "2026-08-04",
                 "category": "llm",
                 "route": "/embeddings",
                 "successful_requests": 4,
                 "failed_requests": 0,
+                "status_code": None,
             },
-        ]
-        with patch("litellm.proxy.proxy_server.prisma_client", _prisma_returning(rows)):
-            response = await get_gateway_daily_activity(user_api_key_dict=_admin())
+            {
+                "kind": "status",
+                "date": None,
+                "category": None,
+                "route": None,
+                "successful_requests": 0,
+                "failed_requests": 3,
+                "status_code": 429,
+            },
+            {
+                "kind": "status",
+                "date": None,
+                "category": None,
+                "route": None,
+                "successful_requests": 0,
+                "failed_requests": 1,
+                "status_code": 500,
+            },
+        )
+        prisma: Final = _prisma_returning(rows)
+        with patch("litellm.proxy.proxy_server.prisma_client", prisma):
+            response: Final = await get_gateway_daily_activity(user_api_key_dict=_admin())
 
         assert response.total_successful_requests == 16
         assert response.total_failed_requests == 4
         assert sum(entry.successful_requests for entry in response.by_date) == 16
         assert sum(entry.successful_requests for entry in response.by_route) == 16
+        assert [(entry.status_code, entry.failed_requests) for entry in response.by_status_code] == [(429, 3), (500, 1)]
         assert [entry.date for entry in response.by_date] == ["2026-08-03", "2026-08-04"]
         assert [entry.route for entry in response.by_route] == ["/chat/completions", "/embeddings"]
+        assert prisma.db.query_raw.call_count == 1
 
     @pytest.mark.asyncio
     async def test_a_null_result_set_is_not_an_error(self):
@@ -236,6 +287,8 @@ class TestGatewayDailyActivityEndpoint:
         assert response.total_successful_requests == 0
         assert response.by_date == ()
         assert response.by_route == ()
+        assert response.by_status_code == ()
+
 
 class TestGatewayDailyActivityRoute:
     """
@@ -258,8 +311,7 @@ class TestGatewayDailyActivityRoute:
                 params={"start_date": "2026-01-01", "end_date": "2026-01-31"},
             )
         assert response.status_code == 200
-        _, start, end = prisma.db.query_raw.call_args.args
-        assert (start, end) == ("2026-01-01", "2026-01-31")
+        assert prisma.db.query_raw.call_args_list == [call(_ACTIVITY_SQL, "2026-01-01", "2026-01-31")]
 
     def test_omitted_dates_fall_back_to_the_default_window(self, frozen_clock):
         prisma = _prisma_returning([])
@@ -269,26 +321,36 @@ class TestGatewayDailyActivityRoute:
         with patch("litellm.proxy.proxy_server.prisma_client", prisma):
             response = TestClient(app).get("/gateway/daily/activity")
         assert response.status_code == 200
-        _, start, end = prisma.db.query_raw.call_args.args
-        assert (start, end) == _FROZEN_RANGE
+        assert prisma.db.query_raw.call_args_list == [call(_ACTIVITY_SQL, *_FROZEN_RANGE)]
 
     def test_serialized_response_carries_the_documented_shape(self):
-        prisma = _prisma_returning(
+        prisma: Final = _prisma_returning(
             [
                 {
+                    "kind": "route",
                     "date": "2026-08-04",
                     "category": "llm",
                     "route": "/chat/completions",
                     "successful_requests": 7,
                     "failed_requests": 3,
-                }
+                    "status_code": None,
+                },
+                {
+                    "kind": "status",
+                    "date": None,
+                    "category": None,
+                    "route": None,
+                    "successful_requests": 0,
+                    "failed_requests": 3,
+                    "status_code": 500,
+                },
             ]
         )
-        app = FastAPI()
+        app: Final = FastAPI()
         app.include_router(router)
         app.dependency_overrides[user_api_key_auth] = _admin
         with patch("litellm.proxy.proxy_server.prisma_client", prisma):
-            body = TestClient(app).get("/gateway/daily/activity").json()
+            body: Final = TestClient(app).get("/gateway/daily/activity").json()
 
         assert body == {
             "total_successful_requests": 7,
@@ -302,4 +364,5 @@ class TestGatewayDailyActivityRoute:
                     "failed_requests": 3,
                 }
             ],
+            "by_status_code": [{"status_code": 500, "failed_requests": 3}],
         }
