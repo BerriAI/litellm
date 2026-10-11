@@ -10,8 +10,8 @@ from pydantic import TypeAdapter
 
 from litellm._internal_context import is_internal_call
 from litellm.litellm_core_utils.litellm_logging import Logging
-from litellm.rust_bridge import callbacks_legacy_python as legacy
-from litellm.rust_bridge.callbacks_legacy_python import failure_handler, setup
+from litellm.rust_bridge.host import callbacks_legacy_python as legacy
+from litellm.rust_bridge.host.callbacks_legacy_python import failure_handler, setup
 from litellm.types.utils import ModelResponse
 
 _OCR_KWARGS: Final = MappingProxyType(
@@ -167,7 +167,7 @@ def test_failure_handler_of_an_internal_call_leaves_the_outer_budget_reservation
     pending.close()
 
 
-CONTRACT_PATH: Final = Path(__file__).parents[3] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"
+CONTRACT_PATH: Final = Path(__file__).parents[4] / "litellm-rust/crates/callbacks-legacy-python/python_contract.json"
 
 
 def test_the_rust_contract_matches_the_shim_signatures() -> None:
