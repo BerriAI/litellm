@@ -29,7 +29,6 @@ from litellm.types.llms.anthropic import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
-    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.hooks.parallel_request_limiter_v3 import (
         RateLimitDescriptor,
         RateLimitDescriptorRateLimitObject,
@@ -41,6 +40,7 @@ if TYPE_CHECKING:
         AllAnthropicToolsValues,
     )
     from litellm.types.llms.openai import ChatCompletionToolParam
+    from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
     from litellm.types.utils import ModelResponse
 
 from ..constants import (
@@ -84,6 +84,7 @@ _PROPAGATED_METADATA_KEYS: Final = (
     "user_api_key_model_max_budget",
     "user_api_key_team_model_max_budget",
     "user_api_key_user_model_max_budget",
+    "user_api_key_team_member_model_max_budget",
     "user_api_key_end_user_model_max_budget",
     "litellm_call_id",
     "litellm_parent_otel_span",
@@ -123,6 +124,23 @@ class _SummaryAcompletion(Protocol):
         messages: Sequence[Mapping[str, object]],
         **kwargs: Unpack[_SummaryCallKwargs],  # kwargs-ok: forwarded verbatim to acompletion, which owns them
     ) -> "Awaitable[ModelResponse | CustomStreamWrapper]": ...
+
+
+class _SummaryModelBudgetLimiter(Protocol):
+    async def is_team_member_within_model_budget(
+        self,
+        user_id: str,
+        team_id: str,
+        team_member_model_max_budget: Mapping[str, object],
+        model: str,
+    ) -> bool: ...
+
+    async def is_end_user_within_model_budget(
+        self,
+        end_user_id: str,
+        end_user_model_max_budget: Mapping[str, object],
+        model: str,
+    ) -> bool: ...
 
 
 class _CreateRateLimitDescriptors(Protocol):
@@ -392,6 +410,42 @@ async def _check_summary_model_access(
     return True
 
 
+async def _check_summary_team_member_model_budget(
+    user_api_key_auth: "UserAPIKeyAuth",
+    model_max_budget_limiter: _SummaryModelBudgetLimiter,
+    summary_model: str,
+) -> bool:
+    team_member_model_max_budget: Final = user_api_key_auth.team_member_model_max_budget
+    user_id: Final = user_api_key_auth.user_id
+    team_id: Final = user_api_key_auth.team_id
+    if (
+        not isinstance(team_member_model_max_budget, Mapping)
+        or not team_member_model_max_budget
+        or not isinstance(user_id, str)
+        or not isinstance(team_id, str)
+    ):
+        return True
+
+    try:
+        await model_max_budget_limiter.is_team_member_within_model_budget(
+            user_id=user_id,
+            team_id=team_id,
+            team_member_model_max_budget=team_member_model_max_budget,
+            model=summary_model,
+        )
+    except litellm.BudgetExceededError:
+        return False
+    except Exception as e:  # noqa: BLE001  # unexpected budget-check errors must deny compaction
+        verbose_logger.warning(
+            "compact_20260112: unexpected error during team member model-budget "
+            "check for summary_model=%s; denying: %s",
+            summary_model,
+            e,
+        )
+        return False
+    return True
+
+
 async def _check_summary_model_budget(
     user_api_key_auth: Optional["UserAPIKeyAuth"],
     summary_model: str,
@@ -407,9 +461,9 @@ async def _check_summary_model_budget(
     per-model budget is configured.
 
     Every scope is checked because the summary's spend is charged to every
-    scope: this file propagates the key, team, user and end-user budgets into the
-    subrequest's metadata, so skipping one of them would let compaction
-    increment a counter it can never be refused by.
+    scope: this file propagates the key, team, user, team-member and end-user
+    budgets into the subrequest's metadata, so skipping one of them would let
+    compaction increment a counter it can never be refused by.
     """
     if user_api_key_auth is None:
         return True
@@ -497,7 +551,11 @@ async def _check_summary_model_budget(
             )
             return False
 
-    return True
+    return await _check_summary_team_member_model_budget(
+        user_api_key_auth=user_api_key_auth,
+        model_max_budget_limiter=model_max_budget_limiter,
+        summary_model=summary_model,
+    )
 
 
 def _without_parallel_request_gauges(
