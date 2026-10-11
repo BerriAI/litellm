@@ -6,7 +6,7 @@ from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VALUES, CaptureMessageCo
 
 @pytest.mark.parametrize("value", ["", "  ", "auth", "none,redis", "redis,", ",postgres"])
 def test_invalid_excluded_services_values_are_rejected(value: str) -> None:
-    with pytest.raises(ValueError, match="Invalid excluded_services.*none"):
+    with pytest.raises(ValueError, match=r"Invalid excluded_services.*none"):
         validate_excluded_services_value(value)
 
 
