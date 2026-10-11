@@ -414,7 +414,7 @@ def test_initialize_rejects_invalid_streaming_scan_settings(mock_mgr, overrides,
 def test_add_guardrail_settings_returns_decisions_providers():
     import asyncio
 
-    from litellm.decisions.main import supported_decisions_providers
+    from litellm.decisions.call import supported_decisions_providers
     from litellm.proxy.guardrails.guardrail_endpoints import get_guardrail_ui_settings
 
     settings: Final = asyncio.run(get_guardrail_ui_settings())

@@ -1405,7 +1405,7 @@ async def get_guardrail_ui_settings():
     - PII entity categories for UI organization
     - Content filter settings (patterns and categories)
     """
-    from litellm.decisions.main import supported_decisions_providers
+    from litellm.decisions.call import supported_decisions_providers
     from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.patterns import (
         PATTERN_CATEGORIES,
         get_available_content_categories,
