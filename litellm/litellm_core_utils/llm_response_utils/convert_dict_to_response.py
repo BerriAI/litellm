@@ -172,43 +172,47 @@ def _coerce_missing_choices_status(value: object) -> int | None:
     if isinstance(value, int):
         return value if 100 <= value <= 599 else None
     if isinstance(value, str) and value.strip().isascii() and value.strip().isdecimal():
-        status_code = int(value.strip())
+        status_code: Final = int(value.strip())
         return status_code if 100 <= status_code <= 599 else None
     return None
 
 
 def _get_missing_choices_error_args(response_object: Mapping[str, object]) -> tuple[int, str]:
-    error = response_object.get("error")
-    top_level_status_values = tuple(response_object.get(field) for field in ("status", "status_code"))
-    nested_error: Mapping[str, object] | None = (
-        cast(Mapping[str, object], error) if isinstance(error, Mapping) else None
+    error: Final = response_object.get("error")
+    top_level_status_values: Final = tuple(
+        response_object.get(field) for field in ("status", "status_code")
     )
-    nested_status_values = (
+    nested_error: Final = (
+        {key: value for key, value in error.items() if isinstance(key, str)}
+        if isinstance(error, Mapping)
+        else None
+    )
+    nested_status_values: Final = (
         tuple(nested_error.get(field) for field in ("code", "status", "status_code"))
         if nested_error is not None
         else ()
     )
-    status_values = (
+    status_values: Final = (
         *(value for value in top_level_status_values if isinstance(value, int) and not isinstance(value, bool)),
         *(value for value in top_level_status_values if isinstance(value, str)),
         *nested_status_values,
     )
-    status_code = next(
+    status_code: Final = next(
         (value for candidate in status_values if (value := _coerce_missing_choices_status(candidate)) is not None),
         500,
     )
-    nested_message_values = (
+    nested_message_values: Final = (
         tuple(nested_error.get(field) for field in ("message", "response"))
         if nested_error is not None
         else (error,)
         if isinstance(error, str)
         else ()
     )
-    message_values = (
+    message_values: Final = (
         *(response_object.get(field) for field in ("response", "message")),
         *nested_message_values,
     )
-    message = next(
+    message: Final = next(
         (value for value in message_values if isinstance(value, str) and value.strip()),
         _invalid_choices_message(response_object),
     )
@@ -216,7 +220,7 @@ def _get_missing_choices_error_args(response_object: Mapping[str, object]) -> tu
 
 
 def _get_choices_error_args(response_object: Mapping[str, object]) -> tuple[int, str]:
-    choices = response_object.get("choices")
+    choices: Final = response_object.get("choices")
     if "choices" in response_object and choices is not None and not isinstance(choices, list):
         return 500, _invalid_choices_message(response_object)
     return _get_missing_choices_error_args(response_object)
