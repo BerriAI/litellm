@@ -1,6 +1,6 @@
-"""The request-log indexes built after `prisma migrate deploy` instead of by a migration:
-by the migration job, or by a serving proxy that ran the migrations itself (in the
-background, once it serves).
+"""The request-log indexes are built after `prisma migrate deploy` instead of by a migration,
+but only when `LITELLM_BUILD_SPEND_LOGS_INDEXES` is set: by the migration job, or by a serving
+proxy that ran the migrations itself (in the background, once it serves).
 
 A migration cannot build them: a plain `CREATE INDEX` blocks spend-log inserts for the
 whole build, and `CREATE INDEX CONCURRENTLY` is refused on a partitioned parent
@@ -50,6 +50,7 @@ class RequestLogIndex:
         return f"{kept}_{digest}"
 
 
+REQUEST_LOG_INDEXES_ENV_VAR: Final = "LITELLM_BUILD_SPEND_LOGS_INDEXES"
 REQUEST_LOG_INDEXES: Final = (
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_api_key_startTime_idx", '("api_key", "startTime")'),
     RequestLogIndex("LiteLLM_SpendLogs", "LiteLLM_SpendLogs_litellm_call_id_idx", '("litellm_call_id")'),
