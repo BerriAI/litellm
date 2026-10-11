@@ -243,7 +243,7 @@ commands:
             mkdir -p "$HOME/.local/bin"
             mv /tmp/codecov "$HOME/.local/bin/codecov"
   start_openai_record_replay_proxy:
-    description: "Start the record/replay proxy (tests/_openai_record_replay_proxy.py) on host port 8090 and wait until healthy. Models whose api_base points here replay recorded provider responses, so the E2E run neither pays for nor depends on the live provider. The default upstream is OpenAI; a non-OpenAI model must point its api_base at /__recorder_upstream/<host>/ so the recorder forwards there instead of defaulting to OpenAI. Run after uv deps are synced."
+    description: "Start the record/replay proxy (tests/_openai_record_replay_proxy.py) on host port 8090 and wait until healthy. Models whose api_base points here replay Redis cache hits. Cache misses call the live provider and store its response, so these legacy E2E jobs still require provider availability and may incur provider charges. The default upstream is OpenAI; a non-OpenAI model must point its api_base at /__recorder_upstream/<host>/ so the recorder forwards there instead of defaulting to OpenAI. Run after uv deps are synced."
     steps:
       - run:
           name: Start record/replay proxy
@@ -379,50 +379,6 @@ commands:
       - save_cargo_target
 
 jobs:
-  # Add Windows testing job
-  using_litellm_on_windows:
-    executor:
-      name: win/default
-      shell: powershell.exe
-    working_directory: ~/project
-    environment:
-      UV_PYTHON: "3.11"
-      CARGO_HTTP_MULTIPLEXING: "false"
-      CARGO_NET_RETRY: "5"
-    steps:
-      - checkout
-      - run:
-          name: Install Python
-          command: |
-            choco install python --version=3.11.0 -y --no-progress --force
-            refreshenv
-            python --version
-          environment:
-            CHOCOLATEY_CONFIRM_ALL: "true"
-      - install_windows_toolchain
-      - run:
-          name: Install Dependencies
-          no_output_timeout: 30m
-          environment:
-            UV_HTTP_TIMEOUT: "300"
-          command: |
-            $env:Path = "$HOME\.cargo\bin;$HOME\.local\bin;$env:Path"
-            for ($attempt = 1; $attempt -le 5; $attempt++) {
-              Write-Host "uv sync attempt $attempt/5"
-              uv sync --frozen --group dev --python 3.11
-              if ($LASTEXITCODE -eq 0) {
-                break
-              }
-              if ($attempt -eq 5) {
-                exit $LASTEXITCODE
-              }
-              Start-Sleep -Seconds 15
-            }
-      - run:
-          name: Run Windows-specific test
-          command: |
-            uv run --no-sync python -m pytest --tb=short tests/windows_tests/ -v
-
   windows_release_wheel:
     executor:
       name: win/default
@@ -517,7 +473,7 @@ jobs:
           command: |
             python3 tests/windows_tests/check_windows_wheel_install.py --lengths-only
 
-  local_testing_part1:
+  auth_ui_unit_tests:
     docker:
       - &python312_image
         image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
@@ -533,219 +489,6 @@ jobs:
     working_directory: ~/project
     environment: &sidecar_database_url
       DATABASE_URL: "postgresql://postgres:postgres@localhost:5432/litellm_test"
-    parallelism: 4
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      - save_cargo_target
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
-      - run:
-          name: Run prisma ./docker/entrypoint.sh
-          command: |
-            set +e
-            chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
-            set -e
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests (Part 1 - A-M)
-          command: |
-            mkdir test-results
-
-            # Discover test files (A-M)
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_[a-mA-M]*.py")
-
-            echo "$TEST_FILES" | circleci tests run \
-              --split-by=timings \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -vv \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise \
-                --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=20 \
-                -k \"not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache\" \
-                -n 4 \
-                --timeout=300 \
-                --timeout_method=thread"
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            # When CI reruns only the failed tests, a parallel node can receive
-            # zero tests and pytest never writes coverage. Emit empty placeholders
-            # so persist_to_workspace and the downstream coverage combine stay green.
-            if [ -f coverage.xml ]; then
-              mv coverage.xml local_testing_part1_coverage.xml
-              mv .coverage local_testing_part1_coverage
-            else
-              touch local_testing_part1_coverage.xml local_testing_part1_coverage
-            fi
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - local_testing_part1_coverage.xml
-            - local_testing_part1_coverage
-  local_testing_part2:
-    docker:
-      - *python312_image
-      - *postgres16_sidecar
-    working_directory: ~/project
-    environment: *sidecar_database_url
-    parallelism: 4
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
-      - run:
-          name: Run prisma ./docker/entrypoint.sh
-          command: |
-            set +e
-            chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
-            set -e
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests (Part 2 - N-Z)
-          command: |
-            mkdir test-results
-
-            # Discover test files (N-Z)
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_[n-zN-Z]*.py")
-
-            echo "$TEST_FILES" | circleci tests run \
-              --split-by=timings \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -vv \
-                --cov=./litellm --cov=./enterprise/litellm_enterprise \
-                --cov-report=xml \
-                --junitxml=test-results/junit.xml \
-                --durations=20 \
-                -k \"not test_python_38.py and not test_basic_python_version.py and not router and not assistants and not langfuse and not caching and not cache\" \
-                -n 4 \
-                --timeout=300 \
-                --timeout_method=thread"
-          no_output_timeout: 15m
-      - run:
-          name: Rename the coverage files
-          command: |
-            # When CI reruns only the failed tests, a parallel node can receive
-            # zero tests and pytest never writes coverage. Emit empty placeholders
-            # so persist_to_workspace and the downstream coverage combine stay green.
-            if [ -f coverage.xml ]; then
-              mv coverage.xml local_testing_part2_coverage.xml
-              mv .coverage local_testing_part2_coverage
-            else
-              touch local_testing_part2_coverage.xml local_testing_part2_coverage
-            fi
-
-      # Store test results
-      - store_test_results:
-          path: test-results
-      - persist_to_workspace:
-          root: .
-          paths:
-            - local_testing_part2_coverage.xml
-            - local_testing_part2_coverage
-  langfuse_logging_unit_tests:
-    docker:
-      - *python312_image
-      - *postgres16_sidecar
-    working_directory: ~/project
-    environment: *sidecar_database_url
-    resource_class: medium
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
-      - run:
-          name: Run prisma ./docker/entrypoint.sh
-          command: |
-            set +e
-            chmod +x docker/entrypoint.sh
-            ./docker/entrypoint.sh
-            set -e
-
-      # Run pytest and generate JUnit XML report
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -v \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                -k \"langfuse\""
-          no_output_timeout: 15m
-      # Store test results
-      - store_test_results:
-          path: test-results
-  auth_ui_unit_tests:
-    docker:
-      - *python312_image
-      - *postgres16_sidecar
-    working_directory: ~/project
-    environment: *sidecar_database_url
 
     steps:
       - checkout
@@ -802,59 +545,6 @@ jobs:
           paths:
             - auth_ui_unit_tests_coverage.xml
             - auth_ui_unit_tests_coverage
-
-  litellm_router_testing: # Runs all tests with the "router" keyword
-    docker:
-      - *python312_image
-    working_directory: ~/project
-    resource_class: large
-    parallelism: 4
-    environment:
-      FAKE_OPENAI_API_BASE: http://127.0.0.1:8190
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - restore_cache:
-          keys:
-            - v1-uv-cache-{{ checksum "uv.lock" }}
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v1-uv-cache-{{ checksum "uv.lock" }}
-      - start_fake_openai_endpoint
-      # Run pytest and generate JUnit XML report
-      - setup_litellm_enterprise_pip
-      - run:
-          name: Run tests
-          command: |
-            # On a "rerun failed tests" build a parallel node can receive no
-            # tests, so the test command never creates test-results. Pre-create it
-            # so store_test_results doesn't fail the node on a missing path.
-            mkdir -p test-results
-
-            TEST_FILES=$(circleci tests glob "tests/local_testing/**/test_*.py")
-
-            echo "$TEST_FILES" | circleci tests run \
-              --split-by=timings \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -v \
-                -k 'router' \
-                -n 4 \
-                --junitxml=test-results/junit.xml \
-                --durations=5 \
-                --timeout=300 --timeout_method=thread"
-          no_output_timeout: 15m
-      # Store test results
-      - store_test_results:
-          path: test-results
 
   llm_translation_testing:
     docker:
@@ -1384,89 +1074,6 @@ jobs:
           paths:
             - audio_coverage.xml
             - audio_coverage
-  installing_litellm_on_python:
-    docker:
-      - *python312_image
-      - *postgres16_sidecar
-    working_directory: ~/project
-    environment: *sidecar_database_url
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
-      - run:
-          name: Run tests
-          command: |
-            uv run --no-sync python -m pytest --tb=short -vv tests/local_testing/test_basic_python_version.py -k "not legacy_resolver"
-
-  installing_litellm_on_python_3_13:
-    docker:
-      - image: cimg/python:3.13.1@sha256:87b243ae80d154db75ce5e58af16c72c5dd4b1e23e5c7264a816e85e0c440c13
-        auth:
-          username: ${DOCKERHUB_USERNAME}
-          password: ${DOCKERHUB_PASSWORD}
-      - *postgres16_sidecar
-    working_directory: ~/project
-    environment: *sidecar_database_url
-    resource_class: medium
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.13
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
-      - run:
-          name: Run tests
-          command: |
-            uv run --no-sync python -m pytest --tb=short -v tests/local_testing/test_basic_python_version.py -k "not legacy_resolver"
-
-  installing_litellm_on_python_v2_migration_resolver:
-    docker:
-      - *python312_image
-      - *postgres16_sidecar
-    working_directory: ~/project
-    environment: *sidecar_database_url
-
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - wait_for_service:
-          url: tcp://localhost:5432
-          timeout: "60"
-      - run:
-          name: Run both migration resolvers against Postgres
-          command: |
-            uv run --no-sync python -m pytest --tb=short -vv \
-              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings \
-              tests/local_testing/test_basic_python_version.py::test_litellm_proxy_server_config_no_general_settings_legacy_resolver
-
   helm_chart_testing:
     machine:
       image: ubuntu-2204:2024.04.1 # Use machine executor instead of docker
@@ -2159,95 +1766,6 @@ jobs:
       - store_test_results:
           path: test-results
 
-  proxy_build_from_pip_tests:
-    # Change from docker to machine executor
-    machine:
-      image: ubuntu-2204:2024.04.1
-    resource_class: large
-    working_directory: ~/project
-    steps:
-      - checkout
-      - run:
-          name: Generate LiteLLM master key
-          command: |
-            key="$(openssl rand -hex 16)"
-            printf 'export LITELLM_MASTER_KEY=sk-%s\n' "$key" >> "$BASH_ENV"
-      - skip_if_unrelated_changes
-      - setup_google_dns
-      # Remove Docker CLI installation since it's already available in machine executor
-      - install_uv
-      - install_rust
-      - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - run:
-          name: Build Docker image
-          command: |
-            docker build -t my-app:latest -f docker/build_from_pip/Dockerfile.build_from_pip .
-      - start_postgres
-      - start_fake_openai_endpoint
-      - run:
-          name: Run Docker container
-          # intentionally give bad redis credentials here
-          # the OTEL test - should get this as a trace
-          command: |
-            docker run -d \
-              -p 4000:4000 \
-              -e DATABASE_URL=postgresql://postgres:postgres@host.docker.internal:5432/circle_test \
-              -e REDIS_HOST=$REDIS_HOST \
-              -e REDIS_PASSWORD=$REDIS_PASSWORD \
-              -e REDIS_PORT=$REDIS_PORT \
-              -e LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" \
-              -e OPENAI_API_KEY=$OPENAI_API_KEY \
-              -e FAKE_OPENAI_API_BASE=http://host.docker.internal:8190 \
-              -e LITELLM_LICENSE=$LITELLM_LICENSE \
-              -e OTEL_EXPORTER="in_memory" \
-              -e AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID \
-              -e AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY \
-              -e AWS_REGION_NAME=$AWS_REGION_NAME \
-              -e COHERE_API_KEY=$COHERE_API_KEY \
-              -e USE_DDTRACE=True \
-              -e DD_API_KEY=$DD_API_KEY \
-              -e DD_SITE=$DD_SITE \
-              -e GCS_FLUSH_INTERVAL="1" \
-              -e LITELLM_LOG=ERROR \
-              --add-host host.docker.internal:host-gateway \
-              --name my-app \
-              -v $(pwd)/docker/build_from_pip/litellm_config.yaml:/app/config.yaml \
-              my-app:latest \
-              --config /app/config.yaml \
-              --port 4000
-      - run:
-          name: Start outputting logs
-          command: docker logs -f my-app
-          background: true
-      - wait_for_service:
-          url: http://localhost:4000
-          timeout: "300"
-      - run:
-          name: Run tests
-          command: |
-            mkdir -p test-results
-            TEST_FILES=$(circleci tests glob "tests/basic_proxy_startup_tests/**/test_*.py")
-            echo "$TEST_FILES" | circleci tests run \
-              --verbose \
-              --command="tr ' ' '\\n' | awk '/\\.py/ {print; next} {sub(/\\.[A-Z][^.]*$/, \"\"); gsub(/\\./, \"/\"); print \$0 \".py\"}' | xargs uv run --no-sync python -m pytest --tb=short \
-                -vv \
-                --junitxml=test-results/junit-2.xml \
-                --durations=5"
-          no_output_timeout: 15m
-            # Clean up first container
-      - store_test_results:
-          path: test-results
-      - run:
-          name: Stop and remove first container
-          command: |
-            docker stop my-app || true
-            docker rm my-app || true
-            docker stop postgres-db || true
-            docker rm postgres-db || true
-          when: always
   proxy_pass_through_endpoint_tests:
     machine:
       image: ubuntu-2204:2024.04.1
@@ -2438,7 +1956,7 @@ jobs:
       - run:
           name: Combine Coverage
           command: |
-            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage local_testing_part1_coverage local_testing_part2_coverage pass_through_unit_tests_coverage batches_coverage google_generate_content_endpoint_coverage litellm_utils_coverage
+            uv tool run --from 'coverage[toml]==7.10.6' coverage combine realtime_translation_coverage ocr_coverage search_coverage logging_coverage audio_coverage pass_through_unit_tests_coverage batches_coverage google_generate_content_endpoint_coverage litellm_utils_coverage
             uv tool run --from 'coverage[toml]==7.10.6' coverage xml
       - codecov/upload:
           file: ./coverage.xml
@@ -3028,10 +2546,71 @@ jobs:
             docker logs redis-cache > test-results/services-<< parameters.suite >>-<< parameters.mode >>/redis.log 2>&1 || true
             docker rm -f postgres-db redis-cache
             test -z "$(docker ps -aq --filter name=postgres-db --filter name=redis-cache)"
+      - when:
+          condition:
+            not:
+              equal: [1, << parameters.parallelism >>]
+          steps:
+            - run:
+                name: Prepare this shard's execution record
+                command: |
+                  results="test-results/integration-<< parameters.suite >>"
+                  if [ "<< parameters.mode >>" = replica ]; then
+                    results="$results-replica"
+                  fi
+                  mkdir -p "/tmp/integration-shards/<< parameters.suite >>-<< parameters.mode >>/$CIRCLE_NODE_INDEX"
+                  cp "$results/execution.json" "/tmp/integration-shards/<< parameters.suite >>-<< parameters.mode >>/$CIRCLE_NODE_INDEX/execution.json"
+                  if [ "<< parameters.suite >>" = mcp ]; then
+                    mkdir -p "/tmp/integration-shards/mcp-standard/$CIRCLE_NODE_INDEX/coverage"
+                    cp test-results/integration-mcp/coverage/data "/tmp/integration-shards/mcp-standard/$CIRCLE_NODE_INDEX/coverage/data.$CIRCLE_NODE_INDEX"
+                  fi
+            - persist_to_workspace:
+                root: /tmp/integration-shards
+                paths:
+                  - << parameters.suite >>-<< parameters.mode >>
       - store_test_results:
           path: test-results
       - store_artifacts:
           path: test-results
+
+  integration_shard_coverage:
+    parameters:
+      suite:
+        type: enum
+        enum: [management, accounting, database, extensions, providers, mcp]
+      mode:
+        type: enum
+        enum: [standard, replica]
+        default: standard
+      shards:
+        type: integer
+    machine:
+      image: ubuntu-2204:2024.04.1
+    resource_class: medium
+    working_directory: ~/project
+    steps:
+      - setup_litellm_test_deps
+      - attach_workspace:
+          at: /tmp/integration-shards
+      - run:
+          name: Verify every << parameters.suite >> case ran exactly once
+          command: |
+            .venv/bin/python -m tests.integration._support.sharding /tmp/integration-shards/<< parameters.suite >>-<< parameters.mode >> \
+              --shards << parameters.shards >>
+      - when:
+          condition:
+            equal: [mcp, << parameters.suite >>]
+          steps:
+            - run:
+                name: Combine coverage from every MCP shard
+                command: |
+                  mkdir -p test-results/integration-mcp/coverage
+                  export COVERAGE_FILE="$PWD/test-results/integration-mcp/coverage/data"
+                  .venv/bin/python -m coverage combine --rcfile=tests/integration/mcp_coverage.toml /tmp/integration-shards/mcp-standard/*/coverage
+                  .venv/bin/python -m coverage report --rcfile=tests/integration/mcp_coverage.toml > test-results/integration-mcp/coverage/coverage.txt
+                  .venv/bin/python -m coverage html --rcfile=tests/integration/mcp_coverage.toml -d test-results/integration-mcp/coverage/html
+            - store_artifacts:
+                path: test-results/integration-mcp/coverage
 
   routing_parity:
     parameters:
@@ -3114,6 +2693,9 @@ jobs:
         default: ""
       timeout_minutes:
         type: integer
+      workers:
+        type: integer
+        default: 1
     machine:
       image: ubuntu-2204:2024.04.1
     resource_class: large
@@ -3141,12 +2723,16 @@ jobs:
           command: |
             mkdir -p test-results
             coverage_args=()
+            worker_args=()
+            if [ "<< parameters.workers >>" -gt 1 ]; then
+              worker_args=(-n << parameters.workers >> --dist=worksteal)
+            fi
             if [ -n "<< parameters.coverage_flag >>" ]; then
               coverage_args=(--cov=./litellm --cov-report=xml:coverage.xml)
             fi
             timeout --signal=TERM << parameters.timeout_minutes >>m uv run --no-sync pytest \
               << parameters.test_path >> -vv --tb=short --durations=10 -o junit_family=xunit1 \
-              --junitxml=test-results/junit.xml "${coverage_args[@]}"
+              --junitxml=test-results/junit.xml "${coverage_args[@]}" "${worker_args[@]}"
       - when:
           condition: << parameters.coverage_flag >>
           steps:
@@ -3244,8 +2830,8 @@ jobs:
               timeout --signal=TERM 15m uv run --no-sync pytest \
               tests/unit/test_redis.py tests/unit/caching/test_redis_connection_pool.py \
               tests/unit/caching/test_redis_cluster_cache.py tests/unit/caching/test_evicted_client_closer.py \
-              tests/local_testing/test_caching.py::test_sync_cluster_authenticates_with_azure_credentials \
-              tests/local_testing/test_caching.py::test_sync_cluster_authenticates_with_gcp_credentials \
+              tests/integration/sdk/test_redis_cluster_iam_auth.py::test_sync_cluster_authenticates_with_azure_credentials \
+              tests/integration/sdk/test_redis_cluster_iam_auth.py::test_sync_cluster_authenticates_with_gcp_credentials \
               --tb=short -vv --reruns 2 --reruns-delay 1 --durations=20 --cov=./litellm \
               --cov-report=xml:coverage.xml -o junit_family=xunit1 --junitxml=test-results/junit.xml
       - when:
@@ -3323,21 +2909,93 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, sdk, cost, security, browser]
+              suite: [sdk, cost, browser]
+          parallelism: 1
+      - integration_contracts:
+          name: integration-security
+          suite: security
+          parallelism: 1
+          resource_class: xlarge
+      - integration_contracts:
+          name: integration-management
+          suite: management
+          parallelism: 4
+      - integration_shard_coverage:
+          name: integration-management-coverage
+          suite: management
+          shards: 4
+          requires: [integration-management]
+      - integration_contracts:
+          name: integration-accounting
+          suite: accounting
+          parallelism: 4
+      - integration_shard_coverage:
+          name: integration-accounting-coverage
+          suite: accounting
+          shards: 4
+          requires: [integration-accounting]
+      - integration_contracts:
+          name: integration-providers
+          suite: providers
+          parallelism: 8
+      - integration_shard_coverage:
+          name: integration-providers-coverage
+          suite: providers
+          shards: 8
+          requires:
+            - integration-providers
+      - integration_contracts:
+          name: integration-database
+          suite: database
+          parallelism: 2
+      - integration_shard_coverage:
+          name: integration-database-coverage
+          suite: database
+          shards: 2
+          requires: [integration-database]
       - integration_contracts:
           name: integration-mcp
           suite: mcp
           resource_class: xlarge
+          parallelism: 2
+      - integration_shard_coverage:
+          name: integration-mcp-coverage
+          suite: mcp
+          shards: 2
+          requires:
+            - integration-mcp
       - integration_contracts:
           name: integration-extensions
           suite: extensions
-          parallelism: 4
+          parallelism: 8
+      - integration_shard_coverage:
+          name: integration-extensions-coverage
+          suite: extensions
+          shards: 8
+          requires:
+            - integration-extensions
       - integration_contracts:
-          name: integration-<< matrix.suite >>-replica
-          matrix:
-            parameters:
-              suite: [management, database]
-              mode: [replica]
+          name: integration-management-replica
+          suite: management
+          mode: replica
+          parallelism: 4
+      - integration_shard_coverage:
+          name: integration-management-replica-coverage
+          suite: management
+          mode: replica
+          shards: 4
+          requires: [integration-management-replica]
+      - integration_contracts:
+          name: integration-database-replica
+          suite: database
+          mode: replica
+          parallelism: 2
+      - integration_shard_coverage:
+          name: integration-database-replica-coverage
+          suite: database
+          mode: replica
+          shards: 2
+          requires: [integration-database-replica]
       - postgres_suite:
           name: proxy-behavior
           test_path: tests/proxy_behavior
@@ -3354,6 +3012,7 @@ workflows:
           test_path: tests/proxy_migration_tests
           seed: false
           timeout_minutes: 20
+          workers: 2
       - postgres_suite:
           name: roi-database
           test_path: tests/integration/database/test_roi_observed.py
@@ -3371,6 +3030,8 @@ workflows:
                 - "6.4.0"
                 - "7.4.1"
                 - "8.0.1"
+      - windows_release_wheel
+      - base_sdk_install
   build_and_test:
     unless:
       or:
@@ -3378,14 +3039,7 @@ workflows:
         - not:
             equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
-      - using_litellm_on_windows
-      - windows_release_wheel
       - provider_replay_harness
-      - base_sdk_install
-      - local_testing_part1
-      - local_testing_part2
-      - langfuse_logging_unit_tests
-      - litellm_router_testing
       - auth_ui_unit_tests
       - build_docker_database_image
       - e2e_ui_testing
@@ -3405,7 +3059,6 @@ workflows:
       - proxy_store_model_in_db_tests:
           requires:
             - build_docker_database_image
-      - proxy_build_from_pip_tests
       - proxy_pass_through_endpoint_tests:
           requires:
             - build_docker_database_image
@@ -3436,15 +3089,9 @@ workflows:
             - image_gen_testing
             - logging_testing
             - audio_testing
-            - langfuse_logging_unit_tests
-            - local_testing_part1
-            - local_testing_part2
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
-      - installing_litellm_on_python
-      - installing_litellm_on_python_3_13
-      - installing_litellm_on_python_v2_migration_resolver
       - helm_chart_testing:
           requires:
             - build_docker_database_image

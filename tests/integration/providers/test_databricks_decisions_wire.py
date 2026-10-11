@@ -204,7 +204,7 @@ def _assert_refused_before_any_upstream_call(gateway: Gateway, model: str, messa
         assert message in response.text, response.text
         assert _upstream_calls(gateway, handle) == []
         row: Final = _spend_row(response.headers["x-litellm-call-id"])
-        assert (row["status"], row["call_type"], _number(row["spend"])) == ("failure", "adecisions", 0.0), row
+        assert (row["status"], row["call_type"], _number(row["spend"])) == ("failure", "asystemone", 0.0), row
 
 
 @pytest.mark.parametrize("name", [name for _, name in _NON_BARE_NAMES], ids=[label for label, _ in _NON_BARE_NAMES])
@@ -274,7 +274,7 @@ def test_an_openai_format_request_at_v1_decisions_reaches_the_serving_endpoint_a
             row["model_group"],
             row["api_base"],
             _number(row["spend"]),
-        ) == ("success", "adecisions", "databricks", deployment, f"{handle.api_base()}/{_ENDPOINT}/invocations", 0.0), (
+        ) == ("success", "asystemone", "databricks", deployment, f"{handle.api_base()}/{_ENDPOINT}/invocations", 0.0), (
             row
         )
 
@@ -382,7 +382,7 @@ def test_a_wildcard_deployment_sends_each_request_to_the_named_endpoint_and_bill
                 row["model_group"],
                 row["api_base"],
                 _number(row["spend"]),
-            ) == ("success", "adecisions", "databricks", model, f"{handle.api_base()}/{_ENDPOINT}/invocations", 0.0), (
+            ) == ("success", "asystemone", "databricks", model, f"{handle.api_base()}/{_ENDPOINT}/invocations", 0.0), (
                 row
             )
 
@@ -451,7 +451,7 @@ def test_a_five_kilobyte_endpoint_name_reaches_the_upstream_and_its_not_found_an
         row: Final = _spend_row(response.headers["x-litellm-call-id"])
         assert (row["status"], row["call_type"], row["model_group"], _number(row["spend"])) == (
             "failure",
-            "adecisions",
+            "asystemone",
             f"{prefix}/{name}",
             0.0,
         ), row
@@ -474,7 +474,7 @@ def test_a_databricks_error_keeps_its_status_and_message_and_bills_nothing(
         row: Final = _spend_row(response.headers["x-litellm-call-id"])
         assert (row["status"], row["call_type"], row["model_group"], _number(row["spend"])) == (
             "failure",
-            "adecisions",
+            "asystemone",
             model,
             0.0,
         ), row
@@ -646,4 +646,4 @@ def test_a_megabyte_model_name_is_refused_in_linear_time_while_liveliness_stays_
         assert _MODEL_RULE in response.text, response.text[:400]
         assert _upstream_calls(gateway, handle) == []
         row: Final = _spend_row(response.headers["x-litellm-call-id"])
-        assert (row["status"], row["call_type"], _number(row["spend"])) == ("failure", "adecisions", 0.0), row
+        assert (row["status"], row["call_type"], _number(row["spend"])) == ("failure", "asystemone", 0.0), row

@@ -2812,22 +2812,24 @@ class TestLoggingOnlyApplyGuardrail:
         assert kwargs["standard_logging_object"] == {"guardrail_information": None}
 
     @pytest.mark.parametrize(
-        "scope,expected_calls",
+        "scope,continue_on_input_failure,expected_calls",
         (
-            (None, [("request", ["hello there"]), ("response", ["general kenobi"])]),
-            ("both", [("request", ["hello there"]), ("response", ["general kenobi"])]),
-            ("input", [("request", ["hello there"])]),
-            ("output", [("response", ["general kenobi"])]),
+            (None, False, [("request", ["hello there"]), ("response", ["general kenobi"])]),
+            (None, True, [("request", ["hello there"]), ("response", ["general kenobi"])]),
+            ("input", False, [("request", ["hello there"])]),
+            ("output", False, [("response", ["general kenobi"])]),
         ),
     )
     @pytest.mark.asyncio
     async def test_logging_only_scope_scans_configured_directions(
         self,
         scope: LoggingOnlyScope | None,
+        continue_on_input_failure: bool,
         expected_calls: list[tuple[str, list[str]]],
     ) -> None:
         guardrail: Final = _ApplyOnlyObserver()
         guardrail.logging_only_scope = scope
+        guardrail.logging_only_continue_on_input_failure = continue_on_input_failure
         kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
 
         out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
@@ -2881,21 +2883,37 @@ class TestLoggingOnlyApplyGuardrail:
         assert [entry["guardrail_name"] for entry in entries] == ["apply-only-observer"]
         assert [entry["guardrail_status"] for entry in entries] == ["success"]
 
+    @pytest.mark.parametrize(
+        "scope,continue_on_input_failure,expected_calls,expected_statuses",
+        (
+            (None, True, [("response", ["general kenobi"])], ["success"]),
+            ("input", True, [], []),
+            ("output", True, [("response", ["general kenobi"])], ["success"]),
+            (None, False, [], []),
+        ),
+    )
     @pytest.mark.asyncio
-    async def test_request_copy_failure_does_not_drop_the_response_scan_for_explicit_both_scope(self):
+    async def test_request_copy_failure_drops_the_response_scan_only_without_continue(
+        self,
+        scope: LoggingOnlyScope | None,
+        continue_on_input_failure: bool,
+        expected_calls: list[tuple[str, list[str]]],
+        expected_statuses: list[str],
+    ):
         import threading
 
         guardrail: Final = _ApplyOnlyObserver()
-        guardrail.logging_only_scope = "both"
+        guardrail.logging_only_scope = scope
+        guardrail.logging_only_continue_on_input_failure = continue_on_input_failure
         call: Final = _logged_call([{"role": "user", "content": "hello there", "lock": threading.Lock()}])
         kwargs: Final = call[0]
         response: Final = call[1]
 
         out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
 
-        assert guardrail.calls == [("response", ["general kenobi"])]
-        entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
-        assert [entry["guardrail_status"] for entry in entries] == ["success"]
+        assert guardrail.calls == expected_calls
+        entries: Final = out_kwargs["standard_logging_object"].get("guardrail_information") or []
+        assert [entry["guardrail_status"] for entry in entries] == expected_statuses
 
     @pytest.mark.asyncio
     async def test_block_verdict_is_recorded_without_raising(self):
@@ -2927,8 +2945,23 @@ class TestLoggingOnlyApplyGuardrail:
         entries = out_kwargs["standard_logging_object"]["guardrail_information"]
         assert [e["guardrail_status"] for e in entries] == ["guardrail_failed_to_respond"]
 
+    @pytest.mark.parametrize(
+        "scope,continue_on_input_failure,expected_calls,expected_statuses",
+        (
+            (None, True, [("request", ["hello there"]), ("response", ["general kenobi"])], ["guardrail_failed_to_respond", "success"]),
+            ("output", True, [("response", ["general kenobi"])], ["success"]),
+            ("input", True, [("request", ["hello there"])], ["guardrail_failed_to_respond"]),
+            (None, False, [("request", ["hello there"])], ["guardrail_failed_to_respond"]),
+        ),
+    )
     @pytest.mark.asyncio
-    async def test_input_scan_error_does_not_drop_the_response_scan_for_explicit_both_scope(self):
+    async def test_input_scan_error_drops_the_response_scan_only_without_continue(
+        self,
+        scope: LoggingOnlyScope | None,
+        continue_on_input_failure: bool,
+        expected_calls: list[tuple[str, list[str]]],
+        expected_statuses: list[str],
+    ):
         class _FailingBothObserver(_ApplyOnlyObserver):
             @log_guardrail_information
             async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
@@ -2938,14 +2971,15 @@ class TestLoggingOnlyApplyGuardrail:
                 return GenericGuardrailAPIInputs(texts=[])
 
         guardrail = _FailingBothObserver()
-        guardrail.logging_only_scope = "both"
+        guardrail.logging_only_scope = scope
+        guardrail.logging_only_continue_on_input_failure = continue_on_input_failure
         kwargs, response = _logged_call([{"role": "user", "content": "hello there"}])
 
         out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
 
-        assert guardrail.calls == [("request", ["hello there"]), ("response", ["general kenobi"])]
+        assert guardrail.calls == expected_calls
         entries = out_kwargs["standard_logging_object"]["guardrail_information"]
-        assert [e["guardrail_status"] for e in entries] == ["guardrail_failed_to_respond", "success"]
+        assert [e["guardrail_status"] for e in entries] == expected_statuses
 
     @pytest.mark.asyncio
     async def test_call_type_without_translation_is_skipped(self):
