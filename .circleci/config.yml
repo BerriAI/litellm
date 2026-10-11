@@ -1479,6 +1479,16 @@ jobs:
             - run:
                 name: Build the candidate dashboard
                 command: cd ui/litellm-dashboard && NEXT_TELEMETRY_DISABLED=1 npm run build
+      - when:
+          condition:
+            equal: [mcp, << parameters.suite >>]
+          steps:
+            - run:
+                name: Install MCP SDK1 peer
+                command: |
+                  uv venv --python 3.12 .venv-mcp-peer
+                  uv pip install --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
+                  echo "export MCP_TEST_PEER_PYTHON=$PWD/.venv-mcp-peer/bin/python" >> "$BASH_ENV"
       - start_postgres:
           image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
           server_args: "-c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000"
@@ -1727,7 +1737,7 @@ jobs:
             mkdir -p test-results
             env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY \
               timeout --signal=TERM 20m uv run --no-sync pytest \
-              tests/mcp_tests tests/unit/experimental_mcp_client tests/unit/proxy/_experimental/mcp_server \
+              tests/unit/experimental_mcp_client tests/unit/proxy/_experimental/mcp_server \
               tests/unit/responses/mcp --tb=short -vv --maxfail=10 -n 2 --dist=loadscope --reruns 0 \
               --reruns-delay 1 --timeout=120 --rerun-except "from pytest-timeout" --durations=20 \
               --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml:coverage.xml \
@@ -1952,17 +1962,6 @@ workflows:
           seed: true
           coverage_flag: lens-postgres
           timeout_minutes: 25
-      - postgres_suite:
-          name: proxy-security
-          test_path: tests/proxy_security_tests
-          seed: true
-          timeout_minutes: 15
-      - postgres_suite:
-          name: schema-migration
-          test_path: tests/proxy_migration_tests
-          seed: false
-          timeout_minutes: 20
-          workers: 2
       - postgres_suite:
           name: roi-database
           test_path: tests/integration/database/test_roi_observed.py

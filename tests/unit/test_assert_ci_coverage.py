@@ -125,8 +125,6 @@ def test_every_circleci_postgres_suite_is_credited_on_the_repo_as_it_stands() ->
     )
     assert paths == (
         "tests/proxy_behavior",
-        "tests/proxy_security_tests",
-        "tests/proxy_migration_tests",
         "tests/integration/database/test_roi_observed.py",
     )
     assert set(paths) <= coverage._invoked_test_tokens(coverage._all_scalars())

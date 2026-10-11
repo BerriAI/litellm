@@ -19,7 +19,7 @@ from litellm.proxy.db.baseline_accounting import BaselineAccountingStore
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 
-_MIGRATION: Final = Path(__file__).parents[2] / (
+_MIGRATION: Final = Path(__file__).parents[4] / (
     "litellm-proxy-extras/litellm_proxy_extras/migrations/20260915010000_add_autorouter_baseline_state/migration.sql"
 )
 

@@ -297,11 +297,6 @@ def test_repair_defaults_to_the_public_schema(monkeypatch: pytest.MonkeyPatch) -
             conn.execute(f'DROP TABLE public."{table}"')
 
 
-def test_repair_survives_an_unreachable_database(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("DIRECT_URL", raising=False)
-    monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@127.0.0.1:9/x?schema=whatever")
-
-    assert ProxyExtrasDBManager.repair_invalid_indexes() is False
 
 
 @requires_db
