@@ -53,3 +53,13 @@ Same isolated fake deployments and controlled local upstream as the earlier gate
 105-edit-deployment-after.png shows a saved deployment-backed router reopened in edit with the Decision model picker listing only decision deployments
 
 105-edit-legacy-before.png and 105-edit-legacy-after.png show a legacy direct Jev router in edit, and saving keeps the stored connection on both sides
+
+## Release 106 (base acf745591166776afd8fd8775d20be6626ae021e, head 9f0fc42df4eb2a9eade6babd06e30b5f9ffce8aa)
+
+`106-before.png` and `106-after.png` show the Add Auto Router modal at the same URL with the same task-owned fake data, with changed controls outlined in red. `106-edit-deployment-after.png` shows the edit modal for a deployment-backed router using the decision model picker. `106-edit-legacy-before.png` and `106-edit-legacy-after.png` show a legacy direct Jev router in the edit modal on base and head. Wire names stay `oss_classifier` and `opensource_classifier_config`
+
+## Final test-only tips
+
+`final-<line>-<sha>-create-after.png` and `final-<line>-<sha>-edit-after.png` are from main d033e6cbc3baf76accd381b907050b9adf29e224, 104 58746028d40f45ff84bcd2112f822ad2edc4113c, 105 d4c95cdbbfc4c9ea73ba93fd617e0aea423bc465 and 106 6d19d8e9624447b01723c1751d33ce117d908005. Each screenshot has its source SHA in the corner. Bases are unchanged, so the earlier before-images still pair with them
+
+All data is fake and task-owned. Every classifier and chat call went to a controlled local upstream, and no real provider was called
