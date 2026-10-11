@@ -25,6 +25,13 @@ use super::*;
     "/anthropic/v1/messages",
     &["DEEPSEEK_API_KEY", "DEEPSEEK_ANTHROPIC_API_BASE", "DEEPSEEK_API_BASE"]
 )]
+#[case::minimax(
+    "minimax",
+    "MINIMAX_API_KEY",
+    "MINIMAX_API_BASE",
+    "/v1/messages",
+    &["MINIMAX_API_KEY", "MINIMAX_API_BASE"]
+)]
 #[tokio::test]
 async fn the_credential_and_base_come_from_the_secret_source(
     call: MessagesCall,

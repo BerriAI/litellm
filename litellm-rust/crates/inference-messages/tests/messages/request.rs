@@ -11,6 +11,9 @@ use super::*;
 
 #[rstest]
 #[case::anthropic_key("anthropic", Some("sk-ant"), &[], ("x-api-key", "sk-ant"), &["authorization"])]
+#[case::minimax_key("minimax", Some("sk-test"), &[], ("x-api-key", "sk-test"), &["authorization"])]
+#[case::minimax_forwarded_key("minimax", Some("deployment"), &[("X-Api-Key", "caller")], ("x-api-key", "caller"), &["authorization"])]
+#[case::minimax_forwarded_bearer("minimax", None, &[("Authorization", "Bearer caller")], ("authorization", "Bearer caller"), &["x-api-key"])]
 #[case::azure_key("azure_ai", Some("sk-azure"), &[], ("x-api-key", "sk-azure"), &["authorization"])]
 #[case::deepseek_key("deepseek", Some("sk-deepseek"), &[], ("x-api-key", "sk-deepseek"), &["authorization"])]
 #[case::deepseek_forwards_caller_authorization(
@@ -88,6 +91,7 @@ async fn credentials_become_exactly_one_auth_header(
 #[case::anthropic("anthropic")]
 #[case::azure_ai("azure_ai")]
 #[case::deepseek("deepseek")]
+#[case::minimax("minimax")]
 #[tokio::test]
 async fn a_call_without_credentials_fails_before_sending(
     call: MessagesCall,
@@ -123,6 +127,9 @@ async fn a_call_without_credentials_fails_before_sending(
     "/v1/messages",
     "/v1/messages"
 )]
+#[case::minimax(MODEL, Some("minimax"), "", "/v1/messages")]
+#[case::minimax_prefix("minimax/claude-sonnet-4-5", None, "/v1/messages", "/v1/messages")]
+#[case::minimax_endpoint_slash(MODEL, Some("minimax"), "/v1/messages/", "/v1/messages")]
 #[case::azure_ai(MODEL, Some("azure_ai"), "", "/anthropic/v1/messages")]
 #[case::deepseek(MODEL, Some("deepseek"), "", "/anthropic/v1/messages")]
 #[case::deepseek_openai_compatible_base(MODEL, Some("deepseek"), "/beta", "/anthropic/v1/messages")]
@@ -301,6 +308,7 @@ fn sent_betas(request: &wiremock::Request) -> BetaSet {
 #[tokio::test]
 async fn feature_betas_join_the_callers_betas_in_one_sorted_header(
     call: MessagesCall,
+    #[values("anthropic", "minimax")] provider: &str,
     #[case] fields: Value,
     #[case] features: &[AnthropicBeta],
 ) {
@@ -312,6 +320,7 @@ async fn feature_betas_join_the_callers_betas_in_one_sorted_header(
 
     run_message(with_fields(
         MessagesCall {
+            custom_llm_provider: Some(provider.into()),
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
             extra_headers: headers([("Anthropic-Beta", "caller-beta-2025-01-01")]),
@@ -362,6 +371,7 @@ async fn an_oauth_key_sends_the_browser_access_header_and_the_oauth_beta(call: M
 #[case::anthropic("anthropic")]
 #[case::azure_ai("azure_ai")]
 #[case::deepseek("deepseek")]
+#[case::minimax("minimax")]
 #[tokio::test]
 async fn caller_protocol_headers_win_over_the_defaults(call: MessagesCall, #[case] provider: &str) {
     let upstream = upstream([message_response()]).await;
@@ -452,6 +462,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
 #[tokio::test]
 async fn reasoning_auto_summary_marks_active_thinking_on_the_wire(
     call: MessagesCall,
+    #[values("anthropic", "minimax")] provider: &str,
     #[case] thinking: Value,
     #[case] expected: Value,
 ) {
@@ -459,6 +470,7 @@ async fn reasoning_auto_summary_marks_active_thinking_on_the_wire(
 
     run_message(with_fields(
         MessagesCall {
+            custom_llm_provider: Some(provider.into()),
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {
@@ -517,6 +529,7 @@ async fn reasoning_auto_summary_marks_active_thinking_on_the_wire(
 #[tokio::test]
 async fn reasoning_is_translated_by_the_model_capabilities(
     call: MessagesCall,
+    #[values("anthropic", "minimax")] provider: &str,
     #[case] capabilities: MessagesModelCapabilities,
     #[case] fields: Value,
     #[case] expected: Value,
@@ -525,6 +538,7 @@ async fn reasoning_is_translated_by_the_model_capabilities(
 
     run_message(with_fields(
         MessagesCall {
+            custom_llm_provider: Some(provider.into()),
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {
@@ -592,6 +606,7 @@ async fn replayed_history_is_cleaned_before_sending(
 #[case::anthropic("anthropic")]
 #[case::azure("azure_ai")]
 #[case::deepseek("deepseek")]
+#[case::minimax("minimax")]
 #[tokio::test]
 async fn metadata_is_reduced_to_the_user_id(call: MessagesCall, #[case] provider: &str) {
     let upstream = upstream([message_response()]).await;
@@ -703,11 +718,16 @@ async fn vertex_ai_addresses_the_model_in_the_url_and_not_in_the_body(
 #[case::numeric_user_id(json!({"metadata": {"user_id": 7}}))]
 #[case::missing_max_tokens(json!({"max_tokens": null}))]
 #[tokio::test]
-async fn an_invalid_request_fails_before_sending(call: MessagesCall, #[case] fields: Value) {
+async fn an_invalid_request_fails_before_sending(
+    call: MessagesCall,
+    #[values("anthropic", "minimax")] provider: &str,
+    #[case] fields: Value,
+) {
     let upstream = upstream([message_response()]).await;
 
     let error = run(with_fields(
         MessagesCall {
+            custom_llm_provider: Some(provider.into()),
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
             ..call
@@ -719,6 +739,45 @@ async fn an_invalid_request_fails_before_sending(call: MessagesCall, #[case] fie
 
     assert!(error.is_request(), "{error:?}");
     assert!(received(&upstream).await.is_empty());
+}
+
+#[rstest]
+#[case::billing_string(json!("x-anthropic-billing-header: private"), None)]
+#[case::billing_blocks(json!([{ "type": "text", "text": "x-anthropic-billing-header: private" }]), None)]
+#[case::mixed_blocks(
+    json!([{ "type": "text", "text": "x-anthropic-billing-header: private" }, { "type": "text", "text": "keep" }]),
+    Some(json!([{ "type": "text", "text": "keep" }]))
+)]
+#[case::ordinary_system(json!("keep"), Some(json!("keep")))]
+#[tokio::test]
+async fn minimax_strips_only_billing_system_blocks(
+    call: MessagesCall,
+    #[case] system: Value,
+    #[case] expected: Option<Value>,
+) {
+    let upstream = upstream([message_response()]).await;
+    let fields = json!({
+        "system": system,
+        "tools": [{"name": "echo", "input_schema": {"type": "object"}}],
+        "messages": [{"role": "user", "content": [{
+            "type": "text", "text": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}
+        }]}]
+    });
+    run_message(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some("minimax".into()),
+            api_key: Some("sk".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        },
+        fields.clone(),
+    ))
+    .await;
+
+    let sent = only_request(&upstream).await.json();
+    assert_eq!(sent.get("system"), expected.as_ref());
+    assert_eq!(sent["tools"], fields["tools"]);
+    assert_eq!(sent["messages"], fields["messages"]);
 }
 
 #[rstest]
