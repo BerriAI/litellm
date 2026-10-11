@@ -1947,12 +1947,6 @@ workflows:
           shards: 2
           requires: [integration-database-replica]
       - postgres_suite:
-          name: proxy-behavior
-          test_path: tests/proxy_behavior
-          seed: true
-          coverage_flag: lens-postgres
-          timeout_minutes: 25
-      - postgres_suite:
           name: proxy-security
           test_path: tests/proxy_security_tests
           seed: true

@@ -3,17 +3,28 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from importlib.metadata import version
 from pathlib import Path
 from typing import Final, Protocol, runtime_checkable
 
 import httpx
 import pytest
+import pytest_asyncio
 from pydantic import TypeAdapter
 from redis import Redis
 
-from tests.integration._support.client import Gateway, eventually, gateway_from_environment
+from tests.integration._support.actors import (
+    ActorSet,
+    GatewayClient,
+    ManagementDatabase,
+    ScratchResources,
+    create_actor_set,
+    create_gateway_client,
+    management_database,
+    scratch_resources,
+)
+from tests.integration._support.client import Gateway, Scenario, eventually, gateway_from_environment
 from tests.integration._support.generation import LIFECYCLE_SETTINGS
 from tests.integration._support.manifest import OWNED_DIRECTORIES
 from tests.integration._support.ordering import collected_case, fixture_groups
@@ -207,6 +218,47 @@ def pytest_sessionfinish(session: pytest.Session, exitstatus: int) -> None:
 @pytest.fixture
 def gateway() -> Iterator[Gateway]:
     with gateway_from_environment() as value:
+        yield value
+
+
+@pytest.fixture(scope="session")
+def session_gateway() -> Iterator[Gateway]:
+    with gateway_from_environment() as value:
+        yield value
+
+
+@pytest.fixture
+def scenario(gateway: Gateway) -> Iterator[Scenario]:
+    value: Final[Scenario]
+    with gateway.scenario() as value:
+        yield value
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def actors(
+    session_gateway: Gateway, db: ManagementDatabase
+) -> AsyncIterator[ActorSet]:
+    with session_gateway.scenario() as scenario:
+        value: Final[ActorSet] = await create_actor_set(session_gateway, scenario, db)
+        yield value
+
+
+@pytest.fixture(scope="session")
+def gateway_client(session_gateway: Gateway, actors: ActorSet) -> GatewayClient:
+    return create_gateway_client(session_gateway, actors)
+
+
+@pytest_asyncio.fixture(scope="session", loop_scope="session")
+async def db(session_gateway: Gateway) -> AsyncIterator[ManagementDatabase]:
+    value: Final[ManagementDatabase]
+    async with management_database(session_gateway) as value:
+        yield value
+
+
+@pytest_asyncio.fixture(scope="function", loop_scope="session")
+async def resources(db: ManagementDatabase) -> AsyncIterator[ScratchResources]:
+    value: Final[ScratchResources]
+    async with scratch_resources(db) as value:
         yield value
 
 
