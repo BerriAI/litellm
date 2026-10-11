@@ -1005,7 +1005,7 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
             )
             event.__dict__["sequence_number"] = self._sequence_number
             self._sequence_number += 1
-            part_added_event = ResponsePartAddedEvent(
+            part_added_event: Final = ResponsePartAddedEvent(
                 type=ResponsesAPIStreamEvents.RESPONSE_PART_ADDED,
                 item_id=self._cached_reasoning_item_id,
                 output_index=self._reasoning_index(),
