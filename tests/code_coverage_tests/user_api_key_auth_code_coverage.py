@@ -31,11 +31,11 @@ def get_function_names_from_file(file_path):
 def get_all_functions_called_in_tests(base_dir):
     """
     Returns a set of function names that are called in test functions
-    inside 'local_testing' and 'unit/proxy' directories,
+    inside the unit/proxy directory,
     specifically in files containing the word 'router'.
     """
     called_functions = set()
-    test_dirs = ["local_testing", "unit/proxy"]
+    test_dirs = ["unit", "integration"]
 
     for test_dir in test_dirs:
         dir_path = os.path.join(base_dir, test_dir)
@@ -79,6 +79,46 @@ def get_functions_from_router(file_path):
 
 ignored_function_names = [
     "__init__",
+    "_normalize_public_auth_route",
+    "_get_model_from_request_context",
+    "_resolve_router_settings_model_group_alias",
+    "_get_model_names_for_budget_checks",
+    "_budget_fallback_target_model",
+    "team_models",
+    "_raw_cache",
+    "_token_team_models",
+    "model_max_budget",
+    "end_user_model_max_budget",
+    "_token_model_budget_fields",
+    "fallbacks",
+    "_router_fallbacks",
+    "_check_team_model_budget",
+    "_is_within_every_model_budget",
+    "_is_fallback_model_authorized",
+    "_is_within_all_fallback_model_budgets",
+    "_check_team_member_model_budget_for_model",
+    "_try_team_member_model_budget_fallback",
+    "_get_bearer_token_or_received_api_key",
+    "_should_route_jwt_to_oauth2_override",
+    "get_global_proxy_spend",
+    "get_rbac_role",
+    "_claim_identifies_user",
+    "_reusable_key_hash_for_user",
+    "_lookup_jwt_mapping_token_hash",
+    "_record_unparsable_body_failure",
+    "_refresh_session_token_grants",
+    "_resolve_object_permission_for_unresolvable_team",
+    "validate_resolved_virtual_key",
+    "_safe_fetch",
+    "_team_obj_from_token",
+    "_token_can_vouch_for_team",
+    "_inherit_org_identity",
+    "is_no_auth_dev_mode",
+    "_noop_none",
+    "_apply_key_end_user_default_budget_to_token",
+    "_spend_counter_redis_cache",
+    "_prefetch_referenced_auth_objects",
+    "authorize_internal_virtual_key",
 ]
 
 

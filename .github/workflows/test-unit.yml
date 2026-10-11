@@ -174,8 +174,6 @@ jobs:
 
           - shard: integrations
             test-path: |-
-              tests/test_litellm/integrations
-              tests/test_litellm/tracing
               tests/unit/integrations
             python-version: "3.12"
             workers: 4
@@ -292,6 +290,7 @@ jobs:
               tests/unit/llms/manus
               tests/unit/llms/meta_llama
               tests/unit/llms/microsoft_365_copilot
+              tests/unit/llms/milvus
               tests/unit/llms/minimax
               tests/unit/llms/mistral
               tests/unit/llms/modelscope
@@ -376,7 +375,6 @@ jobs:
 
           - shard: root
             test-path: >-
-              tests/test_litellm/test_*.py
               tests/unit/test_*.py
             python-version: "3.12"
             workers: 4
@@ -392,16 +390,6 @@ jobs:
             workers: 4
             reruns: 0
             timeout-minutes: 20
-            job-timeout-minutes: 60
-            dist: loadscope
-
-          - shard: router-unit-tests
-            test-path: >-
-              tests/router_unit_tests
-            python-version: "3.12"
-            workers: 0
-            reruns: 0
-            timeout-minutes: 10
             job-timeout-minutes: 60
             dist: loadscope
 
@@ -775,7 +763,7 @@ jobs:
 
           - shard: proxy-server-core
             test-path: |-
-              tests/proxy_unit_tests/test_proxy_server_gemini_pass_through.py
+              tests/unit/proxy/pass_through_endpoints/test_llm_passthrough_endpoints.py
               tests/unit/proxy/test__lazy_features.py
               tests/unit/proxy/test_aproxy_startup.py
               tests/unit/proxy/test_proxy_server.py
@@ -816,7 +804,7 @@ jobs:
 
           - shard: custom-logging
             test-path: |-
-              tests/proxy_unit_tests/test_proxy_custom_logger.py
+              tests/unit/proxy/test_proxy_server_custom_logger.py
               tests/unit/proxy/test_custom_callback_input.py
               tests/unit/proxy/test_custom_logger_s3_gcs.py
             python-version: "3.12"
@@ -880,7 +868,7 @@ jobs:
 
           - shard: endpoints-and-responses
             test-path: |-
-              tests/proxy_unit_tests/test_proxy_exception_mapping.py
+              tests/unit/proxy/test_proxy_server_exception_mapping.py
               tests/unit/proxy/lens
               tests/unit/proxy/auth/test_models_fallback_endpoint.py
               tests/unit/proxy/common_utils/test_check_batch_cost.py

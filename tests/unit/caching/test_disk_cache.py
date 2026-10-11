@@ -65,3 +65,114 @@ async def test_async_increment_adds_to_existing_int(cache):
 async def test_async_increment_treats_non_int_cached_value_as_zero(cache):
     await cache.async_set_cache("counter", "corrupt")
     assert await cache.async_increment("counter", 9) == 9
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_cache_completion_hit_and_param_sensitivity(tmp_path, sync_mode):
+    """Same params hit the disk cache; different params do not."""
+    import litellm
+    from litellm.caching import Cache
+
+    messages = [{"role": "user", "content": "write a one sentence poem about: disk-cache-unit-key"}]
+    litellm.cache = Cache(type="disk", disk_cache_dir=str(tmp_path))
+    try:
+        call = litellm.completion if sync_mode else litellm.acompletion
+        response1 = await call(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            max_tokens=20,
+            mock_response="This number is so great!",
+        ) if not sync_mode else call(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            max_tokens=20,
+            mock_response="This number is so great!",
+        )
+        response2 = await call(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            max_tokens=20,
+            mock_response="This number is great!",
+        ) if not sync_mode else call(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            max_tokens=20,
+            mock_response="This number is great!",
+        )
+        assert response1.choices[0].message.content == response2.choices[0].message.content
+        assert response1.id == response2.id
+        assert response1.created == response2.created
+
+        response3 = await call(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            temperature=0.5,
+            mock_response="This number is awful!",
+        ) if not sync_mode else call(
+            "gpt-3.5-turbo",
+            messages=messages,
+            caching=True,
+            temperature=0.5,
+            mock_response="This number is awful!",
+        )
+        assert response1.choices[0].message.content != response3.choices[0].message.content
+    finally:
+        litellm.cache = None
+        litellm.success_callback = []
+        litellm._async_success_callback = []
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_disk_cache_embedding(tmp_path, respx_mock, monkeypatch):
+    """Second identical embedding call is served from the disk cache."""
+    import json as _json
+
+    import httpx
+
+    import litellm
+    from litellm.caching import Cache
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    input_text = ["hello disk-embedding-unit-key"]
+    vector = [0.1, 0.2, 0.3]
+    embeddings_route = respx_mock.post("https://api.openai.com/v1/embeddings").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": vector}],
+                "model": "text-embedding-ada-002",
+                "usage": {"prompt_tokens": 2, "total_tokens": 2},
+            },
+        )
+    )
+    litellm.cache = Cache(type="disk", disk_cache_dir=str(tmp_path))
+    try:
+        response1 = await litellm.aembedding(
+            "openai/text-embedding-ada-002", input=input_text, caching=True, api_key="sk-unit"
+        )
+        response2 = await litellm.aembedding(
+            "openai/text-embedding-ada-002", input=input_text, caching=True, api_key="sk-unit"
+        )
+        assert response2._hidden_params["cache_hit"] is True
+        assert embeddings_route.call_count == 1
+
+        response3 = await litellm.aembedding(
+            "openai/text-embedding-ada-002",
+            input=input_text,
+            caching=True,
+            user="charlie",
+            api_key="sk-unit",
+        )
+        assert response3._hidden_params.get("cache_hit") is not True
+    finally:
+        litellm.cache = None
+        litellm.success_callback = []
+        litellm._async_success_callback = []

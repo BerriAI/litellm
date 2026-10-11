@@ -1,7 +1,7 @@
 # conftest.py
 #
 # xdist-compatible test isolation for llm_translation tests.
-# Mirrors the pattern in tests/local_testing/conftest.py:
+# Mirrors the legacy conftest pattern:
 #   - Function-scoped fixture resets litellm globals to true defaults
 #   - Module-scoped reload only in single-process mode
 
