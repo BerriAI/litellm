@@ -3350,13 +3350,7 @@ async def _load_team_member_default_model_budget(
     skip_budget_checks: bool,
     proxy_logging_obj: ProxyLogging | None,
 ) -> None:
-    team_metadata_value: Final[object] = (
-        cast(  # cast-ok: team metadata is a string-keyed JSON object
-            object, team_object.metadata
-        )
-        if team_object is not None
-        else None
-    )
+    team_metadata_value: Final[object] = getattr(team_object, "metadata", None) if team_object is not None else None
     team_metadata: Final[Mapping[str, object] | None] = (
         cast(  # cast-ok: team metadata is a string-keyed JSON object
             Mapping[str, object], team_metadata_value
@@ -3384,11 +3378,7 @@ async def _load_team_member_default_model_budget(
         )
         member_budget_row: Final = membership.litellm_budget_table if membership is not None else None
         member_budget_value: Final[object] = (
-            cast(  # cast-ok: budget table stores a string-keyed JSON object
-                object, member_budget_row.model_max_budget
-            )
-            if member_budget_row is not None
-            else None
+            getattr(member_budget_row, "model_max_budget", None) if member_budget_row is not None else None
         )
         if (
             membership is not None
@@ -3416,9 +3406,7 @@ async def _load_team_member_default_model_budget(
         return
 
     default_budget_value: Final[object] = (
-        cast(  # cast-ok: budget table stores a string-keyed JSON object
-            object, team_member_default_budget.model_max_budget
-        )
+        getattr(team_member_default_budget, "model_max_budget", None)
         if team_member_default_budget is not None
         else None
     )

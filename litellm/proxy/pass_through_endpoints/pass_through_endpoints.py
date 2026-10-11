@@ -73,7 +73,7 @@ from litellm.llms.base_llm.managed_resources.utils import (
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.llms.oss_decision import validate_oss_request
 from litellm.passthrough import BasePassthroughUtils
-from litellm.proxy._lazy_features import lazy_feature_routes, lazy_owned_routes
+from litellm.proxy._lazy_features import lazy_owned_routes
 from litellm.proxy._types import (
     ConfigFieldInfo,
     ConfigFieldUpdate,
@@ -3089,8 +3089,11 @@ class SafeRouteAdder:
             app.router.routes[:] = _placed_ahead(  # rebind-ok: the app owns its route table
                 app.router.routes, app.router.routes[-1], shadowed[0]
             )
-        if not builtin_pass_through_routes_first():
-            builtin: Final = tuple(chain.from_iterable(lazy_feature_routes(app).values()))
+        lazy_routes: Final[Mapping[str, tuple[BaseRoute, ...]] | None] = getattr(
+            getattr(app, "state", None), "lazy_routes", None
+        )
+        if lazy_routes is not None and not builtin_pass_through_routes_first():
+            builtin: Final = tuple(chain.from_iterable(lazy_routes.values()))
             if shadowed_by_builtin_claim(path, builtin):
                 app.router.routes[:] = configured_pass_through_routes_first(  # rebind-ok: the app owns its route table
                     app.router.routes, builtin

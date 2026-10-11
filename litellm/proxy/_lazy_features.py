@@ -384,7 +384,7 @@ def _lazy_slots(app: "FastAPI") -> Mapping[str, BaseRoute | None]:
     return app.state.lazy_slots if hasattr(app.state, "lazy_slots") else MappingProxyType({})
 
 
-def lazy_feature_routes(app: "FastAPI") -> Mapping[str, tuple[BaseRoute, ...]]:
+def _lazy_routes(app: "FastAPI") -> Mapping[str, tuple[BaseRoute, ...]]:
     return app.state.lazy_routes if hasattr(app.state, "lazy_routes") else MappingProxyType({})
 
 
@@ -499,7 +499,7 @@ def _register_feature(app: "FastAPI", feat: LazyFeature, module: object, feature
     before: Final = len(app.router.routes)
     feat.register_fn(app, module)
     lazy_routes: Final[Mapping[str, tuple[BaseRoute, ...]]] = MappingProxyType(
-        {**lazy_feature_routes(app), feat.module_path: tuple(app.router.routes[before:])}
+        {**_lazy_routes(app), feat.module_path: tuple(app.router.routes[before:])}
     )
     app.state.lazy_routes = lazy_routes  # rebind-ok: the app owns the record of which routes each feature added
     app.router.routes[:] = _route_table(  # rebind-ok: the app owns its route table
@@ -565,10 +565,7 @@ def _register_all_on_startup(inner: "Lifespan[FastAPI]", features: tuple[LazyFea
 def _restore_registry_order(app: "FastAPI", features: tuple[LazyFeature, ...]) -> None:
     present: Final = frozenset(id(route) for route in app.router.routes)
     still_routed: Final = MappingProxyType(
-        {
-            module_path: tuple(r for r in routes if id(r) in present)
-            for module_path, routes in lazy_feature_routes(app).items()
-        }
+        {module_path: tuple(r for r in routes if id(r) in present) for module_path, routes in _lazy_routes(app).items()}
     )
     app.router.routes[:] = _route_table(  # rebind-ok: the app owns its route table
         app, app.router.routes, still_routed, features
@@ -624,7 +621,7 @@ def lazy_owned_routes(app: "FastAPI") -> frozenset[int]:
     """ids of the routes lazy features have registered on this app. A route added later at
     one of their paths (a config pass-through at /v1/decisions) goes ahead of them, the
     precedence lazy mode gives it when the feature has not loaded by the time the config is read."""
-    return frozenset(id(route) for route in chain.from_iterable(lazy_feature_routes(app).values()))
+    return frozenset(id(route) for route in chain.from_iterable(_lazy_routes(app).values()))
 
 
 def loaded_lazy_modules(app: "FastAPI") -> frozenset[str]:
