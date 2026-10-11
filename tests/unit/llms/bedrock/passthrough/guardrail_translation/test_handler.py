@@ -49,6 +49,19 @@ def _make_structured_rewriting_guardrail(old: str, new: str) -> MagicMock:
     return g
 
 
+def _make_tool_call_rewriting_guardrail(arguments: str) -> MagicMock:
+    def rewrite(inputs: dict, **_: object) -> dict:
+        rewritten = copy.deepcopy(inputs["structured_messages"])
+        for message in rewritten:
+            for call in message.get("tool_calls") or []:
+                call["function"]["arguments"] = arguments
+        return {**inputs, "structured_messages": rewritten}
+
+    g = _make_guardrail({})
+    g.apply_guardrail = AsyncMock(side_effect=rewrite)
+    return g
+
+
 def _converse_data(endpoint: str = "model/anthropic.claude-3-sonnet/converse") -> dict:
     return {
         "endpoint": endpoint,
@@ -752,7 +765,11 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
                     }
                 ],
             },
-            {"role": "tool", "tool_call_id": "tool-1", "content": 'a.txt\n{"count": 1}'},
+            {
+                "role": "tool",
+                "tool_call_id": "tool-1",
+                "content": [{"type": "text", "text": "a.txt"}, {"type": "text", "text": '{"count": 1}'}],
+            },
             {"role": "user", "content": [{"type": "text", "text": "now delete them"}]},
         ]
         assert "tools" not in inputs
@@ -877,6 +894,100 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
 
         with pytest.raises(UnappliableRequestRewrite):
             await handler.process_input_messages(data=_profile_converse_data(), guardrail_to_apply=guardrail)
+
+    @pytest.mark.asyncio
+    async def test_structured_rewrite_keeps_redactions_returned_in_texts(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _profile_converse_data()
+        guardrail = _make_guardrail({})
+        guardrail.apply_guardrail = AsyncMock(
+            side_effect=lambda inputs, **kwargs: {
+                **_rewrite_structured_text(inputs, "internal notice", "[REDACTED]"),
+                "texts": [text.replace("balcony", "[REDACTED]") for text in inputs["texts"]],
+            }
+        )
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert result["data"]["messages"][0]["content"] == [
+            {"text": "Explain [REDACTED] staterooms."},
+            {"text": "[system] [REDACTED]"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_tool_result_text_edit_lands_in_its_item(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _agent_loop_converse_data()
+        guardrail = _make_structured_rewriting_guardrail("a.txt", "[FILE]")
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert result["data"]["messages"][2]["content"][0] == {
+            "toolResult": {"toolUseId": "tool-1", "content": [{"text": "[FILE]"}, {"json": {"count": 1}}]}
+        }
+
+    @pytest.mark.asyncio
+    async def test_tool_result_json_edit_is_written_back_as_json(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _agent_loop_converse_data()
+        data["data"]["messages"][2]["content"][0]["toolResult"]["content"] = [{"json": {"card": "4111 1111 1111 1111"}}]
+        guardrail = _make_structured_rewriting_guardrail("4111 1111 1111 1111", "****")
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert result["data"]["messages"][2]["content"][0]["toolResult"]["content"] == [{"json": {"card": "****"}}]
+
+    @pytest.mark.asyncio
+    async def test_tool_result_json_replaced_by_plain_text_becomes_a_text_item(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _agent_loop_converse_data()
+        guardrail = _make_structured_rewriting_guardrail('{"count": 1}', "[REDACTED]")
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert result["data"]["messages"][2]["content"][0]["toolResult"]["content"] == [
+            {"text": "a.txt"},
+            {"text": "[REDACTED]"},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_tool_call_argument_edit_lands_in_tool_use_input(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _agent_loop_converse_data()
+        guardrail = _make_tool_call_rewriting_guardrail('{"command": "[REDACTED]"}')
+
+        result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert result["data"]["messages"][1]["content"] == [
+            {"text": "Listing them."},
+            {"toolUse": {"toolUseId": "tool-1", "name": "bash", "input": {"command": "[REDACTED]"}}},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_tool_call_arguments_that_are_not_json_fail_closed(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        guardrail = _make_tool_call_rewriting_guardrail("[REDACTED]")
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await handler.process_input_messages(data=_agent_loop_converse_data(), guardrail_to_apply=guardrail)
+
+    @pytest.mark.asyncio
+    async def test_scan_only_tool_results_sends_only_tool_results(self):
+        handler = BedrockPassthroughGuardrailHandler()
+        data = _agent_loop_converse_data()
+        data["data"]["system"] = [{"text": "You are a shell assistant."}]
+        data["data"]["toolConfig"] = _profile_converse_data()["data"]["toolConfig"]
+        data["data"]["additionalModelRequestFields"] = {"thinking": {"type": "adaptive"}}
+        guardrail = _make_guardrail({})
+        guardrail.scan_only_tool_results = True
+
+        await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        inputs = guardrail.apply_guardrail.call_args.kwargs["inputs"]
+        assert inputs["texts"] == ["a.txt"]
+        assert [message["role"] for message in inputs["structured_messages"]] == ["tool"]
+        assert "tools" not in inputs
+
 
 class TestBedrockPassthroughGuardrailHandlerOutput:
     def _converse_response(self, text: str = "Model reply") -> dict:

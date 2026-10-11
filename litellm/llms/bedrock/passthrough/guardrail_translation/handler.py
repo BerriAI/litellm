@@ -11,6 +11,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
 from litellm.llms.base_llm.guardrail_translation.utils import (
+    effective_scan_only_tool_results_for_guardrail,
     effective_skip_system_message_for_guardrail,
     effective_skip_tool_message_for_guardrail,
     scoped_structured_message_indices,
@@ -102,6 +103,7 @@ def _extract_converse_texts(
     body: dict,
     skip_system: bool,
     skip_tool: bool,
+    scan_only_tool_results: bool = False,
 ) -> tuple[list[str], list[_StringHolder]]:
     """
     Walk a Bedrock Converse request body and collect text content.
@@ -129,10 +131,12 @@ def _extract_converse_texts(
     contract, while ``additionalModelRequestFields`` is free-form and defined by
     the target model, so what it carries cannot be classified without knowing
     that model. Scanning it stays the fail-closed default.
+
+    With ``scan_only_tool_results`` only ``toolResult`` content is collected.
     """
     holders: Final[list[_StringHolder]] = []
 
-    if not skip_system:
+    if not skip_system and not scan_only_tool_results:
         for block in body.get("system") or []:
             if isinstance(block, dict):
                 _collect_block_text(block, holders)
@@ -145,18 +149,21 @@ def _extract_converse_texts(
                 continue
             if skip_tool and ("toolUse" in block or "toolResult" in block):
                 continue
-            _collect_block_text(block, holders)
-            tool_use = block.get("toolUse")
-            if isinstance(tool_use, dict):
-                _collect_strings(tool_use.get("input"), holders)
             tool_result = block.get("toolResult")
             if isinstance(tool_result, dict):
                 for inner in tool_result.get("content") or []:
                     if isinstance(inner, dict):
                         _collect_block_text(inner, holders)
                         _collect_strings(inner.get("json"), holders)
+            if scan_only_tool_results:
+                continue
+            _collect_block_text(block, holders)
+            tool_use = block.get("toolUse")
+            if isinstance(tool_use, dict):
+                _collect_strings(tool_use.get("input"), holders)
 
-    _collect_strings(body.get("additionalModelRequestFields"), holders)
+    if not scan_only_tool_results:
+        _collect_strings(body.get("additionalModelRequestFields"), holders)
 
     texts: Final = [container[key] for container, key in holders]
     return texts, holders
@@ -248,15 +255,48 @@ class _BlockRef:
 
 
 @dataclass(frozen=True, slots=True)
+class _ToolResultItemRef:
+    block: _BlockRef
+    item_index: int
+    is_json: bool
+
+
+_ContentSlot: TypeAlias = _BlockRef | _ToolResultItemRef
+_SlotText: TypeAlias = tuple[_ContentSlot, str]
+
+
+@dataclass(frozen=True, slots=True)
 class _ConvertedMessage:
     message: AllMessageValues
-    text_blocks: tuple[_BlockRef, ...]
+    content_slots: tuple[_SlotText, ...] = ()
+    tool_calls: tuple[tuple[_BlockRef, ChatCompletionAssistantToolCall], ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class _BlockTextEdit:
+    ref: _BlockRef
+    text: str
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolResultItemEdit:
+    ref: _ToolResultItemRef
+    item: Mapping[str, object]
+
+
+@dataclass(frozen=True, slots=True)
+class _ToolInputEdit:
+    ref: _BlockRef
+    tool_input: object
+
+
+_Edit: TypeAlias = _BlockTextEdit | _ToolResultItemEdit | _ToolInputEdit
 _IndexedBlock: TypeAlias = tuple[_BlockRef, _ConverseContentBlock]
 _TEXT_PARTS: Final = TypeAdapter(tuple[ChatCompletionTextObject, ...])
+_TOOL_CALLS: Final = TypeAdapter(tuple[ChatCompletionAssistantToolCall, ...])
+_JSON_VALUE: Final = TypeAdapter(object)
 _JSON_OBJECT: Final = TypeAdapter(dict[str, Any])
-_TextEdit: TypeAlias = tuple[_BlockRef, str]
+_REWRITABLE_KEYS: Final = frozenset({"content", "tool_calls"})
 
 
 def _indexed_blocks(message_index: int | None, blocks: Sequence[_ConverseContentBlock]) -> tuple[_IndexedBlock, ...]:
@@ -267,24 +307,24 @@ def _text_blocks(blocks: Sequence[_IndexedBlock]) -> tuple[tuple[_BlockRef, str]
     return tuple((ref, text) for ref, block in blocks if (text := _converse_block_text(block)))
 
 
-def _text_content(text_blocks: Sequence[tuple[_BlockRef, str]]) -> tuple[ChatCompletionTextObject, ...]:
-    return tuple(ChatCompletionTextObject(type="text", text=text) for _, text in text_blocks)
+def _text_content(slots: Sequence[_SlotText]) -> tuple[ChatCompletionTextObject, ...]:
+    return tuple(ChatCompletionTextObject(type="text", text=text) for _, text in slots)
 
 
-def _refs(text_blocks: Sequence[tuple[_BlockRef, str]]) -> tuple[_BlockRef, ...]:
-    return tuple(ref for ref, _ in text_blocks)
-
-
-def _converse_tool_message(tool_result: _ConverseToolResult) -> ChatCompletionToolMessage:
-    return ChatCompletionToolMessage(
-        role="tool",
-        tool_call_id=tool_result.tool_use_id,
-        content="\n".join(
-            part.text or json.dumps(part.json_value)
-            for part in tool_result.content
-            if part.text or part.json_value is not None
-        ),
+def _tool_result_items(ref: _BlockRef, tool_result: _ConverseToolResult) -> tuple[_SlotText, ...]:
+    return tuple(
+        (_ToolResultItemRef(ref, item_index, is_json=not item.text), item.text or json.dumps(item.json_value))
+        for item_index, item in enumerate(tool_result.content)
+        if item.text or item.json_value is not None
     )
+
+
+def _converse_tool_message(ref: _BlockRef, tool_result: _ConverseToolResult) -> _ConvertedMessage:
+    items: Final = _tool_result_items(ref, tool_result)
+    message: Final = ChatCompletionToolMessage(
+        role="tool", tool_call_id=tool_result.tool_use_id, content=list(_text_content(items))
+    )
+    return _ConvertedMessage(message, items)
 
 
 def _converse_tool_call(tool_use: _ConverseToolUse) -> ChatCompletionAssistantToolCall:
@@ -300,14 +340,12 @@ def _converse_tool_call(tool_use: _ConverseToolUse) -> ChatCompletionAssistantTo
 
 def _converse_user_group(is_tool_result: bool, group: Sequence[_IndexedBlock]) -> tuple[_ConvertedMessage, ...]:
     if is_tool_result:
-        return tuple(
-            _ConvertedMessage(_converse_tool_message(block.tool_result), ()) for _, block in group if block.tool_result
-        )
+        return tuple(_converse_tool_message(ref, block.tool_result) for ref, block in group if block.tool_result)
     text_blocks: Final = _text_blocks(group)
     if not text_blocks:
         return ()
     message: Final = ChatCompletionUserMessage(role="user", content=list(_text_content(text_blocks)))
-    return (_ConvertedMessage(message, _refs(text_blocks)),)
+    return (_ConvertedMessage(message, text_blocks),)
 
 
 def _converse_user_messages(blocks: Sequence[_IndexedBlock]) -> tuple[_ConvertedMessage, ...]:
@@ -322,15 +360,15 @@ def _converse_user_messages(blocks: Sequence[_IndexedBlock]) -> tuple[_Converted
 def _converse_assistant_messages(blocks: Sequence[_IndexedBlock]) -> tuple[_ConvertedMessage, ...]:
     text_blocks: Final = _text_blocks(blocks)
     content: Final = list(_text_content(text_blocks))
-    tool_calls: Final = list(_converse_tool_call(block.tool_use) for _, block in blocks if block.tool_use)
+    tool_calls: Final = tuple((ref, _converse_tool_call(block.tool_use)) for ref, block in blocks if block.tool_use)
     if tool_calls:
         message: Final = ChatCompletionAssistantMessage(
-            role="assistant", content=content or None, tool_calls=tool_calls
+            role="assistant", content=content or None, tool_calls=[call for _, call in tool_calls]
         )
-        return (_ConvertedMessage(message, _refs(text_blocks)),)
+        return (_ConvertedMessage(message, text_blocks, tool_calls),)
     if not content:
         return ()
-    return (_ConvertedMessage(ChatCompletionAssistantMessage(role="assistant", content=content), _refs(text_blocks)),)
+    return (_ConvertedMessage(ChatCompletionAssistantMessage(role="assistant", content=content), text_blocks),)
 
 
 def _converse_message(message_index: int, message: _ConverseMessage) -> tuple[_ConvertedMessage, ...]:
@@ -348,11 +386,15 @@ def _converse_structured_messages(request: _ConverseRequest) -> tuple[_Converted
     if not system_blocks:
         return converted
     system: Final = ChatCompletionSystemMessage(role="system", content=list(_text_content(system_blocks)))
-    return (_ConvertedMessage(system, _refs(system_blocks)), *converted)
+    return (_ConvertedMessage(system, system_blocks), *converted)
 
 
-def _without_content(message: Mapping[str, object]) -> tuple[tuple[str, object], ...]:
-    return tuple(sorted(((key, value) for key, value in message.items() if key != "content"), key=lambda item: item[0]))
+def _without_rewritable(message: Mapping[str, object]) -> tuple[tuple[str, object], ...]:
+    return tuple(
+        sorted(
+            ((key, value) for key, value in message.items() if key not in _REWRITABLE_KEYS), key=lambda item: item[0]
+        )
+    )
 
 
 def _returned_text_parts(message: Mapping[str, object]) -> tuple[str, ...] | None:
@@ -363,40 +405,103 @@ def _returned_text_parts(message: Mapping[str, object]) -> tuple[str, ...] | Non
     return tuple(part["text"] for part in parts)
 
 
-def _message_text_edits(converted: _ConvertedMessage, returned: Mapping[str, object]) -> tuple[_TextEdit, ...] | None:
-    if returned == converted.message:
+def _tool_result_item(text: str, is_json: bool) -> Mapping[str, object]:
+    if not is_json:
+        return {"text": text}
+    try:
+        return {"json": _JSON_VALUE.validate_json(text)}
+    except ValidationError:
+        return {"text": text}
+
+
+def _slot_edit(slot: _ContentSlot, text: str) -> _Edit:
+    if isinstance(slot, _BlockRef):
+        return _BlockTextEdit(slot, text)
+    return _ToolResultItemEdit(slot, _tool_result_item(text, slot.is_json))
+
+
+def _content_edits(
+    slots: Sequence[_SlotText], original: Mapping[str, object], returned: Mapping[str, object]
+) -> tuple[_Edit, ...] | None:
+    if returned.get("content") == original.get("content"):
         return ()
-    if not converted.text_blocks or _without_content(returned) != _without_content(converted.message):
-        return None
     texts: Final = _returned_text_parts(returned)
-    if texts is None or len(texts) != len(converted.text_blocks):
+    if texts is None or len(texts) != len(slots):
         return None
-    return tuple(zip(converted.text_blocks, texts))
+    return tuple(_slot_edit(slot, text) for (slot, before), text in zip(slots, texts) if text != before)
 
 
-def _structured_text_edits(
+def _tool_call_identity(call: ChatCompletionAssistantToolCall) -> tuple[str | None, str, str | None]:
+    return call["id"], call["type"], call["function"].get("name")
+
+
+def _tool_call_edits(
+    tool_calls: Sequence[tuple[_BlockRef, ChatCompletionAssistantToolCall]], returned_calls: object
+) -> tuple[_Edit, ...] | None:
+    if returned_calls is None and not tool_calls:
+        return ()
+    try:
+        calls: Final = _TOOL_CALLS.validate_python(returned_calls)
+    except ValidationError:
+        return None
+    if len(calls) != len(tool_calls) or any(
+        _tool_call_identity(call) != _tool_call_identity(before) for call, (_, before) in zip(calls, tool_calls)
+    ):
+        return None
+    try:
+        return tuple(
+            _ToolInputEdit(ref, _JSON_VALUE.validate_json(arguments))
+            for (ref, before), call in zip(tool_calls, calls)
+            if (arguments := call["function"].get("arguments", "")) != before["function"].get("arguments")
+        )
+    except ValidationError:
+        return None
+
+
+def _message_edits(
+    converted: _ConvertedMessage, original: Mapping[str, object], returned: Mapping[str, object]
+) -> tuple[_Edit, ...] | None:
+    if returned == original:
+        return ()
+    if _without_rewritable(returned) != _without_rewritable(original):
+        return None
+    content_edits: Final = _content_edits(converted.content_slots, original, returned)
+    tool_call_edits: Final = _tool_call_edits(converted.tool_calls, returned.get("tool_calls"))
+    if content_edits is None or tool_call_edits is None:
+        return None
+    return (*content_edits, *tool_call_edits)
+
+
+def _structured_edits(
     converted: Sequence[_ConvertedMessage],
     scoped_indices: Sequence[int],
     returned: Sequence[Mapping[str, object]],
-) -> tuple[_TextEdit, ...] | None:
+) -> tuple[_Edit, ...] | None:
     if len(returned) != len(scoped_indices):
         return None
     per_message: Final = tuple(
-        _message_text_edits(converted[index], message) for index, message in zip(scoped_indices, returned)
+        _message_edits(converted[index], converted[index].message, message)
+        for index, message in zip(scoped_indices, returned)
     )
     if any(edits is None for edits in per_message):
         return None
     return tuple(chain.from_iterable(edits for edits in per_message if edits is not None))
 
 
-def _write_back_structured_texts(body: Mapping[str, Any], edits: Sequence[_TextEdit]) -> None:
-    for ref, text in edits:
+def _write_back_structured_edits(body: Mapping[str, Any], edits: Sequence[_Edit]) -> None:
+    for edit in edits:
+        ref = edit.ref.block if isinstance(edit, _ToolResultItemEdit) else edit.ref
         blocks = body["system"] if ref.message_index is None else body["messages"][ref.message_index]["content"]
         block = blocks[ref.block_index]
-        if "text" in block:
-            block["text"] = text
-        else:
-            block["guardContent"]["text"]["text"] = text
+        match edit:
+            case _ToolInputEdit(tool_input=tool_input):
+                block["toolUse"]["input"] = tool_input
+            case _ToolResultItemEdit(ref=item_ref, item=item):
+                block["toolResult"]["content"][item_ref.item_index] = dict(item)
+            case _BlockTextEdit(text=text) if "text" in block:
+                block["text"] = text
+            case _BlockTextEdit(text=text):
+                block["guardContent"]["text"]["text"] = text
 
 
 def _converse_tools(request: _ConverseRequest) -> tuple[ChatCompletionToolParam, ...]:
@@ -713,14 +818,15 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
+        scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
 
-        texts, holders = _extract_converse_texts(body, skip_system, skip_tool)
+        texts, holders = _extract_converse_texts(body, skip_system, skip_tool, scan_only_tool_results)
         converse_request: Final = _parse_converse_request(lambda: _ConverseRequest.model_validate(body))
         converted: Final = _converse_structured_messages(converse_request) if converse_request else ()
         structured_messages: Final = tuple(item.message for item in converted)
         scoped_message_indices: Final = scoped_structured_message_indices(
             structured_messages,
-            scan_only_tool_results=False,
+            scan_only_tool_results=scan_only_tool_results,
             skip_system=skip_system,
             skip_tool=skip_tool,
         )
@@ -733,7 +839,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             inputs["structured_messages"] = copy.deepcopy(
                 list(structured_messages[index] for index in scoped_message_indices)
             )
-        tools: Final = _converse_tools(converse_request) if converse_request else ()
+        tools: Final = _converse_tools(converse_request) if converse_request and not scan_only_tool_results else ()
         if tools:
             inputs["tools"] = list(tools)
         model: Final = data.get("model")
@@ -753,10 +859,10 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         guardrailed_messages: Final = guardrailed_inputs.get("structured_messages")
         if guardrailed_messages is not None:
-            edits: Final = _structured_text_edits(converted, scoped_message_indices, guardrailed_messages)
+            edits: Final = _structured_edits(converted, scoped_message_indices, guardrailed_messages)
             if edits is None:
                 raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
-            _write_back_structured_texts(_JSON_OBJECT.validate_python(body), edits)
+            _write_back_structured_edits(_JSON_OBJECT.validate_python(body), edits)
 
         return data
 
