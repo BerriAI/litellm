@@ -424,7 +424,7 @@ def _fill_the_cap(image: CapRig, cell: str) -> frozenset[str]:
 
 @pytest.mark.timeout(420)
 def test_gateway_image_restart_on_a_kept_directory_starts_the_cap_over(tmp_path: Path) -> None:
-    """D1: the gateway image's launcher (`docker/component_entrypoint.sh` running `python -m gateway.launch`, two
+    """D1: the gateway image's launcher (`docker-entrypoint.sh` running `python -m gateway.launch`, two
     workers) restarted on a kept PROMETHEUS_MULTIPROC_DIR: the entrypoint removes the previous container's samples
     and admitted series before the workers fork, so the second boot shows only its own three keys and a fourth
     lands on `other`."""
