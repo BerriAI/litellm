@@ -196,7 +196,7 @@ def _load_yaml_spec(content: str | bytes) -> Mapping[str, object]:
             content, Loader=yaml.SafeLoader
         ):
             if isinstance(event, AliasEvent):
-                raise ValueError("YAML aliases are not supported in OpenAPI specs")
+                raise TypeError("YAML aliases are not supported in OpenAPI specs")
             if (
                 isinstance(event, ScalarEvent)
                 and len(event.value) > _MAX_YAML_INT_LENGTH

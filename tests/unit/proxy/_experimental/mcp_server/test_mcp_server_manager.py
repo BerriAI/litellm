@@ -4973,7 +4973,7 @@ class TestMCPServerManager:
             (
                 httpx.Response(200, text="paths: &paths {self: *paths}"),
                 "unhealthy",
-                "OpenAPI specification could not be loaded (ValueError)",
+                "OpenAPI specification could not be loaded (TypeError)",
             ),
         ],
     )
