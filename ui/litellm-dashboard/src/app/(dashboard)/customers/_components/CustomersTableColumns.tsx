@@ -180,7 +180,7 @@ export function getCustomerTableColumns(actions: CustomerTableActions): ColumnDe
       header: ({ column }) => <DataTableSortHeader column={column} title="Budget (USD)" />,
       size: 140,
       cell: ({ row }) => (
-        <MoneyCell value={row.original.litellm_budget_table?.max_budget} decimals={2} emptyText="Unlimited" />
+        <MoneyCell value={row.original.litellm_budget_table?.max_budget} decimals={2} emptyText="Unlimited" showZero />
       ),
     },
     {

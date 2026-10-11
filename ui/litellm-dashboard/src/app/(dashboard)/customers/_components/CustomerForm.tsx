@@ -15,6 +15,7 @@ import { FieldGroup } from "@/components/ui/field";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { useZodForm } from "@/lib/forms/useZodForm";
+import { cn } from "@/lib/cva.config";
 import { toCustomerFormValues, type CustomerFormValues } from "./customerPayload";
 
 const mcpSelectionShape = {
@@ -247,13 +248,19 @@ export function CustomerForm({
           onChange={(permissions) => form.setValue("mcp_tool_permissions", permissions)}
         />
       </FieldGroup>
-      <div className="mt-6 flex justify-end gap-2">
-        <Button type="button" variant="outline" onClick={onCancel}>
-          Cancel
-        </Button>
-        <Button type="submit" disabled={isSaving}>
-          {isEdit ? "Save Changes" : "Create Customer"}
-        </Button>
+      <div
+        className={cn("mt-6", {
+          "sticky z-chrome -inset-x-6 -bottom-6 border-t border-border bg-card p-4": isEdit,
+        })}
+      >
+        <div className="flex justify-end gap-2">
+          <Button type="button" variant="outline" onClick={onCancel}>
+            Cancel
+          </Button>
+          <Button type="submit" disabled={isSaving}>
+            {isEdit ? "Save Changes" : "Create Customer"}
+          </Button>
+        </div>
       </div>
     </form>
   );

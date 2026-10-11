@@ -1,11 +1,12 @@
 "use client";
 
-import { Contact } from "lucide-react";
+import { Contact, RefreshCw, Search } from "lucide-react";
 import { useMemo } from "react";
 
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { DataTable, DataTableViewOptions, useUrlTableState } from "@/components/shared/DataTable";
 import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 
 import { getCustomerTableColumns, type CustomerTableActions } from "./CustomersTableColumns";
 
@@ -22,6 +23,8 @@ type CustomersTableProps = CustomerTableActions & {
   data: EndUser[];
   isLoading: boolean;
   isError: boolean;
+  onRefresh: () => void;
+  isRefreshing: boolean;
 };
 
 function EmptyCustomers() {
@@ -34,7 +37,14 @@ function EmptyCustomers() {
   );
 }
 
-export default function CustomersTable({ data, isLoading, isError, ...actions }: CustomersTableProps) {
+export default function CustomersTable({
+  data,
+  isLoading,
+  isError,
+  onRefresh,
+  isRefreshing,
+  ...actions
+}: CustomersTableProps) {
   const { search, setSearch, sorting, onSortingChange, pagination, onPaginationChange } =
     useUrlTableState(TABLE_STATE_OPTIONS);
   const { canModify, premiumUser, onView, onEdit, onDelete, onSetBlocked } = actions;
@@ -57,15 +67,30 @@ export default function CustomersTable({ data, isLoading, isError, ...actions }:
         getRowId={(customer) => customer.user_id}
         defaultColumnVisibility={DEFAULT_COLUMN_VISIBILITY}
         toolbar={(table) => (
-          <div className="flex items-center justify-between gap-4">
-            <Input
-              aria-label="Search customers"
-              placeholder="Search customers by ID or alias"
-              className="max-w-sm"
-              value={search}
-              onChange={(event) => setSearch(event.target.value)}
-            />
-            <DataTableViewOptions table={table} label="Columns" />
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="relative">
+              <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                aria-label="Search customers"
+                placeholder="Search customers by ID or alias"
+                className="h-8 w-56 pl-8"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                size="icon-sm"
+                onClick={onRefresh}
+                disabled={isRefreshing}
+                aria-label="Refresh"
+                title="Refresh"
+              >
+                <RefreshCw className={isRefreshing ? "animate-spin" : ""} />
+              </Button>
+              <DataTableViewOptions table={table} label="Columns" />
+            </div>
           </div>
         )}
         paginationMode="client"

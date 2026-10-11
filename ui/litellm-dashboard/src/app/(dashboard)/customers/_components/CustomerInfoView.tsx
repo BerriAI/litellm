@@ -10,7 +10,7 @@ import CopyButton from "@/components/shared/CopyButton";
 import { PageHeader, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { ModelsCell, MoneyCell } from "@/components/shared/table_cells";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   DropdownMenu,
@@ -72,39 +72,35 @@ function CustomerOverview({ customer, accessToken }: Pick<CustomerInfoViewProps,
     <div className="space-y-6">
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-3">
         <Card>
-          <CardHeader>
-            <CardTitle>Budget Status</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-2">
-            <div className="text-xl font-semibold [&>span]:text-left">
-              <MoneyCell value={customer.spend} decimals={2} />
+          <CardContent>
+            <p className="text-sm text-muted-foreground">Budget Status</p>
+            <div className="mt-2 space-y-2 text-sm text-foreground">
+              <div className="text-xl font-semibold [&>span]:text-left">
+                <MoneyCell value={customer.spend} decimals={2} showZero />
+              </div>
+              <div className="flex gap-1">
+                of{" "}
+                <span className="[&>span]:text-left">
+                  <MoneyCell value={budget?.max_budget} decimals={2} emptyText="Unlimited" showZero />
+                </span>
+              </div>
+              <p className="text-muted-foreground">Reset: {getBudgetDurationLabel(budget?.budget_duration)}</p>
             </div>
-            <div className="flex gap-1">
-              of{" "}
-              <span className="[&>span]:text-left">
-                <MoneyCell value={budget?.max_budget} decimals={2} emptyText="Unlimited" />
-              </span>
-            </div>
-            <p className="text-sm text-muted-foreground">Reset: {getBudgetDurationLabel(budget?.budget_duration)}</p>
           </CardContent>
         </Card>
         <Card>
-          <CardHeader>
-            <CardTitle>Rate Limits</CardTitle>
-          </CardHeader>
           <CardContent>
-            <dl className="space-y-3">
+            <p className="text-sm text-muted-foreground">Rate Limits</p>
+            <dl className="mt-2 space-y-3">
               <OverviewField label="TPM">{budget?.tpm_limit ?? "Unlimited"}</OverviewField>
               <OverviewField label="RPM">{budget?.rpm_limit ?? "Unlimited"}</OverviewField>
             </dl>
           </CardContent>
         </Card>
         <Card>
-          <CardHeader>
-            <CardTitle>Models</CardTitle>
-          </CardHeader>
           <CardContent>
-            <dl className="space-y-3">
+            <p className="text-sm text-muted-foreground">Models</p>
+            <dl className="mt-2 space-y-3">
               <CustomerModelFields customer={customer} />
             </dl>
           </CardContent>
@@ -124,7 +120,7 @@ function CustomerSettings({ customer, accessToken }: Pick<CustomerInfoViewProps,
         <OverviewField label="Budget ID">{customer.budget_id ?? "No budget"}</OverviewField>
         <OverviewField label="Max Budget">
           <span className="[&>span]:text-left">
-            <MoneyCell value={budget?.max_budget} decimals={2} emptyText="Unlimited" />
+            <MoneyCell value={budget?.max_budget} decimals={2} emptyText="Unlimited" showZero />
           </span>
         </OverviewField>
         <OverviewField label="Reset Period">{getBudgetDurationLabel(budget?.budget_duration)}</OverviewField>
@@ -205,7 +201,7 @@ export default function CustomerInfoView({
         <div className="flex items-start justify-between gap-4">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <PageHeaderTitle className="min-w-0 break-words">
+              <PageHeaderTitle className="min-w-0 break-words [&_svg]:size-4">
                 {customer.alias || customer.user_id}
                 <CopyButton
                   value={customer.alias || customer.user_id}
@@ -243,28 +239,30 @@ export default function CustomerInfoView({
           <CustomerOverview customer={customer} accessToken={accessToken} />
         </TabsContent>
         <TabsContent value="settings" className="pt-4">
-          <div>
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-lg font-medium">Customer Settings</h3>
-              {canModify && !showEdit && (
-                <Button variant="outline" onClick={onEdit}>
-                  <Pencil />
-                  Edit Settings
-                </Button>
+          <Card className="max-h-[65vh] overflow-y-auto">
+            <CardContent>
+              <div className="mb-4 flex items-center justify-between">
+                <h3 className="text-lg font-medium">Customer Settings</h3>
+                {canModify && !showEdit && (
+                  <Button variant="outline" onClick={onEdit}>
+                    <Pencil />
+                    Edit Settings
+                  </Button>
+                )}
+              </div>
+              {showEdit ? (
+                <CustomerForm
+                  customer={customer}
+                  isEdit
+                  isSaving={isSaving}
+                  onSubmit={handleSave}
+                  onCancel={onCancelEdit}
+                />
+              ) : (
+                <CustomerSettings customer={customer} accessToken={accessToken} />
               )}
-            </div>
-            {showEdit ? (
-              <CustomerForm
-                customer={customer}
-                isEdit
-                isSaving={isSaving}
-                onSubmit={handleSave}
-                onCancel={onCancelEdit}
-              />
-            ) : (
-              <CustomerSettings customer={customer} accessToken={accessToken} />
-            )}
-          </div>
+            </CardContent>
+          </Card>
         </TabsContent>
       </Tabs>
     </>

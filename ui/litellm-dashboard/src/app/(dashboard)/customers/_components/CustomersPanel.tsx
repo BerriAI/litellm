@@ -1,6 +1,6 @@
 "use client";
 
-import { Contact, Plus, RefreshCw } from "lucide-react";
+import { Contact, Plus } from "lucide-react";
 import { parseAsBoolean, parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useCallback, useState } from "react";
 
@@ -29,17 +29,7 @@ const CUSTOMER_VIEW_PARSERS = {
   customer_tab: parseAsStringLiteral(["overview", "settings"]).withDefault("overview"),
 };
 
-function CustomersHeader({
-  canModify,
-  onCreate,
-  onRefresh,
-  isRefreshing,
-}: {
-  canModify: boolean;
-  onCreate: () => void;
-  onRefresh: () => void;
-  isRefreshing: boolean;
-}) {
+function CustomersHeader({ canModify, onCreate }: { canModify: boolean; onCreate: () => void }) {
   return (
     <PageHeader>
       <PageHeaderTitle>
@@ -47,18 +37,14 @@ function CustomersHeader({
         Customers
       </PageHeaderTitle>
       <PageHeaderDescription>Manage end-user spend, budgets, rate limits, model and MCP access</PageHeaderDescription>
-      <PageHeaderControls>
-        <Button variant="outline" onClick={onRefresh} disabled={isRefreshing}>
-          <RefreshCw />
-          Refresh
-        </Button>
-        {canModify && (
+      {canModify && (
+        <PageHeaderControls>
           <Button onClick={onCreate}>
             <Plus />
             Create Customer
           </Button>
-        )}
-      </PageHeaderControls>
+        </PageHeaderControls>
+      )}
     </PageHeader>
   );
 }
@@ -142,16 +128,13 @@ export default function CustomersPanel() {
         />
       ) : (
         <>
-          <CustomersHeader
-            canModify={canModify}
-            onCreate={() => setIsCreateOpen(true)}
-            onRefresh={() => void customers.refetch()}
-            isRefreshing={customers.isFetching}
-          />
+          <CustomersHeader canModify={canModify} onCreate={() => setIsCreateOpen(true)} />
           <CustomersTable
             data={customers.data ?? []}
             isLoading={customers.isLoading}
             isError={customers.isError}
+            onRefresh={() => void customers.refetch()}
+            isRefreshing={customers.isFetching}
             canModify={canModify}
             premiumUser={premiumUser}
             onView={openCustomer}

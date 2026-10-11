@@ -110,6 +110,42 @@ describe("Customers management", () => {
     ).not.toBeInTheDocument();
   });
 
+  it.each([
+    { maxBudget: 0, budgetLabel: "$0.00" },
+    { maxBudget: null, budgetLabel: "Unlimited" },
+  ])(
+    "distinguishes a $budgetLabel budget from zero spend in the list and details",
+    async ({ maxBudget, budgetLabel }) => {
+      const user = userEvent.setup();
+      const customer: EndUser = {
+        ...activeCustomer,
+        spend: 0,
+        litellm_budget_table: {
+          max_budget: maxBudget,
+          tpm_limit: 600,
+          rpm_limit: 6,
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      };
+      useQuery.mockImplementation((_method: string, path: string) => ({
+        data: path === "/customer/list" ? [customer] : customer,
+        isLoading: false,
+        isError: false,
+      }));
+      renderWithProviders(<CustomersPanel />);
+
+      const row = screen.getByRole("row", { name: /alice@example.test/ });
+      expect(within(row).getByText(budgetLabel)).toBeInTheDocument();
+      await user.click(within(row).getByRole("button", { name: /Alice.*alice@example.test/ }));
+      expect(await screen.findByText("Budget Status")).toBeInTheDocument();
+      expect(screen.getAllByText("$0.00")).toHaveLength(maxBudget === 0 ? 2 : 1);
+      expect(screen.getAllByText(budgetLabel)).toHaveLength(maxBudget === 0 ? 2 : 1);
+      await user.click(screen.getByRole("tab", { name: "Settings" }));
+      expect(await screen.findByText("Max Budget")).toBeInTheDocument();
+      expect(screen.getByText(budgetLabel)).toBeInTheDocument();
+    },
+  );
+
   it("keeps MCP access optional while showing each customer status", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPanel />);
