@@ -1,6 +1,7 @@
 import errno
 import json
 import os
+import re
 import signal
 import socket
 import subprocess
@@ -12,6 +13,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from ipaddress import IPv4Address
+from itertools import accumulate
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
@@ -19,15 +21,19 @@ from urllib.parse import urlsplit
 
 import httpx
 import psutil
+import yaml
 from cryptography import x509
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
-from integration._support.client import GATEWAY_LIMITS, Gateway
+from pydantic import TypeAdapter
+
+from tests.integration._support.client import GATEWAY_LIMITS, Gateway
 
 DB_PUSH: Final = ("--use_prisma_db_push",)
 MIGRATE_DEPLOY: Final = ()
 LEGACY_MIGRATE_DEPLOY: Final = ("--use_legacy_migration_resolver",)
+CONFIGURATION: Final = TypeAdapter(dict[str, object])
 
 
 def proxy_database_environment() -> Mapping[str, str]:
@@ -123,6 +129,7 @@ def _stop(process: subprocess.Popen[bytes]) -> None:
         signal_group(process.pid, signal.SIGKILL)
         process.wait(timeout=3)
         psutil.wait_procs(group_members(process.pid), timeout=3)
+        assert not group_members(process.pid), "Owned proxy child survived emergency cleanup"
         raise
 
 
@@ -189,25 +196,70 @@ def _lost_port_race(exit_code: int | None, log: Path) -> bool:
     return exit_code is not None and _BIND_COLLISION in log.read_text().lower()
 
 
-def _wait_until_ready(launch: _Launch) -> None:
-    with httpx.Client(base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False) as client:
+def _owns_listener(launch: _Launch) -> bool:
+    for member in group_members(launch.process.pid):
+        try:
+            if any(
+                connection.status == psutil.CONN_LISTEN and connection.laddr.port == launch.port
+                for connection in member.net_connections(kind="inet")
+            ):
+                return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return False
+
+
+def _readiness_pids(launch: _Launch) -> Iterator[int]:
+    with httpx.Client(
+        base_url=f"http://127.0.0.1:{launch.port}",
+        timeout=15,
+        trust_env=False,
+        limits=httpx.Limits(max_keepalive_connections=0),
+    ) as client:
         deadline: Final = time.monotonic() + float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS", "70"))
         while launch.process.poll() is None:
             try:
-                if client.get("/health/readiness", timeout=2).status_code == 200:
-                    return
+                response: Final = client.get("/health/integration-readiness", timeout=2)
+                identity: Final = response.headers.get("x-integration-worker-pid", "")
+                if response.status_code == 200 and identity.isdecimal() and _owns_listener(launch):
+                    yield int(identity)
             except httpx.TransportError:
                 pass
             assert time.monotonic() < deadline, "Owned proxy readiness deadline exceeded"
             time.sleep(0.1)
 
 
+def _ready_workers(pids: frozenset[int], pid: int) -> frozenset[int]:
+    return pids | frozenset((pid,))
+
+
+def _ready_worker_pid(member: psutil.Process) -> int | None:
+    try:
+        status: Final = member.status()
+        return (
+            None
+            if status in (psutil.STATUS_ZOMBIE, psutil.STATUS_DEAD, psutil.STATUS_STOPPED, psutil.STATUS_TRACING_STOP)
+            else member.pid
+        )
+    except (psutil.NoSuchProcess, psutil.AccessDenied):
+        return None
+
+
+def _wait_until_ready(launch: _Launch, workers: int = 1) -> None:
+    for ready in accumulate(_readiness_pids(launch), _ready_workers, initial=frozenset[int]()):
+        members: Final = frozenset(
+            pid for member in group_members(launch.process.pid) if (pid := _ready_worker_pid(member)) is not None
+        )
+        if len(ready & members) >= max(1, workers):
+            return
+
+
 def _launch_until_bound(
-    command: tuple[str, ...], root: Path, environment: Mapping[str, str], output: Path, attempts: int
+    command: tuple[str, ...], root: Path, environment: Mapping[str, str], output: Path, attempts: int, workers: int
 ) -> _Launch:
     launch: Final = _launch(command, root, environment, output)
     try:
-        _wait_until_ready(launch)
+        _wait_until_ready(launch, workers)
         exit_code: Final = launch.process.poll()
         assert exit_code is None or (attempts > 1 and _lost_port_race(exit_code, launch.log)), (
             "Owned proxy exited before readiness"
@@ -228,11 +280,40 @@ def _launch_until_bound(
         )
         return launch
     _stop_launch(launch)
-    return _launch_until_bound(command, root, environment, output, attempts - 1)
+    return _launch_until_bound(command, root, environment, output, attempts - 1, workers)
 
 
 def _proxy_root() -> Path:
     return Path(os.environ.get("INTEGRATION_PROXY_ROOT") or Path(__file__).resolve().parents[3])
+
+
+def worker_configuration(config: Path, directory: Path) -> Path:
+    if os.environ.get("INTEGRATION_WORKER_ISOLATION") != "1":
+        return config
+
+    def endpoint(match: re.Match[str]) -> str:
+        if match.group(1) == "8190":
+            return os.environ["INTEGRATION_UPSTREAM_URL"]
+        return f"http://127.0.0.1:{os.environ['INTEGRATION_PROVIDER_PORT']}"
+
+    contents: Final = re.sub(r"http://127[.]0[.]0[.]1:(8190|8191)(?![0-9])", endpoint, config.read_text())
+    directory.mkdir(parents=True, exist_ok=True)
+    destination: Final = directory / f"worker-config-{uuid.uuid4().hex}.yaml"
+    loaded: Final[object] = yaml.safe_load(contents)
+    if not isinstance(loaded, dict):
+        destination.write_text(contents)
+        return destination
+    settings: Final = CONFIGURATION.validate_python(loaded)
+    general: Final = settings.get("general_settings", {})
+    if not isinstance(general, dict):
+        destination.write_text(contents)
+        return destination
+    configured: Final = {
+        **settings,
+        "general_settings": {"database_connection_pool_limit": 2, **CONFIGURATION.validate_python(general)},
+    }
+    destination.write_text(yaml.safe_dump(configured, sort_keys=False))
+    return destination
 
 
 def _proxy_environment(
@@ -261,7 +342,13 @@ def _proxy_environment(
             "PYTHON_DOTENV_DISABLED": "1",
             **overrides,
             "LITELLM_WORKER_STARTUP_HOOKS": ",".join(
-                hook for hook in ("integration._support.runtime:configure_executor", configured_hooks) if hook
+                hook
+                for hook in (
+                    "integration._support.runtime:configure_executor",
+                    "integration._support.runtime:configure_readiness",
+                    configured_hooks,
+                )
+                if hook
             ),
         }
     )
@@ -314,7 +401,7 @@ def owned_proxy_process(
         "-m",
         "integration._support.proxy",
         "--config",
-        str(config or "tests/integration/proxy_config.yaml"),
+        str(worker_configuration(config or root / "tests/integration/proxy_config.yaml", directory)),
         "--host",
         "127.0.0.1",
         "--num_workers",
@@ -324,7 +411,7 @@ def owned_proxy_process(
         *database_setup,
         *extra_arguments,
     )
-    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS)
+    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS, workers)
     process: Final = launch.process
     try:
         with httpx.Client(
@@ -358,7 +445,7 @@ def owned_gateway_image(
         "--timeout-worker-healthcheck",
         str(int(graceful_stop_seconds())),
     )
-    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS)
+    launch: Final = _launch_until_bound(command, root, environment, output, _PORT_ATTEMPTS, workers)
     try:
         with httpx.Client(
             base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS
