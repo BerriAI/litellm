@@ -416,11 +416,12 @@ def setup_and_teardown():
         ("dynamic_rate_limiter_v3", "litellm.proxy.hooks.dynamic_rate_limiter_v3", "PROXY_DynamicRateLimitHandlerV3"),
     ),
 )
-def test_lazy_proxy_callback_classes_resolve_in_registry_lookups(
+def test_lazy_proxy_callback_classes_are_real_classes_in_the_registry(
     callback_name: str, module_path: str, class_name: str
 ) -> None:
     proxy_class: Final = getattr(importlib.import_module(module_path), class_name)
 
+    assert CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE[callback_name] is proxy_class
     assert CustomLoggerRegistry.get_class_type_for_custom_logger_name(callback_name) is proxy_class
     assert CustomLoggerRegistry.get_callback_str_from_class_type(proxy_class) == callback_name
     assert CustomLoggerRegistry.get_all_callback_strs_from_class_type(proxy_class) == [callback_name]
@@ -463,3 +464,13 @@ def test_registry_module_still_raises_for_unknown_attributes() -> None:
 
     with pytest.raises(AttributeError):
         getattr(registry_module, "PROXY_NotARealHandler")
+
+
+def test_registry_maps_every_callback_name_to_a_class() -> None:
+    non_classes: Final = [
+        name
+        for name, callback_class in CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE.items()
+        if not isinstance(callback_class, type)
+    ]
+
+    assert non_classes == []
