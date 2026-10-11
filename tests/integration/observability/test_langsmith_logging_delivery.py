@@ -13,9 +13,14 @@ from typing import Final
 import pytest
 
 import litellm
+from tests._wait_helpers import await_until
 from tests.integration._support.wire import Reply, Request, wire_server
 
 REQUEST_COUNT: Final = 20
+
+
+def _posted_runs(captured: list) -> list:
+    return [run for payload in captured for run in json.loads(payload).get("post", [])]
 
 
 @pytest.mark.asyncio
@@ -60,13 +65,17 @@ async def test_langsmith_logging_async_delivers_runs(monkeypatch: pytest.MonkeyP
 
             await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=30)
 
-            deadline = asyncio.get_event_loop().time() + 30
-            while not captured and asyncio.get_event_loop().time() < deadline:
-                await asyncio.sleep(0.05)
+            await await_until(
+                lambda: len(_posted_runs(captured)) >= REQUEST_COUNT,
+                message=f"{REQUEST_COUNT} LangSmith runs posted",
+                timeout_s=30,
+            )
         finally:
             litellm.success_callback = []
             litellm.logging_callback_manager._reset_all_callbacks()
 
-    assert len(captured) >= 1
-    texts = b"".join(captured).decode("utf-8", errors="replace")
-    assert "langfuse_latency_test_user" in texts or "chatgpt-v-2" in texts or "openai" in texts
+    runs = _posted_runs(captured)
+    assert len(runs) == REQUEST_COUNT
+    assert {(run["run_type"], run["session_name"]) for run in runs} == {("llm", "pr-b")}
+    assert len({run["inputs"]["id"] for run in runs}) == REQUEST_COUNT
+    assert {run["inputs"]["model"] for run in runs} == {"chatgpt-v-2"}

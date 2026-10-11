@@ -13,6 +13,7 @@ from typing import Final
 import pytest
 
 import litellm
+from tests._wait_helpers import await_until
 from tests.integration._support.wire import Reply, Request, wire_server
 
 REQUEST_COUNT: Final = 20
@@ -27,6 +28,10 @@ def _datadog_upstream(request: Request, captured: list) -> Reply:
         payload = body
     captured.append(payload)
     return Reply(status=202, body=b"{}")
+
+
+def _delivered_logs(captured: list) -> list:
+    return [entry for payload in captured for entry in json.loads(payload)]
 
 
 @pytest.mark.asyncio
@@ -63,13 +68,18 @@ async def test_datadog_logging_async_delivers_logs(monkeypatch: pytest.MonkeyPat
 
             await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=30)
 
-            deadline = asyncio.get_event_loop().time() + 30
-            while not captured and asyncio.get_event_loop().time() < deadline:
-                await asyncio.sleep(0.05)
+            await await_until(
+                lambda: len(_delivered_logs(captured)) >= REQUEST_COUNT,
+                message=f"{REQUEST_COUNT} Datadog log entries delivered",
+                timeout_s=30,
+            )
         finally:
             litellm.success_callback = []
             litellm.logging_callback_manager._reset_all_callbacks()
 
-    assert len(captured) >= 1
-    texts = b"".join(captured).decode("utf-8", errors="replace")
-    assert "datadog_latency_test_user" in texts or "chatgpt-v-3" in texts
+    logs = _delivered_logs(captured)
+    assert len(logs) == REQUEST_COUNT
+    assert {log["ddsource"] for log in logs} == {"litellm"}
+    payloads = [json.loads(log["message"]) for log in logs]
+    assert len({payload["id"] for payload in payloads}) == REQUEST_COUNT
+    assert {(payload["status"], payload["model"]) for payload in payloads} == {("success", "chatgpt-v-3")}
