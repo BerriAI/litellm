@@ -14,6 +14,8 @@ from collections.abc import Mapping
 from dataclasses import replace
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import TypeAdapter
+
 import litellm
 from litellm.constants import REDACTED_BY_LITELLM
 from litellm.integrations.custom_logger import CustomLogger
@@ -29,6 +31,8 @@ from litellm.llms.vertex_ai.common_utils import (
 from litellm.secret_managers.main import str_to_bool
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import StandardCallbackDynamicParams
+
+_REQUEST_BODY: Final = TypeAdapter(Mapping[object, object])
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import (
@@ -66,8 +70,14 @@ def redact_streaming_responses_for_custom_logger(model_call_details: dict, custo
     return {**model_call_details, **redacted_entries}
 
 
-def _redacted_streaming_response_copy(streaming_response):
-    redacted_response: Final = copy.deepcopy(streaming_response)
+def _redacted_streaming_response_copy(streaming_response: object) -> object:
+    hidden_params: Final = getattr(streaming_response, "_hidden_params", None)
+    memo: Final = (
+        {id(hidden_params): {**_REQUEST_BODY.validate_python(hidden_params)}}
+        if isinstance(hidden_params, Mapping)
+        else {}
+    )
+    redacted_response: Final = copy.deepcopy(streaming_response, memo)
     _redact_streaming_response(redacted_response)
     return redacted_response
 
@@ -108,6 +118,7 @@ def _redact_choice_content(choice):
             choice.message.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.message, "thinking_blocks"):
             choice.message.thinking_blocks = None
+        choice.message.provider_specific_fields = None  # rebind-ok: scrub the caller-owned logging copy in place
         _redact_tool_calls(getattr(choice.message, "tool_calls", None))
         _redact_function_call(getattr(choice.message, "function_call", None))
     elif isinstance(choice, litellm.utils.StreamingChoices):
@@ -117,6 +128,7 @@ def _redact_choice_content(choice):
             choice.delta.reasoning_content = REDACTED_BY_LITELLM
         if hasattr(choice.delta, "thinking_blocks"):
             choice.delta.thinking_blocks = None
+        choice.delta.provider_specific_fields = None  # rebind-ok: scrub the caller-owned logging copy in place
         _redact_tool_calls(getattr(choice.delta, "tool_calls", None))
         _redact_function_call(getattr(choice.delta, "function_call", None))
 
@@ -237,6 +249,7 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["message"]["thinking_blocks"] = None
                 if "audio" in choice["message"]:
                     choice["message"]["audio"] = None
+                choice["message"]["provider_specific_fields"] = None
                 _redact_tool_calls_dict(choice["message"])
             elif "delta" in choice and isinstance(choice["delta"], dict):
                 if choice["delta"].get("content") is not None:
@@ -247,6 +260,7 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
                     choice["delta"]["thinking_blocks"] = None
                 if "audio" in choice["delta"]:
                     choice["delta"]["audio"] = None
+                choice["delta"]["provider_specific_fields"] = None
                 _redact_tool_calls_dict(choice["delta"])
             elif choice.get("text") is not None:
                 choice["text"] = redacted_str
@@ -261,6 +275,22 @@ def _redacted_baseline_metadata(metadata: Mapping[str, object]) -> Mapping[str, 
     return {**metadata, "_autorouter_baseline_route": replace(route, request_parameters=None)}
 
 
+def _redacted_proxy_request(request: Mapping[str, object]) -> Mapping[str, object]:
+    raw_body: Final = request.get("body")
+    if not isinstance(raw_body, Mapping):
+        return without_classifier_audit(request)
+    body: Final = _REQUEST_BODY.validate_python(raw_body)
+    return {
+        **without_classifier_audit(request),
+        "body": {
+            **body,
+            **({"messages": [{"role": "user", "content": REDACTED_BY_LITELLM}]} if "messages" in body else {}),
+            **({"prompt": ""} if "prompt" in body else {}),
+            **({"input": ""} if "input" in body else {}),
+        },
+    }
+
+
 def redacted_litellm_params(params: Mapping[str, object]) -> dict[str, object]:
     request: Final = params.get("proxy_server_request")
     return {
@@ -270,7 +300,7 @@ def redacted_litellm_params(params: Mapping[str, object]) -> dict[str, object]:
             for key, value in params.items()
             if key in ("metadata", "litellm_metadata") and isinstance(value, Mapping)
         },
-        **({"proxy_server_request": without_classifier_audit(request)} if isinstance(request, Mapping) else {}),
+        **({"proxy_server_request": _redacted_proxy_request(request)} if isinstance(request, Mapping) else {}),
     }
 
 
@@ -278,7 +308,7 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     """
     Performs the actual redaction on the logging object and result.
 
-    redact_streaming_responses=False skips the in-place redaction of the shared streaming
+    redact_streaming_responses=False skips replacing the shared streaming
     response entries; per-callback redaction hands each opted-out callback its own redacted
     copy via redact_streaming_responses_for_custom_logger instead.
     """
@@ -298,7 +328,10 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     # Redact streaming response
     if redact_streaming_responses and model_call_details.get("stream", False) is True:
         for _streaming_key in ("complete_streaming_response", "async_complete_streaming_response"):
-            _redact_streaming_response(model_call_details.get(_streaming_key))
+            if model_call_details.get(_streaming_key) is not None:
+                model_call_details[_streaming_key] = (  # rebind-ok: isolate the logging copy
+                    _redacted_streaming_response_copy(model_call_details[_streaming_key])
+                )
 
     # Redact result
     if result is not None:

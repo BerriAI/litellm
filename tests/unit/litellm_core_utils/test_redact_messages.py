@@ -6,6 +6,7 @@ but litellm_params["litellm_metadata"] is None.
 """
 
 import asyncio
+import copy
 import importlib
 import json
 import os
@@ -36,11 +37,66 @@ from litellm.responses.main import mock_responses_api_response
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import (
     ModelResponse,
+    ModelResponseStream,
     ResponsesAPIResponse,
     StandardLoggingPayload,
     TextCompletionResponse,
 )
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
+
+
+@pytest.mark.parametrize("as_dict", [False, True])
+def test_redaction_removes_nested_callback_content_without_mutating_originals(as_dict: bool) -> None:
+    secret: Final = "private-callback-content"
+    part: Final = {
+        "role": "assistant",
+        "content": secret,
+        "provider_specific_fields": {
+            "reasoning_content": secret,
+            "thinking_blocks": [{"thinking": secret}],
+            "reasoningContentBlocks": [{"reasoningText": {"text": secret}}],
+            "citations": [{"cited_text": secret}],
+        },
+    }
+    response: Final = ModelResponse(choices=[{"index": 0, "message": part}])
+    original: Final = response.model_dump() if as_dict else response
+    snapshot: Final = copy.deepcopy(original)
+    request: Final = {
+        "url": "http://localhost/v1/chat/completions",
+        "body": {"model": "redaction-model", "messages": [{"role": "user", "content": secret}]},
+    }
+    details: Final = {"litellm_params": {"proxy_server_request": request}}
+
+    redacted: Final = perform_redaction(details, original)
+
+    assert secret not in str(redacted)
+    assert secret not in str(details)
+    assert original == snapshot
+    assert request["body"]["messages"] == [{"role": "user", "content": secret}]
+    assert details["litellm_params"]["proxy_server_request"]["body"]["model"] == "redaction-model"
+
+
+@pytest.mark.parametrize("key", ["complete_streaming_response", "async_complete_streaming_response"])
+def test_streaming_provider_reasoning_is_redacted_only_in_callback_copy(key: str) -> None:
+    response: Final = ModelResponseStream(
+        choices=[
+            litellm.utils.StreamingChoices(
+                delta=litellm.utils.Delta(
+                    content="private-answer",
+                    provider_specific_fields={"thinking_blocks": [{"thinking": "private-reasoning"}]},
+                )
+            )
+        ]
+    )
+    response._hidden_params["opaque"] = MappingProxyType({"transport": "metadata"})
+    details: Final = {"stream": True, key: response}
+    perform_redaction(details, None)
+    assert details[key].choices[0].delta.provider_specific_fields is None
+    assert response.choices[0].delta.provider_specific_fields == {
+        "thinking_blocks": [{"thinking": "private-reasoning"}]
+    }
+    assert response.choices[0].delta.content == "private-answer"
+    assert details[key]._hidden_params["opaque"] is response._hidden_params["opaque"]
 
 
 @pytest.fixture(autouse=True)
@@ -473,8 +529,9 @@ class TestPerformRedaction:
 
         perform_redaction(details, None)
 
-        tool_call = streaming_response.choices[0].delta.tool_calls[0]
+        tool_call = details["complete_streaming_response"].choices[0].delta.tool_calls[0]
         assert tool_call.function.arguments == "redacted-by-litellm"
+        assert streaming_response.choices[0].delta.tool_calls[0].function.arguments == '{"city": "sensitive-city"}'
 
     def test_redacts_tool_call_arguments_in_standard_logging_object(self):
         details = {
@@ -752,9 +809,11 @@ class TestPerformRedaction:
 
         perform_redaction(details, response)
 
-        assert response.choices[0].message.content == "redacted-by-litellm"
-        assert getattr(response, "vertex_ai_grounding_metadata") == []
-        assert "vertex_ai_grounding_metadata" not in response._hidden_params
+        redacted: Final = details["complete_streaming_response"]
+        assert redacted.choices[0].message.content == "redacted-by-litellm"
+        assert getattr(redacted, "vertex_ai_grounding_metadata") == []
+        assert "vertex_ai_grounding_metadata" not in redacted._hidden_params
+        assert response.choices[0].message.content == "sensitive answer"
 
     def test_redacts_vertex_provider_metadata_from_metadata_hidden_params(self):
         """Streaming success_handler copies _hidden_params into metadata before redaction."""
