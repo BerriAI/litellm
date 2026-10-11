@@ -18,11 +18,11 @@ class FileContentStreamingHandler:
         *,
         custom_llm_provider: str,
         file_id: str,
-        data: dict[str, Any],
+        data: dict[str, object],
         should_route: bool,
         original_file_id: str | None,
-        credentials: dict[str, Any] | None,
-    ) -> tuple[str, str, dict[str, Any]]:
+        credentials: dict[str, object] | None,
+    ) -> tuple[str, str, dict[str, object]]:
         """
         Resolve the provider, file ID, and request payload to use for streaming.
 

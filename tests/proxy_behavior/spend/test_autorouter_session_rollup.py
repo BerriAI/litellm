@@ -55,6 +55,7 @@ async def _turn(
     baseline: "str | None" = None,
     estimated: bool = True,
     user_id: str = "",
+    token_counts_recorded: bool = True,
 ) -> None:
     touched: Final = 1 if (hit or ttl is not None or not covered) else 0
     await db.execute_raw(
@@ -79,6 +80,7 @@ async def _turn(
         spend if estimated else 0.0,
         saved if estimated else 0.0,
         user_id,
+        int(token_counts_recorded),
     )
 
 
@@ -646,9 +648,9 @@ async def test_a_cross_midnight_session_splits_its_money_by_request_day(db):
     key = f"k-{uuid.uuid4()}"
     router = f"auto-{uuid.uuid4()}"
     midnight = datetime(2026, 9, 2)
-    await _turn(db, key, "A", midnight - timedelta(minutes=10), router=router, spend=1.0, saved=7.0, user_id="u1")
-    await _turn(db, key, "A", midnight + timedelta(minutes=10), router=router, spend=1.0, saved=3.0, user_id="u1")
-    await _turn(db, key, "B", midnight + timedelta(days=1), router=router, spend=1.0, saved=11.0, user_id="u1")
+    await _turn(db, key, "A", midnight - timedelta(minutes=10), router=router, tokens=100, spend=1.0, saved=7.0, user_id="u1")
+    await _turn(db, key, "A", midnight + timedelta(minutes=10), router=router, tokens=200, spend=1.0, saved=3.0, user_id="u1")
+    await _turn(db, key, "B", midnight + timedelta(days=1), router=router, tokens=300, spend=1.0, saved=11.0, user_id="u1")
 
     assert (await _row(db, key, router=router))["saved_spend"] == 21.0
     days = await db.query_raw(
@@ -663,6 +665,7 @@ async def test_a_cross_midnight_session_splits_its_money_by_request_day(db):
         (selected,) = await _benchmark_rows(db, midnight, midnight + timedelta(days=1), key, user_id)
         assert (selected["sessions"], selected["session_turns"]) == (1, 3)
         assert (selected["turns"], selected["spend"], selected["saved_spend"]) == (1, 1.0, 3.0)
+        assert (selected["day_total_tokens"], selected["total_tokens"]) == (200, 600)
 
 
 async def test_a_router_type_change_within_a_day_keeps_each_types_money_apart(db):
@@ -704,6 +707,7 @@ async def test_a_sessionless_turn_writes_its_router_day_row_and_no_session_row(d
                 model="A",
                 turn_at=T0 + timedelta(seconds=offset),
                 total_tokens=10,
+                token_counts_recorded=True,
                 spend=1.0,
                 saved_spend=2.0,
                 classifier_cost=0.1,
@@ -720,9 +724,46 @@ async def test_a_sessionless_turn_writes_its_router_day_row_and_no_session_row(d
 
     (day,) = await _days(db, key, router=router)
     assert (day["turns"], day["spend"], day["saved_spend"], day["classifier_cost"]) == (2, 2.0, 4.0, 0.2)
+    assert day["day_total_tokens"] == 20
     assert (day["sessions"], day["session_turns"]) == (0, 0)
     for table in ("LiteLLM_AutoRouterSession", "LiteLLM_AutoRouterUserSession"):
         assert await db.query_raw(f'SELECT 1 FROM "{table}" WHERE router_name = $1', router) == []
+
+
+@pytest.mark.parametrize("historical", [True, False])
+async def test_daily_token_coverage_stays_unknown_with_old_writers(db: Prisma, historical: bool) -> None:
+    key: Final = f"k-{uuid.uuid4()}"
+    router: Final = f"auto-{uuid.uuid4()}"
+    if historical:
+        await db.execute_raw(
+            'INSERT INTO "LiteLLM_AutoRouterDailySpend" '
+            '(date, api_key, user_id, router_name, router_type, turns, spend) '
+            "VALUES ($1, $2, 'u1', $3, 'complexity', 1, 1)",
+            T0.date().isoformat(), key, router,
+        )
+    await _turn(db, key, "A", T0, router=router, tokens=123, spend=1.0, user_id="u1")
+    if not historical:
+        await db.execute_raw(
+            'UPDATE "LiteLLM_AutoRouterDailySpend" SET turns = turns + 1, spend = spend + 1 '
+            'WHERE api_key = $1 AND router_name = $2', key, router,
+        )
+    for user_id in (None, "u1"):
+        (day,) = await _days(db, key, user_id, router)
+        assert (day["turns"], day["spend"], day["day_total_tokens"]) == (2, 2.0, None)
+
+
+@pytest.mark.parametrize("missing_first", [True, False])
+async def test_missing_usage_never_completes_daily_token_coverage(db: Prisma, missing_first: bool) -> None:
+    key: Final = f"k-{uuid.uuid4()}"
+    router: Final = f"auto-{uuid.uuid4()}"
+    for offset, recorded in enumerate((not missing_first, missing_first)):
+        await _turn(
+            db, key, "A", T0 + timedelta(seconds=offset), router=router,
+            tokens=100 if recorded else 0, spend=1.0, user_id="u1", token_counts_recorded=recorded,
+        )
+    for user_id in (None, "u1"):
+        (day,) = await _days(db, key, user_id, router)
+        assert (day["turns"], day["spend"], day["day_total_tokens"]) == (2, 2.0, None)
 
 
 async def test_router_day_money_reconciles_with_the_overall_daily_total_including_sessionless_requests(db):

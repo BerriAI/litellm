@@ -29,7 +29,7 @@ async def test_gemini_pass_through_endpoint():
         "type": "http",
         "method": "POST",
         "path": "/gemini/v1beta/models/gemini-2.5-flash:countTokens",
-        "query_string": b"key=sk-1234",
+        "query_string": b"key=sk-9876",
         "headers": [
             (b"content-type", b"application/json"),
         ],
@@ -44,8 +44,7 @@ async def test_gemini_pass_through_endpoint():
     )
 
     await gemini_proxy_route(
-        endpoint="v1beta/models/gemini-2.5-flash:countTokens?key=sk-1234",
+        endpoint="v1beta/models/gemini-2.5-flash:countTokens?key=sk-9876",
         request=request,
         fastapi_response=Response(),
     )
-

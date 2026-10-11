@@ -249,7 +249,7 @@ def isolate_litellm_state():
         original_state["model_fallbacks"] = litellm.model_fallbacks
 
     # Store transport/network globals — many tests set these without restoring,
-    # causing subsequent tests to get None from _create_async_transport()
+    # causing subsequent tests to get None from create_async_transport()
     for _attr in ("disable_aiohttp_transport", "force_ipv4"):
         if hasattr(litellm, _attr):
             original_state[_attr] = getattr(litellm, _attr)

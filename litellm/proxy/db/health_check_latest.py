@@ -14,10 +14,11 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Final
 
-from pydantic import BaseModel, ConfigDict, JsonValue, TypeAdapter, field_validator
+from pydantic import ConfigDict, JsonValue, TypeAdapter, field_validator
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.db.db_span import db_span
+from litellm.types.llms.base import LiteLLMBaseModel
 
 if TYPE_CHECKING:
     from litellm.proxy.utils import PrismaClient
@@ -44,7 +45,7 @@ ORDER BY "model_id" ASC, "model_name" ASC, "checked_at" DESC
 """
 
 
-class LatestHealthCheckRow(BaseModel):
+class LatestHealthCheckRow(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, protected_namespaces=())
 
     health_check_id: str

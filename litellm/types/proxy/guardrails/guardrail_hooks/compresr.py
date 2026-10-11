@@ -1,11 +1,13 @@
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import Field
+
+from litellm.types.llms.base import LiteLLMBaseModel
 
 from .base import GuardrailConfigModel
 
 
-class CompresrGuardrailOptionalParams(BaseModel):
+class CompresrGuardrailOptionalParams(LiteLLMBaseModel):
     """Optional tuning knobs for the Compresr guardrail."""
 
     target_compression_ratio: float | None = Field(

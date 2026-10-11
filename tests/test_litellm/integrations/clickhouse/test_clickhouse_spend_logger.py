@@ -163,6 +163,7 @@ def test_success_row_mapping():
     assert row["request_id"] == "chatcmpl-abc123"
     assert row["response_id"] == "chatcmpl-abc123"
     assert row["litellm_call_id"] == "gateway-call"
+    assert row["provider_request_id"] == ""
     assert row["spend"] == 0.00042
     assert (row["prompt_tokens"], row["completion_tokens"], row["total_tokens"]) == (20, 10, 30)
     assert (row["cache_read_tokens"], row["cache_write_tokens"]) == (5, 7)
@@ -184,6 +185,18 @@ def test_success_row_mapping():
     assert row["request_tags"] == ["prod", "agent"]
     assert json.loads(row["messages"]) == [{"role": "user", "content": "hi"}]
     assert json.loads(row["metadata"])["user_api_key_alias"] == "my-key"
+
+
+@pytest.mark.parametrize("header_source", ("response_headers", "additional_headers"))
+def test_provider_request_id_stays_separate_from_message_and_gateway_ids(header_source: str) -> None:
+    headers: Final = {"request-id": "req_native"}
+    hidden: Final = {"additional_headers": headers} if header_source == "additional_headers" else {}
+    kwargs: Final = {"response_cost": 0.00042, "response_headers": headers if header_source == "response_headers" else None}
+    payload: Final = cast(StandardLoggingPayload, _payload(id="msg_native", hidden_params=hidden))
+    row: Final = spend_log_row_from_payload(payload, kwargs)
+    assert (row["provider_request_id"], row["response_id"], row["litellm_call_id"]) == (
+        "req_native", "msg_native", "gateway-call"
+    )
 
 
 @pytest.mark.parametrize("status", ("success", "failure"))
