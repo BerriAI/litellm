@@ -14163,10 +14163,10 @@ export interface paths {
          * Get Public Whats New
          * @description Return the launches the dashboard Home page shows under What's new.
          *
-         *     Resolved once per process: fetched from ``litellm.whats_new_url`` (override with ``LITELLM_WHATS_NEW_URL``)
-         *     on the first request, falling back to the list bundled with the package on any failure, so an airgapped
-         *     proxy serves the bundled list without retrying. Set ``LITELLM_LOCAL_WHATS_NEW=True`` to skip the fetch.
-         *     A restart picks up a newly published list.
+         *     Serves the list bundled with this release. Set ``LITELLM_WHATS_NEW_URL`` to fetch a remote list instead,
+         *     resolved once per process on the first request and falling back to the bundled list on any failure, so an
+         *     airgapped proxy serves the bundled list without retrying. ``LITELLM_LOCAL_WHATS_NEW=True`` forces the
+         *     bundled list even when a URL is set. A restart picks up a newly published list.
          */
         get: operations["get_public_whats_new_public_whats_new_get"];
         put?: never;
