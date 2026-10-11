@@ -30,6 +30,7 @@ from litellm.caching.dual_cache import DualCache
 from litellm.constants import SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY, SESSION_ID_GENERATED_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger, Span
 from litellm.responses.utils import ResponsesAPIRequestUtils
+from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import CallTypes
 
@@ -340,12 +341,12 @@ class DeploymentAffinityCheck(CustomLogger):
 
     @staticmethod
     def _deployment_model_id(
-        deployment: dict,  # mutable-ok: deployment payloads are dicts by router convention; read-only here
+        deployment: dict[str, object],  # mutable-ok: deployment payloads are dicts by router convention; read-only here
     ) -> str | None:
         model_info: Final = deployment.get("model_info")
         if not isinstance(model_info, dict):
             return None
-        model_id: Final = model_info.get("id")
+        model_id: Final[object | None] = model_info.get("id")
         return str(model_id) if model_id is not None else None
 
     async def _deployment_has_capacity(self, model_id: str) -> bool:
@@ -356,26 +357,24 @@ class DeploymentAffinityCheck(CustomLogger):
         unreadable limit value counts as capacity, so this never blocks routing.
         """
         try:
-            limit: Final = await self.cache.async_get_cache(key=self._max_parallel_requests_cache_key(model_id))
+            limit: Final[object | None] = await self.cache.async_get_cache(
+                key=self._max_parallel_requests_cache_key(model_id)
+            )
         except Exception as e:  # noqa: BLE001  # affinity is best-effort; never break routing
             verbose_router_logger.debug(
                 "DeploymentAffinityCheck: failed to read max_parallel_requests limit. error=%s",
                 e,
             )
             return True
-        if limit is None:
+        if not isinstance(limit, MaxParallelRequestsLimit):
             return True
-        in_flight: Final = getattr(limit, "in_flight", None)
-        max_parallel_requests: Final = getattr(limit, "max_parallel_requests", None)
-        if not isinstance(in_flight, int) or not isinstance(max_parallel_requests, int):
-            return True
-        return in_flight < max_parallel_requests
+        return limit.in_flight < limit.max_parallel_requests
 
     async def _yield_session_pin_if_saturated(
         self,
-        session_deployment: dict,  # mutable-ok: read-only router dicts
-        healthy_deployments: Sequence[dict],  # mutable-ok: read-only router dicts
-    ) -> Sequence[dict] | None:  # mutable-ok: read-only router dicts
+        session_deployment: dict[str, object],  # mutable-ok: read-only router dicts
+        healthy_deployments: Sequence[dict[str, object]],  # mutable-ok: read-only router dicts
+    ) -> list[dict[str, object]] | None:  # mutable-ok: read-only router dicts
         """Idle deployments when the pinned one is saturated, else None.
 
         Opt-in via session_affinity_yield_on_saturated_deployment. A turn yields
@@ -390,13 +389,17 @@ class DeploymentAffinityCheck(CustomLogger):
         pinned_model_id: Final = self._deployment_model_id(session_deployment)
         if pinned_model_id is None or await self._deployment_has_capacity(pinned_model_id):
             return None
-        idle_deployments: Final = []
-        for deployment in healthy_deployments:
-            deployment_model_id: Final = self._deployment_model_id(deployment)
-            if deployment_model_id is None or deployment_model_id == pinned_model_id:
-                continue
-            if await self._deployment_has_capacity(deployment_model_id):
-                idle_deployments.append(deployment)
+        candidates: Final = [
+            (deployment, model_id)
+            for deployment in healthy_deployments
+            if (model_id := self._deployment_model_id(deployment)) is not None
+            and model_id != pinned_model_id
+        ]
+        idle_deployments: Final = [
+            deployment
+            for deployment, model_id in candidates
+            if await self._deployment_has_capacity(model_id)
+        ]
         if not idle_deployments:
             return None
         verbose_router_logger.debug(
