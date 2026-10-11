@@ -319,6 +319,13 @@ class CustomStreamWrapper:
         call even though tokens were served. Assemble the response from the
         chunks received so far and submit the same logging once, mirroring how
         the proxy bills a partial stream on client disconnect.
+
+        Only reachable through ``close_stream()`` / the context manager. It is
+        deliberately not wired into ``__del__``: a finalizer runs at an
+        arbitrary point on an arbitrary thread, possibly during interpreter
+        shutdown or after the event loop it needs is gone, so submitting
+        logging from there is neither reliable nor testable. A caller that
+        abandons a stream has to say so.
         """
         if self._abandonment_logged or self.sent_last_chunk:
             return
@@ -371,6 +378,7 @@ class CustomStreamWrapper:
         all miss the call). ``close_stream()`` flushes that log from the chunks
         received so far and releases the underlying provider stream; safe to
         call after the stream has been fully consumed (it is a no-op then).
+        This is the only entry point — there is no GC-time fallback.
 
         Deliberately *not* named ``close``: ``Router.stream_with_fallbacks``
         duck-types on ``hasattr(model_response, "close")`` and calls it from a
@@ -459,10 +467,6 @@ class CustomStreamWrapper:
         still-active call's context within that same Task if this fires late.
         """
         self._restore_consumer_correlation_context(guarded=True)
-        try:
-            self._flush_abandoned_stream_logging()
-        except Exception:  # noqa: BLE001  # __del__ must never raise; logging here is best-effort
-            verbose_logger.debug("abandoned-stream logging failed in __del__", exc_info=True)
 
     async def aclose(self):
         # Emit the abandoned-stream log before closing the provider stream:
