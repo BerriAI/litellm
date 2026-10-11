@@ -19,14 +19,20 @@ def is_ai_decide_model(model: str) -> bool:
     return model == DATABRICKS_AI_DECIDE_MODEL
 
 
+def validate_serving_endpoint_name(name: str) -> str:
+    if _SERVING_ENDPOINT_NAME.fullmatch(name) is None:
+        raise ValueError(
+            "Databricks decisions model must be 'ai_decide' (the ai_decide AI Function) or a bare serving endpoint "
+            "name (letters, digits, '-', '_' and '.', with no '/', '?', '#', spaces, or a leading '.'), e.g. "
+            "databricks-openjev-qwen35-4b"
+        )
+    return name
+
+
 def validate_databricks_decisions_model(model: str) -> str:
-    if is_ai_decide_model(model) or _SERVING_ENDPOINT_NAME.fullmatch(model) is not None:
+    if is_ai_decide_model(model):
         return model
-    raise ValueError(
-        f"Databricks decisions model must be {DATABRICKS_AI_DECIDE_MODEL!r} (the ai_decide AI Function) or a bare "
-        "serving endpoint name (letters, digits, '-', '_' and '.', with no '/', '?', '#', spaces, or a leading '.'), "
-        "e.g. databricks-openjev-qwen35-4b"
-    )
+    return validate_serving_endpoint_name(model)
 
 
 def databricks_workspace_host(api_base: str) -> str:

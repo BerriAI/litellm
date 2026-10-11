@@ -22,11 +22,10 @@ const defaultClassifierModel = (provider: OssClassifierProvider | undefined): st
   fixedClassifierModels(provider)?.[0] ?? (provider === "databricks" ? DATABRICKS_AI_DECIDE_MODEL : "jev-latest");
 
 const isSupportedClassifierModel = (provider: OssClassifierProvider | undefined, model: string): boolean => {
-  if (provider === "databricks") return SERVING_ENDPOINT_NAME.test(model);
+  if (provider === "databricks") return model === DATABRICKS_AI_DECIDE_MODEL || SERVING_ENDPOINT_NAME.test(model);
   const fixed = fixedClassifierModels(provider);
   return fixed === undefined || fixed.some((candidate) => candidate === model);
 };
-
 const jevClassifierConfigFields = {
   provider: z.preprocess(
     (value) => (value === "typesafe" ? "jev" : value),

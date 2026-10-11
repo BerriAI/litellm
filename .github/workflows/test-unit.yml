@@ -139,6 +139,7 @@ jobs:
             test-path: |-
               tests/unit/decisions
               tests/unit/litellm_core_utils
+              tests/unit/systemone
             python-version: "3.12"
             workers: 4
             reruns: 0
@@ -343,6 +344,7 @@ jobs:
               tests/unit/llms/snowflake
               tests/unit/llms/soniox
               tests/unit/llms/stability
+              tests/unit/llms/strands_decider
               tests/unit/llms/tavily
               tests/unit/llms/tencent
               tests/unit/llms/tinyfish

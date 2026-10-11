@@ -136,7 +136,6 @@ class HttpJevClassifierClient:
                 return DATABRICKS_DECISIONS_CONFIG.classifier_response(body, requested_model)
             case "typesafe" | "bespoke":
                 return body
-
     def _log_response(
         self,
         request: JevSystemOneRequest,
