@@ -35,6 +35,7 @@ from litellm.litellm_core_utils.redact_messages import _get_turn_off_message_log
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.proxy._types import AddTeamCallback, ProxyException, TeamCallbackMetadata, UserAPIKeyAuth
+from litellm.types.litellm_params import AGENTIC_LOOP_KWARG_NAMES
 from litellm.proxy.litellm_pre_call_utils import (
     KeyAndTeamLoggingSettings,
     LiteLLMProxyRequestSetup,
@@ -1276,13 +1277,7 @@ async def test_key_metadata_enable_prompt_caching_promoted_to_request_root(key_v
         "service_callback",
         "logger_fn",
         "litellm_disabled_callbacks",
-        "_agentic_loop_depth",
-        "_agentic_loop_fingerprints",
-        "_code_interpreter_interception_active",
-        "_code_interpreter_interception_converted_stream",
-        "_code_interpreter_interception_sandbox_key",
-        "_headroom_interception_converted_stream",
-        "max_agentic_loops",
+        *AGENTIC_LOOP_KWARG_NAMES,
     ],
 )
 async def test_add_litellm_data_to_request_strips_callback_control_fields(
@@ -1313,13 +1308,18 @@ async def test_add_litellm_data_to_request_strips_callback_control_fields(
         "logger_fn": "module.func",
         "_agentic_loop_depth": 5,
         "_agentic_loop_fingerprints": ["forged"],
+        "_agentic_loop_api_surface": "responses",
         "_code_interpreter_interception_active": True,
         "_code_interpreter_interception_converted_stream": True,
         "_code_interpreter_interception_sandbox_key": "forged-key",
+        "_code_interpreter_interception_session_scoped": True,
+        "_websearch_interception_emit_native_blocks": True,
+        "_websearch_interception_converted_stream": True,
+        "_websearch_interception_stream_options": {"include_usage": True},
         "_headroom_interception_converted_stream": True,
         "max_agentic_loops": 9999,
     }
-    sample_value = sample_values[control_field]
+    sample_value: Final = sample_values.get(control_field, "forged")
 
     updated = await add_litellm_data_to_request(
         data={
@@ -2016,6 +2016,8 @@ async def test_add_litellm_data_to_request_user_spend_and_budget():
         api_key="hashed-key",
         metadata={},
         team_metadata={},
+        team_id="team-1",
+        team_member_model_max_budget={"gpt-3.5-turbo": {"max_budget": 15.0, "budget_duration": "1d"}},
         user_spend=150.0,
         user_max_budget=500.0,
     )
@@ -2032,6 +2034,9 @@ async def test_add_litellm_data_to_request_user_spend_and_budget():
     metadata = updated_data.get("metadata", {})
     assert metadata["user_api_key_user_spend"] == 150.0
     assert metadata["user_api_key_user_max_budget"] == 500.0
+    assert metadata["user_api_key_team_member_model_max_budget"] == {
+        "gpt-3.5-turbo": {"max_budget": 15.0, "budget_duration": "1d"}
+    }
 
 
 @pytest.mark.asyncio

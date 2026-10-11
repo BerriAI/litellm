@@ -80,6 +80,7 @@ LOCAL_CATALOGS: Final = MappingProxyType(
             "LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS",
             "LITELLM_LOCAL_AUTOROUTER_PRESETS",
             "LITELLM_LOCAL_POLICY_TEMPLATES",
+            "LITELLM_LOCAL_WHATS_NEW",
         )
     }
 )
@@ -232,6 +233,10 @@ def canary_rig(
             **{name: "127.0.0.1,localhost" for name in ("NO_PROXY", "no_proxy")},
             "OPENAI_BASE_URL": provider.url + "/v1",
             "OPENAI_API_BASE": provider.url + "/v1",
+            "ANTHROPIC_API_BASE": provider.url,
+            "ANTHROPIC_BASE_URL": provider.url,
+            "ANTHROPIC_API_KEY": b1.value,
+            "ANTHROPIC_AUTH_TOKEN": "",
             "GENERIC_LOGGER_ENDPOINT": sink.url,
             "GENERIC_LOGGER_HEADERS": f"Authorization=Bearer {token}",
             **(environment or {}),

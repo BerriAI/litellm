@@ -502,6 +502,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[MatrixRig]:
                     "ANTHROPIC_API_KEY": "synthetic-anthropic-key",
                     "GEMINI_API_BASE": provider.url,
                     "GEMINI_API_KEY": "synthetic-gemini-key",
+                    "LITELLM_BUILTIN_PASS_THROUGH_ROUTES_FIRST": "true",
                 },
                 "general_settings": {
                     **config_base["general_settings"],
@@ -1575,6 +1576,7 @@ def test_eh_provider_passthrough_routes_classify_effective_streaming(
         "POST",
         route,
         request_body,
+        key=key,
         headers=headers,
     )
     assert response.status_code == 200 and marker in response.text, response.text
