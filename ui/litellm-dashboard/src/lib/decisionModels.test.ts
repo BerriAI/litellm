@@ -17,7 +17,8 @@ const COST_MAP = {
 };
 
 describe("isDecisionMode", () => {
-  it("is true only for the evaluation mode", () => {
+  it("is true for both the decisions and evaluation modes", () => {
+    expect(isDecisionMode("decisions")).toBe(true);
     expect(isDecisionMode("evaluation")).toBe(true);
     expect(isDecisionMode("chat")).toBe(false);
     expect(isDecisionMode(null)).toBe(false);

@@ -3,6 +3,7 @@ import uuid
 from typing import Final
 
 import httpx
+import pytest
 from integration._support.client import Gateway, object_value, string_value
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse
@@ -93,7 +94,7 @@ def _probes_sent_to(gateway: Gateway, handle: ScenarioHandle) -> list[tuple[str,
     ]
 
 
-def test_evaluation_mode_health_check_resolves_the_mode_from_the_cost_map_and_sends_the_default_probe(
+def test_decisions_mode_health_check_resolves_the_mode_from_the_cost_map_and_sends_the_default_probe(
     gateway: Gateway,
 ) -> None:
     with gateway.scenario() as scenario:
@@ -114,7 +115,8 @@ def test_evaluation_mode_health_check_resolves_the_mode_from_the_cost_map_and_se
         ]
 
 
-def test_evaluation_mode_health_check_sends_the_configured_state_and_questions(gateway: Gateway) -> None:
+@pytest.mark.parametrize("mode", ("decisions", "evaluation"), ids=("decisions", "legacy-evaluation"))
+def test_decisions_mode_health_check_sends_the_configured_state_and_questions(gateway: Gateway, mode: str) -> None:
     with gateway.scenario() as scenario:
         handle: Final = register_scenario(f"health-decisions-{uuid.uuid4().hex[:12]}", _CONFIGURED_PROBE_REPLY)
         scenario.cleanups.callback(delete_scenario, handle)
@@ -122,7 +124,7 @@ def test_evaluation_mode_health_check_sends_the_configured_state_and_questions(g
             model="typesafe/jev-custom",
             api_base=handle.api_base(),
             model_info={
-                "mode": "evaluation",
+                "mode": mode,
                 "health_check_params": {"state": _CONFIGURED_STATE, "questions": _CONFIGURED_QUESTIONS},
             },
         )
@@ -136,7 +138,7 @@ def test_evaluation_mode_health_check_sends_the_configured_state_and_questions(g
         ]
 
 
-def test_evaluation_mode_health_check_of_the_self_hosted_strands_model_resolves_the_mode_from_the_cost_map(
+def test_decisions_mode_health_check_of_the_self_hosted_strands_model_resolves_the_mode_from_the_cost_map(
     gateway: Gateway,
 ) -> None:
     with gateway.scenario() as scenario:

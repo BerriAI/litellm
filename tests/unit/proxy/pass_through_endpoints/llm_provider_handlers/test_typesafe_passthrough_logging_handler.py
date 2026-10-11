@@ -140,6 +140,7 @@ def test_success_handler_dispatches_to_typesafe_handler():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("decisions", "evaluation"), ids=("decisions", "legacy-evaluation"))
 @pytest.mark.parametrize("guardrail_cost", [0.0, 0.25])
 @pytest.mark.parametrize("metadata_slot", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize("provider,requested,routing_model", [
@@ -149,7 +150,7 @@ def test_success_handler_dispatches_to_typesafe_handler():
 ])
 async def test_oss_gateway_accounts_for_checkpoint_usage_and_registered_cost(
     monkeypatch: pytest.MonkeyPatch, routing_model: str | None, metadata_slot: str, guardrail_cost: float,
-    provider: str, requested: str
+    provider: str, requested: str, mode: str
 ) -> None:
     checkpoint: Final = routing_model or requested
     model: Final = f"{provider}/{checkpoint}"
@@ -157,7 +158,7 @@ async def test_oss_gateway_accounts_for_checkpoint_usage_and_registered_cost(
     output_rate: Final = 0.005
     monkeypatch.setitem(litellm.model_cost, model, {
         "input_cost_per_token": input_rate, "output_cost_per_token": output_rate,
-        "litellm_provider": provider, "mode": "evaluation",
+        "litellm_provider": provider, "mode": mode,
     })
     start: Final = datetime.now()
     logging_obj: Final = Logging(
