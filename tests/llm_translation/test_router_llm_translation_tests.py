@@ -4,13 +4,9 @@ Uses litellm.Router, ensures router.completion and router.acompletion pass BaseL
 
 import asyncio
 import os
-import sys
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from base_llm_unit_tests import BaseLLMChatTest
@@ -44,16 +40,6 @@ class TestRouterLLMTranslation(BaseLLMChatTest):
 
     def get_base_completion_call_args(self) -> dict:
         return {"model": "gpt-4o-mini"}
-
-    def test_tool_call_no_arguments(self, tool_call_no_arguments):
-        """Test that tool calls with no arguments is translated correctly. Relevant issue: https://github.com/BerriAI/litellm/issues/6833"""
-        pass
-
-    def test_prompt_caching(self):
-        """
-        Works locally but CI/CD is failing this test. Temporary skip to push out a new release.
-        """
-        pass
 
 
 def test_router_azure_acompletion():

@@ -1,10 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { prepareModelAddRequest } from "./handle_add_model_submit";
 
-vi.mock("../molecules/notifications_manager", () => ({
-  default: {
-    fromBackend: vi.fn(),
-  },
+vi.mock("../networking", () => ({
+  modelCreateCall: vi.fn(),
 }));
 
 describe("prepareModelAddRequest", () => {
@@ -56,6 +54,32 @@ describe("prepareModelAddRequest", () => {
     expect(deployment.litellmParamsObj.custom_llm_provider).toBe("petals");
   });
 
+  it("sends the backend's own slug for a provider whose key is spelled differently in provider_map", async () => {
+    const formValues = {
+      model_mappings: [{ public_name: "Composer", litellm_model: "cursor/composer-1" }],
+      model_name: "cursor/composer-1",
+      custom_llm_provider: "CURSOR",
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments![0].litellmParamsObj.custom_llm_provider).toBe("cursor");
+  });
+
+  it("builds the wildcard model from the backend slug, not the raw dropdown key", async () => {
+    const formValues = {
+      model: ["all-wildcard"],
+      custom_llm_provider: "CURSOR",
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments).toHaveLength(1);
+    const [deployment] = deployments!;
+    expect(deployment.modelName).toBe("cursor/*");
+    expect(deployment.litellmParamsObj.model).toBe("cursor/*");
+  });
+
   it("ignores litellm_credential_name inside LiteLLM Params JSON", async () => {
     const formValues = {
       model_mappings: [
@@ -78,5 +102,62 @@ describe("prepareModelAddRequest", () => {
     const [deployment] = deployments!;
     expect(deployment.litellmParamsObj.litellm_credential_name).toBe("selected-credential");
     expect(deployment.litellmParamsObj.timeout).toBe(5);
+  });
+
+  it("keeps litellm_credential_name from LiteLLM Params JSON when no credential is selected", async () => {
+    const formValues = {
+      model_mappings: [
+        {
+          public_name: "Public Model",
+          litellm_model: "litellm/public",
+        },
+      ],
+      model_name: "custom-model-name",
+      litellm_extra_params: JSON.stringify({
+        litellm_credential_name: "from-json",
+        timeout: 5,
+      }),
+      litellm_credential_name: null,
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments).toHaveLength(1);
+    const [deployment] = deployments!;
+    expect(deployment.litellmParamsObj.litellm_credential_name).toBe("from-json");
+    expect(deployment.litellmParamsObj.timeout).toBe(5);
+  });
+
+  it("saves the selected mode under model_info", async () => {
+    const formValues = {
+      model_mappings: [{ public_name: "Jev", litellm_model: "typesafe/jev-latest" }],
+      mode: "evaluation",
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments).toHaveLength(1);
+    const [deployment] = deployments!;
+    expect(deployment.modelInfoObj.mode).toBe("evaluation");
+    expect(deployment.litellmParamsObj).not.toHaveProperty("mode");
+  });
+
+  it.each([
+    ["OpenAI", "openai/*"],
+    ["Azure_AI_Studio", "azure_ai/*"],
+    ["Petals", "petals/*"],
+  ])("composes wildcard names for the all-model selection", async (custom_llm_provider, wildcardModel) => {
+    const formValues = {
+      model_mappings: [],
+      model: "all-wildcard",
+      custom_llm_provider,
+    };
+
+    const deployments = await prepareModelAddRequest({ ...formValues }, "token", null);
+
+    expect(deployments).toHaveLength(1);
+    const [deployment] = deployments!;
+    expect(deployment.modelName).toBe(wildcardModel);
+    expect(deployment.litellmParamsObj.model).toBe(wildcardModel);
   });
 });

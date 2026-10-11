@@ -1,9 +1,8 @@
-from typing import List, Optional
-
-from pydantic import BaseModel, Field
+from pydantic import Field
 
 from litellm.models.budget import LiteLLM_BudgetTableFull
 from litellm.models.end_user import LiteLLM_EndUserTable
+from litellm.types.llms.base import LiteLLMBaseModel
 
 
 class CustomerResponse(LiteLLM_EndUserTable):
@@ -14,36 +13,17 @@ class CustomerResponse(LiteLLM_EndUserTable):
     the narrow write-allowlist shape LiteLLM_EndUserTable carries for internal use.
     """
 
-    litellm_budget_table: Optional[LiteLLM_BudgetTableFull] = None  # pyright: ignore
+    litellm_budget_table: LiteLLM_BudgetTableFull | None = None  # pyright: ignore
 
 
-class CustomerAliasesResponse(BaseModel):
-    """Paginated, id-only customer listing used by UI filter dropdowns.
-
-    Deliberately excludes budget/object-permission relations so a proxy with a
-    large LiteLLM_EndUserTable can back a search-as-you-type control without
-    materializing every row (see /customer/list for the full objects).
-
-    Reports ``has_more`` rather than a total count on purpose: a total requires
-    COUNT(*) over the whole match set on every keystroke, which is the exact
-    cost this endpoint exists to avoid. Fetching one row beyond the page is
-    enough to drive an infinite-scroll dropdown.
-    """
-
-    aliases: List[str]
-    current_page: int
-    size: int
-    has_more: bool
+class BlockUsersResponse(LiteLLMBaseModel):
+    blocked_users: list[LiteLLM_EndUserTable]
 
 
-class BlockUsersResponse(BaseModel):
-    blocked_users: List[LiteLLM_EndUserTable]
+class UnblockUsersResponse(LiteLLMBaseModel):
+    blocked_users: list[str] = Field(description="User IDs that remain blocked after this unblock call")
 
 
-class UnblockUsersResponse(BaseModel):
-    blocked_users: List[str] = Field(description="User IDs that remain blocked after this unblock call")
-
-
-class DeleteCustomersResponse(BaseModel):
+class DeleteCustomersResponse(LiteLLMBaseModel):
     deleted_customers: int
     message: str

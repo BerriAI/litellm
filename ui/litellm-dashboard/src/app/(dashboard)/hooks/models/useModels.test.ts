@@ -1,19 +1,24 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { renderHook, waitFor } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import React, { ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   isAutoRouterDeployment,
   selectAutoRouterModelGroups,
+  selectPlainChatModelGroups,
   useAllProxyModels,
   useAutoRouterModelGroups,
+  useAutoRouters,
   useInfiniteModelInfo,
   useModelHub,
+  useModelAccessGroupNames,
   useModelsInfo,
+  usePlainChatModelGroups,
   useSelectedTeamModels,
   useUserModels,
   type AllProxyModelsResponse,
   type AutoRouterCandidateDeployment,
+  type AutoRouterDeployment,
   type PaginatedModelInfoResponse,
   type ProxyModel,
 } from "./useModels";
@@ -113,6 +118,12 @@ describe("useModelsInfo", () => {
       undefined,
       undefined,
       undefined,
+      // exclude_auto_routers defaults off: only the Models + Endpoints table opts in, so
+      // every other consumer of this hook keeps seeing auto-routers.
+      false,
+      undefined,
+      undefined,
+      false,
     );
     expect(modelInfoCall).toHaveBeenCalledTimes(1);
   });
@@ -137,6 +148,12 @@ describe("useModelsInfo", () => {
       undefined,
       undefined,
       undefined,
+      // exclude_auto_routers defaults off: only the Models + Endpoints table opts in, so
+      // every other consumer of this hook keeps seeing auto-routers.
+      false,
+      undefined,
+      undefined,
+      false,
     );
   });
 
@@ -546,6 +563,127 @@ describe("useUserModels", () => {
 
     expect(result.current.isFetched).toBe(false);
     expect(modelAvailableCall).not.toHaveBeenCalled();
+  });
+});
+
+describe("useModelAccessGroupNames", () => {
+  let queryClient: QueryClient;
+
+  beforeEach(() => {
+    queryClient = new QueryClient({
+      defaultOptions: {
+        queries: {
+          retry: false,
+        },
+      },
+    });
+
+    vi.clearAllMocks();
+    mockUseAuthorized.mockReturnValue({
+      accessToken: "test-access-token",
+      userId: "test-user-id",
+      userRole: "Admin",
+      token: "test-token",
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    });
+  });
+
+  const wrapper = ({ children }: { children: ReactNode }) =>
+    React.createElement(QueryClientProvider, { client: queryClient }, children);
+
+  it("fetches and returns the caller's model access group names", async () => {
+    vi.mocked(modelAvailableCall).mockResolvedValue({
+      data: [
+        { id: "repro-access-group", object: "model", created: 0, owned_by: "litellm" },
+        { id: "another-access-group", object: "model", created: 0, owned_by: "litellm" },
+      ],
+    });
+
+    const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current).toEqual(new Set(["repro-access-group", "another-access-group"]));
+    });
+
+    expect(modelAvailableCall).toHaveBeenCalledWith(
+      "test-access-token",
+      "test-user-id",
+      "Admin",
+      false,
+      null,
+      true,
+      true,
+    );
+  });
+
+  it("returns undefined while the access-group lookup is pending", () => {
+    vi.mocked(modelAvailableCall).mockReturnValue(new Promise<AllProxyModelsResponse>(() => undefined));
+
+    const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
+
+    expect(result.current).toBeUndefined();
+  });
+
+  it("returns undefined until authorization is ready", () => {
+    const unauthorizedContext = {
+      accessToken: null,
+      userId: null,
+      userRole: null,
+      token: null,
+      userEmail: "test@example.com",
+      premiumUser: false,
+      disabledPersonalKeyCreation: null,
+      showSSOBanner: false,
+    };
+    mockUseAuthorized.mockReturnValue(unauthorizedContext);
+
+    const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
+
+    expect(result.current).toBeUndefined();
+    expect(modelAvailableCall).not.toHaveBeenCalled();
+  });
+
+  it("returns an empty set when the access-group lookup fails", async () => {
+    vi.mocked(modelAvailableCall).mockRejectedValue(new Error("lookup failed"));
+
+    const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
+
+    await waitFor(() => expect(result.current).toBeDefined());
+    expect(result.current?.size).toBe(0);
+  });
+
+  it("keeps cached access-group names after a failed refetch", async () => {
+    vi.mocked(modelAvailableCall).mockResolvedValueOnce({
+      data: [{ id: "repro-access-group", object: "model", created: 0, owned_by: "litellm" }],
+    });
+
+    const { result } = renderHook(() => useModelAccessGroupNames(), { wrapper });
+
+    await waitFor(() => {
+      expect(result.current?.has("repro-access-group")).toBe(true);
+    });
+
+    const queryKey = queryClient
+      .getQueryCache()
+      .getAll()
+      .find((query) => {
+        return query.queryKey[0] === "modelAccessGroupNames";
+      })?.queryKey;
+    expect(queryKey).toBeDefined();
+    if (!queryKey) throw new Error("The access-group query was not created");
+
+    vi.mocked(modelAvailableCall).mockRejectedValueOnce(new Error("refetch failed"));
+    await act(async () => {
+      await queryClient.refetchQueries({ queryKey });
+    });
+
+    await waitFor(() => {
+      expect(queryClient.getQueryCache().find({ queryKey })?.state.status).toBe("error");
+    });
+    expect(result.current).toEqual(new Set(["repro-access-group"]));
   });
 });
 
@@ -970,6 +1108,48 @@ describe("selectAutoRouterModelGroups", () => {
   });
 });
 
+describe("selectPlainChatModelGroups", () => {
+  it("keeps chat-capable groups when mode metadata is absent or any sibling is compatible", () => {
+    const deployments: AutoRouterDeployment[] = [
+      { model_name: "no-info" },
+      { model_name: "null-info", model_info: null },
+      { model_name: "empty-info", model_info: {} },
+      { model_name: "missing-mode", model_info: { db_model: false } },
+      { model_name: "null-mode", model_info: { mode: null } },
+      { model_name: "empty-mode", model_info: { mode: "" } },
+      { model_name: "chat", model_info: { mode: "chat", db_model: true } },
+      { model_name: "completion", model_info: { mode: "completion" } },
+      { model_name: "chat-and-missing", model_info: { mode: "chat" } },
+      { model_name: "chat-and-missing" },
+      { model_name: "chat-then-embedding", model_info: { mode: "chat" } },
+      { model_name: "chat-then-embedding", model_info: { mode: "embedding" } },
+      { model_name: "embedding-then-chat", model_info: { mode: "embedding" } },
+      { model_name: "embedding-then-chat", model_info: { mode: "chat" } },
+      { model_name: "embedding-only", model_info: { mode: "embedding" } },
+      { model_name: "speech-only", model_info: { mode: "speech" } },
+      { model_name: "shared-router", litellm_params: { model: "openai/gpt-4o" } },
+      { model_name: "shared-router", litellm_params: { model: "auto_router/complexity_router" } },
+      { model_name: "", model_info: { mode: "chat" } },
+    ];
+
+    expect(selectPlainChatModelGroups(deployments)).toEqual(
+      new Set([
+        "no-info",
+        "null-info",
+        "empty-info",
+        "missing-mode",
+        "null-mode",
+        "empty-mode",
+        "chat",
+        "completion",
+        "chat-and-missing",
+        "chat-then-embedding",
+        "embedding-then-chat",
+      ]),
+    );
+  });
+});
+
 describe("useAutoRouterModelGroups", () => {
   let queryClient: QueryClient;
 
@@ -1063,6 +1243,47 @@ describe("useAutoRouterModelGroups", () => {
     expect(modelInfoCall).toHaveBeenCalledWith("test-access-token", "test-user-id", "Admin", 3, 1000);
   });
 
+  it("uses every page for configured chat groups and keeps custom deployments without mode metadata", async () => {
+    (modelInfoCall as any).mockImplementation((_t: string, _u: string, _r: string, page: number) =>
+      Promise.resolve(
+        page === 1
+          ? {
+              data: [
+                { model_name: "configured-chat", model_info: { mode: "chat" } },
+                { model_name: "embedding-only", model_info: { mode: "embedding" } },
+              ],
+              total_pages: 2,
+            }
+          : {
+              data: [
+                { model_name: "custom-no-mode", model_info: { db_model: true } },
+                { model_name: "speech-only", model_info: { mode: "speech" } },
+              ],
+              total_pages: 2,
+            },
+      ),
+    );
+
+    const { result } = renderHook(() => usePlainChatModelGroups(), { wrapper });
+
+    await waitFor(() => expect(result.current.size).toBe(2));
+    expect(result.current).toEqual(new Set(["configured-chat", "custom-no-mode"]));
+    expect(modelInfoCall).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns an empty chat group set while loading and after failure", async () => {
+    (modelInfoCall as any).mockReturnValueOnce(new Promise(() => {}));
+    const loading = renderHook(() => usePlainChatModelGroups(), { wrapper });
+    expect(loading.result.current).toEqual(new Set());
+    loading.unmount();
+
+    queryClient.clear();
+    (modelInfoCall as any).mockRejectedValueOnce(new Error("boom"));
+    const failed = renderHook(() => usePlainChatModelGroups(), { wrapper });
+    await waitFor(() => expect(modelInfoCall).toHaveBeenCalledTimes(2));
+    expect(failed.result.current).toEqual(new Set());
+  });
+
   it("returns an empty set before the model list resolves", () => {
     (modelInfoCall as any).mockReturnValue(new Promise(() => {}));
 
@@ -1078,5 +1299,25 @@ describe("useAutoRouterModelGroups", () => {
 
     await waitFor(() => expect(modelInfoCall).toHaveBeenCalled());
     expect(result.current.size).toBe(0);
+  });
+
+  // The Auto-Routers tab and the models table read the same /v2/model/info data. Six call
+  // sites across the app invalidate ["models","list"] after a write; if the auto-router query
+  // sits in its own namespace, an edit through ModelInfoView leaves the tab stale until a full
+  // reload, and every future writer has to remember a second key.
+  describe("auto-router cache namespace", () => {
+    it("keys the auto-router list under models/list so existing invalidations reach it", async () => {
+      (modelInfoCall as any).mockResolvedValue(mockPaginatedModelInfoResponse);
+      const { result } = renderHook(() => useAutoRouters(), { wrapper });
+
+      await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+      const keys = queryClient
+        .getQueryCache()
+        .findAll({ queryKey: ["models", "list"] })
+        .map((query) => query.queryKey);
+
+      expect(keys.some((key) => JSON.stringify(key).includes("autoRouters"))).toBe(true);
+    });
   });
 });

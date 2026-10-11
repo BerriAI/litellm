@@ -9,8 +9,11 @@ stamping ``api_key_alias`` (or collapses every key onto one series) would drop
 the aliases and fail here.
 
 Scraping goes through ``transport.probe`` (raw text) and is parsed with
-prometheus_client; the metric is eventually consistent (it increments on the
-success-logging callback), so the scrape polls to a deadline.
+prometheus_client. ``/metrics`` is per-pod behind a round-robin LB and the metric
+is eventually consistent (it increments on the success-logging callback), so the
+poll unions the aliases seen across scrapes until the deadline: counters persist
+on whichever pod served the driver call, so repeated scrapes converge without
+re-sending any billable traffic.
 """
 
 from __future__ import annotations
@@ -21,6 +24,7 @@ import pytest
 from prometheus_client.parser import text_string_to_metric_families
 
 from e2e_config import unique_marker
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from logging_client import LoggingClient
 
@@ -44,6 +48,15 @@ def _aliases_in_metric(exposition: str, metric: str, label: str) -> frozenset[st
 
 class TestPrometheusPerKeyCardinality:
     @pytest.mark.covers("logging.prometheus.success.exports_metric", exercised_on=[])
+    @meta(
+        Subject(
+            domain=Domain.OBSERVABILITY,
+            route=Route.METRICS,
+            providers=(Provider.GEMINI,),
+            models=(DRIVER_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_distinct_key_aliases_produce_distinct_series(
         self, client: LoggingClient, resources: ResourceManager
     ) -> None:
@@ -58,13 +71,14 @@ class TestPrometheusPerKeyCardinality:
         deadline = time.monotonic() + client.proxy.poll_timeout
         seen: frozenset[str] = frozenset()
         while time.monotonic() < deadline:
-            seen = _aliases_in_metric(client.scrape_metrics(), REQUESTS_METRIC, ALIAS_LABEL)
+            seen = seen | _aliases_in_metric(client.scrape_metrics(), REQUESTS_METRIC, ALIAS_LABEL)
             if wanted <= seen:
                 break
             time.sleep(client.proxy.poll_interval)
 
         missing = wanted - seen
         assert not missing, (
-            f"{REQUESTS_METRIC} is missing a per-key series for aliases {sorted(missing)}; "
+            f"{REQUESTS_METRIC} never exposed a per-key series for aliases {sorted(missing)} "
+            f"on any scraped pod within the deadline; "
             f"each distinct {ALIAS_LABEL} must grow its own series"
         )

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 from datetime import timedelta
+from typing import Final
 
 import polars as pl
 
 from .schema import FOCUS_NORMALIZED_SCHEMA
 
-_TAG_KEYS = (
+_TAG_KEYS: Final = (
     "team_id",
     "team_alias",
     "organization_id",
@@ -33,7 +34,7 @@ def _build_tags_expr(available_keys: list[str]) -> pl.Expr:
     """
 
     def _struct_to_json(row: dict) -> str:
-        tags = {k: str(v) for k, v in row.items() if v is not None}
+        tags: Final = {k: str(v) for k, v in row.items() if v is not None}
         return json.dumps(tags) if tags else "{}"
 
     return pl.struct(available_keys).map_elements(_struct_to_json, return_dtype=pl.String).alias("Tags")
@@ -50,7 +51,7 @@ class FocusTransformer:
             return pl.DataFrame(schema=self.schema)
 
         # Build Tags JSON from metadata columns using vectorized Polars expression
-        available_keys = [k for k in _TAG_KEYS if k in frame.columns]
+        available_keys: Final = [k for k in _TAG_KEYS if k in frame.columns]
         if available_keys:
             frame = frame.with_columns(_build_tags_expr(available_keys))
         else:
@@ -71,13 +72,13 @@ class FocusTransformer:
         def fmt(col):
             return col.dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
-        DEC = pl.Decimal(18, 6)
+        DEC: Final = pl.Decimal(18, 6)
 
         def dec(col):
             return col.cast(DEC)
 
-        none_str = pl.lit(None, dtype=pl.Utf8)
-        none_dec = pl.lit(None, dtype=pl.Decimal(18, 6))
+        none_str: Final = pl.lit(None, dtype=pl.Utf8)
+        none_dec: Final = pl.lit(None, dtype=pl.Decimal(18, 6))
 
         return frame.select(
             dec(pl.col("spend").fill_null(0.0)).alias("BilledCost"),

@@ -12,10 +12,13 @@ when the feature gate is off.
 """
 
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Final, Protocol
 
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.config import is_otel_v2_enabled
+
+if TYPE_CHECKING:
+    from fastapi import FastAPI
 
 # Routes excluded from server-span tracing by default: high-frequency pollers and
 # static UI/docs assets, none of which are LLM traffic. Entries are substring-matched
@@ -23,7 +26,7 @@ from litellm.integrations.otel.model.config import is_otel_v2_enabled
 # and each entry also covers everything beneath it — e.g. ``/health`` covers
 # ``/health/readiness``). Operators override the whole set via the standard
 # ``OTEL_PYTHON_FASTAPI_EXCLUDED_URLS`` env var (set "" to trace everything).
-_DEFAULT_EXCLUDED_ROUTES = (
+_DEFAULT_EXCLUDED_ROUTES: Final = (
     "/health",  # load-balancer liveness/readiness polling
     "/metrics",  # Prometheus scrape (also drops the /model/metrics admin analytics)
     "/litellm-asset-prefix",  # hashed UI asset bundles
@@ -36,14 +39,14 @@ _DEFAULT_EXCLUDED_ROUTES = (
     "favicon",  # /favicon.ico + /get_favicon
     "/.well-known",  # UI config discovery
 )
-_DEFAULT_EXCLUDED_URLS = ",".join(_DEFAULT_EXCLUDED_ROUTES)
+_DEFAULT_EXCLUDED_URLS: Final = ",".join(_DEFAULT_EXCLUDED_ROUTES)
 
 # Passthrough routes are catch-alls (e.g. "/openai/{endpoint:path}"), so the
 # default OTel server-span name "{method} {route}" collapses every upstream
 # endpoint into "POST /openai/{endpoint:path}". The hook below renames those spans
 # to the real request path so each endpoint is distinguishable. Non-catch-all
 # routes keep their low-cardinality template name.
-PASSTHROUGH_PREFIXES = frozenset(
+PASSTHROUGH_PREFIXES: Final = frozenset(
     {
         "openai",
         "openai_passthrough",
@@ -65,7 +68,15 @@ PASSTHROUGH_PREFIXES = frozenset(
 )
 
 
-def _passthrough_span_name_hook(span: Any, scope: dict) -> None:
+class _RenameableSpan(Protocol):
+    def is_recording(self) -> bool: ...
+
+    def update_name(self, name: str) -> None: ...
+
+    def set_attribute(self, key: str, value: str) -> None: ...
+
+
+def _passthrough_span_name_hook(span: "_RenameableSpan | None", scope: dict) -> None:
     """FastAPI ``server_request_hook``: give passthrough server spans a useful name.
 
     The instrumentation matches the route at span creation, so both the span name
@@ -78,9 +89,9 @@ def _passthrough_span_name_hook(span: Any, scope: dict) -> None:
     try:
         if span is None or not span.is_recording():
             return
-        path = scope.get("path") or ""
-        method = scope.get("method") or ""
-        first_segment = path.lstrip("/").split("/", 1)[0]
+        path: Final = scope.get("path") or ""
+        method: Final = scope.get("method") or ""
+        first_segment: Final = path.lstrip("/").split("/", 1)[0]
         if first_segment in PASSTHROUGH_PREFIXES:
             span.update_name(f"{method} {path}".strip())
             span.set_attribute("http.route", path)
@@ -88,7 +99,7 @@ def _passthrough_span_name_hook(span: Any, scope: dict) -> None:
         pass
 
 
-def instrument_fastapi_app(app: Any) -> None:
+def instrument_fastapi_app(app: "FastAPI") -> None:
     """Attach OTel server-span instrumentation to the proxy FastAPI app.
 
     Safe no-op when the V2 gate is off or ``opentelemetry-instrumentation-fastapi``
@@ -112,7 +123,7 @@ def instrument_fastapi_app(app: Any) -> None:
         # package is absent, even with the gate off.
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 
-        excluded_urls = (
+        excluded_urls: Final = (
             os.environ.get("OTEL_PYTHON_FASTAPI_EXCLUDED_URLS")
             if "OTEL_PYTHON_FASTAPI_EXCLUDED_URLS" in os.environ
             else _DEFAULT_EXCLUDED_URLS

@@ -1,4 +1,4 @@
-from typing import Literal, Optional
+from typing import Final, Literal, Optional
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -59,4 +59,4 @@ class MyCustomHandler(CustomLogger):  # https://docs.litellm.ai/docs/observabili
         pass
 
 
-proxy_handler_instance = MyCustomHandler()
+proxy_handler_instance: Final = MyCustomHandler()

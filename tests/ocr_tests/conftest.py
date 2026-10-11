@@ -5,12 +5,8 @@
 # Vertex AI OCR) are replayed for 24h. See tests/llm_translation/Readme.md
 # for the design overview.
 
-import os
-import sys
-
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 from tests._vcr_conftest_common import (  # noqa: E402,F401
     VerboseReporterState,
@@ -25,8 +21,6 @@ from tests._vcr_conftest_common import (  # noqa: E402,F401
     reset_vcr_diag_dir,
     vcr_config_dict,
 )
-
-_VCR_INCOMPATIBLE_NODEID_SUFFIXES: tuple[str, ...] = ()
 
 _verbose_state = VerboseReporterState()
 
@@ -64,10 +58,7 @@ def pytest_runtest_logreport(report):
 
 
 def pytest_collection_modifyitems(config, items):
-    apply_vcr_auto_marker_to_items(
-        items,
-        skip_nodeid_suffixes=_VCR_INCOMPATIBLE_NODEID_SUFFIXES,
-    )
+    apply_vcr_auto_marker_to_items(items)
 
 
 def pytest_terminal_summary(terminalreporter, exitstatus, config):

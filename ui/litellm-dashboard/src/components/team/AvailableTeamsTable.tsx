@@ -46,6 +46,7 @@ const AvailableTeamsTable: React.FC<AvailableTeamsTableProps> = ({ teams, isLoad
   return (
     <DataTable
       data={teams}
+      paginationMode="client"
       columns={columns}
       getRowId={(team, index) => team.team_id || String(index)}
       sortingMode="client"

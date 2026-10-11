@@ -21,9 +21,9 @@ describe("BarChart", () => {
   });
 
   it("renders the No data placeholder instead of a chart when data is empty", () => {
-    const { container, getByText } = render(<BarChart data={[]} index="date" categories={["passed"]} />);
+    const { container } = render(<BarChart data={[]} index="date" categories={["passed"]} />);
 
-    expect(getByText("No data")).toBeTruthy();
+    expect(screen.getByText("No data")).toBeInTheDocument();
     expect(container.querySelector('[data-slot="chart"]')).toBeNull();
   });
 
@@ -111,6 +111,40 @@ describe("BarChart", () => {
       <BarChart data={data} index="date" categories={["passed", "blocked"]} colors={["green", "red"]} />,
     );
     expect(container.querySelector("style")).toBeNull();
+  });
+
+  it("colors each bar by its datum when colorByDatum is set, instead of one fill for the series", () => {
+    const singleCategory = [
+      { tool: "alpha", spend: 3 },
+      { tool: "beta", spend: 2 },
+      { tool: "gamma", spend: 1 },
+    ];
+
+    const { container, rerender } = render(
+      <BarChart data={singleCategory} index="tool" categories={["spend"]} colors={["blue", "cyan", "violet"]} />,
+    );
+    const sharedFills = Array.from(container.querySelectorAll("path.recharts-rectangle")).map((rect) =>
+      rect.getAttribute("fill"),
+    );
+    expect(new Set(sharedFills).size).toBe(1);
+
+    rerender(
+      <BarChart
+        data={singleCategory}
+        index="tool"
+        categories={["spend"]}
+        colors={["blue", "cyan", "violet"]}
+        colorByDatum
+      />,
+    );
+    const perDatumFills = Array.from(container.querySelectorAll("path.recharts-rectangle")).map((rect) =>
+      rect.getAttribute("fill"),
+    );
+    expect(perDatumFills).toEqual([
+      "var(--color-blue-500, #3b82f6)",
+      "var(--color-cyan-500, #06b6d4)",
+      "var(--color-violet-500, #8b5cf6)",
+    ]);
   });
 
   it("stacks bars into a single column per index when stack is set", () => {

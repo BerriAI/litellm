@@ -5,8 +5,8 @@ import userEvent from "@testing-library/user-event";
 import MCPServerEdit, { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 import { setSecureItem } from "@/utils/secureStorage";
 import * as networking from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
-import { selectAntOption } from "./testUtils";
+import { toast } from "@/lib/toast";
+import { selectOption } from "./testUtils";
 
 vi.mock("@/components/networking", () => ({
   updateMCPServer: vi.fn(),
@@ -15,29 +15,41 @@ vi.mock("@/components/networking", () => ({
   testMCPToolsListRequest: vi.fn().mockResolvedValue({ tools: [], error: null }),
 }));
 
-vi.mock("@/components/molecules/notifications_manager", () => ({
-  default: {
-    success: vi.fn(),
-    fromBackend: vi.fn(),
-  },
-}));
-
 const mockOauth: {
+  status: string;
   tokenResponse: any;
   getTemporaryPayload: (() => Record<string, unknown> | null) | null;
-  onTokenReceived: ((token: Record<string, unknown> | null) => void) | null;
+  onTokenReceived:
+    | ((
+        token: Record<string, unknown> | null,
+        registeredClient?: {
+          client_id: string;
+          client_secret?: string;
+          dcr_issuer?: string;
+          dcr_server_url?: string;
+        },
+      ) => void)
+    | null;
   reset: ReturnType<typeof vi.fn>;
-} = { tokenResponse: null, getTemporaryPayload: null, onTokenReceived: null, reset: vi.fn() };
+} = { status: "idle", tokenResponse: null, getTemporaryPayload: null, onTokenReceived: null, reset: vi.fn() };
 vi.mock("@/hooks/useMcpOAuthFlow", () => ({
   useMcpOAuthFlow: (opts: {
     getTemporaryPayload?: () => Record<string, unknown> | null;
-    onTokenReceived?: (token: Record<string, unknown> | null) => void;
+    onTokenReceived?: (
+      token: Record<string, unknown> | null,
+      registeredClient?: {
+        client_id: string;
+        client_secret?: string;
+        dcr_issuer?: string;
+        dcr_server_url?: string;
+      },
+    ) => void;
   }) => {
     mockOauth.getTemporaryPayload = opts?.getTemporaryPayload ?? null;
     mockOauth.onTokenReceived = opts?.onTokenReceived ?? null;
     return {
       startOAuthFlow: vi.fn(),
-      status: "idle",
+      status: mockOauth.status,
       error: null,
       tokenResponse: mockOauth.tokenResponse,
       reset: mockOauth.reset,
@@ -249,6 +261,56 @@ describe("MCPServerEdit (stdio)", () => {
   });
 });
 
+describe("MCPServerEdit (stdio disabled on the proxy)", () => {
+  const stdioServer = {
+    server_id: "server-1",
+    server_name: "TestServer",
+    alias: "test",
+    transport: "stdio",
+    url: null,
+    auth_type: "none",
+    command: "npx",
+    args: ["-y", "@circleci/mcp-server-circleci"],
+    created_at: "2024-01-01T00:00:00Z",
+    created_by: "user-1",
+    updated_at: "2024-01-01T00:00:00Z",
+    updated_by: "user-1",
+    mcp_access_groups: [],
+  };
+  const renderEdit = (mcpServer: object, stdioEnabled: boolean) =>
+    render(
+      <MCPServerEdit
+        mcpServer={mcpServer as React.ComponentProps<typeof MCPServerEdit>["mcpServer"]}
+        accessToken={null}
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+        stdioEnabled={stdioEnabled}
+      />,
+    );
+
+  it("explains why an existing stdio server cannot run or be saved as stdio", () => {
+    renderEdit(stdioServer, false);
+
+    expect(screen.getByText("stdio is disabled on this proxy")).toBeInTheDocument();
+    expect(screen.getByText(/Set LITELLM_ENABLE_MCP_STDIO=true on the proxy and restart/)).toBeInTheDocument();
+  });
+
+  it("shows no banner for a stdio server once stdio is enabled", () => {
+    renderEdit(stdioServer, true);
+
+    expect(screen.getByLabelText("Command")).toBeInTheDocument();
+    expect(screen.queryByText("stdio is disabled on this proxy")).not.toBeInTheDocument();
+  });
+
+  it("shows no banner for a non-stdio server while stdio is disabled", () => {
+    renderEdit({ ...stdioServer, transport: "http", url: "https://mcp.example.com/mcp" }, false);
+
+    expect(screen.getByRole("tab", { name: "Server Configuration" })).toBeInTheDocument();
+    expect(screen.queryByText("stdio is disabled on this proxy")).not.toBeInTheDocument();
+  });
+});
+
 describe("MCPServerEdit (delegate auth)", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -377,7 +439,7 @@ describe("MCPServerEdit (true passthrough warning)", () => {
       />,
     );
 
-    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+    await selectOption("Authentication", "True Passthrough (no LiteLLM auth)");
 
     await waitFor(() => {
       expect(mockOauth.getTemporaryPayload).toBeTruthy();
@@ -385,6 +447,44 @@ describe("MCPServerEdit (true passthrough warning)", () => {
     const payload = mockOauth.getTemporaryPayload!();
     expect(payload).toBeTruthy();
     expect(payload?.auth_type).toBe("true_passthrough");
+  });
+});
+
+describe("MCPServerEdit (OAuth authorize temp payload)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("forwards issuer/authorization_url/token_url/registration_url to the temp OAuth session payload", async () => {
+    // Without these fields the ephemeral server the temp OAuth session endpoint builds has no
+    // admin-configured OAuth endpoints on it, discovery falls back to (and fails against) the
+    // plain server url, and Authorize & Fetch Token 400s with "authorization url is not
+    // configured" even though the saved server (and the visible form) has all four fields filled in.
+    render(
+      <MCPServerEdit
+        mcpServer={{
+          ...interactiveOAuthServer,
+          issuer: "https://github.com/login/oauth",
+          authorization_url: "https://github.com/login/oauth/authorize",
+          token_url: "https://github.com/login/oauth/access_token",
+          registration_url: "https://github.com/login/oauth/register",
+        }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(mockOauth.getTemporaryPayload).toBeTruthy();
+    });
+    const payload = mockOauth.getTemporaryPayload!();
+    expect(payload).toBeTruthy();
+    expect(payload?.issuer).toBe("https://github.com/login/oauth");
+    expect(payload?.authorization_url).toBe("https://github.com/login/oauth/authorize");
+    expect(payload?.token_url).toBe("https://github.com/login/oauth/access_token");
+    expect(payload?.registration_url).toBe("https://github.com/login/oauth/register");
   });
 });
 
@@ -414,7 +514,7 @@ describe("MCPServerEdit (auth type switch)", () => {
       />,
     );
 
-    await selectAntOption("Authentication", "OAuth Token Exchange (OBO)");
+    await selectOption("Authentication", "OAuth Token Exchange (OBO)");
 
     const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
     await act(async () => {
@@ -466,6 +566,7 @@ describe("MCPServerEdit (auth type switch)", () => {
 describe("MCPServerEdit OAuth token invalidation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockOauth.status = "idle";
   });
 
   const renderOAuthEdit = () =>
@@ -479,6 +580,77 @@ describe("MCPServerEdit OAuth token invalidation", () => {
       />,
     );
 
+  it.each(["authorizing", "exchanging"])("blocks Save while OAuth is %s", async (status) => {
+    mockOauth.status = status;
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+    const view = renderOAuthEdit();
+    const save = screen.getAllByRole("button", { name: "Save Changes" })[0];
+    expect(save).toBeDisabled();
+    await act(async () => {
+      fireEvent.submit(screen.getByRole("form", { name: "Edit MCP server" }));
+    });
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+    act(() => {
+      mockOauth.onTokenReceived?.(
+        { access_token: "new-token" },
+        {
+          client_id: "new-client",
+          dcr_issuer: "https://new.example",
+          dcr_server_url: "https://new.example/mcp",
+        },
+      );
+    });
+    mockOauth.status = "success";
+    view.rerender(
+      <MCPServerEdit
+        mcpServer={{ ...interactiveOAuthServer }}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+    expect(screen.getAllByRole("button", { name: "Save Changes" })[0]).toBeEnabled();
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
+    });
+    await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.updateMCPServer).mock.calls[0][1].credentials).toMatchObject({
+      client_id: "new-client",
+      dcr_issuer: "https://new.example",
+    });
+  });
+
+  it.each(["Save Changes", "Cancel"])("keeps a newly registered client isolated until %s", async (action) => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({ ...interactiveOAuthServer });
+    renderOAuthEdit();
+    act(() => {
+      mockOauth.onTokenReceived?.(
+        { access_token: "new-token" },
+        {
+          client_id: "new-client",
+          client_secret: "new-secret",
+          dcr_issuer: "https://new.example",
+          dcr_server_url: "https://new.example/mcp",
+        },
+      );
+    });
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: action })[0]);
+    });
+    if (action === "Cancel") {
+      expect(networking.updateMCPServer).not.toHaveBeenCalled();
+      return;
+    }
+    await waitFor(() => expect(networking.updateMCPServer).toHaveBeenCalledTimes(1));
+    expect(vi.mocked(networking.updateMCPServer).mock.calls[0][1].credentials).toMatchObject({
+      client_id: "new-client",
+      client_secret: "new-secret",
+      dcr_issuer: "https://new.example",
+    });
+  });
+
   it("invalidates a session-authorized token when the transport switches to stdio", async () => {
     // Switching to stdio clears url/auth_type via programmatic form.setFieldsValue, which antd does
     // not report through onValuesChange; the explicit recheck in handleTransportChange must catch it.
@@ -491,7 +663,7 @@ describe("MCPServerEdit OAuth token invalidation", () => {
     });
     mockOauth.reset.mockClear();
 
-    await selectAntOption("Transport Type", "Standard Input/Output (stdio)");
+    await selectOption("Transport Type", "Standard Input/Output (stdio)");
 
     await waitFor(() => expect(mockOauth.reset).toHaveBeenCalled());
     expect(mockRemoveToken).toHaveBeenCalledWith("oauth_server_1", undefined);
@@ -609,7 +781,7 @@ describe("MCPServerEdit OAuth token invalidation", () => {
     });
     mockOauth.reset.mockClear();
 
-    await selectAntOption("Transport Type", "Server-Sent Events (SSE)");
+    await selectOption("Transport Type", "Server-Sent Events (SSE)");
 
     expect(mockOauth.reset).not.toHaveBeenCalled();
     expect(mockRemoveToken).not.toHaveBeenCalled();
@@ -788,7 +960,7 @@ describe("MCPServerEdit (interactive OAuth)", () => {
   });
 
   // Note: The M2M flow hiding logic is tested via OAuthFormFields.test.tsx (isM2M prop directly),
-  // since Form.useWatch doesn't synchronously reflect initialValues in jsdom.
+  // since a mounted-values read doesn't synchronously reflect the seeded defaults in jsdom.
 
   it("pre-populates token_validation_json from existing server token_validation", async () => {
     const tokenValidation = { organization: "my-org", "team.id": "123" };
@@ -868,7 +1040,7 @@ describe("MCPServerEdit (interactive OAuth)", () => {
       expect(screen.getByText("Token Endpoint Auth Method (optional)")).toBeInTheDocument();
     });
 
-    await selectAntOption("Token Endpoint Auth Method (optional)", "Client Secret Basic");
+    await selectOption("Token Endpoint Auth Method (optional)", "Client Secret Basic");
 
     const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
     await act(async () => {
@@ -1010,7 +1182,7 @@ describe("MCPServerEdit (interactive OAuth)", () => {
       fireEvent.click(saveButtons[0]);
     });
 
-    // The Form.Item inline validator intercepts invalid JSON before handleSave runs,
+    // The field's inline validator intercepts invalid JSON before handleSave runs,
     // so the inline error message appears and updateMCPServer is never called.
     await waitFor(() => {
       expect(screen.getByText("Must be valid JSON")).toBeInTheDocument();
@@ -1214,8 +1386,9 @@ describe("MCPServerEdit (tool list fetch)", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("mcp-tool-config").getAttribute("data-external-error")).toContain(
-        "Authorize with the upstream (browser-only",
+      expect(screen.getByTestId("mcp-tool-config")).toHaveAttribute(
+        "data-external-error",
+        expect.stringContaining("Authorize with the upstream (browser-only"),
       );
     });
     expect(networking.listMCPTools).not.toHaveBeenCalled();
@@ -1242,8 +1415,9 @@ describe("MCPServerEdit (tool list fetch)", () => {
     const { rerender } = render(<MCPServerEdit {...props} />);
 
     await waitFor(() => {
-      expect(screen.getByTestId("mcp-tool-config").getAttribute("data-external-error")).toContain(
-        "Authenticate with this server in the Tools tab",
+      expect(screen.getByTestId("mcp-tool-config")).toHaveAttribute(
+        "data-external-error",
+        expect.stringContaining("Authenticate with this server in the Tools tab"),
       );
     });
     expect(networking.listMCPTools).not.toHaveBeenCalled();
@@ -1277,8 +1451,9 @@ describe("MCPServerEdit (tool list fetch)", () => {
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId("mcp-tool-config").getAttribute("data-external-error")).toContain(
-        "Authenticate with this server in the Tools tab",
+      expect(screen.getByTestId("mcp-tool-config")).toHaveAttribute(
+        "data-external-error",
+        expect.stringContaining("Authenticate with this server in the Tools tab"),
       );
     });
     expect(networking.listMCPTools).not.toHaveBeenCalled();
@@ -1387,10 +1562,8 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     await waitFor(() => {
       expect(networking.storeMCPOAuthUserCredential).toHaveBeenCalled();
     });
-    expect(NotificationsManager.fromBackend).toHaveBeenCalledWith(
-      "MCP Server updated, but failed to persist OAuth token: write failed",
-    );
-    expect(NotificationsManager.success).not.toHaveBeenCalledWith("MCP Server updated successfully");
+    expect(toast.fromError).toHaveBeenCalledWith("MCP Server updated, but failed to persist OAuth token: write failed");
+    expect(toast.success).not.toHaveBeenCalledWith("MCP Server updated successfully");
     expect(onSuccess).not.toHaveBeenCalled();
   });
 
@@ -1605,6 +1778,51 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     expect(screen.getByText(/registered for the previous upstream/)).toBeInTheDocument();
   });
 
+  it("discards a canceled OAuth snapshot before saved server data loads", async () => {
+    setSecureItem(
+      EDIT_OAUTH_UI_STATE_KEY,
+      JSON.stringify({
+        serverId: interactiveOAuthServer.server_id,
+        formValues: { ...interactiveOAuthServer, url: "https://new.example/mcp" },
+      }),
+    );
+    const props = { accessToken: "access-token", onCancel: vi.fn(), onSuccess: vi.fn(), availableAccessGroups: [] };
+    const view = render(<MCPServerEdit {...props} mcpServer={{ ...interactiveOAuthServer, server_id: "", url: "" }} />);
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole("button", { name: "Cancel" })[0]);
+    });
+    expect(props.onCancel).toHaveBeenCalledOnce();
+    expect(window.sessionStorage.getItem(EDIT_OAUTH_UI_STATE_KEY)).toBeNull();
+    expect(mockOauth.reset).toHaveBeenCalled();
+    view.unmount();
+    render(<MCPServerEdit {...props} mcpServer={interactiveOAuthServer} />);
+    await waitFor(() => expect(screen.getByLabelText("MCP Server URL")).toHaveValue(interactiveOAuthServer.url));
+    expect(networking.updateMCPServer).not.toHaveBeenCalled();
+  });
+
+  it("restores the edited upstream after OAuth when saved server data loads later", async () => {
+    setSecureItem(
+      EDIT_OAUTH_UI_STATE_KEY,
+      JSON.stringify({
+        serverId: interactiveOAuthServer.server_id,
+        formValues: { ...interactiveOAuthServer, url: "https://new.example/mcp", issuer: "https://new.example" },
+      }),
+    );
+    const props = {
+      accessToken: "access-token",
+      userID: "user-1",
+      onCancel: vi.fn(),
+      onSuccess: vi.fn(),
+      availableAccessGroups: [],
+    };
+    const { rerender } = render(
+      <MCPServerEdit {...props} mcpServer={{ ...interactiveOAuthServer, server_id: "", url: "" }} />,
+    );
+    rerender(<MCPServerEdit {...props} mcpServer={interactiveOAuthServer} />);
+    await waitFor(() => expect(screen.getByLabelText("MCP Server URL")).toHaveValue("https://new.example/mcp"));
+    expect(screen.getByLabelText("Issuer (optional)")).toHaveValue("https://new.example");
+  });
+
   it("preserves a stored client_id on OAuth-resume restore even when the saved snapshot is token-only", async () => {
     // Post-redirect restore: the sessionStorage snapshot carries only a minted token (no client keys),
     // while the loaded server has a stored client_id. The restore must merge the server's declared app
@@ -1657,9 +1875,7 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
 
     // Check "remove saved app" on server A.
     fireEvent.click(screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }));
-    expect(
-      (screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }) as HTMLInputElement).checked,
-    ).toBe(true);
+    expect(screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ })).toBeChecked();
 
     // Switch the panel to server B without unmounting.
     rerender(
@@ -1674,9 +1890,7 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
     );
 
     // The checkbox must have reset, so saving server B does not send the explicit-null delete write.
-    expect(
-      (screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ }) as HTMLInputElement).checked,
-    ).toBe(false);
+    expect(screen.getByRole("checkbox", { name: /Remove the saved OAuth app on save/ })).not.toBeChecked();
 
     await act(async () => {
       fireEvent.click(screen.getAllByRole("button", { name: "Save Changes" })[0]);
@@ -1705,9 +1919,9 @@ describe("MCPServerEdit (OAuth token persistence on save)", () => {
       />,
     );
 
-    await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+    await selectOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
     mockOauth.tokenResponse = { access_token: "fresh-tok", token_type: "bearer" };
-    await selectAntOption("Authentication", "True Passthrough (no LiteLLM auth)");
+    await selectOption("Authentication", "True Passthrough (no LiteLLM auth)");
 
     await waitFor(() => {
       const withHeaders = vi
@@ -1848,7 +2062,7 @@ describe("MCPServerEdit oauth2_flow selector", () => {
       />,
     );
 
-    await selectAntOption("OAuth Flow Type", "Machine-to-Machine (M2M)");
+    await selectOption("OAuth Flow Type", "Machine-to-Machine (M2M)");
 
     const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
     await act(async () => {
@@ -1880,7 +2094,7 @@ describe("MCPServerEdit oauth2_flow selector", () => {
       />,
     );
 
-    await selectAntOption("OAuth Flow Type", "Interactive (PKCE)");
+    await selectOption("OAuth Flow Type", "Interactive (PKCE)");
 
     const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
     await act(async () => {
@@ -1949,6 +2163,24 @@ describe("MCPServerEdit OAuth flow prefill display", () => {
     expect(screen.queryByText("This server has no OAuth flow set")).not.toBeInTheDocument();
   });
 
+  it("never flashes the warning while mounting a server that already has a flow", async () => {
+    const flashes: Node[] = [];
+    const observer = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (node.textContent?.includes("This server has no OAuth flow set")) flashes.push(node);
+        }
+      }
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+
+    renderEdit({ oauth2_flow: "client_credentials" });
+    await screen.findByText("Machine-to-Machine (M2M)");
+    observer.disconnect();
+
+    expect(flashes).toHaveLength(0);
+  });
+
   it("does not warn for a delegate (PKCE passthrough) server even with no flow set", () => {
     renderEdit({ oauth2_flow: null, delegate_auth_to_upstream: true });
 
@@ -1960,7 +2192,7 @@ describe("MCPServerEdit OAuth flow prefill display", () => {
 
     expect(screen.getByText("This server has no OAuth flow set")).toBeInTheDocument();
 
-    await selectAntOption("OAuth Flow Type", "Machine-to-Machine (M2M)");
+    await selectOption("OAuth Flow Type", "Machine-to-Machine (M2M)");
 
     await waitFor(() => {
       expect(screen.queryByText("This server has no OAuth flow set")).not.toBeInTheDocument();
@@ -1977,12 +2209,14 @@ describe("MCPServerEdit (max concurrent requests)", () => {
     ...interactiveOAuthServer,
     auth_type: "none",
     max_concurrent_requests: 5,
+    rpm: 5,
   };
 
   it("prefills the existing limit and sends an updated value in the payload", async () => {
     vi.mocked(networking.updateMCPServer).mockResolvedValue({
       ...limitedServer,
       max_concurrent_requests: 2,
+      rpm: 2,
     });
 
     render(
@@ -1997,8 +2231,11 @@ describe("MCPServerEdit (max concurrent requests)", () => {
 
     const limitInput = screen.getByPlaceholderText("e.g. 10") as HTMLInputElement;
     expect(limitInput.value).toBe("5");
+    const rpmInput = screen.getByPlaceholderText("e.g. 60") as HTMLInputElement;
+    expect(rpmInput.value).toBe("5");
 
     fireEvent.change(limitInput, { target: { value: "2" } });
+    fireEvent.change(rpmInput, { target: { value: "2" } });
 
     const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
     await act(async () => {
@@ -2011,6 +2248,7 @@ describe("MCPServerEdit (max concurrent requests)", () => {
 
     const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
     expect(payload.max_concurrent_requests).toBe(2);
+    expect(payload.rpm).toBe(2);
   });
 
   it("sends null when the limit is cleared so the backend unsets it", async () => {
@@ -2046,6 +2284,40 @@ describe("MCPServerEdit (max concurrent requests)", () => {
     const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
     expect(payload.max_concurrent_requests).toBeNull();
   });
+
+  it("sends null when the RPM limit is cleared", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...limitedServer,
+      rpm: null,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={limitedServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    const rpmInput = screen.getByPlaceholderText("e.g. 60") as HTMLInputElement;
+    expect(rpmInput.value).toBe("5");
+
+    fireEvent.change(rpmInput, { target: { value: "" } });
+
+    const saveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    await act(async () => {
+      fireEvent.click(saveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.rpm).toBeNull();
+  });
 });
 
 describe("MCPServerEdit (dcr_bridge toggle)", () => {
@@ -2054,7 +2326,7 @@ describe("MCPServerEdit (dcr_bridge toggle)", () => {
     mockOauth.tokenResponse = null;
   });
 
-  const getDcrToggle = () => document.getElementById("dcr_bridge");
+  const getDcrToggle = () => screen.queryByRole("switch", { name: /Gateway-hosted sign-in \(DCR bridge\)/ });
 
   function renderEdit(server: Record<string, unknown>) {
     render(
@@ -2176,7 +2448,7 @@ describe("MCPServerEdit (dcr_bridge toggle)", () => {
       expect(getDcrToggle()).toBeInTheDocument();
     });
 
-    await selectAntOption("Authentication", "API Key");
+    await selectOption("Authentication", "API Key");
     await waitFor(() => {
       expect(getDcrToggle()).not.toBeInTheDocument();
     });
@@ -2200,9 +2472,9 @@ describe("MCPServerEdit (dcr_bridge toggle)", () => {
     });
     expect(getDcrToggle()).toHaveAttribute("aria-checked", "true");
 
-    // The Form.Item stays mounted across the two client-forwarded modes, so the live toggle value is
+    // The field stays mounted across the two client-forwarded modes, so the live toggle value is
     // preserved rather than forced false by the switch.
-    await selectAntOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
+    await selectOption("Authentication", "OAuth Delegate (client-supplied upstream token)");
     await waitFor(() => {
       expect(getDcrToggle()).toBeInTheDocument();
     });
@@ -2210,5 +2482,52 @@ describe("MCPServerEdit (dcr_bridge toggle)", () => {
 
     const payload = await saveAndGetPayload();
     expect(payload.dcr_bridge).toBe(true);
+  });
+});
+
+describe("MCPServerEdit (tab mount contract)", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  const plainServer = {
+    ...interactiveOAuthServer,
+    auth_type: "none",
+    max_concurrent_requests: 5,
+  };
+
+  it("carries pending server edits into a save triggered from the Cost Configuration tab", async () => {
+    vi.mocked(networking.updateMCPServer).mockResolvedValue({
+      ...plainServer,
+      max_concurrent_requests: 2,
+    });
+
+    render(
+      <MCPServerEdit
+        mcpServer={plainServer}
+        accessToken="access-token"
+        onCancel={vi.fn()}
+        onSuccess={vi.fn()}
+        availableAccessGroups={[]}
+      />,
+    );
+
+    fireEvent.change(screen.getByPlaceholderText("e.g. 10"), { target: { value: "2" } });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Cost Configuration" }));
+    expect(await screen.findByTestId("mcp-cost-config")).toBeInTheDocument();
+
+    const costTabSaveButtons = screen.getAllByRole("button", { name: "Save Changes" });
+    expect(costTabSaveButtons).toHaveLength(1);
+    await act(async () => {
+      fireEvent.click(costTabSaveButtons[0]);
+    });
+
+    await waitFor(() => {
+      expect(networking.updateMCPServer).toHaveBeenCalledTimes(1);
+    });
+
+    const [, payload] = vi.mocked(networking.updateMCPServer).mock.calls[0];
+    expect(payload.max_concurrent_requests).toBe(2);
   });
 });

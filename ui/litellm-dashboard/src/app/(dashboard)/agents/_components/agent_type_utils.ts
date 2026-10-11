@@ -1,5 +1,6 @@
 import { Agent } from "@/components/agents/types";
 import { AgentCreateInfo } from "@/components/networking";
+import { parseKillSwitchForForm } from "./kill_switch_config";
 
 /**
  * Detects the agent type from an agent's litellm_params.
@@ -25,6 +26,29 @@ export const detectAgentType = (agent: Agent): string => {
   return "a2a";
 };
 
+const escapeRegExp = (segment: string): string => segment.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * Reverses a `model_template` (e.g. "bedrock/agentcore/{agent_runtime_arn}") against a stored
+ * `model` string to recover the placeholder values that produced it. Builds a regex from the
+ * template's literal segments rather than matching by split("/") position, because a
+ * placeholder's value can itself contain "/" (an AWS ARN's "runtime/<runtime-id>" resource path,
+ * a Vertex AI reasoning engine's "projects/.../reasoningEngines/..." resource id) and would
+ * otherwise be cut off at the first one.
+ */
+export const extractModelTemplateValues = (template: string, model: string): Record<string, string> => {
+  // Splitting on a regex with a capturing group interleaves the captured placeholder
+  // names between the surrounding literal segments, e.g. "a/{x}/b" -> ["a/", "x", "/b"].
+  const parts = template.split(/\{([a-zA-Z0-9_]+)\}/g);
+  const fieldNames = parts.filter((_part, index) => index % 2 === 1);
+  const pattern = parts.map((part, index) => (index % 2 === 1 ? "(.+)" : escapeRegExp(part))).join("");
+
+  const match = model.match(new RegExp(`^${pattern}$`));
+  if (!match) return {};
+
+  return Object.fromEntries(fieldNames.map((name, index) => [name, match[index + 1]]));
+};
+
 /**
  * Parses agent data for dynamic form fields (non-A2A agents).
  * Extracts values from litellm_params based on the agent type metadata.
@@ -35,24 +59,18 @@ export const parseDynamicAgentForForm = (agent: Agent, agentTypeInfo: AgentCreat
     description: agent.agent_card_params?.description || "",
   };
 
+  const templateValues =
+    agentTypeInfo.model_template && agent.litellm_params?.model
+      ? extractModelTemplateValues(agentTypeInfo.model_template, agent.litellm_params.model)
+      : {};
+
   // Extract credential field values from litellm_params
   for (const field of agentTypeInfo.credential_fields) {
     if (field.include_in_litellm_params !== false) {
       values[field.key] = agent.litellm_params?.[field.key] || field.default_value || "";
-    } else {
-      // For fields not in litellm_params (like agent_id), try to extract from model string
-      if (agentTypeInfo.model_template && agent.litellm_params?.model) {
-        const model = agent.litellm_params.model;
-        const templateParts = agentTypeInfo.model_template.split("/");
-        const modelParts = model.split("/");
-
-        // Find the placeholder position and extract the value
-        templateParts.forEach((part, index) => {
-          if (part === `{${field.key}}` && modelParts[index]) {
-            values[field.key] = modelParts[index];
-          }
-        });
-      }
+    } else if (templateValues[field.key] !== undefined) {
+      // For fields not in litellm_params (like agent_runtime_arn), recover from the model string
+      values[field.key] = templateValues[field.key];
     }
   }
 
@@ -60,6 +78,7 @@ export const parseDynamicAgentForForm = (agent: Agent, agentTypeInfo: AgentCreat
   values.cost_per_query = agent.litellm_params?.cost_per_query;
   values.input_cost_per_token = agent.litellm_params?.input_cost_per_token;
   values.output_cost_per_token = agent.litellm_params?.output_cost_per_token;
+  values.kill_switch = parseKillSwitchForForm(agent.kill_switch);
 
   return values;
 };

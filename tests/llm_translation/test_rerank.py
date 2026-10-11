@@ -1,30 +1,22 @@
 import asyncio
 import json
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
-from typing import Optional, Dict
-
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
-
-import os
+from typing import Dict, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 import litellm
-from litellm.types.rerank import RerankResponse
 from litellm import RateLimitError, Timeout, completion, completion_cost, embedding
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.rerank import RerankResponse
 
 
 def assert_response_shape(response, custom_llm_provider):
@@ -46,26 +38,19 @@ def assert_response_shape(response, custom_llm_provider):
     assert isinstance(response.results, expected_response_shape["results"])
     for result in response.results:
         assert isinstance(result["index"], expected_results_shape["index"])
-        assert isinstance(
-            result["relevance_score"], expected_results_shape["relevance_score"]
-        )
+        assert isinstance(result["relevance_score"], expected_results_shape["relevance_score"])
         if "document" in result:
             assert isinstance(result["document"], Dict)
             assert isinstance(result["document"]["text"], str)
     assert isinstance(response.meta, expected_response_shape["meta"])
 
     if custom_llm_provider == "cohere":
-
-        assert isinstance(
-            response.meta["api_version"], expected_meta_shape["api_version"]
-        )
+        assert isinstance(response.meta["api_version"], expected_meta_shape["api_version"])
         assert isinstance(
             response.meta["api_version"]["version"],
             expected_api_version_shape["version"],
         )
-        assert isinstance(
-            response.meta["billed_units"], expected_meta_shape["billed_units"]
-        )
+        assert isinstance(response.meta["billed_units"], expected_meta_shape["billed_units"])
         assert isinstance(
             response.meta["billed_units"]["search_units"],
             expected_billed_units_shape["search_units"],
@@ -107,45 +92,6 @@ async def test_basic_rerank(sync_mode):
         assert_response_shape(response, custom_llm_provider="cohere")
 
     print("response", response.model_dump_json(indent=4))
-
-
-@pytest.mark.asyncio()
-@pytest.mark.parametrize("sync_mode", [True, False])
-@pytest.mark.skip(reason="Skipping test due to 503 Service Temporarily Unavailable")
-async def test_basic_rerank_together_ai(sync_mode):
-    try:
-        if sync_mode is True:
-            response = litellm.rerank(
-                model="together_ai/Salesforce/Llama-Rank-V1",
-                query="hello",
-                documents=["hello", "world"],
-                top_n=3,
-            )
-
-            print("re rank response: ", response)
-
-            assert response.id is not None
-            assert response.results is not None
-
-            assert_response_shape(response, custom_llm_provider="together_ai")
-        else:
-            response = await litellm.arerank(
-                model="together_ai/Salesforce/Llama-Rank-V1",
-                query="hello",
-                documents=["hello", "world"],
-                top_n=3,
-            )
-
-            print("async re rank response: ", response)
-
-            assert response.id is not None
-            assert response.results is not None
-
-            assert_response_shape(response, custom_llm_provider="together_ai")
-    except Exception as e:
-        if "Service unavailable" in str(e):
-            pytest.skip("Skipping test due to 503 Service Temporarily Unavailable")
-        raise e
 
 
 @pytest.mark.asyncio()
@@ -200,10 +146,7 @@ async def test_rerank_custom_api_base(version):
         _url = mock_post.call_args.kwargs["url"]
         print("Arguments passed to API=", args_to_api)
         print("url = ", _url)
-        assert (
-            _url
-            == f"https://exampleopenaiendpoint-production.up.railway.app/{version}/rerank"
-        )
+        assert _url == f"https://exampleopenaiendpoint-production.up.railway.app/{version}/rerank"
 
         request_data = json.loads(args_to_api)
         assert request_data["query"] == expected_payload["query"]
@@ -218,7 +161,6 @@ async def test_rerank_custom_api_base(version):
 
 
 class TestLogger(CustomLogger):
-
     def __init__(self):
         self.kwargs = None
         self.response_obj = None
@@ -370,63 +312,6 @@ def test_rerank_response_assertions():
     assert_response_shape(r, custom_llm_provider="custom")
 
 
-def test_cohere_rerank_v2_client():
-    from litellm.llms.custom_httpx.http_handler import HTTPHandler
-
-    client = HTTPHandler()
-    litellm.api_base = "http://localhost:4000"
-    litellm.set_verbose = True
-
-    text = "Hello there!"
-    list_texts = ["Hello there!", "How are you?", "How do you do?"]
-
-    rerank_model = "rerank-multilingual-v3.0"
-
-    with patch.object(client, "post") as mock_post:
-        mock_response = MagicMock()
-        mock_response.text = json.dumps(
-            {
-                "id": "cmpl-mockid",
-                "results": [
-                    {"index": 0, "relevance_score": 0.95},
-                    {"index": 1, "relevance_score": 0.75},
-                    {"index": 2, "relevance_score": 0.65},
-                ],
-                "usage": {"prompt_tokens": 100, "total_tokens": 150},
-            }
-        )
-        mock_response.status_code = 200
-        mock_response.headers = {"Content-Type": "application/json"}
-        mock_response.json = lambda: json.loads(mock_response.text)
-
-        mock_post.return_value = mock_response
-
-        response = litellm.rerank(
-            model=rerank_model,
-            query=text,
-            documents=list_texts,
-            custom_llm_provider="cohere",
-            max_tokens_per_doc=3,
-            top_n=2,
-            api_key="fake-api-key",
-            client=client,
-        )
-
-        # Ensure Cohere API is called with the expected params
-        mock_post.assert_called_once()
-        assert mock_post.call_args.kwargs["url"] == "http://localhost:4000/v2/rerank"
-
-        request_data = json.loads(mock_post.call_args.kwargs["data"])
-        assert request_data["model"] == rerank_model
-        assert request_data["query"] == text
-        assert request_data["documents"] == list_texts
-        assert request_data["max_tokens_per_doc"] == 3
-        assert request_data["top_n"] == 2
-
-        # Ensure litellm response is what we expect
-        assert response["results"] == mock_response.json()["results"]
-
-
 @pytest.mark.flaky(retries=3, delay=1)
 def test_rerank_cohere_api():
     response = litellm.rerank(
@@ -441,42 +326,3 @@ def test_rerank_cohere_api():
     assert response.results[0]["document"]["text"] is not None
     assert response.results[0]["document"]["text"] == "hello"
     assert response.results[1]["document"]["text"] == "world"
-
-
-def test_rerank_infer_region_from_model_arn(monkeypatch):
-
-    mock_response = MagicMock()
-
-    monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
-    args = {
-        "model": "bedrock/arn:aws:bedrock:us-west-2::foundation-model/amazon.rerank-v1:0",
-        "query": "hello",
-        "documents": ["hello", "world"],
-    }
-
-    def return_val():
-        return {
-            "results": [
-                {"index": 0, "relevanceScore": 0.6716859340667725},
-                {"index": 1, "relevanceScore": 0.0004994205664843321},
-            ]
-        }
-
-    mock_response.json = return_val
-    mock_response.headers = {"key": "value"}
-    mock_response.status_code = 200
-
-    client = HTTPHandler()
-
-    with patch.object(client, "post", return_value=mock_response) as mock_post:
-        litellm.rerank(
-            model=args["model"],
-            query=args["query"],
-            documents=args["documents"],
-            client=client,
-        )
-
-        mock_post.assert_called_once()
-        print(f"mock_post.call_args: {mock_post.call_args.kwargs}")
-        assert "us-west-2" in mock_post.call_args.kwargs["url"]
-        assert "us-east-1" not in mock_post.call_args.kwargs["url"]

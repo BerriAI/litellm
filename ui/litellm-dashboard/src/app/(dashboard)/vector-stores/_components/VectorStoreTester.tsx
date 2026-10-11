@@ -1,8 +1,7 @@
 import React, { useState } from "react";
-import MessageManager from "@/components/molecules/message_manager";
+import { toast } from "@/lib/toast";
 import { ChevronDown, ChevronRight, Database, Send } from "lucide-react";
 import { vectorStoreSearchCall } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
@@ -41,6 +40,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
     {
       query: string;
       response: VectorStoreSearchResponse | null;
+      error: string | null;
       timestamp: number;
     }[]
   >([]);
@@ -48,7 +48,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
 
   const handleSearch = async () => {
     if (!query.trim()) {
-      MessageManager.warning("Please enter a search query");
+      toast.warning("Please enter a search query");
       return;
     }
 
@@ -60,6 +60,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
       const historyEntry = {
         query,
         response,
+        error: null,
         timestamp: Date.now(),
       };
 
@@ -67,7 +68,9 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
       setQuery("");
     } catch (error) {
       console.error("Error searching vector store:", error);
-      NotificationsManager.fromBackend("Failed to search vector store");
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      toast.fromError(errorMessage);
+      setSearchHistory((prev) => [{ query, response: null, error: errorMessage, timestamp: Date.now() }, ...prev]);
     } finally {
       setIsLoading(false);
     }
@@ -87,7 +90,7 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
   const clearHistory = () => {
     setSearchHistory([]);
     setExpandedResults({});
-    NotificationsManager.success("Search history cleared");
+    toast.success("Search history cleared");
   };
 
   const toggleResultExpansion = (historyIndex: number, resultIndex: number) => {
@@ -229,7 +232,13 @@ export const VectorStoreTester: React.FC<VectorStoreTesterProps> = ({ vectorStor
                           })}
                         </div>
                       ) : (
-                        <div className="text-sm text-muted-foreground">No results found</div>
+                        <div
+                          className={
+                            entry.error ? "text-sm break-words text-destructive" : "text-sm text-muted-foreground"
+                          }
+                        >
+                          {entry.error ? `Search failed: ${entry.error}` : "No results found"}
+                        </div>
                       )}
                     </div>
                   </div>

@@ -1,11 +1,11 @@
-from typing import List, Optional, Union
+from typing import Final
 
 import httpx
 
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
-from litellm.secret_managers.main import get_secret_str
+from litellm.llms.voyage.common_utils import get_default_base_url, get_voyage_api_key
 from litellm.types.llms.openai import AllEmbeddingInputValues, AllMessageValues
 from litellm.types.utils import EmbeddingResponse, Usage
 
@@ -15,7 +15,7 @@ class VoyageError(BaseLLMException):
         self,
         status_code: int,
         message: str,
-        headers: Union[dict, httpx.Headers] = {},
+        headers: dict | httpx.Headers = {},
     ):
         self.status_code = status_code
         self.message = message
@@ -38,18 +38,18 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
 
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         if api_base:
             if not api_base.endswith("/embeddings"):
                 api_base = f"{api_base}/embeddings"
             return api_base
-        return "https://api.voyageai.com/v1/embeddings"
+        return f"{get_default_base_url(api_key)}/embeddings"
 
     def get_supported_openai_params(self, model: str) -> list:
         return [
@@ -79,20 +79,14 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
-        if api_key is None:
-            api_key = (
-                get_secret_str("VOYAGE_API_KEY")
-                or get_secret_str("VOYAGE_AI_API_KEY")
-                or get_secret_str("VOYAGE_AI_TOKEN")
-            )
         return {
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {get_voyage_api_key(api_key)}",
         }
 
     def transform_embedding_request(
@@ -114,13 +108,13 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         raw_response: httpx.Response,
         model_response: EmbeddingResponse,
         logging_obj: LiteLLMLoggingObj,
-        api_key: Optional[str] = None,
+        api_key: str | None = None,
         request_data: dict = {},
         optional_params: dict = {},
         litellm_params: dict = {},
     ) -> EmbeddingResponse:
         try:
-            raw_response_json = raw_response.json()
+            raw_response_json: Final = raw_response.json()
         except Exception:
             raise VoyageError(message=raw_response.text, status_code=raw_response.status_code)
 
@@ -129,14 +123,12 @@ class VoyageEmbeddingConfig(BaseEmbeddingConfig):
         model_response.data = raw_response_json.get("data")
         model_response.object = raw_response_json.get("object")
 
-        usage = Usage(
+        usage: Final = Usage(
             prompt_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
             total_tokens=raw_response_json.get("usage", {}).get("total_tokens", 0),
         )
         model_response.usage = usage
         return model_response
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return VoyageError(message=error_message, status_code=status_code, headers=headers)

@@ -14,7 +14,7 @@ import {
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger } from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
+import { ToolbarSeparator } from "@/components/shared/ToolbarSeparator";
 import { cn } from "@/lib/cva.config";
 
 import {
@@ -31,6 +31,7 @@ export const ALL_MODEL_GROUPS_VALUE = "all";
 export const WILDCARD_MODEL_GROUP_VALUE = "wildcard";
 
 const MODEL_TABLE_BODY_HEIGHT = 600;
+const ALL_PROXY_MODELS_LABEL = "All Proxy Models";
 
 const FILTER_LABELS: Record<string, string> = {
   [MODEL_NAME_COLUMN_ID]: "Public Model Name",
@@ -39,7 +40,7 @@ const FILTER_LABELS: Record<string, string> = {
 
 const VIEW_MODE_LABELS: Record<ModelViewMode, string> = {
   current_team: "Current Team Models",
-  all: "All Available Models",
+  all: ALL_PROXY_MODELS_LABEL,
 };
 
 export interface ModelsTableTeamOption {
@@ -73,11 +74,13 @@ interface AllModelsTableProps {
   availableModelAccessGroups: string[];
   userRole: string;
   userID: string;
+  isViewOnly: boolean;
   onModelIdClick: (modelId: string) => void;
   onTeamIdClick: (teamId: string) => void;
   onDeleteClick: (modelId: string) => void;
   onTogglePauseClick: (modelId: string, blocked: boolean) => void | Promise<void>;
   pausingModelId: string | null;
+  credentialLabels?: ReadonlyMap<string, string>;
 }
 
 function EmptyState() {
@@ -120,11 +123,13 @@ export function AllModelsTable({
   availableModelAccessGroups,
   userRole,
   userID,
+  isViewOnly,
   onModelIdClick,
   onTeamIdClick,
   onDeleteClick,
   onTogglePauseClick,
   pausingModelId,
+  credentialLabels,
 }: AllModelsTableProps) {
   const [filtersOpen, setFiltersOpen] = useState(false);
 
@@ -132,18 +137,30 @@ export function AllModelsTable({
     const columnDeps = {
       userRole,
       userID,
+      isViewOnly,
       onModelIdClick,
       onTeamIdClick,
       onDeleteClick,
       onTogglePauseClick,
       pausingModelId,
+      credentialLabels,
     };
     return getModelsTableColumns(columnDeps);
-  }, [userRole, userID, onModelIdClick, onTeamIdClick, onDeleteClick, onTogglePauseClick, pausingModelId]);
+  }, [
+    userRole,
+    userID,
+    isViewOnly,
+    onModelIdClick,
+    onTeamIdClick,
+    onDeleteClick,
+    onTogglePauseClick,
+    pausingModelId,
+    credentialLabels,
+  ]);
 
   const modelGroupOptions = useMemo(
     () => [
-      { label: "All Models", value: ALL_MODEL_GROUPS_VALUE },
+      { label: ALL_PROXY_MODELS_LABEL, value: ALL_MODEL_GROUPS_VALUE },
       { label: "Wildcard Models (*)", value: WILDCARD_MODEL_GROUP_VALUE },
       ...availableModelGroups.map((group) => ({ label: group, value: group })),
     ],
@@ -216,7 +233,7 @@ export function AllModelsTable({
                 <span
                   className={cn(
                     "size-2 shrink-0 rounded-full",
-                    selectedTeamValue === PERSONAL_TEAM_VALUE ? "bg-blue-500" : "bg-green-500",
+                    selectedTeamValue === PERSONAL_TEAM_VALUE ? "bg-info" : "bg-success",
                   )}
                 />
                 <span className="text-muted-foreground">Team</span>
@@ -224,8 +241,15 @@ export function AllModelsTable({
               </SelectTrigger>
               <SelectContent>
                 {teamOptions.map((option) => (
-                  <SelectItem key={option.value} value={option.value} disabled={isLoadingTeams}>
-                    {option.label}
+                  <SelectItem
+                    key={option.value}
+                    value={option.value}
+                    disabled={isLoadingTeams}
+                    className="[&>div]:min-w-0"
+                  >
+                    <span data-slot="select-item-label" className="min-w-0 truncate" title={option.label}>
+                      {option.label}
+                    </span>
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -242,7 +266,7 @@ export function AllModelsTable({
               </SelectContent>
             </Select>
 
-            <Separator orientation="vertical" className="mx-0.5 h-5" />
+            <ToolbarSeparator className="mx-0.5" />
 
             <Button
               variant="outline"
@@ -271,7 +295,7 @@ export function AllModelsTable({
                     options={modelGroupOptions}
                     value={(get(MODEL_NAME_COLUMN_ID) as string) ?? ALL_MODEL_GROUPS_VALUE}
                     onValueChange={(value) =>
-                      set(MODEL_NAME_COLUMN_ID, value === ALL_MODEL_GROUPS_VALUE ? undefined : value)
+                      set(MODEL_NAME_COLUMN_ID, value === ALL_MODEL_GROUPS_VALUE ? undefined : value ?? undefined)
                     }
                     placeholder="Filter by Public Model Name"
                     emptyText="No models found"
@@ -282,7 +306,7 @@ export function AllModelsTable({
                     options={accessGroupOptions}
                     value={(get(ACCESS_GROUPS_COLUMN_ID) as string) ?? ALL_MODEL_GROUPS_VALUE}
                     onValueChange={(value) =>
-                      set(ACCESS_GROUPS_COLUMN_ID, value === ALL_MODEL_GROUPS_VALUE ? undefined : value)
+                      set(ACCESS_GROUPS_COLUMN_ID, value === ALL_MODEL_GROUPS_VALUE ? undefined : value ?? undefined)
                     }
                     placeholder="Filter by Model Access Group"
                     emptyText="No model access groups found"

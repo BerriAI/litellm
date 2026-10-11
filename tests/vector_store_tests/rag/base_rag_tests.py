@@ -4,15 +4,12 @@ Base RAG test class that enforces common tests across all providers.
 Providers should inherit from BaseRAGTest and implement the abstract methods.
 """
 
-import os
-import sys
 import uuid
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Optional
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../.."))
 
 import litellm
 from litellm.types.rag import (
@@ -80,7 +77,7 @@ class BaseRAGTest(ABC):
         """
         Test basic text file ingestion to vector store.
         """
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         filename, unique_id = self.get_unique_filename("basic_ingest")
         text_content = f"Test document {unique_id} for RAG ingestion.".encode("utf-8")
@@ -117,7 +114,7 @@ class BaseRAGTest(ABC):
         """
         import asyncio
 
-        litellm._turn_on_debug()
+        litellm.turn_on_debug()
 
         filename, unique_id = self.get_unique_filename("ingest_query")
         text_content = f"""

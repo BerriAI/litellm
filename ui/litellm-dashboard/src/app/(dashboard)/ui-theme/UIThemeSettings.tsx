@@ -6,7 +6,7 @@ import { Label } from "@/components/ui/label";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { useTheme } from "@/contexts/ThemeContext";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
-import NotificationsManager from "@/components/molecules/notifications_manager";
+import { toast } from "@/lib/toast";
 
 interface UIThemeSettingsProps {
   userID: string | null;
@@ -15,8 +15,9 @@ interface UIThemeSettingsProps {
 }
 
 const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, accessToken }) => {
-  const { logoUrl, setLogoUrl, faviconUrl, setFaviconUrl } = useTheme();
+  const { setLogoUrl, setLogoUrlDark, setFaviconUrl } = useTheme();
   const [logoUrlInput, setLogoUrlInput] = useState<string>("");
+  const [logoUrlDarkInput, setLogoUrlDarkInput] = useState<string>("");
   const [faviconUrlInput, setFaviconUrlInput] = useState<string>("");
   const [loading, setLoading] = useState(false);
 
@@ -40,8 +41,10 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
       if (response.ok) {
         const data = await response.json();
         setLogoUrlInput(data.values?.logo_url || "");
+        setLogoUrlDarkInput(data.values?.logo_url_dark || "");
         setFaviconUrlInput(data.values?.favicon_url || "");
         setLogoUrl(data.values?.logo_url || null);
+        setLogoUrlDark(data.values?.logo_url_dark || null);
         setFaviconUrl(data.values?.favicon_url || null);
       }
     } catch (error) {
@@ -62,19 +65,21 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
         },
         body: JSON.stringify({
           logo_url: logoUrlInput || null,
+          logo_url_dark: logoUrlDarkInput || null,
           favicon_url: faviconUrlInput || null,
         }),
       });
       if (response.ok) {
-        NotificationsManager.success("Theme settings updated successfully!");
+        toast.success("Theme settings updated successfully!");
         setLogoUrl(logoUrlInput || null);
+        setLogoUrlDark(logoUrlDarkInput || null);
         setFaviconUrl(faviconUrlInput || null);
       } else {
         throw new Error("Failed to update settings");
       }
     } catch (error) {
       console.error("Error updating theme settings:", error);
-      NotificationsManager.fromBackend("Failed to update theme settings");
+      toast.fromError("Failed to update theme settings");
     } finally {
       setLoading(false);
     }
@@ -82,8 +87,10 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
 
   const handleReset = async () => {
     setLogoUrlInput("");
+    setLogoUrlDarkInput("");
     setFaviconUrlInput("");
     setLogoUrl(null);
+    setLogoUrlDark(null);
     setFaviconUrl(null);
     setLoading(true);
     try {
@@ -95,16 +102,16 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
           [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ logo_url: null, favicon_url: null }),
+        body: JSON.stringify({ logo_url: null, logo_url_dark: null, favicon_url: null }),
       });
       if (response.ok) {
-        NotificationsManager.success("Theme settings reset to default!");
+        toast.success("Theme settings reset to default!");
       } else {
         throw new Error("Failed to reset");
       }
     } catch (error) {
       console.error("Error resetting theme settings:", error);
-      NotificationsManager.fromBackend("Failed to reset theme settings");
+      toast.fromError("Failed to reset theme settings");
     } finally {
       setLoading(false);
     }
@@ -139,6 +146,23 @@ const UIThemeSettings: React.FC<UIThemeSettingsProps> = ({ userID, userRole, acc
             />
             <p className="mt-1 text-xs text-muted-foreground">
               Enter a URL for your custom logo or leave empty for default
+            </p>
+          </div>
+          <div>
+            <Label htmlFor="ui-theme-logo-url-dark" className="mb-2">
+              Custom Logo URL (dark mode)
+            </Label>
+            <Input
+              id="ui-theme-logo-url-dark"
+              placeholder="https://example.com/logo-dark.png"
+              value={logoUrlDarkInput}
+              onChange={(event) => {
+                setLogoUrlDarkInput(event.target.value);
+                setLogoUrlDark(event.target.value || null);
+              }}
+            />
+            <p className="mt-1 text-xs text-muted-foreground">
+              Enter a URL for a logo suited to dark backgrounds, or leave empty to reuse the logo above
             </p>
           </div>
           <div>

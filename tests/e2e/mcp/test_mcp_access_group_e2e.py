@@ -16,6 +16,7 @@ import pytest
 from datadog_mcp import SEARCH_LOGS_TOOL, register_datadog_mcp
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Domain, Route, Subject, meta
 from lifecycle import ResourceManager
 from mcp_client import McpClient
 
@@ -24,11 +25,18 @@ pytestmark = pytest.mark.e2e
 
 class TestMcpAccessGroupToolSelection:
     @pytest.mark.covers("mcp.list_tools.api_key.access_group_scoped")
+    @meta(
+        Subject(
+            domain=Domain.MCP,
+            route=Route.MCP,
+        )
+    )
     def test_access_group_scopes_tool_selection(
         self, client: McpClient, resources: ResourceManager
     ) -> None:
         group = f"e2e-mcp-grp-{unique_marker()}"
         server_id = register_datadog_mcp(client, resources, mcp_access_groups=[group])
+        client.await_registered(server_id)
 
         granted = client.generate_key(
             user_id=f"e2e-mcp-ag-granted-{unique_marker()}",
@@ -44,12 +52,7 @@ class TestMcpAccessGroupToolSelection:
         )
         resources.defer(lambda: client.proxy.delete_key(other))
 
-        granted_tools = unwrap(client.list_tools(granted))
-        assert granted_tools.tool_name_containing(server_id, SEARCH_LOGS_TOOL) is not None, (
-            f"key granted access group {group} did not see the tagged server's tool "
-            f"(upstream dead or access-group grant not applied): "
-            f"{granted_tools.tool_names_for_server(server_id)}"
-        )
+        _ = client.await_tool(granted, server_id, SEARCH_LOGS_TOOL)
 
         other_tools = unwrap(client.list_tools(other)).tool_names_for_server(server_id)
         assert other_tools == frozenset(), (

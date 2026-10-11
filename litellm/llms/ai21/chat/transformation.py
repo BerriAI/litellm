@@ -4,7 +4,7 @@ AI21 Chat Completions API
 this is OpenAI compatible - no translation needed / occurs
 """
 
-from typing import Optional, Union
+from typing import Final
 
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 
@@ -16,32 +16,32 @@ class AI21ChatConfig(OpenAILikeChatConfig):
     Below are the parameters:
     """
 
-    tools: Optional[list] = None
-    response_format: Optional[dict] = None
-    documents: Optional[list] = None
-    max_tokens: Optional[int] = None
-    stop: Optional[Union[str, list]] = None
-    n: Optional[int] = None
-    stream: Optional[bool] = None
-    seed: Optional[int] = None
-    tool_choice: Optional[str] = None
-    user: Optional[str] = None
+    tools: list | None = None
+    response_format: dict | None = None
+    documents: list | None = None
+    max_tokens: int | None = None
+    stop: str | list | None = None
+    n: int | None = None
+    stream: bool | None = None
+    seed: int | None = None
+    tool_choice: str | None = None
+    user: str | None = None
 
     def __init__(
         self,
-        tools: Optional[list] = None,
-        response_format: Optional[dict] = None,
-        max_tokens: Optional[int] = None,
-        temperature: Optional[float] = None,
-        top_p: Optional[float] = None,
-        stop: Optional[Union[str, list]] = None,
-        n: Optional[int] = None,
-        stream: Optional[bool] = None,
-        seed: Optional[int] = None,
-        tool_choice: Optional[str] = None,
-        user: Optional[str] = None,
+        tools: list | None = None,
+        response_format: dict | None = None,
+        max_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        stop: str | list | None = None,
+        n: int | None = None,
+        stream: bool | None = None,
+        seed: int | None = None,
+        tool_choice: str | None = None,
+        user: str | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

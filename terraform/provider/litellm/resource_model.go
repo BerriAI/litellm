@@ -11,6 +11,9 @@ func resourceLiteLLMModel() *schema.Resource {
 		Read:   resourceLiteLLMModelRead,
 		Update: resourceLiteLLMModelUpdate,
 		Delete: resourceLiteLLMModelDelete,
+		Importer: &schema.ResourceImporter{
+			StateContext: schema.ImportStatePassthroughContext,
+		},
 
 		Schema: map[string]*schema.Schema{
 			"model_name": {
@@ -73,6 +76,14 @@ func resourceLiteLLMModel() *schema.Resource {
 				Type:     schema.TypeString,
 				Required: true,
 			},
+			"pricing_base_model": {
+				// Optional pricing key fed to model_info.base_model, DECOUPLED
+				// from routing. When set, litellm_params.model still routes via
+				// base_model, but cost is looked up against this key (e.g.
+				// "us/gpt-4.1-2025-04-14" for Azure Data Zone pricing).
+				Type:     schema.TypeString,
+				Optional: true,
+			},
 			"tier": {
 				Type:     schema.TypeString,
 				Optional: true,
@@ -81,6 +92,11 @@ func resourceLiteLLMModel() *schema.Resource {
 			"team_id": {
 				Type:     schema.TypeString,
 				Optional: true,
+			},
+			"display_name": {
+				Type:        schema.TypeString,
+				Optional:    true,
+				Description: "Human-readable name returned as display_name by /v1/models, shown in client model pickers instead of model_name",
 			},
 			"mode": {
 				Type:     schema.TypeString,

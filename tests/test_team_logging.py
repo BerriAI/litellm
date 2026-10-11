@@ -7,14 +7,13 @@ import aiohttp
 import os
 import dotenv
 from dotenv import load_dotenv
-import pytest
 
 load_dotenv()
 
 
 async def generate_key(session, models=[], team_id=None):
     url = "http://0.0.0.0:4000/key/generate"
-    headers = {"Authorization": "Bearer sk-1234", "Content-Type": "application/json"}
+    headers = {"Authorization": f"Bearer {os.environ['LITELLM_MASTER_KEY']}", "Content-Type": "application/json"}
     data = {
         "models": models,
         "duration": None,

@@ -4,11 +4,7 @@ import os
 from dataclasses import dataclass
 import argparse
 import re
-import sys
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 
 

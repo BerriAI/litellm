@@ -1,12 +1,7 @@
 import json
-import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 
 import httpx
@@ -97,7 +92,7 @@ async def test_audio_input_to_model(stream, model):
     audio_format = "pcm16"
     if stream is False:
         audio_format = "wav"
-    litellm._turn_on_debug()
+    litellm.turn_on_debug()
     litellm.drop_params = True
     url = "https://openaiassets.blob.core.windows.net/$web/API/docs/audio/alloy.wav"
     response = requests.get(url)

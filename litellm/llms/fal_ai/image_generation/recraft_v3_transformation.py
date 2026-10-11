@@ -1,6 +1,8 @@
-from typing import TYPE_CHECKING, Any, List, Optional
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.types.llms.openai import OpenAIImageGenerationOptionalParams
 from litellm.types.utils import ImageObject, ImageResponse
@@ -9,10 +11,13 @@ from .transformation import FalAIBaseConfig
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
 else:
     LiteLLMLoggingObj = Any
+
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 class FalAIRecraftV3Config(FalAIBaseConfig):
@@ -28,7 +33,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
 
     IMAGE_GENERATION_ENDPOINT: str = "fal-ai/recraft/v3/text-to-image"
 
-    def get_supported_openai_params(self, model: str) -> List[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         """
         Get supported OpenAI parameters for Recraft v3.
         """
@@ -53,15 +58,15 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         - response_format -> ignored (Recraft returns URLs)
         - n -> ignored (Recraft doesn't support multiple images)
         """
-        supported_params = self.get_supported_openai_params(model)
+        supported_params: Final = self.get_supported_openai_params(model)
 
         # Map OpenAI params to Recraft v3 params
-        param_mapping = {
+        param_mapping: Final = {
             "size": "image_size",
         }
 
-        for k in non_default_params.keys():
-            if k not in optional_params.keys():
+        for k in non_default_params:
+            if k not in optional_params:
                 if k in supported_params:
                     # Use mapped parameter name if exists
                     mapped_key = param_mapping.get(k, k)
@@ -88,7 +93,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
 
         return optional_params
 
-    def _map_image_size(self, size: str) -> Any:
+    def _map_image_size(self, size: str) -> str | Mapping[str, int]:
         """
         Map OpenAI size format to Recraft v3 image_size format.
 
@@ -104,7 +109,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         - landscape_16_9
         """
         # Map common OpenAI sizes to Recraft presets
-        size_mapping = {
+        size_mapping: Final = {
             "1024x1024": "square_hd",
             "512x512": "square",
             "768x1024": "portrait_4_3",
@@ -154,7 +159,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
 
         Note: Vector illustrations cost 2X as much.
         """
-        recraft_request_body = {
+        recraft_request_body: Final = {
             "prompt": prompt,
             **optional_params,
         }
@@ -170,9 +175,9 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         request_data: dict,
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
-        api_key: Optional[str] = None,
-        json_mode: Optional[bool] = None,
+        encoding: "Tokenizer | None",
+        api_key: str | None = None,
+        json_mode: bool | None = None,
     ) -> ImageResponse:
         """
         Transform the Recraft v3 response to litellm ImageResponse format.
@@ -190,7 +195,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
         }
         """
         try:
-            response_data = raw_response.json()
+            response_data: Final = raw_response.json()
         except Exception as e:
             raise self.get_error_class(
                 error_message=f"Error transforming image generation response: {e}",
@@ -202,7 +207,7 @@ class FalAIRecraftV3Config(FalAIBaseConfig):
             model_response.data = []
 
         # Handle Recraft v3 response format
-        images = response_data.get("images", [])
+        images: Final = _JSON_OBJECT.validate_python(response_data).get("images", [])
         if isinstance(images, list):
             for image_data in images:
                 if isinstance(image_data, dict):

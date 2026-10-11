@@ -47,7 +47,7 @@ describe("BetaBadge", () => {
 
     const { container } = render(<BetaBadge />);
 
-    expect(container.firstChild).toBeNull();
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should render badge with dot instead of text when dot prop is true", () => {
