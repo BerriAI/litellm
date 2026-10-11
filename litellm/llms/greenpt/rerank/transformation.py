@@ -1,3 +1,5 @@
+from typing import Final
+
 from litellm.llms.hosted_vllm.rerank.transformation import HostedVLLMRerankConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.rerank import RerankBilledUnits
@@ -5,34 +7,34 @@ from litellm.types.utils import ModelInfo
 
 
 class GreenPTRerankConfig(HostedVLLMRerankConfig):
-    def get_supported_cohere_rerank_params(self, model: str) -> list:
+    def get_supported_cohere_rerank_params(self, model: str) -> list:  # mutable-ok: mirrors override contract
         return ["query", "documents", "top_n", "return_documents"]
 
     def validate_environment(
         self,
-        headers: dict,
+        headers: dict,  # mutable-ok: mirrors override contract
         model: str,
         api_key: str | None = None,
-        optional_params: dict | None = None,
-    ) -> dict:
-        api_key = api_key or get_secret_str("GREENPT_API_KEY")
-        if api_key is None:
+        optional_params: dict | None = None,  # mutable-ok: mirrors override contract
+    ) -> dict:  # mutable-ok: mirrors override contract
+        resolved_api_key: Final = api_key or get_secret_str("GREENPT_API_KEY")
+        if resolved_api_key is None:
             raise ValueError("GreenPT API key is required. Set GREENPT_API_KEY.")
         return super().validate_environment(
             headers=headers,
             model=model,
-            api_key=api_key,
+            api_key=resolved_api_key,
             optional_params=optional_params,
         )
 
     def transform_rerank_request(
         self,
         model: str,
-        optional_rerank_params: dict,
-        headers: dict,
-        litellm_params: dict | None = None,
-    ) -> dict:
-        request = super().transform_rerank_request(
+        optional_rerank_params: dict,  # mutable-ok: mirrors override contract
+        headers: dict,  # mutable-ok: mirrors override contract
+        litellm_params: dict | None = None,  # mutable-ok: mirrors override contract
+    ) -> dict:  # mutable-ok: mirrors override contract
+        request: Final = super().transform_rerank_request(
             model=model,
             optional_rerank_params=optional_rerank_params,
             headers=headers,
@@ -50,10 +52,10 @@ class GreenPTRerankConfig(HostedVLLMRerankConfig):
     ) -> tuple[float, float]:
         if model_info is None or billed_units is None:
             return 0.0, 0.0
-        input_cost_per_token = model_info.get("input_cost_per_token")
+        input_cost_per_token: Final = model_info.get("input_cost_per_token")
         if input_cost_per_token is None:
             return 0.0, 0.0
-        total_tokens = billed_units.get("total_tokens")
+        total_tokens: Final = billed_units.get("total_tokens")
         if total_tokens is None:
             return 0.0, 0.0
         return input_cost_per_token * total_tokens, 0.0

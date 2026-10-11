@@ -9010,7 +9010,7 @@ class ProviderConfigManager:
             return get_dashscope_family_rerank_config(provider.value)
         from litellm.llms.greenpt.rerank.transformation import GreenPTRerankConfig
 
-        config_class = {
+        config_class: Final = {
             litellm.LlmProviders.GREENPT: GreenPTRerankConfig,
         }.get(provider, litellm.CohereRerankConfig)
         return config_class()

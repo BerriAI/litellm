@@ -80,7 +80,7 @@ class JSONProviderRegistry:
 
     @classmethod
     def supports_embeddings_api(cls, slug: str) -> bool:
-        provider = cls._providers.get(slug)
+        provider: Final = cls._providers.get(slug)
         if provider is None:
             return False
         return "/v1/embeddings" in provider.supported_endpoints
