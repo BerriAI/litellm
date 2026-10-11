@@ -118,8 +118,8 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
         # A per-user OAuth credential must survive the clear: dropping
         # litellm_credential_name / github_copilot_auth_type would flip the call to
         # shared mode and send the admin's Copilot token to the redirected host.
-        # Per-user mode ignores the caller's api_base anyway (the session's
-        # validated host wins), so keeping the mode is fail-closed.
+        # Per-user mode ignores the caller's api_base anyway (only the
+        # operator-configured Copilot base is used), so keeping the mode is fail-closed.
         credential_name_value: Final[object] = litellm_params.get(  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # litellm_params is the untyped request dict
             "litellm_credential_name"
         )

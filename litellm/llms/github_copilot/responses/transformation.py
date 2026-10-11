@@ -262,7 +262,11 @@ class GithubCopilotResponsesAPIConfig(OpenAIResponsesAPIConfig):
         """
         Get the complete URL for GitHub Copilot Responses API endpoint.
         """
-        return f"{get_copilot_api_base(api_base).rstrip('/')}/responses"
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
+        operator_api_base: Final = get_copilot_api_base(api_base if user_session is None else None)
+        return f"{operator_api_base.rstrip('/')}/responses"
 
     def _handle_reasoning_item(self, item: dict[str, object]) -> dict[str, object]:
         """

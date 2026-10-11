@@ -116,7 +116,11 @@ class GithubCopilotEmbeddingConfig(BaseEmbeddingConfig):
         """
         Get the complete URL for GitHub Copilot Embedding API endpoint.
         """
-        return f"{get_copilot_api_base(api_base).rstrip('/')}/embeddings"
+        user_session: Final = require_github_copilot_user_session(
+            cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
+        )
+        operator_api_base: Final = get_copilot_api_base(api_base if user_session is None else None)
+        return f"{operator_api_base.rstrip('/')}/embeddings"
 
     def transform_embedding_request(
         self,

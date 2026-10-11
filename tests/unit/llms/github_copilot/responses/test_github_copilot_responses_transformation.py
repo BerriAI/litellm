@@ -53,12 +53,22 @@ class TestGithubCopilotResponsesAPITransformation:
         assert config.custom_llm_provider == LlmProviders.GITHUB_COPILOT, "custom_llm_provider should be GITHUB_COPILOT"
 
     @pytest.mark.parametrize(
-        ("api_base", "environment_base", "expected_base"),
+        ("api_base", "environment_base", "shared_expected_base", "per_user_expected_base"),
         (
-            (None, "https://copilot-env.example", "https://copilot-env.example"),
-            ("http://localhost:8080", "https://copilot-env.example", "http://localhost:8080"),
-            ("https://copilot-deployment.example/", None, "https://copilot-deployment.example"),
-            (None, None, DEFAULT_GITHUB_COPILOT_API_BASE),
+            (None, "https://copilot-env.example", "https://copilot-env.example", "https://copilot-env.example"),
+            (
+                "http://localhost:8080",
+                "https://copilot-env.example",
+                "http://localhost:8080",
+                "https://copilot-env.example",
+            ),
+            (
+                "https://copilot-deployment.example/",
+                None,
+                "https://copilot-deployment.example",
+                DEFAULT_GITHUB_COPILOT_API_BASE,
+            ),
+            (None, None, DEFAULT_GITHUB_COPILOT_API_BASE, DEFAULT_GITHUB_COPILOT_API_BASE),
         ),
     )
     @pytest.mark.parametrize("per_user", (False, True))
@@ -66,7 +76,8 @@ class TestGithubCopilotResponsesAPITransformation:
         self,
         api_base: str | None,
         environment_base: str | None,
-        expected_base: str,
+        shared_expected_base: str,
+        per_user_expected_base: str,
         per_user: bool,
         monkeypatch: pytest.MonkeyPatch,
     ):
@@ -84,6 +95,7 @@ class TestGithubCopilotResponsesAPITransformation:
                 else {}
             ),
         )
+        expected_base = per_user_expected_base if per_user else shared_expected_base
         assert url == f"{expected_base}/responses"
         config.authenticator.get_api_key.assert_not_called()
 

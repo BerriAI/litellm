@@ -426,7 +426,7 @@ def _anthropic_messages_payload():
 
 def _copilot_surface_responder(model_payload):
     def respond(request: httpx.Request) -> httpx.Response:
-        if request.url.host in ("api.githubcopilot.com", "configured.example.com", "deployment.example.com"):
+        if request.url.host in ("api.githubcopilot.com", "configured.example.com"):
             return httpx.Response(200, json=model_payload, request=request)
         pytest.fail(f"unexpected request to {request.url}")
 
@@ -448,9 +448,9 @@ def _assert_direct_model_call(requests, github_token, model_host="https://api.gi
 
 
 @pytest.mark.parametrize("surface", ["completion", "embedding", "responses"])
-@pytest.mark.parametrize("deployment_base", [None, "https://deployment.example.com/v1"])
-def test_per_user_request_sends_github_token_directly_to_configured_base(
-    per_user_credential, monkeypatch, surface, deployment_base
+@pytest.mark.parametrize("caller_base", [None, "https://attacker.example.com/v1"])
+def test_per_user_request_sends_github_token_only_to_operator_configured_base(
+    per_user_credential, monkeypatch, surface, caller_base
 ):
     monkeypatch.setenv("GITHUB_COPILOT_API_BASE", "http://configured.example.com/v1")
     payloads = {
@@ -462,7 +462,7 @@ def test_per_user_request_sends_github_token_directly_to_configured_base(
         "litellm_credential_name": "copilot-cred",
         "secret_fields": _secret_fields("user-a", "stored-github-token"),
         "extra_headers": dict(_EVIL_AUTH_HEADERS),
-        "api_base": deployment_base,
+        "api_base": caller_base,
     }
     with github_http(_copilot_surface_responder(payloads[surface])) as requests, _no_authenticator():
         if surface == "completion":
@@ -476,7 +476,7 @@ def test_per_user_request_sends_github_token_directly_to_configured_base(
         else:
             result = litellm.responses(model="github_copilot/gpt-5.3-codex", input="hi", **common)
             assert result.usage.total_tokens == 6
-    expected_base = deployment_base or "http://configured.example.com/v1"
+    expected_base = "http://configured.example.com/v1"
     expected_path = {"completion": "chat/completions", "embedding": "embeddings", "responses": "responses"}[surface]
     assert len(requests) == 1
     assert str(requests[0].url) == f"{expected_base}/{expected_path}"

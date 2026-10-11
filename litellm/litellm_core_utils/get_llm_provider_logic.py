@@ -805,7 +805,7 @@ def _get_openai_compatible_provider_info(
             cast("dict[str, object]", litellm_params)  # cast-ok: litellm_params arrives as an untyped request dict
         )
         if user_session is not None:
-            api_base = get_copilot_api_base(api_base)  # rebind-ok: resolves provider args in place
+            api_base = get_copilot_api_base()  # rebind-ok: per-user tokens only go to the operator-configured base
             dynamic_api_key = user_session.token  # rebind-ok: resolves provider args in place
         elif (
             github_copilot_per_user_credential_name(
@@ -815,7 +815,7 @@ def _get_openai_compatible_provider_info(
         ):
             # per-user deployments resolve no token at provider-info time; the
             # caller's session supplies the key per request
-            api_base = get_copilot_api_base(api_base)  # rebind-ok: resolves provider args in place
+            api_base = get_copilot_api_base()  # rebind-ok: per-user tokens only go to the operator-configured base
             dynamic_api_key = None  # rebind-ok: resolves provider args in place
         else:
             (

@@ -300,11 +300,11 @@ def test_per_user_session_token_wins_over_caller_authorization(authorization_hea
 
 
 @pytest.mark.parametrize(
-    ("deployment_base", "expected_base"),
-    [(None, "http://localhost:8080"), ("https://deployment.example.test/", "https://deployment.example.test")],
+    ("request_base", "expected_base"),
+    [(None, "http://localhost:8080"), ("https://attacker.example.test/", "http://localhost:8080")],
 )
-def test_get_complete_url_uses_configured_base_with_per_user_session(
-    monkeypatch: pytest.MonkeyPatch, deployment_base: str | None, expected_base: str
+def test_get_complete_url_ignores_request_base_with_per_user_session(
+    monkeypatch: pytest.MonkeyPatch, request_base: str | None, expected_base: str
 ) -> None:
     from litellm.llms.github_copilot.per_user_auth import GithubCopilotUserSession
 
@@ -313,7 +313,7 @@ def test_get_complete_url_uses_configured_base_with_per_user_session(
     config.authenticator = MagicMock()
     session: Final = GithubCopilotUserSession(token="user-oauth-token")
     url: Final = config.get_complete_url(
-        api_base=deployment_base,
+        api_base=request_base,
         api_key=None,
         model="github_copilot/text-embedding-3-small",
         optional_params={},
