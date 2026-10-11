@@ -96,7 +96,9 @@ def test_proxy_config_upserts_existing_deployment_without_duplicating_it(monkeyp
 
 
 @pytest.mark.asyncio
-async def test_proxy_config_preserves_models_when_config_read_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_proxy_config_preserves_models_when_config_read_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy import proxy_server
 
     router = litellm.Router(model_list=[_deployment("config-deployment").to_json(exclude_none=True)])
@@ -129,6 +131,8 @@ async def test_proxy_config_keeps_database_models_and_deletes_stale_models(
 
     assert desired == frozenset({"kept-deployment"})
     assert router.get_model_ids() == ["kept-deployment"]
+
+
 from tests._master_key import MASTER_KEY
 
 
@@ -142,7 +146,6 @@ async def test_proxy_config_loads_lens_store_from_yaml(tmp_path, monkeypatch) ->
 
     _, _, settings = await ProxyConfig().load_config(router=None, config_file_path=str(config_file))
     assert is_lens_tracing_enabled(settings["tracing"], {}) is True
-
 
 
 @pytest.mark.asyncio
@@ -170,7 +173,9 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     outcome: Final = pytest.raises(RuntimeError, match="shutdown failure") if shutdown_error else nullcontext()
     with outcome:
         async with manage_tracing(enabled=True, client_factory=client):
-            logger: Final = next(callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter))
+            logger: Final = next(
+                callback for callback in litellm._async_success_callback if isinstance(callback, LensExporter)
+            )
             await logger.async_log_success_event(
                 {"standard_logging_object": {"id": "response-1", "response_cost": 0.25}}, None, None, None
             )
@@ -184,7 +189,6 @@ async def test_tracing_config_automatically_exports_spend_without_a_storage_depe
     assert rows[0]["response_id"] == "response-1"
     assert logger not in litellm._async_success_callback
     assert logger.task is not None and logger.task.done() and not logger.task.cancelled()
-
 
 
 # ---------------------------------------------------------------------------
@@ -4835,7 +4839,9 @@ async def test_ProxyConfig__update_config_from_db_keeps_keys_the_config_file_omi
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("ui_settings_already_synced", [False, True])
-async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(monkeypatch, ui_settings_already_synced):
+async def test_ProxyConfig_add_deployment_continues_after_null_pass_through_endpoints(
+    monkeypatch, ui_settings_already_synced
+):
     from litellm.proxy import proxy_server
 
     pc = ProxyConfig()
@@ -5640,6 +5646,36 @@ async def test_proxy_config_semantic_filter_db_sync_skips_reinit_while_index_bui
     finally:
         gate.set()
         await build_task
+
+
+@pytest.mark.asyncio
+async def test_proxy_config_semantic_filter_db_sync_reinits_after_finished_failed_build(monkeypatch):
+    from litellm.proxy.hooks.mcp_semantic_filter import SemanticToolFilterHook
+
+    settings: Final = {
+        "enabled": True,
+        "embedding_model": "embed",
+        "top_k": 3,
+        "similarity_threshold": 0.5,
+    }
+    build_task: Final = asyncio.create_task(asyncio.sleep(0))
+    await build_task
+    hook: Final = MagicMock(spec=SemanticToolFilterHook)
+    hook.index_build_task = build_task
+    hook.filter = SimpleNamespace(tool_router=None)
+    removed: Final = MagicMock()
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.get_config_param",
+        AsyncMock(return_value=SimpleNamespace(param_value={"mcp_semantic_tool_filter": settings})),
+    )
+    monkeypatch.setattr(litellm.logging_callback_manager, "get_custom_loggers_for_type", lambda _: [hook])
+    monkeypatch.setattr(litellm.logging_callback_manager, "remove_callbacks_by_type", removed)
+    pc: Final = ProxyConfig()
+    pc._last_semantic_filter_config = settings
+
+    await pc._init_semantic_filter_settings_in_db(prisma_client=MagicMock())
+
+    removed.assert_called_once()
 
 
 @pytest.mark.asyncio

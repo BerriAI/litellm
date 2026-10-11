@@ -338,17 +338,19 @@ def test_second_proxy_on_warm_redis_embeds_no_descriptions(gateway: Gateway, tmp
     alias: Final = "sf" + uuid.uuid4().hex[:8]
     descriptions: Final = _descriptions()
     with owned_redis(tmp_path) as redis, scripted_peer(*_tools()) as peer:
-        first_embeddings: Final = EmbeddingDouble("healthy")
+        embeddings: Final = EmbeddingDouble("healthy")
         respond, bodies = _chat_double()
+        second_respond, second_bodies = _chat_double()
         with (
             wire_server(respond) as chat_wire,
-            wire_server(first_embeddings.respond) as first_embedding_wire,
+            wire_server(second_respond) as second_chat_wire,
+            wire_server(embeddings.respond) as embedding_wire,
         ):
             config: Final = _config(
                 tmp_path,
                 alias=alias,
                 peer_url=peer.url,
-                embeddings_url=first_embedding_wire.url,
+                embeddings_url=embedding_wire.url,
                 chat_url=chat_wire.url,
                 redis=redis,
             )
@@ -358,30 +360,24 @@ def test_second_proxy_on_warm_redis_embeds_no_descriptions(gateway: Gateway, tmp
                     lambda filtered: filtered,
                     seconds=60,
                 )
-        second_embeddings: Final = EmbeddingDouble("healthy")
-        second_respond, second_bodies = _chat_double()
-        with (
-            wire_server(second_respond) as second_chat_wire,
-            wire_server(second_embeddings.respond) as second_embedding_wire,
-        ):
+            embedded_so_far: Final = embeddings.document_inputs(descriptions)
             config = _config(
                 tmp_path,
                 alias=alias,
                 peer_url=peer.url,
-                embeddings_url=second_embedding_wire.url,
+                embeddings_url=embedding_wire.url,
                 chat_url=second_chat_wire.url,
                 redis=redis,
             )
             with owned_proxy_process(gateway, tmp_path, {}, config=config) as second_proxy:
-                assert second_embeddings.document_inputs(descriptions) == []
                 assert _request_is_filtered(second_proxy.gateway, "chat", second_bodies, alias)
+                assert embeddings.document_inputs(descriptions) == embedded_so_far
 
 
 def test_two_proxies_cold_starting_together_embed_each_description_once(gateway: Gateway, tmp_path: Path) -> None:
     alias: Final = "sf" + uuid.uuid4().hex[:8]
     descriptions: Final = _descriptions()
-    first_embeddings: Final = EmbeddingDouble("healthy", delay=10.0)
-    second_embeddings: Final = EmbeddingDouble("healthy")
+    embeddings: Final = EmbeddingDouble("healthy", delay=10.0)
     respond_a, bodies_a = _chat_double()
     respond_b, bodies_b = _chat_double()
     with (
@@ -389,14 +385,13 @@ def test_two_proxies_cold_starting_together_embed_each_description_once(gateway:
         scripted_peer(*_tools()) as peer,
         wire_server(respond_a) as chat_wire_a,
         wire_server(respond_b) as chat_wire_b,
-        wire_server(first_embeddings.respond) as embedding_wire_a,
-        wire_server(second_embeddings.respond) as embedding_wire_b,
+        wire_server(embeddings.respond) as embedding_wire,
     ):
         config_a: Final = _config(
             tmp_path,
             alias=alias,
             peer_url=peer.url,
-            embeddings_url=embedding_wire_a.url,
+            embeddings_url=embedding_wire.url,
             chat_url=chat_wire_a.url,
             redis=redis,
         )
@@ -404,7 +399,7 @@ def test_two_proxies_cold_starting_together_embed_each_description_once(gateway:
             tmp_path,
             alias=alias,
             peer_url=peer.url,
-            embeddings_url=embedding_wire_b.url,
+            embeddings_url=embedding_wire.url,
             chat_url=chat_wire_b.url,
             redis=redis,
         )
@@ -422,9 +417,7 @@ def test_two_proxies_cold_starting_together_embed_each_description_once(gateway:
                 lambda filtered: filtered,
                 seconds=60,
             )
-        document_inputs: Final = Counter(
-            first_embeddings.document_inputs(descriptions) + second_embeddings.document_inputs(descriptions)
-        )
+        document_inputs: Final = Counter(embeddings.document_inputs(descriptions))
         assert document_inputs == Counter({description: 1 for description in descriptions})
 
 
@@ -433,56 +426,50 @@ def test_edited_description_reembeds_only_that_tool(gateway: Gateway, tmp_path: 
     descriptions_v1: Final = _descriptions()
     edited: Final = "Cancel and refund an invoice instantly"
     with owned_redis(tmp_path) as redis:
-        first_embeddings: Final = EmbeddingDouble("healthy")
+        embeddings: Final = EmbeddingDouble("healthy")
         respond, bodies = _chat_double()
-        with (
-            scripted_peer(*_tools()) as peer_v1,
-            wire_server(respond) as chat_wire,
-            wire_server(first_embeddings.respond) as first_embedding_wire,
-        ):
-            config: Final = _config(
-                tmp_path,
-                alias=alias,
-                peer_url=peer_v1.url,
-                embeddings_url=first_embedding_wire.url,
-                chat_url=chat_wire.url,
-                redis=redis,
-            )
-            with owned_proxy_process(gateway, tmp_path, {}, config=config) as first_proxy:
-                eventually(
-                    lambda: _request_is_filtered(first_proxy.gateway, "chat", bodies, alias),
-                    lambda filtered: filtered,
-                    seconds=60,
-                )
-        second_embeddings: Final = EmbeddingDouble("healthy")
         second_respond, second_bodies = _chat_double()
-        with (
-            scripted_peer(*_tools(edited)) as peer_v2,
-            wire_server(second_respond) as second_chat_wire,
-            wire_server(second_embeddings.respond) as second_embedding_wire,
-        ):
-            config = _config(
-                tmp_path,
-                alias=alias,
-                peer_url=peer_v2.url,
-                embeddings_url=second_embedding_wire.url,
-                chat_url=second_chat_wire.url,
-                redis=redis,
-            )
-            with owned_proxy_process(gateway, tmp_path, {}, config=config) as second_proxy:
-                assert second_embeddings.document_inputs(descriptions_v1) == []
-                document_inputs: Final = [
-                    text
-                    for inputs, _ in second_embeddings.arrived
-                    for text in inputs
-                    if text not in descriptions_v1 and text not in ("test", PROMPT)
-                ]
-                assert document_inputs == [edited]
-                eventually(
-                    lambda: _request_is_filtered(second_proxy.gateway, "chat", second_bodies, alias),
-                    lambda filtered: filtered,
-                    seconds=60,
+        with wire_server(embeddings.respond) as embedding_wire:
+            with (
+                scripted_peer(*_tools()) as peer_v1,
+                wire_server(respond) as chat_wire,
+            ):
+                config: Final = _config(
+                    tmp_path,
+                    alias=alias,
+                    peer_url=peer_v1.url,
+                    embeddings_url=embedding_wire.url,
+                    chat_url=chat_wire.url,
+                    redis=redis,
                 )
+                with owned_proxy_process(gateway, tmp_path, {}, config=config) as first_proxy:
+                    eventually(
+                        lambda: _request_is_filtered(first_proxy.gateway, "chat", bodies, alias),
+                        lambda filtered: filtered,
+                        seconds=60,
+                    )
+            with (
+                scripted_peer(*_tools(edited)) as peer_v2,
+                wire_server(second_respond) as second_chat_wire,
+            ):
+                config = _config(
+                    tmp_path,
+                    alias=alias,
+                    peer_url=peer_v2.url,
+                    embeddings_url=embedding_wire.url,
+                    chat_url=second_chat_wire.url,
+                    redis=redis,
+                )
+                with owned_proxy_process(gateway, tmp_path, {}, config=config) as second_proxy:
+                    eventually(
+                        lambda: _request_is_filtered(second_proxy.gateway, "chat", second_bodies, alias),
+                        lambda filtered: filtered,
+                        seconds=60,
+                    )
+                    document_inputs: Final = Counter(
+                        text for inputs, _ in embeddings.arrived for text in inputs if text not in ("test", PROMPT)
+                    )
+                    assert document_inputs == Counter({**{d: 1 for d in descriptions_v1}, edited: 1})
 
 
 def test_without_redis_startup_waits_for_the_index(gateway: Gateway, tmp_path: Path) -> None:

@@ -2433,6 +2433,16 @@ def test_embedding_identity_marks_deployment_dimensions():
     router_with.get_model_list = lambda model_name: [
         {"litellm_params": {"model": "amazon.titan-embed-text-v2:0", "dimensions": 512}}
     ]
+    router_with_api_base = Mock()
+    router_with_api_base.get_model_list = lambda model_name: [
+        {
+            "litellm_params": {
+                "model": "amazon.titan-embed-text-v2:0",
+                "dimensions": 512,
+                "api_base": "https://bedrock-endpoint.example.com",
+            }
+        }
+    ]
 
     base = SemanticMCPToolFilter(
         embedding_model="titan-alias",
@@ -2444,6 +2454,15 @@ def test_embedding_identity_marks_deployment_dimensions():
         litellm_router_instance=router_with,
         enabled=True,
     )
+    based = SemanticMCPToolFilter(
+        embedding_model="titan-alias",
+        litellm_router_instance=router_with_api_base,
+        enabled=True,
+    )
 
     assert base.embedding_identity == "titan-alias|amazon.titan-embed-text-v2:0"
     assert sized.embedding_identity == "titan-alias|amazon.titan-embed-text-v2:0@dimensions=512"
+    assert (
+        based.embedding_identity
+        == "titan-alias|amazon.titan-embed-text-v2:0@dimensions=512@api_base=https://bedrock-endpoint.example.com"
+    )

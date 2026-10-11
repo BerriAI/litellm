@@ -8545,7 +8545,7 @@ class ProxyConfig:
         for active_hook in litellm.logging_callback_manager.get_custom_loggers_for_type(hook_type):
             if not isinstance(active_hook, SemanticToolFilterHook):
                 continue
-            if active_hook.index_build_task is not None:
+            if active_hook.index_build_task is not None and not active_hook.index_build_task.done():
                 verbose_proxy_logger.debug(
                     "Semantic filter settings unchanged, index build already started; skipping reinitialization"
                 )

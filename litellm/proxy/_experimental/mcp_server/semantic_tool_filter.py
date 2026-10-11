@@ -56,6 +56,13 @@ def _is_context_window_error(error: BaseException | None) -> bool:
     )
 
 
+def _embedding_params_suffix(litellm_params: Mapping[str, object]) -> str:
+    """Deployment traits that make cached vectors non-interchangeable across endpoints."""
+    return (f"@dimensions={litellm_params['dimensions']}" if litellm_params.get("dimensions") is not None else "") + (
+        f"@api_base={litellm_params['api_base']}" if litellm_params.get("api_base") is not None else ""
+    )
+
+
 class SemanticMCPToolFilter:
     """Filters MCP tools using semantic similarity to reduce context window size."""
 
@@ -113,8 +120,8 @@ class SemanticMCPToolFilter:
             )
             deployment_models: Final = sorted(
                 {
-                    str(model) + ("@dimensions=" + str(dimensions) if dimensions is not None else "")
-                    for model, dimensions in ((p.get("model"), p.get("dimensions")) for p in litellm_params)
+                    str(model) + _embedding_params_suffix(params)
+                    for model, params in ((p.get("model"), p) for p in litellm_params)
                     if model
                 }
             )
