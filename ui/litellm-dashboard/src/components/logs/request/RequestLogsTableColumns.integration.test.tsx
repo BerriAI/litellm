@@ -6,6 +6,7 @@ import { DataTable } from "@/components/shared/DataTable";
 
 import type { LogEntry } from "../types";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
+import { requestLogRowLabel } from "./logDetailRouting";
 
 const { copyToClipboardMock } = vi.hoisted(() => ({ copyToClipboardMock: vi.fn() }));
 
@@ -303,7 +304,7 @@ describe("Request ID column", () => {
         getRowId={(row) => row.request_id}
         size="compact"
         onRowClick={onRowClick}
-        getRowLabel={(row) => `Open request ${row.request_id}`}
+        getRowLabel={requestLogRowLabel}
       />,
     );
 

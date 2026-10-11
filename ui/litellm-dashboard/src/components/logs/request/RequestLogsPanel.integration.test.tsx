@@ -558,6 +558,22 @@ describe("RequestLogsPanel", () => {
       expect(urlParams().get("log_id")).toBe("req-keyboard");
     });
 
+    it("opens a multi-request session from its focused row and exposes its accessible name", async () => {
+      const user = userEvent.setup();
+      respondWith([
+        logEntry({ request_id: "req-session-keyboard", session_id: "sess-keyboard", session_total_count: 3 }),
+      ]);
+      renderPanel();
+
+      const sessionRow = await screen.findByRole("row", { name: "Open session sess-keyboard" });
+      sessionRow.focus();
+      expect(sessionRow).toHaveFocus();
+      await user.keyboard("{Enter}");
+
+      await waitFor(() => expect(drawer()).toHaveAttribute("data-session-id", "sess-keyboard"));
+      expect(urlParams().get("log_id")).toBe("req-session-keyboard");
+    });
+
     it("opens the drawer on load when ?log_id= matches a log in the loaded page", async () => {
       respondWith([logEntry({ request_id: "req-1" }), logEntry({ request_id: "req-2" })]);
       renderPanel("?log_id=req-2");

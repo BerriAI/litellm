@@ -13,6 +13,7 @@ import { CREDENTIAL_LABELS, SPAN_TYPE_LABELS } from "../constants";
 import { LOG_FILTER_IDS, LOG_FILTER_LABELS, type LogsWindow } from "./useLogFilterLogic";
 import { RequestLogsFilters } from "./RequestLogsFilters";
 import { getRequestLogsTableColumns } from "./RequestLogsTableColumns";
+import { requestLogRowLabel } from "./logDetailRouting";
 
 interface RequestLogsTableProps {
   data: LogEntry[];
@@ -116,7 +117,7 @@ export function RequestLogsTable({
       noDataMessage={<RequestLogsEmptyState filtered={isFiltered} />}
       size="compact"
       onRowClick={onRowClick}
-      getRowLabel={(row) => `Open request ${row.request_id}`}
+      getRowLabel={requestLogRowLabel}
       toolbar={(table) => (
         <>
           <DataTableToolbar
