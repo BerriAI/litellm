@@ -70,7 +70,9 @@ impl MessagesRoute {
                 WireRequest {
                     url,
                     headers: authenticated.headers,
-                    body: serde_json::to_value(&body).map_err(serialize_failure)?,
+                    body: provider
+                        .config()
+                        .wire_body(serde_json::to_value(&body).map_err(serialize_failure)?),
                 },
                 request_context,
             )

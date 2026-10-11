@@ -35,7 +35,7 @@ class TestTryShortCircuitSearch:
             )
 
             result = await logger.try_short_circuit_search(
-                model="github_copilot/claude-sonnet-4",
+                model="github_copilot/claude-sonnet-5.5",
                 messages=[
                     {"role": "user", "content": "Search for Claude Code releases"}
                 ],
@@ -66,7 +66,7 @@ class TestTryShortCircuitSearch:
         logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
 
         result = await logger.try_short_circuit_search(
-            model="github_copilot/claude-sonnet-4",
+            model="github_copilot/claude-sonnet-5.5",
             messages=[{"role": "user", "content": "Do something"}],
             tools=[
                 {"type": "web_search_20250305", "name": "web_search", "max_uses": 8},
@@ -83,7 +83,7 @@ class TestTryShortCircuitSearch:
         logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
 
         result = await logger.try_short_circuit_search(
-            model="github_copilot/claude-sonnet-4",
+            model="github_copilot/claude-sonnet-5.5",
             messages=[{"role": "user", "content": "Hello"}],
             tools=None,
             custom_llm_provider="github_copilot",
@@ -97,7 +97,7 @@ class TestTryShortCircuitSearch:
         logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
 
         result = await logger.try_short_circuit_search(
-            model="github_copilot/claude-sonnet-4",
+            model="github_copilot/claude-sonnet-5.5",
             messages=[{"role": "user", "content": "Hello"}],
             tools=[],
             custom_llm_provider="github_copilot",
@@ -111,7 +111,7 @@ class TestTryShortCircuitSearch:
         logger = WebSearchInterceptionLogger(enabled_providers=["bedrock"])
 
         result = await logger.try_short_circuit_search(
-            model="github_copilot/claude-sonnet-4",
+            model="github_copilot/claude-sonnet-5.5",
             messages=[{"role": "user", "content": "Search for something"}],
             tools=[
                 {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
@@ -150,7 +150,7 @@ class TestTryShortCircuitSearch:
         logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
 
         result = await logger.try_short_circuit_search(
-            model="github_copilot/claude-sonnet-4",
+            model="github_copilot/claude-sonnet-5.5",
             messages=[],
             tools=[
                 {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
@@ -171,7 +171,7 @@ class TestTryShortCircuitSearch:
             mock_search.side_effect = RuntimeError("Tavily API error")
 
             result = await logger.try_short_circuit_search(
-                model="github_copilot/claude-sonnet-4",
+                model="github_copilot/claude-sonnet-5.5",
                 messages=[{"role": "user", "content": "Search for something"}],
                 tools=[
                     {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
@@ -194,7 +194,7 @@ class TestTryShortCircuitSearch:
             mock_search.return_value = ("search results here", None)
 
             result = await logger.try_short_circuit_search(
-                model="github_copilot/claude-sonnet-4",
+                model="github_copilot/claude-sonnet-5.5",
                 messages=[{"role": "user", "content": "Search query"}],
                 tools=[{"type": "web_search_20250305", "name": "web_search"}],
                 custom_llm_provider="github_copilot",
@@ -206,7 +206,7 @@ class TestTryShortCircuitSearch:
         assert result["id"].startswith("msg_")
         assert result["type"] == "message"
         assert result["role"] == "assistant"
-        assert result["model"] == "github_copilot/claude-sonnet-4"
+        assert result["model"] == "github_copilot/claude-sonnet-5.5"
         assert result["stop_reason"] == "end_turn"
         assert result["stop_sequence"] is None
         assert "usage" in result
@@ -257,7 +257,7 @@ class TestShortCircuitEntryPoint:
             mock_search.return_value = ("results", None)
             with patch("litellm.callbacks", [logger]):
                 result = await _try_websearch_short_circuit(
-                    model="github_copilot/claude-sonnet-4",
+                    model="github_copilot/claude-sonnet-5.5",
                     messages=[{"role": "user", "content": "search query"}],
                     tools=[{"type": "web_search_20250305", "name": "web_search"}],
                     custom_llm_provider="github_copilot",
@@ -285,7 +285,7 @@ class TestShortCircuitEntryPoint:
             mock_search.return_value = ("streaming results", None)
             with patch("litellm.callbacks", [logger]):
                 result = await _try_websearch_short_circuit(
-                    model="github_copilot/claude-sonnet-4",
+                    model="github_copilot/claude-sonnet-5.5",
                     messages=[{"role": "user", "content": "search query"}],
                     tools=[{"type": "web_search_20250305", "name": "web_search"}],
                     custom_llm_provider="github_copilot",
@@ -353,7 +353,7 @@ class TestShortCircuitEntryPoint:
                 # is passed to the short-circuit, even though the hook would have
                 # already converted stream to False in request_kwargs.
                 result = await _try_websearch_short_circuit(
-                    model="github_copilot/claude-sonnet-4",
+                    model="github_copilot/claude-sonnet-5.5",
                     messages=[{"role": "user", "content": "search query"}],
                     tools=[{"type": "web_search_20250305", "name": "web_search"}],
                     custom_llm_provider="github_copilot",
@@ -382,7 +382,7 @@ class TestShortCircuitEntryPoint:
                 # Simulate the caller having derived custom_llm_provider from
                 # the model string before calling _try_websearch_short_circuit
                 result = await _try_websearch_short_circuit(
-                    model="github_copilot/claude-sonnet-4",
+                    model="github_copilot/claude-sonnet-5.5",
                     messages=[{"role": "user", "content": "search query"}],
                     tools=[{"type": "web_search_20250305", "name": "web_search"}],
                     custom_llm_provider="github_copilot",

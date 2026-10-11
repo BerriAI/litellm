@@ -239,6 +239,7 @@ class ChatCompletionSession(TypedDict, total=False):
         | Message
     ]
     litellm_session_id: str | None
+    instructions: ReadOnly[str | None]
 
 
 ########### End of Initialize Classes used for Responses API  ###########
@@ -581,6 +582,7 @@ class LiteLLMCompletionResponsesConfig:
     async def async_responses_api_session_handler(
         previous_response_id: str,
         litellm_completion_request: dict,
+        instructions: str | None,
     ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
@@ -589,18 +591,25 @@ class LiteLLMCompletionResponsesConfig:
         if previous_response_id:
             chat_completion_session = (
                 await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
-                    previous_response_id=previous_response_id
+                    previous_response_id=previous_response_id,
                 )
             )
         _messages: Final = litellm_completion_request.get("messages") or []
         session_messages: Final = chat_completion_session.get("messages") or []
+        instructions_end: Final = 1 if instructions else 0
+        carried_instructions: Final = None if instructions else chat_completion_session.get("instructions")
+        leading_system_messages: Final = (
+            [LiteLLMCompletionResponsesConfig.transform_instructions_to_system_message(carried_instructions)]
+            if carried_instructions
+            else _messages[:instructions_end]
+        )
 
         # If session messages are empty (e.g., no database in test environment),
         # we still need to process the new input messages
         # Store original _messages before combining for safety check
         original_new_messages: Final = _messages.copy() if _messages else []
 
-        combined_messages = session_messages + _messages
+        combined_messages = leading_system_messages + session_messages + _messages[instructions_end:]
 
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
