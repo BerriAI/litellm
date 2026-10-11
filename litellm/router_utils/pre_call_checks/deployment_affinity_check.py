@@ -339,7 +339,9 @@ class DeploymentAffinityCheck(CustomLogger):
         return f"{model_id}_max_parallel_requests_client"
 
     @staticmethod
-    def _deployment_model_id(deployment: dict) -> str | None:
+    def _deployment_model_id(
+        deployment: dict,  # mutable-ok: router deployment payloads are plain dicts by codebase convention; read-only access here
+    ) -> str | None:
         model_info: Final = deployment.get("model_info")
         if not isinstance(model_info, dict):
             return None
@@ -371,9 +373,9 @@ class DeploymentAffinityCheck(CustomLogger):
 
     async def _yield_session_pin_if_saturated(
         self,
-        session_deployment: dict,
-        healthy_deployments: list[dict],
-    ) -> list[dict] | None:
+        session_deployment: dict,  # mutable-ok: router deployment payloads are plain dicts by codebase convention; read-only access here
+        healthy_deployments: Sequence[dict],  # mutable-ok: router deployment payloads are plain dicts by codebase convention; read-only access here
+    ) -> Sequence[dict] | None:  # mutable-ok: router deployment payloads are plain dicts by codebase convention; read-only access here
         """Idle deployments when the pinned one is saturated, else None.
 
         Opt-in via session_affinity_yield_on_saturated_deployment. A turn yields
