@@ -302,7 +302,11 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                 errorCount={errorCount(validation)}
               />
             </TabsContent>
-            <div className="flex flex-wrap items-center gap-2 border-t bg-muted/30 px-3 py-2">
+            <div
+              role="toolbar"
+              aria-label="Request actions"
+              className="flex flex-wrap items-center gap-2 border-t bg-muted/30 px-3 py-2"
+            >
               <Button
                 variant="ghost"
                 onClick={() => handlePayloadChange(clearedPayload)}
