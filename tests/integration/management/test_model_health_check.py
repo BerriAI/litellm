@@ -147,6 +147,8 @@ def test_evaluation_mode_health_check_of_the_self_hosted_strands_model_resolves_
                 },
             )
         ]
+
+
 _DATABRICKS_ENDPOINT_PROBE_REPLY: Final = JsonResponse(
     content_type="application/json",
     body={
