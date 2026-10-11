@@ -168,10 +168,21 @@ impl BaseMessagesConfig for BedrockMantleAnthropicMessagesConfig {
     }
 
     fn request_headers(&self, headers: Headers, request: &MessagesRequest) -> Headers {
+        let body_betas: BetaSet = request
+            .params
+            .extra
+            .get("anthropic_beta")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(Value::as_str)
+            .filter_map(|beta| beta.parse::<AnthropicBeta>().ok())
+            .collect();
         let caller: BetaSet = existing_betas(&headers)
-            .iter()
+            .union(body_betas)
+            .into_iter()
             .filter_map(|beta| match beta {
-                AnthropicBeta::Other(_) => Some(beta.clone()),
+                AnthropicBeta::Other(_) => Some(beta),
                 _ => beta.on(BetaProvider::BedrockMantle),
             })
             .collect();
@@ -397,6 +408,41 @@ mod tests {
                 .into_iter()
                 .collect()
         );
+    }
+
+    #[rstest]
+    #[case::body_only(
+        json!(["custom-beta", "advanced-tool-use-2025-11-20"]),
+        vec![],
+        vec![
+            AnthropicBeta::Other("custom-beta".into()),
+            AnthropicBeta::ToolSearchTool20251019,
+        ]
+    )]
+    #[case::header_and_body(
+        json!(["custom-b"]),
+        vec![("Anthropic-Beta".into(), "custom-a".into())],
+        vec![
+            AnthropicBeta::Other("custom-a".into()),
+            AnthropicBeta::Other("custom-b".into()),
+        ]
+    )]
+    fn body_betas_are_filtered_renamed_and_merged_with_headers(
+        #[case] body_betas: Value,
+        #[case] headers: Headers,
+        #[case] expected: Vec<AnthropicBeta>,
+    ) {
+        let request: MessagesRequest = serde_json::from_value(json!({
+            "model": "claude-test",
+            "max_tokens": 16,
+            "messages": [],
+            "anthropic_beta": body_betas
+        }))
+        .unwrap();
+        let headers = BEDROCK_MANTLE_MESSAGES_CONFIG.request_headers(headers, &request);
+        let actual: BetaSet = header_value(&headers, "anthropic-beta").unwrap().parse().unwrap();
+        let expected: BetaSet = expected.into_iter().collect();
+        assert_eq!(actual, expected);
     }
 
     #[rstest]
