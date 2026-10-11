@@ -20,6 +20,15 @@ fn tencent_call(call: MessagesCall) -> MessagesCall {
 #[case::deployment_key(&[], "x-api-key", "deployment-key")]
 #[case::forwarded_key(&[("X-Api-Key", "caller-key")], "x-api-key", "caller-key")]
 #[case::forwarded_bearer(&[("Authorization", "Bearer caller")], "authorization", "Bearer caller")]
+#[case::blank_key(&[("X-Api-Key", " \t")], "x-api-key", "deployment-key")]
+#[case::blank_authorization(&[("Authorization", " \t")], "x-api-key", "deployment-key")]
+#[case::empty_bearer(&[("Authorization", "bEaReR \t")], "x-api-key", "deployment-key")]
+#[case::blank_authorization_with_key(
+    &[("Authorization", "Bearer "), ("X-Api-Key", "caller-key")], "x-api-key", "caller-key"
+)]
+#[case::blank_key_with_bearer(
+    &[("X-Api-Key", " "), ("Authorization", "Bearer caller")], "authorization", "Bearer caller"
+)]
 #[tokio::test]
 async fn credentials_reach_the_selected_provider(
     tencent_call: MessagesCall,
@@ -36,6 +45,12 @@ async fn credentials_reach_the_selected_provider(
     .await;
     let sent = only_request(&upstream).await;
     assert_eq!(sent.header_values(header), [credential]);
+    let other_header = if header == "x-api-key" {
+        "authorization"
+    } else {
+        "x-api-key"
+    };
+    assert!(sent.header_values(other_header).is_empty());
     let version = DEFAULT_HEADERS
         .iter()
         .find_map(|(name, value)| (*name == "anthropic-version").then_some(*value))
@@ -69,12 +84,20 @@ async fn credentials_and_base_resolve_from_the_secret_source(tencent_call: Messa
 }
 
 #[rstest]
+#[case::absent(&[])]
+#[case::blank_key(&[("x-api-key", " \t")])]
+#[case::blank_authorization(&[("authorization", " \t")])]
+#[case::empty_bearer(&[("authorization", "Bearer \t")])]
 #[tokio::test]
-async fn missing_credentials_fail_before_sending(tencent_call: MessagesCall) {
+async fn missing_credentials_fail_before_sending(
+    tencent_call: MessagesCall,
+    #[case] forwarded: &[(&str, &str)],
+) {
     let upstream = upstream([message_response()]).await;
     let error = run(MessagesCall {
         api_key: None,
         api_base: Some(upstream.uri()),
+        extra_headers: headers(forwarded.iter().copied()),
         ..tencent_call
     })
     .await
