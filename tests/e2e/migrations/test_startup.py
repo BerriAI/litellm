@@ -3,7 +3,14 @@ from typing import Final
 
 import pytest
 
-from .checks import COMPLETE, FATAL, GATED, assert_completed, start_replicas
+from .checks import (
+    COMPLETE,
+    FATAL,
+    GATED,
+    assert_completed,
+    assert_completed_after_lock_timeouts,
+    start_replicas,
+)
 from .containers import Containers, failed, ready, until, waiting
 from .database import PRISMA_LOCK, Database, Databases, restricted_user
 from .startup_models import Migration
@@ -42,16 +49,25 @@ class TestMigrationStartup:
             domain=Domain.DB,
         )
     )
-    def test_waiters_survive_prolonged_contention(self, containers: Containers, database: Database) -> None:
+    def test_waiters_retry_lock_timeouts_until_contention_clears(
+        self, containers: Containers, database: Database
+    ) -> None:
         with ExitStack() as stack:
             with database.lock():
                 owner: Final = stack.enter_context(containers.start(database, (GATED,)))
                 until("owner blocked in migration SQL", lambda: bool(database.blocked()))
                 followers: Final = start_replicas(stack, containers, database, (GATED,), count=2)
                 until("both followers attempted Prisma locking", lambda: len(database.blocked(PRISMA_LOCK)) == 2)
-                waiting((owner, *followers), 120)
+                until(
+                    "a replica logged a migration lock-timeout retry",
+                    lambda: any(
+                        "timed out waiting for a table lock" in replica.logs()
+                        for replica in (owner, *followers)
+                    ),
+                )
+                waiting((owner, *followers), 20)
             ready((owner, *followers), database)
-            assert_completed(database, GATED)
+            assert_completed_after_lock_timeouts(database, GATED)
 
     @meta(
         Subject(
@@ -71,6 +87,27 @@ class TestMigrationStartup:
         with containers.start(database, (COMPLETE,)) as restarted:
             ready((restarted,), database)
             assert_completed(database)
+
+    @meta(
+        Subject(
+            domain=Domain.DB,
+        )
+    )
+    def test_lock_timeout_exhaustion_then_restart(self, containers: Containers, database: Database) -> None:
+        with database.lock():
+            with containers.start(
+                database, (GATED,), environment={"LITELLM_MIGRATION_DDL_LOCK_TIMEOUT": "2"}
+            ) as replica:
+                until("owner blocked in migration SQL", lambda: bool(database.blocked()))
+                failed((replica,), "attempts that made no progress")
+            assert not database.exists("migration_effect")
+            assert database.query(
+                "SELECT count(*) FROM _prisma_migrations WHERE migration_name = %s AND finished_at IS NOT NULL",
+                (GATED.name,),
+            ) == ((0,),)
+        with containers.start(database, (GATED,)) as restarted:
+            ready((restarted,), database)
+        assert_completed_after_lock_timeouts(database, GATED)
 
     @meta(
         Subject(
