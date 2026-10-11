@@ -794,6 +794,73 @@ def test_clips_for_a_model_without_media_support_are_refused_unless_the_deployme
     }
 
 
+@pytest.mark.parametrize("endpoint", ("/v1/systemone", "/systemone", "/v1/decisions", "/decisions"))
+def test_null_media_on_every_decisions_route_means_no_clips(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+) -> None:
+    _route_to_clef_omni(monkeypatch)
+    upstream: Final = respx_mock.post(_CLEF_OMNI_UPSTREAM).respond(json=_CLEF_OMNI_RESPONSE)
+
+    response: Final = client.post(endpoint, json={**_clef_omni_request(endpoint), "audio": None, "videos": None})
+
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "clef-omni",
+        "state": "Evaluate the clips",
+        "questions": {"heard": {"type": "noul", "instructions": "Is there speech?"}},
+    }
+
+
+@pytest.mark.parametrize("endpoint", ("/v1/systemone", "/v1/decisions"))
+@pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
+def test_a_malformed_clip_for_a_model_without_media_support_is_dropped_only_when_the_deployment_drops_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    endpoint: str,
+    deployment_drops_params: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "clef-flash",
+                    "litellm_params": {
+                        "model": "cloudflare/clef-flash",
+                        "api_base": "https://cf.example",
+                        "api_key": "cf-key",
+                        "drop_params": deployment_drops_params,
+                    },
+                }
+            ]
+        ),
+    )
+    upstream: Final = respx_mock.post("https://cf.example/ai/run/@cf/cloudflare/clef-flash").respond(
+        json=_CLEF_OMNI_RESPONSE
+    )
+    malformed: Final = {"audio": ["https://example.com/clip.wav"], "videos": [{"content_type": "video/mp4"}]}
+
+    response: Final = client.post(endpoint, json={**_clef_omni_request(endpoint), "model": "clef-flash", **malformed})
+
+    if not deployment_drops_params:
+        assert response.status_code == 400, response.text
+        assert "Invalid Decisions request" in response.json()["error"]["message"]
+        assert not upstream.called
+        return
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "clef-flash",
+        "state": "Evaluate the clips",
+        "questions": {"heard": {"type": "noul", "instructions": "Is there speech?"}},
+    }
+
+
 def _decisions_feature() -> LazyFeature:
     return next(feature for feature in LAZY_FEATURES if feature.name == "decisions")
 

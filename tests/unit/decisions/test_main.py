@@ -1780,20 +1780,29 @@ async def test_clips_for_a_model_without_media_support_are_refused_before_http(
     assert len(respx_mock.calls) == 0
 
 
+@pytest.mark.parametrize(
+    "clips",
+    (
+        {"audio": ["data:audio/wav;base64,YQ=="], "videos": ["data:video/mp4;base64,YQ=="]},
+        {"audio": ["https://example.com/clip.wav"], "videos": [{"content_type": "video/mp4"}]},
+    ),
+    ids=("well_formed", "malformed"),
+)
 @pytest.mark.parametrize(("api", "request_kwargs"), _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
 @pytest.mark.asyncio
 async def test_clips_are_dropped_from_the_wire_for_a_model_without_media_support_under_drop_params(
-    api: str, request_kwargs: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    api: str,
+    request_kwargs: Mapping[str, object],
+    clips: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
     call: Final = getattr(litellm, f"a{api}")
-    clips: Final[Mapping[str, object]] = MappingProxyType(
-        {"audio": ["data:audio/wav;base64,YQ=="], "videos": ["data:video/mp4;base64,YQ=="], "drop_params": True}
-    )
 
     await call(model="perplexity/pplx-decider-v1-27b", api_key="caller-key", **request_kwargs)
-    await call(model="perplexity/pplx-decider-v1-27b", api_key="caller-key", **request_kwargs, **clips)
+    await call(model="perplexity/pplx-decider-v1-27b", api_key="caller-key", drop_params=True, **request_kwargs, **clips)
 
     assert len(route.calls) == 2
     text_only_body: Final = json.loads(route.calls[0].request.content)
@@ -1830,8 +1839,13 @@ async def test_systemone_validates_media_before_http(respx_mock: respx.MockRoute
     assert len(respx_mock.calls) == 0
 
 
+@pytest.mark.parametrize(
+    "media", ({"audio": [], "videos": []}, {"audio": None, "videos": None}, {"audio": None, "videos": []}), ids=repr
+)
 @pytest.mark.asyncio
-async def test_empty_media_keeps_text_only_request_unchanged(respx_mock: respx.MockRouter) -> None:
+async def test_empty_or_null_media_keeps_text_only_request_unchanged(
+    respx_mock: respx.MockRouter, media: Mapping[str, object]
+) -> None:
     route: Final = respx_mock.post("https://example.com/v1/systemone").respond(200, json=dict(_RESPONSE))
     await litellm.asystemone(
         model="typesafe/jev-latest",
@@ -1839,11 +1853,68 @@ async def test_empty_media_keeps_text_only_request_unchanged(respx_mock: respx.M
         questions=_QUESTIONS,
         api_base="https://example.com",
         api_key="test",
-        audio=[],
-        videos=[],
+        **media,
     )
     assert json.loads(route.calls[0].request.content) == {
         "model": "jev-latest",
         "state": "test",
         "questions": _QUESTIONS,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_clip_for_a_model_that_takes_media_is_refused_even_under_drop_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request"):
+        await litellm.asystemone(
+            model="cloudflare/clef-omni",
+            state="test",
+            questions=_QUESTIONS,
+            api_base="https://example.com",
+            api_key="test",
+            audio=["https://example.com/clip.wav"],
+            drop_params=True,
+        )
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+async def test_media_support_is_read_per_kind_from_the_cost_map(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "typesafe/jev-hears",
+        {"litellm_provider": "typesafe", "mode": "evaluation", "supports_audio_input": True},
+    )
+    route: Final = respx_mock.post("https://example.com/v1/systemone").respond(200, json=dict(_RESPONSE))
+    audio: Final = ["data:audio/wav;base64,YQ=="]
+
+    await litellm.asystemone(
+        model="typesafe/jev-hears",
+        state="test",
+        questions=_QUESTIONS,
+        api_base="https://example.com",
+        api_key="test",
+        audio=audio,
+    )
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("does not support parameters: ['videos']")):
+        await litellm.asystemone(
+            model="typesafe/jev-hears",
+            state="test",
+            questions=_QUESTIONS,
+            api_base="https://example.com",
+            api_key="test",
+            audio=audio,
+            videos=["data:video/mp4;base64,YQ=="],
+        )
+
+    assert len(route.calls) == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "jev-hears",
+        "state": "test",
+        "questions": _QUESTIONS,
+        "audio": audio,
     }

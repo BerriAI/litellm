@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import ConfigDict, Field, PrivateAttr, model_validator, with_config
+from pydantic import ConfigDict, Field, PrivateAttr, field_validator, model_validator, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -102,6 +102,11 @@ class DecisionsMediaBody(LiteLLMPydanticObjectBase):
     ] = ()
 
     model_config = ConfigDict(extra="allow", frozen=True)
+
+    @field_validator("audio", "videos", mode="before")
+    @classmethod
+    def _null_means_no_clips(cls, value: object) -> object:
+        return () if value is None else value
 
 
 class DecisionsRequestBody(DecisionsMediaBody):

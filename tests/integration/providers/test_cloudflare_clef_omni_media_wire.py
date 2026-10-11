@@ -303,11 +303,15 @@ def test_both_clef_omni_spellings_forward_media_and_carry_the_cost_map_price(gat
                 info.get("output_cost_per_token"),
                 info.get("mode"),
                 info.get("max_input_tokens"),
+                info.get("supports_audio_input"),
+                info.get("supports_video_input"),
             ) == (
                 price["input_cost_per_token"],
                 price["output_cost_per_token"],
                 price["mode"],
                 price["max_input_tokens"],
+                price["supports_audio_input"],
+                price["supports_video_input"],
             ), (model, info)
 
 
@@ -323,20 +327,18 @@ def test_the_maxima_of_four_audio_and_two_video_clips_are_forwarded(gateway: Gat
         assert _upstream_body(request) == _expected_upstream_body(marker, audio=audio, videos=videos)
 
 
-def test_missing_and_empty_media_send_the_same_text_only_body_and_null_is_refused(gateway: Gateway) -> None:
+def test_missing_empty_and_null_media_send_the_same_text_only_body(gateway: Gateway) -> None:
     marker: Final = uuid.uuid4().hex
     with wire_server(_echo) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_CANONICAL, api_base=wire.url, api_key=_API_KEY)
         missing: Final = _decide(gateway, "/v1/systemone", model, marker)
         empty: Final = _decide(gateway, "/v1/systemone", model, marker, audio=[], videos=[])
-        for response in (missing, empty):
+        null: Final = _decide(gateway, "/v1/systemone", model, marker, audio=None, videos=None)
+        for response in (missing, empty, null):
             assert response.status_code == 200, response.text
             assert response.json() == _expected_response("/v1/systemone", marker)
-        null: Final = _decide(gateway, "/v1/systemone", model, marker, audio=None)
-        assert null.status_code == 400, null.text
-        assert "Invalid Decisions request" in null.text, null.text
         bodies: Final = tuple(_upstream_body(request) for request in wire.drain())
-        assert bodies == (_expected_upstream_body(marker), _expected_upstream_body(marker)), bodies
+        assert bodies == (_expected_upstream_body(marker),) * 3, bodies
 
 
 _MALFORMED: Final[tuple[tuple[str, dict[str, JsonValue], str], ...]] = (

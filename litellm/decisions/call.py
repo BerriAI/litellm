@@ -49,10 +49,6 @@ _SAFETY_IDENTIFIER_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(
 _HANDLER: Final = BaseLLMHTTPHandler()
 
 
-def _media_fields(audio: DecisionsAudioClips | None, videos: DecisionsVideoClips | None) -> Mapping[str, object]:
-    return {"audio": audio if audio is not None else (), "videos": videos if videos is not None else ()}
-
-
 @dataclass(frozen=True, slots=True)
 class SystemOneRequestFields:
     state: DecisionsJSON | None
@@ -62,7 +58,7 @@ class SystemOneRequestFields:
 
     def validate(self, safety_identifier: str | None) -> DecisionsRequestBody:
         return _SYSTEMONE_REQUEST_ADAPTER.validate_python(
-            {"state": self.state, "questions": self.questions, **_media_fields(self.audio, self.videos)}
+            {"state": self.state, "questions": self.questions, "audio": self.audio, "videos": self.videos}
         )
 
 
@@ -79,7 +75,8 @@ class OpenAIDecisionRequestFields:
                 "input": self.input,
                 "questions": self.questions,
                 "safety_identifier": safety_identifier,
-                **_media_fields(self.audio, self.videos),
+                "audio": self.audio,
+                "videos": self.videos,
             }
         )
 
@@ -141,10 +138,30 @@ def _drops_params(kwargs: Mapping[str, object]) -> bool:
     return litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
 
 
-def _request_safety_identifier(safety_identifier: object, kwargs: Mapping[str, object]) -> str | None:
-    if isinstance(safety_identifier, str) or not _drops_params(kwargs):
+def _request_safety_identifier(
+    safety_identifier: object, provider_config: BaseDecisionsConfig, kwargs: Mapping[str, object]
+) -> str | None:
+    if not _drops_params(kwargs):
         return _SAFETY_IDENTIFIER_ADAPTER.validate_python(safety_identifier)
+    if isinstance(safety_identifier, str) and provider_config.supports_safety_identifier:
+        return safety_identifier
     return None
+
+
+def _fields_without_unsupported_media(
+    fields: RequestFields,
+    provider_config: BaseDecisionsConfig,
+    model: str,
+    custom_llm_provider: str,
+    kwargs: Mapping[str, object],
+) -> RequestFields:
+    if not _drops_params(kwargs):
+        return fields
+    return replace(
+        fields,
+        audio=fields.audio if provider_config.supports_audio_input(model, custom_llm_provider) else None,
+        videos=fields.videos if provider_config.supports_video_input(model, custom_llm_provider) else None,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -153,16 +170,15 @@ class _UnsupportedParams:
 
 
 def _unsupported_param_names(
-    ir_request: DecisionsIRRequest, provider_config: BaseDecisionsConfig, model: str
+    ir_request: DecisionsIRRequest, provider_config: BaseDecisionsConfig, model: str, custom_llm_provider: str
 ) -> tuple[str, ...]:
-    takes_media: Final = provider_config.supports_audio_video_input(model)
     checks: Final = (
         (
             "safety_identifier",
             ir_request.safety_identifier is not None and not provider_config.supports_safety_identifier,
         ),
-        ("audio", bool(ir_request.audio) and not takes_media),
-        ("videos", bool(ir_request.videos) and not takes_media),
+        ("audio", bool(ir_request.audio) and not provider_config.supports_audio_input(model, custom_llm_provider)),
+        ("videos", bool(ir_request.videos) and not provider_config.supports_video_input(model, custom_llm_provider)),
     )
     return tuple(name for name, unsupported in checks if unsupported)
 
@@ -173,20 +189,13 @@ def _provider_ir_request(
     safety_identifier: str | None,
     provider_config: BaseDecisionsConfig,
     model: str,
-    kwargs: Mapping[str, object],
+    custom_llm_provider: str,
 ) -> DecisionsIRRequest | _UnsupportedParams:
     ir_request: Final = _ir_request(request, safety_identifier)
-    unsupported: Final = _unsupported_param_names(ir_request, provider_config, model)
-    if not unsupported:
-        return ir_request
-    if _drops_params(kwargs):
-        return replace(
-            ir_request,
-            safety_identifier=None if "safety_identifier" in unsupported else ir_request.safety_identifier,
-            audio=() if "audio" in unsupported else ir_request.audio,
-            videos=() if "videos" in unsupported else ir_request.videos,
-        )
-    return _UnsupportedParams(unsupported)
+    unsupported: Final = _unsupported_param_names(ir_request, provider_config, model, custom_llm_provider)
+    if unsupported:
+        return _UnsupportedParams(unsupported)
+    return ir_request
 
 
 def prepare_call(
@@ -219,8 +228,10 @@ def prepare_call(
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
     try:
-        request_safety_identifier: Final = _request_safety_identifier(safety_identifier, kwargs)
-        request: Final = fields.validate(request_safety_identifier)
+        request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
+        request: Final = _fields_without_unsupported_media(
+            fields, provider_config, canonical_model, provider, kwargs
+        ).validate(request_safety_identifier)
     except ValidationError as error:
         raise litellm.BadRequestError(
             message=f"Invalid Decisions request: {error}",
@@ -248,7 +259,7 @@ def prepare_call(
         safety_identifier=request_safety_identifier,
         provider_config=provider_config,
         model=canonical_model,
-        kwargs=kwargs,
+        custom_llm_provider=provider,
     )
     if isinstance(ir_request, _UnsupportedParams):
         raise litellm.UnsupportedParamsError(

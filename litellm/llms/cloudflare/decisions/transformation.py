@@ -30,9 +30,6 @@ class CloudflareDecisionsConfig(BaseDecisionsConfig):
             return model
         return f"@cf/cloudflare/{model}"
 
-    def supports_audio_video_input(self, model: str) -> bool:
-        return self.canonical_model(model) == "@cf/cloudflare/clef-omni"
-
     def request_model(self, model: str) -> str:
         return model.rsplit("/", maxsplit=1)[-1]
 
