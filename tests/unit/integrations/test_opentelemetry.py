@@ -393,18 +393,21 @@ def test_v1_malformed_routing_metadata_preserves_inference_attributes(decision: 
 
 def test_safe_set_attribute_skips_ended_and_non_recording_spans() -> None:
     otel: Final = OpenTelemetry.__new__(OpenTelemetry)
-    recording_span: Final = MagicMock()
-    recording_span.is_recording.return_value = True
-    ended_span: Final = MagicMock()
-    ended_span.is_recording.return_value = False
+    provider: Final = TracerProvider()
+    tracer: Final = provider.get_tracer(__name__)
+
+    with tracer.start_as_current_span("recording") as recording_span:
+        otel.safe_set_attribute(recording_span, "litellm.test", "recorded")
+        assert recording_span.attributes["litellm.test"] == "recorded"
+
+    ended_attributes: Final = dict(recording_span.attributes)
+    assert not recording_span.is_recording()
     non_recording_span: Final = trace.NonRecordingSpan(trace.INVALID_SPAN_CONTEXT)
 
-    otel.safe_set_attribute(recording_span, "litellm.test", "recorded")
-    otel.safe_set_attribute(ended_span, "litellm.test", "skipped")
+    otel.safe_set_attribute(recording_span, "litellm.test", "skipped")
     otel.safe_set_attribute(non_recording_span, "litellm.test", "skipped")
 
-    recording_span.set_attribute.assert_called_once_with("litellm.test", "recorded")
-    ended_span.set_attribute.assert_not_called()
+    assert dict(recording_span.attributes) == ended_attributes
 
 
 def test_seed_request_identity_preserves_recording_span_and_ignores_ended_span() -> None:
