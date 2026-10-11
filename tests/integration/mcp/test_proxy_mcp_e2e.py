@@ -125,7 +125,7 @@ async def test_schema_validation_stops_expensive_work_and_recovers(cancel: bool,
         await group
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def schema_peer() -> typing.Iterator[Wire]:
     def respond(request: WireRequest) -> Reply:
         if request.method == "GET":
@@ -222,7 +222,7 @@ def test_proxy_schema_validation_resolves_only_local_references(
             assert called["content"][0]["text"] == "called"
 
 
-@pytest.fixture(scope="session", autouse=True)
+@pytest.fixture(scope="module", autouse=True)
 def _clear_proxy_database_env() -> typing.Iterator[None]:
     """Ensure local proxy DB settings don't leak into tests."""
     mp = pytest.MonkeyPatch()
@@ -398,19 +398,19 @@ def _math_http_server(offset: int) -> typing.Iterator[str]:
                 process.wait(timeout=5)
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def math_streamable_http_server() -> typing.Iterator[str]:
     with _math_http_server(100) as url:
         yield url
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def math_restricted_server() -> typing.Iterator[str]:
     with _math_http_server(200) as url:
         yield url
 
 
-@pytest.fixture(scope="session")
+@pytest.fixture(scope="module")
 def _proxy_server(
     tmp_path_factory: pytest.TempPathFactory,
     math_streamable_http_server: str,
