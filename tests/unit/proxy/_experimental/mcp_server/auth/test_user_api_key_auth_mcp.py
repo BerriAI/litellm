@@ -26,6 +26,24 @@ from litellm.proxy._types import (
 from litellm.types.agents import AgentCaller
 
 
+@pytest.mark.parametrize("headers,expected", [
+    ({"Authorization": "Bearer caller.jwt.signature"}, "caller.jwt.signature"),
+    ({"AUTHORIZATION": "bEaReR caller.jwt.signature"}, "caller.jwt.signature"),
+    ({"authorization": "Bearer "}, ""),
+    ({"authorization": "Basic credentials"}, None),
+    ({"authorization-extra": "Bearer wrong.jwt.signature"}, None),
+    ({"x-litellm-api-key": "sk-key"}, None),
+    ({}, None),
+])
+def test_incoming_guardrail_bearer_requires_exact_authorization_header(
+    headers: dict[str, str], expected: str | None,
+) -> None:
+    token: Final = MCPRequestHandler.get_incoming_bearer_token(headers)
+    assert (token.get_secret_value() if token is not None else None) == expected
+    if expected:
+        assert expected not in repr(token)
+
+
 @pytest.mark.asyncio
 class TestMCPRequestHandler:
     @pytest.mark.parametrize(
@@ -10773,3 +10791,39 @@ async def test_catalog_refresh_uses_current_virtual_key_policy_and_keeps_session
     assert caller.team_id == "old-team" and not caller.requires_fresh_policy
     assert refreshed.access_group_ids == current_groups
     assert caller.access_group_ids == ["original-group"]
+
+
+@pytest.mark.parametrize("bearer,api_key,claims,explicit_key,expected", [
+    (None, "sk-key", None, None, None),
+    ("sk-key", "sk-key", None, None, None),
+    ("sk-key", "sk-key", {"sub": "previous-jwt"}, "sk-key", None),
+    ("caller.jwt.assertion", "sk-key", {"sub": "caller"}, None, "caller.jwt.assertion"),
+    ("caller.jwt.assertion", None, {"sub": "caller"}, None, "caller.jwt.assertion"),
+    ("upstream", "sk-key", None, "sk-key", "upstream"),
+    ("llm_session_test", None, {"sub": "caller"}, None, None),
+    ("llm_srefresh_test", None, {"sub": "caller"}, None, None),
+    ("opaque-master", "litellm_proxy_master_key", None, None, None),
+])
+def test_guardrail_bearer_preserves_identity_without_exposing_gateway_credentials(
+    bearer: str | None, api_key: str | None, claims: dict[str, str] | None,
+    explicit_key: str | None, expected: str | None,
+) -> None:
+    headers: Final = Headers({
+        **({"Authorization": f"Bearer {bearer}"} if bearer is not None else {}),
+        **({"x-litellm-api-key": explicit_key} if explicit_key else {}),
+    })
+    token: Final = MCPRequestHandler.get_guardrail_bearer_token(
+        headers, UserAPIKeyAuth(api_key=api_key, jwt_claims=claims),
+    )
+    assert (token.get_secret_value() if token is not None else None) == expected
+
+
+def test_guardrail_bearer_respects_custom_admission_header(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "litellm_key_header_name", "x-gateway-key")
+    token: Final = MCPRequestHandler.get_guardrail_bearer_token(
+        Headers({"x-gateway-key": "opaque-master", "authorization": "Bearer opaque-master"}),
+        UserAPIKeyAuth(api_key="litellm_proxy_master_key"),
+    )
+    assert token is None

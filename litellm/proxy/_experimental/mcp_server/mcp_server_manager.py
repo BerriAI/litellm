@@ -57,7 +57,7 @@ from mcp.types import (
     ResourceTemplate,
 )
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl, Field, TypeAdapter
+from pydantic import AnyUrl, Field, SecretStr, TypeAdapter
 from typing_extensions import ReadOnly, assert_never
 
 import litellm
@@ -5921,6 +5921,7 @@ class MCPServerManager:
         litellm_logging_obj: "LiteLLMLoggingObj | None" = None,
         guardrail_context: Mapping[str, object] | None = None,
         tool: MCPTool | None = None,
+        incoming_bearer_token: SecretStr | None | EllipsisType = ...,
     ) -> dict[str, Any]:
         """
         Run pre-call checks and guardrail hooks for an MCP tool call.
@@ -5977,13 +5978,11 @@ class MCPServerManager:
         if proxy_logging_obj is None:
             return hook_result
 
-        # Extract incoming Bearer token from raw request headers so
-        # guardrails like MCPJWTSigner can verify + re-sign it (FR-5).
-        normalized_raw: Final = {k.lower(): v for k, v in (raw_headers or {}).items()}
-        incoming_bearer_token: str | None = None
-        auth_hdr: Final = normalized_raw.get("authorization", "")
-        if auth_hdr.lower().startswith("bearer "):
-            incoming_bearer_token = auth_hdr[len("bearer ") :]
+        caller_bearer: Final = (
+            MCPRequestHandler.get_incoming_bearer_token(raw_headers or {})
+            if incoming_bearer_token is ...
+            else incoming_bearer_token
+        )
 
         pre_hook_kwargs: Final = {
             "guardrail_context": guardrail_context,
@@ -5998,7 +5997,7 @@ class MCPServerManager:
                 getattr(user_api_key_auth, "end_user_id", None) if user_api_key_auth else None
             ),
             "user_api_key_hash": (getattr(user_api_key_auth, "api_key_hash", None) if user_api_key_auth else None),
-            "incoming_bearer_token": incoming_bearer_token,
+            "incoming_bearer_token": caller_bearer.get_secret_value() if caller_bearer is not None else None,
             "headers": logging_safe_mcp_headers(raw_headers),
             "tool_description": tool.description if tool is not None else None,
             "tool_input_schema": tool.input_schema if tool is not None else None,
@@ -6664,6 +6663,7 @@ class MCPServerManager:
         *,
         catalog_auth_header: str | None | EllipsisType = ...,
         listed_tool: MCPTool | None | EllipsisType = ...,
+        incoming_bearer_token: SecretStr | None | EllipsisType = ...,
     ) -> CallToolResult | InputRequiredResult:
         """
         Call a tool with the given name and arguments
@@ -6718,6 +6718,7 @@ class MCPServerManager:
             litellm_logging_obj=litellm_logging_obj,
             guardrail_context=guardrail_context,
             tool=self.get_listed_tool(mcp_server, name, listed_caller) if listed_tool is ... else listed_tool,
+            incoming_bearer_token=incoming_bearer_token,
         )
         if "arguments" in hook_result:
             arguments = hook_result["arguments"]
