@@ -49,6 +49,7 @@ MCP_SERVER_SCRIPT = Path("tests/integration/mcp/_math_server.py")
 MCP_PEER_PYTHON = os.environ.get("MCP_TEST_PEER_PYTHON") or sys.executable
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 PROXY_START_TIMEOUT = 30
+pytestmark: Final = pytest.mark.xdist_group("proxy_mcp_e2e_in_process")
 
 
 PROXY_AUTHORIZATION_HEADER = f"Bearer {MASTER_KEY}"
