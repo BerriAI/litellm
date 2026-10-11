@@ -474,7 +474,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         Returns:
             AgentCoreParsedResponse: Parsed response data
         """
-        content_type: Final = raw_response.headers.get("content-type", "").lower()
+        content_type: Final = ", ".join(httpx.Headers(raw_response.headers).get_list("content-type")).lower()
         verbose_logger.debug("AgentCore response Content-Type: %s", content_type)
 
         # Parse response based on content type
@@ -698,7 +698,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         )
 
         # Check if response is JSON (agent used sync return) instead of SSE
-        content_type: Final = response.headers.get("content-type", "").lower()
+        content_type: Final = ", ".join(httpx.Headers(response.headers).get_list("content-type")).lower()
         if "application/json" in content_type:
             verbose_logger.debug(
                 "AgentCore streaming: received JSON response instead of SSE, converting to single-chunk stream"
@@ -920,7 +920,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         )
 
         # Check if response is JSON (agent used sync return) instead of SSE
-        content_type: Final = response.headers.get("content-type", "").lower()
+        content_type: Final = ", ".join(httpx.Headers(response.headers).get_list("content-type")).lower()
         if "application/json" in content_type:
             verbose_logger.debug(
                 "AgentCore streaming: received JSON response instead of SSE, converting to single-chunk stream"

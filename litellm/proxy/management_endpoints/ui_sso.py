@@ -41,7 +41,7 @@ if TYPE_CHECKING:
 import jwt
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
-from pydantic import TypeAdapter, ValidationError
+from pydantic import ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm._internal_context import with_service_target
@@ -237,6 +237,12 @@ class CliSsoTeamDetail(LiteLLMBaseModel):
 
 
 _CLI_SSO_TEAM_DETAILS_ADAPTER: Final = TypeAdapter(tuple[CliSsoTeamDetail, ...])
+_CLI_SSO_FLOW_JSON_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(
+    dict[str, object], config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
+_SSO_USERINFO_RESPONSE_ADAPTER: Final[TypeAdapter[dict[str, object] | None]] = TypeAdapter(
+    dict[str, object] | None, config=ConfigDict(strict=True, hide_input_in_errors=True)
+)
 _TEAMLESS_CLI_SSO_TEAM_DETAIL: Final = CliSsoTeamDetail(team_models=())
 
 
@@ -371,7 +377,7 @@ def _get_cli_sso_flow_or_raise(login_id: str | None, cache: DualCache) -> dict:
     flow = _read_cli_sso_flow(cache, _get_cli_sso_flow_cache_key(cast(str, login_id)))
     if isinstance(flow, str):
         try:
-            flow = _as_object(json.loads(flow))
+            flow = _CLI_SSO_FLOW_JSON_ADAPTER.validate_python(json.loads(flow))
         except ValueError:
             flow = None
     if not isinstance(flow, dict) or "poll_secret_hash" not in flow:
@@ -4199,7 +4205,7 @@ class SSOAuthenticationHandler:
                 )
                 if resp.status_code == 200:
                     try:
-                        userinfo_raw: Final[dict[str, object] | None] = resp.json()
+                        userinfo_raw: Final = _SSO_USERINFO_RESPONSE_ADAPTER.validate_python(resp.json())
                         if not userinfo_raw:
                             # JSON null (None) or empty dict ({}) — no identity claims.
                             # Treat as failure so id_token fallback can be attempted.
