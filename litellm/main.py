@@ -138,6 +138,7 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
+    DynamicPromptManagementParamLiteral,
     ModelResponseStream,
     RawRequestTypedDict,
     StreamingChoices,
@@ -6401,7 +6402,9 @@ def embedding(
         "encoding_format",
     ]
     default_params: Final = [*openai_params, "aembedding", "extra_headers"]
-    non_default_params: Final = filter_out_litellm_params(kwargs, excluding=default_params)
+    non_default_params: Final = filter_out_litellm_params(
+        kwargs, excluding=(*default_params, *DynamicPromptManagementParamLiteral.list_all_params())
+    )
 
     litellm_params_dict: Final = get_litellm_params(**kwargs)
 

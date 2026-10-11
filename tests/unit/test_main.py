@@ -443,6 +443,68 @@ def test_embedding_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request(
     assert sent["model"] == "text-embedding-3-small"
 
 
+def test_embedding_keeps_deployment_prompt_management_params_out_of_the_bedrock_body(
+    respx_mock: respx.MockRouter,
+) -> None:
+    mock_route: Final = respx_mock.post(
+        "https://bedrock-runtime.us-east-1.amazonaws.com/model/amazon.titan-embed-image-v1/invoke"
+    ).mock(return_value=httpx.Response(status_code=200, json={"embedding": [0.1, 0.2], "inputTextTokenCount": 1}))
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "titan-image",
+                "litellm_params": {
+                    "model": "bedrock/amazon.titan-embed-image-v1",
+                    "api_key": "fake_bedrock_api_key",
+                    "aws_region_name": "us-east-1",
+                    "cache_control_injection_points": [{"location": "message", "role": "user"}],
+                    "knowledge_bases": ["kb-1"],
+                    "vector_store_ids": [],
+                },
+            }
+        ]
+    )
+
+    response: Final = router.embedding(model="titan-image", input=["Help me !"])
+
+    assert json.loads(mock_route.calls.last.request.content) == {"inputText": "Help me !"}
+    assert response.data[0]["embedding"] == [0.1, 0.2]
+
+
+def test_embedding_drops_root_prompt_management_params_but_keeps_explicit_extra_body(
+    respx_mock: respx.MockRouter,
+) -> None:
+    api_base: Final = "http://localhost:12346/v1"
+    mock_route: Final = respx_mock.post(url__regex=rf"{api_base}/embeddings.*").mock(
+        return_value=httpx.Response(
+            status_code=200,
+            json={
+                "object": "list",
+                "data": [{"object": "embedding", "index": 0, "embedding": [0.1, 0.2]}],
+                "model": "text-embedding-3-small",
+                "usage": {"prompt_tokens": 1, "total_tokens": 1},
+            },
+        )
+    )
+
+    litellm.embedding(
+        model="openai/text-embedding-3-small",
+        input="hi",
+        api_base=api_base,
+        api_key="fake_openai_api_key",
+        cache_control_injection_points=[{"location": "message", "role": "user"}],
+        knowledge_bases=["kb-1"],
+        vector_store_ids=["root-store"],
+        extra_body={"vector_store_ids": ["caller-store"]},
+    )
+
+    sent: Final = json.loads(mock_route.calls.last.request.content)
+    assert "cache_control_injection_points" not in sent, sent
+    assert "knowledge_bases" not in sent, sent
+    assert sent["vector_store_ids"] == ["caller-store"]
+    assert sent["input"] == "hi"
+
+
 def test_custom_provider_with_extra_headers():
 
     with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
