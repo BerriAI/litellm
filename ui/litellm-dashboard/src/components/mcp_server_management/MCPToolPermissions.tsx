@@ -16,6 +16,7 @@ import {
   emptyMcpAccessGroups,
   mcpAllowedToolsFor,
   mcpGrantsAllTools,
+  mcpServersForIdentifier,
   resolveEffectiveMcpServers,
 } from "./effectiveMcpServers";
 
@@ -72,6 +73,7 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
   const [loadingTools, setLoadingTools] = useState<Record<string, boolean>>({});
   const [toolErrors, setToolErrors] = useState<Record<string, string>>({});
   const [viewModes, setViewModes] = useState<Record<string, "crud" | "flat">>({});
+  const initialSelectedServers = useRef(selectedServers);
 
   // Keep a ref to the latest toolPermissions so async fetch callbacks always
   // read the current value and do not overwrite sibling servers' results when
@@ -112,7 +114,14 @@ const MCPToolPermissions: React.FC<MCPToolPermissionsProps> = ({
       } else {
         const fetchedTools: MCPTool[] = response.tools || [];
         setServerTools((prev) => ({ ...prev, [serverId]: fetchedTools }));
-        if (!initializeDefaultPermissions) return;
+        if (
+          !initializeDefaultPermissions &&
+          initialSelectedServers.current.some((identifier) =>
+            mcpServersForIdentifier(allServers, identifier).some((server) => server.server_id === serverId),
+          )
+        ) {
+          return;
+        }
 
         // Default only unrestricted direct servers to non-delete tools.
         // Read latest permissions from the ref to avoid clobbering concurrent results.

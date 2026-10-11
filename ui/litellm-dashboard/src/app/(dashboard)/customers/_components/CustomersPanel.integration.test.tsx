@@ -318,6 +318,46 @@ describe("Customers management", () => {
     );
   });
 
+  it("shows a catalog failure when removing an MCP grant and keeps the customer unsaved", async () => {
+    const user = userEvent.setup();
+    const directCustomer: EndUser = {
+      ...activeCustomer,
+      object_permission: {
+        object_permission_id: "permission-alice",
+        mcp_servers: ["server-1"],
+        mcp_access_groups: [],
+        mcp_toolsets: [],
+        mcp_tool_permissions: { "server-1": ["read_document"] },
+        agent_access_groups: [],
+        agents: [],
+        blocked_tools: [],
+        models: [],
+        search_tools: [],
+        skills: [],
+        vector_stores: [],
+      },
+    };
+    useQuery.mockReturnValue({ data: directCustomer, isLoading: false, isError: false });
+    fetchServers.mockRejectedValue(new Error("Catalog unavailable"));
+    renderWithProviders(
+      <>
+        <CustomersPanel />
+        <Toaster />
+      </>,
+      { searchParams: "customer=alice%40example.test&edit=true" },
+    );
+
+    await user.click(await screen.findByRole("button", { name: "Clear all" }));
+    await user.click(screen.getByRole("button", { name: "Save Changes" }));
+
+    expect(
+      await screen.findByText("MCP catalogs must finish loading before permission changes can be saved"),
+    ).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save Changes" })).toBeInTheDocument();
+    expect(screen.queryByText("Customer updated")).not.toBeInTheDocument();
+    expect(post).not.toHaveBeenCalled();
+  });
+
   it("rejects an edit budget of zero because customer updates cannot apply it", async () => {
     const user = userEvent.setup();
     renderWithProviders(<CustomersPanel />, { searchParams: "customer=alice%40example.test&edit=true" });

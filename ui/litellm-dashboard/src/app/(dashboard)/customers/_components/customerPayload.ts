@@ -59,9 +59,6 @@ const grantIdentity = (grant: McpEntitlementUpdate): string => {
   return JSON.stringify(normalized);
 };
 
-const selectionIdentity = (grant: McpEntitlementUpdate): string =>
-  grantIdentity({ ...grant, mcp_tool_permissions: {} });
-
 const extractEditedMcpGrant = (
   values: CustomerFormValues,
   storedGrant: McpEntitlementUpdate,
@@ -103,19 +100,9 @@ const changedMcpGrant = (
   servers: MCPServer[],
   toolsets: MCPToolset[],
 ): McpEntitlementUpdate | null => {
-  const selection = values.mcp_servers_and_groups;
-  const formGrant = {
-    mcp_servers: selection.servers,
-    mcp_access_groups: selection.accessGroups,
-    mcp_toolsets: selection.toolsets,
-    mcp_tool_permissions: values.mcp_tool_permissions,
-  };
   const storedGrant = storedMcpGrant(existing);
   const storedIdentity = grantIdentity(storedGrant);
-  const grant =
-    selectionIdentity(formGrant) === selectionIdentity(storedGrant)
-      ? formGrant
-      : extractEditedMcpGrant(values, storedGrant, servers, toolsets);
+  const grant = extractEditedMcpGrant(values, storedGrant, servers, toolsets);
   return grant && grantIdentity(grant) !== storedIdentity ? grant : null;
 };
 

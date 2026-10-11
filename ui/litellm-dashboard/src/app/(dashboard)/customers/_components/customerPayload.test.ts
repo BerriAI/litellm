@@ -79,6 +79,30 @@ describe("customer payload", () => {
     expect(buildCustomerPayload(values, null, [], [])).toEqual({ user_id: customer.user_id });
   });
 
+  it("drops generated tool grants when a newly selected server is removed before create", () => {
+    const values = {
+      ...toCustomerFormValues(null),
+      user_id: customer.user_id,
+      mcp_tool_permissions: { [server.server_id]: ["read"] },
+    };
+
+    expect(buildCustomerPayload(values, null, [server], [])).toEqual({ user_id: customer.user_id });
+  });
+
+  it("drops a new server's generated tool grants after returning to the stored selection", () => {
+    const stored = { ...customer, object_permission: { ...permission, mcp_access_groups: [], mcp_toolsets: [] } };
+    const anotherServer = { ...server, server_id: "another-server" };
+    const values = {
+      ...toCustomerFormValues(stored),
+      mcp_tool_permissions: { ...permission.mcp_tool_permissions, [anotherServer.server_id]: ["list"] },
+    };
+
+    expect(buildCustomerPayload(values, stored, [server, anotherServer], [])).toEqual({
+      user_id: customer.user_id,
+      models: [],
+    });
+  });
+
   it("keeps zero budgets and trims optional text fields", () => {
     const values = {
       ...toCustomerFormValues(null),
