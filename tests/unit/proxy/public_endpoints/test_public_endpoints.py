@@ -1,18 +1,18 @@
 import json
+import os
 import re
+from collections.abc import Iterator
 from datetime import datetime, timezone
 from importlib.resources import files
-from collections.abc import Iterator
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
-
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from pydantic import TypeAdapter
 
+import litellm
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.public_endpoints import router
 from litellm.router_strategy.complexity_router.fuse_presets import get_fuse_presets
@@ -1168,8 +1168,8 @@ def test_public_mcp_hub_derives_publication_metadata_without_mutating_registry(
     stored_public: bool | None,
 ) -> None:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     app: Final = FastAPI()
     app.include_router(router)
@@ -1253,8 +1253,8 @@ def test_public_mcp_hub_returns_empty_when_whitelist_unset():
 def test_public_mcp_hub_does_not_expose_upstream_url():
     """Regression: /public/mcp_hub is unauthenticated, so the gateway-internal
     upstream url must never appear in its response even when the server has one."""
-    from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.proxy._types import MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     app = FastAPI()
     app.include_router(router)
@@ -1583,6 +1583,47 @@ def test_get_whats_new_local_mode_serves_bundled_list(
         files("litellm.proxy.public_endpoints").joinpath("whats_new.json").read_text(encoding="utf-8")
     )
     assert served == bundled
+    assert len(served.launches) > 0
+
+
+@pytest.mark.asyncio
+async def test_get_whats_new_serves_bundled_list_without_fetching_when_no_url_is_configured(
+    monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
+) -> None:
+    from litellm.proxy.public_endpoints.public_endpoints import _load_bundled_whats_new, get_whats_new
+
+    monkeypatch.delenv("LITELLM_LOCAL_WHATS_NEW", raising=False)
+
+    async def forbidden_fetch(url: str) -> WhatsNewResponse:
+        raise AssertionError(f"no URL is configured, so nothing may be fetched, got {url}")
+
+    served = await get_whats_new(url=None, fetch=forbidden_fetch)
+
+    assert served == _load_bundled_whats_new()
+    assert len(served.launches) > 0
+
+
+def test_whats_new_url_default_mirrors_the_env_var_so_no_remote_url_is_baked_in() -> None:
+    assert litellm.whats_new_url == os.environ.get("LITELLM_WHATS_NEW_URL")
+
+
+@pytest.mark.asyncio
+async def test_public_whats_new_route_serves_the_bundled_list_without_fetching_when_no_url_is_configured(
+    monkeypatch: pytest.MonkeyPatch, reset_whats_new_cache: None
+) -> None:
+    from litellm.proxy.public_endpoints import public_endpoints
+    from litellm.proxy.public_endpoints.public_endpoints import _load_bundled_whats_new, get_public_whats_new
+
+    monkeypatch.delenv("LITELLM_LOCAL_WHATS_NEW", raising=False)
+
+    async def forbidden_fetch(url: str) -> bytes:
+        raise AssertionError(f"no URL is configured, so the route may not fetch, got {url}")
+
+    monkeypatch.setattr(public_endpoints, "_fetch_remote_bytes", forbidden_fetch)
+
+    served = await get_public_whats_new()
+
+    assert served == _load_bundled_whats_new()
     assert len(served.launches) > 0
 
 

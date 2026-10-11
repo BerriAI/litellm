@@ -591,8 +591,8 @@ async def _fetch_remote_whats_new(url: str) -> WhatsNewResponse:
     return WhatsNewResponse.model_validate_json(await _fetch_remote_bytes(url))
 
 
-async def _resolve_whats_new(url: str, fetch: Callable[[str], Awaitable[WhatsNewResponse]]) -> WhatsNewResponse:
-    if os.getenv("LITELLM_LOCAL_WHATS_NEW", "").lower() == "true":
+async def _resolve_whats_new(url: str | None, fetch: Callable[[str], Awaitable[WhatsNewResponse]]) -> WhatsNewResponse:
+    if url is None or os.getenv("LITELLM_LOCAL_WHATS_NEW", "").lower() == "true":
         return _load_bundled_whats_new()
     try:
         return await fetch(url)
@@ -611,7 +611,7 @@ class _WhatsNewCache:
 
 
 async def get_whats_new(
-    url: str,
+    url: str | None,
     fetch: Callable[[str], Awaitable[WhatsNewResponse]] = _fetch_remote_whats_new,
 ) -> WhatsNewResponse:
     cached: Final = _WhatsNewCache.launches
@@ -637,10 +637,10 @@ async def get_public_whats_new() -> WhatsNewResponse:
     """
     Return the launches the dashboard Home page shows under What's new.
 
-    Resolved once per process: fetched from ``litellm.whats_new_url`` (override with ``LITELLM_WHATS_NEW_URL``)
-    on the first request, falling back to the list bundled with the package on any failure, so an airgapped
-    proxy serves the bundled list without retrying. Set ``LITELLM_LOCAL_WHATS_NEW=True`` to skip the fetch.
-    A restart picks up a newly published list.
+    Serves the list bundled with this release. Set ``LITELLM_WHATS_NEW_URL`` to fetch a remote list instead,
+    resolved once per process on the first request and falling back to the bundled list on any failure, so an
+    airgapped proxy serves the bundled list without retrying. ``LITELLM_LOCAL_WHATS_NEW=True`` forces the
+    bundled list even when a URL is set. A restart picks up a newly published list.
     """
     return await get_whats_new(url=litellm.whats_new_url)
 
