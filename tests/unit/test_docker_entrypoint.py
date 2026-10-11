@@ -3,6 +3,7 @@ import os
 import re
 import stat
 import subprocess
+import sys
 from pathlib import Path
 from typing import Final
 
@@ -516,3 +517,98 @@ def test_entrypoint_script_is_executable() -> None:
 
 def test_entrypoint_script_has_no_carriage_returns() -> None:
     assert b"\r" not in DOCKER_ENTRYPOINT.read_bytes()
+
+
+def _run_proxy_with_discrete_database(
+    tmp_path: Path, extra_env: dict[str, str | None], extra_pythonpath: Path | None = None
+) -> list[str]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "litellm").write_text(
+        '#!/bin/sh\n{ echo "args=$*"; echo "DATABASE_URL=$DATABASE_URL"; '
+        'echo "DATABASE_URL_READ_REPLICA=${DATABASE_URL_READ_REPLICA-<unset>}"; } >> "$RECORD"\n'
+    )
+    (bin_dir / "litellm").chmod(0o755)
+    (bin_dir / "python").write_text(f'#!/bin/sh\nexec "{sys.executable}" "$@"\n')
+    (bin_dir / "python").chmod(0o755)
+    record = tmp_path / "record.txt"
+    env = _entrypoint_env(
+        bin_dir,
+        record,
+        {
+            "DATABASE_URL": None,
+            "DATABASE_URL_READ_REPLICA": None,
+            "DIRECT_URL": None,
+            "DATABASE_MAX_IDLE_CONNECTION_LIFETIME": None,
+            "USE_AWS_KMS": None,
+            "DATABASE_HOST": "writer.db",
+            "DATABASE_PORT": "6543",
+            "DATABASE_USER": "app",
+            "DATABASE_PASSWORD": "p@ss",
+            "DATABASE_NAME": "litellm",
+            "DATABASE_HOST_READ_REPLICA": "reader.db",
+            "DATABASE_PORT_READ_REPLICA": "6544",
+            **extra_env,
+        },
+    )
+    env["PYTHONPATH"] = os.pathsep.join(
+        [str(extra_pythonpath), str(REPO_ROOT)] if extra_pythonpath else [str(REPO_ROOT)]
+    )
+
+    result = subprocess.run(
+        ["sh", str(DOCKER_ENTRYPOINT), "proxy", "--port", "4000"],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, f"stdout={result.stdout} stderr={result.stderr}"
+    return record.read_text().splitlines()
+
+
+def test_proxy_assembles_database_urls_from_discrete_variables(tmp_path: Path) -> None:
+    lines = _run_proxy_with_discrete_database(tmp_path, {})
+
+    assert lines[0] == "args=--port 4000"
+    assert lines[1].startswith("DATABASE_URL=postgresql://app:p%40ss@writer.db:6543/litellm")
+    assert lines[2].startswith("DATABASE_URL_READ_REPLICA=postgresql://app:p%40ss@reader.db:6544/litellm")
+    assert "max_idle_connection_lifetime" not in lines[1]
+    assert "max_idle_connection_lifetime" not in lines[2]
+
+
+def test_proxy_decrypts_a_kms_database_password_before_assembling(tmp_path: Path) -> None:
+    site_dir = tmp_path / "site"
+    site_dir.mkdir()
+    (site_dir / "sitecustomize.py").write_text(
+        "import os\n"
+        "import litellm.secret_managers.aws_secret_manager as kms\n"
+        "kms.decrypt_env_var = lambda: {'DATABASE_PASSWORD': 'p@ss'} "
+        "if os.environ.get('DATABASE_PASSWORD') == 'aws_kms/ciphertext' else {}\n"
+    )
+    lines = _run_proxy_with_discrete_database(
+        tmp_path,
+        {"USE_AWS_KMS": "True", "DATABASE_PASSWORD": "aws_kms/ciphertext"},
+        extra_pythonpath=site_dir,
+    )
+
+    assert lines[1].startswith("DATABASE_URL=postgresql://app:p%40ss@writer.db:6543/litellm")
+    assert lines[2].startswith("DATABASE_URL_READ_REPLICA=postgresql://app:p%40ss@reader.db:6544/litellm")
+
+
+def test_proxy_pins_an_env_configured_idle_lifetime(tmp_path: Path) -> None:
+    lines = _run_proxy_with_discrete_database(tmp_path, {"DATABASE_MAX_IDLE_CONNECTION_LIFETIME": "120"})
+
+    assert "max_idle_connection_lifetime=120" in lines[1]
+    assert "max_idle_connection_lifetime=120" in lines[2]
+
+
+def test_proxy_keeps_an_operator_database_url(tmp_path: Path) -> None:
+    record = _run_entrypoint(
+        ("proxy",),
+        tmp_path,
+        DATABASE_URL="postgresql://pinned/db",
+        DATABASE_HOST="writer.db",
+    )
+
+    assert record[0] == "exec=litellm"
