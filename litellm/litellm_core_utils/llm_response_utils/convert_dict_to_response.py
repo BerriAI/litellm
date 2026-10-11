@@ -177,19 +177,29 @@ def _coerce_missing_choices_status(value: object) -> int | None:
     return None
 
 
+def _get_nested_error_values(
+    error: object,
+) -> tuple[tuple[object, ...], tuple[object, ...]]:
+    if not isinstance(error, Mapping):
+        return (), (error,) if isinstance(error, str) else ()
+
+    nested_code: Final[object] = error.get("code")
+    nested_status: Final[object] = error.get("status")
+    nested_status_code: Final[object] = error.get("status_code")
+    nested_message: Final[object] = error.get("message")
+    nested_response: Final[object] = error.get("response")
+    return (
+        (nested_code, nested_status, nested_status_code),
+        (nested_message, nested_response),
+    )
+
+
 def _get_missing_choices_error_args(response_object: Mapping[str, object]) -> tuple[int, str]:
     error: Final = response_object.get("error")
     top_level_status_values: Final = tuple(response_object.get(field) for field in ("status", "status_code"))
-    nested_status_values: Final = (
-        tuple(error.get(field) for field in ("code", "status", "status_code")) if isinstance(error, Mapping) else ()
-    )
-    nested_message_values: Final = (
-        tuple(error.get(field) for field in ("message", "response"))
-        if isinstance(error, Mapping)
-        else (error,)
-        if isinstance(error, str)
-        else ()
-    )
+    nested_values: Final = _get_nested_error_values(error)
+    nested_status_values: Final = nested_values[0]
+    nested_message_values: Final = nested_values[1]
 
     status_values: Final = (
         *(value for value in top_level_status_values if isinstance(value, int) and not isinstance(value, bool)),
