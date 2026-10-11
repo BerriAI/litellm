@@ -4,6 +4,7 @@ from copy import deepcopy
 from typing import Final, cast
 
 import httpx
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -25,6 +26,7 @@ from litellm.utils import (
 )
 
 from ..common_utils import (
+    STR_KEYED_MAPPING,
     AWSEventStreamDecoder,
     SagemakerError,
     client_error_details,
@@ -34,6 +36,14 @@ from ..embedding.transformation import SagemakerEmbeddingConfig
 from .transformation import SagemakerConfig
 
 sagemaker_config: Final = SagemakerConfig()
+
+
+class _InvokeEndpointArgs(TypedDict):
+    EndpointName: ReadOnly[str]
+    ContentType: ReadOnly[str]
+    Body: ReadOnly[bytes]
+    CustomAttributes: ReadOnly[str]
+
 
 """
 SAGEMAKER AUTH Keys/Vars
@@ -574,19 +584,19 @@ class SagemakerLLM(BaseAWSLLM):
         # Transform request based on model type
         provider_config: Final = SagemakerEmbeddingConfig.get_model_config(model)
         endpoint_name: Final = SagemakerEmbeddingConfig.get_endpoint_name(model)
-        inference_component_name: Final = optional_params.get("model_id")
+        embedding_params: Final = STR_KEYED_MAPPING.validate_python(optional_params)
+        inference_component_name: Final = embedding_params.get("model_id")
         if inference_component_name is not None and not isinstance(inference_component_name, str):
             raise SagemakerError(status_code=400, message="model_id must be the inference component name as a string")
-        body_params: Final = {k: v for k, v in optional_params.items() if k != "model_id"}
+        body_params: Final = {k: v for k, v in embedding_params.items() if k != "model_id"}
         request_data: Final = provider_config.transform_embedding_request(endpoint_name, input, body_params, {})
         data: Final = json.dumps(request_data).encode("utf-8")
-        invoke_kwargs: Final = {
-            "EndpointName": endpoint_name,
-            "ContentType": "application/json",
-            "Body": data,
-            "CustomAttributes": "accept_eula=true",
-            **({"InferenceComponentName": inference_component_name} if inference_component_name else {}),
-        }
+        invoke_args: Final = _InvokeEndpointArgs(
+            EndpointName=endpoint_name,
+            ContentType="application/json",
+            Body=data,
+            CustomAttributes="accept_eula=true",
+        )
 
         ## LOGGING
         request_str: Final = f"""
@@ -604,7 +614,11 @@ class SagemakerLLM(BaseAWSLLM):
         )
         ## EMBEDDING CALL
         try:
-            response = client.invoke_endpoint(**invoke_kwargs)
+            response = (
+                client.invoke_endpoint(**invoke_args, InferenceComponentName=inference_component_name)
+                if inference_component_name
+                else client.invoke_endpoint(**invoke_args)
+            )
         except Exception as e:
             status_code, error_message = client_error_details(e)
             raise SagemakerError(status_code=status_code, message=with_inference_component_hint(error_message))

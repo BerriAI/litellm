@@ -13,7 +13,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import StreamingChatCompletionChunk
 
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -54,7 +54,9 @@ def _load_sagemaker_response_stream_shape():
         from botocore.model import ServiceModel
 
         loader: Final = Loader()
-        service_dict: Final = _JSON_OBJECT.validate_python(loader.load_service_model("sagemaker-runtime", "service-2"))
+        service_dict: Final = STR_KEYED_MAPPING.validate_python(
+            loader.load_service_model("sagemaker-runtime", "service-2")
+        )
         return ServiceModel(service_dict).shape_for("InvokeEndpointWithResponseStreamOutput")
     except Exception as e:
         verbose_logger.warning(
@@ -85,17 +87,17 @@ def with_inference_component_hint(error_message: str) -> str:
 
 
 class _ClientErrorBody(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
     message: str | None = Field(default=None, alias="Message")
 
 
 class _ClientErrorMetadata(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
     http_status_code: int = Field(default=500, alias="HTTPStatusCode")
 
 
 class _ClientErrorResponse(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
     error: _ClientErrorBody = Field(default_factory=_ClientErrorBody, alias="Error")
     response_metadata: _ClientErrorMetadata = Field(default_factory=_ClientErrorMetadata, alias="ResponseMetadata")
 
