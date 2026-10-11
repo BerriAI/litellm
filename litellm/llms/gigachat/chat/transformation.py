@@ -210,9 +210,6 @@ class GigaChatConfig(BaseConfig):
                     optional_params["function_call"] = {"name": schema_name}
                     optional_params["_structured_output"] = True
                 elif not (isinstance(value, Mapping) and (value.get("type") in (None, "text", "json_schema"))):
-                    # Only json_schema is mapped above; anything else (json_object,
-                    # a missing schema, an unexpected shape) is silently dropped by
-                    # GigaChat unless we say so.
                     from litellm.utils import UnsupportedParamsError
 
                     if litellm.drop_params is not True and drop_params is not True:
