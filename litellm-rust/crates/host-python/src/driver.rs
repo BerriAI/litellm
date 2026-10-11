@@ -7,10 +7,11 @@ use std::{
 
 use litellm_host::{
     call::HostedCompletion,
+    hooks::StreamPolicy,
     lifecycle::{CallEvent, ExecutionEvent, FailureOrigin, Timing, epoch_seconds},
     machine::{HostFailure, Machine, MachineStep},
     observation::ObservationSender,
-    protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery},
+    protocol::{HostRequest, InterceptRequest, Protocol, StreamDelivery},
 };
 use pyo3::{
     exceptions::{PyBaseException, PyException, PyRuntimeError},
@@ -32,6 +33,7 @@ use crate::{
 type ProtocolOf<H> = <H as PythonBinding>::Protocol;
 type ErrorOf<H> = <ProtocolOf<H> as Protocol>::Error;
 type ResponseOf<H> = <ProtocolOf<H> as Protocol>::Response;
+type ChunkOf<H> = <ProtocolOf<H> as Protocol>::Chunk;
 type StartMachine<P, M> = Box<
     dyn FnOnce(Python<'_>, &Bound<'_, PyDict>, <P as Protocol>::Request) -> PyResult<M>
         + Send
@@ -126,7 +128,14 @@ where
     native: NativeMachine<M>,
     start: Option<StartMachine<ProtocolOf<H>, M>>,
     interrupted: Option<Py<PyBaseException>>,
+    /// A relayed stream is open: chunks go to the consumer as they arrive and the response
+    /// transformation never runs.
     streaming: bool,
+    /// The caller's stream has been opened, by relay, hold-back or synthesis.
+    opened: bool,
+    stream_policy: StreamPolicy,
+    /// The chunks of a held-back stream, until the stream ends and they are assembled.
+    held: Option<Vec<ChunkOf<H>>>,
 }
 
 /// The route's public exception for a native failure. When classification itself fails,
@@ -190,6 +199,11 @@ where
         parts
             .hooks
             .arguments_prepared(&self.task, &prepared)
+            .await
+            .map_err(Setup::Host)?;
+        self.stream_policy = parts
+            .hooks
+            .stream_policy(&self.task, &prepared)
             .await
             .map_err(Setup::Host)?;
         let Parts {
@@ -271,30 +285,98 @@ where
                 Ok(())
             }
             HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
-                self.streaming = true;
-                let head = {
-                    let mut parts = self.parts.lock().await;
-                    let Parts { binding, hooks, .. } = &mut *parts;
-                    let head = Python::attach(|py| binding.encode_stream_head(py, head))?;
-                    hooks.on_stream_open(&self.task, &head).await?;
-                    head
-                };
-                self.consumed(Suspension::Open(head), reply).await
+                if self.stream_policy == StreamPolicy::HoldBack {
+                    self.held = Some(Vec::new());
+                    let ping = {
+                        let mut parts = self.parts.lock().await;
+                        Python::attach(|py| parts.binding.keepalive_chunk(py))?
+                    };
+                    self.native.set_keepalive(ping);
+                } else {
+                    self.streaming = true;
+                }
+                let head = self.open_head(head).await?;
+                reply.send(self.hand_to_consumer(Suspension::Open(head)).await);
+                Ok(())
             }
             HostRequest::Stream(StreamDelivery::Chunk(chunk, reply)) => {
-                let chunk = {
-                    let mut parts = self.parts.lock().await;
-                    let Parts { binding, hooks, .. } = &mut *parts;
-                    let chunk = Python::attach(|py| binding.encode_chunk(py, chunk))?;
-                    hooks.on_stream_chunk(&self.task, &chunk).await?;
-                    chunk
-                };
-                self.consumed(Suspension::Yield(chunk), reply).await
+                if let Some(held) = &mut self.held {
+                    held.push(chunk);
+                    reply.send(ControlFlow::Continue(()));
+                    return Ok(());
+                }
+                let chunk = self.deliverable_chunk(chunk).await?;
+                reply.send(self.hand_to_consumer(Suspension::Yield(chunk)).await);
+                Ok(())
             }
         }
     }
 
-    async fn notify(&self, event: PythonCallEvent<'_>) -> PyResult<()> {
+    /// The stream head as the caller receives it, after the hooks saw it.
+    async fn open_head(
+        &mut self,
+        head: <ProtocolOf<H> as Protocol>::StreamHead,
+    ) -> PyResult<Py<PyAny>> {
+        let mut parts = self.parts.lock().await;
+        let Parts { binding, hooks, .. } = &mut *parts;
+        let head = Python::attach(|py| binding.encode_stream_head(py, head))?;
+        hooks.on_stream_open(&self.task, &head).await?;
+        self.opened = true;
+        Ok(head)
+    }
+
+    /// One chunk as the caller receives it, after the hooks saw it.
+    async fn deliverable_chunk(&mut self, chunk: ChunkOf<H>) -> PyResult<Py<PyAny>> {
+        let mut parts = self.parts.lock().await;
+        let Parts { binding, hooks, .. } = &mut *parts;
+        let chunk = Python::attach(|py| binding.encode_chunk(py, chunk))?;
+        hooks.on_stream_chunk(&self.task, &chunk).await?;
+        Ok(chunk)
+    }
+
+    /// Delivers a complete public response to the caller as a stream: the route's replay
+    /// of it, chunk by chunk, opening the stream first unless the caller already holds it.
+    async fn deliver_as_stream(&mut self, response: Py<PyAny>) -> PyResult<Py<PyAny>> {
+        let replay = {
+            let mut parts = self.parts.lock().await;
+            Python::attach(|py| parts.binding.stream_of_response(py, &response))
+        };
+        let replay = match replay {
+            Ok(replay) => replay,
+            Err(error) => return self.failure(error, FailureOrigin::Host).await,
+        };
+        let head = replay.head;
+        let chunks = replay.chunks;
+        if !self.opened {
+            let head = match self.open_head(head).await {
+                Ok(head) => head,
+                Err(error) => return self.failure(error, FailureOrigin::Host).await,
+            };
+            if self
+                .hand_to_consumer(Suspension::Open(head))
+                .await
+                .is_break()
+            {
+                return self.succeeded(Python::attach(|py| py.None())).await;
+            }
+        }
+        for chunk in chunks {
+            let chunk = match self.deliverable_chunk(chunk).await {
+                Ok(chunk) => chunk,
+                Err(error) => return self.failure(error, FailureOrigin::Host).await,
+            };
+            if self
+                .hand_to_consumer(Suspension::Yield(chunk))
+                .await
+                .is_break()
+            {
+                break;
+            }
+        }
+        self.succeeded(Python::attach(|py| py.None())).await
+    }
+
+    async fn notify(&mut self, event: PythonCallEvent<'_>) -> PyResult<()> {
         let mut parts = self.parts.lock().await;
         parts.observation.emit(&event);
         parts.hooks.on_event(&self.task, event).await
@@ -302,18 +384,11 @@ where
 
     /// Hands a stream boundary to the consumer. Reading on is demand for the next chunk;
     /// anything else, closing the stream included, detaches the call from it.
-    async fn consumed(
-        &self,
-        suspension: Suspension,
-        reply: Reply<ControlFlow<()>>,
-    ) -> Result<(), InvokeError<ErrorOf<H>>> {
-        let read = self.task.suspend(suspension).await;
-        reply.send(if read.is_ok() {
-            ControlFlow::Continue(())
-        } else {
-            ControlFlow::Break(())
-        });
-        Ok(())
+    async fn hand_to_consumer(&mut self, suspension: Suspension) -> ControlFlow<()> {
+        match self.task.suspend(suspension).await {
+            Ok(_) => ControlFlow::Continue(()),
+            Err(_) => ControlFlow::Break(()),
+        }
     }
 
     fn interrupt(&mut self, error: PyErr) -> HostFailure<ErrorOf<H>> {
@@ -331,12 +406,27 @@ where
         &mut self,
         completion: HostedCompletion<ResponseOf<H>>,
     ) -> PyResult<Py<PyAny>> {
+        let held = self.held.take();
+        self.native.set_keepalive(None);
         let transformed = {
             let mut parts = self.parts.lock().await;
             parts.observation.ended_at = Some(epoch_seconds());
-            let response = match completion {
-                HostedCompletion::Complete(response) => response,
-                HostedCompletion::StreamEnded | HostedCompletion::Detached => {
+            let response = match (completion, held) {
+                (HostedCompletion::Complete(response), _) => response,
+                (HostedCompletion::StreamEnded, Some(chunks)) => {
+                    match Python::attach(|py| parts.binding.assemble_stream(py, chunks)) {
+                        Ok(response) => response,
+                        Err(InvokeError::Python(error)) => {
+                            drop(parts);
+                            return self.failure(error, FailureOrigin::Call).await;
+                        }
+                        Err(InvokeError::Native(error)) => {
+                            drop(parts);
+                            return self.machine_failed(error).await;
+                        }
+                    }
+                }
+                (HostedCompletion::StreamEnded | HostedCompletion::Detached, _) => {
                     drop(parts);
                     return self.succeeded(Python::attach(|py| py.None())).await;
                 }
@@ -358,9 +448,16 @@ where
                     .await
             }
         };
-        match transformed {
-            Ok(response) => self.succeeded(response).await,
-            Err(error) => self.failure(error, FailureOrigin::Host).await,
+        let response = match transformed {
+            Ok(response) => response,
+            Err(error) => return self.failure(error, FailureOrigin::Host).await,
+        };
+        match self.stream_policy {
+            StreamPolicy::Relay => self.succeeded(response).await,
+            StreamPolicy::HoldBack | StreamPolicy::Synthesize if !self.streaming => {
+                self.deliver_as_stream(response).await
+            }
+            StreamPolicy::HoldBack | StreamPolicy::Synthesize => self.succeeded(response).await,
         }
     }
 
@@ -555,6 +652,9 @@ where
         start: Some(Box::new(start)),
         interrupted: None,
         streaming: false,
+        opened: false,
+        stream_policy: StreamPolicy::Relay,
+        held: None,
     };
     let mut driver = PythonDriver {
         task,
@@ -573,9 +673,9 @@ where
                 .into_sync_stream(py, head)
                 .map(Bound::unbind)
         }
-        ExecutionStep::Suspend(Suspension::Await(_) | Suspension::Yield(_)) => {
-            Err(PyRuntimeError::new_err("sync call suspended"))
-        }
+        ExecutionStep::Suspend(
+            Suspension::Await(_) | Suspension::Keepalive { .. } | Suspension::Yield(_),
+        ) => Err(PyRuntimeError::new_err("sync call suspended")),
     }
 }
 
@@ -587,6 +687,7 @@ mod tests {
         hooks::CallHooks,
         interceptors::{Interceptors, RawResponse, RequestContext, WireRequest},
         machine::{CallMachine, MachineFault},
+        protocol::Reply,
     };
     use pyo3::exceptions::{PyBaseException, PyValueError};
     use pyo3::types::PyDict;
@@ -1732,6 +1833,346 @@ mod tests {
     }
 
     /// Drives a `Stream` (async) or `SyncStream` to completion from a sync test.
+    /// A route whose complete response is the chunks joined with `+`, and whose replay of a
+    /// response splits it on `+` again, so what the caller streams shows exactly what the
+    /// hooks saw and changed.
+    struct Held;
+
+    impl Protocol for Held {
+        type Response = String;
+        type Error = Error;
+        type Request = ();
+        type HostCall = std::convert::Infallible;
+        type Chunk = &'static str;
+        type StreamHead = Vec<(&'static str, &'static str)>;
+    }
+
+    struct HeldBinding;
+
+    impl PythonBinding for HeldBinding {
+        type Protocol = Held;
+        type Failure = Classified;
+
+        fn decode_request(
+            &mut self,
+            _: Python<'_>,
+            _: &Bound<'_, PyDict>,
+        ) -> Result<(), InvokeError<Error>> {
+            Ok(())
+        }
+
+        fn encode_stream_head(
+            &mut self,
+            py: Python<'_>,
+            head: Vec<(&'static str, &'static str)>,
+        ) -> PyResult<Py<PyAny>> {
+            let headers = PyDict::new(py);
+            for (name, value) in head {
+                headers.set_item(name, value)?;
+            }
+            Ok(headers.into_any().unbind())
+        }
+
+        fn encode_chunk(&mut self, py: Python<'_>, chunk: &'static str) -> PyResult<Py<PyAny>> {
+            Ok(pyo3::types::PyString::new(py, chunk).into_any().unbind())
+        }
+
+        fn encode_response(&mut self, py: Python<'_>, response: String) -> PyResult<Py<PyAny>> {
+            Ok(pyo3::types::PyString::new(py, &response)
+                .into_any()
+                .unbind())
+        }
+
+        fn assemble_stream(
+            &mut self,
+            _: Python<'_>,
+            chunks: Vec<&'static str>,
+        ) -> Result<String, InvokeError<Error>> {
+            Ok(chunks.join("+"))
+        }
+
+        fn stream_of_response(
+            &mut self,
+            py: Python<'_>,
+            response: &Py<PyAny>,
+        ) -> PyResult<crate::StreamReplay<Self::Protocol>> {
+            let text: String = response.extract(py)?;
+            let chunks = text
+                .split('+')
+                .map(|piece| &*Box::leak(piece.to_owned().into_boxed_str()))
+                .collect();
+            Ok(crate::StreamReplay {
+                head: vec![("replayed", "true")],
+                chunks,
+            })
+        }
+
+        fn keepalive_chunk(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+            Ok(Some(
+                pyo3::types::PyString::new(py, "ping").into_any().unbind(),
+            ))
+        }
+
+        fn map_error(&self, _: Python<'_>, error: Error) -> PyResult<Classified> {
+            Ok(Classified(error.0))
+        }
+
+        fn host_error(error: &PyErr) -> Error {
+            Error(error.to_string())
+        }
+    }
+
+    impl PythonHostCalls<Held> for HeldBinding {
+        async fn handle_host_call(
+            &mut self,
+            _: &PythonTask,
+            op: std::convert::Infallible,
+        ) -> Result<(), InvokeError<Error>> {
+            match op {}
+        }
+    }
+
+    impl PythonOwned for HeldBinding {
+        fn close(&mut self, _: Python<'_>) {}
+        fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+            Ok(())
+        }
+    }
+
+    /// Hooks that pick a stream policy and mark every response they transform with `!`.
+    struct PolicyHooks {
+        log: Log,
+        policy: StreamPolicy,
+    }
+
+    impl CallHooks<PythonRuntime> for PolicyHooks {
+        async fn stream_policy(
+            &mut self,
+            _: &PythonTask,
+            _: &Py<PyDict>,
+        ) -> PyResult<StreamPolicy> {
+            Ok(self.policy)
+        }
+
+        async fn transform_response(
+            &mut self,
+            _: &PythonTask,
+            response: Py<PyAny>,
+            _: Timing,
+        ) -> PyResult<Py<PyAny>> {
+            Python::attach(|py| {
+                let text: String = response.extract(py)?;
+                self.log.push(format!("transform:{text}"));
+                Ok(pyo3::types::PyString::new(py, &format!("{text}!"))
+                    .into_any()
+                    .unbind())
+            })
+        }
+
+        async fn on_event(&mut self, _: &PythonTask, event: PythonCallEvent<'_>) -> PyResult<()> {
+            if let PythonCallEvent::Succeeded { response, .. } = event {
+                self.log.push(Python::attach(|py| {
+                    format!("succeeded:{}", response.bind(py))
+                }));
+            }
+            Ok(())
+        }
+
+        async fn on_stream_open(&mut self, _: &PythonTask, head: &Py<PyAny>) -> PyResult<()> {
+            self.log
+                .push(Python::attach(|py| format!("opened:{}", head.bind(py))));
+            Ok(())
+        }
+
+        async fn on_stream_chunk(&mut self, _: &PythonTask, chunk: &Py<PyAny>) -> PyResult<()> {
+            self.log
+                .push(Python::attach(|py| format!("delivered:{}", chunk.bind(py))));
+            Ok(())
+        }
+    }
+
+    impl PythonOwned for PolicyHooks {
+        fn close(&mut self, _: Python<'_>) {}
+        fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+            Ok(())
+        }
+    }
+
+    fn held_stream_machine()
+    -> impl FnOnce(()) -> litellm_host::call::HostedMachine<Held> + Send + Sync {
+        move |()| {
+            litellm_host::call::hosted_call((), None, |(), _, _, _| async {
+                Ok(litellm_host::call::CallOutput::Stream {
+                    head: vec![("request-id", "req_1")],
+                    chunks: Box::pin(futures_util::stream::iter([Ok("first"), Ok("second")])),
+                })
+            })
+        }
+    }
+
+    fn held_complete_machine()
+    -> impl FnOnce(()) -> litellm_host::call::HostedMachine<Held> + Send + Sync {
+        move |()| {
+            litellm_host::call::hosted_call((), None, |(), _, _, _| async {
+                Ok(litellm_host::call::CallOutput::Complete("a+b".to_string()))
+            })
+        }
+    }
+
+    fn run_held(
+        py: Python<'_>,
+        machine: impl FnOnce(()) -> litellm_host::call::HostedMachine<Held> + Send + Sync + 'static,
+        policy: StreamPolicy,
+        asynchronous: bool,
+    ) -> (Py<PyAny>, Log) {
+        install_lifecycle_module(py);
+        let log = Log::default();
+        let handed = run_call(
+            py,
+            move |_, _, request| Ok(machine(request)),
+            HeldBinding,
+            PolicyHooks {
+                log: Log(log.0.clone()),
+                policy,
+            },
+            PyDict::new(py).unbind(),
+            call_options(asynchronous),
+        )
+        .unwrap();
+        let handed = if asynchronous {
+            let completion = handed.call_method1(py, "send", (py.None(),)).unwrap_err();
+            assert!(completion.is_instance_of::<pyo3::exceptions::PyStopIteration>(py));
+            completion.value(py).getattr("value").unwrap().unbind()
+        } else {
+            handed
+        };
+        (handed, log)
+    }
+
+    /// A held-back stream reaches the caller as the replay of the transformed response: the
+    /// provider's chunks are never delivered, the hooks transform what they assembled to,
+    /// and the stream hooks see what the caller got.
+    #[rstest::rstest]
+    #[case::sync(false)]
+    #[case::asynchronous(true)]
+    fn a_held_back_stream_delivers_the_transformed_replay_instead_of_the_provider_chunks(
+        #[case] asynchronous: bool,
+    ) {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            let (stream, log) = run_held(
+                py,
+                held_stream_machine(),
+                StreamPolicy::HoldBack,
+                asynchronous,
+            );
+            let head = stream.getattr(py, "head").unwrap();
+            assert_eq!(head.bind(py).to_string(), "{'request-id': 'req_1'}");
+            assert_eq!(
+                read_all(py, stream.bind(py), asynchronous),
+                ["first", "second!"]
+            );
+            assert_eq!(
+                log.entries(),
+                [
+                    "opened:{'request-id': 'req_1'}",
+                    "transform:first+second",
+                    "delivered:first",
+                    "delivered:second!",
+                    "succeeded:None",
+                ]
+            );
+        });
+    }
+
+    /// A caller who asked for a stream gets one even when the hooks made the provider call
+    /// complete: the complete response is transformed, then replayed as chunks.
+    #[rstest::rstest]
+    #[case::sync(false)]
+    #[case::asynchronous(true)]
+    fn a_synthesized_stream_replays_the_transformed_complete_response(#[case] asynchronous: bool) {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            let (stream, log) = run_held(
+                py,
+                held_complete_machine(),
+                StreamPolicy::Synthesize,
+                asynchronous,
+            );
+            let head = stream.getattr(py, "head").unwrap();
+            assert_eq!(head.bind(py).to_string(), "{'replayed': 'true'}");
+            assert_eq!(read_all(py, stream.bind(py), asynchronous), ["a", "b!"]);
+            assert_eq!(
+                log.entries(),
+                [
+                    "transform:a+b",
+                    "opened:{'replayed': 'true'}",
+                    "delivered:a",
+                    "delivered:b!",
+                    "succeeded:None",
+                ]
+            );
+        });
+    }
+
+    /// Relaying is untouched by the policy stage: live chunks reach the caller and no
+    /// response transformation runs.
+    #[rstest::rstest]
+    #[case::sync(false)]
+    #[case::asynchronous(true)]
+    fn a_relayed_stream_runs_no_response_transformation(#[case] asynchronous: bool) {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            let (stream, log) =
+                run_held(py, held_stream_machine(), StreamPolicy::Relay, asynchronous);
+            assert_eq!(
+                read_all(py, stream.bind(py), asynchronous),
+                ["first", "second"]
+            );
+            assert!(
+                !log.entries()
+                    .iter()
+                    .any(|entry| entry.starts_with("transform:"))
+            );
+            assert_eq!(
+                log.entries(),
+                [
+                    "opened:{'request-id': 'req_1'}",
+                    "delivered:first",
+                    "delivered:second",
+                    "succeeded:None",
+                ]
+            );
+        });
+    }
+
+    /// Closing a held-back stream before it delivers runs no transformation and reports
+    /// success for nothing delivered, exactly as closing a relayed stream does.
+    #[rstest::rstest]
+    fn closing_a_held_back_stream_early_delivers_nothing() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            let (stream, log) = run_held(py, held_stream_machine(), StreamPolicy::HoldBack, false);
+            stream.call_method0(py, "close").unwrap();
+            assert_eq!(
+                log.entries(),
+                ["opened:{'request-id': 'req_1'}", "succeeded:None"]
+            );
+        });
+    }
+
     fn read_all(py: Python<'_>, stream: &Bound<'_, PyAny>, asynchronous: bool) -> Vec<String> {
         if !asynchronous {
             return stream

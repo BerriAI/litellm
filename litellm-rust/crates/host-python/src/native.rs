@@ -37,6 +37,7 @@ pub(super) struct NativeMachine<M: Machine> {
     state: Option<Arc<Mutex<MachineState<M>>>>,
     abort: Option<AbortHandle>,
     asynchronous: bool,
+    keepalive: Option<Py<PyAny>>,
 }
 
 impl<M: Machine + 'static> NativeMachine<M>
@@ -48,7 +49,14 @@ where
             state: None,
             abort: None,
             asynchronous,
+            keepalive: None,
         }
+    }
+
+    /// While set, every wait on the runtime is handed to the caller's stream with this
+    /// chunk, so the stream can keep its consumer's connection alive during the wait.
+    pub(super) fn set_keepalive(&mut self, ping: Option<Py<PyAny>>) {
+        self.keepalive = ping;
     }
 
     pub(super) fn start(&mut self, machine: M) {
@@ -95,7 +103,14 @@ where
             })
             .map(Bound::unbind)
         })?;
-        task.suspend(Suspension::Await(awaitable)).await?;
+        let suspension = match &self.keepalive {
+            Some(ping) => Suspension::Keepalive {
+                awaitable,
+                ping: Python::attach(|py| ping.clone_ref(py)),
+            },
+            None => Suspension::Await(awaitable),
+        };
+        task.suspend(suspension).await?;
         self.take_result()
     }
 

@@ -1,13 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
 from dataclasses import dataclass
 from typing import Final, Protocol
+
+KEEPALIVE_INTERVAL_SECONDS: Final = 15.0
 
 
 @dataclass(frozen=True, slots=True)
 class Await:
     awaitable: Awaitable[object]
+
+
+@dataclass(frozen=True, slots=True)
+class Keepalive:
+    """A wait a held-back stream sits through. While it outlasts the keepalive interval the
+    stream hands its consumer `ping` instead, and resumes the same wait on the next read."""
+
+    awaitable: asyncio.Future[object]
+    ping: object
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +38,7 @@ class Yield:
 
 
 Settled = Complete | Open | Yield
-Step = Await | Settled
+Step = Await | Keepalive | Settled
 
 
 class Execution(Protocol):
@@ -44,7 +56,7 @@ class StreamClosed(Exception):
 
 
 async def _settle(execution: Execution, step: Step) -> Settled:
-    while isinstance(step, Await):
+    while isinstance(step, Await | Keepalive):
         try:
             value = await step.awaitable
         except GeneratorExit:
@@ -57,7 +69,7 @@ async def _settle(execution: Execution, step: Step) -> Settled:
 
 
 def _settled(step: Step) -> Settled:
-    if isinstance(step, Await):
+    if isinstance(step, Await | Keepalive):
         raise RuntimeError("sync call suspended")
     return step
 
@@ -83,6 +95,7 @@ class Stream(AsyncIterator[object]):
     def __init__(self, execution: Execution, head: object = None) -> None:
         self._execution: Final = execution
         self._done = False
+        self._waiting: Keepalive | None = None
         self.head: Final = head
 
     def __aiter__(self) -> Stream:
@@ -92,7 +105,7 @@ class Stream(AsyncIterator[object]):
         if self._done:
             raise StopAsyncIteration
         try:
-            step: Final = await _settle(self._execution, self._execution.resume_value(None))
+            step: Final = await self._advance()
         except BaseException:
             self._finish()
             raise
@@ -100,6 +113,26 @@ class Stream(AsyncIterator[object]):
             return step.value
         self._finish()
         raise StopAsyncIteration
+
+    async def _advance(self) -> Settled | Yield:
+        step = (
+            self._execution.resume_value(None) if self._waiting is None else self._waiting
+        )  # rebind-ok: protocol loop
+        self._waiting = None
+        while True:
+            if isinstance(step, Keepalive):
+                done, _ = await asyncio.wait({step.awaitable}, timeout=KEEPALIVE_INTERVAL_SECONDS)
+                if not done:
+                    self._waiting = step
+                    return Yield(step.ping)
+                error: Final = step.awaitable.exception()
+                step = (  # rebind-ok: protocol loop
+                    self._execution.resume_error(error)
+                    if error is not None
+                    else self._execution.resume_value(step.awaitable.result())
+                )
+                continue
+            return await _settle(self._execution, step)
 
     async def aclose(self) -> None:
         if self._done:

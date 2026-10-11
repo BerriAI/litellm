@@ -18,6 +18,31 @@ pub trait HookRuntime {
 pub type RuntimeCallEvent<'a, R> =
     CallEvent<&'a <R as HookRuntime>::Response, &'a <R as HookRuntime>::Error, &'a RawResponse>;
 
+/// How the host delivers a stream to the caller. `Relay` hands chunks on as they arrive.
+/// `HoldBack` keeps them until the stream ends, runs the response transformation on the
+/// assembled response and delivers what came out. `Synthesize` turns a complete response
+/// into a stream because the caller asked for one and a hook made the provider call
+/// complete instead.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum StreamPolicy {
+    #[default]
+    Relay,
+    HoldBack,
+    Synthesize,
+}
+
+impl StreamPolicy {
+    /// The policy a chain of hooks settles on: holding back wins over synthesizing, and
+    /// either wins over relaying.
+    pub fn merge(self, other: Self) -> Self {
+        match (self, other) {
+            (Self::HoldBack, _) | (_, Self::HoldBack) => Self::HoldBack,
+            (Self::Synthesize, _) | (_, Self::Synthesize) => Self::Synthesize,
+            (Self::Relay, Self::Relay) => Self::Relay,
+        }
+    }
+}
+
 /// The stages of one call a host may act on. Every stage is awaited on the host's own
 /// context, so a hook suspends the call by awaiting rather than by returning a continuation.
 pub trait CallHooks<R: HookRuntime>: Send + Sized {
@@ -44,6 +69,14 @@ pub trait CallHooks<R: HookRuntime>: Send + Sized {
         _arguments: &R::Arguments,
     ) -> impl Future<Output = Result<(), R::Error>> + Send {
         async { Ok(()) }
+    }
+
+    fn stream_policy(
+        &mut self,
+        _runtime: &R::Context,
+        _arguments: &R::Arguments,
+    ) -> impl Future<Output = Result<StreamPolicy, R::Error>> + Send {
+        async { Ok(StreamPolicy::Relay) }
     }
 
     fn before_provider_request(

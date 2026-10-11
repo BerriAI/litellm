@@ -424,6 +424,8 @@ async def test_native_messages_pre_request_failure_never_sends_and_ends_the_call
 
 
 class Gate(CustomLogger):
+    streaming: bool = False
+
     def __init__(self, decision: str) -> None:
         super().__init__()
         self.decision = decision
@@ -435,7 +437,7 @@ class Gate(CustomLogger):
         self.seen.append(response)
         assert model == "claude-sonnet-5"
         assert custom_llm_provider == "anthropic"
-        assert stream is False
+        assert stream is self.streaming
         assert tools == [TOOL]
         if self.decision == "crash":
             raise RuntimeError("gate crashed")
@@ -665,3 +667,171 @@ async def test_native_messages_agentic_hooks_run_before_the_deployment_success_h
         await litellm.anthropic.messages.acreate(**agentic_arguments(messages_server))
 
     assert order == [("agentic", "msg_tool_use"), ("deployment", "msg_final")]
+
+
+class ServerSideWeather(Gate):
+    """Fulfils `get_weather` itself, and tells the gateway so a streamed tool call is never relayed."""
+
+    server_fulfilled_tool_names: Final = frozenset({"get_weather"})
+    streaming = True
+
+
+def tool_use_events() -> tuple[tuple[str, dict[str, object]], ...]:
+    return (
+        (
+            "message_start",
+            {"type": "message_start", "message": {**TOOL_USE_RESPONSE, "content": [], "stop_reason": None}},
+        ),
+        (
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {}},
+            },
+        ),
+        (
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"city": "Paris"}'},
+            },
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": "tool_use", "stop_sequence": None},
+                "usage": {"output_tokens": 9},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    )
+
+
+def events_of(chunks: list[bytes]) -> list[tuple[str, dict[str, object]]]:
+    import json
+
+    events: list[tuple[str, dict[str, object]]] = []
+    for block in b"".join(chunks).decode().split("\n\n"):
+        lines = [line for line in block.split("\n") if line]
+        if not lines:
+            continue
+        name = next(line.removeprefix("event: ") for line in lines if line.startswith("event: "))
+        data = next(line.removeprefix("data: ") for line in lines if line.startswith("data: "))
+        events.append((name, json.loads(data)))
+    return events
+
+
+@pytest.mark.asyncio
+async def test_native_messages_hold_a_stream_back_for_a_server_fulfilled_tool_and_stream_the_answer(
+    messages_server: RecordingServer,
+) -> None:
+    messages_server.enqueue(ResponseSpec(body=None, events=tool_use_events()))
+    recorder: Final = RecordingLogger()
+
+    with rebound(litellm, "callbacks", [ServerSideWeather("run")]):
+        stream: Final = await litellm.anthropic.messages.acreate(
+            **agentic_arguments(messages_server, stream=True, callbacks=[recorder])
+        )
+        assert isinstance(stream, AsyncIterator)
+        chunks: Final = [chunk async for chunk in stream]
+
+    assert_served_natively(messages_server)
+    assert messages_server.requests[0].body["stream"] is True
+    events: Final = events_of(chunks)
+    assert [name for name, _ in events] == [
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+    ]
+    assert events[0][1]["message"]["id"] == "msg_final"
+    assert events[2][1]["delta"] == {"type": "text_delta", "text": "18C and raining in Paris"}
+    assert all("tool_use" not in chunk.decode() for chunk in chunks)
+    success: Final = await recorder.wait_for_async("async_log_success_event")
+    assert len(success) == 1
+    assert success[0].kwargs["stream"] is True
+
+
+@pytest.mark.asyncio
+async def test_native_messages_relay_a_stream_live_and_skip_the_agentic_hooks_when_no_callback_declares_the_tool(
+    messages_server: RecordingServer,
+) -> None:
+    """A callback that overrides the agentic gate without declaring the tool in
+    `server_fulfilled_tool_names` gets a live relay and no end-of-stream hooks. Python would
+    relay the tool call and then append the loop's answer as a second message on the same
+    stream, which no Anthropic SSE client can consume, so the native path does not port that
+    mode. Declaring the tool moves such a callback into hold-back."""
+    messages_server.enqueue(ResponseSpec(body=None, events=tool_use_events()))
+    gate: Final = Gate("run")
+
+    with rebound(litellm, "callbacks", [gate]):
+        stream: Final = await litellm.anthropic.messages.acreate(**agentic_arguments(messages_server, stream=True))
+        assert isinstance(stream, AsyncIterator)
+        chunks: Final = [chunk async for chunk in stream]
+
+    assert_served_natively(messages_server)
+    assert gate.seen == []
+    assert [name for name, _ in events_of(chunks)][:2] == ["message_start", "content_block_start"]
+    assert events_of(chunks)[1][1]["content_block"]["name"] == "get_weather"
+
+
+@pytest.mark.asyncio
+async def test_native_messages_held_back_stream_whose_tool_call_nobody_fulfilled_fails_instead_of_leaking(
+    messages_server: RecordingServer,
+) -> None:
+    messages_server.enqueue(ResponseSpec(body=None, events=tool_use_events()))
+    observed: Final = []
+
+    class Declines(ServerSideWeather):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            observed.append(kwargs["exception"])
+
+    with rebound(litellm, "callbacks", [Declines("decline")]):
+        stream: Final = await litellm.anthropic.messages.acreate(**agentic_arguments(messages_server, stream=True))
+        assert isinstance(stream, AsyncIterator)
+        delivered: Final = []
+        with pytest.raises(litellm.InternalServerError) as raised:
+            async for chunk in stream:
+                delivered.append(chunk)
+
+    assert "Server-side tool retrieval failed" in str(raised.value)
+    assert delivered == []
+    assert_served_natively(messages_server)
+    await drain_logging()
+    assert observed == [raised.value]
+
+
+@pytest.mark.asyncio
+async def test_native_messages_synthesize_a_stream_when_a_pre_request_hook_turns_streaming_off(
+    messages_server: RecordingServer,
+) -> None:
+    class TurnStreamOff(CustomLogger):
+        async def async_pre_request_hook(
+            self, model: str, messages: list[dict[str, object]], kwargs: dict[str, object]
+        ) -> dict[str, object]:
+            return {**kwargs, "stream": False}
+
+    with rebound(litellm, "callbacks", [TurnStreamOff()]):
+        stream: Final = await litellm.anthropic.messages.acreate(**arguments(messages_server, stream=True))
+        assert isinstance(stream, AsyncIterator)
+        chunks: Final = [chunk async for chunk in stream]
+
+    assert_served_natively(messages_server)
+    assert messages_server.requests[0].body["stream"] is False
+    events: Final = events_of(chunks)
+    assert [name for name, _ in events] == [
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+    ]
+    assert events[2][1]["delta"]["text"] == MESSAGES_RESPONSE["content"][0]["text"]
+    assert events[4][1]["delta"]["stop_reason"] == "end_turn"

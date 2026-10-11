@@ -23,6 +23,8 @@ from typing import (
 
 from pydantic import TypeAdapter
 
+import litellm
+
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -204,6 +206,10 @@ class PreRequestHooks(Protocol):
         custom_llm_provider: object,
         **kwargs: object,  # kwargs-ok: the Messages handler forwards every caller keyword to the hooks
     ) -> Awaitable[object]: ...
+
+
+class ServerFulfilledTools(Protocol):
+    def __call__(self, logging_obj: LoggingSurface, tools: object) -> frozenset[str]: ...
 
 
 class AgenticCompletionHooks(Protocol):
@@ -413,17 +419,56 @@ async def prepare_request(operation: str, request: Mapping[str, object]) -> Mapp
             raise ValueError(f"no request body hooks for the {operation} operation")
 
 
-async def transform_response(operation: str, response: object, request: Mapping[str, object]) -> object:
-    """The body of the operation's async handler after the provider call. Messages runs the
-    agentic-loop orchestration, and the answer is the response a callback's loop produced, or
-    the provider's own when no loop ran."""
+async def transform_response(operation: str, response: object, request: Mapping[str, object], stream: bool) -> object:
+    """The body of the operation's handler after the provider call. Messages and Responses run
+    the agentic-loop orchestration, and the answer is the response a callback's loop produced,
+    or the provider's own when no loop ran. `stream` says the provider stream was held back for
+    these hooks, in which case a server-fulfilled tool call that nobody fulfilled is an error
+    rather than something to hand the caller."""
     match operation:
         case "messages":
-            return await _transform_messages_response(response, request)
+            return await _transform_messages_response(response, request, stream)
         case "responses":
             return await _transform_responses_response(response, request)
         case _:
             raise ValueError(f"no response body hooks for the {operation} operation")
+
+
+def stream_policy(operation: str, request: Mapping[str, object]) -> str:
+    """Whether a streaming call's provider stream is held back for the response hooks: it is
+    when the request carries a tool a registered callback fulfils server-side, so the tool call
+    never reaches a client that cannot run it."""
+    match operation:
+        case "messages" | "responses":
+            return "hold_back" if _server_fulfilled_tools(request) else "relay"
+        case _:
+            raise ValueError(f"no stream policy for the {operation} operation")
+
+
+def _server_fulfilled_tools(request: Mapping[str, object]) -> frozenset[str]:
+    from litellm.llms.anthropic.pass_through.messages import handler
+
+    logger: Final = cast(  # cast-ok: the argument stage injected the initialized Logging surface
+        LoggingSurface, request["litellm_logging_obj"]
+    )
+    fulfilled: Final = cast(  # cast-ok: the handler's own server-fulfilled tool lookup
+        ServerFulfilledTools,
+        handler.base_llm_http_handler._server_fulfilled_tools_in_request,  # pyright: ignore[reportPrivateUsage]  # the native call applies the handler's own hold-back rule
+    )
+    return fulfilled(logging_obj=logger, tools=request.get("tools"))
+
+
+def _leaks_server_fulfilled_tool(response: object, request: Mapping[str, object]) -> bool:
+    from litellm.rust_bridge.public_call import optional_mapping, optional_sequence
+
+    content: Final = optional_sequence(
+        optional_mapping(response).get("content") if optional_mapping(response) else None
+    )
+    if content is None:
+        return False
+    names: Final = _server_fulfilled_tools(request)
+    blocks: Final = (optional_mapping(block) for block in content)
+    return any(block is not None and block.get("type") == "tool_use" and block.get("name") in names for block in blocks)
 
 
 async def _prepare_messages_request(request: Mapping[str, object]) -> Mapping[str, object]:
@@ -451,7 +496,7 @@ async def _prepare_messages_request(request: Mapping[str, object]) -> Mapping[st
     return {**request, **updates, "custom_llm_provider": request.get("custom_llm_provider") or derived}
 
 
-async def _transform_messages_response(response: object, request: Mapping[str, object]) -> object:
+async def _transform_messages_response(response: object, request: Mapping[str, object], stream: bool) -> object:
     from litellm.llms.anthropic.pass_through.messages import handler
     from litellm.rust_bridge.public_call import optional_str
     from litellm.types.utils import LlmProviders
@@ -478,11 +523,17 @@ async def _transform_messages_response(response: object, request: Mapping[str, o
         ),
         anthropic_messages_optional_request_params=logger.optional_params,
         logging_obj=logger,
-        stream=False,
+        stream=stream,
         custom_llm_provider=provider,
         kwargs={**_messages_extra(request), **credentials},
         api_surface="anthropic_messages",
     )
+    if selected is None and stream and _leaks_server_fulfilled_tool(response, request):
+        raise litellm.InternalServerError(
+            message="Server-side tool retrieval failed, so this turn could not be completed. Please retry.",
+            llm_provider=provider,
+            model=model,
+        )
     return response if selected is None else selected
 
 

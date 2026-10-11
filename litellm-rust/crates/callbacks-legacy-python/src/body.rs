@@ -7,7 +7,10 @@
 //! completion the way Python's sync handler does. This hook hands them the resolved request
 //! and folds their answers back into the keyword view.
 
-use litellm_host::{hooks::CallHooks, lifecycle::Timing};
+use litellm_host::{
+    hooks::{CallHooks, StreamPolicy},
+    lifecycle::Timing,
+};
 use litellm_host_python::{
     PythonOwned, PythonRuntime, PythonTask, effective_py_args, missing_state,
 };
@@ -24,6 +27,18 @@ pub struct HandlerBody {
     prepares_request: bool,
     base: Option<Py<PyDict>>,
     request: Option<Py<PyDict>>,
+    /// The caller asked for a stream and the request stage turned it off, so the complete
+    /// response has to reach the caller as a stream.
+    stream_turned_off: bool,
+    /// The handler asked to hold the provider stream back for its response hooks.
+    holds_back: bool,
+}
+
+fn streams(py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<bool> {
+    match arguments.bind(py).get_item("stream")? {
+        Some(value) => value.is_truthy(),
+        None => Ok(false),
+    }
 }
 
 /// Whether the operation's Python handler runs body hooks at all, and if so whether it runs
@@ -52,6 +67,8 @@ impl HandlerBody {
             prepares_request,
             base: Some(call.base(py)),
             request: None,
+            stream_turned_off: false,
+            holds_back: false,
         })
     }
 
@@ -102,18 +119,46 @@ impl CallHooks<PythonRuntime> for HandlerBody {
         if !self.prepares_request {
             return Ok(arguments);
         }
-        let (before, awaitable) = Python::attach(|py| -> PyResult<_> {
+        let (before, awaitable, streamed) = Python::attach(|py| -> PyResult<_> {
             let resolved = self.resolved(py, arguments.bind(py))?;
+            let streamed = streams(py, &arguments)?;
             let awaitable = Body::PrepareRequest
                 .call(py, (<&str>::from(self.operation), &resolved))?
                 .unbind();
-            Ok((resolved.unbind(), awaitable))
+            Ok((resolved.unbind(), awaitable, streamed))
         })?;
         let replacement = settle(task, awaitable).await?;
         Python::attach(|py| {
             let replacement = replacement.into_bound(py).cast_into::<PyDict>()?;
             write_back(before.bind(py), &replacement, arguments.bind(py))?;
+            self.stream_turned_off = streamed && !streams(py, &arguments)?;
             Ok(arguments)
+        })
+    }
+
+    async fn stream_policy(
+        &mut self,
+        _: &PythonTask,
+        arguments: &Py<PyDict>,
+    ) -> PyResult<StreamPolicy> {
+        if self.stream_turned_off {
+            return Ok(StreamPolicy::Synthesize);
+        }
+        let holds_back = Python::attach(|py| -> PyResult<bool> {
+            if !streams(py, arguments)? {
+                return Ok(false);
+            }
+            let resolved = self.resolved(py, arguments.bind(py))?;
+            Body::StreamPolicy
+                .call(py, (<&str>::from(self.operation), resolved))?
+                .extract::<String>()
+                .map(|policy| policy == "hold_back")
+        })?;
+        self.holds_back = holds_back;
+        Ok(if holds_back {
+            StreamPolicy::HoldBack
+        } else {
+            StreamPolicy::Relay
         })
     }
 
@@ -132,7 +177,15 @@ impl CallHooks<PythonRuntime> for HandlerBody {
             let request = self.request.as_ref().ok_or_else(missing_state)?;
             let resolved = self.resolved(py, request.bind(py))?;
             Ok(Body::TransformResponse
-                .call(py, (<&str>::from(self.operation), &response, resolved))?
+                .call(
+                    py,
+                    (
+                        <&str>::from(self.operation),
+                        &response,
+                        resolved,
+                        self.holds_back,
+                    ),
+                )?
                 .unbind())
         })?;
         settle(task, awaitable).await
@@ -155,7 +208,10 @@ impl PythonOwned for HandlerBody {
 mod tests {
     use std::ffi::CStr;
 
-    use litellm_host::{hooks::CallHooks, lifecycle::Timing};
+    use litellm_host::{
+        hooks::{CallHooks, StreamPolicy},
+        lifecycle::Timing,
+    };
     use litellm_host_python::{PythonOwned, PythonTask};
     use pyo3::{
         prelude::*,
@@ -384,7 +440,7 @@ bound = {'model': 'bound-model', 'max_tokens': 8}
 kwargs = {'model': 'kwargs-model', 'logger': logger}
 response = {'content': [{'type': 'text', 'text': 'provider'}]}
 replacement = {'content': [{'type': 'text', 'text': 'callback'}]}
-logger.bodies = {'transform': lambda operation, response, request: replacement}
+logger.bodies = {'transform': lambda operation, response, request, stream: replacement}
 ",
             );
             let task = PythonTask::new(true);
@@ -404,9 +460,10 @@ logger.bodies = {'transform': lambda operation, response, request: replacement}
                 py,
                 &locals,
                 c"
-[(name, (operation, seen_response, request))] = logger.calls
+[(name, (operation, seen_response, request, stream))] = logger.calls
 assert name == 'transform_body'
 assert operation == 'messages'
+assert stream is False
 assert seen_response is response
 assert request == {'model': 'kwargs-model', 'max_tokens': 8, 'logger': logger}
 ",
@@ -489,7 +546,7 @@ bound = {'model': 'bound-model'}
 kwargs = {'logger': logger}
 response = {'output': []}
 replacement = {'output': ['from the loop']}
-logger.bodies = {'transform': lambda operation, response, request: replacement}
+logger.bodies = {'transform': lambda operation, response, request, stream: replacement}
 ",
                 LoggingOperation::Responses,
                 false,
@@ -515,6 +572,126 @@ assert selected is replacement
 assert [name for name, _ in logger.calls] == ['transform_body', 'run_sync']
 assert logger.calls[0][1][0] == 'responses'
 ",
+            );
+        });
+    }
+
+    /// The stream policy is the handler's call: a streaming request is held back exactly when
+    /// the shim says so, a complete request is always relayed and never asks Python.
+    #[rstest]
+    #[case::complete_request(
+        "kwargs = {'logger': logger}",
+        "'hold_back'",
+        StreamPolicy::Relay,
+        false
+    )]
+    #[case::stream_relayed(
+        "kwargs = {'stream': True, 'logger': logger}",
+        "'relay'",
+        StreamPolicy::Relay,
+        true
+    )]
+    #[case::stream_held_back(
+        "kwargs = {'stream': True, 'logger': logger}",
+        "'hold_back'",
+        StreamPolicy::HoldBack,
+        true
+    )]
+    fn the_stream_policy_follows_the_handler(
+        #[case] kwargs: &str,
+        #[case] answer: &str,
+        #[case] expected: StreamPolicy,
+        #[case] asked_python: bool,
+        initialized_python: &InitializedPython,
+    ) {
+        initialized_python.attach(|py| {
+            let script = std::ffi::CString::new(format!(
+                "bound = {{'model': 'bound-model', 'stream': False}}\n{kwargs}\nlogger.bodies = {{'policy': lambda operation, request: {answer}}}"
+            ))
+            .unwrap();
+            let (mut body, locals) = body(py, &script);
+            let task = PythonTask::new(true);
+            let kwargs = local_dict(&locals, "kwargs").unbind();
+            let policy = finish(py, &task, body.stream_policy(&task, &kwargs)).unwrap();
+            assert_eq!(policy, expected);
+            let calls = if asked_python { "['policy_body']" } else { "[]" };
+            let asked = std::ffi::CString::new(format!("assert [name for name, _ in logger.calls] == {calls}")).unwrap();
+            run(py, &locals, &asked);
+            if asked_python {
+                run(
+                    py,
+                    &locals,
+                    c"assert logger.calls[0][1][0] == 'messages' and logger.calls[0][1][1]['stream'] is True",
+                );
+            }
+        });
+    }
+
+    /// A pre-request fan-out that turns the stream off leaves a caller who asked for one, so
+    /// the complete response has to be synthesized into a stream for them.
+    #[rstest]
+    fn a_pre_request_fan_out_that_turns_the_stream_off_makes_the_call_synthesize_one(
+        initialized_python: &InitializedPython,
+    ) {
+        initialized_python.attach(|py| {
+            let (mut body, locals) = body(
+                py,
+                c"
+bound = {'model': 'bound-model', 'stream': False}
+kwargs = {'stream': True, 'logger': logger}
+logger.bodies = {'prepare': lambda operation, request: {**request, 'stream': False}}
+",
+            );
+            let task = PythonTask::new(true);
+            let kwargs = local_dict(&locals, "kwargs").unbind();
+            drive(
+                py,
+                &task,
+                body.prepare_request(&task, kwargs.clone_ref(py)),
+                echo,
+            )
+            .outcome
+            .unwrap();
+            let policy = finish(py, &task, body.stream_policy(&task, &kwargs)).unwrap();
+            assert_eq!(policy, StreamPolicy::Synthesize);
+            run(py, &locals, c"assert kwargs['stream'] is False");
+        });
+    }
+
+    #[rstest]
+    fn the_response_fan_out_learns_whether_the_stream_was_held_back(
+        initialized_python: &InitializedPython,
+    ) {
+        initialized_python.attach(|py| {
+            let (mut body, locals) = body(
+                py,
+                c"
+bound = {'model': 'bound-model'}
+kwargs = {'stream': True, 'logger': logger}
+response = {'content': []}
+logger.bodies = {
+    'policy': lambda operation, request: 'hold_back',
+    'transform': lambda operation, response, request, stream: response,
+}
+",
+            );
+            let task = PythonTask::new(true);
+            let kwargs = local_dict(&locals, "kwargs").unbind();
+            finish(py, &task, body.stream_policy(&task, &kwargs)).unwrap();
+            finish(py, &task, body.arguments_prepared(&task, &kwargs)).unwrap();
+            let response = local(&locals, "response").unbind();
+            drive(
+                py,
+                &task,
+                body.transform_response(&task, response, TIMING),
+                echo,
+            )
+            .outcome
+            .unwrap();
+            run(
+                py,
+                &locals,
+                c"assert logger.calls[-1][0] == 'transform_body' and logger.calls[-1][1][3] is True",
             );
         });
     }

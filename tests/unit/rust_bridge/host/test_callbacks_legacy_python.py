@@ -353,7 +353,7 @@ async def test_agentic_response_hooks_see_the_logged_request_and_their_answer_is
     legacy.update_logging(logger, request, "claude-sonnet-5", {"tools": caller_tools, "max_tokens": 8}, {}, "anthropic")
     monkeypatch.setattr(litellm, "callbacks", [callback])
 
-    selected: Final = await legacy.transform_response("messages", original, request)
+    selected: Final = await legacy.transform_response("messages", original, request, False)
 
     assert selected is replacement
 
@@ -372,7 +372,7 @@ async def test_agentic_response_hooks_that_do_not_run_keep_the_provider_response
     legacy.update_logging(logger, request, "claude-sonnet-5", {"max_tokens": 8}, {}, "anthropic")
     monkeypatch.setattr(litellm, "callbacks", [CustomLogger()])
 
-    assert await legacy.transform_response("messages", original, request) is original
+    assert await legacy.transform_response("messages", original, request, False) is original
 
 
 @pytest.mark.asyncio
@@ -386,7 +386,7 @@ async def test_request_body_hooks_refuse_an_operation_whose_handler_has_none(ope
 @pytest.mark.parametrize("operation", ("ocr", "completion"))
 async def test_response_body_hooks_refuse_an_operation_whose_handler_has_none(operation: str) -> None:
     with pytest.raises(ValueError, match=operation):
-        await legacy.transform_response(operation, {}, {"model": "m"})
+        await legacy.transform_response(operation, {}, {"model": "m"}, False)
 
 
 def _responses_logger() -> Logging:
@@ -464,7 +464,7 @@ async def test_responses_agentic_hooks_see_the_responses_surface_and_their_answe
     )
     monkeypatch.setattr(litellm, "callbacks", [Gate()])
 
-    selected: Final = await legacy.transform_response("responses", original, request)
+    selected: Final = await legacy.transform_response("responses", original, request, False)
 
     assert selected is replacement
     assert seen == [
@@ -488,3 +488,59 @@ def test_run_sync_runs_a_body_fan_out_to_completion_without_a_running_loop() -> 
         return "settled"
 
     assert legacy.run_sync(fan_out()) == "settled"
+
+
+class _ServerSideSearch(CustomLogger):
+    server_fulfilled_tool_names: Final = frozenset({"litellm_web_search"})
+
+
+@pytest.mark.parametrize(
+    ("callbacks", "tools", "expected"),
+    (
+        ((), [{"name": "litellm_web_search"}], "relay"),
+        ((_ServerSideSearch(),), [{"name": "get_weather"}], "relay"),
+        ((_ServerSideSearch(),), [{"name": "litellm_web_search"}], "hold_back"),
+        ((_ServerSideSearch(),), None, "relay"),
+    ),
+    ids=("no-callbacks", "other-tool", "server-fulfilled-tool", "no-tools"),
+)
+@pytest.mark.parametrize("operation", ("messages", "responses"))
+def test_stream_policy_holds_back_exactly_when_a_callback_fulfils_a_requested_tool(
+    monkeypatch: pytest.MonkeyPatch,
+    callbacks: tuple[CustomLogger, ...],
+    tools: object,
+    expected: str,
+    operation: str,
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", list(callbacks))
+    request: Final[dict[str, object]] = {
+        "model": "m",
+        "stream": True,
+        "tools": tools,
+        "litellm_logging_obj": _supplied_logger(),
+    }
+
+    assert legacy.stream_policy(operation, request) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("held_back", (True, False), ids=("held-back", "complete"))
+async def test_a_held_back_stream_whose_server_fulfilled_tool_call_nobody_fulfilled_is_an_error(
+    monkeypatch: pytest.MonkeyPatch, held_back: bool
+) -> None:
+    monkeypatch.setattr(litellm, "callbacks", [_ServerSideSearch()])
+    logger: Final = _supplied_logger()
+    request: Final[dict[str, object]] = {
+        "model": "anthropic/claude-sonnet-5",
+        "messages": [],
+        "tools": [{"name": "litellm_web_search"}],
+        "litellm_logging_obj": logger,
+    }
+    legacy.update_logging(logger, request, "claude-sonnet-5", {"tools": request["tools"]}, {}, "anthropic")
+    leaking: Final = {"content": [{"type": "tool_use", "id": "t", "name": "litellm_web_search", "input": {}}]}
+
+    if held_back:
+        with pytest.raises(litellm.InternalServerError, match="Server-side tool retrieval failed"):
+            await legacy.transform_response("messages", leaking, request, True)
+    else:
+        assert await legacy.transform_response("messages", leaking, request, False) is leaking

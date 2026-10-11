@@ -6,7 +6,8 @@ from typing import Final
 
 import pytest
 
-from litellm.rust_bridge.lifecycle import Await, Complete, Execution, Open, Step, drive
+from litellm.rust_bridge import lifecycle
+from litellm.rust_bridge.lifecycle import Await, Complete, Execution, Keepalive, Open, Step, Yield, drive
 
 
 class ScriptedExecution:
@@ -72,3 +73,40 @@ def test_stream_handoff_preserves_head_identity_and_closes_on_construction_failu
         assert asyncio.run(drive(execution, construct)) is stream
         assert not execution.closed
         execution.close()
+
+
+def test_a_stream_pings_while_a_keepalive_wait_outlasts_the_interval_and_then_resumes_with_the_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(lifecycle, "KEEPALIVE_INTERVAL_SECONDS", 0.01)
+
+    async def exercise() -> list[object]:
+        loop: Final = asyncio.get_running_loop()
+        slow: Final[asyncio.Future[object]] = loop.create_future()
+        loop.call_later(0.05, slow.set_result, "assembled")
+        execution: Final = ScriptedExecution([Open("head"), Keepalive(slow, b"ping"), Yield(b"chunk"), Complete(None)])
+        stream: Final = await drive(execution)
+        assert isinstance(stream, lifecycle.Stream)
+        chunks: Final = [chunk async for chunk in stream]
+        assert execution.resumed[-2:] == [("value", "assembled"), ("value", None)]
+        return chunks
+
+    chunks: Final = asyncio.run(exercise())
+
+    assert chunks[-1] == b"chunk"
+    assert len(chunks) >= 2
+    assert all(chunk == b"ping" for chunk in chunks[:-1])
+
+
+def test_a_keepalive_wait_that_fails_resumes_the_execution_with_the_error() -> None:
+    async def exercise() -> list[object]:
+        loop: Final = asyncio.get_running_loop()
+        failing: Final[asyncio.Future[object]] = loop.create_future()
+        failing.set_exception(ValueError("upstream broke"))
+        execution: Final = ScriptedExecution([Open("head"), Keepalive(failing, b"ping"), Complete(None)])
+        stream: Final = await drive(execution)
+        chunks: Final = [chunk async for chunk in stream]
+        assert execution.resumed == [("value", None), ("error", ValueError)]
+        return chunks
+
+    assert asyncio.run(exercise()) == []

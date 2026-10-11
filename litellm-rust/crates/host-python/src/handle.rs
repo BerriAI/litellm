@@ -13,6 +13,12 @@ pub type PythonLifecycle = for<'py> fn(Python<'py>) -> PyResult<Bound<'py, PyMod
 /// for a chunk.
 pub enum Suspension {
     Await(Py<PyAny>),
+    /// An awaitable a held-back stream waits on, with the chunk the stream sends to its
+    /// consumer whenever the wait outlasts the keepalive interval.
+    Keepalive {
+        awaitable: Py<PyAny>,
+        ping: Py<PyAny>,
+    },
     Open(Py<PyAny>),
     Yield(Py<PyAny>),
 }
@@ -103,11 +109,28 @@ impl Execution {
             let step = body.resume(result)?;
             let (tag, value, suspended) = match step {
                 ExecutionStep::Suspend(Suspension::Await(value)) => ("Await", value, true),
+                ExecutionStep::Suspend(Suspension::Keepalive { awaitable, ping }) => (
+                    "Keepalive",
+                    pyo3::types::PyTuple::new(py, [awaitable, ping])?
+                        .into_any()
+                        .unbind(),
+                    true,
+                ),
                 ExecutionStep::Suspend(Suspension::Open(head)) => ("Open", head, true),
                 ExecutionStep::Suspend(Suspension::Yield(value)) => ("Yield", value, true),
                 ExecutionStep::Return(value) => ("Complete", value, false),
             };
-            let step = lifecycle(py)?.getattr(tag)?.call1((value,))?.unbind();
+            let binding = lifecycle(py)?;
+            let step = match tag {
+                "Keepalive" => {
+                    let pair = value.bind(py).cast::<pyo3::types::PyTuple>()?.clone();
+                    binding
+                        .getattr(tag)?
+                        .call1((pair.get_item(0)?, pair.get_item(1)?))?
+                }
+                _ => binding.getattr(tag)?.call1((value,))?,
+            }
+            .unbind();
             Ok((step, suspended))
         }))
         .map_err(panic_to_pyerr)

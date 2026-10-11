@@ -2,7 +2,7 @@ use std::{future::Future, pin::pin, sync::Mutex};
 
 use futures_util::future::BoxFuture;
 use litellm_host::{
-    hooks::CallHooks,
+    hooks::{CallHooks, StreamPolicy},
     interceptors::{RequestContext, WireRequest},
     lifecycle::{FailureOrigin, Timing},
 };
@@ -765,5 +765,45 @@ assert ''.join(applied) == expected, applied
             Some(locals),
         )
         .unwrap();
+    });
+}
+
+struct Policy(StreamPolicy);
+
+impl CallHooks<PythonRuntime> for Policy {
+    async fn stream_policy(&mut self, _: &PythonTask, _: &Py<PyDict>) -> PyResult<StreamPolicy> {
+        Ok(self.0)
+    }
+}
+
+impl PythonOwned for Policy {
+    fn close(&mut self, _: Python<'_>) {}
+
+    fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        Ok(())
+    }
+}
+
+/// The chain's policy is the most demanding one any hook asked for, whatever the order.
+#[rstest]
+#[case::none(&[], StreamPolicy::Relay)]
+#[case::relay_only(&[StreamPolicy::Relay, StreamPolicy::Relay], StreamPolicy::Relay)]
+#[case::synthesize_then_relay(&[StreamPolicy::Synthesize, StreamPolicy::Relay], StreamPolicy::Synthesize)]
+#[case::relay_then_hold_back(&[StreamPolicy::Relay, StreamPolicy::HoldBack], StreamPolicy::HoldBack)]
+#[case::hold_back_then_synthesize(&[StreamPolicy::HoldBack, StreamPolicy::Synthesize], StreamPolicy::HoldBack)]
+#[case::synthesize_then_hold_back(&[StreamPolicy::Synthesize, StreamPolicy::HoldBack], StreamPolicy::HoldBack)]
+fn the_stream_policy_is_the_most_demanding_answer(
+    #[case] policies: &[StreamPolicy],
+    #[case] expected: StreamPolicy,
+) {
+    Python::initialize();
+    Python::attach(|py| {
+        let task = PythonTask::new(true);
+        let mut hooks = policies.iter().fold(HookChain::new(), |chain, &policy| {
+            chain.with(Policy(policy))
+        });
+        let arguments = PyDict::new(py).unbind();
+        let policy = finish(py, &task, hooks.stream_policy(&task, &arguments)).unwrap();
+        assert_eq!(policy, expected);
     });
 }

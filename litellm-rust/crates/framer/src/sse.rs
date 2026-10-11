@@ -46,6 +46,17 @@ impl Decoder for SseCodec {
     }
 }
 
+/// Every event in a complete SSE wire, however it was chunked on the way in.
+pub fn decode_all(wire: &[u8]) -> Result<Vec<SseEvent>, SseError> {
+    let mut codec = SseCodec::default();
+    let mut buffer = BytesMut::from(wire);
+    let mut events = Vec::new();
+    while let Some(event) = codec.decode(&mut buffer)? {
+        events.push(event);
+    }
+    Ok(events)
+}
+
 impl SseCodec {
     fn skip_bom(&mut self, src: &mut BytesMut) -> bool {
         if self.past_bom {

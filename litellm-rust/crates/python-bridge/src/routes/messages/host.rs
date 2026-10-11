@@ -2,13 +2,19 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned, PythonTask};
 
 use bytes::Bytes;
-use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
+use litellm_host_python::{InvokeError, PythonBinding, StreamReplay, from_py, to_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
     Error, MessagesCall, MessagesSettings, MessagesShaping, litellm_params, messages_body,
     route::{Messages, MessagesStreamHead},
 };
-use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
+use litellm_llms::base_llm::messages::{
+    context::MessagesModelCapabilities,
+    streaming::{
+        assemble_message, decode_anthropic_sse, disassemble_message, encode_anthropic_sse,
+    },
+};
+use litellm_llms_types::formats::messages::MessagesResponse;
 use litellm_llms_types::headers::ProviderSpecificHeaders;
 use litellm_router_types::LitellmParams;
 use pyo3::{
@@ -274,6 +280,56 @@ impl PythonBinding for MessagesPythonHost {
 
     fn encode_chunk(&mut self, py: Python<'_>, chunk: Bytes) -> PyResult<Py<PyAny>> {
         Ok(PyBytes::new(py, &chunk).into_any().unbind())
+    }
+
+    fn assemble_stream(
+        &mut self,
+        _: Python<'_>,
+        chunks: Vec<Bytes>,
+    ) -> Result<Box<MessagesResponse>, InvokeError<Error>> {
+        let wire: Vec<u8> = chunks
+            .iter()
+            .flat_map(|chunk| chunk.iter().copied())
+            .collect();
+        let native = |error: litellm_llms::Error| InvokeError::Native(Error::from(error));
+        let events = decode_anthropic_sse(&wire).map_err(native)?;
+        match assemble_message(events).map_err(native)? {
+            Some(message) => Ok(Box::new(message)),
+            None => Err(InvokeError::Native(Error::InvalidRequest(
+                "the provider stream ended without a message".into(),
+            ))),
+        }
+    }
+
+    fn stream_of_response(
+        &mut self,
+        py: Python<'_>,
+        response: &Py<PyAny>,
+    ) -> PyResult<StreamReplay<Self::Protocol>> {
+        let message: MessagesResponse = from_py(response.bind(py))?;
+        let public = |error: litellm_llms::Error| match native_error(py, Error::from(error)) {
+            Ok(failure) => self.map_failure(py, failure),
+            Err(error) => error,
+        };
+        let chunks = disassemble_message(&message)
+            .map_err(public)?
+            .iter()
+            .map(|event| encode_anthropic_sse(event).map_err(public))
+            .collect::<PyResult<Vec<_>>>()?;
+        Ok(StreamReplay {
+            head: MessagesStreamHead {
+                headers: Vec::new(),
+            },
+            chunks,
+        })
+    }
+
+    fn keepalive_chunk(&mut self, py: Python<'_>) -> PyResult<Option<Py<PyAny>>> {
+        Ok(Some(
+            PyBytes::new(py, b"event: ping\ndata: {\"type\": \"ping\"}\n\n")
+                .into_any()
+                .unbind(),
+        ))
     }
 
     fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {

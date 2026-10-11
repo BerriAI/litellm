@@ -10,6 +10,7 @@ from litellm.rust_bridge.lifecycle import Execution
 
 Await: Final = lifecycle.Await
 Complete: Final = lifecycle.Complete
+Keepalive: Final = lifecycle.Keepalive
 Open: Final = lifecycle.Open
 Yield: Final = lifecycle.Yield
 

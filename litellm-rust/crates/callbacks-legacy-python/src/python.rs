@@ -95,6 +95,8 @@ pub(crate) enum Body {
     TransformResponse,
     #[strum(serialize = "run_sync")]
     RunSync,
+    #[strum(serialize = "stream_policy")]
+    StreamPolicy,
 }
 
 impl LegacyPython {

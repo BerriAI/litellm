@@ -121,7 +121,8 @@ FAKES = {
     ),
     'stream_failure': lambda logger, endpoint_type, request_body, chunks, error: logger.record('stream_failure', error),
     'prepare_request': lambda operation, request: request['logger'].body('prepare', operation, request),
-    'transform_response': lambda operation, response, request: request['logger'].body('transform', operation, response, request),
+    'transform_response': lambda operation, response, request, stream: request['logger'].body('transform', operation, response, request, stream),
+    'stream_policy': lambda operation, request: request['logger'].body('policy', operation, request),
     'run_sync': lambda awaitable: run_sync(awaitable),
 }
 assert FAKES.keys() == CONTRACT.keys(), sorted(FAKES.keys() ^ CONTRACT.keys())
@@ -173,7 +174,8 @@ class StubLogger:
     def body(self, phase, *values):
         self.record(phase + '_body', values)
         last_body_logger[0] = self
-        return self.bodies.get(phase, lambda *values: 'awaitable')(*values)
+        default = (lambda *values: 'relay') if phase == 'policy' else (lambda *values: 'awaitable')
+        return self.bodies.get(phase, default)(*values)
 
     def failure_handler(self, error, trace, start, end):
         self.record('failure_handler', error)

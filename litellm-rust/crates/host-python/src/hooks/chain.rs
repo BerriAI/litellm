@@ -1,6 +1,6 @@
 use futures_util::future::BoxFuture;
 use litellm_host::{
-    hooks::CallHooks,
+    hooks::{CallHooks, StreamPolicy},
     interceptors::{RequestContext, WireRequest},
     lifecycle::{CallEvent, Timing},
 };
@@ -30,6 +30,11 @@ trait ChainHooks: PythonOwned {
         task: &'a PythonTask,
         arguments: &'a Py<PyDict>,
     ) -> BoxFuture<'a, PyResult<()>>;
+    fn stream_policy<'a>(
+        &'a mut self,
+        task: &'a PythonTask,
+        arguments: &'a Py<PyDict>,
+    ) -> BoxFuture<'a, PyResult<StreamPolicy>>;
     fn before_provider_request<'a>(
         &'a mut self,
         task: &'a PythonTask,
@@ -85,6 +90,14 @@ impl<H: PythonCallHooks> ChainHooks for H {
         arguments: &'a Py<PyDict>,
     ) -> BoxFuture<'a, PyResult<()>> {
         Box::pin(CallHooks::arguments_prepared(self, task, arguments))
+    }
+
+    fn stream_policy<'a>(
+        &'a mut self,
+        task: &'a PythonTask,
+        arguments: &'a Py<PyDict>,
+    ) -> BoxFuture<'a, PyResult<StreamPolicy>> {
+        Box::pin(CallHooks::stream_policy(self, task, arguments))
     }
 
     fn before_provider_request<'a>(
@@ -208,6 +221,18 @@ impl CallHooks<PythonRuntime> for HookChain {
             hooks.arguments_prepared(task, arguments).await?;
         }
         Ok(())
+    }
+
+    async fn stream_policy(
+        &mut self,
+        task: &PythonTask,
+        arguments: &Py<PyDict>,
+    ) -> PyResult<StreamPolicy> {
+        let mut policy = StreamPolicy::Relay;
+        for hooks in &mut self.hooks {
+            policy = policy.merge(hooks.stream_policy(task, arguments).await?);
+        }
+        Ok(policy)
     }
 
     async fn before_provider_request(
