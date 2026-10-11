@@ -487,6 +487,8 @@ def test_check_spend_report_email_status(monkeypatch: pytest.MonkeyPatch) -> Non
     unconf: Final = check_spend_report_email_status()
     assert unconf.configured is False
     assert unconf.provider is None
+    assert unconf.server_timezone is not None
+    assert len(unconf.server_timezone) > 0
 
     monkeypatch.setenv("SENDGRID_API_KEY", "sg-test-123")
     sg_status: Final = check_spend_report_email_status()

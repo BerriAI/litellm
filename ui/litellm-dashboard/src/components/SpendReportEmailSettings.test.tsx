@@ -370,4 +370,42 @@ describe("SpendReportEmailSettings", () => {
     const testButton = screen.getByRole("button", { name: "Send Test Report Now" });
     expect(testButton).toBeDisabled();
   });
+
+  it("displays server timezone in the Send Time label", async () => {
+    vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
+      values: {
+        enabled: true,
+        frequency: "daily",
+        daily_send_time: "09:00",
+        monthly_send_time: "09:00",
+        recipient_emails: ["ops@example.com"],
+        group_by: ["team"],
+        alerts: [
+          {
+            id: "alert-tz",
+            name: "Timezone Alert",
+            enabled: true,
+            frequency: "daily",
+            send_time: "09:00",
+            recipient_emails: ["ops@example.com"],
+            group_by: ["team"],
+            team_id: null,
+          },
+        ],
+      },
+      field_schema: {},
+      server_timezone: "CEST",
+    });
+    vi.mocked(networking.getSpendReportEmailStatus).mockResolvedValue({
+      configured: true,
+      provider: "smtp",
+      server_timezone: "CEST",
+    });
+
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Send Time (CEST)")).toBeInTheDocument();
+    });
+  });
 });

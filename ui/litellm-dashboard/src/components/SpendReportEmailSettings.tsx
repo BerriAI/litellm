@@ -106,6 +106,7 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
   const [testingAlertId, setTestingAlertId] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState<boolean>(defaultExpanded ?? false);
   const [emailStatus, setEmailStatus] = useState<SpendReportEmailStatusResponse | null>(null);
+  const [serverTimezone, setServerTimezone] = useState<string | null>(null);
 
   const [alerts, setAlerts] = useState<SpendReportEmailAlertItem[]>([]);
   const [recipientsInputs, setRecipientsInputs] = useState<Record<string, string>>({});
@@ -114,7 +115,12 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
   useEffect(() => {
     if (!accessToken) return;
     getSpendReportEmailStatus(accessToken)
-      .then((status) => setEmailStatus(status))
+      .then((status) => {
+        setEmailStatus(status);
+        if (status?.server_timezone) {
+          setServerTimezone(status.server_timezone);
+        }
+      })
       .catch(() => setEmailStatus({ configured: false, provider: null }));
   }, [accessToken]);
 
@@ -126,14 +132,19 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
 
     getSpendReportEmailSettings(accessToken)
       .then((response) => {
-        if (active && response?.values) {
-          const loadedAlerts = buildInitialAlerts(response.values);
-          setAlerts(loadedAlerts);
-          const initialInputs: Record<string, string> = {};
-          loadedAlerts.forEach((a) => {
-            initialInputs[a.id] = (a.recipient_emails || []).join(", ");
-          });
-          setRecipientsInputs(initialInputs);
+        if (active && response) {
+          if (response.server_timezone) {
+            setServerTimezone(response.server_timezone);
+          }
+          if (response.values) {
+            const loadedAlerts = buildInitialAlerts(response.values);
+            setAlerts(loadedAlerts);
+            const initialInputs: Record<string, string> = {};
+            loadedAlerts.forEach((a) => {
+              initialInputs[a.id] = (a.recipient_emails || []).join(", ");
+            });
+            setRecipientsInputs(initialInputs);
+          }
         }
       })
       .catch((error) => {
@@ -183,6 +194,7 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
   }, [accessToken, initialTeams]);
 
   const teams = initialTeams && initialTeams.length > 0 ? initialTeams : availableTeams;
+  const timezoneLabel = serverTimezone || emailStatus?.server_timezone || "Server Time";
 
   const handleAddAlert = () => {
     setIsExpanded(true);
@@ -472,7 +484,9 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
                         </div>
 
                         <div className="space-y-1.5">
-                          <label className="text-xs font-medium text-foreground">Send Time (UTC)</label>
+                          <label className="text-xs font-medium text-foreground">
+                            Send Time ({timezoneLabel})
+                          </label>
                           <Input
                             placeholder="09:00"
                             value={alert.send_time}

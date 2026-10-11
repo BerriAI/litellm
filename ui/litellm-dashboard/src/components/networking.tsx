@@ -5716,6 +5716,7 @@ export interface SpendReportEmailSettingsValues {
 export interface SpendReportEmailSettingsResponse {
   values: SpendReportEmailSettingsValues;
   field_schema: Record<string, any>;
+  server_timezone?: string | null;
 }
 
 export const getSpendReportEmailSettings = async (accessToken: string): Promise<SpendReportEmailSettingsResponse> => {
@@ -5803,6 +5804,7 @@ export interface SpendReportEmailStatusResponse {
   configured: boolean;
   provider?: "smtp" | "sendgrid" | "resend" | null;
   message?: string;
+  server_timezone?: string | null;
 }
 
 export const getSpendReportEmailStatus = async (accessToken: string): Promise<SpendReportEmailStatusResponse> => {

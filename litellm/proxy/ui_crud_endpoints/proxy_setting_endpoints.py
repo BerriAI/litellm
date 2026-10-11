@@ -234,6 +234,8 @@ class UIThemeSettingsResponse(SettingsResponse):
 class SpendReportEmailSettingsResponse(SettingsResponse):
     """Response model for spend report email settings"""
 
+    server_timezone: str | None = None
+
 
 _TEAM_ADMIN_FIELD_ENUM: Final = tuple(sorted(SUPPORTED_TEAM_ADMIN_PERMISSIONS))
 
@@ -1682,14 +1684,17 @@ async def get_spend_report_email_settings():
     Get email spend report settings from litellm_settings.
     """
     from litellm.proxy.proxy_server import proxy_config
+    from litellm.proxy.spend_tracking.spend_report_email import get_server_timezone
 
     config: Final = await proxy_config.get_config()
 
-    return await _get_settings_with_schema(
+    result: Final = await _get_settings_with_schema(
         settings_key="spend_report_email_settings",
         settings_class=SpendReportEmailSettings,
         config=config,
     )
+    result["server_timezone"] = get_server_timezone()
+    return result
 
 
 @router.patch(

@@ -27,6 +27,16 @@ VALID_GROUP_BYS: Final[tuple[SpendReportGroupBy, ...]] = (
 )
 
 
+def get_server_timezone() -> str:
+    tzname: Final = datetime.now().astimezone().tzname()
+    if tzname:
+        return tzname
+    tzinfo: Final = datetime.now().astimezone().tzinfo
+    if tzinfo:
+        return str(tzinfo)
+    return "UTC"
+
+
 class SpendReportEmailAlert(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
@@ -48,7 +58,7 @@ class SpendReportEmailAlert(BaseModel):
     )
     send_time: str = Field(
         default="09:00",
-        description="Send time in HH:MM (24-hour UTC format)",
+        description="Send time in HH:MM (24-hour server format)",
     )
     recipient_emails: list[str] = Field(
         default_factory=list,
@@ -90,11 +100,11 @@ class SpendReportEmailSettings(BaseModel):
     )
     daily_send_time: str = Field(
         default="09:00",
-        description="Daily spend report send time in HH:MM (24-hour UTC format)",
+        description="Daily spend report send time in HH:MM (24-hour server format)",
     )
     monthly_send_time: str = Field(
         default="09:00",
-        description="Monthly spend report send time in HH:MM (24-hour UTC format), sent on the 1st of each month",
+        description="Monthly spend report send time in HH:MM (24-hour server format), sent on the 1st of each month",
     )
     recipient_emails: list[str] = Field(
         default_factory=list,
@@ -126,6 +136,7 @@ class SpendReportEmailSettings(BaseModel):
 class SpendReportEmailSettingsResponse(BaseModel):
     values: dict[str, object]
     field_schema: dict[str, object]
+    server_timezone: str | None = None
 
 
 class SpendReportEmailSendRequest(BaseModel):
@@ -172,6 +183,10 @@ class SpendReportEmailStatusResponse(BaseModel):
         default="",
         description="Informational message about email delivery readiness",
     )
+    server_timezone: str = Field(
+        default_factory=get_server_timezone,
+        description="Server or container local timezone name or abbreviation",
+    )
 
 
 def check_spend_report_email_status() -> SpendReportEmailStatusResponse:
@@ -186,28 +201,33 @@ def check_spend_report_email_status() -> SpendReportEmailStatusResponse:
     except Exception:
         pass
 
+    server_tz: Final = get_server_timezone()
     if os.getenv("SENDGRID_API_KEY") or env_vars.get("SENDGRID_API_KEY"):
         return SpendReportEmailStatusResponse(
             configured=True,
             provider="sendgrid",
             message="SendGrid email delivery is configured",
+            server_timezone=server_tz,
         )
     if os.getenv("RESEND_API_KEY") or env_vars.get("RESEND_API_KEY"):
         return SpendReportEmailStatusResponse(
             configured=True,
             provider="resend",
             message="Resend email delivery is configured",
+            server_timezone=server_tz,
         )
     if os.getenv("SMTP_HOST") or env_vars.get("SMTP_HOST"):
         return SpendReportEmailStatusResponse(
             configured=True,
             provider="smtp",
             message="SMTP email delivery is configured",
+            server_timezone=server_tz,
         )
     return SpendReportEmailStatusResponse(
         configured=False,
         provider=None,
         message="Email delivery is not configured. Configure SMTP server settings or set SENDGRID_API_KEY.",
+        server_timezone=server_tz,
     )
 
 
@@ -439,13 +459,13 @@ def parse_send_time(time_str: str) -> tuple[int, int]:
 
 
 def get_daily_report_date_range(ref_date: date | None = None) -> tuple[date, date]:
-    current_date: Final = ref_date or datetime.now(timezone.utc).date()
+    current_date: Final = ref_date or datetime.now().astimezone().date()
     yesterday: Final = current_date - timedelta(days=1)
     return (yesterday, yesterday)
 
 
 def get_monthly_report_date_range(ref_date: date | None = None) -> tuple[date, date]:
-    current_date: Final = ref_date or datetime.now(timezone.utc).date()
+    current_date: Final = ref_date or datetime.now().astimezone().date()
     first_of_current: Final = current_date.replace(day=1)
     last_of_prev: Final = first_of_current - timedelta(days=1)
     first_of_prev: Final = last_of_prev.replace(day=1)
