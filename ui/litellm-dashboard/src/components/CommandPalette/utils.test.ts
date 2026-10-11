@@ -5,7 +5,7 @@ import { flattenNavItems, matchNavItems, paletteScopeForRoute, shortcutLabel, ty
 describe("paletteScopeForRoute", () => {
   it.each([
     ["api-keys", "keys"],
-    ["", "keys"],
+    ["", "global"],
     ["teams", "global"],
   ] as const)("uses the expected palette scope for %s", (routeSegment, expected) => {
     expect(paletteScopeForRoute(routeSegment)).toBe(expected);
