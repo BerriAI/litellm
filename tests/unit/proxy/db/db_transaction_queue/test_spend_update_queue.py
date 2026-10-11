@@ -291,3 +291,44 @@ async def test_queue_size_reduction_with_large_volume(monkeypatch, spend_queue):
     )
     assert aggregated["user_list_transactions"]["user1"] == 200 * 0.5
     assert aggregated["key_list_transactions"]["key1"] == 300 * 1.0
+
+
+@pytest.mark.asyncio
+async def test_team_token_aggregation(spend_queue):
+    """Per-team token deltas sum into team_token_list_transactions, parallel to
+    the spend sum, so LiteLLM_TeamTable.tokens_used is flushed on the same batch
+    cadence as spend. Non-team updates never create token transactions."""
+    updates: list[SpendUpdateQueueItem] = [
+        {"entity_type": Litellm_EntityType.TEAM, "entity_id": "team1", "response_cost": 0.5, "tokens": 100},
+        {"entity_type": Litellm_EntityType.TEAM, "entity_id": "team1", "response_cost": 0.25, "tokens": 50},
+        {"entity_type": Litellm_EntityType.TEAM, "entity_id": "team2", "response_cost": 1.0, "tokens": 400},
+        # a team update without a tokens field counts as 0 tokens, spend still applies
+        {"entity_type": Litellm_EntityType.TEAM, "entity_id": "team2", "response_cost": 0.2},
+        # a user update carries no team tokens
+        {"entity_type": Litellm_EntityType.USER, "entity_id": "user1", "response_cost": 0.1, "tokens": 9},
+    ]
+    for update in updates:
+        await spend_queue.update_queue.put(update)
+
+    aggregated = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
+
+    # spend is unchanged by the token plumbing
+    assert aggregated["team_list_transactions"]["team1"] == 0.75
+    assert aggregated["team_list_transactions"]["team2"] == 1.2
+    # tokens sum per team
+    assert aggregated["team_token_list_transactions"]["team1"] == 150
+    assert aggregated["team_token_list_transactions"]["team2"] == 400
+    # no team token entry leaked from the user update
+    assert "user1" not in aggregated["team_token_list_transactions"]
+
+
+@pytest.mark.asyncio
+async def test_team_token_aggregation_absent_when_no_tokens(spend_queue):
+    """A plain team spend update (no tokens) leaves tokens_used untouched: the
+    token map has the team at 0, which the commit treats as no increment."""
+    await spend_queue.update_queue.put(
+        {"entity_type": Litellm_EntityType.TEAM, "entity_id": "team1", "response_cost": 0.5}
+    )
+    aggregated = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert aggregated["team_list_transactions"]["team1"] == 0.5
+    assert aggregated["team_token_list_transactions"].get("team1", 0) == 0
