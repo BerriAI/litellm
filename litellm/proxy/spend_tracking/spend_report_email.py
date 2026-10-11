@@ -242,9 +242,7 @@ async def default_email_sender(
 ) -> None:
     if os.getenv("SENDGRID_API_KEY"):
         sg_sender_email: Final = (
-            os.getenv("SENDGRID_SENDER_EMAIL")
-            or os.getenv("SMTP_SENDER_EMAIL")
-            or "notifications@alerts.litellm.ai"
+            os.getenv("SENDGRID_SENDER_EMAIL") or os.getenv("SMTP_SENDER_EMAIL") or "notifications@alerts.litellm.ai"
         )
         sg_sent: Final = await _send_with_enterprise_logger(
             module_name="litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email",
@@ -624,6 +622,7 @@ async def fetch_grouped_spend_data(
         if clean_team_id is not None
         else await query_raw_fn(SPEND_REPORT_QUERIES[group_by], start_date, end_date)
     )
+
     def _validate_rows(raw: object) -> Sequence[Mapping[str, object]]:
         if not isinstance(raw, (list, tuple)):
             return ()
@@ -641,9 +640,7 @@ async def fetch_grouped_spend_data(
             return None
         raw_requests: Final[object] = r.get("request_count")
         req_val: Final = _to_int(raw_requests) if raw_requests is not None else 0
-        base_items: Final = tuple(
-            (k, v) for k, v in r.items() if k not in ("total_spend", "request_count")
-        )
+        base_items: Final = tuple((k, v) for k, v in r.items() if k not in ("total_spend", "request_count"))
         return dict((*base_items, ("total_spend", round(spend_val, 2)), ("request_count", req_val)))
 
     sanitized_items: Final = (_sanitize_row(r) for r in rows_sequence)
@@ -850,15 +847,9 @@ async def send_spend_report_email(
 
     first_group_rows: Final = next(iter(report_data.values()), ())
     total_spend: Final = (
-        sum(_to_float(r.get("total_spend", 0.0)) for r in first_group_rows)
-        if first_group_rows
-        else 0.0
+        sum(_to_float(r.get("total_spend", 0.0)) for r in first_group_rows) if first_group_rows else 0.0
     )
-    total_requests: Final = (
-        sum(_to_int(r.get("request_count", 0)) for r in first_group_rows)
-        if first_group_rows
-        else 0
-    )
+    total_requests: Final = sum(_to_int(r.get("request_count", 0)) for r in first_group_rows) if first_group_rows else 0
 
     return SpendReportSendResult(
         status="success",

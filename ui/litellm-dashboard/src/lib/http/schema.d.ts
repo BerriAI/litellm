@@ -45220,41 +45220,6 @@ export interface components {
              * @description Configured spend report alert instances
              */
             alerts?: components["schemas"]["SpendReportEmailAlert"][];
-            /**
-             * Daily Send Time
-             * @description Daily spend report send time in HH:MM (24-hour server format)
-             * @default 09:00
-             */
-            daily_send_time: string;
-            /**
-             * Enabled
-             * @description Whether email spend reports are enabled
-             * @default false
-             */
-            enabled: boolean;
-            /**
-             * Frequency
-             * @description Report frequency: 'daily', 'monthly', or 'both'
-             * @default daily
-             * @enum {string}
-             */
-            frequency: "daily" | "monthly" | "both";
-            /**
-             * Group By
-             * @description Groupings to include in cumulative reports: 'team', 'team_key', 'team_model', 'team_key_model'
-             */
-            group_by?: ("team" | "team_key" | "team_model" | "team_key_model")[];
-            /**
-             * Monthly Send Time
-             * @description Monthly spend report send time in HH:MM (24-hour server format), sent on the 1st of each month
-             * @default 09:00
-             */
-            monthly_send_time: string;
-            /**
-             * Recipient Emails
-             * @description List of email addresses to receive the spend report
-             */
-            recipient_emails?: string[];
         };
         /**
          * SpendReportEmailSettingsResponse
@@ -74364,7 +74329,9 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": {
+                        [key: string]: components["schemas"]["JsonValue"];
+                    };
                 };
             };
             /** @description Validation Error */
