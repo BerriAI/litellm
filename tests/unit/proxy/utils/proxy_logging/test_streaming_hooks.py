@@ -467,11 +467,6 @@ async def test_async_post_call_streaming_iterator_hook_with_override_chains_call
 async def test_async_post_call_streaming_iterator_hook_presidio_output_masking_keeps_split_pii_buffered(
     proxy_logging, make_user_api_key_auth, monkeypatch
 ):
-    """
-    Regression test for #41611: output PII split across SSE chunks must be
-    evaluated by Presidio's native streaming iterator as a reconstructed
-    response, rather than by the unified per-chunk guardrail path.
-    """
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,

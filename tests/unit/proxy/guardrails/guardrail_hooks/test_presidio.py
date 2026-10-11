@@ -2268,14 +2268,6 @@ async def test_apply_to_output_streaming_mixed_chunks_flushes_and_warns():
 
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_masks_email_split_across_chunks():
-    """
-    Regression test for PII split across streaming chunk boundaries.
-
-    The complete sensitive value is "user@example.com", but the upstream
-    stream delivers it as "user@exa" + "mple.com". The streaming guardrail
-    must evaluate the reconstructed response rather than each chunk
-    independently.
-    """
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
