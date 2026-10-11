@@ -231,9 +231,9 @@ async def test_malformed_budget_ledger_is_rejected(counter: str, invalid_value: 
             },
         )
 
-    with pytest.raises((RuntimeError, ValueError)):
+    with pytest.raises((RuntimeError, TypeError, ValueError)):
         await handler._get_agent_spend(session_id, "agent-a")
-    with pytest.raises((RuntimeError, ValueError)):
+    with pytest.raises((RuntimeError, TypeError, ValueError)):
         await handler._increment_agent_spend(session_id, "agent-a", 0.25)
 
 
@@ -262,14 +262,25 @@ async def test_overflowing_spend_increment_leaves_the_session_ledger_unchanged(c
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("amount", (True, 0.0, -1.0, float("nan"), float("inf")))
-async def test_invalid_spend_increment_leaves_the_session_ledger_unchanged(amount: float) -> None:
+@pytest.mark.parametrize(
+    "amount,expected_error",
+    (
+        (True, TypeError),
+        (0.0, RuntimeError),
+        (-1.0, RuntimeError),
+        (float("nan"), RuntimeError),
+        (float("inf"), RuntimeError),
+    ),
+)
+async def test_invalid_spend_increment_leaves_the_session_ledger_unchanged(
+    amount: float, expected_error: type[Exception]
+) -> None:
     cache: Final = DualCache()
     handler: Final = PROXY_MaxBudgetPerSessionHandler(InternalUsageCache(cache))
     session_id: Final = "invalid-spend-increment"
     assert await handler._increment_agent_spend(session_id, "agent-a", 0.5) == pytest.approx(0.5)
 
-    with pytest.raises(RuntimeError):
+    with pytest.raises(expected_error):
         await handler._increment_agent_spend(session_id, "agent-a", amount)
 
     assert await handler._get_agent_spend(session_id, "agent-a") == pytest.approx(0.5)

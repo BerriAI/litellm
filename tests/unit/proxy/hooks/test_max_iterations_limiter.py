@@ -317,7 +317,7 @@ async def test_malformed_iteration_ledger_is_rejected(counter: str, invalid_valu
             },
         )
 
-    with pytest.raises((RuntimeError, ValueError)):
+    with pytest.raises((RuntimeError, TypeError, ValueError)):
         await handler._increment_agent_and_get(session_id, "agent-a")
 
 

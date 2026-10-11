@@ -14,8 +14,13 @@ import asyncio
 import json
 import math
 import os
-from collections.abc import Awaitable, Callable
-from typing import TYPE_CHECKING, Any, Final, cast
+from collections.abc import Awaitable, Callable, Mapping
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Final,
+    cast,  # noqa: TID251  # Dynamic Redis and cache boundary values are validated before use
+)
 
 from litellm import DualCache
 from litellm._internal_context import with_service_target
@@ -146,7 +151,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         self._ensure_redis_scripts()
 
     def _ensure_redis_scripts(self) -> None:
-        redis_cache = self.internal_usage_cache.dual_cache.redis_cache
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
         if redis_cache is None:
             self.increment_script = None
             self._registered_redis_cache = None
@@ -190,10 +195,11 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         )
 
         # Increment and check
-        if user_api_key_dict.agent_id is None:
-            current_count = await self._increment_legacy_and_get(self._make_legacy_cache_key(session_id))
-        else:
-            current_count = await self._increment_agent_and_get(session_id, user_api_key_dict.agent_id)
+        current_count: Final = (
+            await self._increment_legacy_and_get(self._make_legacy_cache_key(session_id))
+            if user_api_key_dict.agent_id is None
+            else await self._increment_agent_and_get(session_id, user_api_key_dict.agent_id)
+        )
 
         if current_count > max_iterations:
             resolved_model, llm_provider = resolve_llm_provider_for_rate_limit(data.get("model") if data else None)
@@ -266,7 +272,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         stable_agent_id: Final = json.dumps(global_agent_registry.stable_agent_id(agent_id), separators=(",", ":"))
         return f"agent:{stable_agent_id}"
 
-    async def _get_local_scope(self, cache_key: str) -> dict[str, object] | None:
+    async def _get_local_scope(self, cache_key: str) -> Mapping[str, object] | None:
         result: Final[object | None] = cast(  # cast-ok: cache API returns Any; validate value before use
             object | None,
             await self.internal_usage_cache.async_get_cache(
@@ -277,14 +283,17 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         )
         if result is None:
             return None
-        if isinstance(result, dict) and all(isinstance(key, str) for key in result):
-            return cast(dict[str, object], result)  # cast-ok: keys are checked and values remain opaque
+        if isinstance(result, dict) and all(
+            isinstance(key, str)
+            for key in cast(Mapping[object, object], result)  # cast-ok: dict shape is checked and keys remain opaque
+        ):
+            return cast(Mapping[str, object], result)  # cast-ok: keys are checked and values remain opaque
         raise RuntimeError("Agent session scope cache has an invalid value")
 
     @staticmethod
     def _parse_count(value: object) -> int:
         if isinstance(value, bool) or not isinstance(value, (int, float, str, bytes)):
-            raise RuntimeError("Agent session count is invalid")
+            raise TypeError("Agent session count is invalid")
         if isinstance(value, float) and (not math.isfinite(value) or not value.is_integer()):
             raise RuntimeError("Agent session count is not an integer")
         count: Final = int(value)
@@ -348,23 +357,17 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
                 raise
 
         async with self._local_lock:
-            legacy_value = await self._get_local_count(legacy_key)
-            agent_scope = await self._get_local_scope(agent_scope_key)
-            if legacy_value is None:
-                if agent_scope is not None:
-                    raise RuntimeError("Legacy session count expired before agent scope")
-                legacy_value = 0
-            total_new_value = 0
-            agent_value = 0
-            if agent_scope is not None:
-                raw_total_new = agent_scope.get("__total_new")
-                if not isinstance(raw_total_new, (int, float, str, bytes)):
-                    raise RuntimeError("Agent session scope is missing its migration total")
-                raw_agent_value = agent_scope.get(agent_field, 0)
-                if not isinstance(raw_agent_value, (int, float, str, bytes)):
-                    raise RuntimeError("Agent session scope has an invalid counter")
-                total_new_value = self._parse_count(raw_total_new)
-                agent_value = self._parse_count(raw_agent_value)
+            cached_legacy_value: Final = await self._get_local_count(legacy_key)
+            agent_scope: Final = await self._get_local_scope(agent_scope_key)
+            if cached_legacy_value is None and agent_scope is not None:
+                raise RuntimeError("Legacy session count expired before agent scope")
+            legacy_value: Final = 0 if cached_legacy_value is None else cached_legacy_value
+            raw_total_new: Final = agent_scope.get("__total_new") if agent_scope is not None else 0
+            if raw_total_new is None:
+                raise RuntimeError("Agent session scope is missing its migration total")
+            raw_agent_value: Final = agent_scope.get(agent_field, 0) if agent_scope is not None else 0
+            total_new_value: Final = self._parse_count(raw_total_new)
+            agent_value: Final = self._parse_count(raw_agent_value)
             new_legacy: Final = legacy_value + 1
             new_total_new: Final = total_new_value + 1
             new_agent: Final = agent_value + 1
