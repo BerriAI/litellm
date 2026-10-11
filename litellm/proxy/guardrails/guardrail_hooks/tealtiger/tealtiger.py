@@ -16,6 +16,7 @@ from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
+from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -131,45 +132,49 @@ class TealTigerGuardrail(CustomGuardrail):
         Runs on both request (pre-call) and response (post-call) content,
         since TealTiger scans for PII leakage in both directions.
 
-        Tool-call authorization and budget checks only make sense on the
-        request path, so they're gated on input_type == "request".
+        Tool authorization covers tool definitions sent with the request and
+        tool calls in both directions (a model response can invoke a tool the
+        request never declared). The budget check only runs on the request path.
+        In MONITOR mode violations are logged, never raised.
+
+        Spend is accrued per call from an estimate (about 4 characters per
+        token) of the text that passes through, since apply_guardrail is not
+        handed usage data.
 
         Returns a new mapping rather than mutating `inputs` in place, since
         the caller's object should not be rewritten at a distance.
         """
+        self._check_tools(inputs, input_type)
         if input_type == "request":
-            self._check_tool_calls(inputs)
             self._check_budget(request_data)
 
         checked_texts: Final = tuple(self._check_text_or_raise(text) for text in inputs.get("texts") or ())
+        self.engine.record_usage(checked_texts)
         return {**inputs, "texts": list(checked_texts)}
 
-    def _check_tool_calls(self, inputs: GenericGuardrailAPIInputs) -> None:
-        for tool_call in inputs.get("tool_calls") or ():
-            tool_name = _tool_call_name(tool_call)
+    def _violation(self, message: str) -> None:
+        """Raise in ENFORCE mode; only log in MONITOR mode."""
+        if self.engine.mode == PolicyMode.ENFORCE:
+            raise ValueError(f"TealTiger: blocked — {message}")
+        verbose_proxy_logger.warning("TealTiger (MONITOR, not blocking): %s", message)
+
+    def _check_tools(self, inputs: GenericGuardrailAPIInputs, input_type: Literal["request", "response"]) -> None:
+        definitions: Final[Sequence[object]] = (inputs.get("tools") or ()) if input_type == "request" else ()
+        calls: Final[Sequence[object]] = inputs.get("tool_calls") or ()
+        for candidate in (*definitions, *calls):
+            tool_name = _tool_call_name(candidate)
             if tool_name and not self.engine.check_tool(tool_name):
-                raise ValueError(f"TealTiger: blocked — TOOL_NOT_ALLOWLISTED ({tool_name})")
+                self._violation(f"TOOL_NOT_ALLOWLISTED ({tool_name})")
 
     def _check_budget(self, request_data: Mapping[str, object]) -> None:
         raw_user: Final = request_data.get("user")
         session_id: Final[str] = raw_user if isinstance(raw_user, str) else "default"
         over_budget, spent, limit = self.engine.check_budget(session_id=session_id)
         if over_budget:
-            raise ValueError(f"TealTiger: blocked — DAILY_BUDGET_EXCEEDED (${spent:.2f} / ${limit:.2f})")
+            self._violation(f"DAILY_BUDGET_EXCEEDED (${spent:.2f} / ${limit:.2f})")
 
     def _check_text_or_raise(self, text: str) -> str:
         decision: Final = self.engine.evaluate_text(text)
         if decision.action == Action.BLOCK.value:
             raise ValueError(f"TealTiger: blocked — {decision.reason_code}")
         return decision.redacted_text or text
-
-    # ---- cost tracking on successful response ----
-    # NOTE for reviewers: apply_guardrail is only handed extracted `texts` /
-    # `images` / `tool_calls`, not token-usage data — confirmed by reading
-    # litellm/integrations/custom_guardrail.py's apply_guardrail docstring
-    # directly, not just documentation. Wiring TealEngine.track_cost() into
-    # something more precise than a fixed per-request estimate needs either
-    # (a) an async_post_call_success_hook override that reads response.usage
-    #     (loses the endpoint-agnostic behavior apply_guardrail gives us), or
-    #     (b) whatever usage data logging_obj exposes at call time — worth
-    #     asking maintainers directly rather than guessing further.

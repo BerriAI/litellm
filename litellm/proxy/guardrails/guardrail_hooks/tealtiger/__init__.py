@@ -1,4 +1,3 @@
-from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
@@ -24,14 +23,11 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     return _tealtiger_callback
 
 
-guardrail_initializer_registry: Final = MappingProxyType(
-    {
-        SupportedGuardrailIntegrations.TEALTIGER.value: initialize_guardrail,
-    }
-)
+# Plain dicts on purpose: guardrail_registry.py discovers hooks with isinstance(registry, dict)
+guardrail_initializer_registry: Final = {
+    SupportedGuardrailIntegrations.TEALTIGER.value: initialize_guardrail,
+}
 
-guardrail_class_registry: Final = MappingProxyType(
-    {
-        SupportedGuardrailIntegrations.TEALTIGER.value: TealTigerGuardrail,
-    }
-)
+guardrail_class_registry: Final = {
+    SupportedGuardrailIntegrations.TEALTIGER.value: TealTigerGuardrail,
+}
