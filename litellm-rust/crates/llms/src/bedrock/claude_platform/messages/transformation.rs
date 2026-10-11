@@ -340,9 +340,7 @@ mod tests {
             },
             ..Default::default()
         };
-        let env = |name: &str| {
-            (name == "ANTHROPIC_AWS_WORKSPACE_ID").then(|| "workspace".into())
-        };
+        let env = |name: &str| (name == "ANTHROPIC_AWS_WORKSPACE_ID").then(|| "workspace".into());
         let url = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
             .get_complete_url(None, "claude-test", &params, false, &env)
             .unwrap();

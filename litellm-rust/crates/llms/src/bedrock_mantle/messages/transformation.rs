@@ -360,10 +360,7 @@ mod tests {
 
     #[rstest]
     #[case::aws_default_region("AWS_DEFAULT_REGION", "eu-west-1")]
-    fn aws_default_region_selects_mantle_endpoint(
-        #[case] env_name: &str,
-        #[case] region: &str,
-    ) {
+    fn aws_default_region_selects_mantle_endpoint(#[case] env_name: &str, #[case] region: &str) {
         let url = BEDROCK_MANTLE_MESSAGES_CONFIG
             .get_complete_url(
                 None,
@@ -516,7 +513,10 @@ mod tests {
         }))
         .unwrap();
         let headers = BEDROCK_MANTLE_MESSAGES_CONFIG.request_headers(headers, &request);
-        let actual: BetaSet = header_value(&headers, "anthropic-beta").unwrap().parse().unwrap();
+        let actual: BetaSet = header_value(&headers, "anthropic-beta")
+            .unwrap()
+            .parse()
+            .unwrap();
         let expected: BetaSet = expected.into_iter().collect();
         assert_eq!(actual, expected);
     }
