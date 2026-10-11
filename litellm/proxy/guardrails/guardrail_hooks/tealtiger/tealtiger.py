@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Final, Literal
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
-    log_guardrail_information,
+    log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # upstream decorator is untyped
 )
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -28,8 +28,6 @@ from .engine import Action, PolicyMode, TealEngine
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-
-_EMPTY_MAPPING: Final = MappingProxyType({})
 
 DEFAULT_POLICIES: Final = (
     MappingProxyType({"type": "pii", "action": "REDACT", "patterns": "all"}),
@@ -64,7 +62,9 @@ def _tool_call_name_from_mapping(tool_call: Mapping[str, object]) -> str | None:
     if isinstance(direct_name, str):
         return direct_name
     function: Final = tool_call.get("function")
-    nested_name: Final = function.get("name") if isinstance(function, Mapping) else None
+    if not isinstance(function, Mapping):
+        return None
+    nested_name: Final = function.get("name")  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # isinstance on object yields Mapping[Unknown, Unknown]
     return nested_name if isinstance(nested_name, str) else None
 
 
@@ -86,7 +86,7 @@ def _tool_call_name(tool_call: object) -> str | None:
     (ChatCompletionMessageToolCall). Avoids chained .get() calls, since one
     branch of that union doesn't reliably support dict-style access."""
     if isinstance(tool_call, Mapping):
-        return _tool_call_name_from_mapping(tool_call)
+        return _tool_call_name_from_mapping(tool_call)  # pyright: ignore[reportUnknownArgumentType]  # Mapping[Unknown, Unknown] from isinstance
     return _tool_call_name_from_object(tool_call)
 
 
@@ -114,7 +114,7 @@ class TealTigerGuardrail(CustomGuardrail):
             policies=policies or DEFAULT_POLICIES,
             mode=PolicyMode(policy_mode),
         )
-        super().__init__(
+        super().__init__(  # pyright: ignore[reportUnknownMemberType]  # upstream CustomGuardrail.__init__ takes untyped **kwargs
             guardrail_name=guardrail_name,
             event_hook=_to_event_hook(event_hook),
             default_on=default_on or False,

@@ -94,9 +94,13 @@ class TealEngine:
         scope: Final = self._pii_policy.get("patterns", "all")
         if scope == "all":
             return self.patterns
-        entries: Final = (scope,) if isinstance(scope, str) else scope
-        if not isinstance(entries, (list, tuple)):
-            raise TypeError("TealTiger: pii policy `patterns` must be 'all' or a list of names")
+        if isinstance(scope, str):
+            return self._select_patterns((scope,))
+        if isinstance(scope, (list, tuple)):
+            return self._select_patterns(scope)  # pyright: ignore[reportUnknownArgumentType]  # isinstance on object yields list[Unknown]
+        raise TypeError("TealTiger: pii policy `patterns` must be 'all' or a list of names")
+
+    def _select_patterns(self, entries: Sequence[object]) -> Mapping[str, re.Pattern[str]]:
         names: Final = tuple(chain.from_iterable(map(self._expand_scope_entry, entries)))
         return MappingProxyType({name: self.patterns[name] for name in names})
 
@@ -145,12 +149,12 @@ class TealEngine:
         if not self._tool_policy:
             return True
         raw_blocklist: Final = self._tool_policy.get("blocklist")
-        blocklist: Final = raw_blocklist if isinstance(raw_blocklist, (list, tuple)) else ()
+        blocklist: Final = raw_blocklist if isinstance(raw_blocklist, (list, tuple)) else ()  # pyright: ignore[reportUnknownVariableType]  # isinstance on object yields list[Unknown]
         if tool_name in blocklist:
             return False
         raw_allowlist: Final = self._tool_policy.get("allowlist")
         if raw_allowlist is not None:
-            allowlist: Final = raw_allowlist if isinstance(raw_allowlist, (list, tuple)) else ()
+            allowlist: Final = raw_allowlist if isinstance(raw_allowlist, (list, tuple)) else ()  # pyright: ignore[reportUnknownVariableType]  # isinstance on object yields list[Unknown]
             return tool_name in allowlist
         return True
 

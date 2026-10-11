@@ -14,7 +14,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     _tealtiger_callback: Final = TealTigerGuardrail(
         policies=getattr(litellm_params, "policies", None),
         policy_mode=getattr(litellm_params, "policy_mode", "ENFORCE"),
-        guardrail_name=guardrail.get("guardrail_name", ""),
+        guardrail_name=guardrail["guardrail_name"],
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )
