@@ -52,6 +52,13 @@ class GigaChatError(BaseLLMException):
     """GigaChat API error."""
 
 
+def _is_supported_response_format(value: object) -> bool:
+    if not isinstance(value, Mapping):
+        return False
+    response_format_type: Final = value.get("type")  # pyright: ignore[reportUnknownMemberType]  # bare Mapping
+    return response_format_type in (None, "text", "json_schema")
+
+
 class GigaChatConfig(BaseConfig):
     """
     Configuration class for GigaChat API.
@@ -209,7 +216,7 @@ class GigaChatConfig(BaseConfig):
                     ]
                     optional_params["function_call"] = {"name": schema_name}
                     optional_params["_structured_output"] = True
-                elif not (isinstance(value, Mapping) and (value.get("type") in (None, "text", "json_schema"))):
+                elif not _is_supported_response_format(value):
                     from litellm.utils import UnsupportedParamsError
 
                     if litellm.drop_params is not True and drop_params is not True:
