@@ -3,12 +3,13 @@ import { buildCurlCommand, curlPayload } from "./curlCommand";
 
 describe("buildCurlCommand", () => {
   it("targets the proxy endpoint with a key placeholder and the pretty payload", () => {
-    const command = buildCurlCommand({
+    const input = {
       baseUrl: "http://localhost:4000/",
       endpoint: "/v1/systemone",
       payload: JSON.stringify({ model: "jev-latest", state: "it's broken" }),
       authHeaderName: "Authorization",
-    });
+    };
+    const command = buildCurlCommand(input);
 
     expect(command).toContain("curl -X POST 'http://localhost:4000/v1/systemone'");
     expect(command).toContain("-H 'Authorization: Bearer $LITELLM_API_KEY'");
@@ -18,33 +19,36 @@ describe("buildCurlCommand", () => {
   });
 
   it("quotes a proxy URL that carries shell metacharacters", () => {
-    const command = buildCurlCommand({
+    const input = {
       baseUrl: "http://proxy.example/$(touch pwned)'; echo x",
       endpoint: "/v1/decisions",
       payload: "{}",
       authHeaderName: "Authorization",
-    });
+    };
+    const command = buildCurlCommand(input);
     expect(command).toContain(`curl -X POST 'http://proxy.example/$(touch pwned)'\\''; echo x/v1/decisions'`);
   });
 
   it("sends the key under the proxy's configured auth header name", () => {
-    const command = buildCurlCommand({
+    const input = {
       baseUrl: "https://proxy.example",
       endpoint: "/v1/systemone",
       payload: "{}",
       authHeaderName: "X-Litellm-Key",
-    });
+    };
+    const command = buildCurlCommand(input);
     expect(command).toContain("-H 'X-Litellm-Key: Bearer $LITELLM_API_KEY'");
     expect(command).not.toContain("Authorization");
   });
 
   it("passes a payload that is not JSON through untouched", () => {
-    const command = buildCurlCommand({
+    const input = {
       baseUrl: "https://proxy.example",
       endpoint: "/v1/decisions",
       payload: "{",
       authHeaderName: "Authorization",
-    });
+    };
+    const command = buildCurlCommand(input);
     expect(command).toContain("'https://proxy.example/v1/decisions'");
     expect(curlPayload(command)).toBe("{");
   });
