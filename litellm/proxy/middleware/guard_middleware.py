@@ -131,13 +131,19 @@ class GuardMiddleware:
         self._guard_asgi: ASGIApp | None = None
         self._guard_failed = False
 
-    def _ensure_guard(self, scope: Scope) -> bool:
-        if self._guard_asgi is not None or self._guard_failed:
-            return not self._guard_failed
+    def _ensure_guard(self) -> ASGIApp | None:
+        """Build and return the guard ASGI app, or None when the package is
+        missing (logged loudly; the flag-on misconfiguration must stay
+        visible)."""
+        if self._guard_asgi is not None:
+            return self._guard_asgi
+        if self._guard_failed:
+            return None
         try:
-            from guard import PureASGISecurityMiddleware
+            import guard  # pyright: ignore[reportMissingImports]  # optional dependency
 
-            self._guard_asgi = PureASGISecurityMiddleware(self.app, config=_build_guard_config())
+            self._guard_asgi = guard.PureASGISecurityMiddleware(self.app, config=_build_guard_config())  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # guard ships no type information
+            return self._guard_asgi
         except ImportError as exc:
             self._guard_failed = True
             # Log loudly once; security misconfiguration must be visible.
@@ -147,18 +153,19 @@ class GuardMiddleware:
                 "Guard is DISABLED until then.",
                 exc,
             )
-        return not self._guard_failed
+            return None
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not guard_enabled():
             await self.app(scope, receive, send)
             return
 
-        if not self._ensure_guard(scope):
+        guard_asgi: Final = self._ensure_guard()
+        if guard_asgi is None:
             # Flag on, package missing: fail open with a loud log rather
             # than taking the proxy down (matches the disabled path; the
             # misconfiguration is logged at startup of the first request).
             await self.app(scope, receive, send)
             return
 
-        await self._guard_asgi(scope, receive, send)
+        await guard_asgi(scope, receive, send)
