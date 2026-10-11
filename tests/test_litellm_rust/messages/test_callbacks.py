@@ -795,13 +795,10 @@ async def test_native_messages_held_back_stream_whose_tool_call_nobody_fulfilled
     with rebound(litellm, "callbacks", [Declines("decline")]):
         stream: Final = await litellm.anthropic.messages.acreate(**agentic_arguments(messages_server, stream=True))
         assert isinstance(stream, AsyncIterator)
-        delivered: Final = []
         with pytest.raises(litellm.InternalServerError) as raised:
-            async for chunk in stream:
-                delivered.append(chunk)
+            await anext(stream)
 
     assert "Server-side tool retrieval failed" in str(raised.value)
-    assert delivered == []
     assert_served_natively(messages_server)
     await drain_logging()
     assert observed == [raised.value]
