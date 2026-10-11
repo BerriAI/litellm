@@ -415,7 +415,7 @@ def test_a_wildcard_deployment_sends_each_ai_decide_request_to_the_route_and_log
                 row["model_group"],
                 row["api_base"],
                 _number(row["spend"]),
-            ) == ("success", "adecisions", "databricks", model, f"{handle.api_base()}{_ROUTE}", 0.0), row
+            ) == ("success", "asystemone", "databricks", model, f"{handle.api_base()}{_ROUTE}", 0.0), row
 
 
 @pytest.mark.parametrize("model", (5, ["a"]), ids=("int", "list"))
