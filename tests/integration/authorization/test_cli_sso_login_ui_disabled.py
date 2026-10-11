@@ -471,15 +471,17 @@ def test_cli_link_is_reentrant_until_the_poll_consumes_the_session(ui_disabled: 
 def test_burst_of_logins_recovers_from_an_idp_token_outage(idp: Idp, provider: SharedProvider, tmp_path: Path) -> None:
     subject: Final = f"cli-sso-burst-{uuid.uuid4().hex[:12]}"
     writer_url: Final = os.environ.get("INTEGRATION_PROXY_DATABASE_URL") or os.environ["DATABASE_URL"]
+    reader_url: Final = os.environ.get("INTEGRATION_PROXY_READ_REPLICA_URL")
+    database_setting: Final = "DATABASE_URL_READ_REPLICA" if reader_url else "DATABASE_URL"
     with (
-        held_statement_relay(writer_url, DUPLICATE_USER_ID_CHECK) as (relay, relayed_url),
+        held_statement_relay(reader_url or writer_url, DUPLICATE_USER_ID_CHECK) as (relay, relayed_url),
         gateway_from_environment() as rig,
         owned_proxy_process(
             rig,
             tmp_path,
             {
                 "DISABLE_ADMIN_UI": "true",
-                "DATABASE_URL": relayed_url,
+                database_setting: relayed_url,
                 "PRISMA_HEALTH_WATCHDOG_ENABLED": "false",
                 **_sso_environment(idp.wire.url),
             },
