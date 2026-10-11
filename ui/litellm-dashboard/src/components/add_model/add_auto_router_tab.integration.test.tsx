@@ -22,7 +22,7 @@ import { handleAddAutoRouterSubmit } from "./handle_add_auto_router_submit";
 import { getMissingTiersError } from "./build_complexity_router_config";
 import { getSubmitBlockedReason } from "./add_auto_router_tab";
 import { buildModelAvailability } from "@/lib/autorouter_presets";
-import { apiClient, modelCreateCall, testAutoRouterRouting } from "../networking";
+import { apiClient, modelCostMap, modelCreateCall, testAutoRouterRouting } from "../networking";
 import { ModelGroup } from "@/components/llm_calls/fetch_models";
 import { AutoRouterPreset, getRequiredModelsInPreset } from "@/lib/autorouter_presets";
 import { BUNDLED_PRESETS, LOADED_PRESETS_QUERY, useAutoRouterPresets } from "../../../tests/mocks/autoRouterPresets";
@@ -189,6 +189,7 @@ describe("AddAutoRouterTab", () => {
     testQueryClient.clear();
     mockFetchAvailableModels.mockResolvedValue([]);
     mockFetchAllModelDeployments.mockResolvedValue([]);
+    vi.mocked(modelCostMap).mockResolvedValue({});
   });
 
   it("shows Jev essentials before tiers and saves tuning from its own disclosure", async () => {
@@ -230,6 +231,45 @@ describe("AddAutoRouterTab", () => {
       classification_mode: "user_turn",
     };
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject(expected);
+  });
+
+  it.each([
+    { mode: "evaluation" },
+    { mode: "chat", supported_endpoints: ["/v1/decisions"] },
+    { supported_endpoints: ["/v1/systemone"] },
+  ])("selects and saves an onboarded alias using decision catalog metadata %j", async (metadata) => {
+    const alias = "onboarded-decider";
+    const underlyingModel = "mixed-provider/decision-model";
+    vi.mocked(modelCostMap).mockResolvedValue({
+      [underlyingModel]: { litellm_provider: "mixed-provider", ...metadata },
+      "mixed-provider/chat-model": { litellm_provider: "mixed-provider", mode: "chat" },
+      "catalog-only/decision-model": { litellm_provider: "catalog-only", mode: "evaluation" },
+    });
+    mockFetchAvailableModels.mockResolvedValue([
+      ...ALL_FAMILY_MODELS,
+      { model_group: alias },
+      { model_group: "ordinary-chat", mode: "chat" },
+    ]);
+    mockFetchAllModelDeployments.mockResolvedValue([
+      { model_name: alias, litellm_params: { model: underlyingModel } },
+      { model_name: "ordinary-chat", litellm_params: { model: "mixed-provider/chat-model" } },
+      { model_name: "unavailable-decider", litellm_params: { model: underlyingModel } },
+    ]);
+    renderWithProviders(<Harness />);
+    await waitForAutomaticTiers();
+    await userEvent.click(screen.getByRole("radio", { name: "Decisions Model" }));
+    await userEvent.click(screen.getByRole("combobox", { name: "Decision model" }));
+    const option = await screen.findByRole("option", { name: alias, exact: true });
+    expect(screen.getAllByRole("option")).toHaveLength(1);
+    await userEvent.click(option);
+    fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "decision-router" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+    await userEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+    await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+    expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject({
+      classifier_type: "oss_classifier",
+      opensource_classifier_config: { deployment_name: alias },
+    });
   });
 
   it("uses the judge picker empty state when no decision deployments exist", async () => {
