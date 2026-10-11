@@ -146,16 +146,16 @@ class LiteLLMResponsesInteractionsConfig:
         if mime_type is not None and mime_type != _JSON_MIME_TYPE:
             return None
         if isinstance(schema, Mapping) and schema:
-            return {  # mutable-ok: litellm_completion_transformation reads this back with isinstance(..., dict)
-                "format": {  # mutable-ok: and checks this field the same way
+            return {
+                "format": {
                     "type": "json_schema",
                     "name": "response_schema",
-                    "schema": dict(schema),  # mutable-ok: shallow copy of the caller's top-level keys
+                    "schema": dict(schema),
                     "strict": False,
                 }
             }
         if mime_type == _JSON_MIME_TYPE:
-            return {"format": {"type": "json_object"}}  # mutable-ok: same isinstance(..., dict) round trip
+            return {"format": {"type": "json_object"}}
         return None
 
     @staticmethod
