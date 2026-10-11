@@ -11624,10 +11624,10 @@ class ProxyStartupEvent:
                 )
                 await _scheduled_fallback_stats()
 
-        if prisma_client is not None:
-            from litellm.proxy.spend_tracking.spend_report_email import setup_email_spend_report_jobs
+        from litellm.proxy.spend_tracking.spend_report_email import setup_email_spend_report_jobs
 
-            setup_email_spend_report_jobs(scheduler=scheduler)
+        scheduler_instance: Final[object] = getattr(sys.modules[__name__], "scheduler", None)
+        setup_email_spend_report_jobs(scheduler=scheduler_instance)
 
     @classmethod
     async def setup_prisma_client(

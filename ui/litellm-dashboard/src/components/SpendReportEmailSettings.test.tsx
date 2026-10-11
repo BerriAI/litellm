@@ -19,12 +19,18 @@ describe("SpendReportEmailSettings", () => {
   it("renders card title and description", async () => {
     vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
       values: {
-        enabled: true,
-        frequency: "both",
-        daily_send_time: "08:30",
-        monthly_send_time: "10:00",
-        recipient_emails: ["finance@example.com"],
-        group_by: ["team", "team_key_model"],
+        alerts: [
+          {
+            id: "daily-alert",
+            name: "Daily Spend Report",
+            enabled: true,
+            frequency: "daily",
+            send_time: "08:30",
+            recipient_emails: ["finance@example.com"],
+            group_by: ["team", "team_key_model"],
+            team_id: null,
+          },
+        ],
       },
       field_schema: {},
     });
@@ -46,12 +52,18 @@ describe("SpendReportEmailSettings", () => {
   it("renders disabled state badge when enabled is false", async () => {
     vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
       values: {
-        enabled: false,
-        frequency: "daily",
-        daily_send_time: "09:00",
-        monthly_send_time: "09:00",
-        recipient_emails: [],
-        group_by: ["team"],
+        alerts: [
+          {
+            id: "disabled-alert",
+            name: "Disabled Alert",
+            enabled: false,
+            frequency: "daily",
+            send_time: "09:00",
+            recipient_emails: [],
+            group_by: ["team"],
+            team_id: null,
+          },
+        ],
       },
       field_schema: {},
     });
@@ -67,12 +79,18 @@ describe("SpendReportEmailSettings", () => {
   it("renders collapsed by default and allows expanding and collapsing", async () => {
     vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
       values: {
-        enabled: true,
-        frequency: "daily",
-        daily_send_time: "09:00",
-        monthly_send_time: "09:00",
-        recipient_emails: ["ops@example.com"],
-        group_by: ["team"],
+        alerts: [
+          {
+            id: "ops-alert",
+            name: "Ops Alert",
+            enabled: true,
+            frequency: "daily",
+            send_time: "09:00",
+            recipient_emails: ["ops@example.com"],
+            group_by: ["team"],
+            team_id: null,
+          },
+        ],
       },
       field_schema: {},
     });
@@ -104,12 +122,6 @@ describe("SpendReportEmailSettings", () => {
   it("auto-expands when clicking Add Alert from collapsed state", async () => {
     vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
       values: {
-        enabled: false,
-        frequency: "daily",
-        daily_send_time: "09:00",
-        monthly_send_time: "09:00",
-        recipient_emails: [],
-        group_by: ["team"],
         alerts: [],
       },
       field_schema: {},
@@ -126,7 +138,7 @@ describe("SpendReportEmailSettings", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Collapse")).toBeInTheDocument();
-      expect(screen.getByDisplayValue("Spend Report Alert 2")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("Spend Report Alert 1")).toBeInTheDocument();
       expect(screen.getByText("Save Spend Report Settings")).toBeInTheDocument();
     });
   });
@@ -134,12 +146,6 @@ describe("SpendReportEmailSettings", () => {
   it("renders configured multi-alert list", async () => {
     vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
       values: {
-        enabled: true,
-        frequency: "daily",
-        daily_send_time: "09:00",
-        monthly_send_time: "09:00",
-        recipient_emails: [],
-        group_by: ["team"],
         alerts: [
           {
             id: "alert-daily",
@@ -189,12 +195,6 @@ describe("SpendReportEmailSettings", () => {
   it("allows adding a new alert and saving", async () => {
     vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
       values: {
-        enabled: true,
-        frequency: "daily",
-        daily_send_time: "09:00",
-        monthly_send_time: "09:00",
-        recipient_emails: [],
-        group_by: ["team"],
         alerts: [
           {
             id: "alert-1",
@@ -244,12 +244,6 @@ describe("SpendReportEmailSettings", () => {
   it("allows deleting an alert", async () => {
     vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
       values: {
-        enabled: true,
-        frequency: "daily",
-        daily_send_time: "09:00",
-        monthly_send_time: "09:00",
-        recipient_emails: [],
-        group_by: ["team"],
         alerts: [
           {
             id: "alert-delete-me",
@@ -284,12 +278,6 @@ describe("SpendReportEmailSettings", () => {
   it("sends a test email report for a specific alert", async () => {
     vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
       values: {
-        enabled: true,
-        frequency: "daily",
-        daily_send_time: "09:00",
-        monthly_send_time: "09:00",
-        recipient_emails: [],
-        group_by: ["team"],
         alerts: [
           {
             id: "alert-test",
@@ -319,15 +307,16 @@ describe("SpendReportEmailSettings", () => {
     const testButton = screen.getByRole("button", { name: "Send Test Report Now" });
     fireEvent.click(testButton);
 
+    const expectedAlertParams = {
+      frequency: "monthly",
+      recipient_emails: ["ops@example.com"],
+      group_by: ["team", "team_key"],
+      team_id: "team-1",
+    };
     await waitFor(() => {
       expect(networking.sendSpendReportEmailTest).toHaveBeenCalledWith(
         "test-token",
-        expect.objectContaining({
-          frequency: "monthly",
-          recipient_emails: ["ops@example.com"],
-          group_by: ["team", "team_key"],
-          team_id: "team-1",
-        }),
+        expect.objectContaining(expectedAlertParams),
       );
     });
   });
@@ -335,12 +324,6 @@ describe("SpendReportEmailSettings", () => {
   it("disables send test report button when email delivery is not configured", async () => {
     vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
       values: {
-        enabled: true,
-        frequency: "daily",
-        daily_send_time: "09:00",
-        monthly_send_time: "09:00",
-        recipient_emails: ["ops@example.com"],
-        group_by: ["team"],
         alerts: [
           {
             id: "alert-unconf",
@@ -374,12 +357,6 @@ describe("SpendReportEmailSettings", () => {
   it("displays server timezone in the Send Time label", async () => {
     vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
       values: {
-        enabled: true,
-        frequency: "daily",
-        daily_send_time: "09:00",
-        monthly_send_time: "09:00",
-        recipient_emails: ["ops@example.com"],
-        group_by: ["team"],
         alerts: [
           {
             id: "alert-tz",

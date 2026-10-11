@@ -47,9 +47,7 @@ describe("EmailSpendSummaryModal", () => {
 
     expect(screen.getByText("Email Spend Summary")).toBeInTheDocument();
     expect(screen.getByText("2026-03-01 to 2026-03-31")).toBeInTheDocument();
-    expect(
-      screen.getByText(/Want to receive spend summaries on a schedule/i),
-    ).toBeInTheDocument();
+    expect(screen.getByText(/Want to receive spend summaries on a schedule/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Configure Scheduled Email Alerts/i })).toHaveAttribute(
       "href",
       "/logging-and-alerts?tab=email-alerts",
@@ -83,15 +81,16 @@ describe("EmailSpendSummaryModal", () => {
     const sendButton = screen.getByRole("button", { name: "Send Email Summary" });
     fireEvent.click(sendButton);
 
+    const expectedReportParams = {
+      start_date: "2026-03-01",
+      end_date: "2026-03-31",
+      recipient_emails: ["alice@example.com", "bob@example.com"],
+      team_id: "team-eng",
+    };
     await waitFor(() => {
       expect(networking.sendSpendReportEmailTest).toHaveBeenCalledWith(
         "test-token",
-        expect.objectContaining({
-          start_date: "2026-03-01",
-          end_date: "2026-03-31",
-          recipient_emails: ["alice@example.com", "bob@example.com"],
-          team_id: "team-eng",
-        }),
+        expect.objectContaining(expectedReportParams),
       );
       expect(handleClose).toHaveBeenCalled();
     });

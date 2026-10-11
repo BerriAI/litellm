@@ -179,7 +179,8 @@ export const EmailSpendSummaryModal: React.FC<EmailSpendSummaryModalProps> = ({
 
           <div className="p-3 rounded-lg border border-blue-200 dark:border-blue-900 bg-blue-50/50 dark:bg-blue-950/20 text-xs text-muted-foreground flex items-start gap-2">
             <div className="flex-1">
-              Want to receive spend summaries on a schedule? You can configure automated daily, monthly, or team-specific email alerts.
+              Want to receive spend summaries on a schedule? You can configure automated daily, monthly, or
+              team-specific email alerts.
               <div className="mt-1">
                 <Link
                   href="/logging-and-alerts?tab=email-alerts"
@@ -201,9 +202,7 @@ export const EmailSpendSummaryModal: React.FC<EmailSpendSummaryModalProps> = ({
               value={recipientsInput}
               onChange={(e) => setRecipientsInput(e.target.value)}
             />
-            <p className="text-xs text-muted-foreground">
-              Enter one or more email addresses separated by commas.
-            </p>
+            <p className="text-xs text-muted-foreground">Enter one or more email addresses separated by commas.</p>
           </div>
 
           {teams && teams.length > 0 && (

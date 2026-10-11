@@ -455,6 +455,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       >
                         <Button
                           variant="outline"
+                          size="sm"
                           onClick={() => setIsEmailSummaryModalOpen(true)}
                           disabled={emailStatus !== null && !emailStatus.configured}
                         >

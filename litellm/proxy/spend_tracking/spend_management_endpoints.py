@@ -5051,7 +5051,7 @@ async def _assert_user_owns_cold_storage_payload(
 )
 async def trigger_spend_report_email(
     request: SpendReportEmailSendRequest,
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> SpendReportSendResult:
     """
     Trigger sending a spend report email immediately.
@@ -5081,7 +5081,7 @@ async def trigger_spend_report_email(
     response_model=SpendReportEmailStatusResponse,
 )
 async def get_spend_report_email_status(
-    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
 ) -> SpendReportEmailStatusResponse:
     if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN:
         raise HTTPException(

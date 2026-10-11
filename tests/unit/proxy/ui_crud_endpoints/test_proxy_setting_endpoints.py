@@ -3343,11 +3343,17 @@ class TestSpendReportEmailSettingsEndpoints:
 
     def test_get_spend_report_email_settings(self, mock_proxy_config, mock_auth):
         mock_proxy_config["config"]["litellm_settings"]["spend_report_email_settings"] = {
-            "enabled": True,
-            "frequency": "daily",
-            "daily_send_time": "09:00",
-            "recipient_emails": ["reports@example.com"],
-            "group_by": ["team", "team_key"],
+            "alerts": [
+                {
+                    "id": "alert-1",
+                    "name": "Finance Report",
+                    "enabled": True,
+                    "frequency": "daily",
+                    "send_time": "09:00",
+                    "recipient_emails": ["reports@example.com"],
+                    "group_by": ["team", "team_key"],
+                }
+            ],
         }
         self._override_auth(LitellmUserRoles.PROXY_ADMIN)
         try:
@@ -3357,11 +3363,13 @@ class TestSpendReportEmailSettingsEndpoints:
 
         assert resp.status_code == 200, resp.text
         data = resp.json()
-        assert data["values"]["enabled"] is True
-        assert data["values"]["frequency"] == "daily"
-        assert data["values"]["daily_send_time"] == "09:00"
-        assert data["values"]["recipient_emails"] == ["reports@example.com"]
-        assert data["values"]["group_by"] == ["team", "team_key"]
+        alerts = data["values"]["alerts"]
+        assert len(alerts) == 1
+        assert alerts[0]["name"] == "Finance Report"
+        assert alerts[0]["enabled"] is True
+        assert alerts[0]["send_time"] == "09:00"
+        assert alerts[0]["recipient_emails"] == ["reports@example.com"]
+        assert alerts[0]["group_by"] == ["team", "team_key"]
         assert "properties" in data["field_schema"]
 
     def test_get_spend_report_email_settings_requires_admin(self, mock_proxy_config):
@@ -3378,7 +3386,7 @@ class TestSpendReportEmailSettingsEndpoints:
         try:
             resp = client.patch(
                 "/update/spend_report_email_settings",
-                json={"enabled": True, "recipient_emails": ["test@example.com"]},
+                json={"alerts": []},
             )
         finally:
             app.dependency_overrides.clear()
@@ -3391,13 +3399,17 @@ class TestSpendReportEmailSettingsEndpoints:
         monkeypatch.setattr(litellm, "spend_report_email_settings", None)
         self._override_auth(LitellmUserRoles.PROXY_ADMIN)
         payload = {
-            "enabled": True,
-            "frequency": "both",
-            "daily_send_time": "08:00",
-            "monthly_send_time": "09:30",
-            "recipient_emails": ["admin@example.com"],
-            "group_by": ["team", "team_key_model"],
-            "alerts": [],
+            "alerts": [
+                {
+                    "id": "alert-admin",
+                    "name": "Admin Report",
+                    "enabled": True,
+                    "frequency": "daily",
+                    "send_time": "08:00",
+                    "recipient_emails": ["admin@example.com"],
+                    "group_by": ["team", "team_key_model"],
+                }
+            ],
         }
         try:
             resp = client.patch("/update/spend_report_email_settings", json=payload)

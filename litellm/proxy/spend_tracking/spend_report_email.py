@@ -3,22 +3,22 @@ import os
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import date, datetime, timedelta
-from typing import Final, Literal, cast
+from types import MappingProxyType
+from typing import Final, Literal, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import (
-    DAILY_EMAIL_SPEND_REPORT_JOB_ID,
-    MONTHLY_EMAIL_SPEND_REPORT_JOB_ID,
-)
 
+EMPTY_MAP: Final[Mapping[str, object]] = MappingProxyType({})
+_OBJECT_MAP_ADAPTER: Final = TypeAdapter(dict[str, object])
+_ROW_LIST_ADAPTER: Final = TypeAdapter(list[dict[str, object]])
+_STR_SEQUENCE_ADAPTER: Final = TypeAdapter(list[str])
 LITELLM_LOGO_URL: Final = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
 LITELLM_SUPPORT_CONTACT: Final = "support@berri.ai"
 
-SpendReportGroupBy = Literal["team", "team_key", "team_model", "team_key_model"]
-SpendReportFrequency = Literal["daily", "monthly", "both"]
+SpendReportGroupBy: TypeAlias = Literal["team", "team_key", "team_model", "team_key_model"]
 VALID_GROUP_BYS: Final[tuple[SpendReportGroupBy, ...]] = (
     "team",
     "team_key",
@@ -37,8 +37,27 @@ def get_server_timezone() -> str:
     return "UTC"
 
 
+def _extract_group_by_candidates(v: object) -> Sequence[str]:
+    if isinstance(v, str):
+        return (v,)
+    if isinstance(v, (list, tuple)):
+        try:
+            return _STR_SEQUENCE_ADAPTER.validate_python(v)
+        except ValidationError:
+            return ("team",)
+    return ("team",)
+
+
+def _normalize_group_by(v: object) -> tuple[SpendReportGroupBy, ...]:
+    candidates: Final = _extract_group_by_candidates(v)
+    filtered: Final[tuple[SpendReportGroupBy, ...]] = tuple(
+        target for target in VALID_GROUP_BYS if target in candidates
+    )
+    return filtered if filtered else ("team",)
+
+
 class SpendReportEmailAlert(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     id: str = Field(
         default_factory=lambda: str(uuid.uuid4()),
@@ -60,12 +79,12 @@ class SpendReportEmailAlert(BaseModel):
         default="09:00",
         description="Send time in HH:MM (24-hour server format)",
     )
-    recipient_emails: list[str] = Field(
-        default_factory=list,
+    recipient_emails: tuple[str, ...] = Field(
+        default_factory=tuple,
         description="Target email addresses for this alert",
     )
-    group_by: list[SpendReportGroupBy] = Field(
-        default_factory=lambda: ["team"],
+    group_by: tuple[SpendReportGroupBy, ...] = Field(
+        default_factory=lambda: ("team",),
         description="Cumulative groupings to include: 'team', 'team_key', 'team_model', 'team_key_model'",
     )
     team_id: str | None = Field(
@@ -75,74 +94,23 @@ class SpendReportEmailAlert(BaseModel):
 
     @field_validator("group_by", mode="before")
     @classmethod
-    def validate_group_by(cls, v: object) -> list[str]:
-        if isinstance(v, str):
-            candidate_list: Final = [v]
-        elif isinstance(v, (list, tuple)):
-            candidate_list = [str(item) for item in v]
-        else:
-            candidate_list = ["team"]
-
-        filtered: Final = [item for item in candidate_list if item in VALID_GROUP_BYS]
-        return filtered if filtered else ["team"]
+    def validate_group_by(cls, v: object) -> tuple[SpendReportGroupBy, ...]:
+        return _normalize_group_by(v)
 
 
 class SpendReportEmailSettings(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
-    enabled: bool = Field(
-        default=False,
-        description="Whether email spend reports are enabled",
-    )
-    frequency: SpendReportFrequency = Field(
-        default="daily",
-        description="Report frequency: 'daily', 'monthly', or 'both'",
-    )
-    daily_send_time: str = Field(
-        default="09:00",
-        description="Daily spend report send time in HH:MM (24-hour server format)",
-    )
-    monthly_send_time: str = Field(
-        default="09:00",
-        description="Monthly spend report send time in HH:MM (24-hour server format), sent on the 1st of each month",
-    )
-    recipient_emails: list[str] = Field(
-        default_factory=list,
-        description="List of email addresses to receive the spend report",
-    )
-    group_by: list[SpendReportGroupBy] = Field(
-        default_factory=lambda: ["team"],
-        description="Groupings to include in cumulative reports: 'team', 'team_key', 'team_model', 'team_key_model'",
-    )
-    alerts: list[SpendReportEmailAlert] = Field(
-        default_factory=list,
+    alerts: tuple[SpendReportEmailAlert, ...] = Field(
+        default_factory=tuple,
         description="Configured spend report alert instances",
     )
 
-    @field_validator("group_by", mode="before")
-    @classmethod
-    def validate_group_by(cls, v: object) -> list[str]:
-        if isinstance(v, str):
-            candidate_list: Final = [v]
-        elif isinstance(v, (list, tuple)):
-            candidate_list = [str(item) for item in v]
-        else:
-            candidate_list = ["team"]
-
-        filtered: Final = [item for item in candidate_list if item in VALID_GROUP_BYS]
-        return filtered if filtered else ["team"]
-
-
-class SpendReportEmailSettingsResponse(BaseModel):
-    values: dict[str, object]
-    field_schema: dict[str, object]
-    server_timezone: str | None = None
-
 
 class SpendReportEmailSendRequest(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
-    recipient_emails: list[str] | None = Field(
+    recipient_emails: tuple[str, ...] | None = Field(
         default=None,
         description="Optional list of recipients. Defaults to configured recipient_emails",
     )
@@ -150,7 +118,7 @@ class SpendReportEmailSendRequest(BaseModel):
         default="daily",
         description="Report frequency to generate: 'daily' or 'monthly'",
     )
-    group_by: list[SpendReportGroupBy] | None = Field(
+    group_by: tuple[SpendReportGroupBy, ...] | None = Field(
         default=None,
         description="Optional list of groupings to include in the report",
     )
@@ -169,7 +137,7 @@ class SpendReportEmailSendRequest(BaseModel):
 
 
 class SpendReportEmailStatusResponse(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    model_config = ConfigDict(extra="ignore", frozen=True)
 
     configured: bool = Field(
         default=False,
@@ -189,18 +157,26 @@ class SpendReportEmailStatusResponse(BaseModel):
     )
 
 
-def check_spend_report_email_status() -> SpendReportEmailStatusResponse:
-    env_vars: dict[str, object] = {}
+def _extract_env_vars() -> Mapping[str, object]:
     try:
-        from litellm.proxy.proxy_server import general_settings
+        from litellm.proxy import proxy_server
 
-        if isinstance(general_settings, dict):
-            raw_vars = general_settings.get("environment_variables")
+        raw_settings: Final[object] = getattr(proxy_server, "general_settings", None)
+    except (ImportError, AttributeError):
+        return EMPTY_MAP
+    if isinstance(raw_settings, dict):
+        try:
+            settings_map: Final = _OBJECT_MAP_ADAPTER.validate_python(raw_settings)
+            raw_vars: Final[object] = settings_map.get("environment_variables")
             if isinstance(raw_vars, dict):
-                env_vars = raw_vars
-    except Exception:
-        pass
+                return _OBJECT_MAP_ADAPTER.validate_python(raw_vars)
+        except ValidationError:
+            return EMPTY_MAP
+    return EMPTY_MAP
 
+
+def check_spend_report_email_status() -> SpendReportEmailStatusResponse:
+    env_vars: Final = _extract_env_vars()
     server_tz: Final = get_server_timezone()
     if os.getenv("SENDGRID_API_KEY") or env_vars.get("SENDGRID_API_KEY"):
         return SpendReportEmailStatusResponse(
@@ -231,50 +207,70 @@ def check_spend_report_email_status() -> SpendReportEmailStatusResponse:
     )
 
 
+async def _send_with_enterprise_logger(
+    module_name: str,
+    class_name: str,
+    from_email: str,
+    to_email: Sequence[str],
+    subject: str,
+    html: str,
+) -> bool:
+    try:
+        module: Final[object] = __import__(module_name, fromlist=[class_name])
+    except ImportError:
+        return False
+    logger_cls: Final[object] = getattr(module, class_name, None)
+    if not callable(logger_cls):
+        return False
+    logger_instance: Final[object] = logger_cls()
+    send_fn: Final[Callable[..., Awaitable[object]] | None] = getattr(logger_instance, "send_email", None)
+    if send_fn is None:
+        return False
+    await send_fn(
+        from_email=from_email,
+        to_email=list(to_email),
+        subject=subject,
+        html_body=html,
+    )
+    return True
+
+
 async def default_email_sender(
     receiver_email: str,
     subject: str,
     html: str,
 ) -> None:
     if os.getenv("SENDGRID_API_KEY"):
-        try:
-            from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
-                SendGridEmailLogger,
-            )
-
-            sendgrid_logger: Final = SendGridEmailLogger()
-            sender_email: Final = (
-                os.getenv("SENDGRID_SENDER_EMAIL")
-                or os.getenv("SMTP_SENDER_EMAIL")
-                or "notifications@alerts.litellm.ai"
-            )
-            await sendgrid_logger.send_email(
-                from_email=sender_email,
-                to_email=[receiver_email],
-                subject=subject,
-                html_body=html,
-            )
+        sg_sender_email: Final = (
+            os.getenv("SENDGRID_SENDER_EMAIL")
+            or os.getenv("SMTP_SENDER_EMAIL")
+            or "notifications@alerts.litellm.ai"
+        )
+        sg_sent: Final = await _send_with_enterprise_logger(
+            module_name="litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email",
+            class_name="SendGridEmailLogger",
+            from_email=sg_sender_email,
+            to_email=(receiver_email,),
+            subject=subject,
+            html=html,
+        )
+        if sg_sent:
             return
-        except ImportError:
-            verbose_proxy_logger.warning("litellm_enterprise not installed; falling back to SMTP")
+        verbose_proxy_logger.warning("litellm_enterprise not installed; falling back to SMTP")
 
     if os.getenv("RESEND_API_KEY"):
-        try:
-            from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
-                ResendEmailLogger,
-            )
-
-            resend_logger: Final = ResendEmailLogger()
-            sender_email = os.getenv("SMTP_SENDER_EMAIL") or "notifications@alerts.litellm.ai"
-            await resend_logger.send_email(
-                from_email=sender_email,
-                to_email=[receiver_email],
-                subject=subject,
-                html_body=html,
-            )
+        resend_sender_email: Final = os.getenv("SMTP_SENDER_EMAIL") or "notifications@alerts.litellm.ai"
+        resend_sent: Final = await _send_with_enterprise_logger(
+            module_name="litellm_enterprise.enterprise_callbacks.send_emails.resend_email",
+            class_name="ResendEmailLogger",
+            from_email=resend_sender_email,
+            to_email=(receiver_email,),
+            subject=subject,
+            html=html,
+        )
+        if resend_sent:
             return
-        except ImportError:
-            verbose_proxy_logger.warning("litellm_enterprise not installed; falling back to SMTP")
+        verbose_proxy_logger.warning("litellm_enterprise not installed; falling back to SMTP")
 
     from litellm.proxy.utils import send_email as send_smtp_email
 
@@ -286,9 +282,11 @@ async def default_email_sender(
 
 
 class SpendReportSendResult(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
     status: str
     message: str
-    recipients: list[str]
+    recipients: tuple[str, ...]
     frequency: str
     start_date: str
     end_date: str
@@ -544,44 +542,69 @@ def get_monthly_report_date_range(ref_date: date | None = None) -> tuple[date, d
     return (first_of_prev, last_of_prev)
 
 
-def _normalize_settings(settings: SpendReportEmailSettings) -> SpendReportEmailSettings:
-    if not settings.alerts and settings.recipient_emails:
-        settings.alerts.append(
-            SpendReportEmailAlert(
-                id="default-spend-alert",
-                name="General Spend Report",
-                enabled=settings.enabled,
-                frequency="monthly" if settings.frequency == "monthly" else "daily",
-                send_time=settings.daily_send_time if settings.frequency != "monthly" else settings.monthly_send_time,
-                recipient_emails=list(settings.recipient_emails),
-                group_by=list(settings.group_by),
-                team_id=None,
-            )
-        )
-    return settings
+def _settings_from_config(config: Mapping[str, object] | None) -> SpendReportEmailSettings | None:
+    if config is None:
+        return None
+    raw_settings: Final[object] = config.get("litellm_settings")
+    if not isinstance(raw_settings, dict):
+        return None
+    try:
+        raw_settings_map: Final = _OBJECT_MAP_ADAPTER.validate_python(raw_settings)
+    except ValidationError:
+        return None
+    email_data: Final[object] = raw_settings_map.get("spend_report_email_settings")
+    if isinstance(email_data, (dict, Mapping)):
+        return SpendReportEmailSettings.model_validate(email_data)
+    return None
+
+
+def _settings_from_memory() -> SpendReportEmailSettings | None:
+    import litellm
+
+    in_memory_val: Final = getattr(litellm, "spend_report_email_settings", None)
+    if isinstance(in_memory_val, Mapping):
+        return SpendReportEmailSettings.model_validate(in_memory_val)
+    if isinstance(in_memory_val, SpendReportEmailSettings):
+        return in_memory_val
+    return None
 
 
 def get_spend_report_email_settings(
     config: Mapping[str, object] | None = None,
 ) -> SpendReportEmailSettings:
-    res = SpendReportEmailSettings()
-    if config is not None:
-        raw_settings: Final = config.get("litellm_settings", {})
-        if isinstance(raw_settings, dict):
-            email_settings_data: Final = raw_settings.get("spend_report_email_settings")
-            if isinstance(email_settings_data, dict):
-                res = SpendReportEmailSettings(**email_settings_data)
+    from_config: Final = _settings_from_config(config)
+    if from_config is not None:
+        return from_config
 
-    if not res.alerts and not res.recipient_emails:
-        import litellm
+    from_mem: Final = _settings_from_memory()
+    if from_mem is not None:
+        return from_mem
 
-        in_memory_val: Final = getattr(litellm, "spend_report_email_settings", None)
-        if isinstance(in_memory_val, dict):
-            res = SpendReportEmailSettings(**in_memory_val)
-        elif isinstance(in_memory_val, SpendReportEmailSettings):
-            res = in_memory_val
+    return SpendReportEmailSettings()
 
-    return _normalize_settings(res)
+
+def _to_float(val: object) -> float:
+    if isinstance(val, (int, float)):
+        return float(val)
+    if isinstance(val, str):
+        try:
+            return float(val)
+        except ValueError:
+            return 0.0
+    return 0.0
+
+
+def _to_int(val: object) -> int:
+    if isinstance(val, int):
+        return val
+    if isinstance(val, float):
+        return int(val)
+    if isinstance(val, str):
+        try:
+            return int(float(val))
+        except ValueError:
+            return 0
+    return 0
 
 
 async def fetch_grouped_spend_data(
@@ -593,29 +616,37 @@ async def fetch_grouped_spend_data(
 ) -> Sequence[Mapping[str, object]]:
     client: Final = getattr(prisma_client, "db", prisma_client)
     clean_team_id: Final = team_id.strip() if team_id is not None and team_id.strip() else None
+    query_raw_fn: Final[Callable[..., Awaitable[object]] | None] = getattr(client, "query_raw", None)
+    if query_raw_fn is None:
+        return ()
     raw_rows: Final = (
-        cast(
-            Sequence[Mapping[str, object]],
-            await client.query_raw(SPEND_REPORT_QUERIES_WITH_TEAM[group_by], start_date, end_date, clean_team_id),
-        )
+        await query_raw_fn(SPEND_REPORT_QUERIES_WITH_TEAM[group_by], start_date, end_date, clean_team_id)
         if clean_team_id is not None
-        else cast(
-            Sequence[Mapping[str, object]],
-            await client.query_raw(SPEND_REPORT_QUERIES[group_by], start_date, end_date),
-        )
+        else await query_raw_fn(SPEND_REPORT_QUERIES[group_by], start_date, end_date)
     )
+    def _validate_rows(raw: object) -> Sequence[Mapping[str, object]]:
+        if not isinstance(raw, (list, tuple)):
+            return ()
+        try:
+            return _ROW_LIST_ADAPTER.validate_python(raw)
+        except ValidationError:
+            return ()
+
+    rows_sequence: Final[Sequence[Mapping[str, object]]] = _validate_rows(raw_rows)
 
     def _sanitize_row(r: Mapping[str, object]) -> Mapping[str, object] | None:
-        spend_val: Final = float(cast(float | int | str, r.get("total_spend", 0.0)))
+        raw_spend: Final[object] = r.get("total_spend")
+        spend_val: Final = _to_float(raw_spend) if raw_spend is not None else 0.0
         if spend_val <= 0:
             return None
-        return {
-            **r,
-            "total_spend": round(spend_val, 2),
-            "request_count": int(cast(float | int | str, r.get("request_count", 0))),
-        }
+        raw_requests: Final[object] = r.get("request_count")
+        req_val: Final = _to_int(raw_requests) if raw_requests is not None else 0
+        base_items: Final = tuple(
+            (k, v) for k, v in r.items() if k not in ("total_spend", "request_count")
+        )
+        return dict((*base_items, ("total_spend", round(spend_val, 2)), ("request_count", req_val)))
 
-    sanitized_items: Final = (_sanitize_row(r) for r in raw_rows)
+    sanitized_items: Final = (_sanitize_row(r) for r in rows_sequence)
     return tuple(clean_row for clean_row in sanitized_items if clean_row is not None)
 
 
@@ -630,30 +661,27 @@ def _render_table_html(
         for label, _, align in columns
     )
 
-    if not rows:
-        colspan: Final = len(columns)
-        tbody_html: Final = (
-            f'<tr><td colspan="{colspan}" style="padding: 16px; text-align: center; color: #64748b;">'
-            f"No spend recorded for this period</td></tr>"
+    def _render_row(r: Mapping[str, object]) -> str:
+        cells_html: Final = "".join(
+            f'<td style="padding: 9px 12px; color: #1e293b; text-align: {align};">'
+            + html.escape(
+                f"${_to_float(r.get(field_key)):.2f}"
+                if field_key == "total_spend"
+                else f"{_to_int(r.get(field_key)):,}"
+                if field_key == "request_count"
+                else str(r.get(field_key) or "")
+            )
+            + "</td>"
+            for _, field_key, align in columns
         )
-    else:
-        row_html_list: Final[list[str]] = []
-        for r in rows:
-            cells_html: Final[list[str]] = []
-            for _, field_key, align in columns:
-                val: Final = r.get(field_key)
-                if field_key == "total_spend":
-                    formatted: Final = f"${float(cast(float | int | str, val or 0.0)):.2f}"
-                elif field_key == "request_count":
-                    formatted = f"{int(cast(float | int | str, val or 0)):,}"
-                else:
-                    formatted = str(val or "")
-                escaped_val: Final = html.escape(formatted)
-                cells_html.append(
-                    f'<td style="padding: 9px 12px; color: #1e293b; text-align: {align};">{escaped_val}</td>'
-                )
-            row_html_list.append(f'<tr style="border-bottom: 1px solid #e2e8f0;">{"".join(cells_html)}</tr>')
-        tbody_html = "".join(row_html_list)
+        return f'<tr style="border-bottom: 1px solid #e2e8f0;">{cells_html}</tr>'
+
+    tbody_html: Final = (
+        f'<tr><td colspan="{len(columns)}" style="padding: 16px; text-align: center; color: #64748b;">'
+        f"No spend recorded for this period</td></tr>"
+        if not rows
+        else "".join(_render_row(r) for r in rows)
+    )
 
     return f"""
     <div style="margin-bottom: 28px;">
@@ -682,13 +710,9 @@ def build_spend_report_email_html(
     email_logo_url: Final = os.getenv("SMTP_SENDER_LOGO", os.getenv("EMAIL_LOGO_URL", LITELLM_LOGO_URL))
     email_support_contact: Final = os.getenv("EMAIL_SUPPORT_CONTACT", LITELLM_SUPPORT_CONTACT)
 
-    overall_total_spend = 0.0
-    overall_total_requests = 0
-    for rows in report_data.values():
-        if rows:
-            overall_total_spend = sum(float(cast(float | int | str, r.get("total_spend", 0.0))) for r in rows)
-            overall_total_requests = sum(int(cast(float | int | str, r.get("request_count", 0))) for r in rows)
-            break
+    first_rows: Final = next((rows for rows in report_data.values() if rows), ())
+    overall_total_spend: Final = sum(_to_float(r.get("total_spend", 0.0)) for r in first_rows)
+    overall_total_requests: Final = sum(_to_int(r.get("request_count", 0)) for r in first_rows)
 
     frequency_title: Final = frequency.capitalize()
     tables_html: Final = "".join(_render_table_html(group_by, rows) for group_by, rows in report_data.items())
@@ -746,6 +770,33 @@ def build_spend_report_email_html(
     """
 
 
+def _resolve_report_date_range(
+    frequency: str,
+    start_date: str | None,
+    end_date: str | None,
+) -> tuple[str, str]:
+    if start_date is not None and end_date is not None:
+        return (start_date, end_date)
+    if frequency == "daily":
+        d_start, d_end = get_daily_report_date_range()
+        return (d_start.strftime("%Y-%m-%d"), d_end.strftime("%Y-%m-%d"))
+    m_start, m_end = get_monthly_report_date_range()
+    return (m_start.strftime("%Y-%m-%d"), m_end.strftime("%Y-%m-%d"))
+
+
+def _resolve_prisma_client(provided: object | None) -> object:
+    if provided is not None:
+        return provided
+    try:
+        from litellm.proxy.proxy_server import prisma_client
+
+        if prisma_client is not None:
+            return prisma_client
+    except (ImportError, AttributeError):
+        pass
+    raise RuntimeError("Prisma client is not connected")
+
+
 async def send_spend_report_email(
     frequency: Literal["daily", "monthly"] = "daily",
     recipient_emails: Sequence[str] | None = None,
@@ -756,43 +807,27 @@ async def send_spend_report_email(
     prisma_client: object | None = None,
     email_sender: Callable[..., Awaitable[None]] | None = None,
 ) -> SpendReportSendResult:
-    settings: Final = get_spend_report_email_settings()
-
-    resolved_recipients: Final[Sequence[str]] = (
-        recipient_emails if recipient_emails is not None and len(recipient_emails) > 0 else settings.recipient_emails
-    )
-    if not resolved_recipients:
+    if not recipient_emails:
         raise ValueError("No recipient emails configured for spend report email")
 
-    if start_date is not None and end_date is not None:
-        resolved_start_date: Final = start_date
-        resolved_end_date: Final = end_date
-    elif frequency == "daily":
-        d_start, d_end = get_daily_report_date_range()
-        resolved_start_date = d_start.strftime("%Y-%m-%d")
-        resolved_end_date = d_end.strftime("%Y-%m-%d")
-    else:
-        m_start, m_end = get_monthly_report_date_range()
-        resolved_start_date = m_start.strftime("%Y-%m-%d")
-        resolved_end_date = m_end.strftime("%Y-%m-%d")
+    resolved_recipients: Final[Sequence[str]] = recipient_emails
+
+    resolved_dates: Final = _resolve_report_date_range(frequency, start_date, end_date)
+    resolved_start_date: Final = resolved_dates[0]
+    resolved_end_date: Final = resolved_dates[1]
 
     resolved_groupings: Final[Sequence[SpendReportGroupBy]] = (
-        group_by if group_by is not None and len(group_by) > 0 else tuple(settings.group_by)
+        group_by if group_by is not None and len(group_by) > 0 else ("team",)
     )
 
-    active_prisma_client: Final = (
-        prisma_client
-        if prisma_client is not None
-        else getattr(__import__("litellm.proxy.proxy_server", fromlist=["prisma_client"]), "prisma_client", None)
-    )
-    if active_prisma_client is None:
-        raise RuntimeError("Prisma client is not connected")
+    active_prisma_client: Final = _resolve_prisma_client(prisma_client)
 
-    report_data: Final[dict[SpendReportGroupBy, Sequence[Mapping[str, object]]]] = {}
-    for g in resolved_groupings:
-        report_data[g] = await fetch_grouped_spend_data(
+    report_data: Final[Mapping[SpendReportGroupBy, Sequence[Mapping[str, object]]]] = {
+        g: await fetch_grouped_spend_data(
             active_prisma_client, g, resolved_start_date, resolved_end_date, team_id=team_id
         )
+        for g in resolved_groupings
+    }
 
     html_content: Final = build_spend_report_email_html(
         report_data=report_data,
@@ -802,10 +837,7 @@ async def send_spend_report_email(
         team_id=team_id,
     )
 
-    if email_sender is not None:
-        actual_sender = email_sender
-    else:
-        actual_sender = default_email_sender
+    actual_sender: Final = email_sender if email_sender is not None else default_email_sender
 
     team_subject_suffix: Final = f" - Team: {team_id}" if team_id else ""
     subject: Final = f"LiteLLM {frequency.capitalize()} Spend Report{team_subject_suffix} ({resolved_start_date} to {resolved_end_date})"
@@ -818,12 +850,12 @@ async def send_spend_report_email(
 
     first_group_rows: Final = next(iter(report_data.values()), ())
     total_spend: Final = (
-        sum(float(cast(float | int | str, r.get("total_spend", 0.0))) for r in first_group_rows)
+        sum(_to_float(r.get("total_spend", 0.0)) for r in first_group_rows)
         if first_group_rows
         else 0.0
     )
     total_requests: Final = (
-        sum(int(cast(float | int | str, r.get("request_count", 0))) for r in first_group_rows)
+        sum(_to_int(r.get("request_count", 0)) for r in first_group_rows)
         if first_group_rows
         else 0
     )
@@ -831,7 +863,7 @@ async def send_spend_report_email(
     return SpendReportSendResult(
         status="success",
         message=f"Spend report email sent to {len(resolved_recipients)} recipient(s)",
-        recipients=list(resolved_recipients),
+        recipients=tuple(resolved_recipients),
         frequency=frequency,
         start_date=resolved_start_date,
         end_date=resolved_end_date,
@@ -841,17 +873,27 @@ async def send_spend_report_email(
     )
 
 
+def _safe_remove_job(remove_fn: Callable[[str], object] | None, job_id: str) -> None:
+    if remove_fn is None or not job_id:
+        return
+    try:
+        remove_fn(job_id)
+    except Exception as exc:  # noqa: BLE001  # scheduler job removal is best-effort cleanup
+        verbose_proxy_logger.debug("Spend report job %s could not be removed: %s", job_id, exc)
+
+
 async def run_scheduled_email_spend_alert(
     alert: SpendReportEmailAlert,
 ) -> None:
     from litellm.proxy.proxy_server import proxy_logging_obj
 
     job_id: Final = f"email_spend_report_{alert.id}"
-    if proxy_logging_obj is not None:
-        db_writer: Final = getattr(proxy_logging_obj, "db_spend_update_writer", None)
-        pod_lock_manager: Final = getattr(db_writer, "pod_lock_manager", None) if db_writer is not None else None
-        if pod_lock_manager is not None:
-            has_lock: Final = await pod_lock_manager.acquire_lock(cronjob_id=job_id, ttl=3600, allow_reentrant=False)
+    db_writer: Final[object] = getattr(proxy_logging_obj, "db_spend_update_writer", None)
+    pod_lock_manager: Final[object] = getattr(db_writer, "pod_lock_manager", None) if db_writer is not None else None
+    if pod_lock_manager is not None:
+        acquire_lock_fn: Final[Callable[..., Awaitable[bool]] | None] = getattr(pod_lock_manager, "acquire_lock", None)
+        if acquire_lock_fn is not None:
+            has_lock: Final = await acquire_lock_fn(cronjob_id=job_id, ttl=3600, allow_reentrant=False)
             if not has_lock:
                 verbose_proxy_logger.info("Email spend report lock already acquired by another pod: %s", job_id)
                 return
@@ -863,33 +905,61 @@ async def run_scheduled_email_spend_alert(
             group_by=alert.group_by,
             team_id=alert.team_id,
         )
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001  # scheduled job runner must catch top-level exceptions to prevent crash
         verbose_proxy_logger.error("Failed to run scheduled email spend alert (%s): %s", alert.name, e)
 
 
-async def run_scheduled_email_spend_report(
-    frequency: Literal["daily", "monthly"],
+_registered_spend_report_job_ids: Final[set[str]] = set()  # mutable-ok: active background job registry
+
+
+def _setup_alert_jobs(
+    add_job_fn: Callable[..., object],
+    alerts: Sequence[SpendReportEmailAlert],
 ) -> None:
-    from litellm.proxy.proxy_server import proxy_logging_obj
+    for alert in alerts:
+        if not alert.enabled or not alert.recipient_emails:
+            continue
 
-    job_id: Final = DAILY_EMAIL_SPEND_REPORT_JOB_ID if frequency == "daily" else MONTHLY_EMAIL_SPEND_REPORT_JOB_ID
+        job_id = f"email_spend_report_{alert.id}"
+        hour, minute = parse_send_time(alert.send_time)
 
-    if proxy_logging_obj is not None:
-        db_writer: Final = getattr(proxy_logging_obj, "db_spend_update_writer", None)
-        pod_lock_manager: Final = getattr(db_writer, "pod_lock_manager", None) if db_writer is not None else None
-        if pod_lock_manager is not None:
-            has_lock: Final = await pod_lock_manager.acquire_lock(cronjob_id=job_id, ttl=3600, allow_reentrant=False)
-            if not has_lock:
-                verbose_proxy_logger.info("Email spend report lock already acquired by another pod: %s", job_id)
-                return
+        def _build_runner(target_alert: SpendReportEmailAlert) -> Callable[[], Awaitable[None]]:
+            async def _runner() -> None:
+                await run_scheduled_email_spend_alert(target_alert)
 
+            return _runner
+
+        runner_fn = _build_runner(alert)
+
+        if alert.frequency == "daily":
+            add_job_fn(
+                runner_fn,
+                "cron",
+                hour=hour,
+                minute=minute,
+                id=job_id,
+                replace_existing=True,
+            )
+            _registered_spend_report_job_ids.add(job_id)
+        elif alert.frequency == "monthly":
+            add_job_fn(
+                runner_fn,
+                "cron",
+                day=1,
+                hour=hour,
+                minute=minute,
+                id=job_id,
+                replace_existing=True,
+            )
+            _registered_spend_report_job_ids.add(job_id)
+
+
+def _fetch_current_jobs(get_jobs_fn: Callable[[], Sequence[object]]) -> Sequence[object]:
     try:
-        await send_spend_report_email(frequency=frequency)
-    except Exception as e:
-        verbose_proxy_logger.error("Failed to run scheduled email spend report (%s): %s", frequency, e)
-
-
-_registered_spend_report_job_ids: set[str] = set()
+        return get_jobs_fn()
+    except Exception as exc:  # noqa: BLE001  # scheduler job inspection is best-effort
+        verbose_proxy_logger.debug("Could not inspect current scheduler jobs: %s", exc)
+        return ()
 
 
 def setup_email_spend_report_jobs(
@@ -899,127 +969,23 @@ def setup_email_spend_report_jobs(
     if scheduler is None:
         return
 
-    add_job_fn: Final = getattr(scheduler, "add_job", None)
-    remove_job_fn: Final = getattr(scheduler, "remove_job", None)
+    add_job_fn: Final[Callable[..., object] | None] = getattr(scheduler, "add_job", None)
+    remove_job_fn: Final[Callable[[str], object] | None] = getattr(scheduler, "remove_job", None)
     if add_job_fn is None or remove_job_fn is None:
         return
 
     resolved_settings: Final = settings or get_spend_report_email_settings()
 
     for jid in _registered_spend_report_job_ids:
-        try:
-            remove_job_fn(jid)
-        except Exception:
-            pass
+        _safe_remove_job(remove_job_fn, jid)
     _registered_spend_report_job_ids.clear()
 
-    get_jobs_fn: Final = getattr(scheduler, "get_jobs", None)
+    get_jobs_fn: Final[Callable[[], Sequence[object]] | None] = getattr(scheduler, "get_jobs", None)
     if get_jobs_fn is not None:
-        try:
-            for job in get_jobs_fn():
-                jid_str = str(getattr(job, "id", ""))
-                if jid_str.startswith("email_spend_report_"):
-                    try:
-                        remove_job_fn(jid_str)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
+        current_jobs: Final = _fetch_current_jobs(get_jobs_fn)
+        for job in current_jobs:
+            jid_str = str(getattr(job, "id", ""))
+            if jid_str.startswith("email_spend_report_"):
+                _safe_remove_job(remove_job_fn, jid_str)
 
-    if resolved_settings.alerts:
-        try:
-            remove_job_fn(DAILY_EMAIL_SPEND_REPORT_JOB_ID)
-        except Exception:
-            pass
-        try:
-            remove_job_fn(MONTHLY_EMAIL_SPEND_REPORT_JOB_ID)
-        except Exception:
-            pass
-
-        for alert in resolved_settings.alerts:
-            if not alert.enabled or not alert.recipient_emails:
-                continue
-
-            job_id: Final = f"email_spend_report_{alert.id}"
-            hour, minute = parse_send_time(alert.send_time)
-
-            def _build_runner(target_alert: SpendReportEmailAlert) -> Callable[[], Awaitable[None]]:
-                async def _runner() -> None:
-                    await run_scheduled_email_spend_alert(target_alert)
-
-                return _runner
-
-            runner_fn: Final = _build_runner(alert)
-
-            if alert.frequency == "daily":
-                add_job_fn(
-                    runner_fn,
-                    "cron",
-                    hour=hour,
-                    minute=minute,
-                    id=job_id,
-                    replace_existing=True,
-                )
-                _registered_spend_report_job_ids.add(job_id)
-            elif alert.frequency == "monthly":
-                add_job_fn(
-                    runner_fn,
-                    "cron",
-                    day=1,
-                    hour=hour,
-                    minute=minute,
-                    id=job_id,
-                    replace_existing=True,
-                )
-                _registered_spend_report_job_ids.add(job_id)
-        return
-
-    if not resolved_settings.enabled or not resolved_settings.recipient_emails:
-        try:
-            remove_job_fn(DAILY_EMAIL_SPEND_REPORT_JOB_ID)
-        except Exception:
-            pass
-        try:
-            remove_job_fn(MONTHLY_EMAIL_SPEND_REPORT_JOB_ID)
-        except Exception:
-            pass
-        return
-
-    async def _scheduled_daily() -> None:
-        await run_scheduled_email_spend_report(frequency="daily")
-
-    async def _scheduled_monthly() -> None:
-        await run_scheduled_email_spend_report(frequency="monthly")
-
-    if resolved_settings.frequency in ("daily", "both"):
-        d_hour, d_min = parse_send_time(resolved_settings.daily_send_time)
-        add_job_fn(
-            _scheduled_daily,
-            "cron",
-            hour=d_hour,
-            minute=d_min,
-            id=DAILY_EMAIL_SPEND_REPORT_JOB_ID,
-            replace_existing=True,
-        )
-    else:
-        try:
-            remove_job_fn(DAILY_EMAIL_SPEND_REPORT_JOB_ID)
-        except Exception:
-            pass
-
-    if resolved_settings.frequency in ("monthly", "both"):
-        m_hour, m_min = parse_send_time(resolved_settings.monthly_send_time)
-        add_job_fn(
-            _scheduled_monthly,
-            "cron",
-            day=1,
-            hour=m_hour,
-            minute=m_min,
-            id=MONTHLY_EMAIL_SPEND_REPORT_JOB_ID,
-            replace_existing=True,
-        )
-    else:
-        try:
-            remove_job_fn(MONTHLY_EMAIL_SPEND_REPORT_JOB_ID)
-        except Exception:
-            pass
+    _setup_alert_jobs(add_job_fn, resolved_settings.alerts)

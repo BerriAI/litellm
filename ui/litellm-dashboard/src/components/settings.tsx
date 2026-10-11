@@ -381,9 +381,7 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   const handleSwitchChange = (alertName: string) => {
     setActiveAlerts((prev) => {
       const current = prev ?? [];
-      return current.includes(alertName)
-        ? current.filter((alert) => alert !== alertName)
-        : [...current, alertName];
+      return current.includes(alertName) ? current.filter((alert) => alert !== alertName) : [...current, alertName];
     });
   };
   const alerts_to_UI_NAME: Record<string, string> = {

@@ -5812,12 +5812,6 @@ export interface SpendReportEmailAlertItem {
 }
 
 export interface SpendReportEmailSettingsValues {
-  enabled: boolean;
-  frequency: "daily" | "monthly" | "both";
-  daily_send_time: string;
-  monthly_send_time: string;
-  recipient_emails: string[];
-  group_by: ("team" | "team_key" | "team_model" | "team_key_model")[];
   alerts?: SpendReportEmailAlertItem[];
 }
 
