@@ -184,6 +184,37 @@ def test_allowlist_entry_added_since_base_fails(
     assert run_check(tmp_path, monkeypatch, capsys, base | {"L3 module litellm/types/bar.py litellm.main"}) == (0, "")
 
 
+def test_module_import_moved_into_a_function_keeps_its_base_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    build_tree(
+        tmp_path,
+        {"litellm/types/foo.py": "def f():\n    from litellm.router import Router\n"},
+        "L3 function litellm/types/foo.py litellm.router\n",
+    )
+
+    assert run_check(tmp_path, monkeypatch, capsys, frozenset({"L3 module litellm/types/foo.py litellm.router"})) == (
+        0,
+        "",
+    )
+
+
+def test_function_import_moved_to_module_level_is_not_in_the_base(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    build_tree(
+        tmp_path,
+        {"litellm/types/foo.py": "from litellm.router import Router\n"},
+        "L3 module litellm/types/foo.py litellm.router\n",
+    )
+
+    assert run_check(tmp_path, monkeypatch, capsys, frozenset({"L3 function litellm/types/foo.py litellm.router"})) == (
+        1,
+        "scripts/layer_imports_allowlist.txt: entry 'L3 module litellm/types/foo.py litellm.router' is not in the "
+        "base allowlist, fix the import instead of allowlisting it\n",
+    )
+
+
 def test_missing_base_allowlist_skips_growth_check(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

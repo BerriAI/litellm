@@ -148,6 +148,11 @@ def parse_allowlist(text: str) -> frozenset[str]:
     return frozenset(line for line in lines if line and not line.startswith("#"))
 
 
+def moved_into_function(key: str, base_allowed: frozenset[str]) -> bool:
+    rule, context, rest = key.split(" ", 2)
+    return context == "function" and f"{rule} module {rest}" in base_allowed
+
+
 def report(
     found: tuple[Violation, ...], allowed: frozenset[str], base_allowed: frozenset[str] | None
 ) -> tuple[str, ...]:
@@ -166,6 +171,7 @@ def report(
         tuple(
             f"{ALLOWLIST}: entry '{key}' is not in the base allowlist, fix the import instead of allowlisting it"
             for key in sorted(allowed - base_allowed)
+            if not moved_into_function(key, base_allowed)
         )
         if base_allowed is not None
         else ()
