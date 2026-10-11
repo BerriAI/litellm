@@ -573,7 +573,11 @@ async def test_databricks_routes_through_the_serving_endpoint_and_accounts_the_e
             "jev_classifier_config" if legacy else "opensource_classifier_config": {
                 "provider": "databricks",
                 "model": endpoint,
-                **({"api_key": "dapi-configured", "api_base": "https://workspace.test/serving-endpoints"} if configured_key else {}),
+                **(
+                    {"api_key": "dapi-configured", "api_base": "https://workspace.test/serving-endpoints"}
+                    if configured_key
+                    else {}
+                ),
             },
             "tiers": {"SIMPLE": "cheap"},
         },
@@ -596,7 +600,9 @@ async def test_databricks_routes_through_the_serving_endpoint_and_accounts_the_e
     assert (outcome.jev_verdict.provider, outcome.jev_verdict.model) == ("databricks", endpoint)
     assert outcome.classifier_cost == pytest.approx(0.31)
     sent: Final = route.calls.last.request
-    assert sent.headers.get("authorization") == ("Bearer dapi-configured" if configured_key else "Bearer dapi-env-token")
+    assert sent.headers.get("authorization") == (
+        "Bearer dapi-configured" if configured_key else "Bearer dapi-env-token"
+    )
     assert json.loads(sent.content)["model"] == endpoint
     assert len(recorder.calls) == 1
     assert recorder.calls[0]["response_cost"] == pytest.approx(0.31)
@@ -769,18 +775,22 @@ async def test_http_jev_classifier_client_posts_to_system_one() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("status_code", [200, 503])
+@pytest.mark.parametrize("provider,model", [("typesafe", "jev-latest"), ("databricks", "my-endpoint")])
 async def test_deployed_decision_classifier_uses_registered_connection(
-    status_code: int, monkeypatch: pytest.MonkeyPatch
+    status_code: int, provider: str, model: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setitem(litellm.model_cost, f"{provider}/{model}", {"input_cost_per_token": 0.01})
     router: Final = litellm.Router(
         model_list=[
             {
                 "model_name": "decision-deployment",
                 "litellm_params": {
-                    "model": "typesafe/jev-latest",
+                    "model": f"{provider}/{model}",
                     "api_key": "deployment-key",
-                    "api_base": "https://decision.test",
+                    "api_base": "https://decision.test/serving-endpoints"
+                    if provider == "databricks"
+                    else "https://decision.test",
                 },
             }
         ],
@@ -797,20 +807,31 @@ async def test_deployed_decision_classifier_uses_registered_connection(
         derive_savings_baseline=False,
     )
     with respx.mock(assert_all_called=True) as requests:
-        route: Final = requests.post("https://decision.test/v1/systemone").mock(
+        route: Final = requests.post(
+            "https://decision.test/serving-endpoints/my-endpoint/invocations"
+            if provider == "databricks"
+            else "https://decision.test/v1/systemone"
+        ).mock(
             return_value=httpx.Response(
                 status_code,
-                json={"model": "jev-latest", "answers": {"tier": _answer().model_dump()}},
+                json={
+                    "model": model,
+                    "answers": {"tier": _answer().model_dump()},
+                    "usage": {"input_tokens": 31, "output_tokens": 0},
+                },
             )
         )
         outcome: Final = await classifier.aclassify("What is two plus two?")
     assert route.call_count == 1
     assert route.calls[0].request.headers["authorization"] == "Bearer deployment-key"
-    assert json.loads(route.calls[0].request.content)["model"] == "jev-latest"
+    assert json.loads(route.calls[0].request.content)["model"] == model
     assert (outcome.cause == "jev_classifier") is (status_code == 200)
     if status_code == 200:
         assert outcome.jev_verdict is not None
         assert outcome.jev_verdict.label == _answer().choice
+
+        assert outcome.jev_verdict.provider == provider
+        assert outcome.classifier_cost == pytest.approx(0.31)
 
 
 @pytest.mark.parametrize("deployment_name", ["", "   "])
