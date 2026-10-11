@@ -1104,60 +1104,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/audit": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Audit Logs
-         * @description Get all audit logs with filtering and pagination.
-         *
-         *     Returns a paginated response of audit logs matching the specified filters.
-         *
-         *     Note: object_team_id and object_key_hash use Prisma JSON path filtering,
-         *     which requires PostgreSQL.
-         */
-        get: operations["get_audit_logs_audit_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/audit/{id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Audit Log By Id
-         * @description Get detailed information about a specific audit log entry by its ID.
-         *
-         *     Args:
-         *         id (str): The unique identifier of the audit log entry
-         *
-         *     Returns:
-         *         AuditLogResponse: Detailed information about the audit log entry
-         *
-         *     Raises:
-         *         HTTPException: If the audit log is not found or if there's a database connection error
-         */
-        get: operations["get_audit_log_by_id_audit__id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/authorize": {
         parameters: {
             query?: never;
@@ -4407,7 +4353,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Decisions */
+        /**
+         * Ask questions about an input (OpenAI Decisions format)
+         * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+         *
+         *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
+         *     `probabilities`) and `score` (an index into `levels`, with `probabilities`). Requests that break these
+         *     rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy
+         *     model list. System One decision models accept this format too, LiteLLM translates the request and the
+         *     answers. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["decisions_decisions_post"];
         delete?: never;
         options?: never;
@@ -4426,50 +4383,6 @@ export interface paths {
         put?: never;
         /** Delete Allowed Ip */
         post: operations["delete_allowed_ip_delete_allowed_ip_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/email/event_settings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Email Event Settings
-         * @description Get all email event settings
-         */
-        get: operations["get_email_event_settings_email_event_settings_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /**
-         * Update Event Settings
-         * @description Update the settings for email events
-         */
-        patch: operations["update_event_settings_email_event_settings_patch"];
-        trace?: never;
-    };
-    "/email/event_settings/reset": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Reset Event Settings
-         * @description Reset all email event settings to default (new user invitations on, virtual key creation off)
-         */
-        post: operations["reset_event_settings_email_event_settings_reset_post"];
         delete?: never;
         options?: never;
         head?: never;
@@ -12012,240 +11925,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/project/delete": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /**
-         * Delete Project
-         * @description Delete projects
-         *
-         *     Parameters:
-         *     - project_ids: *List[str]* - List of project ids to delete
-         *
-         *     Example:
-         *     ```bash
-         *     curl --location --request DELETE 'http://0.0.0.0:4000/project/delete' \
-         *     --header 'Authorization: Bearer sk-1234' \
-         *     --header 'Content-Type: application/json' \
-         *     --data '{
-         *         "project_ids": ["project-123", "project-456"]
-         *     }'
-         *     ```
-         */
-        delete: operations["delete_project_project_delete_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/project/info": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Project Info
-         * @description Get information about a specific project
-         *
-         *     Parameters:
-         *     - project_id: *str* - The project id to fetch info for
-         *
-         *     Example:
-         *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/project/info?project_id=project-123' \
-         *     --header 'Authorization: Bearer sk-1234'
-         *     ```
-         */
-        get: operations["project_info_project_info_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/project/list": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * List Projects
-         * @description List all projects that the user has access to
-         *
-         *     Example:
-         *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/project/list' \
-         *     --header 'Authorization: Bearer sk-1234'
-         *     ```
-         */
-        get: operations["list_projects_project_list_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/project/new": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * New Project
-         * @description Create a new project. Projects sit between teams and keys in the hierarchy.
-         *
-         *     Only admins or team admins can create projects.
-         *
-         *     # Parameters
-         *
-         *     - project_alias: *Optional[str]* - The name of the project.
-         *     - description: *Optional[str]* - Description of the project's purpose and use case.
-         *     - team_id: *str* - The team id that this project belongs to. Required.
-         *     - models: *List* - The models the project has access to.
-         *     - budget_id: *Optional[str]* - The id for a budget (tpm/rpm/max budget) for the project.
-         *     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
-         *     - max_budget: *Optional[float]* - Max budget for project
-         *     - tpm_limit: *Optional[int]* - Max tpm limit for project
-         *     - rpm_limit: *Optional[int]* - Max rpm limit for project
-         *     - max_parallel_requests: *Optional[int]* - Max parallel requests for project
-         *     - soft_budget: *Optional[float]* - Get a slack alert when this soft budget is reached. Don't block requests.
-         *     - model_max_budget: *Optional[dict]* - Max budget for a specific model. Example: {"gpt-4": 100.0, "gpt-3.5-turbo": 50.0}
-         *     - model_rpm_limit: *Optional[dict]* - RPM limits per model. Example: {"gpt-4": 1000, "gpt-3.5-turbo": 5000}
-         *     - model_tpm_limit: *Optional[dict]* - TPM limits per model. Example: {"gpt-4": 50000, "gpt-3.5-turbo": 100000}
-         *     - budget_duration: *Optional[str]* - Frequency of reseting project budget
-         *     - metadata: *Optional[dict]* - Metadata for project, store information for project. Example metadata - {"use_case_id": "SNOW-12345", "responsible_ai_id": "RAI-67890"}
-         *     - tags: *Optional[list]* - Tags for the project. Example: ["production", "api"]
-         *     - blocked: *bool* - Flag indicating if the project is blocked or not - will stop all calls from keys with this project_id.
-         *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - project-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"]}. IF null or {} then no object permission.
-         *
-         *     Example 1: Create new project **without** a budget_id, with model-specific limits
-         *
-         *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/project/new' \
-         *     --header 'Authorization: Bearer sk-1234' \
-         *     --header 'Content-Type: application/json' \
-         *     --data '{
-         *         "project_alias": "flight-search-assistant",
-         *         "description": "AI-powered flight search and booking assistant",
-         *         "team_id": "team-123",
-         *         "models": ["gpt-4", "gpt-3.5-turbo"],
-         *         "max_budget": 100,
-         *         "model_rpm_limit": {
-         *             "gpt-4": 1000,
-         *             "gpt-3.5-turbo": 5000
-         *         },
-         *         "model_tpm_limit": {
-         *             "gpt-4": 50000,
-         *             "gpt-3.5-turbo": 100000
-         *         },
-         *         "metadata": {
-         *             "use_case_id": "SNOW-12345",
-         *             "responsible_ai_id": "RAI-67890"
-         *         }
-         *     }'
-         *     ```
-         *
-         *     Example 2: Create new project **with** a budget_id
-         *
-         *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/project/new' \
-         *     --header 'Authorization: Bearer sk-1234' \
-         *     --header 'Content-Type: application/json' \
-         *     --data '{
-         *         "project_alias": "hotel-recommendations",
-         *         "description": "Personalized hotel recommendation engine",
-         *         "team_id": "team-123",
-         *         "models": ["claude-3-sonnet"],
-         *         "budget_id": "428eeaa8-f3ac-4e85-a8fb-7dc8d7aa8689",
-         *         "metadata": {
-         *             "use_case_id": "SNOW-54321"
-         *         }
-         *     }'
-         *     ```
-         */
-        post: operations["new_project_project_new_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/project/update": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /**
-         * Update Project
-         * @description Update a project
-         *
-         *     Parameters:
-         *     - project_id: *str* - The project id to update. Required.
-         *     - project_alias: *Optional[str]* - Updated name for the project
-         *     - description: *Optional[str]* - Updated description for the project
-         *     - team_id: *Optional[str]* - Updated team_id for the project
-         *     - metadata: *Optional[dict]* - Updated metadata for project
-         *     - models: *Optional[list]* - Updated list of models for the project
-         *     - blocked: *Optional[bool]* - Updated blocked status
-         *     - max_budget: *Optional[float]* - Updated max budget
-         *     - tpm_limit: *Optional[int]* - Updated tpm limit
-         *     - rpm_limit: *Optional[int]* - Updated rpm limit
-         *     - model_rpm_limit: *Optional[dict]* - Updated RPM limits per model
-         *     - model_tpm_limit: *Optional[dict]* - Updated TPM limits per model
-         *     - budget_duration: *Optional[str]* - Updated budget duration
-         *     - tags: *Optional[list]* - Updated list of tags for the project
-         *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - Updated object permission
-         *
-         *     Example:
-         *     ```bash
-         *     curl --location 'http://0.0.0.0:4000/project/update' \
-         *     --header 'Authorization: Bearer sk-1234' \
-         *     --header 'Content-Type: application/json' \
-         *     --data '{
-         *         "project_id": "project-123",
-         *         "description": "Updated flight search system with enhanced capabilities",
-         *         "max_budget": 200,
-         *         "model_rpm_limit": {
-         *             "gpt-4": 2000,
-         *             "gpt-3.5-turbo": 10000
-         *         },
-         *         "metadata": {
-         *             "use_case_id": "SNOW-12345",
-         *             "status": "active"
-         *         }
-         *     }'
-         *     ```
-         */
-        post: operations["update_project_project_update_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/prompts": {
         parameters: {
             query?: never;
@@ -13496,27 +13175,6 @@ export interface paths {
          *     access tokens expire on their own.
          */
         post: operations["revoke_endpoint_revoke_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/robots.txt": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Robots
-         * @description Block all web crawlers from indexing the proxy server endpoints
-         *     This is useful for ensuring that the API endpoints aren't indexed by search engines
-         */
-        get: operations["get_robots_robots_txt_get"];
-        put?: never;
-        post?: never;
         delete?: never;
         options?: never;
         head?: never;
@@ -15176,7 +14834,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Systemone */
+        /**
+         * Ask named questions about a state (System One format)
+         * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+         *
+         *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
+         *     `confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,
+         *     `legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider
+         *     is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
+         *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["systemone_systemone_post"];
         delete?: never;
         options?: never;
@@ -17241,26 +16910,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/user/available_users": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Available Enterprise Users
-         * @description For keys with `max_users` set, return the list of users that are allowed to use the key.
-         */
-        get: operations["available_enterprise_users_user_available_users_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/user/bulk_update": {
         parameters: {
             query?: never;
@@ -18687,7 +18336,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Decisions */
+        /**
+         * Ask questions about an input (OpenAI Decisions format)
+         * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+         *
+         *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
+         *     `probabilities`) and `score` (an index into `levels`, with `probabilities`). Requests that break these
+         *     rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy
+         *     model list. System One decision models accept this format too, LiteLLM translates the request and the
+         *     answers. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["decisions_v1_decisions_post"];
         delete?: never;
         options?: never;
@@ -20986,7 +20646,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Systemone */
+        /**
+         * Ask named questions about a state (System One format)
+         * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+         *
+         *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
+         *     `confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,
+         *     `legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider
+         *     is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
+         *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["systemone_v1_systemone_post"];
         delete?: never;
         options?: never;
@@ -24807,37 +24478,6 @@ export interface components {
              */
             unnamed_teams_count: number;
         };
-        /**
-         * AuditLogResponse
-         * @description Response model for a single audit log entry
-         */
-        AuditLogResponse: {
-            /** Action */
-            action: string;
-            /** Before Value */
-            before_value?: {
-                [key: string]: unknown;
-            } | null;
-            /** Changed By */
-            changed_by: string;
-            /** Changed By Api Key */
-            changed_by_api_key: string;
-            /** Id */
-            id: string;
-            /** Object Id */
-            object_id: string;
-            /** Table Name */
-            table_name: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Updated Values */
-            updated_values?: {
-                [key: string]: unknown;
-            } | null;
-        };
         /** AutoRouterAllowance */
         AutoRouterAllowance: {
             /**
@@ -27366,6 +27006,24 @@ export interface components {
              */
             role: "user" | "assistant";
         };
+        /** ChoiceAnswer */
+        ChoiceAnswer: {
+            /** Choice */
+            choice: string;
+            /** Confidence */
+            confidence: number;
+            /** Probabilities */
+            probabilities: {
+                [key: string]: number;
+            };
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "choice";
+        } & {
+            [key: string]: unknown;
+        };
         /** ChoiceLogprobs */
         ChoiceLogprobs: {
             /** Content */
@@ -29623,6 +29281,33 @@ export interface components {
              */
             threshold: number;
         };
+        /** DecisionsResponse */
+        DecisionsResponse: {
+            /** Answers */
+            answers: {
+                [key: string]: components["schemas"]["NoulAnswer"] | components["schemas"]["ChoiceAnswer"] | components["schemas"]["ScoreAnswer"];
+            };
+            /** Model */
+            model?: string | null;
+            usage?: components["schemas"]["DecisionsUsage"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** DecisionsUsage */
+        DecisionsUsage: {
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * DefaultInternalUserParams
          * @description Default parameters to apply when a new user signs in via SSO or is created on the /user/new API endpoint
@@ -29769,14 +29454,6 @@ export interface components {
         DeleteOrganizationRequest: {
             /** Organization Ids */
             organization_ids: string[];
-        };
-        /**
-         * DeleteProjectRequest
-         * @description Request model for DELETE /project/delete
-         */
-        DeleteProjectRequest: {
-            /** Project Ids */
-            project_ids: string[];
         };
         /**
          * DeleteResponseResult
@@ -30020,27 +29697,6 @@ export interface components {
              * @constant
              */
             type?: "message";
-        };
-        /**
-         * EmailEvent
-         * @enum {string}
-         */
-        EmailEvent: "Virtual Key Created" | "New User Invitation" | "Virtual Key Rotated" | "Soft Budget Crossed" | "Max Budget Alert";
-        /** EmailEventSettings */
-        EmailEventSettings: {
-            /** Enabled */
-            enabled: boolean;
-            event: components["schemas"]["EmailEvent"];
-        };
-        /** EmailEventSettingsResponse */
-        EmailEventSettingsResponse: {
-            /** Settings */
-            settings: components["schemas"]["EmailEventSettings"][];
-        };
-        /** EmailEventSettingsUpdateRequest */
-        EmailEventSettingsUpdateRequest: {
-            /** Settings */
-            settings: components["schemas"]["EmailEventSettings"][];
         };
         /** EmbeddingRequest */
         EmbeddingRequest: {
@@ -33321,65 +32977,6 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /**
-         * LiteLLM_ProjectTable
-         * @description Database model representation for project
-         */
-        LiteLLM_ProjectTable: {
-            /**
-             * Blocked
-             * @default false
-             */
-            blocked: boolean;
-            /** Budget Id */
-            budget_id?: string | null;
-            /** Created At */
-            created_at?: string | null;
-            /** Created By */
-            created_by?: string | null;
-            /** Description */
-            description?: string | null;
-            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Rpm Limit */
-            model_rpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Spend */
-            model_spend?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Tpm Limit */
-            model_tpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Models
-             * @default []
-             */
-            models: string[];
-            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
-            /** Object Permission Id */
-            object_permission_id?: string | null;
-            /** Project Alias */
-            project_alias?: string | null;
-            /** Project Id */
-            project_id: string;
-            /**
-             * Spend
-             * @default 0
-             */
-            spend: number;
-            /** Team Id */
-            team_id?: string | null;
-            /** Updated At */
-            updated_at?: string | null;
-            /** Updated By */
-            updated_by?: string | null;
-        };
         /** LiteLLM_ProxyModelTable */
         LiteLLM_ProxyModelTable: {
             /**
@@ -36476,148 +36073,6 @@ export interface components {
             /** Users */
             users?: components["schemas"]["LiteLLM_UserTable"][] | null;
         };
-        /**
-         * NewProjectRequest
-         * @description Request model for POST /project/new
-         */
-        NewProjectRequest: {
-            /** Allowed Models */
-            allowed_models?: string[] | null;
-            /**
-             * Blocked
-             * @default false
-             */
-            blocked: boolean;
-            /** Budget Duration */
-            budget_duration?: string | null;
-            /** Budget Id */
-            budget_id?: string | null;
-            /** Description */
-            description?: string | null;
-            /** Guardrails */
-            guardrails?: string[] | null;
-            /** Max Budget */
-            max_budget?: number | null;
-            /** Max Parallel Requests */
-            max_parallel_requests?: number | null;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Itpm Limit */
-            model_itpm_limit?: {
-                [key: string]: number;
-            } | null;
-            /** Model Max Budget */
-            model_max_budget?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Otpm Limit */
-            model_otpm_limit?: {
-                [key: string]: number;
-            } | null;
-            /** Model Rpm Limit */
-            model_rpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Tpm Limit */
-            model_tpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Models
-             * @default []
-             */
-            models: string[];
-            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
-            /** Policies */
-            policies?: string[] | null;
-            /** Project Alias */
-            project_alias?: string | null;
-            /** Project Id */
-            project_id?: string | null;
-            /** Rpm Limit */
-            rpm_limit?: number | null;
-            /** Soft Budget */
-            soft_budget?: number | null;
-            /** Tags */
-            tags?: string[] | null;
-            /** Team Id */
-            team_id: string;
-            /** Temp Budget Expiry */
-            temp_budget_expiry?: string | null;
-            /** Temp Budget Increase */
-            temp_budget_increase?: number | null;
-            /** Tpd Limit */
-            tpd_limit?: number | null;
-            /** Tpm Limit */
-            tpm_limit?: number | null;
-        };
-        /**
-         * NewProjectResponse
-         * @description Response model for POST /project/new
-         */
-        NewProjectResponse: {
-            /**
-             * Blocked
-             * @default false
-             */
-            blocked: boolean;
-            /** Budget Id */
-            budget_id?: string | null;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Created By */
-            created_by?: string | null;
-            /** Description */
-            description?: string | null;
-            litellm_budget_table?: components["schemas"]["LiteLLM_BudgetTable"] | null;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Rpm Limit */
-            model_rpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Spend */
-            model_spend?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Tpm Limit */
-            model_tpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /**
-             * Models
-             * @default []
-             */
-            models: string[];
-            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionTable"] | null;
-            /** Object Permission Id */
-            object_permission_id?: string | null;
-            /** Project Alias */
-            project_alias?: string | null;
-            /** Project Id */
-            project_id: string;
-            /**
-             * Spend
-             * @default 0
-             */
-            spend: number;
-            /** Team Id */
-            team_id?: string | null;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-            /** Updated By */
-            updated_by?: string | null;
-        };
         /** NewTeamRequest */
         NewTeamRequest: {
             /** Access Group Ids */
@@ -37059,6 +36514,18 @@ export interface components {
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
+        /** NoulAnswer */
+        NoulAnswer: {
+            /** Noul */
+            noul: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "noul";
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * OAuth2SecurityScheme
          * @description Defines a security scheme using OAuth 2.0.
@@ -37096,6 +36563,129 @@ export interface components {
             password?: {
                 [key: string]: unknown;
             } | null;
+        };
+        /** OpenAIChoiceAnswer */
+        OpenAIChoiceAnswer: {
+            /** Choice */
+            choice: string | boolean;
+            /** Confidence */
+            confidence: number;
+            /** Name */
+            name: string | null;
+            /** Probabilities */
+            probabilities: components["schemas"]["OpenAIChoiceProbability"][];
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "choice";
+        };
+        /** OpenAIChoiceProbability */
+        OpenAIChoiceProbability: {
+            /** Probability */
+            probability: number;
+            /** Value */
+            value: string | boolean;
+        };
+        /** OpenAIDecisionInputTokensDetails */
+        OpenAIDecisionInputTokensDetails: {
+            /**
+             * Cache Write Tokens
+             * @default 0
+             */
+            cache_write_tokens: number;
+            /**
+             * Cached Tokens
+             * @default 0
+             */
+            cached_tokens: number;
+        };
+        /** OpenAIDecisionOutputTokensDetails */
+        OpenAIDecisionOutputTokensDetails: {
+            /**
+             * Reasoning Tokens
+             * @default 0
+             */
+            reasoning_tokens: number;
+        };
+        /** OpenAIDecisionResponse */
+        OpenAIDecisionResponse: {
+            /** Answers */
+            answers: (components["schemas"]["OpenAIPredicateAnswer"] | components["schemas"]["OpenAIChoiceAnswer"] | components["schemas"]["OpenAIScoreAnswer"] | components["schemas"]["OpenAIRefusalAnswer"])[];
+            /** Model */
+            model: string;
+            usage: components["schemas"]["OpenAIDecisionUsage"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** OpenAIDecisionUsage */
+        OpenAIDecisionUsage: {
+            /** Input Tokens */
+            input_tokens: number;
+            /**
+             * @default {
+             *       "cache_write_tokens": 0,
+             *       "cached_tokens": 0
+             *     }
+             */
+            input_tokens_details: components["schemas"]["OpenAIDecisionInputTokensDetails"];
+            /** Output Tokens */
+            output_tokens: number;
+            /**
+             * @default {
+             *       "reasoning_tokens": 0
+             *     }
+             */
+            output_tokens_details: components["schemas"]["OpenAIDecisionOutputTokensDetails"];
+            /** Total Tokens */
+            total_tokens: number;
+        };
+        /** OpenAIPredicateAnswer */
+        OpenAIPredicateAnswer: {
+            /** Name */
+            name: string | null;
+            /** Probability */
+            probability: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "predicate";
+        };
+        /** OpenAIRefusalAnswer */
+        OpenAIRefusalAnswer: {
+            /** Name */
+            name: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "refusal";
+        };
+        /** OpenAIScoreAnswer */
+        OpenAIScoreAnswer: {
+            /** Confidence */
+            confidence: number;
+            /** Name */
+            name: string | null;
+            /** Probabilities */
+            probabilities: components["schemas"]["OpenAIScoreProbability"][];
+            /** Score */
+            score: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "score";
+        };
+        /** OpenAIScoreProbability */
+        OpenAIScoreProbability: {
+            /** Label */
+            label: string;
+            /** Probability */
+            probability: number;
+            /** Value */
+            value: number;
         };
         /**
          * OpenIdConnectSecurityScheme
@@ -37492,34 +37082,6 @@ export interface components {
             page: number;
             /** Page Size */
             page_size: number;
-        };
-        /**
-         * PaginatedAuditLogResponse
-         * @description Response model for paginated audit logs
-         */
-        PaginatedAuditLogResponse: {
-            /** Audit Logs */
-            audit_logs: components["schemas"]["AuditLogResponse"][];
-            /**
-             * Page
-             * @description Current page number
-             */
-            page: number;
-            /**
-             * Page Size
-             * @description Number of items per page
-             */
-            page_size: number;
-            /**
-             * Total
-             * @description Total number of audit logs matching the filters
-             */
-            total: number;
-            /**
-             * Total Pages
-             * @description Total number of pages
-             */
-            total_pages: number;
         };
         /** PassThroughEndpointResponse */
         PassThroughEndpointResponse: {
@@ -41980,6 +41542,30 @@ export interface components {
              */
             window_seconds: number;
         };
+        /** ScoreAnswer */
+        ScoreAnswer: {
+            /** Confidence */
+            confidence: number;
+            /** Legend */
+            legend: {
+                [key: string]: string | {
+                    [key: string]: unknown;
+                } | unknown[];
+            };
+            /** Probabilities */
+            probabilities: {
+                [key: string]: number;
+            };
+            /** Score */
+            score: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "score";
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * Screenshot
          * @description A screenshot action.
@@ -44824,77 +44410,6 @@ export interface components {
              * @description Semantic version; cleared if omitted
              */
             version?: string | null;
-        };
-        /**
-         * UpdateProjectRequest
-         * @description Request model for POST /project/update
-         */
-        UpdateProjectRequest: {
-            /** Allowed Models */
-            allowed_models?: string[] | null;
-            /** Blocked */
-            blocked?: boolean | null;
-            /** Budget Duration */
-            budget_duration?: string | null;
-            /** Budget Id */
-            budget_id?: string | null;
-            /** Description */
-            description?: string | null;
-            /** Guardrails */
-            guardrails?: string[] | null;
-            /** Max Budget */
-            max_budget?: number | null;
-            /** Max Parallel Requests */
-            max_parallel_requests?: number | null;
-            /** Metadata */
-            metadata?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Itpm Limit */
-            model_itpm_limit?: {
-                [key: string]: number;
-            } | null;
-            /** Model Max Budget */
-            model_max_budget?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Otpm Limit */
-            model_otpm_limit?: {
-                [key: string]: number;
-            } | null;
-            /** Model Rpm Limit */
-            model_rpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /** Model Tpm Limit */
-            model_tpm_limit?: {
-                [key: string]: unknown;
-            } | null;
-            /** Models */
-            models?: string[] | null;
-            object_permission?: components["schemas"]["LiteLLM_ObjectPermissionBase"] | null;
-            /** Policies */
-            policies?: string[] | null;
-            /** Project Alias */
-            project_alias?: string | null;
-            /** Project Id */
-            project_id: string;
-            /** Rpm Limit */
-            rpm_limit?: number | null;
-            /** Soft Budget */
-            soft_budget?: number | null;
-            /** Tags */
-            tags?: string[] | null;
-            /** Team Id */
-            team_id?: string | null;
-            /** Temp Budget Expiry */
-            temp_budget_expiry?: string | null;
-            /** Temp Budget Increase */
-            temp_budget_increase?: number | null;
-            /** Tpd Limit */
-            tpd_limit?: number | null;
-            /** Tpm Limit */
-            tpm_limit?: number | null;
         };
         /**
          * UpdatePublicModelGroupsRequest
@@ -48488,107 +48003,6 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
                 };
-            };
-        };
-    };
-    get_audit_logs_audit_get: {
-        parameters: {
-            query?: {
-                page?: number;
-                page_size?: number;
-                /** @description Filter by user or system that performed the action */
-                changed_by?: string | null;
-                /** @description Filter by API key hash that performed the action */
-                changed_by_api_key?: string | null;
-                /** @description Filter by action type (create, update, delete) */
-                action?: string | null;
-                /** @description Filter by table name that was modified */
-                table_name?: string | null;
-                /** @description Filter by ID of the object that was modified */
-                object_id?: string | null;
-                /** @description Filter logs after this date */
-                start_date?: string | null;
-                /** @description Filter logs before this date */
-                end_date?: string | null;
-                /** @description Filter by team_id present in before_value or updated_values JSON (PostgreSQL only) */
-                object_team_id?: string | null;
-                /** @description Filter by token (key hash) present in before_value or updated_values JSON (PostgreSQL only) */
-                object_key_hash?: string | null;
-                /** @description Match a row whose id, object_id, changed_by, or changed_by_api_key equals this value */
-                search?: string | null;
-                /** @description Column to sort by (e.g. 'updated_at', 'action', 'table_name') */
-                sort_by?: string | null;
-                /** @description Sort order ('asc' or 'desc') */
-                sort_order?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["PaginatedAuditLogResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_audit_log_by_id_audit__id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["AuditLogResponse"];
-                };
-            };
-            /** @description Audit log not found */
-            404: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-            /** @description Database connection error */
-            500: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
             };
         };
     };
@@ -53299,7 +52713,179 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "input": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today.",
+                 *       "model": "luna",
+                 *       "questions": [
+                 *         {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "name": "is_refund_request",
+                 *           "type": "predicate"
+                 *         },
+                 *         {
+                 *           "choices": [
+                 *             {
+                 *               "description": "can wait a week",
+                 *               "value": "low"
+                 *             },
+                 *             {
+                 *               "description": "needs action today",
+                 *               "value": "high"
+                 *             }
+                 *           ],
+                 *           "instructions": "How urgent is this?",
+                 *           "name": "urgency",
+                 *           "type": "choice"
+                 *         },
+                 *         {
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "levels": [
+                 *             {
+                 *               "label": "calm"
+                 *             },
+                 *             {
+                 *               "label": "mildly annoyed"
+                 *             },
+                 *             {
+                 *               "label": "angry"
+                 *             }
+                 *           ],
+                 *           "name": "frustration",
+                 *           "type": "score"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Input
+                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     */
+                    input: string | {
+                        /** Content */
+                        content: string | ({
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        })[];
+                        /**
+                         * Role
+                         * @default user
+                         * @constant
+                         */
+                        role?: "user";
+                        /**
+                         * Type
+                         * @default message
+                         * @constant
+                         */
+                        type?: "message";
+                    }[];
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Predicate, choice and score questions. Answers come back in the same order
+                     */
+                    questions: ({
+                        /**
+                         * Instructions
+                         * @description The yes/no question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "predicate";
+                    } | {
+                        /**
+                         * Choices
+                         * @description The options the model picks from. Values must be unique
+                         */
+                        choices: {
+                            /** Description */
+                            description?: string | null;
+                            /** Value */
+                            value: string | boolean;
+                        }[];
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "choice";
+                    } | {
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Levels
+                         * @description Scale levels from lowest to highest. The score is a level index
+                         */
+                        levels: {
+                            /** Description */
+                            description?: string | null;
+                            /** Label */
+                            label: string;
+                        }[];
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "score";
+                    })[];
+                    /**
+                     * Safety Identifier
+                     * @description A stable id for your end user. Sent to OpenAI and dropped for other providers
+                     */
+                    safety_identifier?: string | null;
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -53307,7 +52893,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OpenAIDecisionResponse"];
                 };
             };
         };
@@ -53341,79 +52927,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_email_event_settings_email_event_settings_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EmailEventSettingsResponse"];
-                };
-            };
-        };
-    };
-    update_event_settings_email_event_settings_patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["EmailEventSettingsUpdateRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    reset_event_settings_email_event_settings_reset_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
         };
@@ -63107,156 +62620,6 @@ export interface operations {
             };
         };
     };
-    delete_project_project_delete_delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DeleteProjectRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_ProjectTable"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    project_info_project_info_get: {
-        parameters: {
-            query: {
-                project_id: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_ProjectTable"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_projects_project_list_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_ProjectTable"][];
-                };
-            };
-        };
-    };
-    new_project_project_new_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["NewProjectRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["NewProjectResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_project_project_update_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["UpdateProjectRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LiteLLM_ProjectTable"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     create_prompt_prompts_post: {
         parameters: {
             query?: never;
@@ -64445,26 +63808,6 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_robots_robots_txt_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
                 };
             };
         };
@@ -66423,7 +65766,132 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "jev",
+                 *       "questions": {
+                 *         "frustration": {
+                 *           "criteria": [
+                 *             "calm",
+                 *             "mildly annoyed",
+                 *             "angry"
+                 *           ],
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "type": "score"
+                 *         },
+                 *         "is_refund_request": {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "type": "noul"
+                 *         },
+                 *         "urgency": {
+                 *           "criteria": {
+                 *             "high": "needs action today",
+                 *             "low": "can wait a week"
+                 *           },
+                 *           "instructions": "How urgent is this?",
+                 *           "type": "choice"
+                 *         }
+                 *       },
+                 *       "state": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today."
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Named noul, choice and score questions. Each key becomes a key in the answers
+                     */
+                    questions: {
+                        [key: string]: ({
+                            /**
+                             * Criteria
+                             * @description Optional descriptions of what makes the answer true and what makes it false
+                             */
+                            criteria?: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            } | null;
+                            /**
+                             * Instructions
+                             * @description The yes/no question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "noul";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Candidate labels mapped to an optional description of each
+                             */
+                            criteria: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            };
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "choice";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Scale levels from lowest to highest. The score is a level index
+                             */
+                            criteria: (string | {
+                                [key: string]: unknown;
+                            } | unknown[])[];
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "score";
+                        } & {
+                            [key: string]: unknown;
+                        });
+                    };
+                    /**
+                     * State
+                     * @description The thing being judged, such as a support ticket, a document or a chat transcript
+                     */
+                    state: string | {
+                        [key: string]: unknown;
+                    } | unknown[];
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -66431,7 +65899,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DecisionsResponse"];
                 };
             };
         };
@@ -68991,26 +68459,6 @@ export interface operations {
             };
         };
     };
-    available_enterprise_users_user_available_users_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": unknown;
-                };
-            };
-        };
-    };
     bulk_user_update_user_bulk_update_post: {
         parameters: {
             query?: never;
@@ -70911,7 +70359,179 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "input": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today.",
+                 *       "model": "luna",
+                 *       "questions": [
+                 *         {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "name": "is_refund_request",
+                 *           "type": "predicate"
+                 *         },
+                 *         {
+                 *           "choices": [
+                 *             {
+                 *               "description": "can wait a week",
+                 *               "value": "low"
+                 *             },
+                 *             {
+                 *               "description": "needs action today",
+                 *               "value": "high"
+                 *             }
+                 *           ],
+                 *           "instructions": "How urgent is this?",
+                 *           "name": "urgency",
+                 *           "type": "choice"
+                 *         },
+                 *         {
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "levels": [
+                 *             {
+                 *               "label": "calm"
+                 *             },
+                 *             {
+                 *               "label": "mildly annoyed"
+                 *             },
+                 *             {
+                 *               "label": "angry"
+                 *             }
+                 *           ],
+                 *           "name": "frustration",
+                 *           "type": "score"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Input
+                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     */
+                    input: string | {
+                        /** Content */
+                        content: string | ({
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        })[];
+                        /**
+                         * Role
+                         * @default user
+                         * @constant
+                         */
+                        role?: "user";
+                        /**
+                         * Type
+                         * @default message
+                         * @constant
+                         */
+                        type?: "message";
+                    }[];
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Predicate, choice and score questions. Answers come back in the same order
+                     */
+                    questions: ({
+                        /**
+                         * Instructions
+                         * @description The yes/no question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "predicate";
+                    } | {
+                        /**
+                         * Choices
+                         * @description The options the model picks from. Values must be unique
+                         */
+                        choices: {
+                            /** Description */
+                            description?: string | null;
+                            /** Value */
+                            value: string | boolean;
+                        }[];
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "choice";
+                    } | {
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Levels
+                         * @description Scale levels from lowest to highest. The score is a level index
+                         */
+                        levels: {
+                            /** Description */
+                            description?: string | null;
+                            /** Label */
+                            label: string;
+                        }[];
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "score";
+                    })[];
+                    /**
+                     * Safety Identifier
+                     * @description A stable id for your end user. Sent to OpenAI and dropped for other providers
+                     */
+                    safety_identifier?: string | null;
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -70919,7 +70539,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OpenAIDecisionResponse"];
                 };
             };
         };
@@ -73992,7 +73612,132 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "jev",
+                 *       "questions": {
+                 *         "frustration": {
+                 *           "criteria": [
+                 *             "calm",
+                 *             "mildly annoyed",
+                 *             "angry"
+                 *           ],
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "type": "score"
+                 *         },
+                 *         "is_refund_request": {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "type": "noul"
+                 *         },
+                 *         "urgency": {
+                 *           "criteria": {
+                 *             "high": "needs action today",
+                 *             "low": "can wait a week"
+                 *           },
+                 *           "instructions": "How urgent is this?",
+                 *           "type": "choice"
+                 *         }
+                 *       },
+                 *       "state": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today."
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Named noul, choice and score questions. Each key becomes a key in the answers
+                     */
+                    questions: {
+                        [key: string]: ({
+                            /**
+                             * Criteria
+                             * @description Optional descriptions of what makes the answer true and what makes it false
+                             */
+                            criteria?: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            } | null;
+                            /**
+                             * Instructions
+                             * @description The yes/no question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "noul";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Candidate labels mapped to an optional description of each
+                             */
+                            criteria: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            };
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "choice";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Scale levels from lowest to highest. The score is a level index
+                             */
+                            criteria: (string | {
+                                [key: string]: unknown;
+                            } | unknown[])[];
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "score";
+                        } & {
+                            [key: string]: unknown;
+                        });
+                    };
+                    /**
+                     * State
+                     * @description The thing being judged, such as a support ticket, a document or a chat transcript
+                     */
+                    state: string | {
+                        [key: string]: unknown;
+                    } | unknown[];
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -74000,7 +73745,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DecisionsResponse"];
                 };
             };
         };
