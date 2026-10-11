@@ -1,4 +1,4 @@
-"""Image-level regression net for the prisma bake in the componentized images.
+"""Image-level regression net for the prisma bake in the `gateway` and `backend` components.
 
 The gateway and backend serve requests; they never shell out to the Prisma CLI
 (``PrismaManager.setup_database`` is reachable only from ``proxy_cli.py``, which
@@ -37,7 +37,8 @@ from tests._master_key import MASTER_KEY
 IMAGE = os.getenv("LITELLM_IMAGE")
 POSTGRES_IMAGE = os.getenv("LITELLM_TEST_POSTGRES_IMAGE", "postgres:16-alpine")
 CURL_IMAGE = os.getenv("LITELLM_TEST_CURL_IMAGE", "curlimages/curl:8.11.1")
-COMPONENT_PORT = os.getenv("LITELLM_COMPONENT_PORT", "4000")
+COMPONENT = os.getenv("LITELLM_COMPONENT", "gateway")
+COMPONENT_PORT = os.getenv("LITELLM_COMPONENT_PORT", {"gateway": "4000", "backend": "4001"}[COMPONENT])
 NON_ROOT_UID = "12345:0"
 STARTUP_TIMEOUT_SECONDS = int(os.getenv("LITELLM_COMPONENT_STARTUP_TIMEOUT", "180"))
 
@@ -65,7 +66,7 @@ def offline_stack():
 
     The container runs with DISABLE_SCHEMA_UPDATE, since applying the schema is
     the migration job's responsibility in this topology and needs the Prisma CLI
-    these images deliberately omit, and with LITELLM_LOCAL_MODEL_COST_MAP, or the
+    these components never invoke, and with LITELLM_LOCAL_MODEL_COST_MAP, or the
     proxy spends the whole startup budget timing out on a cost-map fetch over the
     network it does not have.
 
@@ -94,7 +95,7 @@ def offline_stack():
             "-e", f"LITELLM_MASTER_KEY={MASTER_KEY}",
             "-e", "DISABLE_SCHEMA_UPDATE=true",
             "-e", "LITELLM_LOCAL_MODEL_COST_MAP=True",
-            IMAGE,
+            IMAGE, COMPONENT,
         )
         yield network, component
     finally:
