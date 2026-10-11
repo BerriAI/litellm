@@ -384,19 +384,21 @@ describe("Guardrail Info when the guardrail cannot be loaded", () => {
   });
 
   describe("Delete from the Settings card", () => {
+    const dbGuardrail = {
+      guardrail_id: "123",
+      guardrail_name: "Test Guardrail",
+      litellm_params: { guardrail: "presidio", mode: "pre_call", default_on: true },
+      guardrail_definition_location: "db",
+    };
+    const uiSettings = {
+      supported_entities: [],
+      supported_actions: [],
+      pii_entity_categories: [],
+      supported_modes: ["pre_call"],
+    };
     const mockDbGuardrail = () => {
-      vi.mocked(networking.getGuardrailInfo).mockResolvedValue({
-        guardrail_id: "123",
-        guardrail_name: "Test Guardrail",
-        litellm_params: { guardrail: "presidio", mode: "pre_call", default_on: true },
-        guardrail_definition_location: "db",
-      });
-      vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
-        supported_entities: [],
-        supported_actions: [],
-        pii_entity_categories: [],
-        supported_modes: ["pre_call"],
-      });
+      vi.mocked(networking.getGuardrailInfo).mockResolvedValue(dbGuardrail);
+      vi.mocked(networking.getGuardrailUISettings).mockResolvedValue(uiSettings);
       vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({});
     };
 

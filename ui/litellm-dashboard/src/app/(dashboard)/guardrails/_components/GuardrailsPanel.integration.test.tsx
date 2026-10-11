@@ -56,6 +56,13 @@ beforeAll(() => {
   });
 });
 
+const UI_SETTINGS = {
+  supported_entities: [],
+  supported_actions: [],
+  pii_entity_categories: [],
+  supported_modes: ["pre_call", "post_call"],
+};
+
 describe("GuardrailsPanel delete from the guardrail detail Settings card", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -63,12 +70,7 @@ describe("GuardrailsPanel delete from the guardrail detail Settings card", () =>
     vi.mocked(getGuardrailInfo).mockImplementation(async (_token: string, id: string) =>
       id === CONFIG_GUARDRAIL.guardrail_id ? CONFIG_GUARDRAIL : DB_GUARDRAIL,
     );
-    vi.mocked(getGuardrailUISettings).mockResolvedValue({
-      supported_entities: [],
-      supported_actions: [],
-      pii_entity_categories: [],
-      supported_modes: ["pre_call", "post_call"],
-    });
+    vi.mocked(getGuardrailUISettings).mockResolvedValue(UI_SETTINGS);
     vi.mocked(getGuardrailProviderSpecificParams).mockResolvedValue({});
   });
 
