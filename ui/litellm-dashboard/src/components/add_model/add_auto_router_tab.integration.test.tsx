@@ -202,17 +202,12 @@ describe("AddAutoRouterTab", () => {
     await userEvent.click(screen.getByRole("radio", { name: "Decisions Model" }));
     expect(screen.queryByLabelText("Classifier Model")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("combobox", { name: "Decision model" }));
-    expect(
-      screen.queryByRole("option", { name: ALL_FAMILY_MODELS[0].model_group }),
-    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: ALL_FAMILY_MODELS[0].model_group })).not.toBeInTheDocument();
     await userEvent.click(await screen.findByRole("option", { name: "my-decision" }));
     expect(screen.queryByRole("button", { name: "Routing approach" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Choose models for me" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Classifier Timeout (ms)")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Advanced settings" })).toHaveAttribute(
-      "aria-expanded",
-      "false",
-    );
+    expect(screen.getByRole("button", { name: "Advanced settings" })).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(screen.getByRole("button", { name: "Advanced classifier settings" }));
     fireEvent.change(screen.getByLabelText("Classifier Timeout (ms)"), { target: { value: "4200" } });
     fireEvent.change(screen.getByLabelText("Context Window Size"), { target: { value: "5" } });
