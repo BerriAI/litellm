@@ -361,6 +361,21 @@ def test_key_logging_metadata_rejects_non_string_destination_callback_vars(callb
 
 
 @pytest.mark.usefixtures("otel_v2_on")
+def test_key_logging_metadata_with_non_string_callback_var_key_does_not_raise() -> None:
+    error: Final = logging_metadata_config_error(
+        {
+            "logging": [
+                {
+                    "callback_name": "langfuse_otel",
+                    "callback_vars": {1: "x", "excluded_services": "redis"},
+                }
+            ]
+        }
+    )
+    assert error is None
+
+
+@pytest.mark.usefixtures("otel_v2_on")
 def test_each_entry_keeps_its_own_capture_message_content() -> None:
     error: Final = logging_metadata_config_error(
         {

@@ -596,7 +596,9 @@ class TestFanOut:
         def run():
             set_request_destinations(
                 (
-                    OtelDestination(endpoint="http://team.local", excluded_db_systems=frozenset({"redis", "postgresql"})),
+                    OtelDestination(
+                        endpoint="http://team.local", excluded_db_systems=frozenset({"redis", "postgresql"})
+                    ),
                     OtelDestination(endpoint="http://inherited.local"),
                 )
             )

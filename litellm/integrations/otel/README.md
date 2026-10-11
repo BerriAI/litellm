@@ -311,8 +311,9 @@ nothing here imports outside it:
   `LITELLM_OTEL_EXCLUDED_SERVICES` (comma-separated) or `excluded_services`
   (a YAML list) under `callback_settings.otel`, naming the datastore services
   to withhold (`redis`, `postgres`, `batch_write_to_db`, `redis_*`, or their
-  `db.system.name` spellings `redis` / `postgresql`). Unknown names are logged
-  as an error and ignored. A span is withheld when its `db.system.name` /
+  `db.system.name` spellings `redis` / `postgresql`). Unknown global names are logged
+  as an error and ignored. Team and key callback values are validated when saved,
+  and invalid values are rejected. A span is withheld when its `db.system.name` /
   `db.system` attribute is in the set, so request root, auth, guardrail and
   model spans can never be excluded. Team and key destinations can replace the
   global set with `excluded_services` in their own `callback_vars`; `"none"`

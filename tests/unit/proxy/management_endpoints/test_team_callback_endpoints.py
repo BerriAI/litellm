@@ -1686,6 +1686,39 @@ async def test_a_second_entry_may_not_flip_the_span_scope(patched_prisma, caller
     patched_prisma.db.litellm_teamtable.update.assert_awaited_once()
 
 
+@pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.asyncio
+async def test_a_second_newrelic_entry_may_not_change_excluded_services(patched_prisma) -> None:
+    patched_prisma.get_data = AsyncMock(
+        return_value=_team_row(
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "newrelic",
+                        "callback_type": "success",
+                        "callback_vars": {"newrelic_api_key": "license-key", "excluded_services": "redis"},
+                    }
+                ]
+            }
+        )
+    )
+    data: Final = AddTeamCallback(
+        callback_name="newrelic",
+        callback_type="success_and_failure",
+        callback_vars={"newrelic_api_key": "license-key", "excluded_services": "postgres"},
+    )
+    with pytest.raises(HTTPException) as exc:
+        await add_team_callbacks(
+            data=data,
+            http_request=Mock(spec=Request),
+            team_id="team-victim",
+            user_api_key_dict=_admin_auth(),
+        )
+    assert exc.value.status_code == 400
+    assert "excluded_services" in str(exc.value.detail)
+    patched_prisma.db.litellm_teamtable.update.assert_not_called()
+
+
 @pytest.mark.asyncio
 async def test_add_team_callbacks_rejects_out_of_range_arize_sampling_rate(patched_prisma):
     data = AddTeamCallback(

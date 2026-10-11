@@ -8,13 +8,10 @@ per-integration checks here.
 import math
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import Final
-
-from pydantic import TypeAdapter
+from typing import Final, cast  # noqa: TID251  # preserve arbitrary keys from validated callback mappings
 
 from litellm.types.utils import CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR
 
-_STRING_OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[str, object])
 _NEWRELIC_CALLBACK: Final = "newrelic"
 _NEWRELIC_VAR_PREFIX: Final = "newrelic_"
 _LANGFUSE_OTEL_CALLBACK: Final = "langfuse_otel"
@@ -338,20 +335,28 @@ def _entry_callback_vars(entry: object) -> Mapping[str, str]:
 def _logging_entry_error(entry: object) -> str | None:
     if not isinstance(entry, Mapping):
         return None
-    typed_entry: Final[Mapping[str, object]] = _STRING_OBJECT_MAPPING_ADAPTER.validate_python(entry)
+    typed_entry: Final[Mapping[object, object]] = (
+        cast(  # cast-ok: entry is Mapping-checked but may have non-string keys
+            Mapping[object, object], entry
+        )
+    )
     callback_name: Final = typed_entry.get("callback_name")
     callback_vars_raw: Final = typed_entry.get("callback_vars")
     if not isinstance(callback_name, str) or not isinstance(callback_vars_raw, Mapping):
         return None
-    callback_vars: Final[Mapping[str, object]] = _STRING_OBJECT_MAPPING_ADAPTER.validate_python(callback_vars_raw)
-    if CAPTURE_MESSAGE_CONTENT_VAR in callback_vars:
-        capture_message_content: Final = callback_vars[CAPTURE_MESSAGE_CONTENT_VAR]
-        if not isinstance(capture_message_content, str):
-            return f"{CAPTURE_MESSAGE_CONTENT_VAR} must be a string, got {type(capture_message_content).__name__}"
-    if EXCLUDED_SERVICES_VAR in callback_vars:
-        excluded_services: Final = callback_vars[EXCLUDED_SERVICES_VAR]
-        if not isinstance(excluded_services, str):
-            return f"{EXCLUDED_SERVICES_VAR} must be a string, got {type(excluded_services).__name__}"
+    callback_vars: Final[Mapping[object, object]] = cast(  # cast-ok: Mapping check preserves arbitrary key types
+        Mapping[object, object], callback_vars_raw
+    )
+    destination_var_error: Final = next(
+        (
+            f"{variable_name} must be a string, got {type(callback_vars[variable_name]).__name__}"
+            for variable_name in (CAPTURE_MESSAGE_CONTENT_VAR, EXCLUDED_SERVICES_VAR)
+            if variable_name in callback_vars and not isinstance(callback_vars[variable_name], str)
+        ),
+        None,
+    )
+    if destination_var_error is not None:
+        return destination_var_error
     callback_type_raw: Final = typed_entry.get("callback_type")
     return callback_config_error(
         callback_name,
