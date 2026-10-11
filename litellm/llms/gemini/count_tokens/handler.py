@@ -1,6 +1,9 @@
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
+from pydantic import ConfigDict, TypeAdapter, with_config
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
@@ -10,6 +13,17 @@ if TYPE_CHECKING:
     from litellm.types.google_genai.main import GenerateContentContentListUnionDict
 else:
     GenerateContentContentListUnionDict = Any
+
+
+@with_config(ConfigDict(extra="allow", strict=True))
+class _GeminiCountTokensResponse(TypedDict):
+    totalTokens: NotRequired[ReadOnly[int | float]]
+    tokenizer_used: NotRequired[ReadOnly[str]]
+
+
+_GEMINI_COUNT_TOKENS_RESPONSE_ADAPTER: Final[TypeAdapter[_GeminiCountTokensResponse]] = TypeAdapter(
+    _GeminiCountTokensResponse
+)
 
 
 class GoogleAIStudioTokenCounter:
@@ -79,7 +93,7 @@ class GoogleAIStudioTokenCounter:
 
     async def acount_tokens(
         self,
-        contents: Any,
+        contents: Sequence[Mapping[str, object]] | None,
         model: str,
         api_key: str | None = None,
         api_base: str | None = None,
@@ -143,8 +157,8 @@ class GoogleAIStudioTokenCounter:
             response.raise_for_status()
 
             # Parse response
-            result: Final = response.json()
-            return result
+            result: Final = _GEMINI_COUNT_TOKENS_RESPONSE_ADAPTER.validate_python(response.json())
+            return dict(result)
 
         except httpx.HTTPStatusError as e:
             error_msg = f"Google Gen AI Studio API error: {e.response.status_code} - {e.response.text}"
