@@ -228,10 +228,6 @@ async def test_team_new_with_team_member_budget_creates_budget_row(
 async def test_team_update_team_member_budget_upserts(
     gateway_client, db, resources, actors
 ):
-    """/team/update with `team_member_budget` against a team that has no
-    pre-existing team_member_budget_id routes through
-    TeamMemberBudgetHandler.upsert_team_member_budget_table's else-branch
-    (lines 294–303), which in turn calls create_team_member_budget_table."""
     team_id = await create_scratch_team(db, team_id=resources.tag("team"))
     seeder = actors.keys[Actor.PROXY_ADMIN].cleartext
     resp = await gateway_client.post(
@@ -247,6 +243,8 @@ async def test_team_update_team_member_budget_upserts(
     assert team_row is not None
     budget_id = (team_row.metadata or {}).get("team_member_budget_id")
     assert budget_id is not None, "team_member_budget_id not upserted"
+    budget_row = await db.db.litellm_budgettable.find_unique(where={"budget_id": budget_id})
+    assert budget_row is not None and budget_row.max_budget == 5.0, budget_row
 
     try:
         budget_row: Final = await db.db.litellm_budgettable.find_unique(

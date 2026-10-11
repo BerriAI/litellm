@@ -1,25 +1,6 @@
-from typing import Final
-"""Phase 4 F7-extension — additional payload pins pushing
-`key_management_endpoints.py` past the 70 % stretch.
-
-Same pattern as `test_f7_coverage_closeout.py`: each scenario cites the
-file:line range it pins and asserts observable end-state, not response-body
-snapshots. Targets the largest non-deferred un-covered ranges left after
-the first F7 pass:
-
-  * 5942–6063  /key/health logging-metadata path (test_key_logging body)
-  * 4630–4692  /key/reset_spend happy path + 404 + admin gate
-  * 4565–4596  _validate_reset_spend_value branches
-  * 4421–4476  /key/regenerate ghost-key 404 + premium gate
-  * 6118–6133  _enforce_unique_key_alias duplicate-alias rejection
-  * 6148–6169  validate_model_max_budget malformed payload rejection
-  * 4708–4789  validate_key_list_check user/team/org/key_hash branches
-
-Excluded: `_rotate_master_key` (lines 3997–4123) — deferred per plan §6.
-"""
-
 import uuid
-from typing import Any, Dict, Optional
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Final, Optional
 
 import pytest
 from prisma import Json
@@ -504,8 +485,9 @@ async def test_key_update_with_duration_and_budget_duration(
     )
     assert row is not None
     assert row.budget_duration == "30d"
-    assert row.expires is not None
-    assert row.budget_reset_at is not None
+    now = datetime.now(timezone.utc)
+    assert timedelta(minutes=55) < row.expires - now <= timedelta(hours=1), row.expires
+    assert now < row.budget_reset_at <= now + timedelta(days=31), row.budget_reset_at
     info = await gateway_client.get(
         f"/key/info?key={hash_token(cleartext)}",
         headers={"Authorization": f"Bearer {seeder}"},
@@ -696,8 +678,6 @@ async def test_key_info_explicit_existing_key(gateway_client, db, resources, act
 
 
 async def test_key_info_no_key_uses_auth_header(gateway_client, actors):
-    """Pin line 3260: `key = key or user_api_key_dict.api_key` — caller's
-    own key info is returned when no `?key=` is supplied."""
     caller = actors.keys[Actor.INTERNAL_USER].cleartext
     resp = await gateway_client.get(
         "/key/info",
@@ -740,16 +720,6 @@ async def test_key_generate_with_budget_limits(gateway_client, db, resources, ac
     windows: Final = info.json()["info"]["budget_limits"]
     assert [
         (window["max_budget"], window["budget_duration"]) for window in windows
-    ] == [(5.0, "1d"), (20.0, "30d")]
-    cleartext = resp.json()["key"]
-    info = await gateway_client.get(
-        f"/key/info?key={hash_token(cleartext)}",
-        headers={"Authorization": f"Bearer {seeder}"},
-    )
-    assert info.status_code == 200, info.text
-    assert [
-        (window["max_budget"], window["budget_duration"])
-        for window in info.json()["info"]["budget_limits"]
     ] == [(5.0, "1d"), (20.0, "30d")]
 
 

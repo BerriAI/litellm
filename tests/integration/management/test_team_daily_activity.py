@@ -3,6 +3,7 @@ from typing import Final
 import pytest
 
 from tests.integration._support.actors import Actor
+from tests.integration._support.database import write_rows
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -43,6 +44,21 @@ _CASES = [
 _DATES = "start_date=2024-01-01&end_date=2024-12-31"
 
 
+_SEEDED_SPEND: Final = {"alpha": 1.25, "beta": 2.5}
+
+
+@pytest.fixture(scope="module")
+def seeded_team_spend(actors) -> None:
+    team_ids: Final = {"alpha": actors.team_alpha_id, "beta": actors.team_beta_id}
+    for team, spend in _SEEDED_SPEND.items():
+        write_rows(
+            'INSERT INTO "LiteLLM_DailyTeamSpend" (id, team_id, date, api_key, model, spend, updated_at) '
+            "VALUES (%s, %s, '2024-06-01', 'integration-daily-activity', 'gpt-4o', %s, now()) "
+            "ON CONFLICT (id) DO NOTHING",
+            (f"integration-daily-activity-{team}", team_ids[team], str(spend)),
+        )
+
+
 @pytest.mark.parametrize(
     "endpoint",
     ("/team/daily/activity", "/team/daily/activity/aggregated"),
@@ -54,7 +70,7 @@ _DATES = "start_date=2024-01-01&end_date=2024-12-31"
     ids=[c[0] for c in _CASES],
 )
 async def test_team_daily_activity_matrix(
-    actor: Actor, team: str, expected_status: int, endpoint: str, gateway_client, actors
+    actor: Actor, team: str, expected_status: int, endpoint: str, gateway_client, actors, seeded_team_spend
 ):
     query = _DATES
     if team == "alpha":
@@ -69,7 +85,5 @@ async def test_team_daily_activity_matrix(
     assert (
         resp.status_code == expected_status
     ), f"{actor.value} -> {team}: {resp.status_code} {resp.text}"
-    if expected_status == 200:
-        body: Final = resp.json()
-        assert body["metadata"]["total_spend"] == 0.0
-        assert all(result["metrics"]["spend"] == 0.0 for result in body["results"])
+    if actor == Actor.PROXY_ADMIN and team in _SEEDED_SPEND:
+        assert resp.json()["metadata"]["total_spend"] == _SEEDED_SPEND[team], resp.text
