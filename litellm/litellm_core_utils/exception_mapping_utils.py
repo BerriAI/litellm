@@ -3,8 +3,9 @@ import json
 import re
 import traceback
 from collections.abc import Mapping
+from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Final, Protocol, cast
+from typing import Final, Literal, Protocol, cast
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
@@ -38,10 +39,45 @@ from ..exceptions import (
 )
 
 
+@dataclass(frozen=True, slots=True)
+class _AnthropicErrorDetail:
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
+class _AnthropicErrorBody:
+    type: Literal["error"]
+    error: _AnthropicErrorDetail
+
+
+_ANTHROPIC_ERROR_BODY: Final = TypeAdapter(_AnthropicErrorBody)
+
+
 class ExceptionCheckers:
     """
     Helper class for checking various error conditions in exception strings.
     """
+
+    @staticmethod
+    def is_anthropic_usage_limit_error(error_str: str) -> bool:
+        """
+        Anthropic reports spend/usage-limit exhaustion as an invalid_request_error
+        (HTTP 400), e.g. "You have reached your specified API usage limits." (#37599)
+
+        Only the structured upstream error body is inspected, never the raw string:
+        locally raised validation errors echo the caller's messages, and matching on
+        those would let request content turn a 400 into a 429 and cool down shared
+        deployments.
+        """
+        start: Final = error_str.find("{")
+        if start == -1:
+            return False
+        try:
+            end: Final = json.JSONDecoder().raw_decode(error_str, start)[1]
+            body: Final = _ANTHROPIC_ERROR_BODY.validate_json(error_str[start:end])
+        except ValueError:  # includes json.JSONDecodeError and pydantic.ValidationError
+            return False
+        return "api usage limit" in body.error.message.lower()
 
     @staticmethod
     def is_error_str_rate_limit(error_str: str, status_code: int | None = None) -> bool:
@@ -76,14 +112,6 @@ class ExceptionCheckers:
         # Mistral API returns this error string
         #########################################
         if "service tier capacity exceeded" in _error_str_lower:
-            return True
-
-        #######################################
-        # Anthropic returns spend/usage-limit exhaustion typed as an
-        # invalid_request_error (HTTP 400), e.g. "You have reached your specified
-        # API usage limits." It is a usage limit and should map to 429. (#37599)
-        #######################################
-        if "api usage limit" in _error_str_lower:
             return True
 
         return False
@@ -601,7 +629,7 @@ def _map_anthropic_exception(
     # Anthropic returns usage/spend-limit exhaustion typed as invalid_request_error (400),
     # but per the exception-mapping docs it should surface as a RateLimitError (429). Check
     # before the generic 400 branches below, which would otherwise map it to BadRequestError.
-    if ExceptionCheckers.is_error_str_rate_limit(error_str, getattr(original_exception, "status_code", None)):
+    if ExceptionCheckers.is_anthropic_usage_limit_error(error_str):
         raise RateLimitError(
             message=f"AnthropicError - {error_str}",
             model=model,

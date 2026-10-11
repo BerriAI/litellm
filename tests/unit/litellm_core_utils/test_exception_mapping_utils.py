@@ -216,7 +216,38 @@ class TestExceptionCheckers:
             '"message":"You have reached your specified API usage limits. '
             'You will regain access on 2026-09-01 at 00:00 UTC."}}'
         )
-        assert ExceptionCheckers.is_error_str_rate_limit(error_str, status_code=400) is True
+        assert ExceptionCheckers.is_anthropic_usage_limit_error(error_str) is True
+
+    def test_echoed_request_content_is_not_an_anthropic_usage_limit(self):
+        """A local validation failure echoes the caller's messages. Usage-limit text in
+        that echoed content must not be mistaken for the upstream error and promoted to
+        a 429, which would cool down shared deployments.
+        """
+        error_str = (
+            "AnthropicException - Unsupported file content\n"
+            "Received Messages=[{'role': 'user', 'content': ["
+            "{'type': 'text', 'text': 'api usage limit'}, {'type': 'file', 'file': {}}]}]"
+        )
+        assert ExceptionCheckers.is_anthropic_usage_limit_error(error_str) is False
+        assert ExceptionCheckers.is_error_str_rate_limit(error_str, status_code=400) is False
+
+    def test_echoed_request_content_still_maps_to_bad_request(self):
+        error_str = (
+            "Unsupported file content\n"
+            "Received Messages=[{'role': 'user', 'content': '"
+            '{"type":"error","error":{"message":"api usage limit"}}'
+            "'}]"
+        )
+        from litellm.llms.anthropic.common_utils import AnthropicError
+
+        original_exception = AnthropicError(status_code=400, message=error_str)
+
+        with pytest.raises(litellm.BadRequestError):
+            exception_type(
+                model="claude-haiku-4-5-20251001",
+                original_exception=original_exception,
+                custom_llm_provider="anthropic",
+            )
 
     def test_anthropic_usage_limit_maps_to_rate_limit_error_end_to_end(self):
         """Production path: an Anthropic usage-limit error is typed invalid_request_error
