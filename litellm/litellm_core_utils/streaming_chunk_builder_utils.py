@@ -1,7 +1,7 @@
 import base64
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from itertools import groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Optional, TypeAlias, TypedDict, Union, cast
@@ -155,7 +155,7 @@ class _ToolCallChoice(TypedDict, total=False):
 _ToolCallKey: TypeAlias = tuple[int, int]
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class _ToolCallAccumulator:
     id: str | None = None
     name: str | None = None
@@ -552,38 +552,38 @@ class ChunkProcessor:
                     # Extract id, type, and function data (handle both dict and object)
                     if isinstance(tool_call, dict):
                         if fragment_id := tool_call.get("id"):
-                            tool_call_map[index].id = fragment_id
+                            tool_call_map[index] = replace(tool_call_map[index], id=fragment_id)
                         if fragment_type := tool_call.get("type"):
-                            tool_call_map[index].type = fragment_type
+                            tool_call_map[index] = replace(tool_call_map[index], type=fragment_type)
 
                         function = tool_call.get("function", {})
                         if isinstance(function, dict):
                             if fragment_name := function.get("name"):
-                                tool_call_map[index].name = fragment_name
+                                tool_call_map[index] = replace(tool_call_map[index], name=fragment_name)
                         else:
                             # function is an object
                             if function_name := getattr(function, "name", None):
-                                tool_call_map[index].name = function_name
+                                tool_call_map[index] = replace(tool_call_map[index], name=function_name)
 
                         custom = tool_call.get("custom")
                         if isinstance(custom, dict):
                             if custom_name := custom.get("name"):
-                                tool_call_map[index].custom_name = custom_name
+                                tool_call_map[index] = replace(tool_call_map[index], custom_name=custom_name)
                     else:
                         # tool_call is an object
                         if hasattr(tool_call, "id") and tool_call.id:
-                            tool_call_map[index].id = tool_call.id
+                            tool_call_map[index] = replace(tool_call_map[index], id=tool_call.id)
                         if hasattr(tool_call, "type") and tool_call.type:
-                            tool_call_map[index].type = tool_call.type
+                            tool_call_map[index] = replace(tool_call_map[index], type=tool_call.type)
                         if object_function_name := getattr(getattr(tool_call, "function", None), "name", None):
-                            tool_call_map[index].name = object_function_name
+                            tool_call_map[index] = replace(tool_call_map[index], name=object_function_name)
 
                         object_custom: ChatCompletionDeltaCustomToolCallPayload | None = getattr(
                             tool_call, "custom", None
                         )
                         if object_custom is not None:
                             if getattr(object_custom, "name", None):
-                                tool_call_map[index].custom_name = object_custom.name
+                                tool_call_map[index] = replace(tool_call_map[index], custom_name=object_custom.name)
 
                     # Preserve provider_specific_fields from streaming chunks
                     provider_fields: object = None
@@ -606,10 +606,14 @@ class ChunkProcessor:
 
                     if provider_fields:
                         # Merge provider_specific_fields if multiple chunks have them
-                        merged_provider_fields = dict(tool_call_map[index].provider_specific_fields or {})
-                        if isinstance(provider_fields, dict):
-                            merged_provider_fields.update(provider_fields)
-                        tool_call_map[index].provider_specific_fields = merged_provider_fields
+                        tool_call_map[index] = replace(
+                            tool_call_map[index],
+                            provider_specific_fields=(
+                                {**(tool_call_map[index].provider_specific_fields or {}), **provider_fields}
+                                if isinstance(provider_fields, dict)
+                                else dict(tool_call_map[index].provider_specific_fields or {})
+                            ),
+                        )
 
         joined_fragments: Final = self._join_fragments_by_key_and_field(
             self._iter_tool_call_fragments(tool_call_chunks)

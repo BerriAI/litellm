@@ -187,9 +187,6 @@ class ContextCachingEndpoints(VertexBase):
             if "cachedContents" not in raw_response:
                 return None
 
-            if "cachedContents" not in raw_response:
-                return None
-
             # Check current page for matching cache_key
             for cached_item in raw_response["cachedContents"]:
                 display_name = cached_item.get("displayName")
@@ -273,9 +270,6 @@ class ContextCachingEndpoints(VertexBase):
 
             raw_response = _CachedContentListBodyRoot.model_validate(resp.json()).root
             logging_obj.post_call(original_response=raw_response)
-
-            if "cachedContents" not in raw_response:
-                return None
 
             if "cachedContents" not in raw_response:
                 return None
