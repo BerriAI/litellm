@@ -135,6 +135,57 @@ def test_enabled_without_package_fails_closed(monkeypatch):
     assert len(error_messages) == 1
 
 
+class _StubSecurityConfig:
+    """Captures the kwargs the middleware assembles from the environment."""
+
+    def __init__(self, **kwargs):  # kwargs-ok: mirrors the SecurityConfig keyword surface the wrapper calls
+        self.kwargs: Final = kwargs
+
+
+class _StubSecurityMiddleware:
+    """Pass-through stand-in recording how the wrapper wired it."""
+
+    instances: Final = []
+
+    def __init__(self, app, config=None):
+        self.app: Final = app
+        self.config: Final = config
+        _StubSecurityMiddleware.instances.append(self)
+
+    async def __call__(self, scope, receive, send):
+        await self.app(scope, receive, send)
+
+
+def test_enabled_wires_guard_with_env_config(monkeypatch):
+    """Flag on + importable guard module: the wrapper builds the config
+    from the environment and delegates through the guard middleware. Uses
+    a stub module, so the wiring is exercised in CI where the real
+    optional package is absent."""
+    import types
+
+    stub_module: Final = types.ModuleType("guard")
+    stub_module.SecurityConfig = _StubSecurityConfig
+    stub_module.SecurityMiddleware = _StubSecurityMiddleware
+    monkeypatch.setitem(sys.modules, "guard", stub_module)
+    _StubSecurityMiddleware.instances.clear()
+    monkeypatch.delenv("LITELLM_GUARD_REDIS_URL", raising=False)
+    monkeypatch.setenv("LITELLM_GUARD_ENABLED", "true")
+    monkeypatch.setenv("LITELLM_GUARD_RATE_LIMIT", "33")
+    client: Final = _client(_unique_ip())
+    assert client.get("/ping").status_code == 200
+    wired: Final = _StubSecurityMiddleware.instances[-1]
+    assert isinstance(wired.config, _StubSecurityConfig)
+    assert wired.config.kwargs["rate_limit"] == 33
+    assert wired.config.kwargs["enable_redis"] is False
+    assert wired.config.kwargs["trusted_proxies"] == ()
+    assert wired.config.kwargs["exclude_paths"] == [
+        "/health",
+        "/health/liveliness",
+        "/health/readiness",
+        "/metrics",
+    ]
+
+
 @pytest.mark.skipif(not _GUARD_AVAILABLE, reason="fastapi-guard not installed")
 def test_blocked_ip_is_rejected(monkeypatch):
     blocked: Final = _unique_ip()
