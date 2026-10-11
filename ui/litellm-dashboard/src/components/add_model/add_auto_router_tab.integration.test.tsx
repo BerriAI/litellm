@@ -203,13 +203,13 @@ describe("AddAutoRouterTab", () => {
     expect(screen.queryByLabelText("Classifier Model")).not.toBeInTheDocument();
     await userEvent.click(screen.getByRole("combobox", { name: "Decision model" }));
     expect(
-      screen.queryByRole("option", { name: ALL_FAMILY_MODELS[0].model_group, exact: true }),
+      screen.queryByRole("option", { name: ALL_FAMILY_MODELS[0].model_group }),
     ).not.toBeInTheDocument();
-    await userEvent.click(await screen.findByRole("option", { name: "my-decision", exact: true }));
+    await userEvent.click(await screen.findByRole("option", { name: "my-decision" }));
     expect(screen.queryByRole("button", { name: "Routing approach" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Choose models for me" })).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Classifier Timeout (ms)")).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Advanced settings", exact: true })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: "Advanced settings" })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
@@ -218,8 +218,8 @@ describe("AddAutoRouterTab", () => {
     fireEvent.change(screen.getByLabelText("Context Window Size"), { target: { value: "5" } });
     await selectAutoRouterOption("How often to classify", "Every new user message");
     await userEvent.click(screen.getByRole("button", { name: "Advanced classifier settings" }));
-    await userEvent.click(screen.getByRole("button", { name: "Advanced settings", exact: true }));
-    expect(screen.queryByRole("button", { name: "Classifier tuning", exact: true })).not.toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: "Advanced settings" }));
+    expect(screen.queryByRole("button", { name: "Classifier tuning" })).not.toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "jev-router" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     await userEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
@@ -259,7 +259,7 @@ describe("AddAutoRouterTab", () => {
     await waitForAutomaticTiers();
     await userEvent.click(screen.getByRole("radio", { name: "Decisions Model" }));
     await userEvent.click(screen.getByRole("combobox", { name: "Decision model" }));
-    const option = await screen.findByRole("option", { name: alias, exact: true });
+    const option = await screen.findByRole("option", { name: alias });
     expect(screen.getAllByRole("option")).toHaveLength(1);
     await userEvent.click(option);
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "decision-router" } });
@@ -280,14 +280,14 @@ describe("AddAutoRouterTab", () => {
     await userEvent.click(screen.getByRole("combobox", { name: "Decision model" }));
     expect(await screen.findByText("No results")).toBeVisible();
     await userEvent.keyboard("{Escape}");
-    expect(screen.getByRole("button", { name: "Add Auto Router", exact: true })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeDisabled();
   });
 
   it("does not refill a tier cleared by the user when models refresh", async () => {
     mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
     renderWithProviders(<Harness />);
     await waitForAutomaticTiers();
-    await userEvent.click(within(tierChips("Simple")).getByRole("button", { name: "", exact: true }));
+    await userEvent.click(within(tierChips("Simple")).getByRole("button", { name: "" }));
     await act(async () => {
       await testQueryClient.refetchQueries({ queryKey: ["availableModels"] });
     });
@@ -392,7 +392,7 @@ describe("AddAutoRouterTab", () => {
     await waitForAutomaticTiers();
     await user.click(screen.getByRole("radio", { name: "Decisions Model" }));
     await userEvent.click(screen.getByRole("combobox", { name: "Decision model" }));
-    await userEvent.click(await screen.findByRole("option", { name: "my-decision", exact: true }));
+    await userEvent.click(await screen.findByRole("option", { name: "my-decision" }));
     await waitFor(() =>
       expect(apiClient.post).toHaveBeenLastCalledWith(
         "/auto_router/availability",
@@ -440,7 +440,7 @@ describe("AddAutoRouterTab", () => {
     await waitForAutomaticTiers();
     await user.click(screen.getByRole("radio", { name: "Decisions Model" }));
     await userEvent.click(screen.getByRole("combobox", { name: "Decision model" }));
-    await userEvent.click(await screen.findByRole("option", { name: "my-decision", exact: true }));
+    await userEvent.click(await screen.findByRole("option", { name: "my-decision" }));
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "checked-router" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     let complete: ((result: unknown) => void) | undefined;
@@ -2088,7 +2088,7 @@ describe("preset catalog fetch states", () => {
     await waitForPresetEnabled("Bounded JEV");
     await selectTemplate("Bounded JEV");
     await userEvent.click(screen.getByRole("combobox", { name: "Decision model" }));
-    await userEvent.click(await screen.findByRole("option", { name: "my-decision", exact: true }));
+    await userEvent.click(await screen.findByRole("option", { name: "my-decision" }));
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "bounded-router" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
