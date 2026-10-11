@@ -4,7 +4,7 @@ import re
 import time
 import traceback
 from collections.abc import Mapping, Sequence
-from typing import Final, Literal, cast
+from typing import Any, Final, Literal, cast
 
 from pydantic import ConfigDict, TypeAdapter, with_config
 from typing_extensions import ReadOnly, TypedDict
@@ -232,7 +232,7 @@ def _get_choices_error_args(response_object: Mapping[str, object]) -> tuple[int,
 
 
 async def convert_to_streaming_response_async(
-    response_object: dict | None = None,
+    response_object: Mapping[str, Any] | None = None,
 ):
     """
     Asynchronously converts a response object to a streaming response.
@@ -357,7 +357,7 @@ async def convert_to_streaming_response_async(
 
 
 def convert_to_streaming_response(
-    response_object: dict | None = None,
+    response_object: Mapping[str, Any] | None = None,
 ):
     # used for yielding Cache hits when stream == True
     if response_object is None:
@@ -641,7 +641,7 @@ _should_convert_tool_call_to_json_mode = should_convert_tool_call_to_json_mode
 
 
 def convert_to_model_response_object(
-    response_object: dict | None = None,
+    response_object: Mapping[str, Any] | None = None,
     model_response_object: ModelResponse
     | EmbeddingResponse
     | ImageResponse
