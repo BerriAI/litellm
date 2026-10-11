@@ -180,31 +180,30 @@ def _coerce_missing_choices_status(value: object) -> int | None:
 def _get_missing_choices_error_args(response_object: Mapping[str, object]) -> tuple[int, str]:
     error: Final = response_object.get("error")
     top_level_status_values: Final = tuple(response_object.get(field) for field in ("status", "status_code"))
-    nested_status_values: Final[list[object]] = []
-    nested_message_values: Final[list[object]] = []
-    if isinstance(error, Mapping):
-        for field in ("code", "status", "status_code"):
-            value: object = error.get(field)
-            nested_status_values.append(value)
-        for field in ("message", "response"):
-            value: object = error.get(field)
-            nested_message_values.append(value)
-    elif isinstance(error, str):
-        nested_message_values.append(error)
+    nested_status_values: Final = (
+        tuple(error.get(field) for field in ("code", "status", "status_code")) if isinstance(error, Mapping) else ()
+    )
+    nested_message_values: Final = (
+        tuple(error.get(field) for field in ("message", "response"))
+        if isinstance(error, Mapping)
+        else (error,)
+        if isinstance(error, str)
+        else ()
+    )
 
-    status_values: Final[list[object]] = [
+    status_values: Final = (
         *(value for value in top_level_status_values if isinstance(value, int) and not isinstance(value, bool)),
         *(value for value in top_level_status_values if isinstance(value, str)),
         *nested_status_values,
-    ]
+    )
     status_code: Final = next(
         (value for candidate in status_values if (value := _coerce_missing_choices_status(candidate)) is not None),
         500,
     )
-    message_values: Final[list[object]] = [
+    message_values: Final = (
         *(response_object.get(field) for field in ("response", "message")),
         *nested_message_values,
-    ]
+    )
     message: Final = next(
         (value for value in message_values if isinstance(value, str) and value.strip()),
         _invalid_choices_message(response_object),
