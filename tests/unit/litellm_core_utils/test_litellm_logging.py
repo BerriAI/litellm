@@ -3217,7 +3217,7 @@ def test_get_extra_header_tags():
 
 
 
-def test_header_derived_spend_tags_accept_starlette_headers_mapping():
+def test_header_derived_spend_tags_accept_starlette_headers_mapping(monkeypatch):
     """Pass-through stores Starlette Headers (a Mapping, not dict); tags must still extract.
 
     Regression for https://github.com/BerriAI/litellm/issues/44032
@@ -3227,38 +3227,32 @@ def test_header_derived_spend_tags_accept_starlette_headers_mapping():
 
     from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
 
-    original_extra_headers = getattr(litellm, "extra_spend_tag_headers", None)
-    original_disable_ua = getattr(litellm, "disable_add_user_agent_to_request_tags", False)
-    try:
-        litellm.disable_add_user_agent_to_request_tags = False
-        litellm.extra_spend_tag_headers = ["x-custom-header"]
-        proxy_server_request = {
-            "headers": Headers(
-                {
-                    "user-agent": "curl/8.0.0",
-                    "x-custom-header": "tenant-a",
-                }
-            )
-        }
-
-        ua_tags = StandardLoggingPayloadSetup._get_user_agent_tags(proxy_server_request)
-        assert ua_tags is not None
-        assert "User-Agent: curl" in ua_tags
-        assert "User-Agent: curl/8.0.0" in ua_tags
-
-        extra_tags = StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request)
-        assert extra_tags is not None
-        assert "x-custom-header: tenant-a" in extra_tags
-
-        request_tags = StandardLoggingPayloadSetup._get_request_tags(
-            litellm_params={},
-            proxy_server_request=proxy_server_request,
+    monkeypatch.setattr(litellm, "disable_add_user_agent_to_request_tags", False)
+    monkeypatch.setattr(litellm, "extra_spend_tag_headers", ["x-custom-header"])
+    proxy_server_request = {
+        "headers": Headers(
+            {
+                "user-agent": "curl/8.0.0",
+                "x-custom-header": "tenant-a",
+            }
         )
-        assert "User-Agent: curl" in request_tags
-        assert "x-custom-header: tenant-a" in request_tags
-    finally:
-        litellm.extra_spend_tag_headers = original_extra_headers
-        litellm.disable_add_user_agent_to_request_tags = original_disable_ua
+    }
+
+    ua_tags = StandardLoggingPayloadSetup._get_user_agent_tags(proxy_server_request)
+    assert ua_tags is not None
+    assert "User-Agent: curl" in ua_tags
+    assert "User-Agent: curl/8.0.0" in ua_tags
+
+    extra_tags = StandardLoggingPayloadSetup._get_extra_header_tags(proxy_server_request)
+    assert extra_tags is not None
+    assert "x-custom-header: tenant-a" in extra_tags
+
+    request_tags = StandardLoggingPayloadSetup._get_request_tags(
+        litellm_params={},
+        proxy_server_request=proxy_server_request,
+    )
+    assert "User-Agent: curl" in request_tags
+    assert "x-custom-header: tenant-a" in request_tags
 
 
 
