@@ -23,7 +23,7 @@ from mcp_client import McpClient
 from models import ChatBody, ChatMessage, LiteLLMParamsBody, McpChatTool
 from pydantic import BaseModel
 
-pytestmark = pytest.mark.e2e
+pytestmark = [pytest.mark.e2e, pytest.mark.quiet_stack]
 
 TOP_K: Final = 3
 
