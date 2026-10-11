@@ -1,6 +1,7 @@
 import re
 from collections.abc import Mapping
 from copy import deepcopy
+from datetime import datetime, timezone
 from enum import Enum
 from functools import lru_cache
 from types import MappingProxyType
@@ -1000,18 +1001,18 @@ def strip_field(schema, field_name: str):
         strip_field(items, field_name)
 
 
+_VERTEX_DATETIME_FRACTION: Final = re.compile(r"\.\d+(?=Z$)", re.IGNORECASE)
+
+
 def convert_vertex_datetime_to_openai_datetime(vertex_datetime: str) -> int:
     """
-    Converts a Vertex AI datetime string to an OpenAI datetime integer
+    Converts a Vertex AI / GCS RFC 3339 UTC timestamp to Unix epoch seconds
 
     vertex_datetime: str = "2024-12-04T21:53:12.120184Z"
-    returns: int = 1722729192
+    returns: int = 1733349192
     """
-    from datetime import datetime
-
-    # Parse the ISO format string to datetime object
-    dt: Final = datetime.strptime(vertex_datetime, "%Y-%m-%dT%H:%M:%S.%fZ")
-    # Convert to Unix timestamp (seconds since epoch)
+    whole_seconds: Final = _VERTEX_DATETIME_FRACTION.sub("", vertex_datetime)
+    dt: Final = datetime.strptime(whole_seconds, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc)
     return int(dt.timestamp())
 
 
