@@ -119,7 +119,7 @@ def _start_reservation_lease_renewal(budget_reservation: Mapping[str, object], c
     """A reservation lives inside spend counter keys that expire on their Redis TTL. Renew the TTL
     while the request is in flight so a request longer than the TTL does not drop its
     reservation and admit concurrent requests against the DB floor on any worker."""
-    from litellm.proxy.proxy_server import spend_counter_cache, spend_counter_redis_ttl
+    from litellm.proxy.proxy_server import spend_counter_cache
 
     if spend_counter_cache.redis_cache is None or not counter_keys:
         return
@@ -127,7 +127,7 @@ def _start_reservation_lease_renewal(budget_reservation: Mapping[str, object], c
         _renew_reservation_lease(
             budget_reservation=budget_reservation,
             counter_keys=counter_keys,
-            interval=spend_counter_redis_ttl() / 2,
+            interval=spend_counter_cache.redis_cache.default_ttl / 2,
             request_task=asyncio.current_task(),
         )
     )

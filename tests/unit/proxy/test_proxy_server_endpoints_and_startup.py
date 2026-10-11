@@ -8917,7 +8917,9 @@ async def test_prepare_spend_counter_increment_reseeds_from_db_on_counter_miss()
         fake_prisma.db.litellm_teamtable.find_unique.assert_awaited_once_with(where={"team_id": "team-9"})
         # Seed uses SET NX with db_spend (42) — cross-pod safe, no INCR of 42.
         # Only the per-request delta (1.5) goes through INCRBYFLOAT.
-        fake_redis.async_set_cache.assert_awaited_once_with(key="spend:team:team-9", value=42.0, nx=True)
+        fake_redis.async_set_cache.assert_awaited_once_with(
+            key="spend:team:team-9", value=42.0, nx=True, ttl=proxy_server_module.spend_counter_redis_ttl()
+        )
         writes = [(c["key"], c["value"]) for c in recorded_increments]
         assert writes == [("spend:team:team-9", 1.5)]
     finally:
@@ -9346,6 +9348,7 @@ async def test_window_spend_counter_redis_concurrent_seed_does_not_double_seed()
             key=counter_key,
             value=2.25,
             nx=True,
+            ttl=proxy_server_module.spend_counter_redis_ttl(),
         )
         assert redis_store[counter_key] == pytest.approx(3.25)
         assert counter_cache.in_memory_cache.get_cache(key=counter_key) == pytest.approx(3.25)

@@ -2924,7 +2924,12 @@ def spend_counter_redis_ttl() -> int:
     batch_write_at: Final = (
         proxy_batch_write_at if isinstance(proxy_batch_write_at, (int, float)) else PROXY_BATCH_WRITE_AT
     )
-    return max(SPEND_COUNTER_REDIS_TTL_SECONDS, int(_SPEND_COUNTER_TTL_BATCH_WRITE_MULTIPLE * batch_write_at))
+    configured_redis_ttl: Final = int(litellm.default_redis_ttl) if litellm.default_redis_ttl is not None else 0
+    return max(
+        SPEND_COUNTER_REDIS_TTL_SECONDS,
+        int(_SPEND_COUNTER_TTL_BATCH_WRITE_MULTIPLE * batch_write_at),
+        configured_redis_ttl,
+    )
 
 
 def _fail_closed_budget_enforcement() -> bool:

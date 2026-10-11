@@ -838,6 +838,14 @@ async def test_increment_spend_counters_pipelines_all_scopes_in_one_redis_call(
         assert counter_cache.in_memory_cache.get_cache(key=key) == 1.5
 
 
+def test_spend_counter_redis_ttl_never_shortens_configured_redis_ttl(monkeypatch):
+    """Deployments that configured a longer Redis default must not see spend counters expire sooner"""
+    monkeypatch.setattr(ps.litellm, "default_redis_ttl", 86400)
+    monkeypatch.setattr(ps, "proxy_batch_write_at", 60)
+
+    assert ps.spend_counter_redis_ttl() == 86400
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("batch_write_at", [60, 900])
 async def test_spend_counter_redis_ttl_outlives_db_batch_write_interval(monkeypatch, batch_write_at):
