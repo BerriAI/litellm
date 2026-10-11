@@ -183,11 +183,14 @@ def _get_nested_error_values(
     if not isinstance(error, Mapping):
         return (), (error,) if isinstance(error, str) else ()
 
-    nested_code: Final[object] = error.get("code")
-    nested_status: Final[object] = error.get("status")
-    nested_status_code: Final[object] = error.get("status_code")
-    nested_message: Final[object] = error.get("message")
-    nested_response: Final[object] = error.get("response")
+    nested_error: Final = cast(
+        Mapping[str, object], error
+    )  # cast-ok: provider error payloads are JSON objects with string keys
+    nested_code: Final = nested_error.get("code")
+    nested_status: Final = nested_error.get("status")
+    nested_status_code: Final = nested_error.get("status_code")
+    nested_message: Final = nested_error.get("message")
+    nested_response: Final = nested_error.get("response")
     return (
         (nested_code, nested_status, nested_status_code),
         (nested_message, nested_response),
