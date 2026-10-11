@@ -5,11 +5,17 @@ import * as networking from "./networking";
 
 vi.mock("./networking", () => ({
   sendSpendReportEmailTest: vi.fn(),
+  getSpendReportEmailStatus: vi.fn(),
 }));
 
 describe("EmailSpendSummaryModal", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.mocked(networking.getSpendReportEmailStatus).mockResolvedValue({
+      configured: true,
+      provider: "smtp",
+      message: "SMTP is configured",
+    });
   });
 
   it("does not render dialog content when closed", () => {
@@ -88,5 +94,24 @@ describe("EmailSpendSummaryModal", () => {
       );
       expect(handleClose).toHaveBeenCalled();
     });
+  });
+
+  it("disables send button when email delivery is not configured", () => {
+    renderWithProviders(
+      <EmailSpendSummaryModal
+        isOpen={true}
+        onClose={vi.fn()}
+        accessToken="test-token"
+        startDate="2026-03-01"
+        endDate="2026-03-31"
+        emailStatus={{
+          configured: false,
+          provider: null,
+          message: "Email delivery is not configured",
+        }}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "Send Email Summary" })).toBeDisabled();
   });
 });

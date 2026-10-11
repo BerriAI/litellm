@@ -1,10 +1,16 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { Eye, EyeOff } from "lucide-react";
 import { toast } from "@/lib/toast";
-import { serviceHealthCheck, setCallbacksCall } from "./networking";
+import {
+  getSpendReportEmailStatus,
+  serviceHealthCheck,
+  setCallbacksCall,
+  type SpendReportEmailStatusResponse,
+} from "./networking";
 import { EmailEventSettings } from "./email_events";
 import SpendReportEmailSettings from "./SpendReportEmailSettings";
 
@@ -35,6 +41,21 @@ const SENSITIVE_FIELD_PATTERN = /(PASSWORD|SECRET|KEY|TOKEN)/i;
 
 const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser, alerts }) => {
   const [visibleFields, setVisibleFields] = useState<Record<string, boolean>>({});
+  const [emailStatus, setEmailStatus] = useState<SpendReportEmailStatusResponse | null>(null);
+
+  const fetchEmailStatus = useCallback(async () => {
+    if (!accessToken) return;
+    try {
+      const status = await getSpendReportEmailStatus(accessToken);
+      setEmailStatus(status);
+    } catch {
+      setEmailStatus(null);
+    }
+  }, [accessToken]);
+
+  useEffect(() => {
+    fetchEmailStatus();
+  }, [fetchEmailStatus]);
 
   const toggleFieldVisibility = (key: string) => {
     setVisibleFields((prev) => ({
@@ -80,6 +101,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
     try {
       await setCallbacksCall(accessToken, payload);
       toast.success("Email settings updated successfully");
+      await fetchEmailStatus();
     } catch (error) {
       toast.fromError(error);
     }
@@ -161,20 +183,29 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
 
           <div className="mt-6 flex gap-2">
             <Button onClick={() => handleSaveEmailSettings()}>Save Changes</Button>
-            <Button
-              variant="secondary"
-              onClick={async () => {
-                if (!accessToken) return;
-                try {
-                  await serviceHealthCheck(accessToken, "email");
-                  toast.success("Email test triggered. Check your configured email inbox/logs.");
-                } catch (error) {
-                  toast.fromError(error);
-                }
-              }}
+            <SimpleTooltip
+              content={
+                emailStatus && !emailStatus.configured
+                  ? "Email delivery is not configured. Configure SMTP server settings below or set SENDGRID_API_KEY environment variable."
+                  : undefined
+              }
             >
-              Test Email Alerts
-            </Button>
+              <Button
+                variant="secondary"
+                disabled={emailStatus !== null && !emailStatus.configured}
+                onClick={async () => {
+                  if (!accessToken) return;
+                  try {
+                    await serviceHealthCheck(accessToken, "email");
+                    toast.success("Email test triggered. Check your configured email inbox/logs.");
+                  } catch (error) {
+                    toast.fromError(error);
+                  }
+                }}
+              >
+                Test Email Alerts
+              </Button>
+            </SimpleTooltip>
           </div>
         </CardContent>
       </Card>

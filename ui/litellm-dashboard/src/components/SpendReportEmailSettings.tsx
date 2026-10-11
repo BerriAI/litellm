@@ -554,7 +554,7 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
                         <SimpleTooltip
                           content={
                             emailStatus && !emailStatus.configured
-                              ? "Email delivery is not configured. Configure SMTP server settings above or set SENDGRID_API_KEY environment variable."
+                              ? "Email delivery is not configured. Configure SMTP server settings below or set SENDGRID_API_KEY environment variable."
                               : undefined
                           }
                         >

@@ -1080,6 +1080,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         startDate={startTime ? formatDate(startTime) : undefined}
         endDate={endTime ? formatDate(endTime) : undefined}
         teams={teams}
+        emailStatus={emailStatus}
       />
 
       {/* AI Chat Panel */}

@@ -5,15 +5,20 @@ import userEvent from "@testing-library/user-event";
 import { renderWithProviders } from "@/../tests/test-utils";
 import EmailSettings from "./email_settings";
 
-const { serviceHealthCheck, setCallbacksCall } = vi.hoisted(() => ({
+const { getSpendReportEmailStatus, serviceHealthCheck, setCallbacksCall } = vi.hoisted(() => ({
+  getSpendReportEmailStatus: vi.fn(),
   serviceHealthCheck: vi.fn(),
   setCallbacksCall: vi.fn(),
 }));
 
-vi.mock("@/components/networking", () => ({ serviceHealthCheck, setCallbacksCall }));
+vi.mock("@/components/networking", () => ({ getSpendReportEmailStatus, serviceHealthCheck, setCallbacksCall }));
 
 vi.mock("./email_events", () => ({
   EmailEventSettings: () => <div>email event settings</div>,
+}));
+
+vi.mock("./SpendReportEmailSettings", () => ({
+  default: () => <div>spend report email settings</div>,
 }));
 
 const alerts = [
@@ -38,6 +43,11 @@ describe("EmailSettings", () => {
     vi.clearAllMocks();
     setCallbacksCall.mockResolvedValue({});
     serviceHealthCheck.mockResolvedValue({});
+    getSpendReportEmailStatus.mockResolvedValue({
+      configured: true,
+      provider: "smtp",
+      message: "SMTP is configured",
+    });
   });
 
   it("renders the heading and the docs link", () => {
@@ -127,6 +137,12 @@ describe("EmailSettings", () => {
     expect(screen.getByText("email event settings")).toBeInTheDocument();
   });
 
+  it("renders the spend report email settings section", () => {
+    renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
+
+    expect(screen.getByText("spend report email settings")).toBeInTheDocument();
+  });
+
   it("toggles credential visibility when eye icon is clicked", async () => {
     const user = userEvent.setup();
     renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
@@ -145,5 +161,19 @@ describe("EmailSettings", () => {
     await user.click(hideButton);
 
     expect(passwordInput).toHaveAttribute("type", "password");
+  });
+
+  it("disables Test Email Alerts button when email delivery is not configured", async () => {
+    getSpendReportEmailStatus.mockResolvedValueOnce({
+      configured: false,
+      provider: null,
+      message: "Email delivery is not configured",
+    });
+
+    renderWithProviders(<EmailSettings accessToken="sk-test" premiumUser alerts={alerts} />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "Test Email Alerts" })).toBeDisabled();
+    });
   });
 });

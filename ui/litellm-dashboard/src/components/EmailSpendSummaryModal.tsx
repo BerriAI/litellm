@@ -1,13 +1,19 @@
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import { toast } from "@/lib/toast";
 import { ExternalLink, Loader2, Mail } from "lucide-react";
 import Link from "next/link";
-import { formatDate, sendSpendReportEmailTest } from "./networking";
+import {
+  formatDate,
+  getSpendReportEmailStatus,
+  sendSpendReportEmailTest,
+  type SpendReportEmailStatusResponse,
+} from "./networking";
 import type { Team } from "./key_team_helpers/key_list";
 
 export interface EmailSpendSummaryModalProps {
@@ -18,6 +24,7 @@ export interface EmailSpendSummaryModalProps {
   endDate?: string | null;
   teams?: Team[] | null;
   initialTeamId?: string | null;
+  emailStatus?: SpendReportEmailStatusResponse | null;
 }
 
 type GroupByOptionId = "team" | "team_key" | "team_model" | "team_key_model";
@@ -45,11 +52,40 @@ export const EmailSpendSummaryModal: React.FC<EmailSpendSummaryModalProps> = ({
   endDate,
   teams,
   initialTeamId,
+  emailStatus,
 }) => {
   const [recipientsInput, setRecipientsInput] = useState("");
   const [selectedTeamId, setSelectedTeamId] = useState<string>(initialTeamId || "all");
   const [groupBy, setGroupBy] = useState<GroupByOptionId[]>(DEFAULT_GROUP_BY);
   const [isSending, setIsSending] = useState(false);
+  const [internalEmailStatus, setInternalEmailStatus] = useState<SpendReportEmailStatusResponse | null>(
+    emailStatus ?? null
+  );
+
+  useEffect(() => {
+    if (emailStatus !== undefined) {
+      setInternalEmailStatus(emailStatus);
+      return;
+    }
+    if (!isOpen || !accessToken) return;
+    let cancelled = false;
+    getSpendReportEmailStatus(accessToken)
+      .then((status) => {
+        if (!cancelled) {
+          setInternalEmailStatus(status);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setInternalEmailStatus(null);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOpen, accessToken, emailStatus]);
+
+  const isEmailNotConfigured = internalEmailStatus !== null && !internalEmailStatus.configured;
 
   const resolvedStartDate = startDate || formatDate(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
   const resolvedEndDate = endDate || formatDate(new Date());
@@ -217,10 +253,18 @@ export const EmailSpendSummaryModal: React.FC<EmailSpendSummaryModalProps> = ({
             <Button variant="outline" onClick={onClose} disabled={isSending}>
               Cancel
             </Button>
-            <Button onClick={handleSend} disabled={isSending}>
-              {isSending && <Loader2 className="animate-spin size-4" />}
-              {isSending ? "Sending Email..." : "Send Email Summary"}
-            </Button>
+            <SimpleTooltip
+              content={
+                isEmailNotConfigured
+                  ? "Email delivery is not configured. Configure SMTP server settings in Alerts settings or set SENDGRID_API_KEY environment variable."
+                  : undefined
+              }
+            >
+              <Button onClick={handleSend} disabled={isSending || isEmailNotConfigured}>
+                {isSending && <Loader2 className="animate-spin size-4" />}
+                {isSending ? "Sending Email..." : "Send Email Summary"}
+              </Button>
+            </SimpleTooltip>
           </div>
         </div>
       </DialogContent>
