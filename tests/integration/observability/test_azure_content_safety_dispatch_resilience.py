@@ -422,6 +422,7 @@ def test_x3_killing_one_worker_leaves_the_other_serving(
                 _assert_spend(response.headers["x-litellm-call-id"], response.text)
 
 
+@pytest.mark.timeout(180)
 def test_x4_proxy_restart_preserves_completed_spend_rows(
     gateway: Gateway, tmp_path: Path
 ) -> None:
