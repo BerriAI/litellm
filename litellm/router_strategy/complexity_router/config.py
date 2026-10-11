@@ -716,6 +716,7 @@ _ENVIRONMENT_KEY_SCOPE: Final = MappingProxyType(
 class OpenSourceClassifierConfig(LiteLLMBaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
+    deployment_name: str | None = Field(default=None, min_length=1)
     provider: Literal["jev", "laya", "bespoke", "databricks"] = "jev"
     model: str = "jev-latest"
     api_key: str | None = Field(default=None, description="Provider API key; optional for self-hosted providers")
@@ -754,6 +755,12 @@ class OpenSourceClassifierConfig(LiteLLMBaseModel):
 
     @model_validator(mode="after")
     def _keep_the_environment_key_on_the_environment_base(self) -> "OpenSourceClassifierConfig":
+        if self.deployment_name is not None:
+            if not self.deployment_name.strip():
+                raise ValueError("deployment_name must name a configured decision model")
+            if self.api_key is not None or self.api_base is not None:
+                raise ValueError("deployment_name uses the deployment connection; omit api_key and api_base")
+            return self
         if self.provider in ("laya", "bespoke"):
             from litellm.llms.oss_decision import validate_oss_api_base, validate_oss_model
 
@@ -833,7 +840,10 @@ def _resolve_normalized_complexity_router_config_write(
         {
             key: value
             for key, value in existing.items()
-            if same_provider and key in ("api_key", "api_base") and (key != "api_key" or same_base)
+            if same_provider
+            and not classifier.get("deployment_name")
+            and key in ("api_key", "api_base")
+            and (key != "api_key" or same_base)
         }
     )
     return ComplexityRouterConfigWrite(

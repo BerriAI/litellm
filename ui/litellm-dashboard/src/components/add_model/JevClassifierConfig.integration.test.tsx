@@ -111,19 +111,19 @@ describe("JEV classifier editor", () => {
       expect(screen.getByText("Reasoning Effort")).toBeInTheDocument();
       expect(screen.getByText("Classifier Prompt")).toBeInTheDocument();
       expect(screen.getByRole("switch", { name: "Use images for classification" })).toBeInTheDocument();
-      fireEvent.click(screen.getByRole("radio", { name: /^OSS Classifier$/ }));
-      expect(screen.getByRole("radio", { name: /^OSS Classifier$/ })).toBeChecked();
+      fireEvent.click(screen.getByRole("radio", { name: /^Decisions Model$/ }));
+      expect(screen.getByRole("radio", { name: /^Decisions Model$/ })).toBeChecked();
       expect(screen.getByLabelText("Classifier Model")).toHaveValue("jev-latest");
       expect(screen.getByLabelText("Classifier Instructions")).toBeEnabled();
       expect(screen.queryByLabelText("Judge model")).not.toBeInTheDocument();
       expect(screen.queryByText("Reasoning Effort")).not.toBeInTheDocument();
       expect(screen.queryByText("Classifier Prompt")).not.toBeInTheDocument();
       expect(screen.queryByRole("switch", { name: "Use images for classification" })).not.toBeInTheDocument();
-      fireEvent.click(screen.getByRole("radio", { name: "Laya" }));
+      await chooseSelectOption(userEvent, screen.getByRole("combobox", { name: "Decision model" }), "Laya");
       expect(screen.getByLabelText("Classifier Model")).toHaveTextContent("english");
-      fireEvent.click(screen.getByRole("radio", { name: "Jev" }));
+      await chooseSelectOption(userEvent, screen.getByRole("combobox", { name: "Decision model" }), "Jev");
       expect(screen.getByLabelText("Classifier Model")).toHaveValue("jev-latest");
-      fireEvent.click(screen.getByRole("radio", { name: label }));
+      await chooseSelectOption(userEvent, screen.getByRole("combobox", { name: "Decision model" }), label);
       if (provider === "bespoke") expect(screen.getByLabelText("Classifier Model")).toHaveTextContent("nimble-latest");
       if (provider === "databricks") expect(screen.getByLabelText("Classifier Model")).toHaveValue("");
       if (typesTheModel) {
@@ -137,8 +137,8 @@ describe("JEV classifier editor", () => {
       fireEvent.click(screen.getByRole("switch", { name: "Classifier circuit breaker" }));
       fireEvent.click(screen.getByRole("button", { name: "Customize tiers" }));
       fireEvent.click(screen.getByRole("button", { name: "Save and reload" }));
-      expect(screen.getByRole("radio", { name: /^OSS Classifier$/ })).toBeChecked();
-      expect(screen.getByRole("radio", { name: label })).toBeChecked();
+      expect(screen.getByRole("radio", { name: /^Decisions Model$/ })).toBeChecked();
+      expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveTextContent(label);
       if (typesTheModel) expect(screen.getByLabelText("Classifier Model")).toHaveValue(model);
       else expect(screen.getByLabelText("Classifier Model")).toHaveTextContent(model);
       expect(screen.getByLabelText("Classifier Timeout (ms)")).toHaveValue(4200);

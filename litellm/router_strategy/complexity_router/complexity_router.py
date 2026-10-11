@@ -123,6 +123,7 @@ from .jev_classifier import (
     HttpJevClassifierClient,
     JevClassifierClient,
     JevVerdict,
+    RouterJevClassifierClient,
     build_jev_request,
     jev_classifier_cost,
 )
@@ -1331,8 +1332,9 @@ class ComplexityRouter(CustomLogger):
     - Question complexity (multiple questions)
     """
 
-    @staticmethod
-    def _build_jev_client(config: OpenSourceClassifierConfig) -> JevClassifierClient:
+    def _build_jev_client(self, config: OpenSourceClassifierConfig) -> JevClassifierClient:
+        if config.deployment_name is not None:
+            return RouterJevClassifierClient(self.litellm_router_instance, config.deployment_name)
         if config.provider in ("laya", "bespoke"):
             from litellm.llms.oss_decision import oss_connection
 
@@ -2318,13 +2320,23 @@ class ComplexityRouter(CustomLogger):
             if not self._tier_pools().get(tier_name):
                 raise ValueError(f"Jev classifier returned tier {tier_name!r}, which has no models configured")
             model: Final = response.model or config.model
-            accounting_provider: Final = "typesafe" if config.provider == "jev" else config.provider
+            accounting_provider: Final = (
+                response.classifier_provider
+                if config.deployment_name and response.classifier_provider
+                else "typesafe"
+                if config.provider == "jev"
+                else config.provider
+            )
             verdict: Final = JevVerdict(
                 label=answer.choice,
                 probabilities=answer.probabilities,
                 confidence=answer.confidence,
                 model=model,
-                cost=jev_classifier_cost(response, config.model, accounting_provider),
+                cost=response.classifier_cost
+                if config.deployment_name
+                else jev_classifier_cost(
+                    response, config.model, "typesafe" if config.provider == "jev" else config.provider
+                ),
                 provider=accounting_provider,
             )
             if breaker is not None and permit is not None:

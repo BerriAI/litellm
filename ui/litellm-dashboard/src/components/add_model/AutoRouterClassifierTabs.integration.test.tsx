@@ -105,7 +105,7 @@ describe("Auto-router classifier selection", () => {
         llm: "LLM",
         heuristic_first: "LLM",
         hybrid: "LLM",
-        jev: "OSS Classifier",
+        jev: "Decisions Model",
       }[classifier_type];
       expect(screen.getByRole("radio", { name: new RegExp(`^${family}$`) })).toBeChecked();
       fireEvent.click(screen.getByRole("radio", { name: new RegExp(`^${family}$`) }));
@@ -191,17 +191,14 @@ describe("Auto-router classifier selection", () => {
     expect(screen.getByRole("button", { name: field })).toHaveTextContent("Used by this router");
   });
 
-  it("shows Jev's single Complexity approach without changing saved configuration", () => {
+  it("omits Jev's redundant routing approach without changing saved configuration", () => {
     const onChange = vi.fn();
     renderWithProviders(
       <AutoRouterClassifierTabs value={{ ...initial, classifier_type: "jev" }} onChange={onChange}>
         Existing settings
       </AutoRouterClassifierTabs>,
     );
-    expect(screen.getByRole("button", { name: "Routing approach" })).toHaveTextContent("ComplexityUnlimited");
-    fireEvent.click(screen.getByRole("button", { name: "Routing approach" }));
-    expect(screen.getAllByRole("menuitemradio")).toHaveLength(1);
-    fireEvent.click(screen.getByRole("menuitemradio", { name: /^Complexity/ }));
+    expect(screen.queryByRole("button", { name: "Routing approach" })).not.toBeInTheDocument();
     expect(onChange).not.toHaveBeenCalled();
   });
 
