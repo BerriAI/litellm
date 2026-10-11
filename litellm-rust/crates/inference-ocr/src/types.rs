@@ -1,3 +1,4 @@
+use litellm_llms::base_llm::connection::RuntimeDefaults;
 use std::{collections::BTreeMap, path::PathBuf, time::Duration};
 
 use bytes::Bytes;
@@ -81,6 +82,7 @@ pub struct LiteLLMOcrRequest<D = OcrDocumentInput> {
     pub optional_params: CallArguments,
     pub input_sources: BTreeMap<String, InputSource>,
     pub azure_ad_token_provider: Option<TokenProviderHandle>,
+    pub runtime_defaults: RuntimeDefaults,
     pub(crate) config: OcrConfigKind,
 }
 
@@ -123,12 +125,20 @@ impl LiteLLMOcrRequest {
             optional_params,
             input_sources: BTreeMap::new(),
             azure_ad_token_provider: None,
+            runtime_defaults: RuntimeDefaults::default(),
             config,
         })
     }
 }
 
 impl<D> LiteLLMOcrRequest<D> {
+    pub fn with_runtime_defaults(self, runtime_defaults: RuntimeDefaults) -> Self {
+        Self {
+            runtime_defaults,
+            ..self
+        }
+    }
+
     pub fn map_document<T, E>(
         self,
         map: impl FnOnce(D) -> Result<T, E>,
@@ -141,6 +151,7 @@ impl<D> LiteLLMOcrRequest<D> {
             optional_params: self.optional_params,
             input_sources: self.input_sources,
             azure_ad_token_provider: self.azure_ad_token_provider,
+            runtime_defaults: self.runtime_defaults,
             config: self.config,
         })
     }
@@ -154,6 +165,7 @@ impl<D> LiteLLMOcrRequest<D> {
             optional_params: self.optional_params,
             input_sources: self.input_sources,
             azure_ad_token_provider: self.azure_ad_token_provider,
+            runtime_defaults: self.runtime_defaults,
             config: self.config,
         }
     }

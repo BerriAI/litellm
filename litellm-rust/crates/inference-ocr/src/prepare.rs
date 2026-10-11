@@ -54,6 +54,7 @@ pub(crate) fn prepare_request(
         optional_params,
         input_sources,
         azure_ad_token_provider,
+        runtime_defaults,
         ..
     } = request;
     PreparedOcrRequest {
@@ -64,6 +65,7 @@ pub(crate) fn prepare_request(
         optional_params,
         input_sources,
         azure_ad_token_provider,
+        runtime_defaults,
     }
 }
 

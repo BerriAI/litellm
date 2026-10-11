@@ -2,6 +2,7 @@ use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
+use litellm_auth::VertexParams;
 use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference_messages::{
@@ -22,8 +23,8 @@ use serde_json::{Map, Value};
 use crate::{
     errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{optional_timeout, project_optional_fields, public_response, python_timeout_seconds},
-    python_settings::missing_module,
     routes::RequestView,
+    runtime_defaults::RuntimeDefault,
 };
 
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
@@ -66,31 +67,13 @@ fn merge_headers(
     (!merged.is_empty()).then_some(merged)
 }
 
-/// Reads `litellm.<name>`, the module global a param spec names, the way
-/// `VertexBase.get_vertex_ai_project` reads `litellm.vertex_project`.
-fn module_global<'py>(py: Python<'py>, name: &str) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let module = match py.import("litellm") {
-        Ok(module) => module,
-        Err(error) if missing_module(py, &error, "litellm")? => return Ok(None),
-        Err(error) => return Err(error),
-    };
-    let value = module.getattr(name)?;
-    Ok((!value.is_none()).then_some(value))
-}
-
 /// The caller's litellm params, read from the kwargs by the names the typed params declare,
-/// so a key the configs do not read is never converted; a spec whose spellings the call all
-/// leaves out falls back to the module global it names, which stays the host's concern.
+/// so a key the configs do not read is never converted.
 fn project_litellm_params<'py>(
     argument: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
-    global: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
 ) -> PyResult<Result<LitellmParams, Error>> {
     let fields = project_optional_fields(LitellmParams::fields(), &argument)?;
-    let globals = LitellmParams::specs()
-        .filter(|spec| !spec.wire.iter().any(|name| fields.contains_key(*name)))
-        .filter_map(|spec| spec.module_global);
-    let folded = project_optional_fields(globals, &global)?;
-    Ok(litellm_params(fields.into_iter().chain(folded).collect()))
+    Ok(litellm_params(fields))
 }
 
 fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
@@ -161,7 +144,21 @@ impl MessagesPythonHost {
         let api_base = string("api_base")?;
         let extra_headers = self.merged_headers(py, arguments)?;
         let provider_specific_header = self.provider_specific_header(py, arguments)?;
-        let litellm_params = project_litellm_params(argument, |name| module_global(py, name))?;
+        let litellm_params = project_litellm_params(argument)?;
+        let supplied = [VertexParams::PROJECT, VertexParams::LOCATION]
+            .iter()
+            .flat_map(|spec| spec.wire.iter().copied())
+            .filter_map(|name| argument(name).map(|value| value.map(|_| name)).transpose())
+            .collect::<PyResult<Vec<_>>>()?;
+        let wanted = api_base
+            .is_none()
+            .then_some(RuntimeDefault::ApiBase)
+            .into_iter()
+            .chain(RuntimeDefault::vertex_fallbacks(|spec| {
+                !spec.wire.iter().any(|name| supplied.contains(name))
+            }))
+            .collect::<Vec<_>>();
+        let runtime_defaults = crate::runtime_defaults::read(py, &wanted)?;
         Ok(messages_body(body).and_then(|body| {
             Ok(MessagesCall {
                 body,
@@ -171,6 +168,7 @@ impl MessagesPythonHost {
                 provider_specific_header,
                 custom_llm_provider,
                 litellm_params: litellm_params?,
+                runtime_defaults,
                 timeout: optional_timeout(timeout),
                 shaping,
             })
@@ -410,58 +408,10 @@ mod tests {
         #[case] kwargs: Value,
         #[case] expected: Result<Value, ()>,
     ) {
-        assert_projection(kwargs, json!({}), expected);
+        assert_projection(kwargs, expected);
     }
 
-    #[rstest]
-    #[case::global_fills_a_missing_vertex_project(
-        json!({"model": "m"}),
-        json!({"vertex_project": "from-global", "vertex_location": "us-east5"}),
-        Ok(json!({"model": "m", "vertex_project": "from-global", "vertex_location": "us-east5"})),
-    )]
-    #[case::the_call_wins_over_the_global(
-        json!({"model": "m", "vertex_project": "from-call"}),
-        json!({"vertex_project": "from-global"}),
-        Ok(json!({"model": "m", "vertex_project": "from-call"})),
-    )]
-    #[case::an_explicit_none_in_the_call_still_falls_back(
-        json!({"model": "m", "vertex_project": null}),
-        json!({"vertex_project": "from-global"}),
-        Ok(json!({"model": "m", "vertex_project": "from-global"})),
-    )]
-    #[case::a_global_of_the_wrong_type_is_a_request_error(
-        json!({"model": "m"}),
-        json!({"vertex_location": 5}),
-        Err(()),
-    )]
-    fn module_globals_fill_the_litellm_params_the_call_leaves_out(
-        #[case] kwargs: Value,
-        #[case] globals: Value,
-        #[case] expected: Result<Value, ()>,
-    ) {
-        assert_projection(kwargs, globals, expected);
-    }
-
-    #[rstest]
-    #[case::a_global_without_a_spec_is_never_read(
-        json!({"model": "m"}),
-        json!({"aws_region_name": "eu-central-1", "api_key": "k"}),
-        Ok(json!({"model": "m"})),
-    )]
-    #[case::only_the_spec_named_global_is_read(
-        json!({"model": "m"}),
-        json!({"vertex_ai_project": "legacy-global", "vertex_project": "from-global"}),
-        Ok(json!({"model": "m", "vertex_project": "from-global"})),
-    )]
-    fn only_the_globals_the_specs_name_are_consulted(
-        #[case] kwargs: Value,
-        #[case] globals: Value,
-        #[case] expected: Result<Value, ()>,
-    ) {
-        assert_projection(kwargs, globals, expected);
-    }
-
-    fn assert_projection(kwargs: Value, globals: Value, expected: Result<Value, ()>) {
+    fn assert_projection(kwargs: Value, expected: Result<Value, ()>) {
         Python::initialize();
         Python::attach(|py| {
             let dict = |value: &Value| {
@@ -472,13 +422,8 @@ mod tests {
                     .unwrap()
             };
             let kwargs = dict(&kwargs);
-            let globals = dict(&globals);
             let bound = PyDict::new(py);
-            let projected = project_litellm_params(
-                |name| present(&kwargs, &bound, name),
-                |name| present(&globals, &bound, name),
-            )
-            .unwrap();
+            let projected = project_litellm_params(|name| present(&kwargs, &bound, name)).unwrap();
             match (projected, expected) {
                 (Ok(projected), Ok(fields)) => assert_eq!(
                     projected,

@@ -80,6 +80,7 @@ fn project(
         api_base: deployment.api_base.clone(),
         custom_llm_provider: deployment.custom_llm_provider.clone(),
         litellm_params: deployment.litellm_params.clone(),
+        runtime_defaults: Default::default(),
         extra_headers: None,
         provider_specific_header: anthropic_api_headers(headers),
         timeout: deployment.timeout,

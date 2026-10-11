@@ -31,6 +31,34 @@ pub struct AnthropicMessagesConfig;
 pub const ANTHROPIC_MESSAGES_CONFIG: AnthropicMessagesConfig = AnthropicMessagesConfig;
 
 impl BaseMessagesConfig for AnthropicMessagesConfig {
+    fn prepare_connection(
+        &self,
+        inputs: crate::base_llm::connection::ConnectionInputs<'_>,
+        headers: Headers,
+        model: &str,
+        _stream: bool,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<crate::base_llm::connection::PreparedConnection, Error> {
+        let validated = self.validate_environment(
+            headers,
+            inputs.api_key,
+            model,
+            inputs.litellm_params,
+            env_lookup,
+        )?;
+        let connection = crate::anthropic::connection::AnthropicConnection::resolve(
+            inputs.api_base,
+            inputs.runtime_defaults,
+            env_lookup,
+        )?;
+        Ok(crate::base_llm::connection::PreparedConnection {
+            url: connection.messages_url(),
+            headers: validated.headers,
+            auth: validated.auth,
+            api_base_source: connection.api_base_source(),
+        })
+    }
+
     fn shape_request(
         &self,
         request: MessagesRequest,

@@ -19,6 +19,7 @@ pub struct MessagesCall {
     pub api_base: Option<String>,
     pub custom_llm_provider: Option<String>,
     pub litellm_params: LitellmParams,
+    pub runtime_defaults: litellm_llms::base_llm::connection::RuntimeDefaults,
     pub extra_headers: Option<Map<String, Value>>,
     pub provider_specific_header: Option<ProviderSpecificHeaders>,
     pub timeout: Option<Duration>,

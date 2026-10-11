@@ -150,8 +150,10 @@ pub fn complete_anthropic_url(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> String {
-    let api_base = resolve_anthropic_api_base(api_base, env_lookup);
+    messages_url(&resolve_anthropic_api_base(api_base, env_lookup))
+}
 
+pub fn messages_url(api_base: &str) -> String {
     let api_base = api_base.trim_end_matches('/');
     if api_base.ends_with(MESSAGES_PATH) {
         return api_base.to_string();

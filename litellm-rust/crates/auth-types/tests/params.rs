@@ -4,7 +4,6 @@ use rstest::rstest;
 const LOCATION: ParamSpec = ParamSpec {
     setting: "location",
     wire: &["vertex_location", "vertex_ai_location"],
-    module_global: Some("vertex_location"),
     env: &["VERTEXAI_LOCATION", "VERTEX_LOCATION"],
 };
 
@@ -51,13 +50,13 @@ fn resolution_walks_wire_names_then_environment_names(
 }
 
 #[rstest]
-#[case::without_a_module_global(
+#[case::aws(
     &AwsParams::REGION,
     "Missing AWS region - pass aws_region_name or set AWS_REGION_NAME or AWS_REGION"
 )]
-#[case::with_a_module_global(
+#[case::several_wire_names(
     &LOCATION,
-    "Missing AWS location - pass vertex_location or vertex_ai_location, set litellm.vertex_location, or set VERTEXAI_LOCATION or VERTEX_LOCATION"
+    "Missing AWS location - pass vertex_location or vertex_ai_location or set VERTEXAI_LOCATION or VERTEX_LOCATION"
 )]
 fn a_missing_param_names_every_place_the_spec_reads(
     #[case] spec: &'static ParamSpec,
@@ -68,5 +67,5 @@ fn a_missing_param_names_every_place_the_spec_reads(
     assert_eq!(message, expected);
     assert!(spec.wire.iter().all(|name| message.contains(name)));
     assert!(spec.env.iter().all(|name| message.contains(name)));
-    assert_eq!(message.contains("litellm."), spec.module_global.is_some());
+    assert!(!message.contains("litellm."));
 }

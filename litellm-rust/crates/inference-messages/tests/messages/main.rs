@@ -82,6 +82,7 @@ fn call() -> MessagesCall {
         api_base: None,
         custom_llm_provider: Some("anthropic".into()),
         litellm_params: Default::default(),
+        runtime_defaults: Default::default(),
         extra_headers: None,
         provider_specific_header: None,
         timeout: Some(Duration::from_secs(5)),

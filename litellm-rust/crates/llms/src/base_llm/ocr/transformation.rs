@@ -168,6 +168,7 @@ pub struct PreparedOcrRequest {
     pub optional_params: CallArguments,
     pub input_sources: BTreeMap<String, InputSource>,
     pub azure_ad_token_provider: Option<TokenProviderHandle>,
+    pub runtime_defaults: crate::base_llm::connection::RuntimeDefaults,
 }
 
 impl PreparedOcrRequest {

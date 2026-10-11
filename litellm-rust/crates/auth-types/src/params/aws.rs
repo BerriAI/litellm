@@ -11,12 +11,7 @@ const fn spec(
     wire: &'static [&'static str],
     env: &'static [&'static str],
 ) -> ParamSpec {
-    ParamSpec {
-        setting,
-        wire,
-        module_global: None,
-        env,
-    }
+    ParamSpec { setting, wire, env }
 }
 
 /// The `aws_*` fields of Python's `GenericLiteLLMParams`.

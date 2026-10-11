@@ -7,7 +7,8 @@ use litellm_core_utils::{
 };
 use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{
-    auth::ValidatedEnvironment, messages::context::MessagesTransformContext,
+    auth::ValidatedEnvironment, connection::ConnectionInputs,
+    messages::context::MessagesTransformContext,
 };
 use litellm_llms_types::formats::messages::MessagesRequest;
 use litellm_secrets::source::SecretSource;
@@ -70,6 +71,7 @@ fn prepare_provider_request(
         api_key,
         api_base,
         litellm_params,
+        runtime_defaults,
         extra_headers,
         provider_specific_header,
         timeout,
@@ -95,28 +97,26 @@ fn prepare_provider_request(
     let forwarded = string_headers(Some(
         extra_headers.into_iter().flatten().chain(scoped).collect(),
     ))?;
-    let validated = config.validate_environment(
+    let connection = config.prepare_connection(
+        ConnectionInputs {
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            litellm_params: &litellm_params,
+            runtime_defaults: &runtime_defaults,
+        },
         forwarded,
-        api_key.as_deref(),
         &transformed.model,
-        &litellm_params,
+        transformed.params.stream == Some(true),
         &env_lookup,
     )?;
     let environment = ValidatedEnvironment {
         headers: config.request_headers(
-            with_default_headers(validated.headers, config.default_headers()),
+            with_default_headers(connection.headers, config.default_headers()),
             &transformed,
         ),
-        auth: validated.auth,
+        auth: connection.auth,
     };
-
-    let url = config.get_complete_url(
-        api_base.as_deref(),
-        &transformed.model,
-        &litellm_params,
-        transformed.params.stream == Some(true),
-        &env_lookup,
-    )?;
+    let url = connection.url;
 
     Ok(ProviderMessagesRequest {
         provider,
@@ -232,6 +232,7 @@ mod tests {
                 api_base: None,
                 custom_llm_provider: Some("anthropic".into()),
                 litellm_params: Default::default(),
+                runtime_defaults: Default::default(),
                 extra_headers: None,
                 provider_specific_header: None,
                 timeout: None,
@@ -259,6 +260,7 @@ mod tests {
             api_base: Some("https://anthropic.test".into()),
             custom_llm_provider: Some("anthropic".into()),
             litellm_params: Default::default(),
+            runtime_defaults: Default::default(),
             extra_headers: None,
             provider_specific_header: None,
             timeout: None,
@@ -367,6 +369,7 @@ mod tests {
             api_base: Some("https://resource.services.ai.azure.com".into()),
             custom_llm_provider: custom_llm_provider.map(Into::into),
             litellm_params: Default::default(),
+            runtime_defaults: Default::default(),
             extra_headers: Some(Map::from_iter([("x-priority".into(), json!("extra"))])),
             provider_specific_header: Some(configured),
             timeout: None,

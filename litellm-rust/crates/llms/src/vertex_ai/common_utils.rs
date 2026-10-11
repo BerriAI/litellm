@@ -23,12 +23,16 @@ pub fn validate_vertex_location(location: &str) -> Result<&str, Error> {
     if location == GLOBAL_LOCATION || is_location_token(location) {
         return Ok(location);
     }
-    Err(Error::Auth(litellm_auth::Error::InvalidConfiguration(
+    Err(invalid_location())
+}
+
+pub(super) fn invalid_location() -> Error {
+    Error::Auth(litellm_auth::Error::InvalidConfiguration(
         litellm_auth::ErrorDetail::InvalidType {
             field: "vertex_location".into(),
             expected: "global or a lowercase alphanumeric token with hyphens",
         },
-    )))
+    ))
 }
 
 /// Python's `get_vertex_base_url`: the global control plane, a multi-region geography, or a

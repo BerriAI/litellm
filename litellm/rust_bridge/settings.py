@@ -26,6 +26,7 @@ class UrlPolicy:
 
 @dataclass(frozen=True, slots=True)
 class ProviderDefaults:
+    api_base: object
     vertex_project: object
     vertex_location: object
     enable_azure_ad_token_refresh: object
@@ -112,6 +113,7 @@ def provider_defaults() -> ProviderDefaults:
     import litellm
 
     return ProviderDefaults(
+        api_base=litellm.api_base,
         vertex_project=litellm.vertex_project,
         vertex_location=litellm.vertex_location,
         enable_azure_ad_token_refresh=litellm.enable_azure_ad_token_refresh,

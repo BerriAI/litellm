@@ -5,7 +5,48 @@ use serde_json::Value;
 use super::context::MessagesTransformContext;
 
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
-use crate::{Error, base_llm::messages::streaming::StreamDecoder};
+use crate::{
+    Error,
+    base_llm::{
+        connection::{ConnectionInputs, PreparedConnection},
+        messages::streaming::StreamDecoder,
+    },
+};
+
+/// A connection from a config's own `validate_environment` and `get_complete_url`, for
+/// providers whose settings have no shared resolver yet.
+pub fn prepare_from_parts<C: BaseMessagesConfig + ?Sized>(
+    config: &C,
+    inputs: ConnectionInputs<'_>,
+    headers: Headers,
+    model: &str,
+    stream: bool,
+    env_lookup: &dyn Fn(&str) -> Option<String>,
+) -> Result<PreparedConnection, Error> {
+    let validated = config.validate_environment(
+        headers,
+        inputs.api_key,
+        model,
+        inputs.litellm_params,
+        env_lookup,
+    )?;
+    let url = config.get_complete_url(
+        inputs.api_base,
+        model,
+        inputs.litellm_params,
+        stream,
+        env_lookup,
+    )?;
+    Ok(PreparedConnection {
+        url,
+        headers: validated.headers,
+        auth: validated.auth,
+        api_base_source: match inputs.api_base {
+            Some(_) => litellm_core_utils::settings::SettingSource::Explicit,
+            None => litellm_core_utils::settings::SettingSource::Derived,
+        },
+    })
+}
 
 pub trait BaseMessagesConfig: Sync {
     fn shape_request(
@@ -55,6 +96,17 @@ pub trait BaseMessagesConfig: Sync {
         env_lookup: &dyn Fn(&str) -> Option<String>,
     ) -> Result<ValidatedEnvironment, Error>;
 
+    /// The URL, headers and auth plan for one deployment, built from one selection of the
+    /// provider's connection settings.
+    fn prepare_connection(
+        &self,
+        inputs: ConnectionInputs<'_>,
+        headers: Headers,
+        model: &str,
+        stream: bool,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<PreparedConnection, Error>;
+
     /// `None` relays the upstream bytes untouched, which is right for every host that already
     /// speaks Anthropic SSE. A host on another wire returns the decoder that lifts its frames
     /// into Anthropic stream events, and the route re-encodes those as Anthropic SSE.
@@ -86,6 +138,19 @@ mod tests {
     struct DefaultsConfig;
 
     impl BaseMessagesConfig for DefaultsConfig {
+        fn prepare_connection(
+            &self,
+            inputs: crate::base_llm::connection::ConnectionInputs<'_>,
+            headers: Headers,
+            model: &str,
+            stream: bool,
+            env_lookup: &dyn Fn(&str) -> Option<String>,
+        ) -> Result<crate::base_llm::connection::PreparedConnection, Error> {
+            crate::base_llm::messages::transformation::prepare_from_parts(
+                self, inputs, headers, model, stream, env_lookup,
+            )
+        }
+
         fn secret_names(&self) -> &'static [&'static str] {
             &[]
         }
