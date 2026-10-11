@@ -239,7 +239,7 @@ class ValkeySemanticCache(RedisSemanticCache):
         kwargs.setdefault("metadata", {})["semantic-similarity"] = similarity
 
     @staticmethod
-    def _embedding_metadata(kwargs: dict[str, Any]) -> dict[str, Any] | None:
+    def _embedding_metadata(kwargs: dict[str, Any]) -> dict[str, object] | None:
         """The request metadata forwarded to the embedding call."""
         return kwargs.get("metadata")
 

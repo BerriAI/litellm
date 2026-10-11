@@ -34,6 +34,10 @@ vi.mock("@/app/(dashboard)/playground/components/complianceUI/ComplianceUI", () 
   default: () => <div data-testid="compliance-ui" />,
 }));
 
+vi.mock("@/app/(dashboard)/playground/components/systemOneUI/SystemOneUI", () => ({
+  default: () => <div data-testid="system-one-ui" />,
+}));
+
 vi.mock("@/app/(dashboard)/playground/components/chat_ui/AgentBuilderView", () => ({
   default: () => <div data-testid="agent-builder" />,
 }));
@@ -55,6 +59,7 @@ describe("PlaygroundPage role guard", () => {
     expect(screen.queryByTestId("chat-ui")).not.toBeInTheDocument();
     expect(screen.queryByTestId("compare-ui")).not.toBeInTheDocument();
     expect(screen.queryByTestId("compliance-ui")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("system-one-ui")).not.toBeInTheDocument();
     expect(screen.queryByTestId("agent-builder")).not.toBeInTheDocument();
   });
 
@@ -80,6 +85,15 @@ describe("PlaygroundPage ?tab= deep link", () => {
 
     expect(screen.getByRole("tab", { name: "Compare" })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: "Chat" })).toHaveAttribute("aria-selected", "false");
+  });
+
+  it("activates Decisions from ?tab=system-one", () => {
+    renderWithProviders(<PlaygroundPage />, { searchParams: { tab: "system-one" } });
+
+    const tab = screen.getByRole("tab", { name: /^Decisions/ });
+    expect(tab).toHaveAttribute("aria-selected", "true");
+    expect(tab).toHaveTextContent("Beta");
+    expect(screen.getByTestId("system-one-ui")).toBeInTheDocument();
   });
 
   it("falls back to Chat when ?tab= is not a playground tab", () => {

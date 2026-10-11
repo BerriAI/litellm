@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from "react";
 import { CircleHelp } from "lucide-react";
-import { z } from "zod/v4";
+import { z } from "zod";
 import { Policy } from "@/components/policies/types";
 import { teamListCall, keyListCall, modelAvailableCall, estimateAttachmentImpactCall } from "@/components/networking";
 import { toast } from "@/lib/toast";

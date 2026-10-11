@@ -71,9 +71,7 @@ class TestReasoningAutoSummaryMessages:
     def test_adaptive_thinking_gets_display_summarized(self):
         """reasoning_auto_summary=True + thinking.type='adaptive' -> display='summarized'."""
         with patch.object(litellm, "reasoning_auto_summary", True):
-            params = _call_handler_and_capture_optional_params(
-                thinking={"type": "adaptive", "budget_tokens": 5000}
-            )
+            params = _call_handler_and_capture_optional_params(thinking={"type": "adaptive", "budget_tokens": 5000})
         thinking = params.get("thinking", {})
         assert thinking.get("display") == "summarized"
         assert thinking.get("type") == "adaptive"
@@ -82,9 +80,7 @@ class TestReasoningAutoSummaryMessages:
     def test_enabled_thinking_gets_display_summarized(self):
         """reasoning_auto_summary=True + thinking.type='enabled' -> display='summarized'."""
         with patch.object(litellm, "reasoning_auto_summary", True):
-            params = _call_handler_and_capture_optional_params(
-                thinking={"type": "enabled", "budget_tokens": 10000}
-            )
+            params = _call_handler_and_capture_optional_params(thinking={"type": "enabled", "budget_tokens": 10000})
         thinking = params.get("thinking", {})
         assert thinking.get("display") == "summarized"
         assert thinking.get("type") == "enabled"
@@ -92,18 +88,14 @@ class TestReasoningAutoSummaryMessages:
     def test_disabled_thinking_no_display(self):
         """reasoning_auto_summary=True + thinking.type='disabled' -> display NOT set."""
         with patch.object(litellm, "reasoning_auto_summary", True):
-            params = _call_handler_and_capture_optional_params(
-                thinking={"type": "disabled"}
-            )
+            params = _call_handler_and_capture_optional_params(thinking={"type": "disabled"})
         thinking = params.get("thinking", {})
         assert "display" not in thinking
 
     def test_no_injection_when_flag_false(self):
         """reasoning_auto_summary=False + active thinking -> display NOT set."""
         with patch.object(litellm, "reasoning_auto_summary", False):
-            params = _call_handler_and_capture_optional_params(
-                thinking={"type": "enabled", "budget_tokens": 10000}
-            )
+            params = _call_handler_and_capture_optional_params(thinking={"type": "enabled", "budget_tokens": 10000})
         thinking = params.get("thinking", {})
         assert "display" not in thinking
 
@@ -117,12 +109,11 @@ class TestReasoningAutoSummaryMessages:
 
     def test_env_var_enables_auto_summary(self):
         """LITELLM_REASONING_AUTO_SUMMARY=true env var enables the feature."""
-        with patch.object(litellm, "reasoning_auto_summary", False), patch.dict(
-            os.environ, {"LITELLM_REASONING_AUTO_SUMMARY": "true"}
+        with (
+            patch.object(litellm, "reasoning_auto_summary", False),
+            patch.dict(os.environ, {"LITELLM_REASONING_AUTO_SUMMARY": "true"}),
         ):
-            params = _call_handler_and_capture_optional_params(
-                thinking={"type": "adaptive", "budget_tokens": 5000}
-            )
+            params = _call_handler_and_capture_optional_params(thinking={"type": "adaptive", "budget_tokens": 5000})
         thinking = params.get("thinking", {})
         assert thinking.get("display") == "summarized"
 

@@ -512,3 +512,37 @@ async def test_user_key_pages_and_details_respect_caller_scope() -> None:
             other_body: Final = JSON_OBJECT.validate_json(other_details.content)
             assert object_value(other_body["metadata"])["total_api_keys"] == 0
             assert _aggregate_top_keys(other_body["results"]) == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_team_routes_exclusion_keeps_unassigned_keys() -> None:
+    async with _daily_activity_database(include_team_exclusion_activity=True) as database:
+        repository: Final = _repository(database)
+        app: Final = FastAPI()
+        app.include_router(daily_activity_router)
+        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+            user_id="integration-admin", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+        app.dependency_overrides[get_daily_activity_prisma_client] = lambda: _PrismaDatabase(database)
+        app.dependency_overrides[get_daily_activity_repository] = lambda: repository
+
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://testserver") as client:
+            params: Final = {
+                "start_date": "2026-06-04",
+                "end_date": "2026-06-04",
+                "exclude_team_ids": "litellm-dashboard",
+            }
+            surviving_keys: Final = frozenset(("key-excluded-null", "key-excluded-empty", "key-excluded-normal"))
+
+            aggregated: Final = await client.get("/team/daily/activity/aggregated", params=params)
+            assert aggregated.status_code == 200, aggregated.text
+            aggregated_body: Final = JSON_OBJECT.validate_json(aggregated.content)
+            assert object_value(aggregated_body["metadata"])["total_spend"] == 23.0
+            assert object_value(aggregated_body["metadata"])["total_api_keys"] == 3
+            assert _aggregate_top_keys(aggregated_body["results"]) == surviving_keys
+
+            page: Final = await client.get("/team/daily/activity/aggregated/keys", params={**params, "limit": 10})
+            assert page.status_code == 200, page.text
+            page_body: Final = DailyActivityKeyPageResponse.model_validate_json(page.content)
+            assert page_body.total_api_keys == 3
+            assert frozenset(row.api_key for row in page_body.api_keys) == surviving_keys

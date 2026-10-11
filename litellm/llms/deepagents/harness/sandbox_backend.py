@@ -129,8 +129,6 @@ class SandboxBackend(SandboxBackendProtocol):  # pyright: ignore[reportUntypedBa
     def id(self) -> str:
         return self._id
 
-    # -- paths --------------------------------------------------------------
-
     def to_real(self, path: str) -> str:
         """Sandbox path for a virtual path (or an absolute path already under workdir)."""
         normalized = posixpath.normpath("/" + path.lstrip("/"))
@@ -186,8 +184,6 @@ class SandboxBackend(SandboxBackendProtocol):  # pyright: ignore[reportUntypedBa
     async def _run(self, cmd: Sequence[str], timeout: float | None = DEEPAGENTS_FS_TIMEOUT_SECONDS) -> CompletedRun:
         return await self._sandbox.run(cmd, timeout=timeout)
 
-    # -- ls -----------------------------------------------------------------
-
     async def als(self, path: str) -> LsResult:
         try:
             real = await self.to_confined(path)
@@ -206,8 +202,6 @@ class SandboxBackend(SandboxBackendProtocol):  # pyright: ignore[reportUntypedBa
 
     def ls(self, path: str) -> LsResult:
         return self._sync(self.als(path))
-
-    # -- read / write / edit ------------------------------------------------
 
     async def _read_bytes(self, path: str) -> bytes:
         return await self._sandbox.read(await self.to_confined(path))
@@ -296,8 +290,6 @@ class SandboxBackend(SandboxBackendProtocol):  # pyright: ignore[reportUntypedBa
     def delete(self, file_path: str) -> DeleteResult:
         return self._sync(self.adelete(file_path))
 
-    # -- glob / grep --------------------------------------------------------
-
     def _find_cmd(self, root: str) -> tuple[str, ...]:
         prune = tuple(
             itertools.chain.from_iterable(
@@ -378,8 +370,6 @@ class SandboxBackend(SandboxBackendProtocol):  # pyright: ignore[reportUntypedBa
     ) -> GrepResult:
         return self._sync(self.agrep(pattern, path, glob, max_count=max_count))
 
-    # -- upload / download --------------------------------------------------
-
     async def _upload_one(self, path: str, data: bytes) -> FileUploadResponse:
         if not self._writable:
             return FileUploadResponse(path=path, error="permission_denied")
@@ -424,8 +414,6 @@ class SandboxBackend(SandboxBackendProtocol):  # pyright: ignore[reportUntypedBa
         paths: list[str],  # mutable-ok: signature fixed by deepagents BackendProtocol
     ) -> list[FileDownloadResponse]:  # mutable-ok: return type fixed by deepagents BackendProtocol
         return self._sync(self.adownload_files(paths))
-
-    # -- execute ------------------------------------------------------------
 
     async def aexecute(self, command: str, *, timeout: int | None = None) -> ExecuteResponse:
         if not self._allow_execute:
