@@ -250,9 +250,10 @@ fn mantle_region(
     params: &LitellmParams,
     env: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
-    let region = resolve_non_empty(params.aws.aws_region_name.as_deref(), &|_| None, &[])
+    let region = mantle_base(base, params, env)
+        .and_then(|base| mantle_host_region(&base))
+        .or_else(|| resolve_non_empty(params.aws.aws_region_name.as_deref(), &|_| None, &[]))
         .or_else(|| mantle_model(model).1)
-        .or_else(|| mantle_base(base, params, env).and_then(|base| mantle_host_region(&base)))
         .or_else(|| resolve_non_empty(None, env, REGION_ENVS))
         .unwrap_or_else(|| "us-east-1".into());
     validated_region(region)
@@ -320,6 +321,40 @@ mod tests {
             .unwrap();
         assert!(
             matches!(environment.auth, AuthScheme::AwsSigV4 { region: actual, service: "bedrock", .. } if actual == region)
+        );
+    }
+
+    #[rstest]
+    #[case::explicit_regional_endpoint(
+        "https://bedrock-mantle.us-west-2.api.aws",
+        "us-east-1",
+        "us-west-2"
+    )]
+    fn public_regional_host_precedes_configured_region(
+        #[case] api_base: &str,
+        #[case] configured_region: &str,
+        #[case] expected_region: &str,
+    ) {
+        let params = LitellmParams {
+            api_base: Some(api_base.into()),
+            aws: AwsParams {
+                aws_region_name: Some(configured_region.into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let url = BEDROCK_MANTLE_MESSAGES_CONFIG
+            .get_complete_url(None, "claude-test", &params, false, &|_| None)
+            .unwrap();
+        let environment = BEDROCK_MANTLE_MESSAGES_CONFIG
+            .validate_environment(vec![], None, "claude-test", &params, &|_| None)
+            .unwrap();
+        assert_eq!(
+            url,
+            "https://bedrock-mantle.us-west-2.api.aws/anthropic/v1/messages"
+        );
+        assert!(
+            matches!(environment.auth, AuthScheme::AwsSigV4 { region, service: "bedrock", .. } if region == expected_region)
         );
     }
 

@@ -194,7 +194,8 @@ fn platform_region(
             .strip_suffix(".api.aws")
             .map(str::to_string)
     });
-    let region = resolve_aws_region(host_region.as_deref(), &params.aws, env)
+    let region = host_region
+        .or_else(|| resolve_aws_region(None, &params.aws, env))
         .or_else(|| resolve_non_empty(None, env, &["AWS_DEFAULT_REGION"]))
         .ok_or_else(|| Error::Auth(AwsParams::REGION.missing("Claude Platform on AWS")))?;
     validated_region(region)
@@ -318,6 +319,43 @@ mod tests {
         } else {
             assert!(matches!(result, Err(Error::InvalidRequest(_))));
         }
+    }
+
+    #[rstest]
+    #[case::explicit_regional_endpoint(
+        "https://aws-external-anthropic.us-west-2.api.aws",
+        "us-east-1",
+        "us-west-2"
+    )]
+    fn public_regional_host_precedes_configured_region(
+        #[case] api_base: &str,
+        #[case] configured_region: &str,
+        #[case] expected_region: &str,
+    ) {
+        let params = LitellmParams {
+            api_base: Some(api_base.into()),
+            aws: AwsParams {
+                aws_region_name: Some(configured_region.into()),
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+        let env = |name: &str| {
+            (name == "ANTHROPIC_AWS_WORKSPACE_ID").then(|| "workspace".into())
+        };
+        let url = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+            .get_complete_url(None, "claude-test", &params, false, &env)
+            .unwrap();
+        let environment = BEDROCK_CLAUDE_PLATFORM_MESSAGES_CONFIG
+            .validate_environment(vec![], None, "claude-test", &params, &env)
+            .unwrap();
+        assert_eq!(
+            url,
+            "https://aws-external-anthropic.us-west-2.api.aws/v1/messages"
+        );
+        assert!(
+            matches!(environment.auth, AuthScheme::AwsSigV4 { region, service: SERVICE, .. } if region == expected_region)
+        );
     }
 
     #[rstest]
