@@ -679,7 +679,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             return None
 
         # Check if request has tools
-        tools: Final[Sequence[dict[str, object]] | None] = kwargs.get("tools")
+        tools: Final[Sequence[dict[str, object]] | None] = kwargs.get("tools")  # mutable-ok: request tool list
         if not tools:
             return None
 
@@ -1691,8 +1691,9 @@ class WebSearchInterceptionLogger(CustomLogger):
                 {
                     key: value
                     for key, value in {**configured_search_kwargs, **parent_correlation.as_search_kwargs()}.items()
-                    if key
-                    != "search_domain_filter"  # rebind-ok: already passed explicitly above; passing it twice is a TypeError
+                    # search_domain_filter is passed explicitly above; letting it
+                    # through here as well would be a duplicate keyword argument.
+                    if key != "search_domain_filter"
                 }
             )
             result: Final = (
