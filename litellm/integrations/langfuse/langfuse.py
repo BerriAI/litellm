@@ -153,9 +153,13 @@ def _usage_token_value(usage_obj: object, standard_name: str, decision_name: str
                 "_UsageObject", usage_obj
             )
         )
-        if (dict_value := usage_proto.get(standard_name)) is None and decision_name is not None:
-            decision_dict_value: Final = usage_proto.get(decision_name)
-            return decision_dict_value if isinstance(decision_dict_value, int) else 0
+        # A raw dict here means _chat_usage could not validate it as a chat or
+        # responses usage (e.g. a malformed /v1/responses payload whose token
+        # counts fail validation) and passed it through unchanged. Read only the
+        # standard chat field so a failed validation logs as zero, matching
+        # getattr(..., None) or 0; do not fall back to decisions-style names,
+        # which would resurrect a value from a payload that failed validation.
+        dict_value: Final = usage_proto.get(standard_name)
         return dict_value if isinstance(dict_value, int) else 0
     if (attr_value := getattr(usage_obj, standard_name, None)) is None and decision_name is not None:
         decision_attr_value: Final = getattr(usage_obj, decision_name, None)
