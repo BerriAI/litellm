@@ -855,7 +855,7 @@ if MCP_AVAILABLE:
                 wire_compat_for(ctx.protocol_version),
                 ctx.protocol_version,
                 incoming_bearer_token=(
-                    MCPRequestHandler.get_incoming_bearer_token(request.headers)
+                    MCPRequestHandler.get_guardrail_bearer_token(request.headers, auth)
                     if isinstance(request, StarletteRequest)
                     else None
                 ),
