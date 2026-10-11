@@ -346,6 +346,10 @@ model_list:
     litellm_params:
       model: strands_decider/strands-decider-2B-hobson-v19
       api_base: http://127.0.0.1:8191
+  - model_name: hosted_vllm/Qwen/Qwen3-0.6B
+    litellm_params:
+      model: hosted_vllm/Qwen/Qwen3-0.6B
+      api_base: http://127.0.0.1:8191
   - model_name: azure_ai/decision-1
     litellm_params:
       model: azure_ai/decision-1
