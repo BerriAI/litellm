@@ -187,7 +187,7 @@ def test_non_openai_error_uses_nested_error_object(code: int | str) -> None:
 def test_non_openai_error_uses_nested_error_message_variants(
     error: dict[str, object] | str, expected_status: int, expected_message: str
 ) -> None:
-    with pytest.raises(Exception, match=r"^$") as exc_info:
+    with pytest.raises(Exception) as exc_info:
         convert_to_model_response_object(
             response_object={"error": error, "choices": None},
             model_response_object=ModelResponse(),

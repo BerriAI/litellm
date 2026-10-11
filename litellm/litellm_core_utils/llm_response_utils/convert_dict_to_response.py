@@ -698,9 +698,9 @@ def convert_to_model_response_object(
         if has_meaningful_error:
             error_args: Final = {"status_code": 422, "message": "Error in response object"}
             if response_type == "completion" and not response_object.get("choices"):
-                error_status, error_message = _get_choices_error_args(response_object)
+                error_status, provider_message = _get_choices_error_args(response_object)
                 error_args["status_code"] = error_status
-                error_args["message"] = error_message
+                error_args["message"] = provider_message
                 if isinstance(error_obj, dict) and "message" in error_obj:
                     nested_error_message: Final[object] = error_obj["message"]
                     if isinstance(nested_error_message, dict):
@@ -733,10 +733,10 @@ def convert_to_model_response_object(
             if not isinstance(response_object.get("choices"), list):
                 from litellm.exceptions import APIError
 
-                status_code, message = _get_choices_error_args(response_object)
+                status_code, provider_message = _get_choices_error_args(response_object)
                 raise APIError(
                     status_code=status_code,
-                    message=message,
+                    message=provider_message,
                     llm_provider="",
                     model="",
                 )
@@ -903,7 +903,7 @@ def convert_to_model_response_object(
                 raise Exception("Error in response object format")
 
             return LiteLLMResponseObjectHandler.convert_to_image_response(
-                response_object=response_object,
+                response_object=dict(response_object),
                 model_response_object=model_response_object,
                 hidden_params=hidden_params,
             )
