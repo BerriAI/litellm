@@ -5,6 +5,9 @@ Base class across routing strategies to abstract commmon functions like batch in
 import asyncio
 import logging
 from abc import ABC
+from collections.abc import AsyncGenerator, Generator
+from contextlib import asynccontextmanager, contextmanager
+from threading import Lock
 from typing import Final
 
 from litellm._internal_context import with_service_target
@@ -12,6 +15,26 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisPipelineIncrementOperation, log_redis_failure
 from litellm.constants import DEFAULT_REDIS_SYNC_INTERVAL
+
+_MEASUREMENT_LOCKS: Final = tuple(Lock() for _ in range(64))
+
+
+@contextmanager
+def routing_measurement_lock(model_group: str) -> Generator[None, None, None]:
+    lock: Final = _MEASUREMENT_LOCKS[hash(model_group) % len(_MEASUREMENT_LOCKS)]
+    with lock:
+        yield
+
+
+@asynccontextmanager
+async def async_routing_measurement_lock(model_group: str) -> AsyncGenerator[None, None]:
+    lock: Final = _MEASUREMENT_LOCKS[hash(model_group) % len(_MEASUREMENT_LOCKS)]
+    while not lock.acquire(blocking=False):
+        await asyncio.sleep(0.001)
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 class BaseRoutingStrategy(ABC):

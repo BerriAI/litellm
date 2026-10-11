@@ -13,6 +13,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_router_callback_metadata
+from litellm.router_strategy.base_routing_strategy import async_routing_measurement_lock, routing_measurement_lock
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.utils import LiteLLMPydanticObjectBase
 from litellm.utils import print_verbose
@@ -78,20 +79,29 @@ class LowestTPMLoggingHandler(CustomLogger):
                 # ------------
 
                 ## TPM
-                request_count_dict = measurement_cache.get_cache(key=tpm_key, local_only=local_only) or {}
-                request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
+                with routing_measurement_lock(str(model_group)):
+                    request_count_dict = (
+                        measurement_cache.get_cache(key=tpm_key, local_only=local_only)
+                        or self.router_cache.get_cache(key=tpm_key, local_only=True)
+                        or {}
+                    )
+                    request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
 
-                self.router_cache.set_cache(
-                    key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl, local_only=local_only
-                )
+                    self.router_cache.set_cache(
+                        key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl, local_only=local_only
+                    )
 
-                ## RPM
-                request_count_dict = measurement_cache.get_cache(key=rpm_key, local_only=local_only) or {}
-                request_count_dict[id] = request_count_dict.get(id, 0) + 1
+                    ## RPM
+                    request_count_dict = (
+                        measurement_cache.get_cache(key=rpm_key, local_only=local_only)
+                        or self.router_cache.get_cache(key=rpm_key, local_only=True)
+                        or {}
+                    )
+                    request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
-                self.router_cache.set_cache(
-                    key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl, local_only=local_only
-                )
+                    self.router_cache.set_cache(
+                        key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl, local_only=local_only
+                    )
 
                 ### TESTING ###
                 if self.test_flag:
@@ -151,20 +161,29 @@ class LowestTPMLoggingHandler(CustomLogger):
                 # update cache
 
                 ## TPM
-                request_count_dict = await measurement_cache.async_get_cache(key=tpm_key, local_only=local_only) or {}
-                request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
+                async with async_routing_measurement_lock(str(model_group)):
+                    request_count_dict = (
+                        await measurement_cache.async_get_cache(key=tpm_key, local_only=local_only)
+                        or await self.router_cache.async_get_cache(key=tpm_key, local_only=True)
+                        or {}
+                    )
+                    request_count_dict[id] = request_count_dict.get(id, 0) + total_tokens
 
-                await self.router_cache.async_set_cache(
-                    key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl, local_only=local_only
-                )
+                    await self.router_cache.async_set_cache(
+                        key=tpm_key, value=request_count_dict, ttl=self.routing_args.ttl, local_only=local_only
+                    )
 
-                ## RPM
-                request_count_dict = await measurement_cache.async_get_cache(key=rpm_key, local_only=local_only) or {}
-                request_count_dict[id] = request_count_dict.get(id, 0) + 1
+                    ## RPM
+                    request_count_dict = (
+                        await measurement_cache.async_get_cache(key=rpm_key, local_only=local_only)
+                        or await self.router_cache.async_get_cache(key=rpm_key, local_only=True)
+                        or {}
+                    )
+                    request_count_dict[id] = request_count_dict.get(id, 0) + 1
 
-                await self.router_cache.async_set_cache(
-                    key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl, local_only=local_only
-                )
+                    await self.router_cache.async_set_cache(
+                        key=rpm_key, value=request_count_dict, ttl=self.routing_args.ttl, local_only=local_only
+                    )
 
                 ### TESTING ###
                 if self.test_flag:

@@ -1,6 +1,6 @@
 import json
 import logging
-from typing import Any, Dict, List, Optional, Set, Union
+from typing import Any, Dict, Final, List, Optional, Set, Union
 
 import pytest
 
@@ -162,3 +162,34 @@ async def test_push_refused_by_the_open_circuit_breaker_is_not_logged_as_an_erro
 
     assert caplog.records == []
     assert base_strategy.redis_increment_operation_queue == []
+
+
+@pytest.mark.asyncio
+async def test_cancelled_measurement_waiter_does_not_block_later_updates() -> None:
+    from litellm.router_strategy.base_routing_strategy import async_routing_measurement_lock
+
+    acquired: Final = asyncio.Event()
+    release: Final = asyncio.Event()
+    waiting: Final = asyncio.Event()
+
+    async def hold() -> None:
+        async with async_routing_measurement_lock("cancellation-test"):
+            acquired.set()
+            await release.wait()
+
+    async def update() -> int:
+        waiting.set()
+        async with async_routing_measurement_lock("cancellation-test"):
+            return 1
+
+    holder: Final = asyncio.create_task(hold())
+    await acquired.wait()
+    waiter: Final = asyncio.create_task(update())
+    await waiting.wait()
+    waiter.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiter
+    release.set()
+    await holder
+
+    assert await update() == 1

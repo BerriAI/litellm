@@ -25222,17 +25222,28 @@ def test_router_discard_unregisters_group_selectors() -> None:
 @pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
 @pytest.mark.parametrize("has_shared_history", [False, True])
 @pytest.mark.parametrize(
-    "strategy, is_async, is_timeout",
+    "strategy, is_async, is_timeout, mode",
     [
-        ("usage-based-routing-v2", False, False),
-        ("usage-based-routing-v2", True, False),
-        ("usage-based-routing", False, False),
-        ("usage-based-routing", True, False),
-        ("cost-based-routing", False, False),
-        ("cost-based-routing", True, False),
-        ("latency-based-routing", False, False),
-        ("latency-based-routing", True, False),
-        ("latency-based-routing", True, True),
+        ("usage-based-routing-v2", False, False, "sequential"),
+        ("usage-based-routing-v2", True, False, "sequential"),
+        ("usage-based-routing", False, False, "sequential"),
+        ("usage-based-routing", True, False, "sequential"),
+        ("cost-based-routing", False, False, "sequential"),
+        ("cost-based-routing", True, False, "sequential"),
+        ("latency-based-routing", False, False, "sequential"),
+        ("latency-based-routing", True, False, "sequential"),
+        ("latency-based-routing", True, True, "sequential"),
+        ("usage-based-routing", True, False, "overlap"),
+        ("cost-based-routing", True, False, "overlap"),
+        ("latency-based-routing", True, False, "overlap"),
+        ("latency-based-routing", True, True, "overlap"),
+        ("usage-based-routing", False, False, "offline"),
+        ("usage-based-routing", True, False, "offline"),
+        ("cost-based-routing", False, False, "offline"),
+        ("cost-based-routing", True, False, "offline"),
+        ("latency-based-routing", False, False, "offline"),
+        ("latency-based-routing", True, False, "offline"),
+        ("latency-based-routing", True, True, "offline"),
     ],
 )
 async def test_multiple_routers_shared_cache_usage_not_doubled(
@@ -25241,6 +25252,7 @@ async def test_multiple_routers_shared_cache_usage_not_doubled(
     has_shared_history: bool,
     metadata_key: Literal["metadata", "litellm_metadata"],
     strategy: str,
+    mode: Literal["sequential", "overlap", "offline"],
 ) -> None:
     import fakeredis
     import fakeredis.aioredis
@@ -25344,10 +25356,44 @@ async def test_multiple_routers_shared_cache_usage_not_doubled(
                     else:
                         selector.log_success_event(callback_kwargs, response, now, now)
 
-        for cache in (shared_cache, router_1.cache, router_2.cache):
+            if mode == "offline":
+                server.connected = False
+                for selector in (selector_2, selector_1):
+                    if is_timeout:
+                        await selector.async_log_failure_event(kwargs, None, now, now)
+                    elif is_async:
+                        await selector.async_log_success_event(kwargs, response, now, now)
+                    else:
+                        selector.log_success_event(kwargs, response, now, now)
+                server.connected = True
+            elif mode == "overlap":
+                original_get: Final = async_client.get
+
+                async def delayed_get(key: str) -> bytes | None:
+                    result: Final = await original_get(key)
+                    await asyncio.sleep(0)
+                    assert result is None or isinstance(result, bytes)
+                    return result
+
+                with patch.object(async_client, "get", side_effect=delayed_get):
+                    if is_timeout:
+                        await asyncio.gather(
+                            selector_1.async_log_failure_event(kwargs, None, now, now),
+                            selector_2.async_log_failure_event(later_kwargs, None, now, now),
+                        )
+                    else:
+                        await asyncio.gather(
+                            selector_1.async_log_success_event(kwargs, response, now, now),
+                            selector_2.async_log_success_event(later_kwargs, response, now, now),
+                        )
+
+        caches: Final = (shared_cache,) if mode == "overlap" else (shared_cache, router_1.cache, router_2.cache)
+        for cache in caches:
             value: Final = cache.get_cache(cache_key, local_only=True)
             history_count: Final = int(has_shared_history)
-            expected_count: Final = 2 + history_count
+            expected_count: Final = (
+                2 + history_count + (2 if mode == "overlap" else int(mode == "offline" and cache is not shared_cache))
+            )
             if is_timeout:
                 assert len(value["dep-1"]["latency"]) == expected_count
             elif strategy == "usage-based-routing-v2":

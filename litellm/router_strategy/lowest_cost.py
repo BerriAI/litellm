@@ -13,6 +13,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_router_callback_metadata
+from litellm.router_strategy.base_routing_strategy import async_routing_measurement_lock, routing_measurement_lock
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 
 _callback_metadata_adapter: Final = TypeAdapter(Mapping[str, object])
@@ -83,25 +84,32 @@ class LowestCostLoggingHandler(CustomLogger):
                 # Update usage
                 # ------------
 
-                request_count_dict: Final = measurement_cache.get_cache(key=cost_key, local_only=local_only) or {}
+                with routing_measurement_lock(str(model_group)):
+                    request_count_dict: Final = (
+                        measurement_cache.get_cache(key=cost_key, local_only=local_only)
+                        or self.router_cache.get_cache(key=cost_key, local_only=True)
+                        or {}
+                    )
 
-                # check local result first
+                    # check local result first
 
-                if id not in request_count_dict:
-                    request_count_dict[id] = {}
+                    if id not in request_count_dict:
+                        request_count_dict[id] = {}
 
-                if precise_minute not in request_count_dict[id]:
-                    request_count_dict[id][precise_minute] = {}
+                    if precise_minute not in request_count_dict[id]:
+                        request_count_dict[id][precise_minute] = {}
 
-                ## TPM
-                request_count_dict[id][precise_minute]["tpm"] = (
-                    request_count_dict[id][precise_minute].get("tpm", 0) + total_tokens
-                )
+                    ## TPM
+                    request_count_dict[id][precise_minute]["tpm"] = (
+                        request_count_dict[id][precise_minute].get("tpm", 0) + total_tokens
+                    )
 
-                ## RPM
-                request_count_dict[id][precise_minute]["rpm"] = request_count_dict[id][precise_minute].get("rpm", 0) + 1
+                    ## RPM
+                    request_count_dict[id][precise_minute]["rpm"] = (
+                        request_count_dict[id][precise_minute].get("rpm", 0) + 1
+                    )
 
-                self.router_cache.set_cache(key=cost_key, value=request_count_dict, local_only=local_only)
+                    self.router_cache.set_cache(key=cost_key, value=request_count_dict, local_only=local_only)
 
                 ### TESTING ###
                 if self.test_flag:
@@ -168,26 +176,31 @@ class LowestCostLoggingHandler(CustomLogger):
                 # Update usage
                 # ------------
 
-                request_count_dict: Final = (
-                    await measurement_cache.async_get_cache(key=cost_key, local_only=local_only) or {}
-                )
+                async with async_routing_measurement_lock(str(model_group)):
+                    request_count_dict: Final = (
+                        await measurement_cache.async_get_cache(key=cost_key, local_only=local_only)
+                        or await self.router_cache.async_get_cache(key=cost_key, local_only=True)
+                        or {}
+                    )
 
-                if id not in request_count_dict:
-                    request_count_dict[id] = {}
-                if precise_minute not in request_count_dict[id]:
-                    request_count_dict[id][precise_minute] = {}
+                    if id not in request_count_dict:
+                        request_count_dict[id] = {}
+                    if precise_minute not in request_count_dict[id]:
+                        request_count_dict[id][precise_minute] = {}
 
-                ## TPM
-                request_count_dict[id][precise_minute]["tpm"] = (
-                    request_count_dict[id][precise_minute].get("tpm", 0) + total_tokens
-                )
+                    ## TPM
+                    request_count_dict[id][precise_minute]["tpm"] = (
+                        request_count_dict[id][precise_minute].get("tpm", 0) + total_tokens
+                    )
 
-                ## RPM
-                request_count_dict[id][precise_minute]["rpm"] = request_count_dict[id][precise_minute].get("rpm", 0) + 1
+                    ## RPM
+                    request_count_dict[id][precise_minute]["rpm"] = (
+                        request_count_dict[id][precise_minute].get("rpm", 0) + 1
+                    )
 
-                await self.router_cache.async_set_cache(
-                    key=cost_key, value=request_count_dict, local_only=local_only
-                )  # reset map within window
+                    await self.router_cache.async_set_cache(
+                        key=cost_key, value=request_count_dict, local_only=local_only
+                    )  # reset map within window
 
                 ### TESTING ###
                 if self.test_flag:
