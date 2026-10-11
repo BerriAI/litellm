@@ -60,6 +60,31 @@ def test_usage_based_routing_v1_selects_the_lowest_recorded_tpm() -> None:
     assert deployment["model_info"]["id"] == LOW_USAGE_DEPLOYMENT_ID
 
 
+def test_usage_based_routing_v1_skips_a_deployment_whose_tpm_limit_is_used_up() -> None:
+    router: Final = Router(
+        model_list=[
+            {**_deployment(LOW_USAGE_DEPLOYMENT_ID), "tpm": 100},
+            {**_deployment(HIGH_USAGE_DEPLOYMENT_ID), "tpm": 1000},
+        ],
+        routing_strategy="usage-based-routing",
+        num_retries=0,
+    )
+    now: Final = datetime.now()
+    for offset in range(-1, 2):
+        router.cache.set_cache(
+            key=f"{MODEL_GROUP}:tpm:{(now + timedelta(minutes=offset)).strftime('%H-%M')}",
+            value={LOW_USAGE_DEPLOYMENT_ID: 100, HIGH_USAGE_DEPLOYMENT_ID: 500},
+            ttl=float("inf"),
+        )
+
+    deployment: Final = router.get_available_deployment(
+        model=MODEL_GROUP,
+        messages=[{"role": "user", "content": "Tell me a joke."}],
+    )
+
+    assert deployment["model_info"]["id"] == HIGH_USAGE_DEPLOYMENT_ID
+
+
 @pytest.mark.asyncio
 async def test_v2_async_selection_uses_prefetched_counters_only_when_they_cover_its_keys():
     router_cache = DualCache()

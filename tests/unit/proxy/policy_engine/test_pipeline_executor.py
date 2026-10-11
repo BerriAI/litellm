@@ -19,7 +19,11 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import (
     CustomCodeGuardrail,
 )
-from litellm.proxy.policy_engine.pipeline_executor import PipelineExecutor, UndeliverableStreamRewrite
+from litellm.proxy.policy_engine.pipeline_executor import (
+    PipelineExecutor,
+    UndeliverableStreamRewrite,
+    pipeline_step_is_detect_only,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.policy_engine.pipeline_types import (
     GuardrailPipeline,
@@ -1794,3 +1798,24 @@ def test_undeliverable_stream_rewrite_keeps_its_reason_through_a_copy(clone):
     assert copied.reason == "the translation refused it"
     assert str(copied) == str(original)
     assert str(copied).endswith("cannot be written back to the stream: the translation refused it")
+
+
+@pytest.mark.parametrize(
+    ("on_pass", "on_fail", "on_error", "detect_only"),
+    (
+        pytest.param("allow", "next", None, True, id="allow-next"),
+        pytest.param("next", "allow", "next", True, id="next-allow-next"),
+        pytest.param("allow", "next", "allow", True, id="allow-next-allow"),
+        pytest.param("allow", "block", None, False, id="on_fail-block"),
+        pytest.param("allow", "next", "block", False, id="on_error-block"),
+        pytest.param("allow", "modify_response", None, False, id="on_fail-modify_response"),
+        pytest.param("modify_response", "next", None, False, id="on_pass-modify_response"),
+        pytest.param("block", "next", None, False, id="on_pass-block"),
+    ),
+)
+def test_pipeline_step_is_detect_only_when_no_reachable_action_touches_the_response(
+    on_pass: str, on_fail: str, on_error: str | None, detect_only: bool
+) -> None:
+    step = PipelineStep(guardrail="scanner", on_pass=on_pass, on_fail=on_fail, on_error=on_error)
+
+    assert pipeline_step_is_detect_only(step) is detect_only
