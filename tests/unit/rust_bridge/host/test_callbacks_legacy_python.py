@@ -1,9 +1,10 @@
+import asyncio
 import datetime
 import inspect
 from collections.abc import Mapping
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, cast
 
 import pytest
 from pydantic import TypeAdapter
@@ -12,9 +13,16 @@ import litellm
 from litellm._internal_context import is_internal_call
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.rust_bridge.host import callbacks_legacy_python as legacy
 from litellm.rust_bridge.host.callbacks_legacy_python import failure_handler, setup
 from litellm.types.integrations.custom_logger import AgenticLoopPlan
+from litellm.types.llms.openai import (
+    OutputTextDeltaEvent,
+    ResponseCompletedEvent,
+    ResponsesAPIResponse,
+    ResponsesAPIStreamEvents,
+)
 from litellm.types.utils import ModelResponse
 
 _OCR_KWARGS: Final = MappingProxyType(
@@ -669,3 +677,116 @@ async def test_short_circuit_continues_to_the_provider_when_nothing_owns_the_req
 async def test_short_circuits_refuse_an_operation_whose_handler_has_none(operation: str) -> None:
     with pytest.raises(ValueError, match=operation):
         await legacy.short_circuit(operation, {"model": "m"})
+
+
+class _StreamLogger:
+    def __init__(self) -> None:
+        self.start_time = datetime.datetime(2026, 1, 1)
+        self.completion_start_time: datetime.datetime | None = None
+        self.model_call_details: dict[str, object] = {}
+        self.calls: list[tuple[str, object]] = []
+
+    async def dispatch_success_handlers(self, result, start_time, end_time, cache_hit, prefer_async_handlers):
+        self.calls.append(("dispatch", (result, start_time, end_time, cache_hit, prefer_async_handlers)))
+
+    async def async_failure_handler(self, exception, traceback_exception, start_time, end_time):
+        self.calls.append(("async_failure", (exception, start_time, end_time)))
+
+    def failure_handler(self, exception, traceback_exception, start_time, end_time):
+        self.calls.append(("failure", (exception, start_time, end_time)))
+
+
+_RESPONSE: Final = ResponsesAPIResponse.model_validate(
+    {"id": "resp_1", "object": "response", "created_at": 1, "model": "gpt", "status": "completed", "output": []}
+)
+_COMPLETED: Final = ResponseCompletedEvent(type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED, response=_RESPONSE)
+_DELTA: Final = OutputTextDeltaEvent(
+    type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA, item_id="msg", output_index=0, content_index=0, delta="hi"
+)
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_success_dispatches_the_terminal_response_once_with_the_stream_times() -> None:
+    logger: Final = _StreamLogger()
+    logger.model_call_details["cache_hit"] = True
+    start: Final = datetime.datetime(2026, 1, 1, 0, 0, 1)
+    end: Final = datetime.datetime(2026, 1, 1, 0, 0, 2)
+    first: Final = datetime.datetime(2026, 1, 1, 0, 0, 1, 500)
+
+    legacy.stream_success(
+        "responses",
+        cast(Logging, logger),  # cast-ok: a recording stand-in for the Logging surface
+        {},
+        [_DELTA, _COMPLETED],
+        start,
+        end,
+        first,
+    )
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=5)
+
+    assert logger.completion_start_time == first
+    assert logger.calls == [("dispatch", (_RESPONSE, start, end, True, True))]
+
+
+def test_responses_stream_success_without_a_terminal_event_logs_nothing() -> None:
+    logger: Final = _StreamLogger()
+
+    legacy.stream_success(
+        "responses",
+        cast(Logging, logger),  # cast-ok: a recording stand-in for the Logging surface
+        {},
+        [_DELTA],
+        datetime.datetime.now(),
+        datetime.datetime.now(),
+        None,
+    )
+
+    assert logger.calls == []
+
+
+@pytest.mark.asyncio
+async def test_responses_stream_failure_runs_the_async_then_the_sync_failure_handler() -> None:
+    logger: Final = _StreamLogger()
+    error: Final = RuntimeError("stream broke")
+
+    await legacy.stream_failure(
+        "responses",
+        cast(Logging, logger),  # cast-ok: a recording stand-in for the Logging surface
+        {},
+        [_DELTA],
+        error,
+    )
+    await asyncio.get_running_loop().run_in_executor(None, lambda: None)
+    for _ in range(50):
+        if len(logger.calls) == 2:
+            break
+        await asyncio.sleep(0.01)
+
+    assert [name for name, _ in logger.calls] == ["async_failure", "failure"]
+    assert all(call[1][0] is error and call[1][1] == logger.start_time for call in logger.calls)
+
+
+@pytest.mark.parametrize("function", ("stream_success", "stream_failure"))
+def test_stream_logging_rejects_an_operation_without_a_stream_iterator(function: str) -> None:
+    logger: Final = _StreamLogger()
+    arguments: Final = (
+        (
+            "ocr",
+            cast(Logging, logger),
+            {},
+            [],
+            datetime.datetime.now(),
+            datetime.datetime.now(),
+            None,
+        )  # cast-ok: a recording stand-in for the Logging surface
+        if function == "stream_success"
+        else (
+            "ocr",
+            cast(Logging, logger),
+            {},
+            [],
+            RuntimeError("x"),
+        )  # cast-ok: a recording stand-in for the Logging surface
+    )
+    with pytest.raises(ValueError, match="no stream logging"):
+        getattr(legacy, function)(*arguments)

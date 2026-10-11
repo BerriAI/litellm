@@ -9,7 +9,9 @@ use litellm_host::{
     machine::ChannelInterceptors,
     protocol::Protocol,
 };
-use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonTask, from_py};
+use litellm_host_python::{
+    InvokeError, PythonBinding, PythonHostCalls, PythonLifecycle, PythonTask, from_py,
+};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference::RouteError;
 use litellm_secrets::source::SecretSource;
@@ -137,6 +139,11 @@ impl InferenceHost {
         self.cache.call(task, op).await
     }
 
+    /// The caller's resolved request, as the argument stage left it.
+    pub fn request<'py>(&self, py: Python<'py>) -> PyResult<&Bound<'py, PyDict>> {
+        self.view.request(py)
+    }
+
     pub fn close(&mut self) {
         self.view.close();
         self.cache.close();
@@ -189,6 +196,8 @@ impl InferenceHost {
 pub(super) trait InferenceRoute: Sized + Send + 'static {
     type Protocol: litellm_inference::caching::Cachable;
     const OPERATION: LoggingOperation;
+    /// The Python module whose `drive` and stream classes wrap this route's executions.
+    const LIFECYCLE: PythonLifecycle = crate::lifecycle::binding;
 
     fn new(
         http: litellm_http::Client,
@@ -252,5 +261,6 @@ where
         host,
         hooks,
         asynchronous,
+        R::LIFECYCLE,
     )
 }

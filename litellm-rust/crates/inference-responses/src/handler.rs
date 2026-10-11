@@ -138,9 +138,6 @@ pub(super) fn stream_error(error: SseError) -> Error {
 }
 
 fn framing_error(error: SseError) -> Error {
-    litellm_llms::Error::InvalidResponse(litellm_llms::ErrorDetail::failed(
-        "stream framing",
-        error,
-    ))
-    .into()
+    litellm_llms::Error::InvalidResponse(litellm_llms::ErrorDetail::failed("stream framing", error))
+        .into()
 }

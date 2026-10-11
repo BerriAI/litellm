@@ -11,7 +11,7 @@ import contextvars
 import datetime
 import traceback
 import uuid
-from collections.abc import Awaitable, Coroutine, Mapping
+from collections.abc import Awaitable, Coroutine, Mapping, Sequence
 from dataclasses import dataclass
 from typing import (
     TYPE_CHECKING,
@@ -167,6 +167,18 @@ class LoggingSurface(Protocol):
         cache_hit: bool | None = None,
         **kwargs: object,
     ) -> Coroutine[object, object, None]: ...
+
+    def dispatch_success_handlers(
+        self,
+        result: object = None,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+        cache_hit: bool | None = None,
+        prefer_async_handlers: bool = False,
+    ) -> Coroutine[object, object, None]: ...
+
+    @property
+    def start_time(self) -> datetime.datetime: ...
 
 
 if TYPE_CHECKING:
@@ -655,39 +667,143 @@ def stream_opened(logger: Logging, head: Mapping[str, object]) -> None:
     )
 
 
+MESSAGES_STREAM_ROUTE: Final = "/v1/messages"
+MESSAGES_STREAM_ENDPOINT_TYPE: Final = "anthropic"
+
+
 def stream_success(
+    operation: str,
     logger: Logging,
-    url_route: str,
-    endpoint_type: str,
     request_body: dict[str, object],
-    chunks: list[bytes],
+    chunks: Sequence[object],
     start: datetime.datetime,
     end: datetime.datetime,
     first_chunk: datetime.datetime | None,
 ) -> None:
+    """The end-of-stream success logging the operation's Python stream iterator runs: the
+    Messages pass-through billing over the delivered bytes, or the Responses success fan-out
+    with the response its terminal event carried."""
+    if first_chunk is not None:
+        logger.completion_start_time = first_chunk
+        logger.model_call_details["completion_start_time"] = first_chunk
+    coroutine: Final = _stream_success_logging(operation, logger, request_body, chunks, start, end)
+    if coroutine is not None:
+        _schedule_stream_logging(logger, coroutine)
+
+
+def _stream_success_logging(
+    operation: str,
+    logger: Logging,
+    request_body: Mapping[str, object],
+    chunks: Sequence[object],
+    start: datetime.datetime,
+    end: datetime.datetime,
+) -> Coroutine[object, object, None] | None:
+    match operation:
+        case "messages":
+            return _messages_stream_success(logger, request_body, _byte_chunks(chunks), start, end)
+        case "responses":
+            completed: Final = _completed_response(chunks)
+            return None if completed is None else _responses_stream_success(logger, completed, start, end)
+        case _:
+            raise ValueError(f"no stream logging for the {operation} operation")
+
+
+def stream_failure(
+    operation: str,
+    logger: Logging,
+    request_body: dict[str, object],
+    chunks: Sequence[object],
+    error: Exception,
+) -> Coroutine[object, object, None]:
+    """The failure logging the operation's Python stream iterator runs once chunks reached the
+    caller: Messages bills the partial usage from the delivered bytes, Responses runs the async
+    then the sync failure handler."""
+    match operation:
+        case "messages":
+            return _messages_stream_failure(logger, request_body, _byte_chunks(chunks), error)
+        case "responses":
+            return _responses_stream_failure(logger, error, datetime.datetime.now())
+        case _:
+            raise ValueError(f"no stream logging for the {operation} operation")
+
+
+_BYTE_CHUNKS: Final = TypeAdapter(list[bytes])
+
+
+def _byte_chunks(chunks: Sequence[object]) -> Sequence[bytes]:
+    return _BYTE_CHUNKS.validate_python(chunks)
+
+
+def _messages_stream_success(
+    logger: Logging,
+    request_body: Mapping[str, object],
+    chunks: Sequence[bytes],
+    start: datetime.datetime,
+    end: datetime.datetime,
+) -> Coroutine[object, object, None]:
     from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
         GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
     )
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
     from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
 
-    if first_chunk is not None:
-        logger.completion_start_time = first_chunk
-        logger.model_call_details["completion_start_time"] = first_chunk
     build: Final = cast(  # cast-ok: bounded adapter for the untyped pass-through logging builder
         StreamingLogBuilder,
         PassThroughStreamingHandler._route_streaming_logging_to_handler,  # pyright: ignore[reportPrivateUsage]  # the Messages stream iterator bills through the same builder
     )
-    coroutine: Final = build(
+    return build(
         litellm_logging_obj=logger,
         passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
-        url_route=url_route,
-        request_body=request_body,
-        endpoint_type=EndpointType(endpoint_type),
+        url_route=MESSAGES_STREAM_ROUTE,
+        request_body=dict(request_body),
+        endpoint_type=EndpointType(MESSAGES_STREAM_ENDPOINT_TYPE),
         start_time=start,
-        raw_bytes=chunks,
+        raw_bytes=list(chunks),
         end_time=end,
     )
+
+
+def _messages_stream_failure(
+    logger: Logging, request_body: Mapping[str, object], chunks: Sequence[bytes], error: Exception
+) -> Coroutine[object, object, None]:
+    from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
+    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
+
+    return PassThroughStreamingHandler.schedule_stream_failure_logging(
+        litellm_logging_obj=logger,
+        endpoint_type=EndpointType(MESSAGES_STREAM_ENDPOINT_TYPE),
+        request_body=dict(request_body),
+        raw_bytes=list(chunks),
+        exception=error,
+    )
+
+
+def _completed_response(chunks: Sequence[object]) -> object | None:
+    from litellm.rust_bridge.responses.streams import terminal_response
+
+    return next((response for response in map(terminal_response, reversed(chunks)) if response is not None), None)
+
+
+def _responses_stream_success(
+    logger: LoggingSurface, completed: object, start: datetime.datetime, end: datetime.datetime
+) -> Coroutine[object, object, None]:
+    return logger.dispatch_success_handlers(
+        completed, start_time=start, end_time=end, cache_hit=_cache_hit(logger), prefer_async_handlers=True
+    )
+
+
+async def _responses_stream_failure(logger: LoggingSurface, error: Exception, end: datetime.datetime) -> None:
+    from litellm.litellm_core_utils.litellm_logging import executor
+
+    trace: Final = "".join(traceback.format_exception(error))
+    try:
+        await logger.async_failure_handler(error, trace, logger.start_time, end)
+    finally:
+        executor.submit(contextvars.copy_context().run, logger.failure_handler, error, trace, logger.start_time, end)
+
+
+def _schedule_stream_logging(logger: Logging, coroutine: Coroutine[object, object, None]) -> None:
     if getattr(logger, "_on_deferred_stream_complete", None) is not None:
         logger._deferred_stream_complete_args = (coroutine,)  # pyright: ignore[reportAttributeAccessIssue]  # the proxy's deferred stream release reads this slot
         return
@@ -699,22 +815,3 @@ def stream_success(
         executor.submit(contextvars.copy_context().run, asyncio.run, coroutine)
         return
     enqueue_logging(coroutine)
-
-
-def stream_failure(
-    logger: Logging,
-    endpoint_type: str,
-    request_body: dict[str, object],
-    chunks: list[bytes],
-    error: Exception,
-) -> Coroutine[object, object, None]:
-    from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler
-    from litellm.types.passthrough_endpoints.pass_through_endpoints import EndpointType
-
-    return PassThroughStreamingHandler.schedule_stream_failure_logging(
-        litellm_logging_obj=logger,
-        endpoint_type=EndpointType(endpoint_type),
-        request_body=request_body,
-        raw_bytes=chunks,
-        exception=error,
-    )

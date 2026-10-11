@@ -255,7 +255,8 @@ impl LegacyLogging {
             return self.dispatch_failure(task).await;
         }
         let scheduled = Python::attach(|py| -> PyResult<Py<PyAny>> {
-            let (Some(logger), Some(error), Some(stream)) = (&self.logger, &self.error, &self.stream)
+            let (Some(logger), Some(error), Some(stream)) =
+                (&self.logger, &self.error, &self.stream)
             else {
                 return Err(missing_state());
             };
@@ -1767,12 +1768,16 @@ assert logger.calls[1][1] is response
     }
 
     #[rstest]
-    fn stream_bindings_deliver_collected_chunks_in_order_without_success_fan_out() {
+    #[case::messages(crate::LoggingOperation::Messages)]
+    #[case::responses(crate::LoggingOperation::Responses)]
+    fn stream_bindings_deliver_collected_chunks_in_order_without_success_fan_out(
+        #[case] operation: crate::LoggingOperation,
+    ) {
         Python::initialize();
         Python::attach(|py| {
             let locals = namespace(py, c"first = b'first'\nlast = b'last'\nresponse = None\nhead = {'additional_headers': {'request-id': 'req_native'}}");
             let mut logging = LegacyLogging {
-                operation: crate::LoggingOperation::Messages,
+                operation,
                 ..logged(py, &locals, true)
             };
             let task = PythonTask::new(true);

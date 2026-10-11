@@ -267,6 +267,8 @@ async def test_unstarted_native_inference_has_no_provider_or_callback_effects(
     "options",
     (
         {"vendor_flag": True},
+        {"extra_body": {"provider_option": True}},
+        {"mock_response": "mock"},
         {"num_retries": 1},
         {"model_list": []},
         {"user_api_key_alias": "proxy-key", "proxy_server_request": {"url": "/v1/responses"}},
@@ -290,14 +292,6 @@ async def test_native_responses_merges_extra_body_into_the_provider_body(recordi
     assert body["provider_option"] is True
     assert body["temperature"] == 0.5
     assert "extra_body" not in body
-
-
-@pytest.mark.asyncio
-async def test_native_responses_stream_fails_before_the_provider(recording_server: RecordingServer) -> None:
-    recording_server.expected_requests = 0
-    with pytest.raises(litellm.APIConnectionError, match="native Python responses streaming"):
-        await execute("responses", True, recording_server, {"stream": True})
-    assert not recording_server.requests
 
 
 @pytest.mark.asyncio

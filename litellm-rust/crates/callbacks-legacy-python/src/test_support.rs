@@ -116,10 +116,10 @@ FAKES = {
     ),
     'after_deployment_failure': lambda kwargs, error, call_type: kwargs['logger'].hook('failure', error, call_type),
     'stream_opened': lambda logger, head: logger.record('stream_opened', head),
-    'stream_success': lambda logger, url_route, endpoint_type, request_body, chunks, start, end, first_chunk: logger.record(
+    'stream_success': lambda operation, logger, request_body, chunks, start, end, first_chunk: logger.record(
         'stream_success', list(chunks)
     ),
-    'stream_failure': lambda logger, endpoint_type, request_body, chunks, error: logger.record('stream_failure', error),
+    'stream_failure': lambda operation, logger, request_body, chunks, error: logger.record('stream_failure', error),
     'prepare_request': lambda operation, request: request['logger'].body('prepare', operation, request),
     'transform_response': lambda operation, response, request, stream: request['logger'].body('transform', operation, response, request, stream),
     'stream_policy': lambda operation, request: request['logger'].body('policy', operation, request),

@@ -19,7 +19,7 @@ use super::{
 };
 use crate::cache::Cached;
 
-const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.responses.route_host";
+pub(super) const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.responses.route_host";
 
 fn run_responses(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> PyResult<Py<PyAny>> {
     let host = InferenceHost::new(
@@ -32,7 +32,11 @@ fn run_responses(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> Py
             "responses"
         },
     );
-    run_inference::<ResponsesRoute, _>(py, call, asynchronous, ResponsesPythonHost(host))
+    run_inference::<ResponsesRoute, _>(py, call, asynchronous, ResponsesPythonHost::new(host))
+}
+
+fn streams(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
+    py.import("litellm.rust_bridge.responses.streams")
 }
 
 #[pyfunction]
@@ -48,6 +52,7 @@ pub(crate) fn aresponses(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<Py
 impl InferenceRoute for ResponsesRoute {
     type Protocol = Responses;
     const OPERATION: LoggingOperation = LoggingOperation::Responses;
+    const LIFECYCLE: litellm_host_python::PythonLifecycle = streams;
 
     fn new(
         http: litellm_http::Client,

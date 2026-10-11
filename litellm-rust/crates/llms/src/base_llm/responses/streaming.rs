@@ -84,7 +84,12 @@ fn text(object: &Map<String, Value>, field: &str) -> String {
         .to_owned()
 }
 
-fn part_events(item_id: &str, output_index: usize, content_index: usize, part: &Value) -> Vec<ResponsesStreamEvent> {
+fn part_events(
+    item_id: &str,
+    output_index: usize,
+    content_index: usize,
+    part: &Value,
+) -> Vec<ResponsesStreamEvent> {
     let position = |extra: Value| {
         let mut data = json!({"item_id": item_id, "output_index": output_index, "content_index": content_index});
         if let (Value::Object(data), Value::Object(extra)) = (&mut data, extra) {
@@ -174,7 +179,9 @@ fn item_events(response_id: &str, output_index: usize, item: &Value) -> Vec<Resp
 /// The event stream a client would have seen for a complete response, the way the Python
 /// synthetic stream replays one: the response created and in progress with no output, every
 /// output item added, spelled out and done, then the complete response.
-pub fn disassemble_response(response: &ResponsesApiResponse) -> Result<Vec<ResponsesStreamEvent>, Error> {
+pub fn disassemble_response(
+    response: &ResponsesApiResponse,
+) -> Result<Vec<ResponsesStreamEvent>, Error> {
     let complete = serde_json::to_value(response).map_err(invalid)?;
     let mut opened = complete.clone();
     if let Value::Object(opened) = &mut opened {
@@ -187,8 +194,14 @@ pub fn disassemble_response(response: &ResponsesApiResponse) -> Result<Vec<Respo
         .enumerate()
         .flat_map(|(index, item)| item_events(&response.id, index, item));
     Ok([
-        event(ResponsesStreamEventType::Created, json!({"response": opened})),
-        event(ResponsesStreamEventType::InProgress, json!({"response": opened})),
+        event(
+            ResponsesStreamEventType::Created,
+            json!({"response": opened}),
+        ),
+        event(
+            ResponsesStreamEventType::InProgress,
+            json!({"response": opened}),
+        ),
     ]
     .into_iter()
     .chain(items)
@@ -237,10 +250,11 @@ mod tests {
             "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n",
             "data: [DONE]\n\n",
         );
-        let blocks: Vec<Bytes> = openai_sse_blocks(in_pieces(wire.as_bytes(), size.min(wire.len())))
-            .try_collect()
-            .await
-            .unwrap();
+        let blocks: Vec<Bytes> =
+            openai_sse_blocks(in_pieces(wire.as_bytes(), size.min(wire.len())))
+                .try_collect()
+                .await
+                .unwrap();
         assert_eq!(
             blocks,
             vec![
@@ -265,7 +279,10 @@ mod tests {
     #[case::incomplete("response.incomplete", Some("resp_1"))]
     #[case::failed("response.failed", Some("resp_1"))]
     #[case::no_terminal("response.in_progress", None)]
-    fn the_terminal_event_carries_the_assembled_response(#[case] terminal: &str, #[case] id: Option<&str>) {
+    fn the_terminal_event_carries_the_assembled_response(
+        #[case] terminal: &str,
+        #[case] id: Option<&str>,
+    ) {
         let wire = format!(
             "event: response.created\ndata: {{\"type\":\"response.created\",\"response\":{{\"id\":\"early\",\"model\":\"gpt\",\"output\":[]}}}}\n\nevent: {terminal}\ndata: {}\n\n",
             COMPLETED.replace("response.completed", terminal)
@@ -285,7 +302,10 @@ mod tests {
     #[case::function_call(json!({"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "get_weather", "arguments": "{\"city\":\"Paris\"}", "status": "completed"}))]
     #[case::passthrough(json!({"type": "reasoning", "id": "rs_1", "summary": [{"type": "summary_text", "text": "thinking"}]}))]
     fn a_response_survives_the_event_round_trip(#[case] item: Value) {
-        let original = response(vec![item, json!({"type": "message", "id": "msg_2", "role": "assistant", "status": "completed", "content": []})]);
+        let original = response(vec![
+            item,
+            json!({"type": "message", "id": "msg_2", "role": "assistant", "status": "completed", "content": []}),
+        ]);
         let events = disassemble_response(&original).unwrap();
         let wire: Vec<u8> = events
             .iter()
@@ -308,8 +328,14 @@ mod tests {
             json!({"type": "function_call", "id": "fc_1", "call_id": "call_1", "name": "f", "arguments": "{}", "status": "completed"}),
         ]))
         .unwrap();
-        let shapes: Vec<Value> = events.iter().map(|event| serde_json::to_value(event).unwrap()).collect();
-        let types: Vec<&str> = shapes.iter().map(|shape| shape["type"].as_str().unwrap()).collect();
+        let shapes: Vec<Value> = events
+            .iter()
+            .map(|event| serde_json::to_value(event).unwrap())
+            .collect();
+        let types: Vec<&str> = shapes
+            .iter()
+            .map(|shape| shape["type"].as_str().unwrap())
+            .collect();
         assert_eq!(
             types,
             [
@@ -334,15 +360,24 @@ mod tests {
         assert_eq!(shapes[4]["item_id"], "msg_1");
         assert_eq!(shapes[9]["delta"], "{}");
         assert_eq!(shapes[12]["response"]["status"], "completed");
-        assert_eq!(shapes[12]["response"]["output"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            shapes[12]["response"]["output"].as_array().unwrap().len(),
+            2
+        );
     }
 
     #[rstest]
     fn an_event_is_named_by_its_type_on_the_wire() {
-        let encoded = encode_openai_sse(&event(ResponsesStreamEventType::OutputTextDelta, json!({"delta": "x"}))).unwrap();
+        let encoded = encode_openai_sse(&event(
+            ResponsesStreamEventType::OutputTextDelta,
+            json!({"delta": "x"}),
+        ))
+        .unwrap();
         assert_eq!(
             encoded,
-            Bytes::from("event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n")
+            Bytes::from(
+                "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"x\"}\n\n"
+            )
         );
     }
 }
