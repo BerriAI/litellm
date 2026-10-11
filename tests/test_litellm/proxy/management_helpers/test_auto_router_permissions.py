@@ -308,3 +308,26 @@ async def test_jev_evaluation_obeys_each_containing_scope(catalog: Router, restr
         return
     await operation
     assert not catalog.get_model_list("typesafe/jev-latest")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("restricted", ["key", "team", None])
+async def test_deployed_decision_classifier_requires_key_and_team_access(catalog: Router, restricted: str | None) -> None:
+    permitted: Final = ["allowed", "other"]
+    operation: Final = authorize_member_auto_router_dependencies(
+        config=validate_member_auto_router_config({
+            "tiers": {"SIMPLE": "allowed"},
+            "classifier_type": "jev",
+            "jev_classifier_config": {"deployment_name": "other"},
+        }),
+        default_model=None,
+        user_api_key_dict=_actor(models=["allowed"] if restricted == "key" else permitted),
+        team=_team(models=["allowed"] if restricted == "team" else permitted),
+        prisma_client=_Client(),
+        llm_router=catalog,
+    )
+    if restricted is not None:
+        with pytest.raises(ProxyException, match="other"):
+            await operation
+        return
+    await operation

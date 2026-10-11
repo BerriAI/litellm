@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, NamedTuple, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple, Protocol, TypeAlias
 from uuid import uuid4
 
 import httpx
@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_router_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.litellm_core_utils.classifier_logging import masked_originating_request
 from litellm.litellm_core_utils.internal_call_metadata import (
     effective_turn_off_message_logging,
     forwarded_internal_call_metadata,
@@ -22,7 +23,11 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.typesafe_passthr
     TypeSafePassthroughLoggingHandler,
 )
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS as _DEFAULT_JEV_INSTRUCTIONS
+from litellm.types.decisions import DecisionsResponse
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
+
+if TYPE_CHECKING:
+    from litellm.router import Router
 
 JevProbability: TypeAlias = Annotated[float, Field(ge=0.0, le=1.0)]
 DEFAULT_JEV_INSTRUCTIONS: Final = _DEFAULT_JEV_INSTRUCTIONS
@@ -65,6 +70,8 @@ class JevSystemOneResponse(BaseModel):
 
     model: str | None = None
     answers: Mapping[str, JevChoiceAnswer]
+    classifier_cost: float | None = None
+    classifier_provider: str | None = None
     usage: JevUsage | None = None
 
 
@@ -75,6 +82,74 @@ class JevClassifierClient(Protocol):
         timeout_s: float,
         request_kwargs: Mapping[str, object] | None = None,
     ) -> JevSystemOneResponse: ...
+
+
+class _DecisionsRouter(Protocol):
+    async def adecisions(
+        self,
+        *,
+        model: str,
+        state: str,
+        questions: Mapping[str, object],
+        timeout: float,
+        num_retries: int,
+        disable_fallbacks: bool,
+        metadata: Mapping[str, object],
+        proxy_server_request: Mapping[str, object],
+        turn_off_message_logging: bool | None,
+        litellm_session_id: str = "",
+        litellm_trace_id: str = "",
+    ) -> object: ...
+
+
+_PARENT_METADATA: Final = TypeAdapter[Mapping[str, object] | None](Mapping[str, object] | None)
+
+
+class RouterJevClassifierClient:
+    def __init__(self, router: "Router", deployment_name: str) -> None:
+        self._router: _DecisionsRouter = router
+        self._deployment_name = deployment_name
+
+    async def evaluate(
+        self,
+        request: JevSystemOneRequest,
+        timeout_s: float,
+        request_kwargs: Mapping[str, object] | None = None,
+    ) -> JevSystemOneResponse:
+        parent: Final = request_kwargs or MappingProxyType({})
+        metadata: Final = {  # mutable-ok: Router logging enriches the SDK metadata dictionary in place
+            **forwarded_internal_call_metadata(
+                _PARENT_METADATA.validate_python(parent.get("litellm_metadata") or parent.get("metadata")),
+                AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+            ),
+            INTERNAL_CALL_ORIGIN_METADATA_KEY: AUTOROUTER_CLASSIFIER_CALL_ORIGIN,
+        }
+        response: Final = DecisionsResponse.model_validate(
+            await self._router.adecisions(
+                model=self._deployment_name,
+                state=request.state,
+                questions=request.model_dump()["questions"],
+                timeout=timeout_s,
+                num_retries=0,
+                disable_fallbacks=True,
+                metadata=metadata,
+                proxy_server_request={  # mutable-ok: SDK logging consumes the proxy request as a JSON dictionary
+                    "originating_request_masked": masked_originating_request(request_kwargs),
+                    "body": request.model_copy(update=MappingProxyType({"model": self._deployment_name})).model_dump(),
+                },
+                turn_off_message_logging=effective_turn_off_message_logging(request_kwargs),
+                **parent_session_kwargs(request_kwargs),
+            )
+        )
+        return JevSystemOneResponse.model_validate(
+            MappingProxyType(
+                {
+                    **response.model_dump(),
+                    "classifier_cost": response.hidden_params.get("response_cost"),
+                    "classifier_provider": response.hidden_params.get("custom_llm_provider"),
+                }
+            )
+        )
 
 
 class HttpJevClassifierClient:
@@ -189,6 +264,7 @@ class JevVerdict(NamedTuple):
     confidence: float
     model: str
     cost: float | None
+    provider: str = "typesafe"
 
 
 class _RegistryPricing(BaseModel):
