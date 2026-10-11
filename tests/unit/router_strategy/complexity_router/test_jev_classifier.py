@@ -14,6 +14,7 @@ import litellm
 from litellm._logging import verbose_router_logger
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_key
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
@@ -500,6 +501,11 @@ async def test_oss_routes_with_its_own_credentials_and_accounts_the_checkpoint(
     monkeypatch.setenv(f"{provider.upper()}_API_KEY", "oss-env-key")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setitem(litellm.model_cost, f"{provider}/{model}", {"input_cost_per_token": 0.01})
+    monkeypatch.setitem(
+        litellm.model_cost,
+        decisions_pricing_key(provider, model),
+        {"input_cost_per_token": 0.01},
+    )
     recorder: Final = _UsageRecorder(f"{provider}/{model}")
     monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
     router: Final = ComplexityRouter(
@@ -563,6 +569,11 @@ async def test_databricks_routes_through_the_serving_endpoint_and_accounts_the_e
     monkeypatch.setenv("DATABRICKS_TOKEN", "dapi-env-token")
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setitem(litellm.model_cost, f"databricks/{endpoint}", {"input_cost_per_token": 0.01})
+    monkeypatch.setitem(
+        litellm.model_cost,
+        decisions_pricing_key("databricks", endpoint),
+        {"input_cost_per_token": 0.01},
+    )
     recorder: Final = _UsageRecorder(f"databricks/{endpoint}")
     monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
     router: Final = ComplexityRouter(
