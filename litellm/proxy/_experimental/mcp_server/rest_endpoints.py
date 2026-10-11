@@ -412,7 +412,7 @@ if MCP_AVAILABLE:
                 raw_headers=virtual_raw_headers,
                 litellm_logging_obj=virtual_logging_obj,
                 guardrail_context=MCPRequestContext.resolve_guardrail_context(virtual_data),
-                incoming_bearer_token=MCPRequestHandler.get_incoming_bearer_token(request.headers),
+                incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(request.headers, user_api_key_dict),
             )
         except Exception as e:
             virtual_request_data: Final = virtual_processor.data
@@ -1346,7 +1346,9 @@ if MCP_AVAILABLE:
                     litellm_logging_obj=data.get("litellm_logging_obj"),
                     guardrail_context=MCPRequestContext.resolve_guardrail_context(data),
                     requested_server_id=canonical_server_id,
-                    incoming_bearer_token=MCPRequestHandler.get_incoming_bearer_token(request.headers),
+                    incoming_bearer_token=MCPRequestHandler.get_guardrail_bearer_token(
+                        request.headers, user_api_key_dict
+                    ),
                 )
                 result: Final = complete_call_tool_result(executed, WireCompat.LEGACY)
             except Exception as e:
