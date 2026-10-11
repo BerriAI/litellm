@@ -74,6 +74,8 @@ class TeamBase(LiteLLMPydanticObjectBase):
     tpd_limit: int | None = None
     max_budget: float | None = None
     soft_budget: float | None = None
+    # cumulative token cap over budget_duration (mirrors max_budget); null = untracked
+    max_tokens_budget: int | None = None
     budget_duration: str | None = None
     budget_limits: list[BudgetLimitEntry] | None = None
     models: list[str] = []
@@ -86,6 +88,7 @@ class TeamBase(LiteLLMPydanticObjectBase):
 class LiteLLM_TeamTable(TeamBase):
     team_id: str
     spend: float | None = None
+    tokens_used: int | None = None  # cumulative tokens consumed this window (mirrors spend)
     max_parallel_requests: int | None = None
     budget_duration: str | None = None
     budget_reset_at: datetime | None = None

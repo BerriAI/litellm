@@ -197,6 +197,8 @@ model LiteLLM_TeamTable {
     tpd_limit     BigInt?
     budget_duration String? 
     budget_reset_at DateTime?
+    max_tokens_budget BigInt?  // cumulative token cap over budget_duration; null = untracked (mirrors max_budget)
+    tokens_used BigInt @default(0)  // cumulative tokens consumed in the current window (mirrors spend)
     blocked Boolean @default(false)
     created_at    DateTime               @default(now()) @map("created_at")
     updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")

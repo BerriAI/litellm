@@ -118,6 +118,9 @@ class SpendUpdateQueue(BaseUpdateQueue):
                 current_cost = _in_memory_map[_key].get("response_cost", 0) or 0
                 update_cost = update.get("response_cost", 0) or 0
                 _in_memory_map[_key]["response_cost"] = current_cost + update_cost
+                current_tokens = _in_memory_map[_key].get("tokens", 0) or 0
+                update_tokens = update.get("tokens", 0) or 0
+                _in_memory_map[_key]["tokens"] = current_tokens + update_tokens
 
         for _key, update in _in_memory_map.items():
             aggregated_spend_updates.append(update)
@@ -135,6 +138,7 @@ class SpendUpdateQueue(BaseUpdateQueue):
             end_user_list_transactions={},
             key_list_transactions={},
             team_list_transactions={},
+            team_token_list_transactions={},
             team_member_list_transactions={},
             org_list_transactions={},
             org_member_list_transactions={},
@@ -215,6 +219,15 @@ class SpendUpdateQueue(BaseUpdateQueue):
                 transactions_dict[entity_id] = 0
 
             transactions_dict[entity_id] += response_cost or 0
+
+            # Tokens budgets only apply to teams, so sum the token delta into a
+            # parallel map flushed to LiteLLM_TeamTable.tokens_used beside spend.
+            if entity_type == Litellm_EntityType.TEAM:
+                team_tokens = db_spend_update_transactions["team_token_list_transactions"]
+                if team_tokens is None:
+                    team_tokens = {}
+                    db_spend_update_transactions["team_token_list_transactions"] = team_tokens
+                team_tokens[entity_id] = (team_tokens.get(entity_id) or 0) + (update.get("tokens") or 0)
 
         return db_spend_update_transactions
 
