@@ -147,6 +147,8 @@ class SupportedGuardrailIntegrations(Enum):
     AGENT_365 = "agent_365"
     CONDUCT = "conduct"
     TEALTIGER = "tealtiger"
+    DECISION_MODEL = "decision_model"
+
 
 class Role(Enum):
     SYSTEM = "system"
