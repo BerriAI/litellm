@@ -842,7 +842,6 @@ const ComplexityRouterConfig: React.FC<ComplexityRouterConfigProps> = ({
         </>
       )}
       <DefaultModelField value={value} onChange={onChange} modelOptions={modelOptions} />
-      <Separator className="my-6" />
 
       <RoutingOptions
         showValidationErrors={showValidationErrors}
