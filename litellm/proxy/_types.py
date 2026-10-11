@@ -5114,7 +5114,7 @@ class DBSpendUpdateTransactions(TypedDict):
     team_list_transactions: dict[str, float] | None
     # cumulative token deltas per team, flushed to LiteLLM_TeamTable.tokens_used
     # alongside team_list_transactions (spend). Tokens budgets only apply to teams.
-    team_token_list_transactions: dict[str, int] | None
+    team_token_list_transactions: dict[str, float] | None
     team_member_list_transactions: dict[str, float] | None
     org_list_transactions: dict[str, float] | None
     org_member_list_transactions: ReadOnly[dict[str, float] | None]
