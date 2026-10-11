@@ -6,7 +6,7 @@ extras fails on any call that passes ordinary tools. This module imports only th
 reason.
 """
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 
 
 def _is_mcp_tool(tool: object) -> bool:
@@ -23,5 +23,12 @@ def may_name_litellm_mcp_gateway(tools: Iterable[object] | None) -> bool:
     ``LiteLLM_Proxy_MCP_Handler.should_use_litellm_mcp_gateway`` reads ``server_url`` from dict tools of type
     ``mcp`` and from nothing else, so this is a necessary condition for it: it never returns False for a tool
     list the handler would accept.
+
+    A one-shot iterable such as a generator cannot be scanned twice, and the handler scans it again, so it is
+    left unread and reported as possibly naming the gateway. Those inputs keep the previous code path.
     """
-    return any(_is_mcp_tool(tool) for tool in tools or ())
+    if tools is None:
+        return False
+    if not isinstance(tools, Collection):
+        return True
+    return any(_is_mcp_tool(tool) for tool in tools)

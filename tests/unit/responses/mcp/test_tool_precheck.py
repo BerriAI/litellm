@@ -6,14 +6,12 @@ neither, so ordinary tools must never make ``completion()`` or ``responses()`` i
 
 import sys
 from typing import Final
-from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
 import respx
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 GATEWAY_HANDLER_MODULES: Final = (
     "litellm.responses.mcp.litellm_proxy_mcp_handler",
@@ -132,23 +130,23 @@ def test_responses_without_a_gateway_tool_does_not_import_the_gateway_handler(to
 
 @pytest.mark.asyncio
 @pytest.mark.usefixtures("gateway_handler_unavailable")
-async def test_anthropic_messages_with_function_tool_does_not_import_the_gateway_handler():
-    upstream: Final = httpx.Response(
-        200,
-        json=ANTHROPIC_MESSAGE_PAYLOAD,
-        request=httpx.Request("POST", "https://api.anthropic.com/v1/messages"),
+async def test_anthropic_messages_with_function_tool_does_not_import_the_gateway_handler(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    upstream: Final = respx_mock.post("https://api.anthropic.com/v1/messages").mock(
+        return_value=httpx.Response(200, json=ANTHROPIC_MESSAGE_PAYLOAD)
     )
 
-    with patch.object(AsyncHTTPHandler, "post", new_callable=AsyncMock, return_value=upstream) as post:
-        response = await litellm.anthropic_interface.messages.acreate(
-            model="anthropic/claude-sonnet-5-5",
-            messages=[{"role": "user", "content": "hi"}],
-            max_tokens=16,
-            tools=[ANTHROPIC_FUNCTION_TOOL],
-            api_key="sk-test",
-        )
+    response = await litellm.anthropic_interface.messages.acreate(
+        model="anthropic/claude-sonnet-5-5",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=16,
+        tools=[ANTHROPIC_FUNCTION_TOOL],
+        api_key="sk-test",
+    )
 
-    post.assert_awaited_once()
+    assert upstream.called
     assert response["content"][0]["text"] == "ok"
 
 
@@ -181,6 +179,14 @@ def test_may_name_litellm_mcp_gateway_keeps_only_mcp_tools(tools, expected):
     from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
 
     assert may_name_litellm_mcp_gateway(tools) is expected
+
+
+def test_precheck_leaves_a_one_shot_iterable_unread():
+    tools: Final = (tool for tool in [FUNCTION_TOOL, GATEWAY_MCP_TOOL, GATEWAY_MCP_TOOL])
+    from litellm.responses.mcp.tool_precheck import may_name_litellm_mcp_gateway
+
+    assert may_name_litellm_mcp_gateway(tools) is True
+    assert list(tools) == [FUNCTION_TOOL, GATEWAY_MCP_TOOL, GATEWAY_MCP_TOOL]
 
 
 @pytest.mark.parametrize(
