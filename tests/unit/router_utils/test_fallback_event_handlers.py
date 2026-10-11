@@ -590,7 +590,7 @@ class TagRoutingFallbackRouter:
     def log_retry(self, kwargs, e):
         return kwargs
 
-    def _get_all_deployments(self, model_name: str, **kwargs):
+    def get_all_deployments(self, model_name: str, **kwargs):
         return list(self.deployments_by_group.get(model_name, []))
 
     async def async_function_with_fallbacks(self, *args, **kwargs):
