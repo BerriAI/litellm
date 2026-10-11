@@ -5,6 +5,7 @@ import * as networking from "./networking";
 
 vi.mock("./networking", () => ({
   getSpendReportEmailSettings: vi.fn(),
+  getSpendReportEmailStatus: vi.fn().mockResolvedValue({ configured: true, provider: "smtp" }),
   updateSpendReportEmailSettings: vi.fn(),
   sendSpendReportEmailTest: vi.fn(),
   teamListCall: vi.fn().mockResolvedValue([]),
@@ -28,7 +29,7 @@ describe("SpendReportEmailSettings", () => {
       field_schema: {},
     });
 
-    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" />);
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
 
     expect(screen.getByText("Scheduled Spend Reports (Email / SMTP)")).toBeInTheDocument();
 
@@ -60,6 +61,73 @@ describe("SpendReportEmailSettings", () => {
     await waitFor(() => {
       const disabledElements = screen.getAllByText("Disabled");
       expect(disabledElements.length).toBeGreaterThan(0);
+    });
+  });
+
+  it("renders collapsed by default and allows expanding and collapsing", async () => {
+    vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
+      values: {
+        enabled: true,
+        frequency: "daily",
+        daily_send_time: "09:00",
+        monthly_send_time: "09:00",
+        recipient_emails: ["ops@example.com"],
+        group_by: ["team"],
+      },
+      field_schema: {},
+    });
+
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Expand")).toBeInTheDocument();
+      expect(screen.queryByText("Save Spend Report Settings")).not.toBeInTheDocument();
+    });
+
+    const expandButton = screen.getByRole("button", { name: /Expand spend report settings/i });
+    fireEvent.click(expandButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("Collapse")).toBeInTheDocument();
+      expect(screen.getByText("Save Spend Report Settings")).toBeInTheDocument();
+    });
+
+    const collapseButton = screen.getByRole("button", { name: /Collapse spend report settings/i });
+    fireEvent.click(collapseButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("Expand")).toBeInTheDocument();
+      expect(screen.queryByText("Save Spend Report Settings")).not.toBeInTheDocument();
+    });
+  });
+
+  it("auto-expands when clicking Add Alert from collapsed state", async () => {
+    vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
+      values: {
+        enabled: false,
+        frequency: "daily",
+        daily_send_time: "09:00",
+        monthly_send_time: "09:00",
+        recipient_emails: [],
+        group_by: ["team"],
+        alerts: [],
+      },
+      field_schema: {},
+    });
+
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Expand")).toBeInTheDocument();
+    });
+
+    const addAlertButton = screen.getByRole("button", { name: "Add Alert" });
+    fireEvent.click(addAlertButton);
+
+    await waitFor(() => {
+      expect(screen.getByText("Collapse")).toBeInTheDocument();
+      expect(screen.getByDisplayValue("Spend Report Alert 2")).toBeInTheDocument();
+      expect(screen.getByText("Save Spend Report Settings")).toBeInTheDocument();
     });
   });
 
@@ -101,6 +169,7 @@ describe("SpendReportEmailSettings", () => {
     renderWithProviders(
       <SpendReportEmailSettings
         accessToken="test-token"
+        defaultExpanded
         teams={[{ team_id: "team-123", team_alias: "Team Alpha" } as any]}
       />,
     );
@@ -143,7 +212,7 @@ describe("SpendReportEmailSettings", () => {
     });
     vi.mocked(networking.updateSpendReportEmailSettings).mockResolvedValue({});
 
-    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" />);
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("Initial Alert")).toBeInTheDocument();
@@ -197,7 +266,7 @@ describe("SpendReportEmailSettings", () => {
       field_schema: {},
     });
 
-    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" />);
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("Alert To Delete")).toBeInTheDocument();
@@ -241,7 +310,7 @@ describe("SpendReportEmailSettings", () => {
       total_requests: 5,
     });
 
-    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" />);
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
 
     await waitFor(() => {
       expect(screen.getByDisplayValue("Testable Alert")).toBeInTheDocument();
@@ -261,5 +330,44 @@ describe("SpendReportEmailSettings", () => {
         }),
       );
     });
+  });
+
+  it("disables send test report button when email delivery is not configured", async () => {
+    vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
+      values: {
+        enabled: true,
+        frequency: "daily",
+        daily_send_time: "09:00",
+        monthly_send_time: "09:00",
+        recipient_emails: ["ops@example.com"],
+        group_by: ["team"],
+        alerts: [
+          {
+            id: "alert-unconf",
+            name: "Unconfigured Alert",
+            enabled: true,
+            frequency: "daily",
+            send_time: "09:00",
+            recipient_emails: ["ops@example.com"],
+            group_by: ["team"],
+            team_id: null,
+          },
+        ],
+      },
+      field_schema: {},
+    });
+    vi.mocked(networking.getSpendReportEmailStatus).mockResolvedValue({
+      configured: false,
+      provider: null,
+    });
+
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Unconfigured Alert")).toBeInTheDocument();
+    });
+
+    const testButton = screen.getByRole("button", { name: "Send Test Report Now" });
+    expect(testButton).toBeDisabled();
   });
 });

@@ -58,6 +58,7 @@ from litellm.proxy.spend_tracking.spend_capture_rate import (
 )
 from litellm.proxy.spend_tracking.spend_report_email import (
     SpendReportEmailSendRequest,
+    SpendReportEmailStatusResponse,
     SpendReportSendResult,
 )
 
@@ -5059,4 +5060,18 @@ async def trigger_spend_report_email(
         end_date=request.end_date,
         team_id=request.team_id,
     )
+
+
+@router.get(
+    "/spend/report/email/status",
+    tags=["spend tracking"],
+    dependencies=[Depends(user_api_key_auth)],
+    response_model=SpendReportEmailStatusResponse,
+)
+async def get_spend_report_email_status(
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+) -> SpendReportEmailStatusResponse:
+    from litellm.proxy.spend_tracking.spend_report_email import check_spend_report_email_status
+
+    return check_spend_report_email_status()
 

@@ -5799,6 +5799,32 @@ export const sendSpendReportEmailTest = async (
   }
 };
 
+export interface SpendReportEmailStatusResponse {
+  configured: boolean;
+  provider?: "smtp" | "sendgrid" | "resend" | null;
+  message?: string;
+}
+
+export const getSpendReportEmailStatus = async (accessToken: string): Promise<SpendReportEmailStatusResponse> => {
+  try {
+    const url = proxyBaseUrl ? `${proxyBaseUrl}/spend/report/email/status` : `/spend/report/email/status`;
+    const response = await fetch(url, {
+      method: "GET",
+      headers: {
+        [globalLitellmHeaderName]: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+    });
+    if (!response.ok) {
+      return { configured: false, provider: null, message: "Unable to verify email configuration" };
+    }
+    return await response.json();
+  } catch (error) {
+    console.error("Failed to fetch spend report email status:", error);
+    return { configured: false, provider: null, message: "Unable to verify email configuration" };
+  }
+};
+
 export { type Team } from "./key_team_helpers/key_list"; // Re-export Team
 
 export const deleteAgentCall = async (accessToken: string, agentId: string) => {

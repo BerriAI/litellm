@@ -8,21 +8,25 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Trash2, Send } from "lucide-react";
+import { Plus, Trash2, Send, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "@/lib/toast";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import {
   getSpendReportEmailSettings,
+  getSpendReportEmailStatus,
   updateSpendReportEmailSettings,
   sendSpendReportEmailTest,
   teamListCall,
   type SpendReportEmailAlertItem,
   type SpendReportEmailSettingsValues,
+  type SpendReportEmailStatusResponse,
 } from "./networking";
 import type { Team } from "@/components/key_team_helpers/key_list";
 
 interface SpendReportEmailSettingsProps {
   accessToken: string | null;
   teams?: Team[];
+  defaultExpanded?: boolean;
 }
 
 type GroupByOptionId = "team" | "team_key" | "team_model" | "team_key_model";
@@ -95,14 +99,24 @@ const buildInitialAlerts = (values: SpendReportEmailSettingsValues): SpendReport
 export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> = ({
   accessToken,
   teams: initialTeams,
+  defaultExpanded,
 }) => {
   const [loading, setLoading] = useState<boolean>(Boolean(accessToken));
   const [saving, setSaving] = useState(false);
   const [testingAlertId, setTestingAlertId] = useState<string | null>(null);
+  const [isExpanded, setIsExpanded] = useState<boolean>(defaultExpanded ?? false);
+  const [emailStatus, setEmailStatus] = useState<SpendReportEmailStatusResponse | null>(null);
 
   const [alerts, setAlerts] = useState<SpendReportEmailAlertItem[]>([]);
   const [recipientsInputs, setRecipientsInputs] = useState<Record<string, string>>({});
   const [availableTeams, setAvailableTeams] = useState<Team[]>([]);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    getSpendReportEmailStatus(accessToken)
+      .then((status) => setEmailStatus(status))
+      .catch(() => setEmailStatus({ configured: false, provider: null }));
+  }, [accessToken]);
 
   useEffect(() => {
     let active = true;
@@ -171,6 +185,7 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
   const teams = initialTeams && initialTeams.length > 0 ? initialTeams : availableTeams;
 
   const handleAddAlert = () => {
+    setIsExpanded(true);
     const newId =
       typeof crypto !== "undefined" && crypto.randomUUID ? crypto.randomUUID() : `alert-${Date.now()}`;
     const newAlert: SpendReportEmailAlertItem = {
@@ -316,21 +331,35 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
               breakdowns by team, API keys, and models.
             </CardDescription>
           </div>
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            onClick={handleAddAlert}
-            disabled={loading || saving}
-            className="self-start sm:self-auto flex items-center gap-1.5"
-          >
-            <Plus className="h-4 w-4" />
-            Add Alert
-          </Button>
+          <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={handleAddAlert}
+              disabled={loading || saving}
+              className="flex items-center gap-1.5"
+            >
+              <Plus className="h-4 w-4" />
+              Add Alert
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsExpanded((prev) => !prev)}
+              aria-label={isExpanded ? "Collapse spend report settings" : "Expand spend report settings"}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <span>{isExpanded ? "Collapse" : "Expand"}</span>
+              {isExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+            </Button>
+          </div>
         </div>
       </CardHeader>
 
-      <CardContent>
+      {isExpanded && (
+        <CardContent>
         <Separator className="mb-6" />
 
         {loading ? (
@@ -522,17 +551,25 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
                       </div>
 
                       <div className="flex justify-end pt-2">
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          onClick={() => handleSendTestReport(alert)}
-                          disabled={isTesting || saving}
-                          className="flex items-center gap-1.5 text-xs h-8"
+                        <SimpleTooltip
+                          content={
+                            emailStatus && !emailStatus.configured
+                              ? "Email delivery is not configured. Configure SMTP server settings above or set SENDGRID_API_KEY environment variable."
+                              : undefined
+                          }
                         >
-                          <Send className="h-3.5 w-3.5" />
-                          {isTesting ? "Sending Test..." : "Send Test Report Now"}
-                        </Button>
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            onClick={() => handleSendTestReport(alert)}
+                            disabled={isTesting || saving || (emailStatus !== null && !emailStatus.configured)}
+                            className="flex items-center gap-1.5 text-xs h-8"
+                          >
+                            <Send className="h-3.5 w-3.5" />
+                            {isTesting ? "Sending Test..." : "Send Test Report Now"}
+                          </Button>
+                        </SimpleTooltip>
                       </div>
                     </CardContent>
                   </Card>
@@ -560,6 +597,7 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
           </div>
         )}
       </CardContent>
+      )}
     </Card>
   );
 };

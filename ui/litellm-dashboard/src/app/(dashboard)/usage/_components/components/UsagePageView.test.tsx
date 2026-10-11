@@ -32,6 +32,13 @@ vi.mock("@/components/networking", () => ({
   dailyActivityExportCall: vi.fn(),
   gatewayDailyActivityCall: vi.fn(),
   tagListCall: vi.fn(),
+  getSpendReportEmailStatus: vi.fn(),
+  formatDate: vi.fn((date: Date) => {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+  }),
 }));
 
 // Mock child components to simplify testing
@@ -174,6 +181,7 @@ describe("UsagePage", () => {
   const mockDailyActivityKeyPageCall = vi.mocked(networking.dailyActivityKeyPageCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
+  const mockGetSpendReportEmailStatus = vi.mocked(networking.getSpendReportEmailStatus);
   const mockUseCustomers = vi.mocked(useCustomers);
   const mockUseAgents = vi.mocked(useAgents);
   const mockUseAuthorized = vi.mocked(useAuthorized);
@@ -400,6 +408,7 @@ describe("UsagePage", () => {
     );
     mockTagListCall.mockClear();
     mockGatewayDailyActivityCall.mockClear();
+    mockGetSpendReportEmailStatus.mockResolvedValue({ configured: true, provider: "smtp" });
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
     mockGatewayDailyActivityCall.mockResolvedValue(mockGatewayActivity);
     mockUseInfiniteUsers.mockReturnValue({
@@ -1306,6 +1315,25 @@ describe("UsagePage", () => {
       expect(screen.getByText("Key Activity")).toBeInTheDocument();
       expect(screen.getByText("MCP Server Activity")).toBeInTheDocument();
       expect(screen.getByText("Endpoint Activity")).toBeInTheDocument();
+    });
+  });
+
+  describe("email summary button", () => {
+    it("should be enabled when email delivery is configured", async () => {
+      mockGetSpendReportEmailStatus.mockResolvedValue({ configured: true, provider: "smtp" });
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      const emailButton = await screen.findByRole("button", { name: /email summary/i });
+      expect(emailButton).not.toBeDisabled();
+    });
+
+    it("should be disabled when email delivery is not configured", async () => {
+      mockGetSpendReportEmailStatus.mockResolvedValue({ configured: false, provider: null });
+      renderWithProviders(<UsagePage {...defaultProps} />);
+
+      await waitFor(() => {
+        expect(screen.getByRole("button", { name: /email summary/i })).toBeDisabled();
+      });
     });
   });
 });

@@ -379,11 +379,12 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
   }, [showEditCallback, selectedEditCallback, editForm, callbackConfigs]);
 
   const handleSwitchChange = (alertName: string) => {
-    if (activeAlerts.includes(alertName)) {
-      setActiveAlerts(activeAlerts.filter((alert) => alert !== alertName));
-    } else {
-      setActiveAlerts([...activeAlerts, alertName]);
-    }
+    setActiveAlerts((prev) => {
+      const current = prev ?? [];
+      return current.includes(alertName)
+        ? current.filter((alert) => alert !== alertName)
+        : [...current, alertName];
+    });
   };
   const alerts_to_UI_NAME: Record<string, string> = {
     llm_exceptions: "LLM Exceptions",
@@ -416,8 +417,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
             let _alert_info = alerts_data[0];
             let catch_all_webhook = _alert_info.variables.SLACK_WEBHOOK_URL;
 
-            let active_alerts = _alert_info.active_alerts;
-            setActiveAlerts(active_alerts);
+            let active_alerts = _alert_info?.active_alerts;
+            setActiveAlerts(Array.isArray(active_alerts) ? active_alerts : []);
             setCatchAllWebhookURL(catch_all_webhook);
             setAlertToWebhooks(_alert_info.alerts_to_webhook);
           }
@@ -431,8 +432,8 @@ const Settings: React.FC<SettingsPageProps> = ({ accessToken, userRole, userID, 
     fetchCallbacks();
   }, [accessToken, userRole, userID]);
 
-  const isAlertOn = (alertName: string) => {
-    return activeAlerts && activeAlerts.includes(alertName);
+  const isAlertOn = (alertName: string): boolean => {
+    return Boolean(activeAlerts && activeAlerts.includes(alertName));
   };
 
   // Shared handler for callback form submission

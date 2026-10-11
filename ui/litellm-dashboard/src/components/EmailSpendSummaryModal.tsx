@@ -7,7 +7,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "@/lib/toast";
 import { ExternalLink, Loader2, Mail } from "lucide-react";
 import Link from "next/link";
-import { sendSpendReportEmailTest } from "./networking";
+import { formatDate, sendSpendReportEmailTest } from "./networking";
 import type { Team } from "./key_team_helpers/key_list";
 
 export interface EmailSpendSummaryModalProps {
@@ -51,8 +51,8 @@ export const EmailSpendSummaryModal: React.FC<EmailSpendSummaryModalProps> = ({
   const [groupBy, setGroupBy] = useState<GroupByOptionId[]>(DEFAULT_GROUP_BY);
   const [isSending, setIsSending] = useState(false);
 
-  const resolvedStartDate = startDate || new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
-  const resolvedEndDate = endDate || new Date().toISOString().split("T")[0];
+  const resolvedStartDate = startDate || formatDate(new Date(Date.now() - 7 * 24 * 60 * 60 * 1000));
+  const resolvedEndDate = endDate || formatDate(new Date());
 
   const handleGroupByToggle = (optionId: GroupByOptionId, checked: boolean) => {
     setGroupBy((prev) => {

@@ -33,7 +33,15 @@ import EntityUsageExportModal from "@/components/EntityUsageExport";
 import EmailSpendSummaryModal from "@/components/EmailSpendSummaryModal";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import { Team } from "@/components/key_team_helpers/key_list";
-import { gatewayDailyActivityCall, Organization, tagListCall } from "@/components/networking";
+import {
+  formatDate,
+  gatewayDailyActivityCall,
+  getSpendReportEmailStatus,
+  Organization,
+  SpendReportEmailStatusResponse,
+  tagListCall,
+} from "@/components/networking";
+import { SimpleTooltip } from "@/components/ui/tooltip";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
 import { ChartLoader } from "@/components/shared/chart_loader";
 import { Tag } from "@/components/tag_management/types";
@@ -112,6 +120,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
   const [isGlobalExportModalOpen, setIsGlobalExportModalOpen] = useState(false);
   const [isEmailSummaryModalOpen, setIsEmailSummaryModalOpen] = useState(false);
+  const [emailStatus, setEmailStatus] = useState<SpendReportEmailStatusResponse | null>(null);
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const [selectedUsageView, setUsageView] = useState<UsageOption>("global");
   // Org-admin membership is read from the server, so unlike the other usage
@@ -125,6 +134,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
   const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
   const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
+
+  useEffect(() => {
+    if (!accessToken) return;
+    getSpendReportEmailStatus(accessToken)
+      .then(setEmailStatus)
+      .catch(() => {
+        setEmailStatus({ configured: false, provider: null });
+      });
+  }, [accessToken]);
+
   // Sync selectedUserId when auth state settles (isAdmin/userID may be null on initial render)
   useEffect(() => {
     if (!isAdmin && userID) {
@@ -507,10 +526,22 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <Download />
                       Export Data
                     </Button>
-                    <Button variant="outline" onClick={() => setIsEmailSummaryModalOpen(true)}>
-                      <Mail />
-                      Email Summary
-                    </Button>
+                    <SimpleTooltip
+                      content={
+                        emailStatus && !emailStatus.configured
+                          ? "Email delivery is not configured. Configure SMTP server settings in Alerts settings or set SENDGRID_API_KEY environment variable."
+                          : undefined
+                      }
+                    >
+                      <Button
+                        variant="outline"
+                        onClick={() => setIsEmailSummaryModalOpen(true)}
+                        disabled={emailStatus !== null && !emailStatus.configured}
+                      >
+                        <Mail />
+                        Email Summary
+                      </Button>
+                    </SimpleTooltip>
                   </div>
                 </div>
                 {/* Cost Panel */}
@@ -1046,8 +1077,8 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         isOpen={isEmailSummaryModalOpen}
         onClose={() => setIsEmailSummaryModalOpen(false)}
         accessToken={accessToken}
-        startDate={startTime ? startTime.toISOString().split("T")[0] : undefined}
-        endDate={endTime ? endTime.toISOString().split("T")[0] : undefined}
+        startDate={startTime ? formatDate(startTime) : undefined}
+        endDate={endTime ? formatDate(endTime) : undefined}
         teams={teams}
       />
 

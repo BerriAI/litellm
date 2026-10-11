@@ -143,6 +143,14 @@ vi.spyOn(Date.prototype, "toLocaleString").mockImplementation(function (this: Da
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 });
 
+vi.spyOn(Number.prototype, "toLocaleString").mockImplementation(function (
+  this: number,
+  locales?: Intl.LocalesArgument,
+  options?: Intl.NumberFormatOptions,
+) {
+  return new Intl.NumberFormat((locales as string) || "en-US", options).format(this);
+});
+
 if (typeof window !== "undefined") {
   // Fixed matchMedia not found error in tests: https://github.com/vitest-dev/vitest/issues/821
   Object.defineProperty(window, "matchMedia", {

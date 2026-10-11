@@ -13,6 +13,8 @@ from litellm.proxy.spend_tracking.spend_report_email import (
     SpendReportEmailAlert,
     SpendReportEmailSettings,
     build_spend_report_email_html,
+    check_spend_report_email_status,
+    default_email_sender,
     fetch_grouped_spend_data,
     get_daily_report_date_range,
     get_monthly_report_date_range,
@@ -475,5 +477,81 @@ def test_setup_email_spend_report_jobs_multiple_alerts() -> None:
 
     assert "email_spend_report_alert-daily-eng" in added_jobs
     assert "email_spend_report_alert-disabled" not in added_jobs
+
+
+def test_check_spend_report_email_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SENDGRID_API_KEY", raising=False)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.delenv("SMTP_HOST", raising=False)
+
+    unconf: Final = check_spend_report_email_status()
+    assert unconf.configured is False
+    assert unconf.provider is None
+
+    monkeypatch.setenv("SENDGRID_API_KEY", "sg-test-123")
+    sg_status: Final = check_spend_report_email_status()
+    assert sg_status.configured is True
+    assert sg_status.provider == "sendgrid"
+
+    monkeypatch.delenv("SENDGRID_API_KEY", raising=False)
+    monkeypatch.setenv("RESEND_API_KEY", "re-test-123")
+    resend_status: Final = check_spend_report_email_status()
+    assert resend_status.configured is True
+    assert resend_status.provider == "resend"
+
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+    monkeypatch.setenv("SMTP_HOST", "smtp.example.com")
+    smtp_status: Final = check_spend_report_email_status()
+    assert smtp_status.configured is True
+    assert smtp_status.provider == "smtp"
+
+
+@pytest.mark.asyncio
+async def test_default_email_sender_sendgrid(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("SENDGRID_API_KEY", "sg-test-key")
+    monkeypatch.setenv("SENDGRID_SENDER_EMAIL", "sender@example.com")
+
+    mock_send: Final = AsyncMock()
+    mock_logger: Final = MagicMock()
+    mock_logger.send_email = mock_send
+
+    monkeypatch.setattr(
+        "litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email.SendGridEmailLogger",
+        lambda: mock_logger,
+    )
+
+    await default_email_sender(
+        receiver_email="receiver@example.com",
+        subject="Test Report",
+        html="<p>Test</p>",
+    )
+
+    mock_send.assert_awaited_once_with(
+        from_email="sender@example.com",
+        to_email=["receiver@example.com"],
+        subject="Test Report",
+        html_body="<p>Test</p>",
+    )
+
+
+@pytest.mark.asyncio
+async def test_default_email_sender_smtp(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SENDGRID_API_KEY", raising=False)
+    monkeypatch.delenv("RESEND_API_KEY", raising=False)
+
+    mock_smtp_send: Final = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.utils.send_email", mock_smtp_send)
+
+    await default_email_sender(
+        receiver_email="receiver@example.com",
+        subject="SMTP Report",
+        html="<p>SMTP</p>",
+    )
+
+    mock_smtp_send.assert_awaited_once_with(
+        receiver_email="receiver@example.com",
+        subject="SMTP Report",
+        html="<p>SMTP</p>",
+    )
 
 

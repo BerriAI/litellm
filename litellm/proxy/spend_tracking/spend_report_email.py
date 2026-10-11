@@ -157,6 +157,118 @@ class SpendReportEmailSendRequest(BaseModel):
     )
 
 
+class SpendReportEmailStatusResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    configured: bool = Field(
+        default=False,
+        description="Whether email delivery (SMTP, SendGrid, or Resend) is configured",
+    )
+    provider: Literal["smtp", "sendgrid", "resend"] | None = Field(
+        default=None,
+        description="Active email provider being used",
+    )
+    message: str = Field(
+        default="",
+        description="Informational message about email delivery readiness",
+    )
+
+
+def check_spend_report_email_status() -> SpendReportEmailStatusResponse:
+    env_vars: dict[str, object] = {}
+    try:
+        from litellm.proxy.proxy_server import general_settings
+
+        if isinstance(general_settings, dict):
+            raw_vars = general_settings.get("environment_variables")
+            if isinstance(raw_vars, dict):
+                env_vars = raw_vars
+    except Exception:
+        pass
+
+    if os.getenv("SENDGRID_API_KEY") or env_vars.get("SENDGRID_API_KEY"):
+        return SpendReportEmailStatusResponse(
+            configured=True,
+            provider="sendgrid",
+            message="SendGrid email delivery is configured",
+        )
+    if os.getenv("RESEND_API_KEY") or env_vars.get("RESEND_API_KEY"):
+        return SpendReportEmailStatusResponse(
+            configured=True,
+            provider="resend",
+            message="Resend email delivery is configured",
+        )
+    if os.getenv("SMTP_HOST") or env_vars.get("SMTP_HOST"):
+        return SpendReportEmailStatusResponse(
+            configured=True,
+            provider="smtp",
+            message="SMTP email delivery is configured",
+        )
+    return SpendReportEmailStatusResponse(
+        configured=False,
+        provider=None,
+        message="Email delivery is not configured. Configure SMTP server settings or set SENDGRID_API_KEY.",
+    )
+
+
+async def default_email_sender(
+    receiver_email: str,
+    subject: str,
+    html: str,
+) -> None:
+    if os.getenv("SENDGRID_API_KEY"):
+        try:
+            from litellm_enterprise.enterprise_callbacks.send_emails.sendgrid_email import (
+                SendGridEmailLogger,
+            )
+
+            sendgrid_logger: Final = SendGridEmailLogger()
+            sender_email: Final = (
+                os.getenv("SENDGRID_SENDER_EMAIL")
+                or os.getenv("SMTP_SENDER_EMAIL")
+                or "notifications@alerts.litellm.ai"
+            )
+            await sendgrid_logger.send_email(
+                from_email=sender_email,
+                to_email=[receiver_email],
+                subject=subject,
+                html_body=html,
+            )
+            return
+        except ImportError:
+            verbose_proxy_logger.warning("litellm_enterprise not installed; falling back to SMTP")
+
+    if os.getenv("RESEND_API_KEY"):
+        try:
+            from litellm_enterprise.enterprise_callbacks.send_emails.resend_email import (
+                ResendEmailLogger,
+            )
+
+            resend_logger: Final = ResendEmailLogger()
+            sender_email = (
+                os.getenv("RESEND_FROM_EMAIL")
+                or os.getenv("SMTP_SENDER_EMAIL")
+                or "notifications@alerts.litellm.ai"
+            )
+            await resend_logger.send_email(
+                from_email=sender_email,
+                to_email=[receiver_email],
+                subject=subject,
+                html_body=html,
+            )
+            return
+        except ImportError:
+            verbose_proxy_logger.warning("litellm_enterprise not installed; falling back to SMTP")
+
+    from litellm.proxy.utils import send_email as send_smtp_email
+
+    await send_smtp_email(
+        receiver_email=receiver_email,
+        subject=subject,
+        html=html,
+    )
+
+
 class SpendReportSendResult(BaseModel):
     status: str
     message: str
@@ -611,9 +723,7 @@ async def send_spend_report_email(
     if email_sender is not None:
         actual_sender = email_sender
     else:
-        from litellm.proxy.utils import send_email
-
-        actual_sender = send_email
+        actual_sender = default_email_sender
 
     team_subject_suffix: Final = f" - Team: {team_id}" if team_id else ""
     subject: Final = f"LiteLLM {frequency.capitalize()} Spend Report{team_subject_suffix} ({resolved_start_date} to {resolved_end_date})"

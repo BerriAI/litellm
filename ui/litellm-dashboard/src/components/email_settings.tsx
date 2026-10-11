@@ -87,12 +87,14 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
 
   return (
     <>
+      <div className="mb-6">
+        <EmailEventSettings accessToken={accessToken} />
+      </div>
+
       <div className="mt-6 mb-6">
         <SpendReportEmailSettings accessToken={accessToken} />
       </div>
-      <div className="mt-6 mb-6">
-        <EmailEventSettings accessToken={accessToken} />
-      </div>
+
       <Card>
         <CardHeader>
           <CardTitle className="text-base">Email Server Settings</CardTitle>
@@ -126,7 +128,7 @@ const EmailSettings: React.FC<EmailSettingsProps> = ({ accessToken, premiumUser,
                           rel="noreferrer"
                           className="text-sm text-primary underline underline-offset-4"
                         >
-                          ✨ {key}
+                          {key}
                         </a>
                       ) : (
                         <p className="text-sm">{key}</p>
