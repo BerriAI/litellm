@@ -1,10 +1,15 @@
 
 
+import json
+from typing import Final
 from unittest.mock import MagicMock
 
 import httpx
 import pytest
+import respx
 from pydantic import ValidationError
+
+import litellm
 
 from litellm.llms.watsonx.embed.transformation import IBMWatsonXEmbeddingConfig
 from litellm.types.utils import EmbeddingResponse
@@ -132,3 +137,31 @@ def test_transform_embedding_response_shape_errors_do_not_echo_the_payload(paylo
         _transform(payload)
 
     assert "leaked payload text" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+async def test_watsonx_embedding_sends_the_bearer_token_to_the_regional_endpoint(
+    sync_mode: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("WATSONX_API_KEY", "mock-api-key")
+    monkeypatch.setenv("WATSONX_TOKEN", "mock-watsonx-token")
+    monkeypatch.setenv("WATSONX_API_BASE", "https://us-south.ml.cloud.ibm.com")
+    monkeypatch.setenv("WATSONX_PROJECT_ID", "mock-project-id")
+    route: Final = respx_mock.post(url__startswith="https://us-south.ml.cloud.ibm.com/ml/v1/text/embeddings").respond(
+        json={
+            "model_id": "ibm/slate-30m-english-rtrvr",
+            "created_at": "2024-01-01T00:00:00.00Z",
+            "results": [{"embedding": [0.0, 1.0]}],
+            "input_token_count": 8,
+        }
+    )
+    request: Final = {"model": "watsonx/ibm/slate-30m-english-rtrvr", "input": ["good morning from litellm"]}
+
+    response: Final = litellm.embedding(**request) if sync_mode else await litellm.aembedding(**request)
+
+    assert route.call_count == 1
+    assert route.calls.last.request.headers["Authorization"] == "Bearer mock-watsonx-token"
+    assert json.loads(route.calls.last.request.content)["inputs"] == ["good morning from litellm"]
+    assert response.data == [{"object": "embedding", "index": 0, "embedding": [0.0, 1.0]}]
+    assert (response.usage.prompt_tokens, response.usage.total_tokens) == (8, 8)

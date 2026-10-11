@@ -197,6 +197,53 @@ def test_internal_async_marker_bypasses_native() -> None:
 
 
 @pytest.mark.parametrize(
+    ("model", "custom_llm_provider"),
+    [
+        ("vertex_ai/gemini-2.5-pro", None),
+        ("gemini-2.5-pro", "vertex_ai"),
+    ],
+)
+def test_vertex_models_other_than_claude_stay_on_python(model: str, custom_llm_provider: str | None) -> None:
+    args: Final[tuple[object, ...]] = (16, MESSAGES, model)
+    kwargs: Final[Mapping[str, object]] = {"custom_llm_provider": custom_llm_provider}
+    expected: Final = response(model)
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: records call shape
+        return expected
+
+    def native(request: NativeCall) -> AnthropicMessagesResponse:
+        pytest.fail("Rust serves only Claude on Vertex AI")
+
+    result: Final = _DISPATCH.run(
+        args,
+        kwargs,
+        python=python,
+        binding=messages_binding(native),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
+        rules=RUST_RULES,
+    )
+    assert result is expected
+
+
+def test_vertex_claude_reaches_native() -> None:
+    args: Final[tuple[object, ...]] = (16, MESSAGES, "vertex_ai/claude-sonnet-4-5@20250929")
+    expected: Final = response("vertex_ai/claude-sonnet-4-5@20250929")
+
+    def python(*call_args: object, **call_kwargs: object) -> AnthropicMessagesResponse:  # kwargs-ok: records call shape
+        pytest.fail("Claude on Vertex AI is served natively")
+
+    result: Final = _DISPATCH.run(
+        args,
+        {},
+        python=python,
+        binding=messages_binding(lambda request: expected),
+        native=lambda hook, request, call_args, call_kwargs: hook(request),
+        rules=RUST_RULES,
+    )
+    assert result is expected
+
+
+@pytest.mark.parametrize(
     ("args", "kwargs"),
     (
         ((16, MESSAGES, "claude-sonnet-4-5"), {"model": "duplicate"}),

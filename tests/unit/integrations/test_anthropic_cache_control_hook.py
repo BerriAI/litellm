@@ -3923,6 +3923,24 @@ class TestHostedOpenAIDialectFlag:
         self._register(monkeypatch, "azure_ai/gpt-collide", "azure_ai", flag=None)
         assert AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint("gpt-collide", "azure_ai") is False
 
+    def test_the_support_check_reads_the_served_providers_row_for_a_provider_stripped_name(self, monkeypatch):
+        """The chat-to-Responses bridge holds the provider-stripped deployment name and the provider that
+        serves it, which has no row and no ``gpt-`` version of its own."""
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert supports_openai_prompt_cache_breakpoint("openai.gpt-5.6-sol") is False
+        assert supports_openai_prompt_cache_breakpoint("openai.gpt-5.6-sol", "bedrock_mantle") is True
+        assert supports_openai_prompt_cache_breakpoint("us-east-1/openai.gpt-5.6-sol", "bedrock_mantle") is True
+
+    def test_the_support_check_honors_the_served_providers_opt_out_over_the_version_rule(self, monkeypatch):
+        self._register(monkeypatch, "bedrock_mantle/gpt-6-luna", "bedrock_mantle", flag=False)
+        assert supports_openai_prompt_cache_breakpoint("gpt-6-luna") is True
+        assert supports_openai_prompt_cache_breakpoint("gpt-6-luna", "bedrock_mantle") is False
+
+    def test_the_support_check_ignores_a_served_provider_without_a_row_of_its_own(self, monkeypatch):
+        self._register(monkeypatch, self.MANTLE_MODEL, "bedrock_mantle")
+        assert supports_openai_prompt_cache_breakpoint("openai.gpt-5.6-sol", "azure") is False
+        assert supports_openai_prompt_cache_breakpoint("gpt-5.6", "azure") is True
+
 
 class TestBedrockMantleGptShipsTheOpenAIDialect:
     """The shipped cost map flags Bedrock Mantle's GPT-5.6 and newer OpenAI rows, so a configured injection point
