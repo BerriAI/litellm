@@ -456,6 +456,10 @@ jobs:
   llm_translation_testing:
     docker:
       - &python312_image
+        image: cimg/python:3.12@sha256:9c796c23c84e84a66a964acb508d39dc5433c81a47e07efd56dccbbc2427e07c
+        auth:
+          username: ${DOCKERHUB_USERNAME}
+          password: ${DOCKERHUB_PASSWORD}
     working_directory: ~/project
     resource_class: xlarge
 
