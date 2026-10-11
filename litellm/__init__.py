@@ -1468,6 +1468,7 @@ from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *
 from .decisions.main import *
+from .systemone.main import *
 from .search.main import *
 from .realtime_api.main import (
     _arealtime,
@@ -1647,6 +1648,30 @@ if TYPE_CHECKING:
     )
     from .llms.hosted_vllm.rerank.transformation import (
         HostedVLLMRerankConfig as HostedVLLMRerankConfig,
+    )
+    from .llms.perplexity.decisions.transformation import (
+        PerplexityDecisionsConfig as PerplexityDecisionsConfig,
+    )
+    from .llms.typesafe.decisions.transformation import (
+        TypeSafeDecisionsConfig as TypeSafeDecisionsConfig,
+    )
+    from .llms.openrouter.decisions.transformation import (
+        OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
+    )
+    from .llms.cloudflare.decisions.transformation import (
+        CloudflareDecisionsConfig as CloudflareDecisionsConfig,
+    )
+    from .llms.strands_decider.decisions.transformation import (
+        StrandsDeciderDecisionsConfig as StrandsDeciderDecisionsConfig,
+    )
+    from .llms.hosted_vllm.decisions.transformation import (
+        HostedVLLMDecisionsConfig as HostedVLLMDecisionsConfig,
+    )
+    from .llms.openai.decisions.transformation import (
+        OpenAIDecisionsConfig as OpenAIDecisionsConfig,
+    )
+    from .llms.azure_ai.decisions.transformation import (
+        AzureAIDecisionsConfig as AzureAIDecisionsConfig,
     )
     from .llms.nvidia_nim.rerank.transformation import (
         NvidiaNimRerankConfig as NvidiaNimRerankConfig,
