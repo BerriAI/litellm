@@ -17,14 +17,21 @@ from litellm.utils import get_model_info_helper
 _OPENAI_DEFAULT_API_BASE: Final = "https://api.openai.com/v1"
 _OPENAI_API_HOST: Final = "api.openai.com"
 # Databricks serves OpenAI GPT models as e.g. ``databricks-gpt-5-6-sol``: the minor version is
-# hyphenated, so the OpenAI version parser does not recognise it.
-_DATABRICKS_GPT_NAME: Final = re.compile(r"^databricks-gpt-(\d+)-(\d+)(?=-|$)")
+# hyphenated, so the OpenAI version parser does not recognise it. The minor version is optional
+# so major-only names (``databricks-gpt-5``) map as well.
+_DATABRICKS_GPT_NAME: Final = re.compile(r"^databricks-gpt-(\d+)(?:-(\d+))?(?=-|$)")
+
+
+def _openai_gpt_name(match: "re.Match[str]") -> str:
+    major: Final = match.group(1)
+    minor: Final = match.group(2)
+    return f"gpt-{major}" if minor is None else f"gpt-{major}.{minor}"
 
 
 def _openai_name_for_databricks_model(model: str) -> str:
     """``databricks-gpt-5-6-sol`` -> ``gpt-5.6-sol``; other names are returned unchanged."""
     model_name: Final = model.split("/")[-1]
-    return _DATABRICKS_GPT_NAME.sub(r"gpt-\1.\2", model_name)
+    return _DATABRICKS_GPT_NAME.sub(_openai_gpt_name, model_name)
 
 
 def _is_openai_backed_api_base(api_base: str) -> bool:
@@ -134,8 +141,10 @@ def responses_api_bridge_check(
     )
     # Databricks proxies OpenAI GPT models to the real OpenAI backend, which enforces the
     # reasoning+tools constraint, and serves them on its own /responses route as well.
-    on_databricks_gpt_endpoint: Final = custom_llm_provider == "databricks" and OpenAIGPT5Config.is_model_gpt_5_model(
-        model
+    on_databricks_gpt_endpoint: Final = (
+        custom_llm_provider == "databricks"
+        and OpenAIGPT5Config.is_model_gpt_5_model(model)
+        and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
     )
     on_constraint_enforcing_endpoint: Final = (
         custom_llm_provider in ("azure", "databricks")
