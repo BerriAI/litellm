@@ -2215,3 +2215,32 @@ async def test_chat_sends_a_breakpoint_by_the_deployments_own_flag_not_a_sibling
         "opted-in": True,
         "flagless": False,
     }
+
+
+def test_transform_choices_json_mode_reports_stop_when_tool_call_becomes_content():
+    """json_mode turns a tool call into JSON content; the choice must then report
+    finish_reason 'stop' instead of 'tool_calls' with no tool_calls attached."""
+    choice = [
+        {
+            "finish_reason": "tool_calls",
+            "index": 0,
+            "logprobs": None,
+            "message": {
+                "content": None,
+                "role": "assistant",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {"name": "json_tool_call", "arguments": '{"a": 1}'},
+                    }
+                ],
+            },
+        }
+    ]
+
+    out = OpenAIGPTConfig()._transform_choices(choices=choice, json_mode=True)
+
+    assert out[0].message.content == '{"a": 1}'
+    assert out[0].message.tool_calls is None
+    assert out[0].finish_reason == "stop"
