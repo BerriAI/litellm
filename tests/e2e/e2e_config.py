@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Final
 
 from dotenv import load_dotenv
+from e2e_metadata import step
 from fixture_mode import deterministic_marker, parse_fixture_mode, registration_owner
 from provider_edge import provider_edge_api_base
 from pydantic import TypeAdapter
@@ -25,7 +26,7 @@ from pydantic import TypeAdapter
 load_dotenv(Path(__file__).resolve().parent / ".env", override=False)
 
 PROXY_BASE_URL = os.environ.get("LITELLM_PROXY_URL", "http://localhost:4000").rstrip("/")
-MASTER_KEY = os.environ.get("LITELLM_MASTER_KEY", "sk-1234")
+MASTER_KEY = os.environ["LITELLM_MASTER_KEY"]
 
 # Control-plane (management/admin) base URL. Defaults to PROXY_BASE_URL so a
 # single path-routing host (stage ALB, compose monolith) works for both planes.
@@ -212,6 +213,8 @@ OWNED_GATEWAY_OPT_IN_ENV: Final = "E2E_OWNED_GATEWAY"
 OTEL_V2_OPT_IN_ENV: Final = "E2E_OTEL_V2"
 OTEL_TLS_OPT_IN_ENV: Final = "E2E_OTEL_EXPORTER_ENDPOINT"
 SECRET_MANAGER_OPT_IN_ENV: Final = "E2E_SECRET_MANAGER"
+SAGEMAKER_NOVA_OPT_IN_ENV: Final = "SAGEMAKER_NOVA_ENDPOINT"
+SAGEMAKER_NOVA2_LITE_OPT_IN_ENV: Final = "SAGEMAKER_NOVA2_LITE_ENDPOINT"
 ANOMALY_SESSIONS = int(os.environ.get("E2E_ANOMALY_SESSIONS", "6"))
 ANOMALY_TURNS_PER_SESSION = int(os.environ.get("E2E_ANOMALY_TURNS_PER_SESSION", "6"))
 ANOMALY_TURN_ATTEMPTS = int(os.environ.get("E2E_ANOMALY_TURN_ATTEMPTS", "3"))
@@ -308,6 +311,7 @@ def available_port() -> int:
         return TypeAdapter(tuple[str, int]).validate_python(listener.getsockname())[1]
 
 
+@step("Wait for the last control-plane write to reach every proxy replica")
 def settle_propagation(written_at: float) -> None:
     """Block until PROPAGATION_TIMEOUT has elapsed since `written_at`, a
     `time.monotonic()` stamp taken the moment a control-plane write returned.

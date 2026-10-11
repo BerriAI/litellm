@@ -16,6 +16,8 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     encrypted_reasoning_signature,
     get_file_ids_from_messages,
     get_format_from_file_id,
+    get_semantic_cache_prompt_from_messages,
+    get_str_from_messages,
     handle_any_messages_to_chat_completion_str_messages_conversion,
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
@@ -2171,3 +2173,93 @@ class TestMergeConsecutiveSystemMessages:
         )
 
         assert merged == [{"role": "system"}, {"role": "user", "content": "Hi"}]
+
+
+_CLAUDE_CODE_TOOL_TURN: Final = [
+    {"role": "user", "content": "list the files"},
+    {
+        "role": "assistant",
+        "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}],
+    },
+    {
+        "role": "user",
+        "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "calc.py test_calc.py"}],
+    },
+]
+
+
+@pytest.mark.parametrize(
+    ("messages", "expected"),
+    [
+        pytest.param(_CLAUDE_CODE_TOOL_TURN, "list the filescalc.py test_calc.py", id="tool-result-string"),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "tool_result",
+                            "tool_use_id": "toolu_1",
+                            "content": [
+                                {"type": "text", "text": "x = 1"},
+                                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": ""}},
+                            ],
+                        }
+                    ],
+                }
+            ],
+            "x = 1",
+            id="tool-result-blocks",
+        ),
+        pytest.param(
+            [{"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1"}]}],
+            "",
+            id="tool-result-without-content",
+        ),
+    ],
+)
+def test_get_semantic_cache_prompt_from_messages_keeps_tool_result_text(
+    messages: list[dict[str, object]], expected: str
+) -> None:
+    assert get_semantic_cache_prompt_from_messages(messages) == expected
+
+
+def test_get_semantic_cache_prompt_from_messages_differs_from_the_turn_before_it() -> None:
+    assert get_str_from_messages(_CLAUDE_CODE_TOOL_TURN) == get_str_from_messages(_CLAUDE_CODE_TOOL_TURN[:1])
+    assert get_semantic_cache_prompt_from_messages(_CLAUDE_CODE_TOOL_TURN) != get_semantic_cache_prompt_from_messages(
+        _CLAUDE_CODE_TOOL_TURN[:1]
+    )
+
+
+@pytest.mark.parametrize(
+    "messages",
+    [
+        pytest.param([{"role": "system", "content": "be brief. "}, {"role": "user", "content": "hello"}], id="strings"),
+        pytest.param(
+            [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "What is "},
+                        {"type": "image_url", "image_url": {"url": "https://example.com/a.png"}},
+                        {"type": "text", "text": "this?"},
+                    ],
+                }
+            ],
+            id="text-parts",
+        ),
+        pytest.param(
+            [
+                {"role": "assistant"},
+                {"role": "assistant", "content": None},
+                {"role": "user", "content": ""},
+                {"role": "tool", "content": "small", "search_results": [{"source": "s", "title": "t", "content": []}]},
+            ],
+            id="empty-content-and-search-results",
+        ),
+    ],
+)
+def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_without_tool_results(
+    messages: list[dict[str, object]],
+) -> None:
+    assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)

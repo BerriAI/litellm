@@ -49,6 +49,27 @@ def test_web_search_cost_high():
     )
 
 
+def test_get_web_search_options_preserves_explicit_none_error():
+    with pytest.raises(TypeError):
+        StandardBuiltInToolCostTracking.get_web_search_options(
+            {"web_search_options": None, "tools": [{"type": "web_search_preview"}]}
+        )
+
+
+def test_get_web_search_options_accepts_non_list_tool_iterables():
+    options = StandardBuiltInToolCostTracking.get_web_search_options(
+        {"tools": ({"type": "web_search_preview"},)}
+    )
+
+    assert options == {"type": "web_search_preview"}
+
+
+def test_get_file_search_tool_call_does_not_validate_tool_payload():
+    tool = {"type": "file_search", "vector_store_ids": "not-a-list"}
+
+    assert StandardBuiltInToolCostTracking.get_file_search_tool_call({"tools": [tool]}) == tool
+
+
 # Test file search cost calculation
 def test_file_search_cost():
     file_search = FileSearchTool(type="file_search")
@@ -363,15 +384,15 @@ def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
     Regression for the provider-prefix fallback in _handle_web_search_cost. When the initial
     get_model_info lookup fails for a "/"-containing model, the retry re-resolves model_info from
     the prefix and must adopt that prefix's provider for routing. Otherwise an unrelated model
-    (here OpenRouter, which carries no web search pricing) is re-resolved but still routed through
+    (here Azure, which carries no web search pricing) is re-resolved but still routed through
     the request's vertex_ai Gemini calculator, which charges its $0.035 per_prompt default for a
     model that should cost nothing for web search.
     """
     from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
-    model = "openrouter/google/gemini-3.1-flash-lite"
+    model = "azure/gpt-4o"
     model_info = litellm.get_model_info(model)
-    assert model_info["litellm_provider"] == "openrouter"
+    assert model_info["litellm_provider"] == "azure"
     assert not model_info.get("search_context_cost_per_query")
 
     usage = Usage(
@@ -570,5 +591,3 @@ _BEDROCK_MANTLE_WEB_SEARCH_MODELS = (
 )
 
 _BEDROCK_MANTLE_WEB_SEARCH_RATE = 0.012
-
-
