@@ -2563,6 +2563,18 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
 
+# Optional fastapi-guard security middleware (off unless LITELLM_GUARD_ENABLED
+# is set). Added before CORSMiddleware and SecurityHeadersMiddleware so it
+# nests *inside* both (Starlette makes the last-added middleware outermost)
+# and guard's own 403/429 rejections still leave with CORS and security
+# headers. It stays outside the auth dependencies, so screened-and-blocked
+# requests never reach key validation. See middleware/guard_middleware.py.
+from litellm.proxy.middleware.guard_middleware import (  # noqa: E402  # mid-file attach: the middleware stack freezes once the lifespan runs
+    GuardMiddleware,
+)
+
+app.add_middleware(GuardMiddleware)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -2609,16 +2621,6 @@ app.add_middleware(LensInternalMiddleware)
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(GZipBufferedResponseMiddleware)
-
-# Optional fastapi-guard security middleware (off unless LITELLM_GUARD_ENABLED
-# is set). Added inside SecurityHeaders so screened responses are still
-# headered, and outside the auth dependencies so screened-and-blocked
-# requests never reach key validation. See middleware/guard_middleware.py.
-from litellm.proxy.middleware.guard_middleware import (  # noqa: E402  # mid-file attach: the middleware stack freezes once the lifespan runs
-    GuardMiddleware,
-)
-
-app.add_middleware(GuardMiddleware)
 
 
 def mount_swagger_ui():
