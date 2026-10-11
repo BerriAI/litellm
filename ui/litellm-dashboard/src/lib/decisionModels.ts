@@ -25,7 +25,8 @@ export interface DecisionCatalog {
 
 export const EMPTY_DECISION_CATALOG: DecisionCatalog = { models: new Set(), providers: new Map() };
 
-export const isDecisionMode = (mode: string | null | undefined): boolean => mode === "evaluation";
+export const isDecisionMode = (mode: string | null | undefined): boolean =>
+  mode === "decisions" || mode === "evaluation";
 
 export interface DecisionModelFields {
   readonly mode?: string | null;
