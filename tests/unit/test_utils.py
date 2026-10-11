@@ -7626,6 +7626,21 @@ def test_trim_messages_return_response_tokens_is_none_when_no_token_limit_is_kno
     assert response_tokens is None
 
 
+def test_trim_messages_return_response_tokens_returns_a_tuple_when_trimming_fails(monkeypatch):
+    def failing_token_count(*args, **kwargs):
+        raise RuntimeError("tokenizer unavailable")
+
+    monkeypatch.setattr(litellm.utils, "get_token_count", failing_token_count)
+    messages = [{"role": "user", "content": "hi"}]
+
+    assert trim_messages(messages, max_tokens=1000) == messages
+
+    trimmed_messages, response_tokens = trim_messages(messages, max_tokens=1000, return_response_tokens=True)
+
+    assert trimmed_messages == messages
+    assert response_tokens is None
+
+
 @pytest.mark.parametrize("model", ["gpt-5.4-mini", "claude-sonnet-4-6"])
 def test_trimming_with_model_cost_max_input_tokens(model):
     messages = [

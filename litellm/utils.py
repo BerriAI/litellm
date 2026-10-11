@@ -7700,8 +7700,9 @@ def trim_messages(
 
     Returns:
         Trimmed messages. If return_response_tokens is True, a `(messages, response_tokens)` tuple instead,
-        whether or not anything had to be trimmed. `response_tokens` is None when there is no token limit to
-        measure against (unknown model and no `max_tokens`).
+        whether or not anything had to be trimmed. `response_tokens` is what is left of the limit the messages
+        were trimmed to (`max_tokens`, or the model's max input tokens times `trim_ratio`). It is None when
+        there is no token limit to measure against (unknown model and no `max_tokens`) or trimming failed.
     """
     # Initialize max_tokens
     # if users pass in max tokens, trim to this amount
