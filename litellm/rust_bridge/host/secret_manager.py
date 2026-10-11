@@ -157,3 +157,9 @@ def native_secret_manager_config(client: object) -> NativeSecretManagerConfig | 
         ):
             return _capture(client, adapter)
     return None
+
+
+def read_secret_str(name: str) -> str | None:
+    from litellm.secret_managers.main import get_secret_str
+
+    return get_secret_str(name)
