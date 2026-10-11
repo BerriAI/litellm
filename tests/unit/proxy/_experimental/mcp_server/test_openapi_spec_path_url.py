@@ -179,8 +179,8 @@ def test_non_object_spec_is_rejected(tmp_path: Path, document: str) -> None:
     (
         ("openapi: [unclosed", ValueError, "Invalid YAML OpenAPI spec"),
         ("paths: !!python/object/apply:builtins.eval ['1 + 1']", ValueError, "Invalid YAML OpenAPI spec"),
-        ("paths: &paths {self: *paths}", TypeError, "YAML aliases are not supported"),
-        ("base: &base {a: 1}\npaths: {<<: *base}", TypeError, "YAML aliases are not supported"),
+        ("paths: &paths {self: *paths}", ValueError, "YAML aliases are not supported"),
+        ("base: &base {a: 1}\npaths: {<<: *base}", ValueError, "YAML aliases are not supported"),
         ("x-value: 1" + ":11" * 400, ValueError, "YAML integer is too long"),
         ("x-value: !!int '" + "1" * 1025 + "'", ValueError, "YAML integer is too long"),
     ),
