@@ -178,11 +178,16 @@ def test_non_object_spec_is_rejected(tmp_path: Path, document: str) -> None:
     "document,error_type,message",
     (
         ("openapi: [unclosed", ValueError, "Invalid YAML OpenAPI spec"),
+        ("openapi: 3.0.0\npaths: \x00", ValueError, "Invalid YAML OpenAPI spec"),
         ("paths: !!python/object/apply:builtins.eval ['1 + 1']", ValueError, "Invalid YAML OpenAPI spec"),
         ("paths: &paths {self: *paths}", TypeError, "YAML aliases are not supported"),
         ("base: &base {a: 1}\npaths: {<<: *base}", TypeError, "YAML aliases are not supported"),
         ("x-value: 1" + ":11" * 400, ValueError, "YAML integer is too long"),
         ("x-value: !!int '" + "1" * 1025 + "'", ValueError, "YAML integer is too long"),
+        ("x-value: ! 1" + ":11" * 400, ValueError, "YAML integer is too long"),
+        ("x-value: ! '1" + ":11" * 400 + "'", ValueError, "YAML integer is too long"),
+        ("x-value: !!int {=: '1" + ":11" * 400 + "'}", ValueError, "YAML integer must be a scalar"),
+        ("x-value: !!int [1]", ValueError, "YAML integer must be a scalar"),
     ),
 )
 def test_unsafe_or_invalid_yaml_is_rejected(
@@ -193,6 +198,23 @@ def test_unsafe_or_invalid_yaml_is_rejected(
 
     with pytest.raises(error_type, match=message):
         gen.load_openapi_spec(str(path))
+
+
+@pytest.mark.parametrize("value", ("1", "! 1", "!!int '1'"))
+def test_yaml_integer_scalar_types_are_preserved(tmp_path: Path, value: str) -> None:
+    path: Final = tmp_path / "openapi.yaml"
+    path.write_text(f"paths: {{}}\nx-value: {value}", encoding="utf-8")
+
+    assert gen.load_openapi_spec(str(path)) == {"paths": {}, "x-value": 1}
+
+
+@pytest.mark.parametrize("tag", ("", "!!str "))
+def test_long_yaml_strings_are_preserved(tmp_path: Path, tag: str) -> None:
+    path: Final = tmp_path / "openapi.yaml"
+    value: Final = "1" + ":11" * 400
+    path.write_text(f"paths: {{}}\nx-value: {tag}'{value}'", encoding="utf-8")
+
+    assert gen.load_openapi_spec(str(path)) == {"paths": {}, "x-value": value}
 
 
 @pytest.mark.asyncio

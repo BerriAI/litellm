@@ -4975,6 +4975,11 @@ class TestMCPServerManager:
                 "unhealthy",
                 "OpenAPI specification could not be loaded (TypeError)",
             ),
+            (
+                httpx.Response(200, content=b"openapi: 3.0.0\npaths: \x00"),
+                "unhealthy",
+                "OpenAPI specification could not be loaded (ValueError)",
+            ),
         ],
     )
     async def test_openapi_health_reports_safe_failures(

@@ -187,33 +187,37 @@ def _validate_openapi_spec(value: object) -> Mapping[str, object]:
 
 def _load_yaml_spec(content: str | bytes) -> Mapping[str, object]:
     import yaml
-    from yaml.events import AliasEvent, ScalarEvent
+    from yaml.events import AliasEvent, MappingStartEvent, ScalarEvent, SequenceStartEvent
     from yaml.nodes import ScalarNode
 
-    loader: Final = yaml.SafeLoader(content)
     try:
-        for event in yaml.parse(  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # untyped stubs
-            content, Loader=yaml.SafeLoader
-        ):
-            if isinstance(event, AliasEvent):
-                raise TypeError("YAML aliases are not supported in OpenAPI specs")
-            if (
-                isinstance(event, ScalarEvent)
-                and len(event.value) > _MAX_YAML_INT_LENGTH
-                and (
-                    event.tag
-                    or loader.resolve(  # pyright: ignore[reportUnknownMemberType]  # YAML resolver stub is untyped
-                        ScalarNode, event.value, event.implicit
-                    )
-                )
-                == "tag:yaml.org,2002:int"
+        loader: Final = yaml.SafeLoader(content)
+        try:
+            for event in yaml.parse(  # pyright: ignore[reportUnknownVariableType, reportUnknownMemberType]  # untyped stubs
+                content, Loader=yaml.SafeLoader
             ):
-                raise ValueError("YAML integer is too long in OpenAPI spec")
-        return _validate_openapi_spec(loader.get_single_data())
+                if isinstance(event, AliasEvent):
+                    raise TypeError("YAML aliases are not supported in OpenAPI specs")
+                if isinstance(event, (MappingStartEvent, SequenceStartEvent)) and event.tag == "tag:yaml.org,2002:int":
+                    raise ValueError("YAML integer must be a scalar in OpenAPI spec")
+                if (
+                    isinstance(event, ScalarEvent)
+                    and len(event.value) > _MAX_YAML_INT_LENGTH
+                    and (
+                        event.tag
+                        if event.tag not in (None, "!")
+                        else loader.resolve(  # pyright: ignore[reportUnknownMemberType]  # YAML resolver stub is untyped
+                            ScalarNode, event.value, event.implicit
+                        )
+                    )
+                    == "tag:yaml.org,2002:int"
+                ):
+                    raise ValueError("YAML integer is too long in OpenAPI spec")
+            return _validate_openapi_spec(loader.get_single_data())
+        finally:
+            loader.dispose()  # pyright: ignore[reportUnknownMemberType]  # PyYAML dispose stub is untyped
     except yaml.YAMLError as exc:
         raise ValueError("Invalid YAML OpenAPI spec") from exc
-    finally:
-        loader.dispose()  # pyright: ignore[reportUnknownMemberType]  # PyYAML dispose stub is untyped
 
 
 def _parse_openapi_spec(content: str | bytes) -> Mapping[str, object]:
