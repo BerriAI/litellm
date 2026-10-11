@@ -38,6 +38,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     PromptTokensDetailsWrapper,
     StreamingChoices,
+    TextCompletionResponse,
     Usage,
 )
 from litellm.types.utils import GenericStreamingChunk as GChunk
@@ -2274,6 +2275,7 @@ class CustomStreamWrapper:
         if self.logging_obj is None or not self.chunks:
             return
         try:
+            selected_response: Final[ModelResponse | TextCompletionResponse | ModelResponseStream | None]
             try:
                 selected_response = litellm.stream_chunk_builder(
                     chunks=self.chunks,
