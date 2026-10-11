@@ -6210,3 +6210,41 @@ class TestCloseFlushesAbandonedStream:
         # the provider stream was closed and the reference dropped
         assert released == [True]
         assert wrapper.completion_stream is None
+
+    def test_no_flush_when_nothing_was_streamed(self):
+        wrapper, logging_obj = self._wrapper_with_chunk()
+        wrapper.chunks = []
+
+        wrapper.close_stream()
+
+        # nothing was served, so there is nothing to bill or log
+        assert "async_complete_streaming_response" not in logging_obj.model_call_details
+        assert wrapper._abandonment_logged is False
+
+    def test_flush_survives_stream_chunk_builder_raising(self):
+        wrapper, logging_obj = self._wrapper_with_chunk()
+
+        def _boom(**_kwargs):
+            raise RuntimeError("builder exploded")
+
+        with patch("litellm.stream_chunk_builder", _boom):
+            wrapper.close_stream()
+
+        # the failure is logged, not raised, and nothing half-built is recorded
+        assert "async_complete_streaming_response" not in logging_obj.model_call_details
+        assert wrapper._abandonment_logged is True
+
+    def test_close_survives_provider_stream_raising(self):
+        wrapper, _ = self._wrapper_with_chunk()
+
+        class _Angry:
+            def close(inner_self):
+                raise OSError("already closed")
+
+        wrapper.completion_stream = _Angry()
+
+        wrapper.close_stream()
+
+        # a provider that fails to close must not mask the caller's own error,
+        # and the reference is still dropped
+        assert wrapper.completion_stream is None
