@@ -148,7 +148,6 @@ class SupportedGuardrailIntegrations(Enum):
     CONDUCT = "conduct"
     TEALTIGER = "tealtiger"
 
-
 class Role(Enum):
     SYSTEM = "system"
     ASSISTANT = "assistant"

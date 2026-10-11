@@ -51,7 +51,7 @@ def mock_redis_failure(mocker):
 
 def test_cache_ping_success(mock_redis_success):
     """Test successful cache ping with regular response"""
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
     assert response.status_code == 200
 
     data = response.json()
@@ -72,7 +72,7 @@ def test_cache_ping_with_complex_objects(mock_redis_success, mocker):
     mock_redis_success.cache.complex_attr = ComplexObject()
     mock_redis_success.cache.datetime_attr = mocker.MagicMock()
 
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
     assert response.status_code == 200
 
     # Verify response is JSON serializable
@@ -93,7 +93,7 @@ def test_cache_ping_with_circular_reference(mock_redis_success):
     circular_dict["self"] = circular_dict
     mock_redis_success.cache.circular_ref = circular_dict
 
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
     assert response.status_code == 200
 
     # Verify response is still JSON serializable
@@ -103,7 +103,7 @@ def test_cache_ping_with_circular_reference(mock_redis_success):
 
 def test_cache_ping_failure(mock_redis_failure):
     """Test cache ping failure with expected error fields"""
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
     assert response.status_code == 503
 
     data = response.json()
@@ -125,7 +125,7 @@ def test_cache_ping_failure(mock_redis_failure):
 
 def test_cache_ping_failure_does_not_expose_traceback(mock_redis_failure):
     """CWE-209: Stack trace and exception text must not appear in the HTTP 503 response body."""
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
     assert response.status_code == 503
 
     data = response.json()
@@ -162,7 +162,7 @@ def test_cache_ping_no_cache_initialized():
 
     try:
         response = client.get(
-            "/cache/ping", headers={"Authorization": "Bearer sk-1234"}
+            "/cache/ping", headers={"Authorization": "Bearer sk-9876"}
         )
         assert response.status_code == 503
 
@@ -190,7 +190,7 @@ def test_cache_ping_no_cache_does_not_expose_internals():
 
     try:
         response = client.get(
-            "/cache/ping", headers={"Authorization": "Bearer sk-1234"}
+            "/cache/ping", headers={"Authorization": "Bearer sk-9876"}
         )
         assert response.status_code == 503
 
@@ -225,7 +225,7 @@ def test_cache_ping_health_check_includes_only_cache_attributes(mock_redis_succe
     # Add a field on the underlying `cache` object that SHOULD appear
     mock_redis_success.cache.redis_kwargs = {"host": "localhost", "port": 6379}
 
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
     assert (
         response.status_code == 200
     ), f"Unexpected status code: {response.status_code}"
@@ -253,7 +253,7 @@ def test_cache_ping_with_redis_version_float(mock_redis_success):
     # Set redis_version as a float
     mock_redis_success.cache.redis_version = 7.2
 
-    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-1234"})
+    response = client.get("/cache/ping", headers={"Authorization": "Bearer sk-9876"})
     assert response.status_code == 200
 
     data = response.json()
@@ -325,7 +325,7 @@ def test_cache_redis_info_no_cache():
     litellm.cache = None
 
     response = client.get(
-        "/cache/redis/info", headers={"Authorization": "Bearer sk-1234"}
+        "/cache/redis/info", headers={"Authorization": "Bearer sk-9876"}
     )
     assert response.status_code == 503
 

@@ -16,20 +16,38 @@ from integration._support.client import (
     gateway_from_environment,
 )
 from integration._support.otlp_sink import (
+    AuditConfigWriter,
     Span,
     SpanSinks,
+    audit_configuration_writer,
+    langfuse_callback_variables,
+    owned_sinks,
     recorded_spans,
     spans_for_trace,
 )
 from integration._support.process import owned_proxy, owned_proxy_process
 from pydantic import JsonValue
 
-AuditConfigWriter = Callable[[Path, Mapping[str, JsonValue]], Path]
-
 DB_SYSTEM_KEYS: Final = frozenset({"db.system.name", "db.system"})
 
 
-@pytest.fixture(scope="module")
+@pytest.fixture
+def audit_sinks(tmp_path: Path) -> Iterator[SpanSinks]:
+    with owned_sinks(tmp_path / "sinks") as sinks:
+        yield sinks
+
+
+@pytest.fixture
+def otel_audit_config(audit_sinks: SpanSinks) -> AuditConfigWriter:
+    return audit_configuration_writer(audit_sinks)
+
+
+@pytest.fixture
+def langfuse_vars(audit_sinks: SpanSinks) -> dict[str, JsonValue]:
+    return langfuse_callback_variables(audit_sinks)
+
+
+@pytest.fixture
 def gateway(audit_sinks: SpanSinks) -> Iterator[Gateway]:
     with gateway_from_environment() as base:
         yield base
@@ -170,7 +188,9 @@ def _assert_tenant_keeps_redis_without_postgres(
     tenant_start, _ = recorded_spans(audit_sinks.tenant)
     operator_start, _ = recorded_spans(audit_sinks.operator)
     traffic: Final = _drive(candidate, langfuse_vars)
-    _await_db_span(audit_sinks.operator, None, "batch_write_to_db", seconds=60, since=operator_start)
+    _await_db_span(
+        audit_sinks.operator, None, "postgres.update LiteLLM_VerificationToken", seconds=60, since=operator_start
+    )
     tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
     _await_db_span(audit_sinks.tenant, tenant_trace, "redis", seconds=60)
     systems: Final = _db_systems(_trace_spans(audit_sinks.tenant, tenant_trace, seconds=15))
@@ -232,7 +252,9 @@ def test_excluded_services_drops_db_spans_at_tenant_only(
         _, all_tenant = recorded_spans(audit_sinks.tenant, ten_start)
         names: Final = sorted(str(span["name"]) for span in all_tenant)
         assert _db_systems(all_tenant) == set(), f"aux db spans reached tenant: {names}"
-        assert not any("batch_write_to_db" in name for name in names), f"spend writer reached tenant: {names}"
+        assert not any("postgres.update LiteLLM_VerificationToken" in name for name in names), (
+            f"spend writer reached tenant: {names}"
+        )
 
 
 @pytest.mark.timeout(180)
@@ -247,8 +269,8 @@ def test_without_excluded_services_the_tenant_still_gets_redis_and_postgres_span
     with owned_proxy(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config, workers=2) as candidate:
         tenant_start, _ = recorded_spans(audit_sinks.tenant)
         traffic: Final = _drive(candidate, langfuse_vars)
-        _await_db_span(audit_sinks.tenant, None, "batch_write_to_db", seconds=60, since=tenant_start)
         tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
+        _await_db_span(audit_sinks.tenant, tenant_trace, "postgresql", seconds=60, since=tenant_start)
         _await_db_span(audit_sinks.tenant, tenant_trace, "redis", seconds=60)
         _assert_core_spans_present(_trace_spans(audit_sinks.tenant, tenant_trace, seconds=15))
         _, all_tenant = recorded_spans(audit_sinks.tenant, tenant_start)
@@ -574,7 +596,7 @@ def test_bogus_excluded_services_env_logs_and_drops_without_otel_callback(
         _assert_tenant_keeps_redis_without_postgres(owned.gateway, audit_sinks, langfuse_vars)
 
 
-def test_postgres_exclusion_covers_batch_write_to_db(
+def test_postgres_exclusion_covers_spend_flush(
     gateway: Gateway,
     audit_sinks: SpanSinks,
     otel_audit_config: AuditConfigWriter,
@@ -586,11 +608,19 @@ def test_postgres_exclusion_covers_batch_write_to_db(
         op_start, _ = recorded_spans(audit_sinks.operator)
         ten_start, _ = recorded_spans(audit_sinks.tenant)
         traffic: Final = _drive(candidate, langfuse_vars)
-        _await_db_span(audit_sinks.operator, None, "batch_write_to_db", seconds=60, since=op_start)
+        _await_db_span(audit_sinks.operator, None, "postgres.update LiteLLM_VerificationToken", seconds=60, since=op_start)
+        operator_trace: Final = _trace_id(audit_sinks.operator, traffic)
+        _, operator_spans = recorded_spans(audit_sinks.operator, op_start)
+        assert any(
+            span["name"] == "postgres.update LiteLLM_VerificationToken" and span["trace_id"] != operator_trace
+            for span in operator_spans
+        ), tuple((span["name"], span["trace_id"]) for span in operator_spans)
         tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
         _await_db_span(audit_sinks.tenant, tenant_trace, "redis", seconds=60)
         tenant_spans: Final = _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
         _, all_tenant = recorded_spans(audit_sinks.tenant, ten_start)
         names: Final = sorted(str(span["name"]) for span in all_tenant)
         assert "redis" in _db_systems(tenant_spans), f"redis spans missing at tenant: {names}"
-        assert not any("batch_write_to_db" in name for name in names), f"spend writer reached tenant: {names}"
+        assert not any("postgres.update LiteLLM_VerificationToken" in name for name in names), (
+            f"spend writer reached tenant: {names}"
+        )
