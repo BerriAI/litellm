@@ -1,5 +1,6 @@
-use std::ffi::CStr;
+use std::{ffi::CStr, future::Future, pin::pin};
 
+use litellm_host_python::{PythonTask, Resumed, Suspension};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyTuple};
 
@@ -192,4 +193,38 @@ pub(crate) fn legacy_call(
     };
     let call = PublicCall::capture(&dict("bound"), &PyTuple::empty(py), &dict("kwargs")).unwrap();
     LegacyLogging::new(py, crate::LoggingOperation::Ocr, call, asynchronous)
+}
+
+/// What driving a hook on the test thread produced: its outcome, and every awaitable it
+/// handed to the caller's task in the order it suspended on them.
+pub(crate) struct Driven<T> {
+    pub(crate) outcome: T,
+    pub(crate) awaited: Vec<Py<PyAny>>,
+}
+
+/// Runs a hook to completion on the test thread, answering each suspension with `answer`.
+pub(crate) fn drive<T>(
+    py: Python<'_>,
+    task: &PythonTask,
+    future: impl Future<Output = T>,
+    mut answer: impl FnMut(Python<'_>, usize, &Py<PyAny>) -> PyResult<Py<PyAny>>,
+) -> Driven<T> {
+    let mut future = pin!(future);
+    let mut awaited = Vec::new();
+    let mut resumption = None;
+    loop {
+        match task.resume(future.as_mut(), resumption.take()).unwrap() {
+            Resumed::Complete(outcome) => return Driven { outcome, awaited },
+            Resumed::Suspended(Suspension::Await(awaitable)) => {
+                resumption = Some(answer(py, awaited.len(), &awaitable));
+                awaited.push(awaitable);
+            }
+            Resumed::Suspended(_) => panic!("hooks never reach a stream boundary"),
+        }
+    }
+}
+
+/// [`drive`] answering every suspension with `None`.
+pub(crate) fn finish<T>(py: Python<'_>, task: &PythonTask, future: impl Future<Output = T>) -> T {
+    drive(py, task, future, |py, _, _| Ok(py.None())).outcome
 }

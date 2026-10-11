@@ -1,5 +1,5 @@
 use litellm_host::hooks::CallHooks;
-use litellm_host_python::{PythonOwned, PythonRuntime};
+use litellm_host_python::{PythonOwned, PythonRuntime, PythonTask};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -36,14 +36,16 @@ pub(crate) const PYTHON_CONTRACT: &str = include_str!("../preflight_contract.jso
 pub(crate) struct SdkPolicy;
 
 impl CallHooks<PythonRuntime> for SdkPolicy {
-    fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
-        inherit_credentials(py, arguments.bind(py), || {
-            Ok(PythonPreflight::CredentialList
-                .call(py, ())?
-                .cast_into::<PyList>()?)
-        })?;
-        PythonPreflight::CheckLimits.call(py, (arguments,))?;
-        Ok(())
+    async fn arguments_prepared(&mut self, _: &PythonTask, arguments: &Py<PyDict>) -> PyResult<()> {
+        Python::attach(|py| {
+            inherit_credentials(py, arguments.bind(py), || {
+                Ok(PythonPreflight::CredentialList
+                    .call(py, ())?
+                    .cast_into::<PyList>()?)
+            })?;
+            PythonPreflight::CheckLimits.call(py, (arguments,))?;
+            Ok(())
+        })
     }
 }
 
@@ -110,6 +112,15 @@ mod tests {
 
     use super::*;
     use strum::VariantArray;
+
+    /// Runs a hook that never suspends to completion on the test thread.
+    fn settled<T>(future: impl std::future::Future<Output = T>) -> T {
+        let task = PythonTask::new(false);
+        match task.resume(std::pin::pin!(future), None).unwrap() {
+            litellm_host_python::Resumed::Complete(value) => value,
+            litellm_host_python::Resumed::Suspended(_) => panic!("the hook suspended"),
+        }
+    }
 
     /// Tests share one interpreter, and the stub module below is global state, so the
     /// tests that install it run one at a time.
@@ -425,9 +436,11 @@ preflight.credential_list = lambda: [Credential(), Credential()]
 arguments = {'litellm_credential_name': 'missing'}
 ",
             );
-            SdkPolicy
-                .arguments_prepared(py, &argument_dict(&locals).unbind())
-                .unwrap();
+            settled(
+                SdkPolicy
+                    .arguments_prepared(&PythonTask::new(false), &argument_dict(&locals).unbind()),
+            )
+            .unwrap();
             py.run(
                 c"
 assert arguments == {'litellm_credential_name': 'missing'}, arguments
@@ -463,9 +476,11 @@ preflight.check_limits = check_limits
 arguments = {'litellm_credential_name': 'ocr-test'}
 ",
             );
-            let error = SdkPolicy
-                .arguments_prepared(py, &argument_dict(&locals).unbind())
-                .unwrap_err();
+            let error = settled(
+                SdkPolicy
+                    .arguments_prepared(&PythonTask::new(false), &argument_dict(&locals).unbind()),
+            )
+            .unwrap_err();
             assert!(
                 error
                     .value(py)

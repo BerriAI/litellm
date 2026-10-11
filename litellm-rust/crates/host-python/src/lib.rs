@@ -1,6 +1,7 @@
 //! The CPython runtime adapter: value marshalling, interpreter detachment, the tokio and
 //! asyncio glue, and the driver that runs a native [`Machine`](litellm_host::machine::Machine)
-//! against a Python binding, host services and active call hooks. Everything here is Python-specific by
+//! against a Python binding, host services and active call hooks as one async body on the
+//! caller's Python task ([`PythonTask`]). Everything here is Python-specific by
 //! construction; another host language gets its own crate of the same shape.
 
 mod argument;
@@ -18,6 +19,7 @@ mod native;
 mod owned;
 mod runtime;
 mod services;
+mod task;
 
 pub use argument::{effective_py_args, lookup, present};
 pub use binding::PythonBinding;
@@ -27,8 +29,8 @@ pub use error::{InvokeError, missing_state};
 pub use file_reader::{FileContent, PythonFileReader, py_bytes};
 pub use fork_gate::RuntimeAlreadyStarted;
 pub use gil::{PythonContext, attach_blocking, release_count, release_gil};
-pub use handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle};
-pub use hooks::{HookChain, HookResume, HookStep, PythonCallEvent, PythonCallHooks, PythonRuntime};
+pub use handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle, Suspension};
+pub use hooks::{HookChain, PythonCallEvent, PythonCallHooks, PythonRuntime};
 pub use marshal::{
     Pythonized, from_py, from_py_argument, json_loads, json_object_field, panic_to_pyerr, to_py,
 };
@@ -38,7 +40,8 @@ pub use runtime::{
     ready_future, reserve_process_for_forking, run_async, run_async_value, run_sync,
     run_sync_value, runtime_started,
 };
-pub use services::{HostResume, HostStep, PythonHostCalls};
+pub use services::PythonHostCalls;
+pub use task::{PythonTask, Resumed, Suspend};
 
 /// Starts the interpreter and imports the standard modules the tests share, once, so
 /// parallel test threads never race a first import of `asyncio`.

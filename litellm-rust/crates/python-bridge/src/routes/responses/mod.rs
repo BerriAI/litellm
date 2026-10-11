@@ -31,7 +31,6 @@ fn run_responses(py: Python<'_>, call: NativeCall<'_>, asynchronous: bool) -> Py
         } else {
             "responses"
         },
-        asynchronous,
     );
     run_inference::<ResponsesRoute, _>(py, call, asynchronous, ResponsesPythonHost(host))
 }

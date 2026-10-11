@@ -39,7 +39,6 @@ fn run_chat_completions(
         } else {
             "completion"
         },
-        asynchronous,
     );
     run_inference::<ChatCompletionsRoute, _>(
         py,

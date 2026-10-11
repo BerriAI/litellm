@@ -9,8 +9,8 @@ use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use tokio::sync::Mutex;
 
-use crate::missing_state;
 use crate::runtime::{poll_async_value, run_async_value, run_sync_value};
+use crate::{PythonTask, Suspension, missing_state};
 
 type NativeResult<M> = Result<
     MachineStep<
@@ -30,11 +30,9 @@ struct MachineState<M: Machine> {
     result: Option<MachineResult<M>>,
 }
 
-pub(super) enum NativePoll<T> {
-    Ready(T),
-    Suspend(Py<PyAny>),
-}
-
+/// The native machine as the Python driver steps it: a step that completes on its first
+/// poll is taken inline, one that needs the runtime becomes a Python awaitable the caller's
+/// task awaits. Closing aborts the runtime side.
 pub(super) struct NativeMachine<M: Machine> {
     state: Option<Arc<Mutex<MachineState<M>>>>,
     abort: Option<AbortHandle>,
@@ -60,11 +58,11 @@ where
         })));
     }
 
-    pub(super) fn resume(
+    pub(super) async fn resume(
         &mut self,
-        py: Python<'_>,
+        task: &PythonTask,
         interruption: Option<HostFailure<<M::Protocol as Protocol>::Error>>,
-    ) -> PyResult<NativePoll<NativeResult<M>>> {
+    ) -> PyResult<NativeResult<M>> {
         let state = Arc::clone(self.state.as_ref().ok_or_else(missing_state)?);
         let future = async move {
             let mut state = state.lock().await;
@@ -79,28 +77,29 @@ where
             state.result = Some(result);
             Ok(())
         };
-        if self.asynchronous {
-            let mut future = Box::pin(future);
-            if let Poll::Ready(()) = poll_async_value(py, future.as_mut())? {
-                return Ok(NativePoll::Ready(self.take_result()?));
-            }
-            let (abort, registration) = AbortHandle::new_pair();
-            self.abort = Some(abort);
-            Ok(NativePoll::Suspend(
-                run_async_value(py, async move {
-                    Abortable::new(future, registration)
-                        .await
-                        .map_err(|_| PyRuntimeError::new_err("native execution closed"))?
-                })?
-                .unbind(),
-            ))
-        } else {
-            run_sync_value(py, future)?;
-            Ok(NativePoll::Ready(self.take_result()?))
+        if !self.asynchronous {
+            Python::attach(|py| run_sync_value(py, future))?;
+            return self.take_result();
         }
+        let mut future = Box::pin(future);
+        if let Poll::Ready(()) = Python::attach(|py| poll_async_value(py, future.as_mut()))? {
+            return self.take_result();
+        }
+        let (abort, registration) = AbortHandle::new_pair();
+        self.abort = Some(abort);
+        let awaitable = Python::attach(|py| {
+            run_async_value(py, async move {
+                Abortable::new(future, registration)
+                    .await
+                    .map_err(|_| PyRuntimeError::new_err("native execution closed"))?
+            })
+            .map(Bound::unbind)
+        })?;
+        task.suspend(Suspension::Await(awaitable)).await?;
+        self.take_result()
     }
 
-    pub(super) fn take_result(&self) -> PyResult<NativeResult<M>> {
+    fn take_result(&self) -> PyResult<NativeResult<M>> {
         self.state
             .as_ref()
             .ok_or_else(missing_state)?

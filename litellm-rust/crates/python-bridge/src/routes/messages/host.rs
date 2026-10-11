@@ -1,5 +1,5 @@
 use crate::cache::{CacheCall, Cached, PythonCache, Selection};
-use litellm_host_python::{HostStep, PythonHostCalls, PythonOwned};
+use litellm_host_python::{PythonHostCalls, PythonOwned, PythonTask};
 
 use bytes::Bytes;
 use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
@@ -99,10 +99,10 @@ pub(super) struct MessagesPythonHost {
 }
 
 impl MessagesPythonHost {
-    pub(super) fn new(view: RequestView, asynchronous: bool) -> Self {
+    pub(super) fn new(view: RequestView) -> Self {
         Self {
             view,
-            cache: PythonCache::new(asynchronous),
+            cache: PythonCache::new(),
         }
     }
 
@@ -291,20 +291,12 @@ impl PythonBinding for MessagesPythonHost {
 }
 
 impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
-    fn handle_host_call(
+    async fn handle_host_call(
         &mut self,
-        py: Python<'_>,
+        task: &PythonTask,
         op: CacheCall,
     ) -> Result<(), InvokeError<Error>> {
-        self.cache.begin(py, op).map(|_| ())
-    }
-
-    fn begin_host_call(
-        &mut self,
-        py: Python<'_>,
-        op: CacheCall,
-    ) -> Result<HostStep<Error>, InvokeError<Error>> {
-        self.cache.begin(py, op)
+        self.cache.call(task, op).await
     }
 }
 

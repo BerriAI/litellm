@@ -16,11 +16,13 @@ Boundary tests exercise behavior with a supplied lifecycle binding without impor
 
 `HookChain` composes Python runtime hooks in order. Each argument, wire-request and response transformation feeds its result to the next hook. After all argument transformations, the driver calls `arguments_prepared` on every hook in order. Retained callback views must adopt that dictionary before later policy hooks can mutate or reject it. SDK policy is supplied by bridge composition as a hook, never a separate driver phase or parameter. Hooks implement only the stages they need. Default stages preserve the supplied values
 
-Terminal notifications share the selected response or exception. An ordinary notification error is reported as unraisable and does not skip the next hook or replace the selected outcome. Preparation, interception and transformation errors stop the chain. Cancellation stops all further hook dispatch. Suspensions stay inline in the existing driver, and the chain traverses retained event values for GC
+Terminal notifications share the selected response or exception. An ordinary notification error is reported as unraisable and does not skip the next hook or replace the selected outcome. Preparation, interception and transformation errors stop the chain. Cancellation stops all further hook dispatch
+
+Hooks and host calls are `async fn`s that receive the `PythonTask`. A Python call's result goes through `PythonTask::settle`, which awaits an awaitable on the caller's task when the call is asynchronous and returns a cancellation as the outer error. No hook returns a continuation or keeps pending state between steps: whatever a suspended hook holds lives on its own future, and dropping the future releases it
 
 ## Existing runtime invariants
 
-- Keep this crate the CPython runtime adapter and nothing more: Serde marshalling, interpreter detachment, tokio/asyncio glue, the `Execution` handle, the call driver and the `PythonBinding`, `PythonHostCalls` and `PythonOwned` traits, and the `PythonRuntime` specialization of `host::hooks::CallHooks`
+- Keep this crate the CPython runtime adapter and nothing more: Serde marshalling, interpreter detachment, tokio/asyncio glue, the `Execution` handle, the `PythonTask`, the call driver and the `PythonBinding`, `PythonHostCalls` and `PythonOwned` traits, and the `PythonRuntime` specialization of `host::hooks::CallHooks`
   - No LiteLLM domain dependencies beyond `litellm-host`: no route types, no `Logging` policy, no public API registration, no cdylib build features
   - `PythonCallHooks` only constrains the shared call-stage interface to `PythonRuntime` and Python ownership. It must not redeclare the stages
   - `PythonCallEvent` is a specialization of the shared `CallEvent`, never a separately defined lifecycle. The driver emits `Succeeded` or `Failed` exactly once and never dispatches callbacks after a cancellation. Which Python objects consume those events is the legacy adapter's business
@@ -37,7 +39,9 @@ Terminal notifications share the selected response or exception. An ordinary not
   - Keep diagnostic counters in the consumer. Wrapper invocations do not measure every interpreter release
   - Release exclusive class borrows/locks before Python calls or decrements that can invoke finalizers. Expose retained Python edges to GC without calling Python during traversal
 - Keep coroutine driving in the shared Python driver and the native handle
-  - Shared driver implementation: `litellm/rust_bridge/lifecycle.py`, handle: `src/handle.rs`, call driver: `src/driver.rs`, native-backed behavior tests: `tests/lifecycle.py`. The consumer supplies the lifecycle binding
+  - Shared driver implementation: `litellm/rust_bridge/lifecycle.py`, handle: `src/handle.rs`, task: `src/task.rs`, call driver: `src/driver.rs`, native-backed behavior tests: `tests/lifecycle.py`. The consumer supplies the lifecycle binding
+  - The call is one async body polled only from `Execution.resume_*` through `PythonTask::resume`, with a noop waker. Nothing in that body may await tokio I/O directly: the native machine is polled inline and otherwise becomes a Python awaitable, and every other await goes through `PythonTask::suspend`
   - Every lifecycle suspension is awaited inline in the caller's task. `into_future` creates a separate task and cannot satisfy this contract
+  - The body shares the binding, hooks and keyword view with the handle through a lock it releases around every native step and stream boundary, so GC traversal sees them while the call waits on the runtime or its consumer. Traversal is blind only while a hook's own awaitable is in flight
 - References: [ownership](https://pyo3.rs/v0.29.2/types.html), [conversions](https://pyo3.rs/v0.29.2/conversions/traits.html), [pythonize errors](https://docs.rs/pythonize/0.29.0/src/pythonize/error.rs.html)
   - [GC](https://pyo3.rs/v0.29.2/class/protocols.html#garbage-collector-integration), [re-entry](https://pyo3.rs/v0.29.2/class/call.html), [parallelism](https://pyo3.rs/v0.29.2/parallelism.html), [async delivery source](https://docs.rs/pyo3-async-runtimes/0.29.0/src/pyo3_async_runtimes/generic.rs.html)

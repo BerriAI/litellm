@@ -2,7 +2,7 @@ use crate::{
     cache::{CacheCall, Cached, Selection},
     routes::inference::InferenceHost,
 };
-use litellm_host_python::{HostStep, InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
+use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned, PythonTask};
 use litellm_inference_responses::{Error, route::Responses, types::ResponsesCall};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
@@ -116,20 +116,12 @@ impl PythonBinding for ResponsesPythonHost {
 }
 
 impl PythonHostCalls<Cached<Responses>> for ResponsesPythonHost {
-    fn handle_host_call(
+    async fn handle_host_call(
         &mut self,
-        py: Python<'_>,
+        task: &PythonTask,
         op: CacheCall,
     ) -> Result<(), InvokeError<Error>> {
-        self.0.begin_cache_call(py, op).map(|_| ())
-    }
-
-    fn begin_host_call(
-        &mut self,
-        py: Python<'_>,
-        op: CacheCall,
-    ) -> Result<HostStep<Error>, InvokeError<Error>> {
-        self.0.begin_cache_call(py, op)
+        self.0.cache_call(task, op).await
     }
 }
 
