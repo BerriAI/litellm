@@ -1615,7 +1615,6 @@ async def test_public_whats_new_route_serves_the_bundled_list_without_fetching_w
     from litellm.proxy.public_endpoints.public_endpoints import _load_bundled_whats_new, get_public_whats_new
 
     monkeypatch.delenv("LITELLM_LOCAL_WHATS_NEW", raising=False)
-    monkeypatch.setattr(litellm, "whats_new_url", None)
 
     async def forbidden_fetch(url: str) -> bytes:
         raise AssertionError(f"no URL is configured, so the route may not fetch, got {url}")
