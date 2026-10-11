@@ -667,11 +667,7 @@ def convert_to_model_response_object(
     ### CHECK IF ERROR IN RESPONSE ### - openrouter returns these in the dictionary
     # Some OpenAI-compatible providers (e.g., Apertis) return empty error objects
     # even on success. Only raise if the error contains meaningful data.
-    if (
-        response_object is not None
-        and "error" in response_object
-        and response_object["error"] is not None
-    ):
+    if response_object is not None and "error" in response_object and response_object["error"] is not None:
         error_obj: Final = response_object["error"]
         has_meaningful_error = False
 
