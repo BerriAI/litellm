@@ -28,7 +28,7 @@ Needs the proxy on the same host, since RSS and CPU come from psutil on its proc
 a multi-worker proxy serves /metrics from the prometheus multiprocess collector, which drops
 the process collector's memory and CPU series. Log bytes are read from the file the proxy's
 stdout/stderr was redirected to, so the same host requirement covers that too. Deselected
-unless E2E_REDIS_CHAOS is set.
+unless E2E_PERF_TESTS is set.
 """
 
 from __future__ import annotations
