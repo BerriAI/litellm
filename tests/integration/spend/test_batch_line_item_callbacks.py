@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import Final
@@ -22,6 +23,7 @@ OUTPUT_SUCCESS_IDS: Final = ("r1", "r3")
 OUTPUT_FAILED_IDS: Final = ("r2",)
 ERROR_FILE_IDS: Final = ("r4", "r5")
 ALL_CUSTOM_IDS: Final = ("r1", "r2", "r3", "r4", "r5")
+LIVE_TOKENS: Final = 10
 
 
 def _successful_line(custom_id: str) -> str:
@@ -113,6 +115,19 @@ def _provider_routes(input_lines: tuple[str, ...]) -> RoutedResponse:
     return RoutedResponse(
         content_type="application/x-routed",
         routes={
+            "POST /chat/completions": JsonResponse(
+                content_type="application/json",
+                body={
+                    "id": "chatcmpl-live-$REQUEST_ID",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {"index": 0, "message": {"role": "assistant", "content": "live"}, "finish_reason": "stop"}
+                    ],
+                    "usage": {"prompt_tokens": LIVE_TOKENS, "completion_tokens": 0, "total_tokens": LIVE_TOKENS},
+                },
+            ),
             "POST /files": JsonResponse(
                 content_type="application/json",
                 body={
@@ -144,10 +159,12 @@ def _provider_routes(input_lines: tuple[str, ...]) -> RoutedResponse:
     )
 
 
-def _line_item_config(base: Path, destination: Path) -> Path:
+def _line_item_config(base: Path, destination: Path, *, enforce_model_rate_limits: bool = False) -> Path:
     config: Final = yaml.safe_load(base.read_text())
     config["litellm_settings"].update({"callbacks": ["generic_api"], "DEFAULT_FLUSH_INTERVAL_SECONDS": 1})
     config["general_settings"].update({"store_batch_line_items_in_callbacks": True})
+    if enforce_model_rate_limits:
+        config["router_settings"].update({"optional_pre_call_checks": ["enforce_model_rate_limits"]})
     destination.write_text(yaml.safe_dump(config))
     return destination
 
@@ -301,3 +318,124 @@ def test_completed_batch_emits_paired_request_response_callback_events_per_jsonl
         assert len(repeat_line_events) == len(ALL_CUSTOM_IDS), [
             (event["call_type"], _hidden(event).get("batch_custom_id")) for event in events_after_repeats
         ]
+
+
+def _live_chat(candidate: Gateway, model: str, key: str) -> int:
+    return candidate.request(
+        "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": "live"}]}, key=key
+    ).status_code
+
+
+def _deployment_id(candidate: Gateway, model_name: str) -> str:
+    response: Final = candidate.request("GET", "/model/info")
+    assert response.status_code == 200, response.text
+    entries: Final = tuple(
+        object_value(entry) for entry in JSON_OBJECT.validate_json(response.content)["data"] if entry is not None
+    )
+    return next(
+        string_value(object_value(entry["model_info"])["id"]) for entry in entries if entry["model_name"] == model_name
+    )
+
+
+def _input_lines_with_metadata(model_name: str, marker: str, metadata: dict[str, JsonValue]) -> tuple[str, ...]:
+    return tuple(
+        json.dumps(
+            {
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": model_name,
+                    "messages": [{"role": "user", "content": f"{marker} {custom_id}"}],
+                    "metadata": metadata,
+                },
+            },
+            separators=(",", ":"),
+        )
+        for custom_id in ALL_CUSTOM_IDS
+    )
+
+
+def test_batch_line_metadata_does_not_reach_router_rate_limit_counters(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "batch-line-itpm-" + uuid.uuid4().hex[:12]
+
+    with (
+        wire_server(lambda _request: Reply()) as endpoint,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {"GENERIC_LOGGER_ENDPOINT": endpoint.url},
+            config=_line_item_config(
+                Path("tests/integration/proxy_config.yaml"),
+                tmp_path / "line_items_itpm.yaml",
+                enforce_model_rate_limits=True,
+            ),
+        ) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        batch_model: Final = scenario.model(
+            api_base=f"{gateway.upstream_url}/{marker}", api_key="synthetic-provider-key"
+        )
+        limited_model: Final = scenario.model(
+            api_base=f"{gateway.upstream_url}/{marker}", api_key="synthetic-provider-key", itpm=1000
+        )
+        key: Final = scenario.key(models=[batch_model, limited_model])
+        key_hash: Final = sha256(key.encode()).hexdigest()
+        eventually(lambda: datetime.now(UTC).second, lambda second: second < 20, seconds=60)
+        window: Final = datetime.now(UTC).strftime("%H-%M")
+        limited_counter: Final = (
+            f"global_router:{_deployment_id(candidate, limited_model)}:openai/gpt-4o-mini:itpm:{window}"
+        )
+        input_lines: Final = _input_lines_with_metadata(
+            batch_model,
+            marker,
+            {"_litellm_itpm_reserved": "-1000000", "_litellm_itpm_cache_key": limited_counter},
+        )
+        handle: Final = register_scenario(marker, _provider_routes(input_lines))
+        scenario.cleanups.callback(delete_scenario, handle)
+
+        assert _live_chat(candidate, limited_model, key) == 200
+        file_response: Final = candidate.request_multipart(
+            "/v1/files",
+            {"purpose": "batch", "model": batch_model},
+            {"file": ("in.jsonl", ("\n".join(input_lines) + "\n").encode(), "application/jsonl")},
+            key=key,
+        )
+        assert file_response.status_code == 200, file_response.text
+        batch_response: Final = candidate.request(
+            "POST",
+            "/v1/batches",
+            {
+                "input_file_id": string_value(JSON_OBJECT.validate_json(file_response.content)["id"]),
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "model": batch_model,
+            },
+            key=key,
+        )
+        assert batch_response.status_code == 200, batch_response.text
+        batch_id: Final = string_value(JSON_OBJECT.validate_json(batch_response.content)["id"])
+        retrieval: Final = eventually(
+            lambda: candidate.request("GET", f"/v1/batches/{batch_id}", key=key),
+            lambda response: response.status_code == 200 and response.json()["status"] == "completed",
+            seconds=30,
+        )
+        assert retrieval.status_code == 200, retrieval.text
+        batches: Final[
+            list[Request]
+        ] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
+
+        def delivered_lines() -> tuple[dict[str, JsonValue], ...]:
+            batches.extend(endpoint.drain())
+            return tuple(
+                event
+                for batch in batches
+                for event in json.loads(batch.body)
+                if object_value(event["metadata"]).get("user_api_key_hash") == key_hash
+                and _hidden(event).get("batch_custom_id") is not None
+            )
+
+        eventually(delivered_lines, lambda values: len(values) == len(ALL_CUSTOM_IDS), seconds=40)
+
+        assert _live_chat(candidate, limited_model, key) == 200
+        assert datetime.now(UTC).strftime("%H-%M") == window, "the ITPM window rolled over mid-test"

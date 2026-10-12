@@ -13,6 +13,9 @@ cost, or error propagation fails here.
 
 import asyncio
 import json
+import subprocess
+import sys
+import textwrap
 import uuid
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
@@ -1530,3 +1533,135 @@ async def test_fanout_emitting_nothing_releases_the_claim(recorder):
     assert file_mock.await_count == 6, (
         "a completed fan-out that emits nothing must release the claim so the next retrieve retries"
     )
+
+
+CALLER_FIELDS_INPUT_JSONL = json.dumps(
+    {
+        "custom_id": "a",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hi a"}],
+            "temperature": 0.2,
+            "user": "end-user-a",
+            "call_type": "embedding",
+            "metadata": {
+                "_litellm_itpm_reserved": 5,
+                "_litellm_itpm_cache_key": "global_router:dep-2:gpt-4o:itpm:00-00",
+            },
+            "standard_callback_dynamic_params": {"langfuse_host": "https://line.example"},
+        },
+    }
+).encode()
+
+
+@pytest.mark.asyncio
+async def test_line_body_fields_do_not_replace_the_callback_kwargs(recorder):
+    """A JSONL line body is the caller's input file, so its fields reach callbacks as
+    the line's optional_params and never stand in for the kwargs litellm sets, which
+    router hooks read to settle rate limit reservations."""
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
+    file_mock: Final = AsyncMock(
+        side_effect=_scoped_file_content({"input-fields": CALLER_FIELDS_INPUT_JSONL, "output-fields": OUTPUT_JSONL})
+    )
+    with (
+        patch(
+            "litellm.files.main.afile_content", file_mock
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(_parent_logging(), _provider_batch("batch_fields", "input-fields", "output-fields"))
+
+    line: Final = next(e for e in recorder.success_events if _hidden(e).get("batch_custom_id") == "a")
+    assert "metadata" not in line
+    assert line["call_type"] == "acompletion"
+    assert line["standard_callback_dynamic_params"] == {}
+    assert line["user"] == "end-user-a"
+    assert line["optional_params"]["temperature"] == 0.2
+    assert line["optional_params"]["metadata"]["_litellm_itpm_reserved"] == 5
+
+
+@pytest.mark.asyncio
+async def test_a_retrieve_after_the_shutdown_drain_leaves_every_line_to_the_next_retrieve(recorder):
+    """A fan-out started after the shutdown drain would be cancelled with the loop
+    while holding the batch claim, so it is not started, the batch stays unclaimed,
+    and the aggregate event still bills the batch."""
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
+    with (
+        patch(
+            "litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=_file_content
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        assert await drain_batch_line_items(timeout=1) == 0
+        await _log_aggregate_success()
+        loop: Final = asyncio.get_running_loop()
+        started: Final = [task for task in pending_batch_line_item_tasks() if task.get_loop() is loop]
+        await asyncio.gather(*started)
+        next_retrieve: Final = await log_batch_line_items(
+            batch=_batch(),
+            custom_llm_provider="openai",
+            parent=_parent_logging(),
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+        )
+
+    assert started == []
+    assert [
+        _payload(e)["response_cost"] for e in recorder.success_events if _hidden(e).get("batch_custom_id") is None
+    ] == [1.5]
+    assert next_retrieve == 2
+
+
+_EXIT_FLUSH_SPAWN_SCRIPT: Final = textwrap.dedent(
+    """
+    import asyncio
+    import atexit
+    from types import SimpleNamespace
+
+    from litellm.batches.batch_line_item_logging import spawn_batch_line_items
+    from litellm.types.utils import LiteLLMBatch
+
+
+    async def spawn():
+        return spawn_batch_line_items(
+            batch=LiteLLMBatch(
+                id="batch_exit", object="batch", endpoint="/v1/chat/completions", input_file_id="in",
+                status="completed", completion_window="24h", created_at=1,
+            ),
+            custom_llm_provider="openai",
+            parent=SimpleNamespace(litellm_params={}),
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            result_files=None,
+        )
+
+
+    def flush_at_exit():
+        loop = asyncio.new_event_loop()
+        print("spawned:", loop.run_until_complete(spawn()), flush=True)
+        loop.close()
+
+
+    atexit.register(flush_at_exit)
+    """
+)
+
+
+def test_a_retrieve_flushed_at_interpreter_exit_starts_no_line_fan_out():
+    """The logging worker's exit flush runs a queued retrieve handler on a loop it
+    closes as soon as the handler returns, so a fan-out started there would be
+    destroyed partway with the batch claim held."""
+    result: Final = subprocess.run(
+        [sys.executable, "-P", "-c", _EXIT_FLUSH_SPAWN_SCRIPT], capture_output=True, text=True, timeout=120
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert "spawned: None" in result.stdout, result.stdout + result.stderr

@@ -15,6 +15,10 @@ import litellm
 from litellm import Router
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
+from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
+    ITPM_CACHE_KEY,
+    ITPM_RESERVED_KEY,
+)
 from litellm.router_utils.pre_call_checks.model_rate_limit_check import (
     ModelRateLimitingCheck,
 )
@@ -380,6 +384,33 @@ class TestModelRateLimitingCheckAsync:
         _, kwarg_params = mock_cache.async_increment_cache.call_args
         assert "test-id:gpt-4:tpm:" in kwarg_params["key"]
         assert kwarg_params["value"] == 50
+
+    @pytest.mark.asyncio
+    async def test_batch_line_item_events_leave_router_counters_untouched(self):
+        """A completed batch's JSONL lines are logged as events of their own, and their
+        metadata comes from the caller's input file, so a line event must not count
+        tokens against a deployment or settle a reservation the metadata names."""
+        dual_cache = DualCache()
+        check = ModelRateLimitingCheck(dual_cache=dual_cache)
+        itpm_counter = "global_router:other-id:gpt-4:itpm:00-00"
+        await dual_cache.async_increment_cache(key=itpm_counter, value=8, ttl=60)
+        minute = litellm.utils.get_utc_datetime().strftime("%H-%M")
+        line_kwargs = {
+            "litellm_params": {"batch_parent_id": "batch_1"},
+            "metadata": {ITPM_RESERVED_KEY: 5, ITPM_CACHE_KEY: itpm_counter},
+            "standard_logging_object": {
+                "model_id": "test-id",
+                "total_tokens": 50,
+                "hidden_params": {"litellm_model_name": "gpt-4"},
+                "metadata": {},
+            },
+        }
+
+        await check.async_log_success_event(line_kwargs, None, None, None)
+        await check.async_log_failure_event(line_kwargs, None, None, None)
+
+        assert await dual_cache.async_get_cache(key=itpm_counter) == 8
+        assert await dual_cache.async_get_cache(key=f"test-id:gpt-4:tpm:{minute}") is None
 
 
 class TestRouterWithEnforceModelRateLimits:

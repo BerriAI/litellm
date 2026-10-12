@@ -1,6 +1,8 @@
 import asyncio
 import json
+import threading
 import uuid
+import weakref
 from collections.abc import Iterator, Mapping
 from datetime import datetime
 from types import MappingProxyType
@@ -76,6 +78,8 @@ batch_line_item_claim_cache: Final = DualCache()
 
 # asyncio holds tasks weakly, so each spawned line fan-out stays referenced here until it finishes
 _LINE_ITEM_TASKS: Final[set["asyncio.Task[int]"]] = set()  # mutable-ok: strong refs to running fan-outs
+# loops whose shutdown drain has started, where a new fan-out would be cancelled with its claim held
+_DRAINED_LOOPS: Final[weakref.WeakSet[asyncio.AbstractEventLoop]] = weakref.WeakSet()
 
 # Anthropic keeps no input file, so its retrieved batch reports input_file_id as the string "None"
 _NO_FILE_IDS: Final = frozenset(("", "None"))
@@ -362,15 +366,22 @@ async def _emit_line_event(
         call_type=call_type,
         start_time=start_time,
     )
+    line_user: Final = request_body.get("user")
     child.update_environment_variables(  # pyright: ignore[reportUnknownMemberType]  # Logging.update_environment_variables is untyped upstream
         litellm_params={
             **parent_params,
             "metadata": _metadata_copy(parent_params),
         },
-        optional_params=_optional_params_for_body(request_body),
+        optional_params={},
         model=child.model,
+        user=line_user if isinstance(line_user, str) else None,
         custom_llm_provider=custom_llm_provider,
     )
+    # The line body is caller data, so it is kept as optional_params without its keys
+    # landing on the callback kwargs, where router hooks read metadata and call_type
+    line_optional_params: Final = _optional_params_for_body(request_body)
+    child.optional_params = line_optional_params
+    child.model_call_details["optional_params"] = line_optional_params
     child.mark_batch_line_item(batch.id)
     for secret_key in _SECRET_PARAM_KEYS:
         child.litellm_params.pop(secret_key, None)  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped upstream
@@ -434,12 +445,22 @@ def spawn_batch_line_items(
     litellm_params: dict[str, object] | None,  # mutable-ok: the logging object's shared litellm_params dict
     model_info: ModelInfo | None,
     result_files: BatchResultFiles | None,
-) -> "asyncio.Task[int]":
+) -> "asyncio.Task[int] | None":
     """Run ``log_batch_line_items`` in its own task, so the fan-out never shares
     the logging worker deadline the aggregate aretrieve_batch event runs under.
     The parent's litellm_params are copied first, because the aggregate event's
-    callbacks keep writing request-local markers into its metadata."""
-    task: Final = asyncio.get_running_loop().create_task(
+    callbacks keep writing request-local markers into its metadata. Once this
+    loop's shutdown drain has started, or the interpreter is exiting and the
+    logging worker's exit flush runs the handler on a loop it closes right after,
+    no fan-out starts or claims the batch, so the next retrieve emits every line."""
+    loop: Final = asyncio.get_running_loop()
+    if loop in _DRAINED_LOOPS or not threading.main_thread().is_alive():
+        verbose_logger.warning(
+            "batch line items for batch_id=%s are skipped during shutdown and will be emitted on the next retrieve",
+            batch.id,
+        )
+        return None
+    task: Final = loop.create_task(
         log_batch_line_items(
             batch=batch,
             custom_llm_provider=custom_llm_provider,
@@ -469,10 +490,12 @@ def pending_batch_line_item_tasks() -> tuple["asyncio.Task[int]", ...]:
 
 
 async def drain_batch_line_items(timeout: float) -> int:
-    """Wait up to ``timeout`` seconds for this loop's running line fan-outs, so a
-    shutdown lets them finish before it closes the clients they write through.
-    Returns how many are still running when the wait ends."""
+    """Stop this loop from starting new line fan-outs, then wait up to ``timeout``
+    seconds for the running ones, so a shutdown lets them finish before it closes
+    the clients they write through. Returns how many are still running when the
+    wait ends."""
     loop: Final = asyncio.get_running_loop()
+    _DRAINED_LOOPS.add(loop)
     running: Final = [task for task in pending_batch_line_item_tasks() if task.get_loop() is loop and not task.done()]
     if not running:
         return 0

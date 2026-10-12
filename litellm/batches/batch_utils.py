@@ -144,24 +144,26 @@ async def handle_completed_batch_with_files(
 ) -> "tuple[BatchCostUsageResult, BatchResultFiles]":
     """_handle_completed_batch plus the raw output/error bytes it fetched, so
     downstream line-item logging reuses them instead of refetching."""
-    error_file_content: Final = await fetch_batch_error_file_content(
-        batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
-    )
-    error_file_failed_requests: Final = count_error_file_failed_requests_from_content(error_file_content)
-
     if batch.output_file_id is None:
+        only_error_file_content: Final = await fetch_batch_error_file_content(
+            batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
+        )
         return (
             BatchCostUsageResult(
                 cost=0.0,
                 usage=Usage(prompt_tokens=0, completion_tokens=0, total_tokens=0),
                 models=[],
                 successful_requests=0,
-                failed_requests=error_file_failed_requests,
+                failed_requests=count_error_file_failed_requests_from_content(only_error_file_content),
             ),
-            BatchResultFiles(output=None, error=error_file_content),
+            BatchResultFiles(output=None, error=only_error_file_content),
         )
 
     file_content = await _fetch_batch_output_file_content(batch, custom_llm_provider, litellm_params=litellm_params)
+    error_file_content: Final = await fetch_batch_error_file_content(
+        batch, custom_llm_provider=custom_llm_provider, litellm_params=litellm_params
+    )
+    error_file_failed_requests: Final = count_error_file_failed_requests_from_content(error_file_content)
 
     output_file_result: Final = (
         calculate_vertex_ai_batch_cost_and_usage(

@@ -21,6 +21,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.router_utils.pre_call_checks.io_token_rate_limit_check import (
     ITPM_RESERVED_KEY,
     async_io_token_pre_call_check,
@@ -335,6 +336,8 @@ class ModelRateLimitingCheck(CustomLogger):
             get_parent_otel_span_from_kwargs,
         )
 
+        if is_batch_line_item_event(kwargs):
+            return
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object")
 
@@ -393,6 +396,8 @@ class ModelRateLimitingCheck(CustomLogger):
             get_parent_otel_span_from_kwargs,
         )
 
+        if is_batch_line_item_event(kwargs):
+            return
         # Never fail the primary logging pipeline over an io-token refund error.
         with contextlib.suppress(Exception):
             await async_io_token_refund_failure(

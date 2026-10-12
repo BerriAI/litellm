@@ -2561,6 +2561,34 @@ async def testhandle_completed_batch_with_files_no_output_returns_error_bytes(mo
     assert files.error == error_bytes
 
 
+@pytest.mark.asyncio
+async def test_handle_completed_batch_with_files_fetches_the_output_file_first(monkeypatch):
+    """The output file is fetched before the error file, the order
+    handle_completed_batch used before it returned the fetched bytes."""
+    fetched: list[str] = []
+
+    async def fake_fetch(batch, custom_llm_provider, litellm_params=None):
+        fetched.append(batch.output_file_id)
+        return _vertex_jsonl([_success_row(model="gpt-4o", usage=_usage(10, 5))])
+
+    async def fake_afile_content(**kw):
+        fetched.append(kw["file_id"])
+        return type("R", (), {"content": b""})()
+
+    import litellm.cost_calculator as cc
+    import litellm.files.main as files_main
+
+    monkeypatch.setattr(bu, "_fetch_batch_output_file_content", fake_fetch)
+    monkeypatch.setattr(files_main, "afile_content", fake_afile_content)
+    monkeypatch.setattr(cc, "batch_cost_calculator", lambda **kw: (2.0, 1.3))
+
+    await bu.handle_completed_batch_with_files(
+        _batch("of").model_copy(update={"error_file_id": "ef"}), custom_llm_provider="openai"
+    )
+
+    assert fetched == ["of", "ef"]
+
+
 @pytest.fixture()
 def _vcr_outcome_gate(request, vcr):
     install_live_call_probe(request, vcr)
