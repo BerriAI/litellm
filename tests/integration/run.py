@@ -32,6 +32,7 @@ GITHUB_FILES: Final = frozenset(
         "tests/integration/database/image/test_offline_image_migration.py",
         "tests/integration/database/image/test_ui_image_serves_offline.py",
         "tests/integration/mcp/test_interactions.py",
+        "tests/integration/sdk/test_redis_cluster_iam_auth.py",
     }
 )
 
