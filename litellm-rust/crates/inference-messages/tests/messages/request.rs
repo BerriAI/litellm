@@ -301,6 +301,10 @@ fn sent_betas(request: &wiremock::Request) -> BetaSet {
     json!({"tools": [{"type": "advisor_20260301", "name": "advisor", "model": MODEL}]}),
     &[AnthropicBeta::AdvisorTool20260301]
 )]
+#[case::safeguards(
+    json!({"safeguards": [{"type": "dangerous_tool_use", "classifier_context": {"v": 1}}]}),
+    &[AnthropicBeta::DangerousToolUse20260903]
+)]
 #[case::several_features_at_once(
     json!({"speed": "fast", "output_format": {"type": "json_schema"}}),
     &[AnthropicBeta::StructuredOutputs20251113, AnthropicBeta::FastMode20260201]
