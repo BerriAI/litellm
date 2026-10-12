@@ -33,6 +33,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
 )
 from litellm.proxy.management_helpers.audit_logs import create_object_audit_log
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.table_repositories import VirtualModelRepository
 from litellm.router_utils.auto_router_model_naming import AUTO_ROUTER_MODEL_PREFIX
 from litellm.types.proxy.management_endpoints.virtual_model_endpoints import (
@@ -132,10 +133,12 @@ async def _resolve_live_deployments_by_id(
     if not all_member_ids:
         return MappingProxyType({})
 
-    deployments_raw: Final = await prisma_client.writer_db.litellm_proxymodeltable.find_many(  # pyright: ignore[reportAny]  # Prisma accessors return Any
-        where={"model_id": {"in": list(all_member_ids)}}
+    deployments_raw: Final = await find_many_in(
+        prisma_client.writer_db.litellm_proxymodeltable,  # pyright: ignore[reportAny]  # Prisma accessor is Any
+        "model_id",
+        all_member_ids,
     )
-    deployments: Final = _validate_proxy_models(deployments_raw)  # pyright: ignore[reportAny]  # deployments_raw is Any from Prisma
+    deployments: Final = _validate_proxy_models(deployments_raw)
     return MappingProxyType({d.model_id: d.model_name for d in deployments if d.model_name})
 
 
@@ -173,10 +176,12 @@ async def _validate_members(
             param="members",
         )
 
-    deployments_raw: Final = await prisma_client.writer_db.litellm_proxymodeltable.find_many(  # pyright: ignore[reportAny]  # Prisma accessors return Any
-        where={"model_id": {"in": list(model_ids)}}
+    deployments_raw: Final = await find_many_in(
+        prisma_client.writer_db.litellm_proxymodeltable,  # pyright: ignore[reportAny]  # Prisma accessor is Any
+        "model_id",
+        model_ids,
     )
-    deployments: Final = _validate_proxy_models(deployments_raw)  # pyright: ignore[reportAny]  # deployments_raw is Any from Prisma
+    deployments: Final = _validate_proxy_models(deployments_raw)
 
     found_ids: Final = frozenset(d.model_id for d in deployments)
     missing_ids: Final = frozenset(model_ids) - found_ids
