@@ -1,4 +1,5 @@
 import json
+from collections.abc import Mapping
 from typing import Final
 
 import httpx
@@ -32,9 +33,13 @@ WEATHER_TOOL: Final = {
 }
 
 
-def _zerogpu_client(requests: list[httpx.Request], usage: dict[str, object]) -> OpenAI:
-    def respond(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
+class _RecordingZeroGPU:
+    def __init__(self, usage: Mapping[str, object]) -> None:
+        self.usage: Final = usage
+        self.requests: tuple[httpx.Request, ...] = ()
+
+    def respond(self, request: httpx.Request) -> httpx.Response:
+        self.requests = (*self.requests, request)
         return httpx.Response(
             200,
             json={
@@ -43,45 +48,44 @@ def _zerogpu_client(requests: list[httpx.Request], usage: dict[str, object]) -> 
                 "created": 1234567890,
                 "model": json.loads(request.content)["model"],
                 "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
-                "usage": usage,
+                "usage": dict(self.usage),
             },
         )
 
-    return OpenAI(
-        api_key="zerogpu-test-key",
-        base_url=ZEROGPU_API_BASE,
-        http_client=httpx.Client(transport=httpx.MockTransport(respond)),
-    )
+    def client(self) -> OpenAI:
+        return OpenAI(
+            api_key="zerogpu-test-key",
+            base_url=ZEROGPU_API_BASE,
+            http_client=httpx.Client(transport=httpx.MockTransport(self.respond)),
+        )
 
 
 def test_prefixed_model_reaches_zerogpu_chat_completions_without_the_prefix():
-    requests: Final[list[httpx.Request]] = []
-    client: Final = _zerogpu_client(requests, {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
+    zerogpu: Final = _RecordingZeroGPU({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
 
-    with client:
+    with zerogpu.client() as client:
         litellm.completion(
             model="zerogpu/gpt-oss-120b",
             messages=[{"role": "user", "content": "hello"}],
             client=client,
         )
 
-    assert len(requests) == 1
-    assert str(requests[0].url) == f"{ZEROGPU_API_BASE}/chat/completions"
-    assert json.loads(requests[0].content) == {
+    assert len(zerogpu.requests) == 1
+    assert str(zerogpu.requests[0].url) == f"{ZEROGPU_API_BASE}/chat/completions"
+    assert json.loads(zerogpu.requests[0].content) == {
         "model": "gpt-oss-120b",
         "messages": [{"role": "user", "content": "hello"}],
     }
 
 
 def test_responses_request_is_bridged_to_zerogpu_chat_completions():
-    requests: Final[list[httpx.Request]] = []
-    client: Final = _zerogpu_client(requests, {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
+    zerogpu: Final = _RecordingZeroGPU({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
 
-    with client:
+    with zerogpu.client() as client:
         response: Final = litellm.responses(model="zerogpu/gpt-oss-120b", input="hello", client=client)
 
-    assert [str(request.url) for request in requests] == [f"{ZEROGPU_API_BASE}/chat/completions"]
-    assert json.loads(requests[0].content) == {
+    assert [str(request.url) for request in zerogpu.requests] == [f"{ZEROGPU_API_BASE}/chat/completions"]
+    assert json.loads(zerogpu.requests[0].content) == {
         "model": "gpt-oss-120b",
         "messages": [{"role": "user", "content": "hello"}],
     }
@@ -89,10 +93,9 @@ def test_responses_request_is_bridged_to_zerogpu_chat_completions():
 
 
 def test_anthropic_messages_request_is_bridged_to_zerogpu_chat_completions():
-    requests: Final[list[httpx.Request]] = []
-    client: Final = _zerogpu_client(requests, {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
+    zerogpu: Final = _RecordingZeroGPU({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
 
-    with client:
+    with zerogpu.client() as client:
         response: Final = litellm.anthropic.messages.create(
             model="zerogpu/gpt-oss-120b",
             messages=[{"role": "user", "content": "hello"}],
@@ -100,8 +103,8 @@ def test_anthropic_messages_request_is_bridged_to_zerogpu_chat_completions():
             client=client,
         )
 
-    assert [str(request.url) for request in requests] == [f"{ZEROGPU_API_BASE}/chat/completions"]
-    assert json.loads(requests[0].content) == {
+    assert [str(request.url) for request in zerogpu.requests] == [f"{ZEROGPU_API_BASE}/chat/completions"]
+    assert json.loads(zerogpu.requests[0].content) == {
         "model": "gpt-oss-120b",
         "messages": [{"role": "user", "content": "hello"}],
         "max_tokens": 10,
@@ -111,16 +114,15 @@ def test_anthropic_messages_request_is_bridged_to_zerogpu_chat_completions():
 
 @pytest.mark.parametrize("model", ZEROGPU_MODELS)
 def test_zerogpu_completion_is_charged_at_the_cost_map_rates(model: str):
-    requests: Final[list[httpx.Request]] = []
     usage: Final = {
         "prompt_tokens": 1000,
         "completion_tokens": 200,
         "total_tokens": 1200,
         "prompt_tokens_details": {"cached_tokens": 400},
     }
-    client: Final = _zerogpu_client(requests, usage)
+    zerogpu: Final = _RecordingZeroGPU(usage)
 
-    with client:
+    with zerogpu.client() as client:
         response: Final = litellm.completion(
             model=f"zerogpu/{model}",
             messages=[{"role": "user", "content": "hello"}],
@@ -155,10 +157,9 @@ def test_trim_messages_fits_zerogpu_history_into_the_model_context_window(model:
 def test_tools_and_reasoning_effort_reach_zerogpu_only_for_models_that_support_them(
     model: str, forwards_tools: bool, forwards_reasoning_effort: bool
 ):
-    requests: Final[list[httpx.Request]] = []
-    client: Final = _zerogpu_client(requests, {"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
+    zerogpu: Final = _RecordingZeroGPU({"prompt_tokens": 3, "completion_tokens": 1, "total_tokens": 4})
 
-    with client:
+    with zerogpu.client() as client:
         litellm.completion(
             model=f"zerogpu/{model}",
             messages=[{"role": "user", "content": "weather in Paris?"}],
@@ -171,7 +172,7 @@ def test_tools_and_reasoning_effort_reach_zerogpu_only_for_models_that_support_t
 
     tools: Final = {"tools": [WEATHER_TOOL], "tool_choice": "auto"} if forwards_tools else {}
     reasoning: Final = {"reasoning_effort": "high"} if forwards_reasoning_effort else {}
-    assert json.loads(requests[0].content) == {
+    assert json.loads(zerogpu.requests[0].content) == {
         "model": model,
         "messages": [{"role": "user", "content": "weather in Paris?"}],
         **tools,
