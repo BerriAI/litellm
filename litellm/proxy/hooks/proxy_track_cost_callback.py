@@ -913,7 +913,7 @@ async def _update_database_and_spend_counters_in_batch(
                     counter_key=f"tokens:team:{team_id}",
                     increment=total_tokens,
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001  # best-effort cross-pod token counter; a Redis failure must not break the response or the spend write
                 verbose_proxy_logger.warning("Failed to increment team token-budget counter for team_id=%s", team_id)
 
     return True
