@@ -129,6 +129,16 @@ def _is_stopped(process: psutil.Process) -> bool:
         return False
 
 
+def _suspend(process: psutil.Process) -> None:
+    process.suspend()
+    deadline: Final = time.monotonic() + STRICT_HEALTHCHECK_SECONDS
+    while not _is_stopped(process):
+        assert time.monotonic() < deadline, (
+            f"Process {process.pid} did not stop within {STRICT_HEALTHCHECK_SECONDS}s of SIGSTOP"
+        )
+        time.sleep(0.01)
+
+
 def _is_reaped(process: psutil.Process) -> bool:
     try:
         process.status()
@@ -152,7 +162,7 @@ class WorkerKill:
     fired: threading.Event
 
     def freeze(self) -> psutil.Process:
-        self.victim.suspend()
+        _suspend(self.victim)
         return self.victim
 
     def __call__(self) -> None:
@@ -235,7 +245,7 @@ class OwnedProxy:
         )
         assert pid == self.process.pid or pid in self.worker_pids(), f"{pid} is not part of this proxy"
         target: Final = psutil.Process(pid)
-        target.suspend()
+        _suspend(target)
         try:
             yield target
         finally:
@@ -307,7 +317,7 @@ def kill_stray_process(pid: int) -> None:
 @contextmanager
 def paused(process: subprocess.Popen[bytes] | subprocess.Popen[str]) -> Iterator[None]:
     target: Final = psutil.Process(process.pid)
-    target.suspend()
+    _suspend(target)
     try:
         yield
     finally:
