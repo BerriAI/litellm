@@ -2136,6 +2136,24 @@
         "interactions": false
       }
     },
+    "paraloncloud": {
+      "display_name": "ParalonCloud (`paraloncloud`)",
+      "url": "https://docs.litellm.ai/docs/providers/paraloncloud",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "scaleway": {
       "display_name": "Scaleway (`scaleway`)",
       "url": "https://docs.litellm.ai/docs/providers/scaleway",
