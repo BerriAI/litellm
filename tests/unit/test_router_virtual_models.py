@@ -2880,3 +2880,49 @@ async def test_get_model_list_returns_resolved_members():
 
     model_ids = {deployment["model_info"]["id"] for deployment in vm_list}
     assert model_ids == {"dep1", "dep2"}
+
+
+def test_virtual_model_rows_do_not_inherit_member_access_groups():
+    """
+    A virtual model row must not inherit the access_groups of its members.
+    If it did, a key authorized only for a member's access group would
+    implicitly be authorized for the virtual model name, bypassing the
+    access_group filter on failover to reach a restricted member.
+    """
+    vm_name = f"{VIRTUAL_MODEL_PREFIX}test-model"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "member-1-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key1"},
+                "model_info": {"id": "member-1", "access_groups": ["alpha-group"]},
+            },
+            {
+                "model_name": "member-2-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key2"},
+                "model_info": {"id": "member-2", "access_groups": ["beta-group"]},
+            },
+        ],
+    )
+
+    router.set_virtual_models(
+        {
+            vm_name: VirtualModelRouterState(
+                members={"member-1": 1, "member-2": 2},
+            )
+        }
+    )
+
+    vm_list = router.get_model_list(model_name=vm_name)
+    assert vm_list is not None
+    assert len(vm_list) == 2
+
+    for deployment in vm_list:
+        model_info = deployment.get("model_info", {})
+        assert "access_groups" not in model_info, (
+            f"Virtual model row must not inherit member access_groups, got {model_info.get('access_groups')}"
+        )
+        assert "id" in model_info, "model_info.id must be preserved"
+
+    model_ids = {deployment["model_info"]["id"] for deployment in vm_list}
+    assert model_ids == {"member-1", "member-2"}

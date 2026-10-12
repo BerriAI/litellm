@@ -8084,9 +8084,7 @@ class Router:
                 )
                 return ()
 
-        verbose_router_logger.debug(
-            "Retry skips deployments that already answered %s to this request: %s", status_code, skipped
-        )
+        verbose_router_logger.debug("Retry skips %d deployment(s) after status %s", len(skipped), status_code)
         return skipped
 
     @tracer.wrap()
@@ -12309,7 +12307,7 @@ class Router:
             }
 
             return {  # pyright: ignore[reportReturnType,reportUnknownVariableType]  # returning dict with unknown keys/values from untyped model_list
-                **deployment,
+                **self._as_routing_group_row(deployment),
                 "model_name": requested_name,
                 "litellm_params": params_copy,
             }
