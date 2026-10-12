@@ -15,7 +15,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.types.utils import EmbeddingResponse
 
-from ..common_utils import OpenAILikeBase, OpenAILikeError
+from ..common_utils import OPENAI_LIKE_HEADERS_ADAPTER, OpenAILikeBase, OpenAILikeError
 
 
 class OpenAILikeEmbeddingHandler(OpenAILikeBase):
@@ -103,7 +103,7 @@ class OpenAILikeEmbeddingHandler(OpenAILikeBase):
             api_base=api_base,
             api_key=api_key,
             endpoint_type="embeddings",
-            headers=request_headers,
+            headers=OPENAI_LIKE_HEADERS_ADAPTER.validate_python(request_headers),
             custom_endpoint=custom_endpoint,
         )
         model = model

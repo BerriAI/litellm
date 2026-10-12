@@ -22,7 +22,7 @@ from litellm.llms.openai.openai import OpenAIConfig
 from litellm.types.utils import CustomStreamingDecoder, ModelResponse
 from litellm.utils import CustomStreamWrapper, ProviderConfigManager
 
-from ..common_utils import OpenAILikeBase, OpenAILikeError
+from ..common_utils import OPENAI_LIKE_HEADERS_ADAPTER, OpenAILikeBase, OpenAILikeError
 from .transformation import OpenAILikeChatConfig
 
 
@@ -253,7 +253,7 @@ class OpenAILikeChatHandler(OpenAILikeBase):
             api_key=api_key,
             endpoint_type="chat_completions",
             custom_endpoint=custom_endpoint,
-            headers=headers,
+            headers=OPENAI_LIKE_HEADERS_ADAPTER.validate_python(headers),
         )
 
         stream: Final[bool] = optional_params.pop("stream", None) or False

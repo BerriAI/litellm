@@ -1,6 +1,9 @@
 from typing import Final, Literal
 
 import httpx
+from pydantic import TypeAdapter
+
+OPENAI_LIKE_HEADERS_ADAPTER: Final[TypeAdapter[dict[str, str] | None]] = TypeAdapter(dict[str, str] | None)
 
 
 class OpenAILikeError(Exception):
