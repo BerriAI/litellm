@@ -1059,9 +1059,9 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
     router: Final = Router(
         model_list=[
             {
-                "model_name": "semantic-ranker-default-004",
+                "model_name": "semantic-ranker-custom-test",
                 "litellm_params": {
-                    "model": "vertex_ai/semantic-ranker-default-004",
+                    "model": "vertex_ai/semantic-ranker-custom-test",
                     "vertex_project": "test-project",
                     "vertex_location": "us-east5",
                 },
@@ -1070,7 +1070,7 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
         ]
     )
     router_model_id: Final = router.model_list[0]["model_info"]["id"]
-    assert litellm.model_cost["vertex_ai/semantic-ranker-default-004"].get("input_cost_per_query") is None
+    assert litellm.model_cost.get("vertex_ai/semantic-ranker-custom-test", {}).get("input_cost_per_query") is None
 
     response: Final = RerankResponse(
         id="vertex_ai_rerank_test",
@@ -1080,7 +1080,7 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
 
     cost: Final = completion_cost(
         completion_response=response,
-        model="vertex_ai/semantic-ranker-default-004",
+        model="vertex_ai/semantic-ranker-custom-test",
         custom_llm_provider="vertex_ai",
         call_type="arerank",
         custom_pricing=True,
@@ -1088,6 +1088,39 @@ def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
     )
 
     assert cost == pytest.approx(3 * 0.001)
+
+
+@pytest.mark.parametrize(
+    "model",
+    (
+        "vertex_ai/semantic-ranker-default",
+        "vertex_ai/semantic-ranker-default@latest",
+        "vertex_ai/semantic-ranker-default-004",
+        "vertex_ai/semantic-ranker-default-003",
+        "vertex_ai/semantic-ranker-default-002",
+        "vertex_ai/semantic-ranker-fast",
+        "vertex_ai/semantic-ranker-fast@latest",
+        "vertex_ai/semantic-ranker-fast-004",
+    ),
+)
+def test_vertex_semantic_ranker_rerank_completion_cost_is_nonzero(
+    model: str, _local_model_cost_map: None
+) -> None:
+    response: Final = RerankResponse(
+        id="vertex_ai_rerank_pricing_test",
+        results=[],
+        meta={"billed_units": {"search_units": 3}},
+    )
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="vertex_ai",
+        call_type="rerank",
+    )
+
+    assert cost > 0
+    assert cost == pytest.approx(3 * litellm.model_cost[model]["input_cost_per_query"])
 
 
 def test_azure_realtime_cost_calculator(_local_model_cost_map):
