@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
+from .config import parse_config
 from .tealtiger import TealTigerGuardrail
 
 if TYPE_CHECKING:
@@ -11,9 +12,12 @@ if TYPE_CHECKING:
 def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> TealTigerGuardrail:
     import litellm
 
+    config: Final = parse_config(
+        getattr(litellm_params, "policies", None), getattr(litellm_params, "policy_mode", None)
+    )
     _tealtiger_callback: Final = TealTigerGuardrail(
-        policies=getattr(litellm_params, "policies", None),
-        policy_mode=getattr(litellm_params, "policy_mode", "ENFORCE"),
+        policies=config.policies,
+        policy_mode=config.policy_mode,
         guardrail_name=guardrail["guardrail_name"],
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,

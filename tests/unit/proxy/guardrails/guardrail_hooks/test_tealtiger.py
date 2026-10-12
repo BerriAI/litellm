@@ -1,454 +1,530 @@
-"""
-Unit tests for the TealTiger guardrail.
+"""Unit tests for the TealTiger guardrail. Nothing on the other side of the call: no network, no API keys."""
 
-Run with: pytest tests/unit/proxy/guardrails/guardrail_hooks/test_tealtiger.py -v
-
-These import from the vendored litellm/proxy/guardrails/guardrail_hooks/
-tealtiger/ package. Placed inside an actual litellm checkout, no path
-changes should be needed since the tests import via the standard package path.
-"""
+import json
+import re
+from unittest.mock import patch
 
 import pytest
+from fastapi import HTTPException
+from litellm.types.guardrails import GuardrailEventHooks
+from pydantic import ValidationError
 
-from litellm.proxy.guardrails.guardrail_hooks.tealtiger.engine import (
-    Action,
-    PolicyMode,
-    TealEngine,
-    estimate_tokens,
+from litellm.proxy.guardrails.guardrail_hooks.tealtiger import budget as budget_module
+from litellm.proxy.guardrails.guardrail_hooks.tealtiger.budget import BudgetLedger
+from litellm.proxy.guardrails.guardrail_hooks.tealtiger.config import parse_config
+from litellm.proxy.guardrails.guardrail_hooks.tealtiger.decision import Action, RiskLevel
+from litellm.proxy.guardrails.guardrail_hooks.tealtiger.engine import TealEngine, estimate_tokens
+from litellm.proxy.guardrails.guardrail_hooks.tealtiger.request import (
+    ANONYMOUS,
+    Identity,
+    identity_of,
+    tool_name_of,
 )
-from litellm.proxy.guardrails.guardrail_hooks.tealtiger.tealtiger import (
+from litellm.proxy.guardrails.guardrail_hooks.tealtiger.tealtiger import TealTigerGuardrail, _to_event_hook
+from litellm.types.proxy.guardrails.guardrail_hooks.tealtiger import (
     DEFAULT_POLICIES,
-    TealTigerGuardrail,
+    CostPolicy,
+    PiiPolicy,
+    PolicyMode,
+    TealTigerGuardrailConfigModel,
+    ToolAuthPolicy,
 )
 
+_BLOCKED_TOOL = re.compile(r"TealTiger: blocked: TOOL_NOT_ALLOWLISTED \(correlation_id=[0-9a-f-]{36}\)")
+_ALICE = Identity(user="alice", session="s1")
 
-def make_engine(mode=PolicyMode.ENFORCE):
-    policies = [
-        {"type": "pii", "action": "REDACT", "patterns": "all"},
-        {"type": "cost", "action": "ENFORCE", "daily_limit_usd": 1.0},
-        {"type": "tool_auth", "action": "ENFORCE", "allowlist": ["search", "calculator"]},
-    ]
+
+def _engine(*policies, mode: PolicyMode = PolicyMode.ENFORCE) -> TealEngine:
     return TealEngine(policies=policies, mode=mode)
 
 
-def test_engine_allows_clean_text():
-    engine = make_engine()
-    decision = engine.evaluate_text("What's the weather like today?")
-    assert decision.action == Action.ALLOW.value
+# ---------- PII ----------
 
 
-def test_engine_redacts_ssn():
-    engine = make_engine()
-    decision = engine.evaluate_text("My SSN is 123-45-6789")
-    assert decision.action == Action.REDACT.value
-    assert "123-45-6789" not in decision.redacted_text
+def test_default_policies_redact_an_ssn_and_mark_it_critical():
+    decision = _engine(*DEFAULT_POLICIES).check_text("My SSN is 123-45-6789")
 
-
-def test_engine_monitor_mode_never_redacts():
-    engine = make_engine(mode=PolicyMode.MONITOR)
-    decision = engine.evaluate_text("My SSN is 123-45-6789")
-    assert decision.action == Action.ALLOW.value
-
-
-def test_engine_tool_allowlist():
-    engine = make_engine()
-    assert engine.check_tool("calculator") is True
-    assert engine.check_tool("shell_exec") is False
-
-
-def test_engine_budget_enforcement():
-    engine = make_engine()
-    engine.track_cost(tokens=1_000_000)  # pushes spend over $1 limit
-    over_budget, spent, limit = engine.check_budget()
-    assert over_budget is True
-
-
-@pytest.mark.asyncio
-async def test_apply_guardrail_redacts_request_text():
-    guardrail = TealTigerGuardrail(policies=DEFAULT_POLICIES, policy_mode="ENFORCE")
-    inputs = {"texts": ["Contact me at jane@example.com"], "images": [], "tool_calls": []}
-
-    result = await guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data={"model": "gpt-4", "user": "test-user"},
-        input_type="request",
+    assert (decision.action, decision.reason_code, decision.risk_level, decision.redacted_text) == (
+        Action.REDACT,
+        "PII_DETECTED:ssn",
+        RiskLevel.CRITICAL,
+        "My SSN is [REDACTED:SSN]",
     )
-    assert "jane@example.com" not in result["texts"][0]
 
 
-@pytest.mark.asyncio
-async def test_apply_guardrail_blocks_disallowed_tool():
-    policies = [
-        {"type": "pii", "action": "REDACT", "patterns": "all"},
-        {"type": "tool_auth", "action": "ENFORCE", "allowlist": ["search"]},
-    ]
-    guardrail = TealTigerGuardrail(policies=policies, policy_mode="ENFORCE")
-    inputs = {
-        "texts": ["run it"],
-        "images": [],
-        "tool_calls": [{"name": "shell_exec"}],
-    }
+def test_email_is_redacted_at_medium_risk():
+    decision = _engine(*DEFAULT_POLICIES).check_text("mail jane@example.com")
 
-    with pytest.raises(ValueError, match="TOOL_NOT_ALLOWLISTED"):
-        await guardrail.apply_guardrail(
-            inputs=inputs,
-            request_data={"model": "gpt-4"},
-            input_type="request",
-        )
-
-
-def test_engine_malformed_blocklist_fails_safe():
-    """A non-list/tuple blocklist value shouldn't crash — treated as empty."""
-    policies = [
-        {"type": "tool_auth", "action": "ENFORCE", "blocklist": "not-a-list"},
-    ]
-    engine = TealEngine(policies=policies, mode=PolicyMode.ENFORCE)
-    # malformed blocklist -> treated as empty -> nothing gets blocked via it
-    assert engine.check_tool("anything") is True
-
-
-def test_engine_malformed_allowlist_denies_by_default():
-    """A non-list/tuple allowlist value shouldn't crash — fails closed (deny)."""
-    policies = [
-        {"type": "tool_auth", "action": "ENFORCE", "allowlist": "not-a-list"},
-    ]
-    engine = TealEngine(policies=policies, mode=PolicyMode.ENFORCE)
-    # malformed allowlist -> treated as empty -> nothing is in it -> denied
-    assert engine.check_tool("anything") is False
-
-
-def test_engine_malformed_budget_limit_treated_as_no_limit():
-    """A non-numeric daily_limit_usd shouldn't crash — treated as no budget cap."""
-    policies = [
-        {"type": "cost", "action": "ENFORCE", "daily_limit_usd": "fifty dollars"},
-    ]
-    engine = TealEngine(policies=policies, mode=PolicyMode.ENFORCE)
-    engine.track_cost(tokens=999_999_999)  # would blow any real limit
-    over_budget, spent, limit = engine.check_budget()
-    assert over_budget is False
-
-
-@pytest.mark.asyncio
-async def test_apply_guardrail_session_id_falls_back_when_user_not_a_string():
-    """A non-string 'user' in request_data shouldn't crash session_id handling."""
-    policies = [
-        {"type": "cost", "action": "ENFORCE", "daily_limit_usd": 1.0},
-    ]
-    guardrail = TealTigerGuardrail(policies=policies, policy_mode="ENFORCE")
-    inputs = {"texts": ["hello"], "images": [], "tool_calls": []}
-    # user is an int here, not a str -- should fall back to "default" cleanly
-    result = await guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data={"model": "gpt-4", "user": 12345},
-        input_type="request",
+    assert (decision.reason_code, decision.risk_level, decision.redacted_text) == (
+        "PII_DETECTED:email",
+        RiskLevel.MEDIUM,
+        "mail [REDACTED:EMAIL]",
     )
-    assert result["texts"] == ["hello"]
 
 
-# ---------- coverage for _to_event_hook and _tool_call_name helpers ----------
+def test_clean_text_is_allowed_without_a_redaction():
+    decision = _engine(*DEFAULT_POLICIES).check_text("What's the weather like today?")
 
-from litellm.types.guardrails import GuardrailEventHooks
+    assert (decision.action, decision.reason_code, decision.risk_level, decision.redacted_text) == (
+        Action.ALLOW,
+        "NO_VIOLATIONS",
+        RiskLevel.NONE,
+        None,
+    )
 
-from litellm.proxy.guardrails.guardrail_hooks.tealtiger.tealtiger import (
-    _to_event_hook,
-    _tool_call_name,
+
+@pytest.mark.parametrize(
+    "text",
+    ["Enter your PASSWORD", "Order 1234567890 shipped", "upgrade to 1.2.3.4", "due 12/25/2024", "INTERNATIONAL"],
 )
+def test_ordinary_text_is_not_flagged_by_the_default_scope(text: str):
+    decision = _engine(*DEFAULT_POLICIES).check_text(text)
+
+    assert (decision.action, decision.redacted_text) == (Action.ALLOW, None), f"flagged {text!r}: {decision}"
 
 
-def test_to_event_hook_passes_through_none():
-    assert _to_event_hook(None) is None
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("call (555) 123-4567 now", "call [REDACTED:PHONE_US] now"),
+        ("call 555-123-4567 now", "call [REDACTED:PHONE_US] now"),
+        ("card 4111 1111 1111 1111", "card [REDACTED:CREDIT_CARD_VISA]"),
+        ("key AKIAIOSFODNN7EXAMPLE", "key [REDACTED:AWS_ACCESS_KEY]"),
+    ],
+)
+def test_real_pii_is_still_redacted_by_the_default_scope(text: str, expected: str):
+    assert _engine(*DEFAULT_POLICIES).check_text(text).redacted_text == expected
 
 
-def test_to_event_hook_passes_through_real_enum():
-    result = _to_event_hook(GuardrailEventHooks.pre_call)
-    assert result == GuardrailEventHooks.pre_call
+def test_block_action_blocks_instead_of_redacting():
+    decision = _engine(PiiPolicy(action="BLOCK")).check_text("My SSN is 123-45-6789")
+
+    assert (decision.action, decision.reason_code, decision.redacted_text) == (Action.BLOCK, "PII_DETECTED:ssn", None)
 
 
-def test_to_event_hook_converts_bare_string():
-    result = _to_event_hook("pre_call")
-    assert result == GuardrailEventHooks.pre_call
+def test_pattern_list_scans_only_the_listed_patterns():
+    engine = _engine(PiiPolicy(patterns=("email",)))
+
+    assert engine.check_text("SSN 123-45-6789").action == Action.ALLOW
+    assert engine.check_text("mail jane@example.com").redacted_text == "mail [REDACTED:EMAIL]"
 
 
-def test_to_event_hook_converts_list_of_strings():
-    result = _to_event_hook(["pre_call", "post_call"])
-    assert result == [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
+def test_category_name_scans_every_pattern_in_that_category():
+    engine = _engine(PiiPolicy(patterns=("credentials",)))
+
+    assert engine.check_text("mail jane@example.com").action == Action.ALLOW
+    assert engine.check_text("key AKIAIOSFODNN7EXAMPLE").redacted_text == "key [REDACTED:AWS_ACCESS_KEY]"
 
 
-def test_to_event_hook_converts_mixed_list():
-    result = _to_event_hook([GuardrailEventHooks.pre_call, "post_call"])
-    assert result == [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]
+def test_loose_pattern_is_available_when_named_explicitly():
+    decision = _engine(PiiPolicy(patterns=("swift_bic",))).check_text("Enter your PASSWORD")
+
+    assert decision.redacted_text == "Enter your [REDACTED:SWIFT_BIC]"
 
 
-def test_tool_call_name_from_dict_shape():
-    """ChatCompletionToolCallChunk-style: a plain dict."""
-    tool_call = {"id": "1", "type": "function", "function": {"name": "shell_exec"}, "index": 0}
-    assert _tool_call_name(tool_call) == "shell_exec"
+def test_monitor_mode_keeps_the_text_and_records_what_enforce_would_have_done():
+    decision = _engine(*DEFAULT_POLICIES, mode=PolicyMode.MONITOR).check_text("My SSN is 123-45-6789")
 
-
-def test_tool_call_name_from_dict_shape_missing_function():
-    tool_call = {"id": "1", "type": "function", "index": 0}
-    assert _tool_call_name(tool_call) is None
-
-
-class _FakeFunction:
-    def __init__(self, name):
-        self.name = name
-
-
-class _FakeToolCallObject:
-    """Mimics ChatCompletionMessageToolCall's real shape: attribute access."""
-
-    def __init__(self, name):
-        self.function = _FakeFunction(name)
-        self.id = "1"
-        self.type = "function"
-
-
-def test_tool_call_name_from_object_shape():
-    """ChatCompletionMessageToolCall-style: a pydantic-like object."""
-    assert _tool_call_name(_FakeToolCallObject("calculator")) == "calculator"
-
-
-def test_tool_call_name_from_object_shape_missing_function():
-    class _Empty:
-        pass
-
-    assert _tool_call_name(_Empty()) is None
-
-
-@pytest.mark.asyncio
-async def test_apply_guardrail_blocks_object_shaped_tool_call():
-    """The object-shaped (pydantic) tool_call variant should be checked too,
-    not just the dict-shaped one."""
-    policies = [
-        {"type": "pii", "action": "REDACT", "patterns": "all"},
-        {"type": "tool_auth", "action": "ENFORCE", "allowlist": ["search"]},
-    ]
-    guardrail = TealTigerGuardrail(policies=policies, policy_mode="ENFORCE")
-    inputs = {
-        "texts": ["run it"],
-        "images": [],
-        "tool_calls": [_FakeToolCallObject("shell_exec")],
-    }
-    with pytest.raises(ValueError, match="TOOL_NOT_ALLOWLISTED"):
-        await guardrail.apply_guardrail(
-            inputs=inputs,
-            request_data={"model": "gpt-4"},
-            input_type="request",
-        )
-
-
-# ---------- additional edge-case coverage ----------
-
-
-def test_engine_no_pii_match_leaves_redacted_text_none():
-    engine = make_engine()
-    decision = engine.evaluate_text("Contact me at clean_user_handle")
-    assert decision.action == Action.ALLOW.value
-    assert decision.redacted_text is None
-
-
-def test_engine_tool_auth_blocklist_only():
-    policies = [
-        {"type": "tool_auth", "action": "ENFORCE", "blocklist": ["dangerous_exec", "terminal"]},
-    ]
-    engine = TealEngine(policies=policies, mode=PolicyMode.ENFORCE)
-    assert engine.check_tool("calculator") is True
-    assert engine.check_tool("dangerous_exec") is False
-
-
-def test_engine_tool_auth_no_allowlist_or_blocklist_allows_everything():
-    policies = [
-        {"type": "tool_auth", "action": "ENFORCE"},
-    ]
-    engine = TealEngine(policies=policies, mode=PolicyMode.ENFORCE)
-    assert engine.check_tool("any_tool") is True
-
-
-def test_engine_budget_tracking_stays_under_limit():
-    policies = [
-        {"type": "cost", "action": "ENFORCE", "daily_limit_usd": 10.0},
-    ]
-    engine = TealEngine(policies=policies, mode=PolicyMode.ENFORCE)
-    engine.track_cost(tokens=10)
-    over_budget, spent, limit = engine.check_budget()
-    assert over_budget is False
-    assert spent > 0
-    assert limit == 10.0
-
-
-@pytest.mark.asyncio
-async def test_apply_guardrail_budget_exceeded_raises_error():
-    policies = [
-        {"type": "cost", "action": "ENFORCE", "daily_limit_usd": 0.00001},
-    ]
-    guardrail = TealTigerGuardrail(policies=policies, policy_mode="ENFORCE")
-    guardrail.engine.track_cost(tokens=1_000_000)
-
-    inputs = {"texts": ["hello"], "images": [], "tool_calls": []}
-
-    with pytest.raises(ValueError, match="BUDGET_EXCEEDED"):
-        await guardrail.apply_guardrail(
-            inputs=inputs,
-            request_data={"model": "gpt-4", "user": "test-user"},
-            input_type="request",
-        )
-
-
-@pytest.mark.asyncio
-async def test_apply_guardrail_redacts_response_text():
-    guardrail = TealTigerGuardrail(policies=DEFAULT_POLICIES, policy_mode="ENFORCE")
-    inputs = {"texts": ["Found secret token: 123-45-6789"], "images": [], "tool_calls": []}
-
-    result = await guardrail.apply_guardrail(
-        inputs=inputs,
-        request_data={"model": "gpt-4"},
-        input_type="response",
+    assert (decision.action, decision.reason_code, decision.redacted_text, dict(decision.details)) == (
+        Action.ALLOW,
+        "PII_DETECTED:ssn",
+        None,
+        {"types": ("ssn",), "monitor_would": "REDACT"},
     )
-    assert "123-45-6789" not in result["texts"][0]
 
 
-def test_tool_call_name_handles_invalid_types():
-    assert _tool_call_name(None) is None
-    assert _tool_call_name("invalid_str") is None
-    assert _tool_call_name(12345) is None
+def test_receipt_is_typed_json_with_risk_level_reason_and_correlation_id():
+    decision = _engine(*DEFAULT_POLICIES).check_text("My SSN is 123-45-6789")
+
+    assert json.loads(decision.receipt_json()) == {
+        "correlation_id": decision.correlation_id,
+        "action": "REDACT",
+        "reason_code": "PII_DETECTED:ssn",
+        "risk_level": "CRITICAL",
+        "details": {"types": ["ssn"]},
+    }
 
 
-_TOOL_POLICIES = [
-    {"type": "tool_auth", "action": "ENFORCE", "allowlist": ["search"]},
-]
+# ---------- tools ----------
+
+
+def test_tool_allowlist_allows_listed_and_blocks_unlisted_tools():
+    engine = _engine(ToolAuthPolicy(allowlist=("search",)))
+
+    assert engine.check_tool("search").action == Action.ALLOW
+    blocked = engine.check_tool("shell_exec")
+    assert (blocked.action, blocked.reason_code, blocked.risk_level, dict(blocked.details)) == (
+        Action.BLOCK,
+        "TOOL_NOT_ALLOWLISTED",
+        RiskLevel.HIGH,
+        {"tool_name": "shell_exec"},
+    )
+
+
+def test_tool_blocklist_wins_over_a_missing_allowlist():
+    engine = _engine(ToolAuthPolicy(blocklist=("shell_exec",)))
+
+    assert [engine.check_tool(name).action for name in ("search", "shell_exec")] == [Action.ALLOW, Action.BLOCK]
+
+
+def test_no_tool_policy_allows_every_tool():
+    assert _engine(*DEFAULT_POLICIES).check_tool("anything").action == Action.ALLOW
+
+
+# ---------- budgets ----------
+
+
+def _cost_engine(**limits: float) -> TealEngine:
+    return _engine(CostPolicy(cost_per_1k_tokens=1.0, **limits))
+
+
+def test_daily_budget_is_tracked_per_user():
+    engine = _cost_engine(daily_limit_usd=1.0)
+    engine.record_usage(_ALICE, ["x" * 4000])  # 1000 estimated tokens at $1 per 1k
+
+    alice = engine.check_budget(_ALICE, ["hi"])
+    bob = engine.check_budget(Identity(user="bob", session=None), ["hi"])
+
+    assert (alice.action, alice.reason_code, bob.action) == (Action.BLOCK, "DAILY_BUDGET_EXCEEDED", Action.ALLOW)
+    assert dict(alice.details) == {"spent_usd": 1.0, "limit_usd": 1.0, "user": "alice"}
+
+
+def test_session_budget_is_tracked_per_session():
+    engine = _cost_engine(session_limit_usd=1.0)
+    engine.record_usage(_ALICE, ["x" * 4000])
+
+    same_session = engine.check_budget(Identity(user="bob", session="s1"), ["hi"])
+    other_session = engine.check_budget(Identity(user="alice", session="s2"), ["hi"])
+
+    assert (same_session.reason_code, other_session.action) == ("SESSION_BUDGET_EXCEEDED", Action.ALLOW)
+
+
+def test_request_budget_blocks_one_oversized_request():
+    engine = _cost_engine(request_limit_usd=1.0)
+
+    small = engine.check_budget(_ALICE, ["x" * 3996])  # 999 tokens: $0.999
+    large = engine.check_budget(_ALICE, ["x" * 4000])  # 1000 tokens: $1.00
+
+    assert (small.action, large.reason_code) == (Action.ALLOW, "REQUEST_BUDGET_EXCEEDED")
+
+
+def test_no_cost_policy_means_no_budget():
+    engine = _engine(*DEFAULT_POLICIES)
+    engine.record_usage(_ALICE, ["x" * 4_000_000])
+
+    assert engine.check_budget(_ALICE, ["hi"]).action == Action.ALLOW
+
+
+def test_monitor_mode_allows_an_exhausted_budget_and_records_it():
+    engine = _engine(CostPolicy(daily_limit_usd=1.0, cost_per_1k_tokens=1.0), mode=PolicyMode.MONITOR)
+    engine.record_usage(_ALICE, ["x" * 4000])
+
+    decision = engine.check_budget(_ALICE, ["hi"])
+
+    assert (decision.action, decision.reason_code, decision.details["monitor_would"]) == (
+        Action.ALLOW,
+        "DAILY_BUDGET_EXCEEDED",
+        "BLOCK",
+    )
+
+
+def test_ledger_resets_when_the_local_day_rolls_over():
+    ledger = BudgetLedger()
+    ledger.record("alice", "s1", 2.0)
+
+    with patch.object(budget_module, "_today", return_value="2999-01-01"):
+        assert ledger.spent("alice", "s1") == (0.0, 0.0)
+
+
+def test_ledger_accumulates_within_a_day():
+    ledger = BudgetLedger()
+    ledger.record("alice", "s1", 0.25)
+    ledger.record("alice", "s1", 0.5)
+
+    assert ledger.spent("alice", "s1") == (0.75, 0.75)
+
+
+def test_estimate_tokens_is_about_four_characters_per_token():
+    assert [estimate_tokens(texts) for texts in ([], ["abcd"], ["abcde", "fg"])] == [0, 1, 2]
+
+
+# ---------- config ----------
+
+
+def test_config_defaults_to_pii_redaction_in_enforce_mode_with_no_budget():
+    config = parse_config(None, None)
+
+    assert (config.policies, config.policy_mode) == ((PiiPolicy(),), PolicyMode.ENFORCE)
+
+
+def test_config_parses_a_yaml_style_policy_list_into_typed_policies():
+    config = parse_config(
+        [
+            {"type": "pii", "action": "BLOCK", "patterns": ["email"]},
+            {"type": "cost", "daily_limit_usd": 5},
+            {"type": "tool_auth", "allowlist": ["search"]},
+        ],
+        "MONITOR",
+    )
+
+    assert config.policies == (
+        PiiPolicy(action="BLOCK", patterns=("email",)),
+        CostPolicy(daily_limit_usd=5.0),
+        ToolAuthPolicy(allowlist=("search",)),
+    )
+    assert config.policy_mode == PolicyMode.MONITOR
+
+
+@pytest.mark.parametrize(
+    "policies",
+    [
+        [{"type": "nope"}],
+        [{"type": "cost", "daily_limit": 5}],
+        [{"type": "cost", "daily_limit_usd": -1}],
+        [{"type": "pii", "patterns": "email"}],
+    ],
+)
+def test_config_rejects_invalid_policies_at_startup(policies: list[dict[str, object]]):
+    with pytest.raises(ValidationError):
+        parse_config(policies, None)
+
+
+def test_config_rejects_an_unknown_pattern_name_at_startup():
+    with pytest.raises(ValueError, match="unknown pii pattern or category name"):
+        parse_config([{"type": "pii", "patterns": ["email", "not_a_pattern"]}], None)
+
+
+def test_config_rejects_an_unknown_policy_mode():
+    with pytest.raises(ValidationError):
+        parse_config(None, "WATCH")
+
+
+# ---------- request shapes ----------
+
+
+class _Function:
+    name = "search"
+
+
+class _ToolCallObject:
+    function = _Function()
+
+
+@pytest.mark.parametrize(
+    ("tool", "expected"),
+    [
+        ({"name": "search"}, "search"),
+        ({"type": "function", "function": {"name": "search"}}, "search"),
+        (_ToolCallObject(), "search"),
+        ({"function": "not-a-mapping"}, None),
+        ({}, None),
+        (None, None),
+        ("invalid", None),
+        (12345, None),
+    ],
+)
+def test_tool_name_of_reads_every_tool_shape(tool: object, expected: str | None):
+    assert tool_name_of(tool) == expected
+
+
+@pytest.mark.parametrize(
+    ("request_data", "expected"),
+    [
+        ({"user": "alice", "litellm_session_id": "s1"}, Identity(user="alice", session="s1")),
+        ({"metadata": {"user_api_key_user_id": "key-user"}}, Identity(user="key-user", session=None)),
+        ({"user": "alice", "metadata": {"user_api_key_user_id": "key-user"}}, Identity(user="alice", session=None)),
+        ({}, ANONYMOUS),
+        ({"user": 42}, ANONYMOUS),
+    ],
+)
+def test_identity_of_prefers_the_request_user_and_falls_back_to_anonymous(request_data: dict, expected: Identity):
+    assert identity_of(request_data) == expected
+
+
+# ---------- guardrail ----------
+
+
+def _guardrail(*policies, mode: PolicyMode = PolicyMode.ENFORCE) -> TealTigerGuardrail:
+    return TealTigerGuardrail(policies=policies or DEFAULT_POLICIES, policy_mode=mode)
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_blocks_disallowed_tool_definition_openai_shape():
-    guardrail = TealTigerGuardrail(policies=_TOOL_POLICIES, policy_mode="ENFORCE")
-    inputs = {"texts": ["hi"], "tools": [{"type": "function", "function": {"name": "shell_exec"}}]}
+async def test_request_text_is_redacted_and_other_inputs_are_preserved():
+    inputs = {"texts": ["Contact me at jane@example.com"], "images": ["img"], "model": "gpt-4"}
 
-    with pytest.raises(ValueError, match="TOOL_NOT_ALLOWLISTED"):
+    result = await _guardrail().apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+
+    assert result == {"texts": ["Contact me at [REDACTED:EMAIL]"], "images": ["img"], "model": "gpt-4"}
+    assert inputs["texts"] == ["Contact me at jane@example.com"], "the caller's inputs must not be mutated"
+
+
+@pytest.mark.asyncio
+async def test_response_text_is_redacted_too():
+    result = await _guardrail().apply_guardrail(
+        inputs={"texts": ["token: 123-45-6789"]}, request_data={}, input_type="response"
+    )
+
+    assert result == {"texts": ["token: [REDACTED:SSN]"]}
+
+
+@pytest.mark.asyncio
+async def test_block_policy_raises_a_400_with_the_reason_and_correlation_id():
+    guardrail = _guardrail(PiiPolicy(action="BLOCK"))
+
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(inputs={"texts": ["SSN 123-45-6789"]}, request_data={}, input_type="request")
+
+    assert blocked.value.status_code == 400
+    assert re.fullmatch(r"TealTiger: blocked: PII_DETECTED:ssn \(correlation_id=[0-9a-f-]{36}\)", blocked.value.detail)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "inputs",
+    [
+        {"texts": ["hi"], "tools": [{"type": "function", "function": {"name": "shell_exec"}}]},
+        {"texts": ["hi"], "tools": [{"name": "shell_exec"}]},
+        {"texts": ["hi"], "tool_calls": [{"name": "shell_exec"}]},
+        {"texts": ["hi"], "tool_calls": [_ToolCallObject()]},
+    ],
+)
+async def test_unlisted_tool_in_a_request_is_blocked(inputs: dict):
+    guardrail = _guardrail(ToolAuthPolicy(allowlist=("other",)))
+
+    with pytest.raises(HTTPException) as blocked:
         await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
 
-
-@pytest.mark.asyncio
-async def test_apply_guardrail_blocks_disallowed_tool_definition_anthropic_shape():
-    guardrail = TealTigerGuardrail(policies=_TOOL_POLICIES, policy_mode="ENFORCE")
-    inputs = {"texts": ["hi"], "tools": [{"name": "shell_exec"}]}
-
-    with pytest.raises(ValueError, match="TOOL_NOT_ALLOWLISTED"):
-        await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
+    assert (blocked.value.status_code, bool(_BLOCKED_TOOL.fullmatch(blocked.value.detail))) == (400, True)
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_allows_allowlisted_tool_definition():
-    guardrail = TealTigerGuardrail(policies=_TOOL_POLICIES, policy_mode="ENFORCE")
+async def test_unlisted_tool_call_in_a_response_is_blocked():
+    guardrail = _guardrail(ToolAuthPolicy(allowlist=("search",)))
+
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(
+            inputs={"texts": [], "tool_calls": [{"name": "shell_exec"}]}, request_data={}, input_type="response"
+        )
+
+    assert _BLOCKED_TOOL.fullmatch(blocked.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_allowlisted_tool_definition_passes():
+    guardrail = _guardrail(ToolAuthPolicy(allowlist=("search",)))
     inputs = {"texts": ["hi"], "tools": [{"type": "function", "function": {"name": "search"}}]}
 
     result = await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
-    assert result["texts"] == ["hi"]
+
+    assert result == {"texts": ["hi"], "tools": [{"type": "function", "function": {"name": "search"}}]}
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_blocks_disallowed_tool_call_in_response():
-    guardrail = TealTigerGuardrail(policies=_TOOL_POLICIES, policy_mode="ENFORCE")
-    inputs = {"texts": [], "tool_calls": [{"name": "shell_exec"}]}
-
-    with pytest.raises(ValueError, match="TOOL_NOT_ALLOWLISTED"):
-        await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="response")
-
-
-@pytest.mark.asyncio
-async def test_monitor_mode_does_not_block_disallowed_tool():
-    guardrail = TealTigerGuardrail(policies=_TOOL_POLICIES, policy_mode="MONITOR")
-    inputs = {"texts": ["hi"], "tools": [{"name": "shell_exec"}], "tool_calls": [{"name": "shell_exec"}]}
+async def test_monitor_mode_never_raises_and_leaves_text_untouched():
+    guardrail = _guardrail(PiiPolicy(action="BLOCK"), ToolAuthPolicy(allowlist=("other",)), mode=PolicyMode.MONITOR)
+    inputs = {"texts": ["SSN 123-45-6789"], "tools": [{"name": "shell_exec"}], "tool_calls": [{"name": "shell_exec"}]}
 
     result = await guardrail.apply_guardrail(inputs=inputs, request_data={}, input_type="request")
-    assert result["texts"] == ["hi"]
+
+    assert result == inputs
 
 
 @pytest.mark.asyncio
-async def test_monitor_mode_does_not_block_exhausted_budget():
-    policies = [{"type": "cost", "action": "ENFORCE", "daily_limit_usd": 0.00001}]
-    guardrail = TealTigerGuardrail(policies=policies, policy_mode="MONITOR")
-    guardrail.engine.track_cost(tokens=1_000_000)
+async def test_traffic_accrues_spend_per_user_until_the_daily_budget_blocks_that_user_only():
+    guardrail = _guardrail(CostPolicy(daily_limit_usd=0.01, cost_per_1k_tokens=1.0))
+    big_request = {"texts": ["x" * 40_000]}  # about 10k tokens: $10 against a $0.01 limit
 
-    result = await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data={}, input_type="request")
-    assert result["texts"] == ["hi"]
+    await guardrail.apply_guardrail(inputs=big_request, request_data={"user": "alice"}, input_type="request")
 
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data={"user": "alice"}, input_type="request")
+    bob = await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data={"user": "bob"}, input_type="request")
 
-@pytest.mark.asyncio
-async def test_budget_accrues_from_traffic_and_eventually_blocks():
-    policies = [{"type": "cost", "action": "ENFORCE", "daily_limit_usd": 0.01, "cost_per_1k_tokens": 1.0}]
-    guardrail = TealTigerGuardrail(policies=policies, policy_mode="ENFORCE")
-    big_text = "x" * 40_000  # about 10k tokens, about $10 at $1 per 1k tokens
-
-    await guardrail.apply_guardrail(inputs={"texts": [big_text]}, request_data={}, input_type="request")
-    over_budget, spent, _ = guardrail.engine.check_budget()
-    assert over_budget is True
-    assert spent > 0
-
-    with pytest.raises(ValueError, match="DAILY_BUDGET_EXCEEDED"):
-        await guardrail.apply_guardrail(inputs={"texts": ["next"]}, request_data={}, input_type="request")
+    assert blocked.value.detail.startswith("TealTiger: blocked: DAILY_BUDGET_EXCEEDED")
+    assert bob == {"texts": ["hi"]}
 
 
 @pytest.mark.asyncio
-async def test_budget_accrues_on_response_path():
-    policies = [{"type": "cost", "action": "ENFORCE", "daily_limit_usd": 100.0, "cost_per_1k_tokens": 1.0}]
-    guardrail = TealTigerGuardrail(policies=policies, policy_mode="ENFORCE")
+async def test_response_text_also_accrues_spend():
+    guardrail = _guardrail(CostPolicy(daily_limit_usd=1.0, cost_per_1k_tokens=1.0))
 
-    await guardrail.apply_guardrail(inputs={"texts": ["y" * 4000]}, request_data={}, input_type="response")
-    _, spent, _ = guardrail.engine.check_budget()
-    assert spent == pytest.approx(1.0)
+    await guardrail.apply_guardrail(
+        inputs={"texts": ["y" * 4000]}, request_data={"user": "alice"}, input_type="response"
+    )
 
-
-def test_estimate_tokens():
-    assert estimate_tokens([]) == 0
-    assert estimate_tokens(["abcd"]) == 1
-    assert estimate_tokens(["abcde", "fg"]) == 2
+    with pytest.raises(HTTPException) as blocked:
+        await guardrail.apply_guardrail(inputs={"texts": ["hi"]}, request_data={"user": "alice"}, input_type="request")
+    assert blocked.value.detail.startswith("TealTiger: blocked: DAILY_BUDGET_EXCEEDED")
 
 
-def test_pattern_scope_list_only_scans_listed_patterns():
-    engine = TealEngine(policies=[{"type": "pii", "action": "REDACT", "patterns": ["email"]}])
+@pytest.mark.asyncio
+async def test_every_non_clean_decision_is_logged_as_a_receipt():
+    guardrail = _guardrail(PiiPolicy())
 
-    ssn = engine.evaluate_text("SSN 123-45-6789")
-    assert ssn.action == Action.ALLOW.value
+    with patch("litellm.proxy.guardrails.guardrail_hooks.tealtiger.tealtiger.verbose_proxy_logger") as logger:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["SSN 123-45-6789", "hello"]}, request_data={}, input_type="request"
+        )
 
-    email = engine.evaluate_text("mail jane@example.com")
-    assert email.action == Action.REDACT.value
-    assert "jane@example.com" not in (email.redacted_text or "")
-
-
-def test_pattern_scope_accepts_category_names():
-    engine = TealEngine(policies=[{"type": "pii", "action": "REDACT", "patterns": ["credentials"]}])
-
-    assert engine.evaluate_text("mail jane@example.com").action == Action.ALLOW.value
-    assert engine.evaluate_text("key AKIAIOSFODNN7EXAMPLE").action == Action.REDACT.value
-
-
-def test_pattern_scope_unknown_name_fails_at_startup():
-    with pytest.raises(ValueError, match="unknown pii pattern"):
-        TealEngine(policies=[{"type": "pii", "action": "REDACT", "patterns": ["not_a_pattern"]}])
-
-
-def test_pattern_scope_invalid_type_fails_at_startup():
-    with pytest.raises(TypeError, match="must be 'all' or a list"):
-        TealEngine(policies=[{"type": "pii", "action": "REDACT", "patterns": 5}])
+    (info_call,) = logger.info.call_args_list
+    template, receipt_json = info_call.args
+    receipt = json.loads(receipt_json)
+    assert (template, receipt["action"], receipt["reason_code"], receipt["risk_level"]) == (
+        "tealtiger.decision_receipt=%s",
+        "REDACT",
+        "PII_DETECTED:ssn",
+        "CRITICAL",
+    )
+    clean_reasons = [json.loads(call.args[1])["reason_code"] for call in logger.debug.call_args_list]
+    assert clean_reasons == ["NO_VIOLATIONS", "NO_VIOLATIONS"], (
+        "the budget check and the clean text each get a debug receipt"
+    )
 
 
-def test_cost_rate_read_from_policy_and_defaults():
-    custom = TealEngine(policies=[{"type": "cost", "daily_limit_usd": 1.0, "cost_per_1k_tokens": 0.5}])
-    assert custom.cost_per_1k_tokens == 0.5
-    default = TealEngine(policies=[{"type": "cost", "daily_limit_usd": 1.0}])
-    assert default.cost_per_1k_tokens == 0.002
+@pytest.mark.asyncio
+async def test_monitor_mode_logs_the_pii_finding_it_does_not_enforce():
+    guardrail = _guardrail(PiiPolicy(), mode=PolicyMode.MONITOR)
+
+    with patch("litellm.proxy.guardrails.guardrail_hooks.tealtiger.tealtiger.verbose_proxy_logger") as logger:
+        await guardrail.apply_guardrail(inputs={"texts": ["SSN 123-45-6789"]}, request_data={}, input_type="request")
+
+    receipt = json.loads(logger.info.call_args.args[1])
+    assert (receipt["action"], receipt["reason_code"], receipt["details"]["monitor_would"]) == (
+        "ALLOW",
+        "PII_DETECTED:ssn",
+        "REDACT",
+    )
+
+
+# ---------- wiring ----------
+
+
+def test_get_config_model_returns_the_tealtiger_config_model():
+    assert TealTigerGuardrail.get_config_model() is TealTigerGuardrailConfigModel
+    assert TealTigerGuardrailConfigModel.ui_friendly_name() == "TealTiger"
 
 
 def test_registries_are_plain_dicts_so_litellm_discovers_them():
     from litellm.proxy.guardrails.guardrail_hooks import tealtiger as hook
 
-    assert isinstance(hook.guardrail_initializer_registry, dict)
-    assert isinstance(hook.guardrail_class_registry, dict)
-    assert "tealtiger" in hook.guardrail_initializer_registry
+    assert (type(hook.guardrail_initializer_registry), type(hook.guardrail_class_registry)) == (dict, dict)
+    assert list(hook.guardrail_initializer_registry) == ["tealtiger"]
 
 
 def test_litellm_registry_discovers_tealtiger():
     from litellm.proxy.guardrails.guardrail_registry import get_guardrail_initializer_from_hooks
 
     assert "tealtiger" in get_guardrail_initializer_from_hooks()
+
+
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        (None, None),
+        (GuardrailEventHooks.pre_call, GuardrailEventHooks.pre_call),
+        ("pre_call", GuardrailEventHooks.pre_call),
+        (["pre_call", GuardrailEventHooks.post_call], [GuardrailEventHooks.pre_call, GuardrailEventHooks.post_call]),
+    ],
+)
+def test_to_event_hook_converts_litellm_params_mode(mode, expected):
+    assert _to_event_hook(mode) == expected

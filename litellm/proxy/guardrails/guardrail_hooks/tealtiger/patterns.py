@@ -14,7 +14,8 @@ instead of "all", or override this module's PII_PATTERNS entirely.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
+from itertools import chain
 from types import MappingProxyType
 from typing import Final
 
@@ -47,7 +48,7 @@ PII_PATTERNS: Final = MappingProxyType(
         "ethereum_address": re.compile(r"\b0x[a-fA-F0-9]{40}\b"),
         # ---------- contact info ----------
         "email": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b"),
-        "phone_us": re.compile(r"\b(?:\+?1[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
+        "phone_us": re.compile(r"(?<!\w)(?:\+?1[-.\s]?)?(?:\(\d{3}\)\s?|\d{3}[-.\s])\d{3}[-.\s]\d{4}\b"),
         "phone_intl": re.compile(r"\+\d{1,3}[-.\s]?\(?\d{1,4}\)?(?:[-.\s]?\d{2,4}){2,4}\b"),
         "us_zip_plus4": re.compile(r"\b\d{5}-\d{4}\b"),
         "po_box": re.compile(r"\bP\.?O\.?\s?Box\s?\d+\b", re.IGNORECASE),
@@ -76,9 +77,34 @@ PII_PATTERNS: Final = MappingProxyType(
 )
 
 
-def default_patterns() -> Mapping[str, re.Pattern[str]]:
-    """Return the built-in, immutable pattern mapping."""
-    return PII_PATTERNS
+# Patterns that match ordinary text too often to scan by default (any 8-letter uppercase word looks like a
+# SWIFT code, any 10-digit number looks like an NPI or phone, and so on). They stay available when named
+# explicitly in a pii policy's `patterns` list.
+LOOSE_PATTERNS: Final = frozenset(
+    {
+        "ssn_no_dash",
+        "ein",
+        "us_passport",
+        "passport_generic_intl",
+        "drivers_license_generic",
+        "npi_number",
+        "date_of_birth",
+        "vin",
+        "credit_card_generic",
+        "swift_bic",
+        "us_bank_routing",
+        "us_bank_account",
+        "bitcoin_address",
+        "us_zip_plus4",
+        "lat_long_coordinates",
+        "ipv4",
+        "imei",
+    }
+)
+
+DEFAULT_PATTERNS: Final[Mapping[str, re.Pattern[str]]] = MappingProxyType(
+    {name: pattern for name, pattern in PII_PATTERNS.items() if name not in LOOSE_PATTERNS}
+)
 
 
 PATTERN_CATEGORIES: Final = MappingProxyType(
@@ -142,3 +168,31 @@ PATTERN_CATEGORIES: Final = MappingProxyType(
         ),
     }
 )
+
+# Matches that expose a secret or a government/financial identifier get the highest risk level.
+CRITICAL_PATTERNS: Final = frozenset(
+    {
+        "ssn",
+        "itin",
+        "credit_card_visa",
+        "credit_card_mastercard",
+        "credit_card_amex",
+        "credit_card_discover",
+        *PATTERN_CATEGORIES["credentials"],
+    }
+)
+
+
+def resolve_scope(scope: str | Sequence[str]) -> Mapping[str, re.Pattern[str]]:
+    """Turn a pii policy's `patterns` value into the patterns to scan: "all" is the high-precision default set,
+    anything else is exactly the pattern and category names listed (unknown names are rejected by parse_config)."""
+    if isinstance(scope, str):
+        return DEFAULT_PATTERNS
+    names: Final = tuple(chain.from_iterable(PATTERN_CATEGORIES.get(entry, (entry,)) for entry in scope))
+    return MappingProxyType({name: PII_PATTERNS[name] for name in names if name in PII_PATTERNS})
+
+
+def unknown_pattern_names(scope: str | Sequence[str]) -> tuple[str, ...]:
+    if isinstance(scope, str):
+        return ()
+    return tuple(entry for entry in scope if entry not in PATTERN_CATEGORIES and entry not in PII_PATTERNS)
