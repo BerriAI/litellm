@@ -1058,6 +1058,14 @@ class TestCacheControlAsPromptCacheBreakpoint:
         body = self._transform("gpt-5.6", messages)
         assert body["messages"] == [{"role": "user", "content": [_text("first"), _breakpoint(_text("last"))]}]
 
+    def test_gpt_5_6_marked_message_with_null_content_still_goes_out_with_the_mark_stripped(self):
+        messages: list[dict[str, object]] = [
+            {"role": "user", "content": None, "cache_control": _EPHEMERAL},
+            {"role": "user", "content": "Hello"},
+        ]
+        body = self._transform("gpt-5.6", messages)
+        assert body["messages"] == [{"role": "user", "content": None}, {"role": "user", "content": "Hello"}]
+
     def test_gpt_5_6_keeps_the_mark_on_a_tool_message_and_drops_the_tool_definition_mark(self):
         messages: list[dict[str, object]] = [
             {"role": "user", "content": "look it up"},
