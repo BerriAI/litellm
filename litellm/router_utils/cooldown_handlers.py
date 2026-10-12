@@ -8,7 +8,7 @@ Router cooldown handlers
 
 import asyncio
 import math
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -381,6 +381,9 @@ def _should_cooldown_deployment(
     exception_status: str | int,
     original_exception: Exception,
     requested_model_group: str | None = None,
+    virtual_model_has_alternatives_fn: Callable[[str], bool] | None = None,
+    allowed_fails_override: int | None = None,
+    cooldown_time_override: float | None = None,
 ) -> bool:
     """
     Helper that decides if a deployment should be put in cooldown
@@ -401,12 +404,15 @@ def _should_cooldown_deployment(
     - v1 logic (Legacy): if allowed fails or allowed fail policy set, coolsdown if num fails in this minute > allowed fails
     """
     model_group: Final = litellm_router_instance.get_model_group(id=deployment)
-    is_single_deployment_model_group = False
-    if model_group is not None and len(model_group) == 1:
-        is_single_deployment_model_group = not (
+    is_single_deployment_model_group: Final = (
+        not (
             litellm_router_instance.routing_group_has_alternatives(requested_model_group)
             or litellm_router_instance.team_model_has_alternatives(deployment)
+            or (virtual_model_has_alternatives_fn(deployment) if virtual_model_has_alternatives_fn else False)
         )
+        if model_group is not None and len(model_group) == 1
+        else False
+    )
 
     exception_status_int: Final = cast_exception_status_to_int(exception_status)
     dep_policy, dep_allowed_fails = _get_deployment_cooldown_policy(litellm_router_instance, deployment)
@@ -434,6 +440,15 @@ def _should_cooldown_deployment(
         litellm_router_instance.allowed_fails_policy is None
         and _is_allowed_fails_set_on_router(litellm_router_instance=litellm_router_instance) is False
     ):
+        if allowed_fails_override is not None:
+            return should_cooldown_based_on_allowed_fails_policy(
+                litellm_router_instance=litellm_router_instance,
+                deployment=deployment,
+                original_exception=original_exception,
+                allowed_fails_override=allowed_fails_override,
+                cooldown_time_override=cooldown_time_override,
+            )
+
         num_successes_this_minute: Final = get_deployment_successes_for_current_minute(
             litellm_router_instance=litellm_router_instance, deployment_id=deployment
         )
@@ -475,6 +490,8 @@ def _should_cooldown_deployment(
             litellm_router_instance=litellm_router_instance,
             deployment=deployment,
             original_exception=original_exception,
+            allowed_fails_override=allowed_fails_override,
+            cooldown_time_override=cooldown_time_override,
         )
 
     return False
@@ -520,12 +537,24 @@ def set_cooldown_deployments(
     exception_status_int: Final = cast_exception_status_to_int(exception_status)
     verbose_router_logger.debug("Attempting to add %s to cooldown list", deployment)
 
+    vm_aggregate: Final = litellm_router_instance._virtual_models  # pyright: ignore[reportPrivateUsage]  # accessing internal state in cooldown logic
+    vm_config: Final = (
+        vm_aggregate.configs.get(requested_model_group)
+        if requested_model_group is not None and requested_model_group in vm_aggregate.names
+        else None
+    )
+    allowed_fails_override: Final = vm_config.allowed_fails if vm_config is not None else None
+    cooldown_time_override: Final = vm_config.cooldown_time if vm_config is not None else None
+
     if _should_cooldown_deployment(
         litellm_router_instance=litellm_router_instance,
         deployment=deployment,
         exception_status=exception_status,
         original_exception=original_exception,
         requested_model_group=requested_model_group,
+        virtual_model_has_alternatives_fn=litellm_router_instance.virtual_model_has_alternatives,
+        allowed_fails_override=allowed_fails_override,
+        cooldown_time_override=cooldown_time_override,
     ):
         litellm_router_instance.cooldown_cache.add_deployment_to_cooldown(
             model_id=deployment,

@@ -74,6 +74,7 @@ from litellm.constants import (
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
+    VIRTUAL_MODEL_PREFIX,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.bug_report import (
@@ -180,6 +181,7 @@ if TYPE_CHECKING:
 
     from litellm.integrations.opentelemetry import OpenTelemetry
     from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
+    from litellm.types.router import VirtualModelRouterState
 
     Span = _Span | Any
 else:
@@ -717,6 +719,9 @@ from litellm.proxy.management_endpoints.ui_sso import (
 from litellm.proxy.management_endpoints.ui_sso import router as ui_sso_router
 from litellm.proxy.management_endpoints.user_agent_analytics_endpoints import (
     router as user_agent_analytics_router,
+)
+from litellm.proxy.management_endpoints.virtual_model_endpoints import (
+    router as virtual_model_router,
 )
 from litellm.proxy.management_endpoints.workflow_management_endpoints import (
     router as workflow_management_router,
@@ -7100,12 +7105,27 @@ class ProxyConfig:
         ## MODEL LIST
         model_list: Final = config.get("model_list", None)
         if model_list:
-            router_params["model_list"] = model_list
-            validate_auto_router_capability_limits(model_list, limit=_license_check.auto_router_capability_limit())
+            filtered_model_list: Final = [  # pyright: ignore[reportUnknownVariableType]  # config model_list rows arrive as untyped YAML mappings
+                model
+                for model in model_list
+                if not (model.get("model_name") or "").startswith(VIRTUAL_MODEL_PREFIX)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # config model_list rows arrive as untyped YAML mappings
+            ]
+            skipped_count: Final = len(model_list) - len(filtered_model_list)  # pyright: ignore[reportUnknownArgumentType]  # model_list is untyped from YAML
+            if skipped_count > 0:
+                verbose_proxy_logger.warning(
+                    "Skipping %d model_list entries with reserved prefix '%s' (managed virtual model namespace)",
+                    skipped_count,
+                    VIRTUAL_MODEL_PREFIX,
+                )
+            router_params["model_list"] = filtered_model_list
+            validate_auto_router_capability_limits(
+                filtered_model_list,
+                limit=_license_check.auto_router_capability_limit(),  # pyright: ignore[reportUnknownArgumentType]  # filtered_model_list is untyped from YAML
+            )
             print(  # noqa: T201
                 "\033[32mLiteLLM: Proxy initialized with Config, Set models:\033[0m"
             )
-            for model in model_list:
+            for model in filtered_model_list:  # pyright: ignore[reportUnknownVariableType]  # config model_list rows arrive as untyped YAML mappings
                 ### LOAD FROM os.environ/ ###
                 for k, v in model["litellm_params"].items():
                     if isinstance(v, str) and v.startswith("os.environ/") and not holds_secret_pointer(k):
@@ -7170,7 +7190,7 @@ class ProxyConfig:
                 x for x in litellm.Router.get_valid_args() if x not in ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG
             ]
 
-            for k, v in router_settings.items():
+            for k, v in router_settings.items():  # pyright: ignore[reportUnknownVariableType]  # router_settings arrives as untyped YAML mapping
                 if k in available_args:
                     if k == "plugins" and isinstance(v, list):
                         v = resolve_routing_plugins(
@@ -7178,6 +7198,42 @@ class ProxyConfig:
                             config_file_path=config_file_path,
                             source_label="router_settings.plugins",
                         )
+                    elif k == "model_group_alias" and isinstance(v, dict):
+                        filtered_alias = {  # pyright: ignore[reportUnknownVariableType]  # model_group_alias values arrive as untyped YAML mappings
+                            alias: target
+                            for alias, target in v.items()  # pyright: ignore[reportUnknownVariableType]  # alias/target are untyped from YAML
+                            if not alias.startswith(VIRTUAL_MODEL_PREFIX)  # pyright: ignore[reportUnknownMemberType]  # alias is untyped from YAML
+                        }
+                        skipped_aliases = [alias for alias in v if alias.startswith(VIRTUAL_MODEL_PREFIX)]  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # alias is untyped from YAML
+                        if skipped_aliases:
+                            verbose_proxy_logger.warning(
+                                "Skipping %d model_group_alias keys with reserved prefix '%s': %s",
+                                len(skipped_aliases),  # pyright: ignore[reportUnknownArgumentType]  # skipped_aliases is untyped from YAML
+                                VIRTUAL_MODEL_PREFIX,
+                                skipped_aliases,  # pyright: ignore[reportUnknownArgumentType]  # skipped_aliases is untyped from YAML
+                            )
+                        v = filtered_alias  # pyright: ignore[reportUnknownVariableType]  # filtered_alias is untyped from YAML
+                    elif k == "routing_groups" and isinstance(v, list):
+                        filtered_groups = [  # pyright: ignore[reportUnknownVariableType]  # routing_groups items arrive as untyped YAML
+                            group  # pyright: ignore[reportUnknownVariableType]  # group is untyped from YAML
+                            for group in v  # pyright: ignore[reportUnknownVariableType]  # iteration variable is untyped from YAML
+                            if not (
+                                isinstance(group, dict) and group.get("group_name", "").startswith(VIRTUAL_MODEL_PREFIX)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # group is untyped from YAML
+                            )
+                        ]
+                        skipped_groups = [  # pyright: ignore[reportUnknownVariableType]  # skipped_groups is list[Unknown | None] from YAML
+                            group.get("group_name")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # group is untyped from YAML
+                            for group in v  # pyright: ignore[reportUnknownVariableType]  # iteration variable is untyped from YAML
+                            if isinstance(group, dict) and group.get("group_name", "").startswith(VIRTUAL_MODEL_PREFIX)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # group is untyped from YAML
+                        ]
+                        if skipped_groups:
+                            verbose_proxy_logger.warning(
+                                "Skipping %d routing_groups with reserved prefix '%s': %s",
+                                len(skipped_groups),  # pyright: ignore[reportUnknownArgumentType]  # skipped_groups is untyped from YAML
+                                VIRTUAL_MODEL_PREFIX,
+                                skipped_groups,  # pyright: ignore[reportUnknownArgumentType]  # skipped_groups is untyped from YAML
+                            )
+                        v = filtered_groups  # pyright: ignore[reportUnknownVariableType]  # filtered_groups is untyped from YAML
                     router_params[k] = v
                 elif k in {"health_check_interval", "health_check_concurrency"}:
                     raise ValueError(
@@ -7962,11 +8018,52 @@ class ProxyConfig:
 
     @staticmethod
     def _apply_router_settings(llm_router: Router, router_settings: Mapping[str, object]) -> None:
-        llm_router.update_settings(**{k: v for k, v in router_settings.items() if k != "routing_groups"})
-        if "routing_groups" not in router_settings:
+        filtered_settings: Final = {}
+        for k, v in router_settings.items():  # pyright: ignore[reportUnknownVariableType]  # router_settings values arrive as unknown from Mapping[str, object]
+            if k == "model_group_alias" and isinstance(v, dict):
+                filtered_alias = {  # pyright: ignore[reportUnknownVariableType]  # model_group_alias values arrive as unknown object
+                    alias: target
+                    for alias, target in v.items()  # pyright: ignore[reportUnknownVariableType]  # alias/target are unknown from Mapping[str, object]
+                    if not alias.startswith(VIRTUAL_MODEL_PREFIX)  # pyright: ignore[reportUnknownMemberType]  # alias is unknown from Mapping[str, object]
+                }
+                skipped_aliases = [alias for alias in v if alias.startswith(VIRTUAL_MODEL_PREFIX)]  # pyright: ignore[reportUnknownVariableType,reportUnknownMemberType]  # alias is unknown from Mapping[str, object]
+                if skipped_aliases:
+                    verbose_proxy_logger.warning(
+                        "Skipping %d model_group_alias keys from DB with reserved prefix '%s': %s",
+                        len(skipped_aliases),  # pyright: ignore[reportUnknownArgumentType]  # skipped_aliases is unknown from Mapping[str, object]
+                        VIRTUAL_MODEL_PREFIX,
+                        skipped_aliases,  # pyright: ignore[reportUnknownArgumentType]  # skipped_aliases is unknown from Mapping[str, object]
+                    )
+                filtered_settings[k] = filtered_alias
+            elif k == "routing_groups" and isinstance(v, list):
+                filtered_groups = [  # pyright: ignore[reportUnknownVariableType]  # routing_groups items arrive as unknown object
+                    group  # pyright: ignore[reportUnknownVariableType]  # group is unknown from Mapping[str, object]
+                    for group in v  # pyright: ignore[reportUnknownVariableType]  # iteration variable is unknown from Mapping[str, object]
+                    if not (
+                        isinstance(group, dict) and (group.get("group_name") or "").startswith(VIRTUAL_MODEL_PREFIX)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # group is unknown from Mapping[str, object]
+                    )
+                ]
+                skipped_groups = [  # pyright: ignore[reportUnknownVariableType]  # skipped_groups is list[Unknown | None] from Mapping[str, object]
+                    group.get("group_name")  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # group is unknown from Mapping[str, object]
+                    for group in v  # pyright: ignore[reportUnknownVariableType]  # iteration variable is unknown from Mapping[str, object]
+                    if isinstance(group, dict) and (group.get("group_name") or "").startswith(VIRTUAL_MODEL_PREFIX)  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType]  # group is unknown from Mapping[str, object]
+                ]
+                if skipped_groups:
+                    verbose_proxy_logger.warning(
+                        "Skipping %d routing_groups from DB with reserved prefix '%s': %s",
+                        len(skipped_groups),  # pyright: ignore[reportUnknownArgumentType]  # skipped_groups is unknown from Mapping[str, object]
+                        VIRTUAL_MODEL_PREFIX,
+                        skipped_groups,  # pyright: ignore[reportUnknownArgumentType]  # skipped_groups is unknown from Mapping[str, object]
+                    )
+                filtered_settings[k] = filtered_groups
+            else:
+                filtered_settings[k] = v
+
+        llm_router.update_settings(**{k: v for k, v in filtered_settings.items() if k != "routing_groups"})  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType,reportUnknownVariableType]  # update_settings accepts **kwargs; values are unknown from Mapping[str, object]
+        if "routing_groups" not in filtered_settings:
             return
         try:
-            llm_router.update_settings(routing_groups=router_settings["routing_groups"])
+            llm_router.update_settings(routing_groups=filtered_settings["routing_groups"])  # pyright: ignore[reportUnknownMemberType,reportUnknownArgumentType]  # update_settings accepts **kwargs; routing_groups is unknown from Mapping[str, object]
         except (TypeError, ValueError) as invalid_groups:
             verbose_proxy_logger.error(
                 "Ignoring invalid router_settings.routing_groups from config/DB, all other router settings still "
@@ -8318,6 +8415,50 @@ class ProxyConfig:
 
     _get_models_from_db = get_models_from_db
 
+    async def get_virtual_models_from_db(
+        self, prisma_client: PrismaClient
+    ) -> tuple[tuple[str, "VirtualModelRouterState"], ...] | None:
+        """
+        Fetch all virtual models with their members from the DB.
+
+        Returns:
+        - list[tuple[router_name, VirtualModelRouterState]]: the virtual models (may be empty)
+        - None: signals a DB fetch *failure* — callers must not treat this
+          as "all virtual models deleted" and must not evict existing router state.
+
+        Pinned to the writer DB for the same reason as get_models_from_db.
+        """
+        try:
+            from litellm.types.router import VirtualModelRouterState
+
+            rows: Final = await VirtualModelRepository(WriterPinnedClient(prisma_client.db)).table.find_many(
+                include={"members": {"order_by": {"priority": "asc"}}}
+            )
+        except Exception as e:  # noqa: BLE001  # mirrors get_models_from_db: any read failure degrades to None so a flaky virtual read never blocks the model reconcile
+            verbose_proxy_logger.exception(
+                "litellm.proxy_server.py::get_virtual_models_from_db() - Error getting virtual models from DB - %s",
+                e,
+            )
+            return None
+
+        return tuple(
+            (
+                f"{VIRTUAL_MODEL_PREFIX}{row.virtual_model_name}",
+                VirtualModelRouterState(
+                    members={member.model_id: member.priority for member in row.members or []},
+                    routing_strategy=row.routing_strategy,
+                    num_retries=row.num_retries,
+                    timeout=row.timeout,
+                    stream_timeout=row.stream_timeout,
+                    allowed_fails=row.allowed_fails,
+                    cooldown_time=row.cooldown_time,
+                ),
+            )
+            for row in rows
+        )
+
+    _get_virtual_models_from_db = get_virtual_models_from_db
+
     async def add_deployment(
         self,
         prisma_client: PrismaClient,
@@ -8385,6 +8526,10 @@ class ProxyConfig:
                 still_desired_ids = await self._update_llm_router(
                     new_models=new_models, proxy_logging_obj=proxy_logging_obj
                 )
+
+                virtual_models_list: Final = await self.get_virtual_models_from_db(prisma_client=prisma_client)
+                if virtual_models_list is not None and llm_router is not None:
+                    llm_router.set_virtual_models(dict(virtual_models_list))
 
             db_general_settings: Final[_ConfigParamRow | None] = await get_config_param(
                 prisma_client, "general_settings"
@@ -9535,7 +9680,7 @@ async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKe
             )
 
             # chunk = chunk.model_dump_json(exclude_none=True)
-            async for c in chunk:
+            async for c in chunk:  # pyright: ignore[reportGeneralTypeIssues]  # hook returns the async iterator at runtime; inferred union is over-broad
                 c = c.model_dump_json(exclude_none=True)
                 try:
                     yield f"data: {c}\n\n"
@@ -14014,6 +14159,7 @@ from litellm.repositories.table_repositories import (
     InvitationLinkRepository,
     PromptRepository,
     SSOConfigRepository,
+    VirtualModelRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -20200,6 +20346,7 @@ app.include_router(budget_management_router)
 app.include_router(model_management_router)
 app.include_router(model_access_group_management_router)
 app.include_router(auto_router_management_router)
+app.include_router(virtual_model_router)
 app.include_router(tag_management_router)
 app.include_router(workflow_management_router)
 app.include_router(memory_router)
