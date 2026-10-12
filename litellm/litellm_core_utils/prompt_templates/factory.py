@@ -1329,7 +1329,7 @@ def get_thought_signature_from_tool(tool: Mapping[str, object]) -> str | None:
     tool_call_id: Final = cast(  # cast-ok: tool IDs come from model responses
         str, tool.get("id")
     )
-    if tool_call_id and isinstance(tool_call_id, str):
+    if tool_call_id:
         _, signature = _decode_tool_call_id_with_signature(tool_call_id)
         return signature
     return None
