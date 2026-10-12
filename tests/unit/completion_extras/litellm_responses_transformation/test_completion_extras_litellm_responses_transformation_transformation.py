@@ -5183,9 +5183,9 @@ def test_convert_response_output_folds_two_messages_and_function_call_into_one_c
     assert len(choices) == 1
     assert choices[0].index == 0
     assert choices[0].finish_reason == "tool_calls"
-    assert choices[0].message.content == "First message.\nSecond message."
+    assert choices[0].message.content == "First message.Second message."
     assert choices[0].message.annotations == [
-        {**second_annotation, "start_index": len("First message.\n"), "end_index": len("First message.\n") + 6}
+        {**second_annotation, "start_index": len("First message."), "end_index": len("First message.") + 6}
     ]
     tool_calls: Final = choices[0].message.tool_calls
     assert tool_calls is not None

@@ -335,9 +335,6 @@ def _message_reasoning_items(message: "Message") -> Sequence[ChatCompletionReaso
     return reasoning_items or ()
 
 
-_MESSAGE_JOINER: Final = "\n"
-
-
 def _shifted_annotations(messages: Sequence["Message"], offsets: Sequence[int]) -> Iterator[ChatCompletionAnnotation]:
     for message, offset in zip(messages, offsets):
         for annotation in _message_annotations(message):
@@ -355,7 +352,7 @@ def _fold_choices_into_one(
 
     messages: Final = tuple(choice.message for choice in choices)
     texts: Final = tuple(str(message.content or "") for message in messages)
-    offsets: Final = (0, *accumulate(len(text) + len(_MESSAGE_JOINER) for text in texts))
+    offsets: Final = (0, *accumulate(len(text) for text in texts))
     annotations: Final = tuple(_shifted_annotations(messages, offsets))
     reasoning_contents: Final = (*(_message_reasoning_content(m) for m in messages), trailing_reasoning_content)
     reasoning_items: Final = (
@@ -365,7 +362,7 @@ def _fold_choices_into_one(
     return Choices(
         message=Message(
             role=messages[0].role if messages else "assistant",
-            content=_MESSAGE_JOINER.join(texts) if messages else None,
+            content="".join(texts) if messages else None,
             annotations=list(annotations) or None,
             tool_calls=list(tool_calls) or None,
             reasoning_content=" ".join(value for value in reasoning_contents if value) or None,

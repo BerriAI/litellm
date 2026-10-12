@@ -660,7 +660,7 @@ def test_chat_over_responses_deployment_folds_two_messages_and_function_call_int
                 "index": 0,
                 "message": {
                     "role": "assistant",
-                    "content": "First message.\nSecond message.",
+                    "content": "First message.Second message.",
                     "tool_calls": [
                         {
                             "id": "fc_1",
