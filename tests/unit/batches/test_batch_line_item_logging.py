@@ -1543,6 +1543,7 @@ CALLER_FIELDS_INPUT_JSONL = json.dumps(
         "body": {
             "model": "gpt-4o",
             "messages": [{"role": "user", "content": "hi a"}],
+            "system": "answer briefly",
             "temperature": 0.2,
             "user": "end-user-a",
             "call_type": "embedding",
@@ -1560,11 +1561,14 @@ CALLER_FIELDS_INPUT_JSONL = json.dumps(
 async def test_line_body_fields_do_not_replace_the_callback_kwargs(recorder):
     """A JSONL line body is the caller's input file, so its fields reach callbacks as
     the line's optional_params and never stand in for the kwargs litellm sets, which
-    router hooks read to settle rate limit reservations."""
+    router hooks read to settle rate limit reservations. The system prompt is still
+    logged, and the retrieve request's callback settings still apply."""
     litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
     file_mock: Final = AsyncMock(
         side_effect=_scoped_file_content({"input-fields": CALLER_FIELDS_INPUT_JSONL, "output-fields": OUTPUT_JSONL})
     )
+    parent: Final = _parent_logging()
+    parent.standard_callback_dynamic_params = {"langfuse_host": "https://team.example"}
     with (
         patch(
             "litellm.files.main.afile_content", file_mock
@@ -1573,12 +1577,13 @@ async def test_line_body_fields_do_not_replace_the_callback_kwargs(recorder):
             "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
         ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
     ):
-        await _log_completed_batch(_parent_logging(), _provider_batch("batch_fields", "input-fields", "output-fields"))
+        await _log_completed_batch(parent, _provider_batch("batch_fields", "input-fields", "output-fields"))
 
     line: Final = next(e for e in recorder.success_events if _hidden(e).get("batch_custom_id") == "a")
     assert "metadata" not in line
     assert line["call_type"] == "acompletion"
-    assert line["standard_callback_dynamic_params"] == {}
+    assert line["standard_callback_dynamic_params"] == {"langfuse_host": "https://team.example"}
+    assert _payload(line)["messages"][0] == {"role": "system", "content": "answer briefly"}
     assert line["user"] == "end-user-a"
     assert line["optional_params"]["temperature"] == 0.2
     assert line["optional_params"]["metadata"]["_litellm_itpm_reserved"] == 5
@@ -1665,3 +1670,30 @@ def test_a_retrieve_flushed_at_interpreter_exit_starts_no_line_fan_out():
 
     assert result.returncode == 0, result.stderr
     assert "spawned: None" in result.stdout, result.stdout + result.stderr
+
+
+@pytest.mark.asyncio
+async def test_line_events_follow_the_retrieve_requests_message_logging_opt_out(recorder):
+    """A key or team that turned message logging off gets its batch lines logged
+    without their prompts and responses, the same as its own requests."""
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
+    parent: Final = _parent_logging()
+    parent.standard_callback_dynamic_params = {"turn_off_message_logging": True}
+    with (
+        patch(
+            "litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=_file_content
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(parent, _batch())
+
+    line_events: Final = [
+        e for e in recorder.success_events + recorder.failure_events if _hidden(e).get("batch_custom_id")
+    ]
+    assert sorted(_hidden(e)["batch_custom_id"] for e in line_events) == ["a", "b"]
+    logged: Final = json.dumps([[_payload(e)["messages"], _payload(e)["response"]] for e in line_events])
+    assert "hi a" not in logged
+    assert "hi b" not in logged
+    assert "hello back" not in logged

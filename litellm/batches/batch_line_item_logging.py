@@ -81,6 +81,9 @@ _LINE_ITEM_TASKS: Final[set["asyncio.Task[int]"]] = set()  # mutable-ok: strong 
 # loops whose shutdown drain has started, where a new fan-out would be cancelled with its claim held
 _DRAINED_LOOPS: Final[weakref.WeakSet[asyncio.AbstractEventLoop]] = weakref.WeakSet()
 
+# Body keys carrying the system prompt: Anthropic and Bedrock `system`, Responses `instructions`
+_SYSTEM_PROMPT_KEYS: Final = ("system", "instructions")
+
 # Anthropic keeps no input file, so its retrieved batch reports input_file_id as the string "None"
 _NO_FILE_IDS: Final = frozenset(("", "None"))
 
@@ -287,7 +290,7 @@ def _new_child_logging(
 ) -> "Logging":
     from litellm.litellm_core_utils.litellm_logging import Logging
 
-    return Logging(
+    child: Final = Logging(
         model=model,
         messages=messages,
         stream=False,
@@ -302,6 +305,10 @@ def _new_child_logging(
         dynamic_async_failure_callbacks=parent.dynamic_async_failure_callbacks,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # same as above
         kwargs={"litellm_session_id": parent.litellm_session_id},
     )
+    # Lines are logged under the retrieve request's key and team callback settings,
+    # such as turn_off_message_logging and per-team logging credentials
+    child.standard_callback_dynamic_params = parent.standard_callback_dynamic_params.copy()
+    return child
 
 
 def _line_hidden_params(
@@ -378,10 +385,12 @@ async def _emit_line_event(
         custom_llm_provider=custom_llm_provider,
     )
     # The line body is caller data, so it is kept as optional_params without its keys
-    # landing on the callback kwargs, where router hooks read metadata and call_type
+    # landing on the callback kwargs, where router hooks read metadata and call_type.
+    # The system prompt is the one exception: logging reads it off the kwargs, as for a direct call
     line_optional_params: Final = _optional_params_for_body(request_body)
     child.optional_params = line_optional_params
     child.model_call_details["optional_params"] = line_optional_params
+    child.model_call_details.update({key: request_body[key] for key in _SYSTEM_PROMPT_KEYS if key in request_body})
     child.mark_batch_line_item(batch.id)
     for secret_key in _SECRET_PARAM_KEYS:
         child.litellm_params.pop(secret_key, None)  # pyright: ignore[reportUnknownMemberType]  # Logging.litellm_params is untyped upstream

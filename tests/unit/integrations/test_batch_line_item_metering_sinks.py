@@ -419,3 +419,67 @@ async def test_otel_v2_metrics_are_identical_with_the_flag_on_and_off(
             f"{on_counts[0]} datapoints on vs {on_counts[1]} off"
         )
     assert sum(off.get("gen_ai.usage.cost", [])) == pytest.approx(AGGREGATE_COST)
+
+
+async def _datadog_metric_names(monkeypatch: pytest.MonkeyPatch, flag: bool) -> list[str]:
+    from litellm.integrations.datadog.datadog_metrics import DatadogMetricsLogger
+
+    monkeypatch.setenv("DD_API_KEY", "test-dd-key")
+    logger = DatadogMetricsLogger(start_periodic_flush=False)
+    await _log_completed_batch(monkeypatch, [logger], flag=flag)
+    return sorted(series["metric"] for series in logger.log_queue)
+
+
+@pytest.mark.asyncio
+async def test_datadog_metrics_are_identical_with_the_flag_on_and_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    off = await _datadog_metric_names(monkeypatch, flag=False)
+    on = await _datadog_metric_names(monkeypatch, flag=True)
+
+    assert off
+    assert on == off
+
+
+async def _slack_daily_report_updates(monkeypatch: pytest.MonkeyPatch, flag: bool) -> list[str]:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.integrations.SlackAlerting.slack_alerting import SlackAlerting
+
+    class _RecordingCache(DualCache):
+        """The real cache, also listing the daily report keys each event increments."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.incremented: list[str] = []
+
+        async def async_increment_cache(self, key: str, value: float, **kwargs: Any) -> float:
+            self.incremented.append(key)
+            return await super().async_increment_cache(key=key, value=value, **kwargs)
+
+    cache = _RecordingCache()
+    logger = SlackAlerting(internal_usage_cache=cache, alert_types=["daily_reports"])
+    await _log_completed_batch(monkeypatch, [logger], flag=flag)
+    return cache.incremented
+
+
+@pytest.mark.asyncio
+async def test_slack_daily_reports_are_identical_with_the_flag_on_and_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Daily reports rank deployments by their live failures and latency, which a
+    line that ran inside the provider's batch job says nothing about."""
+    off = await _slack_daily_report_updates(monkeypatch, flag=False)
+    on = await _slack_daily_report_updates(monkeypatch, flag=True)
+
+    assert off
+    assert on == off
+
+
+@pytest.mark.asyncio
+async def test_pagerduty_does_not_count_failed_batch_lines(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A failed line is reported by its batch, so it never counts toward the
+    failure threshold that pages on-call for live traffic."""
+    from litellm_enterprise.enterprise_callbacks.pagerduty.pagerduty import PagerDutyAlerting
+
+    monkeypatch.setenv("PAGERDUTY_API_KEY", "test-pd-key")
+    logger = PagerDutyAlerting(alerting_args={"failure_threshold": 100})
+
+    await _log_completed_batch(monkeypatch, [logger])
+
+    assert logger._failure_events == []

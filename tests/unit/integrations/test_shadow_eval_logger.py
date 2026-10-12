@@ -1016,6 +1016,22 @@ def test_judge_prompt_is_bounded_however_large_the_inputs():
 
 @pytest.mark.asyncio
 class TestSuccessHookSkipChain:
+    async def test_a_batch_line_item_is_not_shadowed(self, monkeypatch: pytest.MonkeyPatch):
+        """A completed batch's JSONL lines are logged as their own events, but the
+        batch API served them, so shadowing one would buy a realtime call for it."""
+        import litellm as litellm_module
+
+        monkeypatch.setattr(litellm_module, "completion_cost", lambda completion_response: 0.005)
+        router = _router()
+        logger = _logger(router=router, prisma=_prisma(), jobs=(_job(),))
+        line_kwargs = _success_kwargs()
+        line_kwargs["litellm_params"]["batch_parent_id"] = "batch_1"
+
+        await logger.async_log_success_event(line_kwargs, RESPONSE, None, None)
+        await _drain(logger)
+
+        router.acompletion.assert_not_called()
+
     async def test_happy_path_writes_exactly_one_attempt_row(self, monkeypatch: pytest.MonkeyPatch):
         import litellm as litellm_module
 

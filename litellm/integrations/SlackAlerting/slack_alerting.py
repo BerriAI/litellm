@@ -29,6 +29,7 @@ from litellm.integrations.SlackAlerting.budget_alert_types import get_budget_ale
 from litellm.integrations.SlackAlerting.hanging_request_check import (
     AlertingHangingRequestCheck,
 )
+from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.exception_mapping_utils import (
     add_key_name_and_team_to_alert,
@@ -1688,6 +1689,10 @@ Model Info:
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Log deployment latency"""
+        # A batch line item ran inside the provider's batch job, not on the deployment,
+        # and its timing spans the whole batch, so it says nothing about deployment health
+        if is_batch_line_item_event(kwargs):
+            return
         try:
             if "daily_reports" in self.alert_types:
                 litellm_params: Final = kwargs.get("litellm_params", {}) or {}
@@ -1723,6 +1728,8 @@ Model Info:
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         """Log failure + deployment latency"""
+        if is_batch_line_item_event(kwargs):
+            return
         _litellm_params: Final = kwargs.get("litellm_params", {})
         _model_info: Final = _litellm_params.get("model_info", {}) or {}
         model_id: Final = _model_info.get("id", "")

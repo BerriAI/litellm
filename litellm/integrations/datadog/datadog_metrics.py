@@ -14,6 +14,7 @@ from litellm.integrations.datadog.datadog_handler import (
     get_datadog_service,
     normalize_datadog_tag_value,
 )
+from litellm.litellm_core_utils.core_helpers import is_batch_line_item_event
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
@@ -170,6 +171,9 @@ class DatadogMetricsLogger(CustomBatchLogger):
         self.log_queue.append(series_count)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        # A batch line item is counted by the aggregate aretrieve_batch event
+        if is_batch_line_item_event(kwargs):
+            return
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
@@ -185,6 +189,8 @@ class DatadogMetricsLogger(CustomBatchLogger):
             verbose_logger.exception("Datadog Metrics: Error in async_log_success_event: %s", e)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        if is_batch_line_item_event(kwargs):
+            return
         try:
             standard_logging_object: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
 
