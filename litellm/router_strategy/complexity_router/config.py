@@ -12,7 +12,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, NamedTuple
+from typing import TYPE_CHECKING, Annotated, Final, Literal, NamedTuple
 
 from pydantic import (
     ConfigDict,
@@ -27,7 +27,10 @@ from pydantic import (
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
-if sys.version_info >= (3, 11):
+if TYPE_CHECKING:
+    import sre_constants
+    import sre_parse
+elif sys.version_info >= (3, 11):
     from re import _constants as sre_constants
     from re import _parser as sre_parse
 else:
