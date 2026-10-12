@@ -1,6 +1,5 @@
 import asyncio
 import re
-import signal
 import socket
 import threading
 import uuid
@@ -249,11 +248,11 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_the_component
             held_by: Final = MappingProxyType({pid: _open_peer_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == len(texts), held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            peer.release.set()
-            served: Final = await burst
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                peer.release.set()
+                served: Final = await burst
             assert len(served) == held_by[survivor_pid], (held_by, len(served))
             for item in served:
                 _assert_embedded(item)
@@ -280,7 +279,7 @@ async def test_proxy_sigterm_mid_burst_finishes_in_flight_calls_and_a_relaunch_s
                 _burst(str(owned.gateway.client.base_url), owned.gateway.key, texts, tolerate_transport_errors=True)
             )
             await asyncio.to_thread(eventually, peer.held.qsize, lambda size: size == len(texts), 120)
-            owned.process.send_signal(signal.SIGTERM)
+            owned.begin_shutdown()
             peer.release.set()
             served: Final = await burst
             exit_code: Final = await asyncio.to_thread(
