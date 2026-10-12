@@ -137,6 +137,41 @@ describe("RouterSettings", () => {
     );
   });
 
+  it("keeps Save Changes disabled when the router settings source cannot be loaded", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getRouterSettingsCall).mockRejectedValue(new Error("500 Internal Server Error"));
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    const save = await screen.findByRole("button", { name: /save changes/i });
+    expect(save).toBeDisabled();
+    expect(save).toHaveAttribute("title", expect.stringContaining("config.yaml"));
+    await user.click(save);
+    expect(setCallbacksCall).not.toHaveBeenCalled();
+  });
+
+  it("should leave config.yaml owned keys out of the save payload and still send edited ones", async () => {
+    const user = userEvent.setup();
+    vi.mocked(getRouterSettingsCall).mockResolvedValue({
+      ...mockRouterSettingsResponse,
+      source: { num_retries: "config", timeout: "db" },
+    });
+    renderWithProviders(<RouterSettings {...defaultProps} />);
+
+    await findStrategySelect();
+
+    expect(await screen.findByRole("textbox", { name: /num_retries/i })).toBeDisabled();
+    const timeout = screen.getByRole("textbox", { name: /timeout/i });
+    await user.clear(timeout);
+    fireEvent.change(timeout, { target: { value: "42" } });
+
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+
+    await waitFor(() => expect(setCallbacksCall).toHaveBeenCalledTimes(1));
+    const [, payload] = vi.mocked(setCallbacksCall).mock.calls[0];
+    expect(payload.router_settings).toEqual(expect.objectContaining({ timeout: 42 }));
+    expect(payload.router_settings).not.toHaveProperty("num_retries");
+  });
+
   it("should show a success notification after saving", async () => {
     const user = userEvent.setup();
     renderWithProviders(<RouterSettings {...defaultProps} />);

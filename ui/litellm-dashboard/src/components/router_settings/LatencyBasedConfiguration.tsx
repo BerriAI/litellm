@@ -1,4 +1,5 @@
 import React from "react";
+import { CONFIG_OWNED_HINT, ConfigOwnedBadge } from "./ConfigOwned";
 import { Input } from "@/components/ui/input";
 
 interface routingStrategyArgs {
@@ -13,9 +14,13 @@ const defaultLowestLatencyArgs: routingStrategyArgs = {
 
 interface LatencyBasedConfigurationProps {
   routingStrategyArgs: { [key: string]: any };
+  ownedByConfig?: boolean;
 }
 
-const LatencyBasedConfiguration: React.FC<LatencyBasedConfigurationProps> = ({ routingStrategyArgs }) => {
+const LatencyBasedConfiguration: React.FC<LatencyBasedConfigurationProps> = ({
+  routingStrategyArgs,
+  ownedByConfig = false,
+}) => {
   const paramExplanation: { [key: string]: string } = {
     ttl: "Sliding window to look back over when calculating the average latency of a deployment. Default - 1 hour (in seconds).",
     lowest_latency_buffer:
@@ -26,7 +31,10 @@ const LatencyBasedConfiguration: React.FC<LatencyBasedConfigurationProps> = ({ r
     <>
       <div className="space-y-6">
         <div className="max-w-3xl">
-          <h3 className="text-sm font-medium text-foreground">Latency-Based Configuration</h3>
+          <h3 className="text-sm font-medium text-foreground">
+            Latency-Based Configuration
+            {ownedByConfig && <ConfigOwnedBadge />}
+          </h3>
           <p className="text-xs text-muted-foreground mt-1">Fine-tune latency-based routing behavior</p>
         </div>
 
@@ -41,6 +49,8 @@ const LatencyBasedConfiguration: React.FC<LatencyBasedConfigurationProps> = ({ r
                 <Input
                   name={param}
                   defaultValue={typeof value === "object" ? JSON.stringify(value, null, 2) : value?.toString()}
+                  disabled={ownedByConfig}
+                  title={ownedByConfig ? CONFIG_OWNED_HINT : undefined}
                   className="font-mono text-sm w-full"
                 />
               </label>
