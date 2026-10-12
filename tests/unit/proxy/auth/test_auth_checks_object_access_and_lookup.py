@@ -10011,6 +10011,7 @@ async def test_invalidate_team_member_spend_state_sets_new_spend_instead_of_dele
     caller passing new_spend must match that precedent, not merely delete the counter."""
     from litellm.caching.dual_cache import DualCache
     from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.proxy_server import spend_counter_redis_ttl
 
     real_cache = UserApiKeyCache()
     real_spend_counter_cache = DualCache()
@@ -10029,7 +10030,9 @@ async def test_invalidate_team_member_spend_state_sets_new_spend_instead_of_dele
         )
 
     assert real_spend_counter_cache.in_memory_cache.get_cache(key="spend:team_member:user-1:team-1") == 2.5
-    fake_redis_cache.async_set_cache.assert_awaited_once_with(key="spend:team_member:user-1:team-1", value=2.5, ttl=60)
+    fake_redis_cache.async_set_cache.assert_awaited_once_with(
+        key="spend:team_member:user-1:team-1", value=2.5, ttl=spend_counter_redis_ttl()
+    )
 
 
 @pytest.mark.asyncio

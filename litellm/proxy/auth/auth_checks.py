@@ -3198,7 +3198,11 @@ async def invalidate_team_member_spend_state(
         await asyncio.wait((inflight,))
 
     if new_spend is not None:
-        from litellm.proxy.proxy_server import SPEND_DB_FLOOR_CACHE_TTL_SECONDS, spend_counter_cache
+        from litellm.proxy.proxy_server import (
+            SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
+            spend_counter_cache,
+            spend_counter_redis_ttl,
+        )
 
         spend_counter_key: Final = f"spend:team_member:{user_id}:{team_id}"
         spend_db_floor_key: Final = f"spend_db_floor:{spend_counter_key}"
@@ -3206,7 +3210,9 @@ async def invalidate_team_member_spend_state(
         spend_counter_cache.in_memory_cache.set_cache(key=spend_counter_key, value=new_spend, ttl=60)
         if spend_counter_cache.redis_cache is not None:
             try:
-                await spend_counter_cache.redis_cache.async_set_cache(key=spend_counter_key, value=new_spend, ttl=60)
+                await spend_counter_cache.redis_cache.async_set_cache(
+                    key=spend_counter_key, value=new_spend, ttl=spend_counter_redis_ttl()
+                )
             except Exception as e:  # noqa: BLE001  # fall back to deleting the stale entry before giving up
                 verbose_proxy_logger.warning(
                     "Failed to set spend counter %s in Redis after reset: %s; deleting it instead so the next "
