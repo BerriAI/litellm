@@ -3,7 +3,8 @@
 Split from test_vertex.py to satisfy CI per-file size limits.
 """
 import asyncio
-import time
+import threading
+from typing import Final
 
 from dotenv import load_dotenv
 
@@ -250,9 +251,16 @@ def test_get_gcs_object_content_type_anonymous_success_no_auth_header():
     assert hdrs is None or "Authorization" not in hdrs
 
 
-def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text():
+def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text() -> None:
     from litellm.llms.vertex_ai.gemini import transformation as gemini_transformation
 
+    get_started: Final = threading.Event()
+    loop_progressed: Final = threading.Event()
+    response: Final = MagicMock()
+    response.is_error = False
+    response.status_code = 200
+    response.raise_for_status.return_value = None
+    response.json.return_value = {"contentType": "image/png"}
     messages = [
         {
             "role": "user",
@@ -266,12 +274,8 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
     ]
 
     def slow_http_get(*args, **kwargs):
-        time.sleep(0.5)
-        response = MagicMock()
-        response.is_error = False
-        response.status_code = 200
-        response.raise_for_status.return_value = None
-        response.json.return_value = {"contentType": "image/png"}
+        get_started.set()
+        response.wait_result = loop_progressed.wait(timeout=10)
         return response
 
     async def fake_check_and_create_cache(self, **kwargs):
@@ -282,11 +286,11 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
     mock_http = MagicMock()
     mock_http.get.side_effect = slow_http_get
 
-    async def run_scenario() -> float:
-        async def concurrent_sleep() -> float:
-            start = time.monotonic()
-            await asyncio.sleep(0.05)
-            return time.monotonic() - start
+    async def run_scenario() -> None:
+        async def concurrent_progress() -> None:
+            while not get_started.is_set():
+                await asyncio.sleep(0.001)
+            loop_progressed.set()
 
         task = asyncio.create_task(
             gemini_transformation.async_transform_request_body(
@@ -306,9 +310,7 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
                 vertex_auth_header=None,
             )
         )
-        elapsed = await concurrent_sleep()
-        await task
-        return elapsed
+        await asyncio.gather(task, concurrent_progress())
 
     with (
         patch.object(gemini_transformation, "_GCS_METADATA_VERTEX_BASE", mock_v),
@@ -322,12 +324,9 @@ def test_async_transform_request_body_offloads_extensionless_gs_not_plain_text()
             new=fake_check_and_create_cache,
         ),
     ):
-        sleep_elapsed = asyncio.run(run_scenario())
+        asyncio.run(run_scenario())
 
-    assert sleep_elapsed < 0.4, (
-        f"Event loop blocked for {sleep_elapsed:.3f}s; "
-        "async_transform_request_body did not offload sync GCS metadata"
-    )
+    assert response.wait_result is True
 
     async def fake_cache2(self, **kwargs):
         return kwargs["messages"], kwargs["optional_params"], None
