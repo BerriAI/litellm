@@ -5492,6 +5492,12 @@ class Router:
 
             self._update_kwargs_with_deployment(deployment=deployment, kwargs=kwargs, function_name=function_name)
 
+            # Count the picked deployment against its per-minute rpm budget at
+            # selection time, the same way _acompletion does, so
+            # _pre_call_checks enforces rpm limits on passthrough routes
+            # (/v1/messages and friends) that go through this helper.
+            self._track_deployment_metrics(deployment=deployment, parent_otel_span=parent_otel_span)
+
             data: Final = deployment["litellm_params"].copy()
             model_name: Final = data["model"]
             self.total_calls[model_name] += 1
@@ -13786,7 +13792,7 @@ class Router:
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
-    ):
+    ) -> dict[str, Any]:
         """
         Async implementation of 'get_available_deployments'.
 
@@ -15199,7 +15205,9 @@ class Router:
 
         return pass_through_deployments
 
-    def _track_deployment_metrics(self, deployment, parent_otel_span: Span | None, response=None):
+    def _track_deployment_metrics(
+        self, deployment: dict[str, Any], parent_otel_span: Span | None, response: object | None = None
+    ):
         """
         Tracks successful requests rpm usage.
         """
