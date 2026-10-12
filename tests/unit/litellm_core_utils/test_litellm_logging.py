@@ -1287,24 +1287,19 @@ class TestRetrieveBatchCostPassesModelIdentity:
 
         captured: dict[str, object] = {}
 
-        from litellm.batches.batch_utils import BatchCostUsageResult, BatchResultFiles
+        from litellm.batches.batch_utils import BatchCostUsageResult
 
-        async def fake_handle_completed_batch(
-            **kwargs: object,
-        ) -> tuple[BatchCostUsageResult, BatchResultFiles]:
+        async def fake_handle_completed_batch(**kwargs: object) -> BatchCostUsageResult:
             captured.update(kwargs)
-            return (
-                BatchCostUsageResult(
-                    cost=1.25,
-                    usage=Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800),
-                    models=["m"],
-                    successful_requests=1,
-                    failed_requests=0,
-                ),
-                BatchResultFiles(output=None, error=None),
+            return BatchCostUsageResult(
+                cost=1.25,
+                usage=Usage(prompt_tokens=1800, completion_tokens=1000, total_tokens=2800),
+                models=["m"],
+                successful_requests=1,
+                failed_requests=0,
             )
 
-        monkeypatch.setattr(logging_module, "handle_completed_batch_with_files", fake_handle_completed_batch)
+        monkeypatch.setattr(logging_module, "handle_completed_batch", fake_handle_completed_batch)
 
         obj = LitellmLogging(
             model="bedrock/global.anthropic.claude-sonnet-4-6",
@@ -1387,7 +1382,7 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
         from litellm.litellm_core_utils import litellm_logging as logging_module
 
         handle_completed_batch = AsyncMock()
-        monkeypatch.setattr(logging_module, "handle_completed_batch_with_files", handle_completed_batch)
+        monkeypatch.setattr(logging_module, "handle_completed_batch", handle_completed_batch)
         batch = self._batch(status, output_file_id)
 
         await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)
@@ -1397,23 +1392,20 @@ class TestRetrieveBatchPricesOnlyFinalBatches:
 
     @pytest.mark.asyncio
     async def test_completed_batch_with_output_is_priced(self, monkeypatch) -> None:
-        from litellm.batches.batch_utils import BatchCostUsageResult, BatchResultFiles
+        from litellm.batches.batch_utils import BatchCostUsageResult
         from litellm.litellm_core_utils import litellm_logging as logging_module
         from litellm.types.utils import Usage
 
         handle_completed_batch = AsyncMock(
-            return_value=(
-                BatchCostUsageResult(
-                    cost=8e-06,
-                    usage=Usage(prompt_tokens=26, completion_tokens=9, total_tokens=35),
-                    models=["gpt-5.6-luna"],
-                    successful_requests=2,
-                    failed_requests=0,
-                ),
-                BatchResultFiles(output=None, error=None),
+            return_value=BatchCostUsageResult(
+                cost=8e-06,
+                usage=Usage(prompt_tokens=26, completion_tokens=9, total_tokens=35),
+                models=["gpt-5.6-luna"],
+                successful_requests=2,
+                failed_requests=0,
             )
         )
-        monkeypatch.setattr(logging_module, "handle_completed_batch_with_files", handle_completed_batch)
+        monkeypatch.setattr(logging_module, "handle_completed_batch", handle_completed_batch)
         batch = self._batch("completed", "file-out")
 
         await self._logging_obj()._async_success_handler_body(result=batch, start_time=None, end_time=None)

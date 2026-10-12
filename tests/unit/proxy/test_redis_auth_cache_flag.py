@@ -74,6 +74,7 @@ def _patched_init_cache(litellm_settings: dict, cache_params: dict):
         patch.object(ps, "spend_counter_cache", fresh_spend_cache),
         patch.object(ps, "cli_sso_session_cache", fresh_cli_sso_cache),
         patch.object(ps, "litellm_config_cache", fresh_config_cache),
+        patch.object(ps, "batch_line_item_claim_cache", DualCache()),
         patch.object(ps, "llm_router", None),
         # Cache is locally imported inside _init_cache: patch it at source.
         patch("litellm.Cache", return_value=mock_litellm_cache),

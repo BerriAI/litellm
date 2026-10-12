@@ -681,11 +681,11 @@ async def test_a_line_the_batch_could_not_price_reports_the_zero_the_aggregate_b
         await _log_completed_batch(_parent_logging(), _batch())
 
     line_costs: Final = [
-        _payload(event)["response_cost"]
+        (event["response_cost"], _payload(event)["response_cost"])
         for event in recorder.success_events
         if _hidden(event).get("batch_custom_id") is not None
     ]
-    assert line_costs == [0.0]
+    assert line_costs == [(0.0, 0.0)]
 
 
 @pytest.mark.asyncio

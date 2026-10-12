@@ -36,6 +36,7 @@ from litellm._uuid import uuid
 from litellm.batches.batch_utils import (
     BatchResultFiles,
     batch_cost_is_final,
+    handle_completed_batch,
     handle_completed_batch_with_files,
 )
 from litellm.caching.caching import DualCache
@@ -3316,6 +3317,9 @@ class Logging(LiteLLMLoggingBaseClass):
             has_explicit_batch_data: Final = all(x is not None for x in (batch_cost, batch_usage, batch_models))
             should_compute_batch_data: Final = not has_explicit_batch_data and batch_cost_is_final(result)
             result_files: BatchResultFiles | None = None  # rebind-ok: one batch-data branch below supplies the bytes
+            batch_litellm_params: Final = cast(  # cast-ok: shared attribute is an untyped dict
+                "dict[str, object] | None", self.litellm_params
+            )
             if has_explicit_batch_data:
                 set_hidden_param(result, "response_cost", batch_cost)
                 set_hidden_param(result, "batch_models", batch_models)
@@ -3342,14 +3346,23 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
 
             elif should_compute_batch_data:
-                batch_result, fetched_result_files = await handle_completed_batch_with_files(
-                    batch=result,
-                    custom_llm_provider=self.custom_llm_provider,
-                    model_name=self.get_deployment_model_for_cost(),
-                    litellm_params=self.litellm_params,
-                    model_info=self.get_router_deployment_model_info(),
-                )
-                result_files = fetched_result_files  # rebind-ok: the files this branch fetched
+                if litellm.store_batch_line_items_in_callbacks:
+                    batch_result, fetched_result_files = await handle_completed_batch_with_files(
+                        batch=result,
+                        custom_llm_provider=self.custom_llm_provider,
+                        model_name=self.get_deployment_model_for_cost(),
+                        litellm_params=batch_litellm_params,
+                        model_info=self.get_router_deployment_model_info(),
+                    )
+                    result_files = fetched_result_files  # rebind-ok: the files this branch fetched
+                else:
+                    batch_result = await handle_completed_batch(
+                        batch=result,
+                        custom_llm_provider=self.custom_llm_provider,
+                        model_name=self.get_deployment_model_for_cost(),
+                        litellm_params=batch_litellm_params,
+                        model_info=self.get_router_deployment_model_info(),
+                    )
 
                 set_hidden_param(result, "response_cost", batch_result.cost)
                 set_hidden_param(result, "batch_models", batch_result.models)
@@ -3366,16 +3379,13 @@ class Logging(LiteLLMLoggingBaseClass):
             if litellm.store_batch_line_items_in_callbacks and (has_explicit_batch_data or should_compute_batch_data):
                 from litellm.batches.batch_line_item_logging import spawn_batch_line_items
 
-                _line_item_litellm_params: Final = cast(  # cast-ok: shared attribute is an untyped dict
-                    "dict[str, object] | None", self.litellm_params
-                )
                 try:
                     spawn_batch_line_items(
                         batch=result,
                         custom_llm_provider=self.custom_llm_provider,
                         parent=self,
                         model_name=self.get_deployment_model_for_cost(),
-                        litellm_params=_line_item_litellm_params,
+                        litellm_params=batch_litellm_params,
                         model_info=self.get_router_deployment_model_info(),
                         result_files=result_files,
                     )
