@@ -58,7 +58,7 @@ Skip this step entirely for a trial deploy.
 
 ## Run the installer
 
-DeployStack will prompt for project, region, tenant, env, image tag, `image_registry`, and TLS posture, then run `terraform apply`. Open `<walkthrough-editor-open-file filePath="terraform/litellm/gcp/examples/default/deploystack.json">deploystack.json</walkthrough-editor-open-file>` if you want to see the prompt definitions first.
+DeployStack will prompt for project, region, tenant, env, image tag, `image_registry`, and TLS posture, then run `terraform apply`. Open `<walkthrough-editor-open-file filePath="examples/default/deploystack.json">deploystack.json</walkthrough-editor-open-file>` if you want to see the prompt definitions first.
 
 ```bash
 deploystack install
@@ -131,4 +131,4 @@ deploystack uninstall
 
 <walkthrough-conclusion-trophy></walkthrough-conclusion-trophy>
 
-Full configuration reference is in `<walkthrough-editor-open-file filePath="terraform/litellm/gcp/README.md">README.md</walkthrough-editor-open-file>`, and every input variable on the underlying module lives in `<walkthrough-editor-open-file filePath="terraform/litellm/gcp/variables.tf">variables.tf</walkthrough-editor-open-file>`.
+Full configuration reference is in `<walkthrough-editor-open-file filePath="README.md">README.md</walkthrough-editor-open-file>`, and every input variable on the underlying module lives in `<walkthrough-editor-open-file filePath="variables.tf">variables.tf</walkthrough-editor-open-file>`.
