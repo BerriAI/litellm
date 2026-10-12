@@ -36,7 +36,9 @@ from litellm.batches.batch_utils import BatchResultFiles
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.llms.bedrock.files.transformation import get_configured_s3_bucket_names
 from litellm.types.utils import LiteLLMBatch, Usage
 
 INPUT_JSONL = b"\n".join(
@@ -920,6 +922,46 @@ async def test_line_items_bedrock_shapes(recorder):
     (failure,) = recorder.failure_events
     assert (_hidden(failure)["batch_custom_id"], _hidden(failure)["batch_line_status_code"]) == ("br-err", 400)
     assert "bad request" in _payload(failure)["error_str"]
+
+
+@pytest.mark.asyncio
+async def test_a_bedrock_batch_the_poller_logs_reads_every_file_from_the_deployment_bucket(recorder):
+    """Bedrock trusts its S3 bucket only from the server-side credential snapshot, so the line
+    fan-out the cost poller starts must hand that snapshot to every file read"""
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
+    file_mock: Final = AsyncMock(side_effect=_edge_file_content)
+    parent: Final = _parent_logging(custom_llm_provider="bedrock")
+    parent._litellm_internal_model_credentials = (
+        MappingProxyType(  # test-quality-ok: private transport attribute, same channel the batch cost poller sets
+            {"s3_bucket_name": "line-items-bucket", "aws_region_name": "us-east-1"}
+        )
+    )
+    with (
+        patch(
+            "litellm.files.main.afile_content", file_mock
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(parent, _provider_batch("batch_bed_poller", "input-bed", "output-bed"))
+
+    buckets_by_file: Final[dict[str, tuple[str, ...]]] = {}  # mutable-ok: collects one entry per fetched file
+    for call in file_mock.call_args_list:
+        litellm_params: dict[str, object] = {}  # mutable-ok: the dict the real file read builds and passes on
+        add_trusted_model_credentials_to_litellm_params(litellm_params, call.kwargs)
+        buckets_by_file[call.kwargs["file_id"]] = get_configured_s3_bucket_names(litellm_params)
+    assert buckets_by_file == {
+        "output-bed": ("line-items-bucket",),
+        "input-bed": ("line-items-bucket",),
+    }
+    assert sorted(
+        _hidden(e)["batch_custom_id"] for e in recorder.success_events if _hidden(e).get("batch_custom_id")
+    ) == [
+        "br-anth",
+        "br-conv",
+        "br-titan",
+    ]
 
 
 @pytest.mark.asyncio

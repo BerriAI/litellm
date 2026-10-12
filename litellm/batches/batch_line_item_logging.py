@@ -594,8 +594,12 @@ async def log_batch_line_items(
     try:
         internal_credentials: Final = parent._litellm_internal_model_credentials  # pyright: ignore[reportPrivateUsage]  # declared transport attribute on Logging
         internal_mapping: Final = _as_object_mapping(internal_credentials)
+        # Cloud storage providers resolve their bucket only from the trusted snapshot key, so it
+        # travels with the flattened credentials, the same shape the cost poller fetches with
         fetch_params: Final[dict[str, object] | None] = (  # mutable-ok: file fetcher requires a plain dict
-            dict(internal_mapping) if internal_mapping is not None else litellm_params
+            {**internal_mapping, "_litellm_internal_model_credentials": MappingProxyType(dict(internal_mapping))}
+            if internal_mapping is not None
+            else litellm_params
         )
 
         output_content: Final = (
