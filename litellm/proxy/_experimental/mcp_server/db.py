@@ -223,6 +223,7 @@ class _OAuthCredentialAccessToken(TypedDict):
 
 class OAuthCredentialPayload(_OAuthCredentialAccessToken, total=False):
     identity_binding_proof: ReadOnly[str]
+    cimd_client_id: ReadOnly[str]
     type: str
     refresh_token: str
     expires_at: str
@@ -1765,6 +1766,7 @@ async def store_user_oauth_credential(
     scopes: list[str] | None = None,
     skip_byok_guard: bool = False,
     identity_binding_proof: str | None = None,
+    cimd_client_id: str | None = None,
 ) -> None:
     """Persist an OAuth2 access token for a user+server pair.
 
@@ -1782,6 +1784,7 @@ async def store_user_oauth_credential(
         "access_token": access_token,
         "connected_at": datetime.now(timezone.utc).isoformat(),
         **({"identity_binding_proof": identity_binding_proof} if identity_binding_proof else {}),
+        **({"cimd_client_id": cimd_client_id} if cimd_client_id else {}),
     }
     if refresh_token:
         payload["refresh_token"] = refresh_token
@@ -2063,6 +2066,7 @@ async def refresh_user_oauth_token(
             auth_method=getattr(server, "token_endpoint_auth_method", None),
             client_id=client_id,
             client_secret=client_secret,
+            cimd_client_id=cred.get("cimd_client_id"),
         )
         token_data: Final[dict[str, str]] = {
             "grant_type": "refresh_token",
@@ -2132,6 +2136,7 @@ async def refresh_user_oauth_token(
         expires_in=expires_in,
         scopes=scopes,
         identity_binding_proof=binding_proof,
+        cimd_client_id=cred.get("cimd_client_id"),
         skip_byok_guard=True,  # Row is already OAuth2; skip the extra find_unique check
     )
 

@@ -72,6 +72,7 @@ def _configuration_identity(server: MCPServer) -> str:
                     "token_url",
                     "registration_url",
                     "authorization_response_iss_parameter_supported",
+                    "client_id_metadata_document_supported",
                 )
             )
             | (frozenset() if server.issuer_is_anchored else frozenset(("issuer",))),

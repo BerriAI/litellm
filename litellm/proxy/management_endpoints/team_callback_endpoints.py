@@ -31,8 +31,10 @@ from litellm.proxy._types import (
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
+    conflicting_capture_error,
     conflicting_span_scope_error,
     cross_entry_family_error,
+    stored_capture_entries,
 )
 from litellm.proxy.common_utils.callback_utils import (  # noqa: F401  # legacy module exports
     _CALLBACK_VAR_ENCRYPTED_PREFIX,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -288,6 +290,9 @@ async def add_team_callbacks(
         - langfuse_host: The host for the Langfuse callback
         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
+        - capture_message_content: For OTel v2 callbacks, "no_content" or "span_only".
+          An explicit value overrides the global setting for this destination; omitted follows the proxy's own callback for that backend, else the global setting.
+          "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
         - gcs_bucket_name: The name of the GCS bucket
         - gcs_path_service_account: The path to the GCS service account
         - langsmith_api_key: The API key for the Langsmith callback
@@ -351,11 +356,19 @@ async def add_team_callbacks(
         # Decrypted, because the checks compare the incoming values against
         # the stored ones and the credentials are encrypted at rest.
         decrypted_logging: Final = decrypt_callback_vars(team_metadata).get("logging")
+        stored_capture: Final = stored_capture_entries(decrypted_logging)
         stored_entries: Final = decrypted_logging if isinstance(decrypted_logging, list) else ()
         stored_entry_vars: Final = [entry.get("callback_vars") or {} for entry in stored_entries]
         scope_error: Final = conflicting_span_scope_error(data.callback_vars, stored_entry_vars)
         if scope_error is not None:
             raise _callback_config_error(scope_error)
+        capture_error: Final = conflicting_capture_error(
+            data.callback_name,
+            data.callback_vars,
+            stored_capture,
+        )
+        if capture_error is not None:
+            raise _callback_config_error(capture_error)
         # One entry has to own a credential family end to end. The entries are
         # flattened into one dict before a request reads them, so an entry
         # naming only a destination would pair with a key written on another
