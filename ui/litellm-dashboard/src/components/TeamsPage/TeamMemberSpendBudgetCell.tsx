@@ -2,14 +2,11 @@
 
 import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
 import { getSpendBudgetMeterTone } from "@/components/shared/table_cells/spend_budget_cell";
+import type { components } from "@/lib/http/schema";
 import { formatBudgetResetUtc } from "@/utils/budgetUtils";
 import { formatNumberWithCommas, getSpendString } from "@/utils/dataUtils";
 
-interface CallerMembership {
-  spend: number;
-  max_budget: number | null;
-  budget_reset_at: string | null;
-}
+type CallerMembership = components["schemas"]["TeamListCallerMembership"];
 
 interface TeamMemberSpendBudgetCellProps {
   teamSpend: number | null | undefined;
@@ -29,7 +26,7 @@ function BudgetLine({ label, spend, maxBudget, resetAt }: BudgetLineProps) {
   const budget = typeof maxBudget === "number" && Number.isFinite(maxBudget) ? maxBudget : null;
   const spendText = spendValue === 0 ? "$0.00" : getSpendString(spendValue, 2);
   const budgetText = budget === null ? "Unlimited" : `$${formatNumberWithCommas(budget, 2)}`;
-  const resetText = label === "Member" ? formatBudgetResetUtc(resetAt) : null;
+  const resetText = formatBudgetResetUtc(resetAt);
 
   return (
     <div className="flex flex-col gap-1">

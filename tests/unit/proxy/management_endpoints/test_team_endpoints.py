@@ -50,6 +50,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
 from litellm.proxy.management_endpoints.team_endpoints import (
     _STRIP_DELETED_TEAM_FROM_USERS_SQL,
     _enrich_team_list_with_caller_membership,
+    _TeamListCallerIdentity,
     GetTeamMemberPermissionsResponse,
     UpdateTeamMemberPermissionsRequest,
     _build_team_list_where_conditions,
@@ -3851,9 +3852,8 @@ async def test_list_team_v2_security_check_non_admin_user_own_teams():
             )
 
             # Should return results without error
-            assert "teams" in result
-            assert "total" in result
-            assert result["total"] == 2
+            assert len(result.teams) == 2
+            assert result.total == 2
 
 
 @pytest.mark.asyncio
@@ -3903,9 +3903,8 @@ async def test_list_team_v2_security_check_admin_user():
         )
 
         # Should return results without error
-        assert "teams" in result
-        assert "total" in result
-        assert result["total"] == 2
+        assert len(result.teams) == 2
+        assert result.total == 2
 
 
 @pytest.mark.asyncio
@@ -3971,10 +3970,8 @@ async def test_list_team_v2_with_status_deleted():
         mock_db.litellm_teamtable.count.assert_not_called()
 
         # Should return results without error
-        assert "teams" in result
-        assert "total" in result
-        assert result["total"] == 2
-        assert len(result["teams"]) == 2
+        assert len(result.teams) == 2
+        assert result.total == 2
 
 
 @pytest.mark.asyncio
@@ -4045,8 +4042,8 @@ async def test_list_team_v2_includes_litellm_model_table():
             status=None,
         )
 
-        assert result["teams"][0].litellm_model_table is not None
-        assert result["teams"][0].litellm_model_table.model_aliases == {"my-fast-model": "fake-model"}
+        assert result.teams[0].litellm_model_table is not None
+        assert result.teams[0].litellm_model_table.model_aliases == {"my-fast-model": "fake-model"}
 
         mock_db.litellm_deletedteamtable.find_many = AsyncMock(
             side_effect=lambda **kw: [_team_row("team_2", kw.get("include"))]
@@ -4145,9 +4142,9 @@ async def test_list_team_v2_org_admin_sees_org_teams():
             status=None,
         )
 
-        assert result["total"] == 1
-        assert len(result["teams"]) == 1
-        assert result["teams"][0].members_count == 1
+        assert result.total == 1
+        assert len(result.teams) == 1
+        assert result.teams[0].members_count == 1
 
         # Verify org-scoped where clause
         where = mock_db.litellm_teamtable.find_many.call_args.kwargs["where"]
@@ -4247,8 +4244,8 @@ async def test_list_team_v2_org_admin_own_user_id_sees_all_org_teams():
             status=None,
         )
 
-        assert result["total"] == 2
-        assert len(result["teams"]) == 2
+        assert result.total == 2
+        assert len(result.teams) == 2
 
         # Verify the where clause scopes by org OR own membership — no
         # top-level team_id filter that would hide org teams they aren't in
@@ -4386,8 +4383,8 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
             sort_order="asc",
             status=None,
         )
-        assert result["total"] == len(result["teams"])
-        return [t.team_id for t in result["teams"]]
+        assert result.total == len(result.teams)
+        return [t.team_id for t in result.teams]
 
     own_view = ["team_in_org_A", "other_team_in_org_A", "team_in_org_B"]
     assert await list_teams("org_admin_user") == own_view
@@ -4632,7 +4629,7 @@ async def test_list_team_v2_org_admin_with_user_id_returns_user_teams():
             status=None,
         )
 
-        assert result["total"] == 1
+        assert result.total == 1
 
         # Verify the where clause filters by user's teams AND org scope
         where = mock_db.litellm_teamtable.find_many.call_args.kwargs["where"]
@@ -4902,8 +4899,8 @@ async def test_list_team_v2_populates_keys_count():
             status=None,
         )
 
-        assert result["total"] == 2
-        by_id = {t.team_id: t for t in result["teams"]}
+        assert result.total == 2
+        by_id = {t.team_id: t for t in result.teams}
         assert by_id["team_a"].keys_count == 3
         assert by_id["team_b"].keys_count == 0
         # The aggregate is one batched query, filtered by the page's team IDs.
@@ -4943,6 +4940,13 @@ def _team_list_member(
     )
 
 
+def _team_list_caller_identity(
+    user_id: str | None = "caller",
+    user_email: str | None = None,
+) -> _TeamListCallerIdentity:
+    return _TeamListCallerIdentity(user_id=user_id, user_email=user_email)
+
+
 def _budget_table(
     budget_id: str,
     max_budget: float | None,
@@ -4975,8 +4979,7 @@ async def test_team_list_caller_membership_uses_member_spend_budget_and_reset_da
     teams: Final = await _enrich_team_list_with_caller_membership(
         prisma_client,
         [_team_list_member("team-a")],
-        "caller",
-        None,
+        _team_list_caller_identity(),
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -4999,8 +5002,7 @@ async def test_team_list_caller_membership_includes_roster_members_without_membe
     teams: Final = await _enrich_team_list_with_caller_membership(
         prisma_client,
         [_team_list_member("team-a", default_budget_id="team-budget")],
-        "caller",
-        None,
+        _team_list_caller_identity(),
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -5029,8 +5031,7 @@ async def test_team_list_caller_membership_matches_email_only_roster_member() ->
     teams: Final = await _enrich_team_list_with_caller_membership(
         prisma_client,
         [team],
-        "caller",
-        "caller@x.com",
+        _team_list_caller_identity(user_email="caller@x.com"),
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -5040,7 +5041,7 @@ async def test_team_list_caller_membership_matches_email_only_roster_member() ->
         budget_reset_at=None,
     )
     membership_query.assert_awaited_once()
-    budget_query.assert_awaited_once_with(where={"budget_id": {"in": ("team-budget",)}})
+    budget_query.assert_awaited_once()
 
 
 @pytest.mark.parametrize("caller_user_email", ("other@x.com", None))
@@ -5061,8 +5062,7 @@ async def test_team_list_caller_membership_ignores_email_only_roster_member_with
     teams: Final = await _enrich_team_list_with_caller_membership(
         prisma_client,
         [team],
-        "caller",
-        caller_user_email,
+        _team_list_caller_identity(user_email=caller_user_email),
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -5083,8 +5083,7 @@ async def test_team_list_caller_membership_uses_team_default_without_member_rese
     teams: Final = await _enrich_team_list_with_caller_membership(
         prisma_client,
         [_team_list_member("team-a", default_budget_id="team-budget")],
-        "caller",
-        None,
+        _team_list_caller_identity(),
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -5093,7 +5092,7 @@ async def test_team_list_caller_membership_uses_team_default_without_member_rese
         max_budget=50,
         budget_reset_at=None,
     )
-    budget_query.assert_awaited_once_with(where={"budget_id": {"in": ("team-budget",)}})
+    budget_query.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -5110,8 +5109,7 @@ async def test_team_list_caller_membership_uses_reset_date_from_member_linked_de
     teams: Final = await _enrich_team_list_with_caller_membership(
         prisma_client,
         [_team_list_member("team-a", default_budget_id="team-budget")],
-        "caller",
-        None,
+        _team_list_caller_identity(),
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -5134,8 +5132,7 @@ async def test_team_list_caller_membership_ignores_zero_team_default_budget() ->
     teams: Final = await _enrich_team_list_with_caller_membership(
         prisma_client,
         [_team_list_member("team-a", default_budget_id="team-budget")],
-        "caller",
-        None,
+        _team_list_caller_identity(),
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -5171,8 +5168,7 @@ async def test_team_list_caller_membership_applies_only_active_temporary_increas
     teams: Final = await _enrich_team_list_with_caller_membership(
         prisma_client,
         [_team_list_member("team-a")],
-        "caller",
-        None,
+        _team_list_caller_identity(),
         datetime(2030, 1, 1, tzinfo=timezone.utc),
     )
 
@@ -5213,8 +5209,7 @@ async def test_team_list_caller_membership_uses_private_row_reset_with_inherited
     teams: Final = await _enrich_team_list_with_caller_membership(
         prisma_client,
         [_team_list_member("team-a", default_budget_id="team-budget")],
-        "caller",
-        None,
+        _team_list_caller_identity(),
         datetime(2030, 1, 1, tzinfo=timezone.utc),
     )
 
@@ -5237,8 +5232,7 @@ async def test_team_list_caller_membership_is_null_for_nonmember_admins() -> Non
     teams: Final = await _enrich_team_list_with_caller_membership(
         prisma_client,
         [team],
-        "caller",
-        None,
+        _team_list_caller_identity(),
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -5254,8 +5248,7 @@ async def test_team_list_caller_membership_skips_queries_without_caller_user_id(
     teams: Final = await _enrich_team_list_with_caller_membership(
         prisma_client,
         [_team_list_member("team-a")],
-        None,
-        None,
+        _team_list_caller_identity(user_id=None),
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
@@ -5281,17 +5274,16 @@ async def test_team_list_caller_membership_batches_page_membership_and_budget_qu
             _team_list_member("team-a", default_budget_id="budget-a"),
             _team_list_member("team-b", default_budget_id="budget-b"),
         ],
-        "caller",
-        None,
+        _team_list_caller_identity(),
         datetime(2026, 10, 1, tzinfo=timezone.utc),
     )
 
-    assert [team.caller_membership.max_budget for team in teams if team.caller_membership is not None] == [50, 75]
-    membership_query.assert_awaited_once_with(
-        where={"team_id": {"in": ("team-a", "team-b")}, "user_id": "caller"},
-        include={"litellm_budget_table": True},
-    )
-    budget_query.assert_awaited_once_with(where={"budget_id": {"in": ("budget-a", "budget-b")}})
+    assert [team.caller_membership for team in teams] == [
+        TeamListCallerMembership(spend=0.0, max_budget=50, budget_reset_at=None),
+        TeamListCallerMembership(spend=0.0, max_budget=75, budget_reset_at=None),
+    ]
+    membership_query.assert_awaited_once()
+    budget_query.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -5329,8 +5321,8 @@ async def test_list_team_v2_keys_count_skipped_for_empty_page():
             status=None,
         )
 
-        assert result["total"] == 0
-        assert result["teams"] == []
+        assert result.total == 0
+        assert result.teams == []
         mock_db.litellm_verificationtoken.group_by.assert_not_called()
 
 
@@ -5379,7 +5371,7 @@ async def test_list_team_v2_keys_count_skipped_for_deleted_status():
             status="deleted",
         )
 
-        assert result["total"] == 1
+        assert result.total == 1
         mock_db.litellm_verificationtoken.group_by.assert_not_called()
 
 

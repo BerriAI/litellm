@@ -5227,16 +5227,15 @@ async def team_member_me(
         user_api_key_cache=user_api_key_cache,
     )
 
-    caller_user_email: Final = user_api_key_dict.user_email
-    member_role: str | None = None
-    for m in team_table.members_with_roles:
-        # Match by user_id when present, else fall back to email — members
-        # added by email may have user_id=None on the stored entry.
-        if (m.user_id is not None and m.user_id == caller_user_id) or (
-            m.user_email is not None and caller_user_email is not None and m.user_email == caller_user_email
-        ):
-            member_role = m.role
-            break
+    caller_identity: Final = _TeamListCallerIdentity(
+        user_id=caller_user_id,
+        user_email=user_api_key_dict.user_email,
+    )
+    matched_member: Final = next(
+        (member for member in team_table.members_with_roles if _team_member_matches_caller(member, caller_identity)),
+        None,
+    )
+    member_role: Final = matched_member.role if matched_member is not None else None
 
     if member_role is None:
         # Caller is not a member of this team. Even proxy admins get 404 here —
@@ -5695,22 +5694,31 @@ def _team_list_budget_model(budget_row: _TeamListBudgetRow | None) -> LiteLLM_Bu
     )
 
 
-def _caller_in_roster(team: TeamListItem, caller_user_id: str, caller_user_email: str | None) -> bool:
-    return any(
-        (member.user_id is not None and member.user_id == caller_user_id)
-        or (member.user_email is not None and caller_user_email is not None and member.user_email == caller_user_email)
-        for member in team.members_with_roles
+@dataclass(frozen=True, slots=True)
+class _TeamListCallerIdentity:
+    user_id: str | None
+    user_email: str | None
+
+
+def _team_member_matches_caller(member: Member, caller_identity: _TeamListCallerIdentity) -> bool:
+    return (member.user_id is not None and member.user_id == caller_identity.user_id) or (
+        member.user_email is not None
+        and caller_identity.user_email is not None
+        and member.user_email == caller_identity.user_email
     )
+
+
+def _caller_in_roster(team: TeamListItem, caller_identity: _TeamListCallerIdentity) -> bool:
+    return any(_team_member_matches_caller(member, caller_identity) for member in team.members_with_roles)
 
 
 def _team_member_default_budget_id(
     team: TeamListItem,
-    caller_user_id: str,
-    caller_user_email: str | None,
+    caller_identity: _TeamListCallerIdentity,
     memberships_by_team: Mapping[str, _TeamListMembershipRow],
 ) -> str | None:
     membership_row: Final = memberships_by_team.get(team.team_id)
-    if membership_row is None and not _caller_in_roster(team, caller_user_id, caller_user_email):
+    if membership_row is None and not _caller_in_roster(team, caller_identity):
         return None
     member_budget: Final = _team_list_budget_model(
         membership_row.litellm_budget_table if membership_row is not None else None
@@ -5728,20 +5736,17 @@ def _team_member_default_budget_id(
 
 def _team_list_caller_membership(
     team: TeamListItem,
-    caller_user_id: str,
-    caller_user_email: str | None,
+    caller_identity: _TeamListCallerIdentity,
     memberships_by_team: Mapping[str, _TeamListMembershipRow],
+    default_budget_id: str | None,
     budgets_by_id: Mapping[str, _TeamListBudgetRow],
     now: datetime,
 ) -> TeamListCallerMembership | None:
     membership_row: Final = memberships_by_team.get(team.team_id)
-    if membership_row is None and not _caller_in_roster(team, caller_user_id, caller_user_email):
+    if membership_row is None and not _caller_in_roster(team, caller_identity):
         return None
     member_budget_row: Final = membership_row.litellm_budget_table if membership_row is not None else None
     member_budget: Final = _team_list_budget_model(member_budget_row)
-    default_budget_id: Final = _team_member_default_budget_id(
-        team, caller_user_id, caller_user_email, memberships_by_team
-    )
     default_budget_row: Final = budgets_by_id.get(default_budget_id) if default_budget_id is not None else None
     team_default_budget: Final = _team_list_budget_model(default_budget_row)
     max_budget: Final = resolve_effective_team_member_budget(
@@ -5762,10 +5767,10 @@ def _team_list_caller_membership(
 async def _enrich_team_list_with_caller_membership(
     prisma_client: PrismaClient,
     teams: Sequence[TeamListItem],
-    caller_user_id: str | None,
-    caller_user_email: str | None,
+    caller_identity: _TeamListCallerIdentity,
     now: datetime,
 ) -> tuple[TeamListItem, ...]:
+    caller_user_id: Final = caller_identity.user_id
     if caller_user_id is None:
         return tuple(team.model_copy(update={"caller_membership": None}) for team in teams)
     if not teams:
@@ -5778,17 +5783,11 @@ async def _enrich_team_list_with_caller_membership(
         include={"litellm_budget_table": True},
     )
     memberships_by_team: Final = {row.team_id: row for row in membership_rows}
+    default_budget_id_by_team: Final = MappingProxyType(
+        {team.team_id: _team_member_default_budget_id(team, caller_identity, memberships_by_team) for team in teams}
+    )
     default_budget_ids: Final = tuple(
-        dict.fromkeys(
-            budget_id
-            for team in teams
-            if (
-                budget_id := _team_member_default_budget_id(
-                    team, caller_user_id, caller_user_email, memberships_by_team
-                )
-            )
-            is not None
-        )
+        dict.fromkeys(budget_id for budget_id in default_budget_id_by_team.values() if budget_id is not None)
     )
     default_budget_rows: Final[Sequence[_TeamListBudgetRow]] = (
         await _budget_db(prisma_client).find_many(
@@ -5804,9 +5803,9 @@ async def _enrich_team_list_with_caller_membership(
             update={
                 "caller_membership": _team_list_caller_membership(
                     team=team,
-                    caller_user_id=caller_user_id,
-                    caller_user_email=caller_user_email,
+                    caller_identity=caller_identity,
                     memberships_by_team=memberships_by_team,
+                    default_budget_id=default_budget_id_by_team.get(team.team_id),
                     budgets_by_id=budgets_by_id,
                     now=now,
                 )
@@ -5929,7 +5928,7 @@ async def list_team_v2(
     sort_order: str = fastapi.Query(default="asc", description="Sort order ('asc' or 'desc')"),
     status: str | None = fastapi.Query(default=None, description="Filter by status (e.g. 'deleted')"),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-) -> Mapping[str, int | Sequence[TeamListItem | LiteLLM_TeamTable | LiteLLM_DeletedTeamTable]]:
+) -> TeamListResponse:
     """
     Get a paginated list of teams with filtering and sorting options.
 
@@ -6004,13 +6003,13 @@ async def list_team_v2(
     )
 
     if where_conditions is None:
-        return {
-            "teams": [],
-            "total": 0,
-            "page": page,
-            "page_size": page_size,
-            "total_pages": 0,
-        }
+        return TeamListResponse(
+            teams=[],
+            total=0,
+            page=page,
+            page_size=page_size,
+            total_pages=0,
+        )
 
     # Build order_by conditions
     valid_sort_columns: Final = ["team_id", "team_alias", "created_at"]
@@ -6076,24 +6075,27 @@ async def list_team_v2(
                     {a for group in team_groups for a in (group.access_agent_ids or [])}
                 )
 
+    caller_identity: Final = _TeamListCallerIdentity(
+        user_id=user_api_key_dict.user_id,
+        user_email=user_api_key_dict.user_email,
+    )
     team_list_with_caller_membership: Final = (
         await _enrich_team_list_with_caller_membership(
             prisma_client=prisma_client,
             teams=tuple(team for team in team_list if isinstance(team, TeamListItem)),
-            caller_user_id=user_api_key_dict.user_id,
-            caller_user_email=user_api_key_dict.user_email,
+            caller_identity=caller_identity,
             now=get_utc_datetime(),
         )
         if not use_deleted_table and team_list
         else team_list
     )
-    return {
-        "teams": team_list_with_caller_membership,
-        "total": total_count,
-        "page": page,
-        "page_size": page_size,
-        "total_pages": total_pages,
-    }
+    return TeamListResponse(
+        teams=list(team_list_with_caller_membership),
+        total=total_count,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages,
+    )
 
 
 async def _authorize_and_filter_teams(

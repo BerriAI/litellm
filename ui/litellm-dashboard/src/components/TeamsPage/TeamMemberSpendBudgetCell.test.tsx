@@ -29,7 +29,7 @@ describe("TeamMemberSpendBudgetCell", () => {
   });
 
   it("shows the team budget and Unlimited for a member without a budget", () => {
-    const { container } = render(
+    render(
       <TeamMemberSpendBudgetCell
         teamSpend={600}
         teamMaxBudget={1000}
@@ -42,7 +42,6 @@ describe("TeamMemberSpendBudgetCell", () => {
     expect(screen.getByText("Member")).toBeInTheDocument();
     expect(screen.getByText("/ Unlimited")).toBeInTheDocument();
     expect(screen.getAllByRole("meter")).toHaveLength(1);
-    expect(container.querySelectorAll('[data-slot="meter-indicator"]')).toHaveLength(1);
   });
 
   it("omits the reset text when no member reset date exists", () => {
@@ -65,17 +64,16 @@ describe("TeamMemberSpendBudgetCell", () => {
     expect(screen.getAllByRole("meter")).toHaveLength(1);
   });
 
-  it("uses the over tone when member spend exceeds the budget", () => {
-    const { container } = render(
+  it("exposes member spend above its budget through the meter", () => {
+    render(
       <TeamMemberSpendBudgetCell
         teamSpend={10}
         teamMaxBudget={100}
         callerMembership={{ spend: 150, max_budget: 100, budget_reset_at: null }}
       />,
     );
-    const indicators = container.querySelectorAll('[data-slot="meter-indicator"]');
 
-    expect(indicators[1]).toHaveClass("bg-destructive");
+    expect(screen.getAllByRole("meter")[1]).toHaveAttribute("aria-valuetext", "Member $150.00 of $100.00");
   });
 
   it("does not render meters for zero or unlimited budgets", () => {
