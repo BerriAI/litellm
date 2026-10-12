@@ -56,6 +56,25 @@ describe("usage view and tab", () => {
     expect(applyPatch("?view=team&team=t1", usageViewPatch("global"))).toBe("");
   });
 
+  it("round-trips the User Agent Activity view", () => {
+    const query = applyPatch("", usageViewPatch("user-agent-activity"));
+
+    expect(query).toBe("?view=user-agent-activity");
+    expect(usageViewFromParams(load(query))).toBe("user-agent-activity");
+  });
+
+  it.each(["users", "errors"] as const)("round-trips the %s tab", (tab) => {
+    const query = applyPatch("", usageTabPatch(tab));
+
+    expect(query).toBe(`?tab=${tab}`);
+    expect(usageTabFromParams(load(query))).toBe(tab);
+  });
+
+  it("falls back from the admin-only Errors tab for an internal user", () => {
+    expect(usageTabFromParams(load("?tab=errors"), false)).toBe("cost");
+    expect(clean("?tab=errors", internalUserAccess)).toEqual({ query: "", deniedAccess: false });
+  });
+
   it("keeps the default tab out of the URL", () => {
     expect(applyPatch("?tab=models", usageTabPatch("cost"))).toBe("");
     expect(applyPatch("", usageTabPatch("mcp"))).toBe("?tab=mcp");
@@ -82,6 +101,14 @@ describe("entity selection", () => {
 
     expect(query).toBe("?view=user&user=u1");
     expect(selectedEntitiesFromParams(load(query), "user")).toEqual(["u1"]);
+  });
+
+  it("keeps User Agent Activity tag filters in the URL", () => {
+    const query = applyPatch("?view=user-agent-activity", entitySelectionPatch("tag", ["User-Agent: Chrome/1.0"]));
+
+    expect(query).toBe("?view=user-agent-activity&tag=User-Agent:+Chrome/1.0");
+    expect(clean(query)).toBeNull();
+    expect(selectedEntitiesFromParams(load(query), "tag")).toEqual(["User-Agent: Chrome/1.0"]);
   });
 
   it("removes the key once the selection is cleared", () => {

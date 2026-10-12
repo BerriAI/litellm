@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { STACKED_USAGE_PALETTE } from "@/components/shared/charts";
 import UserAgentActivity from "./user_agent_activity";
 import * as networking from "./networking";
 
@@ -184,6 +185,22 @@ describe("UserAgentActivity", () => {
     expect(prompts).toBeGreaterThan(0);
   });
 
+  it("uses and reports a controlled tag selection", async () => {
+    const onSelectedTagsChange = vi.fn();
+    const selectedTags = ["User-Agent: Chrome/1.0"];
+
+    render(
+      <UserAgentActivity {...defaultProps} selectedTags={selectedTags} onSelectedTagsChange={onSelectedTagsChange} />,
+    );
+
+    await waitFor(() => {
+      expect(mockTagDauCall).toHaveBeenCalledWith("test-token", expect.any(Date), undefined, selectedTags);
+    });
+    fireEvent.click(await screen.findByRole("button", { name: "Clear user agent filter" }));
+
+    expect(onSelectedTagsChange).toHaveBeenCalledWith([]);
+  });
+
   // Walks up from the panel's heading to the nearest ancestor that owns a chart, so the
   // assertions do not depend on how many wrappers the tab library puts around a panel.
   const chartForTitle = (title: string): HTMLElement => {
@@ -201,7 +218,8 @@ describe("UserAgentActivity", () => {
 
     const rectangles = Array.from(chart.querySelectorAll("path.recharts-rectangle"));
     const fills = new Set(rectangles.map((rect) => rect.getAttribute("fill")));
-    expect(fills).toEqual(new Set(["var(--color-blue-500, #3b82f6)", "var(--color-cyan-500, #06b6d4)"]));
+    // Stacked in the shared usage palette, so these charts match the Usage overview.
+    expect(fills).toEqual(new Set([STACKED_USAGE_PALETTE[0], STACKED_USAGE_PALETTE[1]]));
 
     const xPositions = new Set(rectangles.map((rect) => rect.getAttribute("d")?.match(/^M\s*([\d.]+)/)?.[1]));
     expect(xPositions.size).toBe(1);
@@ -232,7 +250,7 @@ describe("UserAgentActivity", () => {
     expect(screen.getByText("Per User Usage")).toBeInTheDocument();
   });
 
-  it("renders the DAU chart stacked with default color cycle and abbreviated axis ticks", async () => {
+  it("renders the DAU chart stacked in the shared usage palette with abbreviated axis ticks", async () => {
     const firstBucketDate = new Date();
     firstBucketDate.setDate(firstBucketDate.getDate() - 6);
     const todayStr = new Date().toISOString().split("T")[0];

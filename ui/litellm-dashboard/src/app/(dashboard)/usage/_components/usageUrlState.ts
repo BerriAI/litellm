@@ -7,7 +7,7 @@ import { uiHref } from "@/utils/uiHref";
 import { USAGE_OPTIONS, type UsageOption } from "./components/UsageViewSelect/UsageViewSelect";
 
 export const DEFAULT_USAGE_VIEW: UsageOption = "global";
-export const USAGE_TABS = ["cost", "models", "keys", "mcp", "endpoints"] as const;
+export const USAGE_TABS = ["cost", "models", "keys", "users", "mcp", "endpoints", "errors"] as const;
 export type UsageTab = (typeof USAGE_TABS)[number];
 export const DEFAULT_USAGE_TAB: UsageTab = "cost";
 
@@ -50,7 +50,7 @@ const VIEW_ENTITY_KEYS: Readonly<Record<UsageOption, readonly EntityKey[]>> = {
   tag: ["tag"],
   agent: ["agent"],
   user: ["user"],
-  "user-agent-activity": [],
+  "user-agent-activity": ["tag"],
 };
 
 const TABBED_VIEWS: readonly UsageOption[] = ["global", "my-usage"];
@@ -76,8 +76,8 @@ const hasEntityValue = (params: UsageUrlParams, key: EntityKey): boolean =>
 export const usageViewFromParams = (params: UsageUrlParams): UsageOption =>
   isUsageOption(params.view) ? params.view : DEFAULT_USAGE_VIEW;
 
-export const usageTabFromParams = (params: UsageUrlParams): UsageTab =>
-  isUsageTab(params.tab) ? params.tab : DEFAULT_USAGE_TAB;
+export const usageTabFromParams = (params: UsageUrlParams, isAdmin = true): UsageTab =>
+  isUsageTab(params.tab) && (params.tab !== "errors" || isAdmin) ? params.tab : DEFAULT_USAGE_TAB;
 
 export const usageViewPatch = (view: UsageOption): UsageUrlPatch => ({
   ...RESET_TO_DEFAULT_VIEW,
@@ -163,7 +163,9 @@ export const cleanUsageUrl = (params: UsageUrlParams, access: UsageUrlAccess): U
   const strayEntityKeys = (["user", "team", "org", "customer", "tag", "agent"] as const).filter(
     (key) => !viewKeys.includes(key) && hasEntityValue(params, key),
   );
-  const invalidTab = params.tab !== null && (!TABBED_VIEWS.includes(view) || !isUsageTab(params.tab));
+  const invalidTab =
+    params.tab !== null &&
+    (!TABBED_VIEWS.includes(view) || !isUsageTab(params.tab) || (!access.isAdmin && params.tab === "errors"));
   const patch: UsageUrlPatch = {
     ...(params.view !== null && !isUsageOption(params.view) ? { view: null } : {}),
     ...(invalidTab ? { tab: null } : {}),

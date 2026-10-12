@@ -33,6 +33,7 @@ from models import (
     ModelNewBody,
     TeamInfoResponse,
 )
+from e2e_metadata import Domain, Mode, Provider, Subject, meta
 
 pytestmark = pytest.mark.e2e
 
@@ -177,6 +178,14 @@ class TestKeyScopedToAccessGroup:
         "other.auth.model_access_group.member_allowed",
     )
     @pytest.mark.parametrize(("case", "select_model"), ALLOWED)
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(GROUP_BACKEND, WILDCARD_BARE_MODEL, WILDCARD_PREFIXED_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_group_grants_every_deployment_in_it(
         self,
         case: str,
@@ -202,6 +211,13 @@ class TestKeyScopedToAccessGroup:
 
     @pytest.mark.covers("other.auth.model_access_group.non_member_denied")
     @pytest.mark.parametrize(("case", "select_model"), DENIED)
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(GROUP_BACKEND, UNCOVERED_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_group_grants_nothing_outside_it(
         self,
         case: str,
@@ -228,6 +244,14 @@ class TestKeyScopedToAccessGroup:
 
 class TestTeamScopedToAccessGroup:
     @pytest.mark.covers("other.auth.model_access_group.team_wildcard_bare_name_allowed")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            providers=(Provider.OPENAI,),
+            models=(TEAM_WILDCARD_BARE_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_group_grants_the_teams_own_wildcard(
         self, client: AccessControlClient, team_grant: TeamGrant
     ) -> None:
@@ -248,6 +272,12 @@ class TestTeamScopedToAccessGroup:
         )
 
     @pytest.mark.covers("other.auth.model_access_group.team_non_member_denied")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_group_grants_the_team_nothing_outside_it(
         self, client: AccessControlClient, team_grant: TeamGrant
     ) -> None:

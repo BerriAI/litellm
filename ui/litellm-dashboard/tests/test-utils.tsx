@@ -3,6 +3,7 @@ import { render, RenderOptions, screen, waitFor } from "@testing-library/react";
 import type userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { NuqsTestingAdapter, OnUrlUpdateFunction } from "nuqs/adapters/testing";
+import { HotkeysProvider } from "react-hotkeys-hook";
 import { expect } from "vitest";
 
 // Create a client for testing
@@ -37,7 +38,9 @@ export const renderWithProviders = (ui: React.ReactElement, options?: RenderOpti
       resetUrlUpdateQueueOnMount={resetUrlUpdateQueueOnMount}
       hasMemory
     >
-      <QueryClientProvider client={testQueryClient}>{children}</QueryClientProvider>
+      <QueryClientProvider client={testQueryClient}>
+        <HotkeysProvider>{children}</HotkeysProvider>
+      </QueryClientProvider>
     </NuqsTestingAdapter>
   );
   return render(ui, { wrapper: Providers, ...renderOptions });
