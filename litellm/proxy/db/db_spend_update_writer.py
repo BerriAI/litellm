@@ -2187,9 +2187,14 @@ class DBSpendUpdateWriter:
                                     response_cost,
                                     token_increment,
                                 )
-                                team_update_data: dict = {"spend": {"increment": response_cost}}
-                                if token_increment:
-                                    team_update_data["tokens_used"] = {"increment": token_increment}
+                                team_update_data: Final = (
+                                    {
+                                        "spend": {"increment": response_cost},
+                                        "tokens_used": {"increment": token_increment},
+                                    }
+                                    if token_increment
+                                    else {"spend": {"increment": response_cost}}
+                                )
                                 batcher.litellm_teamtable.update_many(  # 'update_many' prevents error from being raised if no row exists
                                     where={"team_id": team_id},
                                     data=team_update_data,

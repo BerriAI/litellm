@@ -5114,7 +5114,7 @@ class DBSpendUpdateTransactions(TypedDict):
     team_list_transactions: dict[str, float] | None
     # cumulative token deltas per team, flushed to LiteLLM_TeamTable.tokens_used
     # alongside team_list_transactions (spend). Tokens budgets only apply to teams.
-    team_token_list_transactions: dict[str, float] | None
+    team_token_list_transactions: dict[str, float] | None  # mutable-ok: accumulator  # writable-ok: queue-reassigned
     team_member_list_transactions: dict[str, float] | None
     org_list_transactions: dict[str, float] | None
     org_member_list_transactions: ReadOnly[dict[str, float] | None]
@@ -5128,7 +5128,7 @@ class SpendUpdateQueueItem(TypedDict, total=False):
     entity_type: Litellm_EntityType
     entity_id: str
     response_cost: float | None
-    tokens: int | None  # total tokens for this request; summed into tokens_used for TEAM updates
+    tokens: int | None  # writable-ok: total request tokens; dedup accumulates in place
 
 
 class ToolDiscoveryQueueItem(TypedDict, total=False):

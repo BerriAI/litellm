@@ -733,27 +733,24 @@ class _IncrementSpendCounters(Protocol):
     ) -> None: ...
 
 
-def _extract_total_tokens(kwargs: dict, completion_response: object) -> int:
+def _extract_total_tokens(kwargs: Mapping[str, object], completion_response: object) -> int:
     """Total tokens for this request, for the team token-budget counter.
 
     Prefers the StandardLoggingPayload (always populated for a billed call),
     falling back to the response usage. Returns 0 when unknown, which leaves the
     token counter untouched.
     """
-    sl_object = kwargs.get("standard_logging_object") or {}
-    total = sl_object.get("total_tokens")
-    if total:
-        return int(total)
-    usage = getattr(completion_response, "usage", None)
-    if usage is None and isinstance(completion_response, dict):
-        usage = completion_response.get("usage")
-    if usage is not None:
-        total = getattr(usage, "total_tokens", None)
-        if total is None and isinstance(usage, dict):
-            total = usage.get("total_tokens")
-        if total:
-            return int(total)
-    return 0
+    sl_object: Final = kwargs.get("standard_logging_object") or {}
+    sl_total: Final = sl_object.get("total_tokens")
+    if sl_total:
+        return int(sl_total)
+    usage: Final = (
+        completion_response.get("usage")
+        if isinstance(completion_response, dict)
+        else getattr(completion_response, "usage", None)
+    )
+    usage_total: Final = usage.get("total_tokens") if isinstance(usage, dict) else getattr(usage, "total_tokens", None)
+    return int(usage_total) if usage_total else 0
 
 
 async def _update_database_and_spend_counters(
