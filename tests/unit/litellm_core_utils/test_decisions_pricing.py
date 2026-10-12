@@ -3,7 +3,7 @@ from typing import Final, cast
 import pytest
 
 import litellm
-from litellm.cost_calculator import cost_per_token
+from litellm import cost_calculator
 from litellm.litellm_core_utils.decisions_pricing import (
     apply_decisions_pricing,
     decisions_pricing_fields,
@@ -79,7 +79,7 @@ def luna_with_decisions_fields(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_cost_per_token_bills_decisions_call_types_from_decisions_fields(
     luna_with_decisions_fields: None, call_type: str
 ) -> None:
-    prompt_cost, completion_cost = cost_per_token(
+    prompt_cost, completion_cost = cost_calculator.cost_per_token(
         model="gpt-6-luna",
         custom_llm_provider="openai",
         usage_object=_LUNA_USAGE,
@@ -91,7 +91,7 @@ def test_cost_per_token_bills_decisions_call_types_from_decisions_fields(
 
 
 def test_cost_per_token_keeps_chat_on_plain_fields(luna_with_decisions_fields: None) -> None:
-    prompt_cost, completion_cost = cost_per_token(
+    prompt_cost, completion_cost = cost_calculator.cost_per_token(
         model="gpt-6-luna",
         custom_llm_provider="openai",
         usage_object=_LUNA_USAGE,
@@ -111,7 +111,7 @@ def test_cost_per_token_falls_back_to_plain_fields_without_decisions_fields(monk
     }
     monkeypatch.setitem(litellm.model_cost, "perplexity/pplx-decider-v1-27b", plain_row)
 
-    prompt_cost, completion_cost = cost_per_token(
+    prompt_cost, completion_cost = cost_calculator.cost_per_token(
         model="pplx-decider-v1-27b",
         custom_llm_provider="perplexity",
         usage_object=_LUNA_USAGE,
