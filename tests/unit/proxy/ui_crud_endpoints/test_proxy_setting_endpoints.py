@@ -3405,6 +3405,7 @@ class TestSpendReportEmailSettingsEndpoints:
                     "name": "Admin Report",
                     "enabled": True,
                     "frequency": "daily",
+                    "day_of_week": "monday",
                     "send_time": "08:00",
                     "recipient_emails": ["admin@example.com"],
                     "group_by": ["team", "team_key_model"],
