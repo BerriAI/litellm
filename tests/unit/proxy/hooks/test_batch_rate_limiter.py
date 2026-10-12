@@ -11,6 +11,7 @@ import time
 from collections.abc import Iterator, Sequence
 from datetime import datetime, timezone
 from typing import Final, Literal
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -481,10 +482,9 @@ async def test_batch_rate_limiter_without_user_context(openai_files: respx.MockR
     assert usage_without_context.total_tokens == usage_with_context.total_tokens == _token_counter_total(rows)
 
 
-@pytest.mark.asyncio
-async def test_managed_file_is_read_through_the_managed_files_hook_with_user_context(
-    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
-):
+async def _install_managed_file_hook(
+    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, rows: str
+) -> tuple[respx.Route, respx.Route]:
     from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
     from litellm import Router
@@ -494,24 +494,22 @@ async def test_managed_file_is_read_through_the_managed_files_hook_with_user_con
     from litellm.proxy.utils import ProxyLogging
 
     assert is_base64_encoded_unified_file_id(_MANAGED_FILE_ID)
-    rows: Final = _batch_rows(("Test message for regression",))
     provider_route: Final = _serve_file(openai_files, "file-provider-1", rows)
-    standard_route: Final = _serve_file(openai_files, "file-abc123", rows)
     unrouted_managed_read: Final = _serve_file(openai_files, _MANAGED_FILE_ID, rows)
-    file_cache: Final = InternalUsageCache(dual_cache=DualCache())
-    await file_cache.async_set_cache(
-        key=_MANAGED_FILE_ID,
-        value=LiteLLM_ManagedFileTable(
-            unified_file_id=_MANAGED_FILE_ID,
-            model_mappings={"deployment-1": "file-provider-1"},
-            flat_model_file_ids=["file-provider-1"],
-            created_by="test-user-regression",
-        ).model_dump(),
-        litellm_parent_otel_span=None,
+    row: Final = LiteLLM_ManagedFileTable(
+        unified_file_id=_MANAGED_FILE_ID,
+        model_mappings={"deployment-1": "file-provider-1"},
+        flat_model_file_ids=["file-provider-1"],
+        created_by="test-user-regression",
+        team_id="team-owner",
     )
+    file_cache: Final = InternalUsageCache(dual_cache=DualCache())
+    await file_cache.async_set_cache(key=_MANAGED_FILE_ID, value=row.model_dump(), litellm_parent_otel_span=None)
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_managedfiletable.find_first = AsyncMock(return_value=row)
     proxy_logging: Final = ProxyLogging(user_api_key_cache=DualCache())
     proxy_logging.proxy_hook_mapping["managed_files"] = _PROXY_LiteLLMManagedFiles(
-        internal_usage_cache=file_cache, prisma_client=None
+        internal_usage_cache=file_cache, prisma_client=prisma_client
     )
     router: Final = Router(
         model_list=[
@@ -524,6 +522,16 @@ async def test_managed_file_is_read_through_the_managed_files_hook_with_user_con
     )
     monkeypatch.setattr(proxy_server, "proxy_logging_obj", proxy_logging)
     monkeypatch.setattr(proxy_server, "llm_router", router)
+    return provider_route, unrouted_managed_read
+
+
+@pytest.mark.asyncio
+async def test_managed_file_is_read_through_the_managed_files_hook_with_user_context(
+    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    rows: Final = _batch_rows(("Test message for regression",))
+    provider_route, unrouted_managed_read = await _install_managed_file_hook(openai_files, monkeypatch, rows)
+    standard_route: Final = _serve_file(openai_files, "file-abc123", rows)
     _, _, batch_limiter = _make_limiters()
     user_api_key_dict: Final = UserAPIKeyAuth(
         api_key="test-key-regression", user_id="test-user-regression", tpm_limit=1000, rpm_limit=10
@@ -541,3 +549,25 @@ async def test_managed_file_is_read_through_the_managed_files_hook_with_user_con
     assert not unrouted_managed_read.called
     assert managed_usage.request_count == standard_usage.request_count == 1
     assert managed_usage.total_tokens == standard_usage.total_tokens == _token_counter_total(rows)
+
+
+@pytest.mark.asyncio
+async def test_managed_file_of_another_tenant_is_denied_before_it_is_read(
+    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    rows: Final = _batch_rows(("Test message for regression",))
+    provider_route, unrouted_managed_read = await _install_managed_file_hook(openai_files, monkeypatch, rows)
+    _, _, batch_limiter = _make_limiters()
+    outsider: Final = UserAPIKeyAuth(api_key="test-key-outsider", user_id="outsider", team_id="team-other", tpm_limit=1)
+
+    with pytest.raises(HTTPException) as denied:
+        await batch_limiter.async_pre_call_hook(
+            user_api_key_dict=outsider,
+            cache=DualCache(),
+            data=dict(_create_batch_data(_MANAGED_FILE_ID)),
+            call_type="acreate_batch",
+        )
+
+    assert denied.value.status_code == 403
+    assert not provider_route.called
+    assert not unrouted_managed_read.called
