@@ -953,12 +953,44 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
     @pytest.mark.asyncio
     async def test_request_fields_without_strings_add_no_row(self):
         data = _profile_converse_data()
-        data["data"]["additionalModelRequestFields"] = {"top_k": 5, "stop": [], "thinking": {"budget_tokens": 1}}
+        data["data"]["additionalModelRequestFields"] = {"top_k": 5, "stop": [""], "thinking": {"budget_tokens": 1}}
         guardrail = _replying({})
 
         await BedrockPassthroughGuardrailHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
 
         assert [row["role"] for row in guardrail.received[-1]["structured_messages"]] == ["system", "user"]
+
+    @pytest.mark.asyncio
+    async def test_row_mask_for_a_field_the_guardrail_removed_from_the_body_fails_closed(self):
+        data = _profile_converse_data()
+        data["data"]["additionalModelRequestFields"] = {"system": "card 4111 1111 1111 1111"}
+
+        def remove_field_then_mask(inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
+            del data["data"]["additionalModelRequestFields"]
+            return _with_structured_text(inputs, "4111 1111 1111 1111", "[CARD]")
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(
+                data=data, guardrail_to_apply=_ScriptedGuardrail(remove_field_then_mask)
+            )
+
+    @pytest.mark.asyncio
+    async def test_tool_call_without_input_reaches_the_guardrail_with_empty_arguments(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {"messages": [{"role": "assistant", "content": [{"toolUse": {"toolUseId": "t1", "name": "now"}}]}]},
+        }
+        guardrail = _replying({})
+
+        await BedrockPassthroughGuardrailHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.received[-1]["structured_messages"] == [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [{"id": "t1", "type": "function", "function": {"name": "now", "arguments": "{}"}}],
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_structured_rewrite_that_cannot_be_placed_fails_closed(self):
@@ -1992,7 +2024,9 @@ class TestConverseRewriteRegressions:
         ]
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("change", ["invalid_json", "changed_id", "changed_name", "changed_shape"])
+    @pytest.mark.parametrize(
+        "change", ["invalid_json", "changed_id", "changed_name", "changed_shape", "changed_list_length", "dropped_call"]
+    )
     async def test_unsafe_tool_call_rewrites_fail_closed(self, change):
         data = {
             "endpoint": "model/test/converse",
@@ -2000,23 +2034,32 @@ class TestConverseRewriteRegressions:
                 "messages": [
                     {
                         "role": "assistant",
-                        "content": [{"toolUse": {"toolUseId": "t1", "name": "pay", "input": {"card": "raw"}}}],
+                        "content": [
+                            {"toolUse": {"toolUseId": "t1", "name": "pay", "input": {"card": "raw", "tags": ["a"]}}}
+                        ],
                     }
                 ]
             },
         }
         original = copy.deepcopy(data["data"])
-        call = {"id": "t1", "type": "function", "function": {"name": "pay", "arguments": '{"card":"masked"}'}}
+        call = {
+            "id": "t1",
+            "type": "function",
+            "function": {"name": "pay", "arguments": '{"card":"masked","tags":["a"]}'},
+        }
         if change == "invalid_json":
             call["function"]["arguments"] = "not json"
         elif change == "changed_id":
             call["id"] = "t2"
         elif change == "changed_name":
             call["function"]["name"] = "other"
-        else:
-            call["function"]["arguments"] = '{"different":"masked"}'
+        elif change == "changed_shape":
+            call["function"]["arguments"] = '{"different":"masked","tags":["a"]}'
+        elif change == "changed_list_length":
+            call["function"]["arguments"] = '{"card":"masked","tags":["a","b"]}'
+        calls = [] if change == "dropped_call" else [call]
         guard = _replying(
-            {"texts": ["masked"], "structured_messages": [{"role": "assistant", "content": None, "tool_calls": [call]}]}
+            {"texts": ["masked"], "structured_messages": [{"role": "assistant", "content": None, "tool_calls": calls}]}
         )
         with pytest.raises(UnappliableRequestRewrite):
             await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
@@ -2112,6 +2155,47 @@ class TestConverseRewriteRegressions:
         result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
         written = result["data"]["system"] if role == "system" else result["data"]["messages"][0]["content"]
         assert written == [{"text": "Order details."}, {"text": "card [CARD]"}]
+
+    @pytest.mark.asyncio
+    async def test_flattened_assistant_row_under_skip_tool_is_accepted_when_the_flat_texts_reproduce_it(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [
+                            {"text": "Order details."},
+                            {"text": "card 4111"},
+                            {"toolUse": {"toolUseId": "t1", "name": "pay", "input": {"card": "4111"}}},
+                        ],
+                    }
+                ]
+            },
+        }
+        guard = _ScriptedGuardrail(
+            lambda _: {
+                "texts": ["Order details.", "card [CARD]"],
+                "structured_messages": [{"role": "assistant", "content": "Order details.\ncard [CARD]"}],
+            },
+            skip_tool=True,
+        )
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert result["data"]["messages"][0]["content"][:2] == [{"text": "Order details."}, {"text": "card [CARD]"}]
+
+    @pytest.mark.asyncio
+    async def test_row_whose_role_changed_fails_closed(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {"messages": [{"role": "user", "content": [{"text": "card 4111"}]}]},
+        }
+        original = copy.deepcopy(data["data"])
+        guard = _replying(
+            {"structured_messages": [{"role": "assistant", "content": [{"type": "text", "text": "card [CARD]"}]}]}
+        )
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert data["data"] == original
 
     @pytest.mark.asyncio
     async def test_flat_text_mask_wins_over_a_changed_but_unmasked_structured_leaf(self):

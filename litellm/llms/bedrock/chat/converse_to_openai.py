@@ -129,8 +129,6 @@ def as_json_object(value: object) -> Mapping[str, object] | None:
 
 
 def as_json_array(value: object) -> Sequence[object] | None:
-    if not isinstance(value, list):
-        return None
     try:
         return _ITEMS.validate_python(value)
     except ValidationError:
