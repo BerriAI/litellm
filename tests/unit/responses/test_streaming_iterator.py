@@ -6,7 +6,7 @@ completion_start_time = end_time."""
 import asyncio, importlib
 import json
 from collections.abc import Callable
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime
 from functools import partial
 from typing import Final, Optional
@@ -603,6 +603,34 @@ async def test_mid_stream_rate_limit_is_not_charged_to_the_fallback_deployment(m
     assert get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == [], (
         "the primary's mid-stream 429 was charged to the fallback deployment"
     )
+
+
+def _consume_async_stream(logging_obj: Mock, trailing_error: Exception) -> None:
+    async def consume() -> None:
+        async for _ in _make_iterator(sse_events=[], logging_obj=logging_obj, trailing_error=trailing_error):
+            pass
+
+    asyncio.run(asyncio.wait_for(consume(), timeout=5))
+
+
+def _consume_sync_stream(logging_obj: Mock, trailing_error: Exception) -> None:
+    for _ in _make_sync_iterator(sse_events=[], logging_obj=logging_obj, trailing_error=trailing_error):
+        pass
+
+
+@pytest.mark.parametrize("consume", [_consume_async_stream, _consume_sync_stream], ids=["async", "sync"])
+def test_stream_keeps_its_fallback_error_when_the_logging_pool_is_shut_down(monkeypatch, consume):
+    stopped_pool: Final = ThreadPoolExecutor(max_workers=1)
+    stopped_pool.shutdown()
+    monkeypatch.setattr(streaming_module, "executor", stopped_pool)
+    logging_obj: Final = _failure_tracking_logging_obj()
+    trailing_error: Final = httpx.ReadError("Response payload is not completed")
+
+    with pytest.raises(MidStreamFallbackError) as exc_info:
+        consume(logging_obj, trailing_error)
+
+    assert exc_info.value.original_exception is trailing_error
+    _assert_failure_logged_once(logging_obj, trailing_error)
 
 
 @pytest.mark.asyncio
