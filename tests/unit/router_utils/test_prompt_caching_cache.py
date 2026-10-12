@@ -124,6 +124,30 @@ def _tool(cache_control: dict[str, str] | None) -> ChatCompletionToolParam:
             PROMPT_CACHE_PIN_TTL_SECONDS,
             id="non-ephemeral-1h-ignored",
         ),
+        pytest.param(
+            _system_block_messages({"type": "ephemeral", "ttl": "3600s"}),
+            None,
+            PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,
+            id="gemini-style-3600s",
+        ),
+        pytest.param(
+            _system_block_messages({"type": "ephemeral", "ttl": "2h"}),
+            None,
+            2 * PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,
+            id="longer-than-1h",
+        ),
+        pytest.param(
+            _system_block_messages({"type": "ephemeral", "ttl": "90s"}),
+            None,
+            PROMPT_CACHE_PIN_TTL_SECONDS,
+            id="shorter-than-5m-keeps-the-floor",
+        ),
+        pytest.param(
+            _system_block_messages({"type": "ephemeral", "ttl": "soon"}),
+            None,
+            PROMPT_CACHE_PIN_TTL_SECONDS,
+            id="unparseable-ttl-keeps-the-floor",
+        ),
     ],
 )
 def test_pin_ttl_follows_the_longest_breakpoint_ttl(
@@ -331,7 +355,7 @@ async def test_same_cacheable_prefix_routes_to_same_deployment() -> None:
         enable_prompt_caching=None,
         request_kwargs={},
     )
-    cache: Final = PromptCachingCache(cache=router.cache)
+    cache: Final = PromptCachingCache(cache=router._prompt_caching_pin_cache)
     cached_2: Final = await asyncio.wait_for(
         _first_non_none(lambda: cache.async_get_model_id(affinity_messages, None)),
         timeout=10,

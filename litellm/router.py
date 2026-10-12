@@ -1121,6 +1121,10 @@ class Router:
             redis_cache=redis_cache,
             in_memory_cache=InMemoryCache(),
         )
+        self._prompt_caching_pin_cache: DualCache = DualCache(
+            redis_cache=redis_cache,
+            in_memory_cache=InMemoryCache(),
+        )
 
         ### SCHEDULER ###
         self.scheduler = Scheduler(polling_interval=polling_interval, redis_cache=redis_cache)
@@ -1449,6 +1453,7 @@ class Router:
         """
         self.cache.attach_redis_cache(cache)
         self._claude_code_session_router_cache.attach_redis_cache(cache)
+        self._prompt_caching_pin_cache.attach_redis_cache(cache)
 
     _update_redis_cache = update_redis_cache
 
@@ -2529,7 +2534,7 @@ class Router:
                 continue
             if pre_call_check == "prompt_caching":
                 _callback = PromptCachingDeploymentCheck(
-                    cache=self.cache, is_priority_group=self._is_priority_routing_group
+                    cache=self._prompt_caching_pin_cache, is_priority_group=self._is_priority_routing_group
                 )
             elif pre_call_check == "router_budget_limiting":
                 if self.get_router_deployment_budget_limiter() is not None:

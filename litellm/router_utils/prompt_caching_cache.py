@@ -4,9 +4,11 @@ Wrapper around router cache. Meant to store model id when prompt caching support
 
 import hashlib
 import json
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import accumulate, chain
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from pydantic import JsonValue, TypeAdapter
@@ -38,7 +40,8 @@ class PromptCachingCacheValue(TypedDict):
 
 PROMPT_CACHE_PIN_TTL_SECONDS: Final = 300
 PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS: Final = 3600
-_ONE_HOUR_CACHE_CONTROL_TTL: Final = "1h"
+_CACHE_CONTROL_TTL: Final = re.compile(r"^(\d+(?:\.\d+)?)([smh])$")
+_TTL_UNIT_SECONDS: Final = MappingProxyType({"s": 1, "m": 60, "h": 3600})
 _PROMPT_CACHE_PINS_TARGET: Final = "prompt_cache_pins"
 _TOOL_RUN_BLOCK_TYPES: Final = frozenset({"tool_use", "tool_result"})
 _PREFIX_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, JsonValue], ...])
@@ -125,9 +128,10 @@ def _breakpoint_pin_ttl_seconds(carrier: JsonValue | Mapping[str, JsonValue]) ->
     cache_control: Final = carrier.get("cache_control")
     if not isinstance(cache_control, dict) or cache_control.get("type") != "ephemeral":
         return None
-    if cache_control.get("ttl") == _ONE_HOUR_CACHE_CONTROL_TTL:
-        return PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS
-    return PROMPT_CACHE_PIN_TTL_SECONDS
+    declared: Final = _CACHE_CONTROL_TTL.match(str(cache_control.get("ttl", "")))
+    if declared is None:
+        return PROMPT_CACHE_PIN_TTL_SECONDS
+    return max(PROMPT_CACHE_PIN_TTL_SECONDS, int(float(declared.group(1)) * _TTL_UNIT_SECONDS[declared.group(2)]))
 
 
 def _breakpoint_carriers(message: Mapping[str, JsonValue]) -> tuple[JsonValue | Mapping[str, JsonValue], ...]:
