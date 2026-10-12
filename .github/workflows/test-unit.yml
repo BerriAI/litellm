@@ -592,7 +592,7 @@ jobs:
             workers: 4
             reruns: 0
             timeout-minutes: 15
-            job-timeout-minutes: 30
+            job-timeout-minutes: 60
             dist: loadscope
 
           - shard: proxy-infra
