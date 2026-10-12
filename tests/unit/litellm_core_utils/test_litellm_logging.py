@@ -13063,7 +13063,6 @@ def test_masking_function_not_in_metadata_when_not_provided():
     assert result["metadata"]["some_key"] == "some_value"
 
 
-<<<<<<< HEAD
 def test_copy_for_new_call_logs_a_turn_under_its_own_call_id_against_the_connections_reservation() -> None:
     reservation: Final[dict[str, object]] = {"reserved_cost": 0.5, "entries": []}
     connection: Final = LitellmLogging(
@@ -13151,7 +13150,6 @@ def test_legacy_s3_logs_a_streamed_anthropic_messages_call_handed_off_from_the_a
     assert s3_writer.log_event.call_count == expected_s3_writes
     if expected_s3_writes:
         assert s3_writer.log_event.call_args.kwargs["response_obj"] is complete_response
-=======
 # --- no-log callback filtering (#44503) ---
 
 
@@ -13262,4 +13260,3 @@ def test_no_log_keeps_running_proxy_prefixed_handlers(
         )
         is True
     )
->>>>>>> e3abaf57e (fix(proxy): keep the proxy spend writer running on no-log requests)

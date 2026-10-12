@@ -122,3 +122,47 @@ async def test_collector_event_carries_no_content_for_no_log_requests(monkeypatc
         assert COMPLETION_SECRET not in published
     else:
         assert PROMPT_SECRET in published
+
+
+VECTOR_STORE_SECRET: Final = "VECTOR-STORE-SECRET-5c8e0a"
+
+
+@pytest.mark.parametrize("global_disable_no_log_param", [False, True])
+@pytest.mark.parametrize("store_prompts", [True, False])
+@pytest.mark.parametrize("no_log", [True, False])
+def test_spend_row_content_follows_no_log_and_admin_settings(
+    monkeypatch, no_log: bool, store_prompts: bool, global_disable_no_log_param: bool
+):
+    """Content is stored only when prompt storage is on and the request's `no-log` is honoured.
+
+    `global_disable_no_log_param` lets an administrator turn the request parameter off; the
+    spend row must then follow `store_prompts_in_spend_logs` alone, as the callback filter does.
+    Cost is recorded in every combination.
+    """
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", global_disable_no_log_param)
+    payload: Final = _payload(monkeypatch, no_log=no_log, store_prompts=store_prompts)
+    content_expected: Final = store_prompts and not (no_log and not global_disable_no_log_param)
+
+    assert (PROMPT_SECRET in payload["proxy_server_request"]) is content_expected
+    assert (COMPLETION_SECRET in payload["response"]) is content_expected
+    assert payload["spend"] == 0.001
+    assert payload["total_tokens"] == 7
+
+
+@pytest.mark.parametrize("global_disable_no_log_param", [False, True])
+@pytest.mark.parametrize("no_log", [True, False])
+def test_vector_store_content_follows_request_no_log(monkeypatch, no_log: bool, global_disable_no_log_param: bool):
+    """Vector-store search results are request content too: a no-log row must not carry them."""
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(litellm, "global_disable_no_log_param", global_disable_no_log_param)
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
+    kwargs: Final = _kwargs(no_log=no_log)
+    kwargs["standard_logging_object"]["metadata"]["vector_store_request_metadata"] = [
+        {"vector_store_search_response": {"data": [{"content": [{"text": VECTOR_STORE_SECRET, "type": "text"}]}]}}
+    ]
+    now: Final = datetime.datetime.now(timezone.utc)
+
+    payload: Final = get_logging_payload(kwargs=kwargs, response_obj=_response(), start_time=now, end_time=now)
+
+    assert (VECTOR_STORE_SECRET in json.dumps(payload, default=str)) is (not no_log or global_disable_no_log_param)
