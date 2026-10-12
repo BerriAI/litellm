@@ -1619,6 +1619,7 @@ _CLIENT_IP_HEADERS: Final = frozenset(
     }
 )
 _REQUEST_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
+_ORIGINATING_REQUEST_KEY: Final = "originating_request_masked"
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[object, object])
 _OBJECT_LIST: Final = TypeAdapter(list[object])
 _IP_ADDRESS_CHARACTERS: Final = "0123456789abcdefABCDEF.:"
@@ -1712,12 +1713,22 @@ def _without_requester_ip_address(value: object, *, headers: bool = False) -> ob
     return value
 
 
-def _stored_request_without_requester_ip_address(request_body: Mapping[object, object]) -> Mapping[object, object]:
-    """The request body with `requester_ip_address` set to null, client-IP forwarding headers dropped and every IP
-    address in the other header values and in the error text masked inside its metadata."""
+def _request_metadata_without_requester_ip_address(request_body: Mapping[object, object]) -> Mapping[object, object]:
     return {
         key: _without_requester_ip_address(value) if key in _REQUEST_METADATA_KEYS else value
         for key, value in request_body.items()
+    }
+
+
+def _stored_request_without_requester_ip_address(request_body: Mapping[object, object]) -> Mapping[object, object]:
+    """The request body, and the originating request a classifier row stores in it, with `requester_ip_address` set
+    to null, client-IP forwarding headers dropped and every IP address in the other header values and in the error
+    text masked inside their metadata."""
+    return {
+        key: _request_metadata_without_requester_ip_address(_OBJECT_MAPPING.validate_python(value))
+        if key == _ORIGINATING_REQUEST_KEY and isinstance(value, Mapping)
+        else value
+        for key, value in _request_metadata_without_requester_ip_address(request_body).items()
     }
 
 

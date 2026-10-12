@@ -62,8 +62,8 @@ def _config(tmp_path: Path, general_settings: Mapping[str, JsonValue], **section
     config.write_text(
         json.dumps(
             {
-                **sections,
                 "model_list": [],
+                **sections,
                 "general_settings": {
                     "master_key": "os.environ/LITELLM_MASTER_KEY",
                     "database_url": "os.environ/DATABASE_URL",
@@ -311,6 +311,8 @@ def _provider(request: Request) -> Reply:
             ).encode()
         )
     assert request.target.endswith("/v1/chat/completions"), request.target
+    if "response_format" in body:
+        return _classifier_verdict()
     if LONG_PROVIDER_FAILURE.encode() in request.body:
         return Reply(
             status=400,
@@ -333,6 +335,27 @@ def _provider(request: Request) -> Reply:
     return _completion_reply(uuid4().hex, body.get("stream") is True)
 
 
+def _classifier_verdict() -> Reply:
+    return Reply(
+        body=json.dumps(
+            {
+                "id": f"chatcmpl-{uuid4().hex}",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": json.dumps({"tier": "SIMPLE"})},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+            }
+        ).encode()
+    )
+
+
 def _akto_allows(_: Request) -> Reply:
     return Reply(body=json.dumps({"data": {"guardrailsResult": {"Allowed": True}}}).encode())
 
@@ -346,6 +369,7 @@ class Rig:
     chat_model: str
     claude_model: str
     embedding_model: str
+    router_model: str
 
     def send(self, path: str, body: Mapping[str, JsonValue], forwarded_for: str) -> str:
         response: Final = self.proxy.request(
@@ -381,9 +405,33 @@ def _row_for_call(call_id: str) -> dict[str, JsonValue]:
     return rows[0]
 
 
+def _auto_router_models(router: str, provider: Wire) -> list[JsonValue]:
+    deployment: Final[JsonValue] = {
+        "model": "openai/gpt-4o-mini",
+        "api_base": provider.url + "/v1",
+        "api_key": "synthetic-openai-key",
+    }
+    return [
+        {"model_name": f"{router}-judge", "litellm_params": deployment},
+        {"model_name": f"{router}-tier", "litellm_params": deployment},
+        {
+            "model_name": router,
+            "litellm_params": {
+                "model": "auto_router/complexity_router",
+                "complexity_router_config": {
+                    "classifier_type": "llm",
+                    "classifier_llm_config": {"model": f"{router}-judge", "timeout_ms": 20000},
+                    "tiers": {tier: f"{router}-tier" for tier in ("SIMPLE", "MEDIUM", "COMPLEX", "REASONING")},
+                },
+            },
+        },
+    ]
+
+
 def _rig(stack: ExitStack, gateway: Gateway, root: Path, provider: Wire, disabled: bool) -> Rig:
     akto: Final = stack.enter_context(wire_server(_akto_allows))
     callbacks: Final = stack.enter_context(wire_server(lambda _: Reply()))
+    router: Final = f"requester-ip-router-{uuid4().hex[:8]}"
     config: Final = _config(
         root,
         {SETTING: True, "store_prompts_in_spend_logs": True} if disabled else {"store_prompts_in_spend_logs": True},
@@ -400,6 +448,7 @@ def _rig(stack: ExitStack, gateway: Gateway, root: Path, provider: Wire, disable
                 },
             }
         ],
+        model_list=_auto_router_models(router, provider),
     )
     proxy: Final = stack.enter_context(
         owned_proxy(
@@ -424,7 +473,8 @@ def _rig(stack: ExitStack, gateway: Gateway, root: Path, provider: Wire, disable
         api_key="synthetic-openai-key",
         model_info={"mode": "embedding"},
     )
-    return Rig(proxy, akto, callbacks, scenario.key(models=[chat, claude, embedding]), chat, claude, embedding)
+    key: Final = scenario.key(models=[chat, claude, embedding, router, f"{router}-judge", f"{router}-tier"])
+    return Rig(proxy, akto, callbacks, key, chat, claude, embedding, router)
 
 
 @pytest.fixture(scope="module")
@@ -646,6 +696,31 @@ def test_long_header_value_keeps_no_ip_fragment_at_the_truncation_cut(rigs: Mapp
     assert cut is not None, stored_value
     assert re.search(r"[\d.]$", stored_value[: cut.start()]) is None, stored_value[: cut.start()][-60:]
     assert LONG_HEADER_IP not in row_text, row_text
+
+
+@DISABLED
+def test_auto_router_classifier_row_follows_the_setting(rigs: Mapping[bool, Rig], disabled: bool) -> None:
+    rig: Final = rigs[disabled]
+    marker: Final = f"requester-ip-classifier-{uuid4().hex}"
+    rig.send(
+        "/v1/chat/completions",
+        {"model": rig.router_model, "messages": [{"role": "user", "content": marker}]},
+        FORWARDED_IP,
+    )
+
+    rows: Final = eventually(
+        lambda: read_rows(
+            f"{_ROW_COLUMNS} WHERE s.proxy_server_request::text LIKE %s AND s.proxy_server_request::text LIKE %s",
+            ("%originating_request_masked%", f"%{marker}%"),
+        ),
+        lambda values: len(values) == 1,
+        seconds=70,
+    )
+    stored_request: Final = object_value(json.loads(string_value(rows[0]["row_text"]))["proxy_server_request"])
+
+    assert marker in json.dumps(stored_request["originating_request_masked"]), stored_request
+    assert (FORWARDED_IP in _ips_in_row(rows[0])) is not disabled, rows[0]
+    assert (_ips_in_row(rows[0]) == ()) is disabled, rows[0]
 
 
 @DISABLED

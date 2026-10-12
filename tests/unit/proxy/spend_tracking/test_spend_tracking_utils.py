@@ -6618,6 +6618,13 @@ def test_stored_request_without_requester_ip_address_drops_or_masks_only_ip_fiel
             "spend_logs_metadata": [{"headers": {"true-client-ip": "203.0.113.9", "x-client": "host:2001:db8::9"}}],
             "error_information": {"error_message": "denied 203.0.113.9"},
         },
+        "originating_request_masked": {
+            "messages": [{"role": "user", "content": "203.0.113.9"}],
+            "metadata": {
+                "requester_ip_address": "203.0.113.9",
+                "headers": {"x-forwarded-for": "203.0.113.9", "host": "10.0.0.5:4000"},
+            },
+        },
     }
 
     assert _stored_request_without_requester_ip_address(body) == {
@@ -6637,6 +6644,10 @@ def test_stored_request_without_requester_ip_address_drops_or_masks_only_ip_fiel
             "forwarded": "not a header",
             "spend_logs_metadata": [{"headers": {"x-client": "host:REDACTED_BY_LITELM"}}],
             "error_information": {"error_message": "denied REDACTED_BY_LITELM"},
+        },
+        "originating_request_masked": {
+            "messages": [{"role": "user", "content": "203.0.113.9"}],
+            "metadata": {"requester_ip_address": None, "headers": {"host": "REDACTED_BY_LITELM:4000"}},
         },
     }
 
