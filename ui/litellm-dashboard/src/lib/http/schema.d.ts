@@ -32238,6 +32238,11 @@ export interface components {
             end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
+            /**
+             * Expires
+             * @description Absolute expiration with a timezone. Overrides duration and must respect the maximum key duration.
+             */
+            expires?: string | null;
             /** Guardrails */
             guardrails?: string[] | null;
             /** Key */
@@ -41396,6 +41401,11 @@ export interface components {
             end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
+            /**
+             * Expires
+             * @description Absolute expiration with a timezone. Overrides duration and must respect the maximum key duration.
+             */
+            expires?: string | null;
             /** Grace Period */
             grace_period?: string | null;
             /** Guardrails */
@@ -47349,6 +47359,11 @@ export interface components {
             end_user_budget_id?: string | null;
             /** Enforced Params */
             enforced_params?: string[] | null;
+            /**
+             * Expires
+             * @description Absolute expiration with a timezone. Overrides duration and must respect the maximum key duration.
+             */
+            expires?: string | null;
             /** Guardrails */
             guardrails?: string[] | null;
             /** Key */
