@@ -18,6 +18,7 @@ from litellm.constants import (
     DEFAULT_MAX_LRU_CACHE_SIZE,
     DEFAULT_REPLICATE_GPU_PRICE_PER_SECOND,
 )
+from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_fields, is_decisions_call_type
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
     StandardBuiltInToolCostTracking,
@@ -570,7 +571,22 @@ def cost_per_token(
     ):  # Option 3. if user passed model="bedrock/anthropic.claude-3", use model="anthropic.claude-3"
         model = model_without_prefix
 
-    # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
+    if is_decisions_call_type(call_type):
+        decisions_model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
+        decisions_overrides: Final = decisions_pricing_fields(
+            litellm.model_cost.get(decisions_model_info["key"], {})  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
+        )
+        if decisions_overrides:
+            return generic_cost_per_token(
+                model=model,
+                usage=usage_block,
+                custom_llm_provider=custom_llm_provider,
+                service_tier=service_tier,
+                data_residency=data_residency,
+                model_info=cast(  # cast-ok: _decisions fields override same-named ModelInfo rates
+                    ModelInfo, {**decisions_model_info, **decisions_overrides}
+                ),
+            )
     if call_type == "speech" or call_type == "aspeech":
         lyria_generation_cost: Final = (
             get_vertex_ai_lyria_generation_cost(model=model_without_prefix)
@@ -1124,6 +1140,8 @@ def infer_call_type(call_type: CallTypesLiteral | None, completion_response: obj
         return "text_completion"
     elif isinstance(completion_response, LiteLLMSendMessageResponse):
         return "send_message"
+    elif isinstance(completion_response, (DecisionsResponse, OpenAIDecisionResponse)):
+        return "adecisions"
 
     return call_type
 

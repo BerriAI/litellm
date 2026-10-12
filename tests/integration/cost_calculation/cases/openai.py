@@ -2,9 +2,10 @@
 
 PARITY pairs the streamed case with its plain twin where both bill the same row."""
 
-from typing import Final
+from typing import Final, cast
 
 from integration.cost_calculation.cost_tracking_case import (
+    COST_MAP,
     BinaryResponse,
     CostTrackingTestCase,
     Deployment,
@@ -18,6 +19,7 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
     WavUpload,
 )
+from pydantic import JsonValue
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 
 
@@ -7848,6 +7850,173 @@ GPT_6_1_SOL_INPUT_TEXT: Final = CostTrackingTestCase(
 )
 
 
+_OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS: Final = 367
+_OPENAI_GPT_6_LUNA_DECISIONS_OUTPUT_TOKENS: Final = 3
+_OPENAI_GPT_6_LUNA_DECISIONS_INPUT_RATE: Final = cast(
+    float,
+    COST_MAP["gpt-6-luna"].input_cost_per_token_decisions,
+)
+_OPENAI_GPT_6_LUNA_DECISIONS_SPEND: Final = (
+    _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS * _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_RATE
+)
+_OPENAI_GPT_6_LUNA_DECISIONS_UPSTREAM_BODY: Final[dict[str, JsonValue]] = {
+    "model": "gpt-6-luna",
+    "input": "The package arrived broken.",
+    "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+}
+_OPENAI_GPT_6_LUNA_DECISIONS_RESPONSE: Final = JsonResponse(
+    content_type="application/json",
+    body={
+        "model": "gpt-6-luna",
+        "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.9}],
+        "usage": {
+            "input_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS,
+            "input_tokens_details": {"cached_tokens": 256, "cache_write_tokens": 64},
+            "output_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_OUTPUT_TOKENS,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS + _OPENAI_GPT_6_LUNA_DECISIONS_OUTPUT_TOKENS,
+        },
+    },
+)
+
+OPENAI_GPT_6_LUNA_DECISIONS: Final = CostTrackingTestCase(
+    name="openai-gpt-6-luna-decisions-evaluation-pricing",
+    covers="quota_management.spend_tracking.decisions_costs",
+    model="gpt-6-luna",
+    endpoint="/v1/decisions",
+    deployment=Deployment(model="openai/gpt-6-luna"),
+    request={
+        "model": "$MODEL",
+        "input": "The package arrived broken.",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    },
+    upstream_body=_OPENAI_GPT_6_LUNA_DECISIONS_UPSTREAM_BODY,
+    response=_OPENAI_GPT_6_LUNA_DECISIONS_RESPONSE,
+    expected=ExactExpected(
+        spend=_OPENAI_GPT_6_LUNA_DECISIONS_SPEND,
+        input_cost=_OPENAI_GPT_6_LUNA_DECISIONS_SPEND,
+        output_cost=0.0,
+        prompt_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS,
+        completion_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_OUTPUT_TOKENS,
+    ),
+)
+
+OPENAI_GPT_6_LUNA_SYSTEMONE: Final = CostTrackingTestCase(
+    name="openai-gpt-6-luna-systemone-evaluation-pricing",
+    covers="quota_management.spend_tracking.decisions_costs",
+    model="gpt-6-luna",
+    endpoint="/v1/systemone",
+    deployment=Deployment(model="openai/gpt-6-luna"),
+    request={
+        "model": "$MODEL",
+        "state": "The package arrived broken.",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    },
+    upstream_body=_OPENAI_GPT_6_LUNA_DECISIONS_UPSTREAM_BODY,
+    response=_OPENAI_GPT_6_LUNA_DECISIONS_RESPONSE,
+    expected=ExactExpected(
+        spend=_OPENAI_GPT_6_LUNA_DECISIONS_SPEND,
+        input_cost=_OPENAI_GPT_6_LUNA_DECISIONS_SPEND,
+        output_cost=0.0,
+        prompt_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS,
+        completion_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_OUTPUT_TOKENS,
+    ),
+)
+
+
+# Above 272k input tokens OpenAI bills the whole request at the long-context column. For decisions
+# that column is the `_above_272k_tokens_decisions` fields: 2e-07 for input, cached and cache-write
+# tokens alike, output still 0. Mirrors the live 320,162-token call that billed 0.0640324.
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_TOKENS: Final = 320162
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHED_TOKENS: Final = 100000
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_WRITE_TOKENS: Final = 10000
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_OUTPUT_TOKENS: Final = 3
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_RATE: Final = cast(
+    float,
+    COST_MAP["gpt-6-luna"].input_cost_per_token_above_272k_tokens_decisions,
+)
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_READ_RATE: Final = cast(
+    float,
+    COST_MAP["gpt-6-luna"].cache_read_input_token_cost_above_272k_tokens_decisions,
+)
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_WRITE_RATE: Final = cast(
+    float,
+    COST_MAP["gpt-6-luna"].cache_creation_input_token_cost_above_272k_tokens_decisions,
+)
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_SPEND: Final = (
+    (
+        _OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_TOKENS
+        - _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHED_TOKENS
+        - _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_WRITE_TOKENS
+    )
+    * _OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_RATE
+    + _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHED_TOKENS * _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_READ_RATE
+    + _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_WRITE_TOKENS * _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_WRITE_RATE
+)
+_OPENAI_GPT_6_LUNA_DECISIONS_LONG_RESPONSE: Final = JsonResponse(
+    content_type="application/json",
+    body={
+        "model": "gpt-6-luna",
+        "answers": [{"type": "predicate", "name": "is_defect", "probability": 0.84}],
+        "usage": {
+            "input_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_TOKENS,
+            "input_tokens_details": {
+                "cached_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHED_TOKENS,
+                "cache_write_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_LONG_CACHE_WRITE_TOKENS,
+            },
+            "output_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_LONG_OUTPUT_TOKENS,
+            "output_tokens_details": {"reasoning_tokens": 0},
+            "total_tokens": _OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_TOKENS
+            + _OPENAI_GPT_6_LUNA_DECISIONS_LONG_OUTPUT_TOKENS,
+        },
+    },
+)
+
+OPENAI_GPT_6_LUNA_DECISIONS_LONG_CONTEXT: Final = CostTrackingTestCase(
+    name="openai-gpt-6-luna-decisions-above-272k-pricing",
+    covers="quota_management.spend_tracking.decisions_costs",
+    model="gpt-6-luna",
+    endpoint="/v1/decisions",
+    deployment=Deployment(model="openai/gpt-6-luna"),
+    request={
+        "model": "$MODEL",
+        "input": "The package arrived broken.",
+        "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+    },
+    upstream_body=_OPENAI_GPT_6_LUNA_DECISIONS_UPSTREAM_BODY,
+    response=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_RESPONSE,
+    expected=ExactExpected(
+        spend=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_SPEND,
+        input_cost=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_SPEND,
+        output_cost=0.0,
+        prompt_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_TOKENS,
+        completion_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_OUTPUT_TOKENS,
+    ),
+)
+
+OPENAI_GPT_6_LUNA_SYSTEMONE_LONG_CONTEXT: Final = CostTrackingTestCase(
+    name="openai-gpt-6-luna-systemone-above-272k-pricing",
+    covers="quota_management.spend_tracking.decisions_costs",
+    model="gpt-6-luna",
+    endpoint="/v1/systemone",
+    deployment=Deployment(model="openai/gpt-6-luna"),
+    request={
+        "model": "$MODEL",
+        "state": "The package arrived broken.",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    },
+    upstream_body=_OPENAI_GPT_6_LUNA_DECISIONS_UPSTREAM_BODY,
+    response=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_RESPONSE,
+    expected=ExactExpected(
+        spend=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_SPEND,
+        input_cost=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_SPEND,
+        output_cost=0.0,
+        prompt_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_INPUT_TOKENS,
+        completion_tokens=_OPENAI_GPT_6_LUNA_DECISIONS_LONG_OUTPUT_TOKENS,
+    ),
+)
+
+
 CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_3_CODEX_INPUT_TEXT,
     GPT_5_3_CODEX_CACHE_READ,
@@ -7980,6 +8149,10 @@ CASES: Final[tuple[CostTrackingTestCase, ...]] = (
     GPT_5_6_CHAT_REQUEST_TO_EMBEDDING_ENTRY,
     GPT_5_6_CLIENT_DISCONNECT_MID_STREAM,
     GPT_6_1_SOL_INPUT_TEXT,
+    OPENAI_GPT_6_LUNA_DECISIONS,
+    OPENAI_GPT_6_LUNA_SYSTEMONE,
+    OPENAI_GPT_6_LUNA_DECISIONS_LONG_CONTEXT,
+    OPENAI_GPT_6_LUNA_SYSTEMONE_LONG_CONTEXT,
 )
 
 PARITY: Final[tuple[StreamParityTestCase, ...]] = (
