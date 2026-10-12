@@ -7,7 +7,6 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Final
 
-import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
@@ -953,13 +952,8 @@ def test_killing_a_worker_mid_burst_leaves_no_duplicate_rows(
     chaos_rig: tuple[OwnedProxy, Wire, Wire, threading.Event],
 ) -> None:
     owned, azure, provider, _ = chaos_rig
-    port: Final = owned.gateway.client.base_url.port
-    workers: Final = tuple(
-        child
-        for child in psutil.Process(owned.process.pid).children(recursive=False)
-        if any(connection.laddr.port == port for connection in child.net_connections(kind="tcp"))
-    )
-    assert len(workers) == 2, [worker.pid for worker in workers]
+    workers: Final = owned.worker_pids()
+    assert len(workers) == 2, workers
     with owned.gateway.scenario() as scenario:
         model: Final = scenario.model(
             model="openai/gpt-4.1-mini", api_base=provider.url + "/v1", api_key="synthetic-provider-key"
@@ -972,11 +966,12 @@ def test_killing_a_worker_mid_burst_leaves_no_duplicate_rows(
 
         with ThreadPoolExecutor(max_workers=6) as pool:
             future_map: Final = tuple(pool.submit(call, identity) for identity in identities)
-            workers[0].kill()
-            outcomes: Final = tuple(
-                future.result() if not future.exception() else (identities[index], -1)
-                for index, future in enumerate(future_map)
-            )
+            with owned.replacing_worker(min(workers)) as kill:
+                kill()
+                outcomes: Final = tuple(
+                    future.result() if not future.exception() else (identities[index], -1)
+                    for index, future in enumerate(future_map)
+                )
     survivors: Final = tuple(status for _, status in outcomes if status != -1)
     assert survivors and {status for status in survivors} == {200}, outcomes
     scans: Final = _shield_prompts(azure.drain())
