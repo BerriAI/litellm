@@ -6523,7 +6523,6 @@ async def team_max_budget_check(
             )
 
 
-
 async def team_max_tokens_check(
     team_object: LiteLLM_TeamTable | None,
     valid_token: UserAPIKeyAuth | None,

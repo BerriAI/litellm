@@ -914,9 +914,7 @@ async def _update_database_and_spend_counters_in_batch(
                     increment=total_tokens,
                 )
             except Exception:
-                verbose_proxy_logger.warning(
-                    "Failed to increment team token-budget counter for team_id=%s", team_id
-                )
+                verbose_proxy_logger.warning("Failed to increment team token-budget counter for team_id=%s", team_id)
 
     return True
 

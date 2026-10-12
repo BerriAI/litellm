@@ -16912,6 +16912,7 @@ export interface paths {
          *     - rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of RPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating RPM, or "best_effort_throughput" for best effort enforcement.
          *     - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
          *     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+         *     - max_tokens_budget: Optional[int] - The maximum cumulative tokens the team may consume over budget_duration (mirrors max_budget). Null means token usage is tracked but not capped.
          *     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set, soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
          *     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
          *     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
@@ -17143,6 +17144,7 @@ export interface paths {
          *     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
          *     - tpd_limit: Optional[int] - The TPD (Tokens Per Day) limit for this team. Batch submissions are charged against it instead of tpm_limit/rpm_limit
          *     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
+         *     - max_tokens_budget: Optional[int] - The maximum cumulative tokens the team may consume over budget_duration (mirrors max_budget). Null means token usage is tracked but not capped.
          *     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set (either in the request or existing), soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
          *     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
          *     - models: Optional[list] - A list of models associated with the team - all keys for this team_id will have at most, these models. If empty, assumes all models are allowed.
@@ -33745,6 +33747,8 @@ export interface components {
             max_budget?: number | null;
             /** Max Parallel Requests */
             max_parallel_requests?: number | null;
+            /** Max Tokens Budget */
+            max_tokens_budget?: number | null;
             /**
              * Members
              * @default []
@@ -33803,6 +33807,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tokens Used */
+            tokens_used?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -35276,6 +35282,8 @@ export interface components {
             max_budget?: number | null;
             /** Max Parallel Requests */
             max_parallel_requests?: number | null;
+            /** Max Tokens Budget */
+            max_tokens_budget?: number | null;
             /**
              * Members
              * @default []
@@ -35334,6 +35342,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tokens Used */
+            tokens_used?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -38596,6 +38606,8 @@ export interface components {
             guardrails?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Max Tokens Budget */
+            max_tokens_budget?: number | null;
             /** Mcp Rpm Limit */
             mcp_rpm_limit?: {
                 [key: string]: number;
@@ -39837,6 +39849,8 @@ export interface components {
             guardrails?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Max Tokens Budget */
+            max_tokens_budget?: number | null;
             /** Mcp Rpm Limit */
             mcp_rpm_limit?: {
                 [key: string]: number;
@@ -45475,6 +45489,8 @@ export interface components {
             max_budget?: number | null;
             /** Max Parallel Requests */
             max_parallel_requests?: number | null;
+            /** Max Tokens Budget */
+            max_tokens_budget?: number | null;
             /**
              * Members
              * @default []
@@ -45533,6 +45549,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tokens Used */
+            tokens_used?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -45612,6 +45630,8 @@ export interface components {
             max_budget?: number | null;
             /** Max Parallel Requests */
             max_parallel_requests?: number | null;
+            /** Max Tokens Budget */
+            max_tokens_budget?: number | null;
             /**
              * Members
              * @default []
@@ -45675,6 +45695,8 @@ export interface components {
             team_id: string;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
+            /** Tokens Used */
+            tokens_used?: number | null;
             /** Tpd Limit */
             tpd_limit?: number | null;
             /** Tpm Limit */
@@ -47851,6 +47873,8 @@ export interface components {
             guardrails?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Max Tokens Budget */
+            max_tokens_budget?: number | null;
             /** Mcp Rpm Limit */
             mcp_rpm_limit?: {
                 [key: string]: number;

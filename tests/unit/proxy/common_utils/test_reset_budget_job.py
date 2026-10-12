@@ -431,7 +431,9 @@ def test_reset_budget_for_team(reset_budget_job, mock_prisma_client):
     assert write["where"] == {"team_id": "tid-1"}
     assert write["data"]["spend"] == {"decrement": 500.0}
     assert write["data"]["budget_reset_at"] > now
-    assert set(write["data"].keys()) == {"spend", "budget_reset_at"}
+    # Team resets also hard-zero the token-budget accumulator for the new window.
+    assert write["data"]["tokens_used"] == 0
+    assert set(write["data"].keys()) == {"spend", "budget_reset_at", "tokens_used"}
 
 
 def test_reset_budget_for_enduser(reset_budget_job, mock_prisma_client):
@@ -552,7 +554,11 @@ def test_reset_budget_all(reset_budget_job, mock_prisma_client):
         assert len(writes) == 1, f"expected 1 {table_name} write, got {len(writes)}"
         assert writes[0]["where"] == where
         assert writes[0]["data"]["spend"] == {"decrement": decrement}
-        assert set(writes[0]["data"].keys()) == {"spend", "budget_reset_at"}
+        # Teams carry the extra token-budget accumulator, zeroed for the new window.
+        expected_keys = {"spend", "budget_reset_at"}
+        if table_name == "team":
+            expected_keys = expected_keys | {"tokens_used"}
+        assert set(writes[0]["data"].keys()) == expected_keys
 
     # The budget tier's cascade rides the same batch machinery.
     assert _batch_writes(mock_prisma_client, "enduser") == [
@@ -4108,8 +4114,12 @@ async def test_reset_budget_continues_other_categories_on_failure(frozen_reset_c
     assert len(user_writes) == 1
     assert user_writes[0]["where"] == {"user_id": "user2"}
     assert len(team_writes) == 2
-    for c in key_writes + user_writes + team_writes:
+    for c in key_writes + user_writes:
         assert set(c["data"].keys()) == {"spend", "budget_reset_at"}
+        assert c["data"]["spend"] == {"decrement": pre_reset_spend[next(iter(c["where"].values()))]}
+    # Team writes additionally zero the token-budget accumulator for the new window.
+    for c in team_writes:
+        assert set(c["data"].keys()) == {"spend", "budget_reset_at", "tokens_used"}
         assert c["data"]["spend"] == {"decrement": pre_reset_spend[next(iter(c["where"].values()))]}
 
 
@@ -4166,7 +4176,7 @@ async def test_reset_budget_teams_partial_failure():
     team_writes = [c for c in batch_calls if c["table"] == "team"]
     assert len(team_writes) == 1
     assert team_writes[0]["where"] == {"team_id": "team2"}
-    assert set(team_writes[0]["data"].keys()) == {"spend", "budget_reset_at"}
+    assert set(team_writes[0]["data"].keys()) == {"spend", "budget_reset_at", "tokens_used"}
     assert team_writes[0]["data"]["spend"] == {"decrement": pre_reset_spend}
 
     failure_hook_calls = (

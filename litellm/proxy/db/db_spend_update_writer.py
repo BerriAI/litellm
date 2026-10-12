@@ -2168,9 +2168,7 @@ class DBSpendUpdateWriter:
 
         ### UPDATE TEAM TABLE ###
         team_list_transactions: Final = db_spend_update_transactions["team_list_transactions"]
-        team_token_list_transactions: Final = (
-            db_spend_update_transactions.get("team_token_list_transactions") or {}
-        )
+        team_token_list_transactions: Final = db_spend_update_transactions.get("team_token_list_transactions") or {}
         verbose_proxy_logger.debug("Team Spend transactions: %s", team_list_transactions)
         if team_list_transactions is not None and len(team_list_transactions.keys()) > 0:
             for i in range(n_retry_times + 1):
