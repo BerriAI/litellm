@@ -163,6 +163,37 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
     ));
 }
 
+/// Each chunk the route hands on is exactly one provider event, as the wire spelled it, so a
+/// host that maps chunks to events never sees half an event or two at once. Comments and the
+/// `[DONE]` terminator carry no event and are dropped.
+#[rstest]
+#[tokio::test]
+async fn streaming_frames_one_event_per_chunk(call: ResponsesCall) {
+    let created = "event: response.created\ndata: {\"type\":\"response.created\"}\n\n";
+    let completed = "event: response.completed\ndata: {\"type\":\"response.completed\"}\n\n";
+    let body = format!("{created}: keepalive\n\n{completed}data: [DONE]\n\n");
+    let upstream =
+        upstream([ResponseTemplate::new(200).set_body_raw(body, "text/event-stream")]).await;
+    let host = RecordingCall::<Responses>::new(ResponsesCall {
+        api_base: Some(upstream.uri()),
+        optional_params: json!({"stream":true}).as_object().unwrap().clone(),
+        ..call
+    });
+    let call = host.request.lock().unwrap().take().unwrap();
+    let ResponsesOutput::Stream { chunks, .. } = responses_route(no_secrets())
+        .execute(call, &host, Some(host.events.0.sender.clone()))
+        .await
+        .unwrap()
+    else {
+        panic!()
+    };
+    let chunks = chunks.try_collect::<Vec<_>>().await.unwrap();
+    assert_eq!(
+        chunks,
+        vec![bytes::Bytes::from(created), bytes::Bytes::from(completed)]
+    );
+}
+
 #[rstest]
 #[case::http(429, json!({"error":"limited"}))]
 #[case::invalid_response(200, json!({"unexpected":true}))]

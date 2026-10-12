@@ -12,12 +12,7 @@ from typing import Final
 
 from litellm.rust_bridge import lifecycle, streams
 from litellm.rust_bridge.lifecycle import Execution
-from litellm.types.llms.openai import (
-    ResponseCompletedEvent,
-    ResponseFailedEvent,
-    ResponseIncompleteEvent,
-    ResponsesAPIResponse,
-)
+from litellm.types.llms.openai import ResponseCompletedEvent, ResponseFailedEvent, ResponseIncompleteEvent
 
 Await: Final = streams.Await
 Complete: Final = streams.Complete
@@ -28,10 +23,8 @@ Yield: Final = streams.Yield
 TERMINAL_EVENTS: Final = (ResponseCompletedEvent, ResponseIncompleteEvent, ResponseFailedEvent)
 
 
-def terminal_response(event: object) -> ResponsesAPIResponse | None:
-    if not isinstance(event, TERMINAL_EVENTS):
-        return None
-    return event.response
+def is_terminal_event(event: object) -> bool:
+    return isinstance(event, TERMINAL_EVENTS)
 
 
 async def drive(execution: Execution) -> object:

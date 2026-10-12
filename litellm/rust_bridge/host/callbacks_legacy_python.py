@@ -780,9 +780,16 @@ def _messages_stream_failure(
 
 
 def _completed_response(chunks: Sequence[object]) -> object | None:
-    from litellm.rust_bridge.responses.streams import terminal_response
+    """The terminal event the stream delivered, which `Logging` assembles into the logged response.
+    A copy, as the Python iterator logs one, so the usage the log rewrites never reaches the
+    caller's event."""
+    from litellm.responses.streaming_iterator import (
+        _logging_copy,  # pyright: ignore[reportPrivateUsage]  # the Responses iterator's own detached copy for logging
+    )
+    from litellm.rust_bridge.responses.streams import is_terminal_event
 
-    return next((response for response in map(terminal_response, reversed(chunks)) if response is not None), None)
+    terminal: Final = next((chunk for chunk in reversed(chunks) if is_terminal_event(chunk)), None)
+    return None if terminal is None else _logging_copy(terminal)
 
 
 def _responses_stream_success(

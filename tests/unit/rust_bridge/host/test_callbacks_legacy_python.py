@@ -706,7 +706,7 @@ _DELTA: Final = OutputTextDeltaEvent(
 
 
 @pytest.mark.asyncio
-async def test_responses_stream_success_dispatches_the_terminal_response_once_with_the_stream_times() -> None:
+async def test_responses_stream_success_dispatches_a_copy_of_the_terminal_event_with_the_stream_times() -> None:
     logger: Final = _StreamLogger()
     logger.model_call_details["cache_hit"] = True
     start: Final = datetime.datetime(2026, 1, 1, 0, 0, 1)
@@ -725,7 +725,11 @@ async def test_responses_stream_success_dispatches_the_terminal_response_once_wi
     await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=5)
 
     assert logger.completion_start_time == first
-    assert logger.calls == [("dispatch", (_RESPONSE, start, end, True, True))]
+    [(name, (logged, *rest))] = logger.calls
+    assert name == "dispatch"
+    assert rest == [start, end, True, True]
+    assert logged == _COMPLETED
+    assert logged is not _COMPLETED
 
 
 def test_responses_stream_success_without_a_terminal_event_logs_nothing() -> None:

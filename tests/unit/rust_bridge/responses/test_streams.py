@@ -69,7 +69,7 @@ def test_the_sync_stream_exposes_the_terminal_event_as_it_hands_it_over() -> Non
 
 
 @pytest.mark.parametrize(
-    ("event", "expected"), ((COMPLETED, RESPONSE), (INCOMPLETE, RESPONSE), (DELTA, None), (b"raw", None))
+    ("event", "expected"), ((COMPLETED, True), (INCOMPLETE, True), (DELTA, False), (b"raw", False))
 )
-def test_terminal_response_reads_only_terminal_events(event: object, expected: object | None) -> None:
-    assert streams.terminal_response(event) is expected
+def test_is_terminal_event_recognises_only_the_terminal_events(event: object, expected: bool) -> None:
+    assert streams.is_terminal_event(event) is expected

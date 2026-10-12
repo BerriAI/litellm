@@ -132,6 +132,10 @@ def arguments(server: RecordingServer, **kwargs: object) -> dict[str, object]:
     }
 
 
+def total_tokens(usage: object) -> object:
+    return usage["total_tokens"] if isinstance(usage, dict) else getattr(usage, "total_tokens", None)
+
+
 def assert_served_natively(server: RecordingServer) -> None:
     assert len(server.requests) == 1
     assert server.requests[0].path == "/responses"
@@ -163,7 +167,7 @@ async def test_native_responses_stream_yields_the_typed_events_and_logs_success_
     assert success[0].kwargs["stream"] is True
     assert success[0].kwargs["completion_start_time"] is not None
     assert success[0].response.id == RESPONSES_RESPONSE["id"]
-    assert success[0].response.usage.total_tokens == RESPONSES_RESPONSE["usage"]["total_tokens"]
+    assert total_tokens(success[0].response.usage) == RESPONSES_RESPONSE["usage"]["total_tokens"]
     assert "log_failure_event" not in recorder.names
 
 
