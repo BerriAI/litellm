@@ -171,6 +171,7 @@ fn feature_betas(request: &MessagesRequest) -> BetaSet {
             .then_some(AnthropicBeta::PerTurnControl20260701),
         has_advisor_tool(tools).then_some(AnthropicBeta::AdvisorTool20260301),
         is_tool_search_used(tools).then_some(AnthropicBeta::AdvancedToolUse20251120),
+        carries_safeguards(params).then_some(AnthropicBeta::DangerousToolUse20260903),
     ]
     .into_iter()
     .flatten()
@@ -204,6 +205,13 @@ fn uses_structured_output(params: &MessagesOptionalParams) -> bool {
             .as_ref()
             .and_then(Recognized::known)
             .is_some_and(|config| config.format.is_some())
+}
+
+fn carries_safeguards(params: &MessagesOptionalParams) -> bool {
+    params
+        .extra
+        .get("safeguards")
+        .is_some_and(|value| !value.is_null())
 }
 
 fn messages_carry_output_config(messages: &[Message]) -> bool {
@@ -1025,6 +1033,11 @@ mod tests {
         json!({"messages": [{"role": "user", "content": "hi", "output_config": null}]}),
         &["per-turn-control-2026-07-01"]
     )]
+    #[case::safeguards(
+        json!({"safeguards": [{"type": "dangerous_tool_use", "classifier_context": {"v": 1, "permission_mode": "auto"}}]}),
+        &["dangerous-tool-use-2026-09-03"]
+    )]
+    #[case::null_safeguards(json!({"safeguards": null}), &[])]
     fn feature_betas_follow_the_request(#[case] fields: Value, #[case] expected: &[&str]) {
         assert_eq!(feature_betas(&request(fields)), betas(expected));
     }
@@ -1066,6 +1079,11 @@ mod tests {
         &[("anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14,context-management-2025-06-27,per-turn-control-2026-07-01,effort-2025-11-24")],
         json!({"messages": [{"role": "user", "content": "hi", "output_config": {"effort": "low"}}]}),
         &[("anthropic-beta", "claude-code-20250219,context-management-2025-06-27,effort-2025-11-24,interleaved-thinking-2025-05-14,per-turn-control-2026-07-01")],
+    )]
+    #[case::safeguards_join_the_client_betas_without_the_dangerous_tool_use_beta(
+        &[("anthropic-beta", "claude-code-20250219,interleaved-thinking-2025-05-14")],
+        json!({"safeguards": [{"type": "dangerous_tool_use"}]}),
+        &[("anthropic-beta", "claude-code-20250219,dangerous-tool-use-2026-09-03,interleaved-thinking-2025-05-14")],
     )]
     fn request_headers_merge_the_feature_betas(
         #[case] input: &[(&str, &str)],
