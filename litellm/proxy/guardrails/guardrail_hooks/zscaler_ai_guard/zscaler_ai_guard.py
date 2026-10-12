@@ -4,6 +4,7 @@
 #
 # +-------------------------------------------------------------+
 import os
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal, Optional
 
 from fastapi import HTTPException
@@ -109,6 +110,11 @@ class ZscalerAIGuard(CustomGuardrail):
         self.timeout = self._resolve_timeout(litellm_params.timeout)
 
     @staticmethod
+    def _resolve_request_user(request_data: Mapping[str, object]) -> str | None:
+        request_user: Final = request_data.get("user")
+        return request_user if isinstance(request_user, str) and request_user else None
+
+    @staticmethod
     def _resolve_metadata_value(request_data: dict | None, key: str) -> str | None:
         """
         Resolve metadata value from request_data, checking both metadata locations.
@@ -210,7 +216,7 @@ class ZscalerAIGuard(CustomGuardrail):
                 )
             verbose_proxy_logger.debug("inside apply_guardrail kwargs: %s", kwargs)
 
-            user_for_payload: Final = request_data.get("user") or None
+            user_for_payload: Final = self._resolve_request_user(request_data)
 
             zscaler_ai_guard_result = None
             direction: Final = "OUT" if input_type == "response" else "IN"
@@ -365,7 +371,14 @@ class ZscalerAIGuard(CustomGuardrail):
             raise HTTPException(status_code=response.status_code, detail=user_facing_error)
 
     async def make_zscaler_ai_guard_api_call(
-        self, zscaler_ai_guard_url, api_key, policy_id, direction, content, user: str | None = None, **kwargs
+        self,
+        zscaler_ai_guard_url: str,
+        api_key: str | None,
+        policy_id,
+        direction: str,
+        content: str,
+        user: str | None = None,
+        **kwargs,
     ):
         """
         Makes an API call to the Zscaler AI Guard service and handles retries, errors, and response parsing.

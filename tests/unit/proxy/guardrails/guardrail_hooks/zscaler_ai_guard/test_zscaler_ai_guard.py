@@ -576,10 +576,12 @@ def setup_and_teardown():
         ({}, None),
         ({"user": None}, None),
         ({"user": ""}, None),
+        ({"user": 12345}, None),
+        ({"user": ["alice@example.com"]}, None),
     ],
 )
 async def test_apply_guardrail_sends_request_user_in_execute_policy_body(
-    request_data: dict[str, str | None],
+    request_data: dict[str, object],
     expected_body_user: str | None,
     input_type: Literal["request", "response"],
 ) -> None:
