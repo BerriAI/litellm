@@ -12,6 +12,7 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm import Router
+from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.router import AllowedFailsPolicy, RetryPolicy
 import os
@@ -629,7 +630,7 @@ def test_no_retry_for_bad_request_error_400():
     Test that 400 BadRequestError is NOT retried, even if healthy deployments exist.
     This tests the fix for GitHub issue #19216.
     """
-    healthy_deployments = ["deployment1", "deployment2"]  # Multiple healthy deployments
+    healthy_deployments = _deployments("deployment1", "deployment2")
 
     router = Router(
         model_list=[
@@ -666,7 +667,7 @@ def test_no_retry_for_unprocessable_entity_error_422():
     """
     Test that 422 UnprocessableEntityError is NOT retried, even if healthy deployments exist.
     """
-    healthy_deployments = ["deployment1", "deployment2"]  # Multiple healthy deployments
+    healthy_deployments = _deployments("deployment1", "deployment2")
 
     router = Router(
         model_list=[
@@ -762,6 +763,38 @@ def test_non_retryable_error_is_raised_when_no_untried_healthy_deployment_is_lef
         )
 
     assert exc_info.value is error
+
+
+@pytest.mark.asyncio
+async def test_guardrail_rejection_on_a_retry_is_not_failed_over_to_a_sibling() -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "retry-test-model",
+                "litellm_params": {"model": "openai/retry-test-model", "api_key": "test-key"},
+                "model_info": {"id": deployment_id},
+            }
+            for deployment_id in ("refusing", "guarded", "unguarded")
+        ],
+        disable_cooldowns=True,
+    )
+    not_found: Final = _not_found()
+    not_found.retry_skip_deployment_id = "refusing"
+    guardrail_rejection: Final = GuardrailRaisedException(guardrail_name="pii", message="blocked", blocked_content=True)
+    guardrail_rejection.retry_skip_deployment_id = "guarded"
+    attempts: Final = AsyncMock(side_effect=[not_found, guardrail_rejection, "unguarded answer"])
+
+    with pytest.raises(GuardrailRaisedException) as exc_info:
+        await router.async_function_with_retries(
+            model="retry-test-model",
+            messages=[{"role": "user", "content": "retry test"}],
+            original_function=attempts,
+            num_retries=2,
+            metadata={},
+        )
+
+    assert exc_info.value is guardrail_rejection
+    assert attempts.await_count == 2
 
 
 def test_no_retry_when_no_healthy_deployments():
