@@ -170,6 +170,25 @@ def _httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     litellm.in_memory_llm_clients_cache.flush_cache()
 
 
+_GPT_6_LUNA_DECISIONS_INPUT_RATE: Final = 1e-07
+_MICROSOFT_DECISION_1_DECISIONS_INPUT_RATE: Final = 7e-08
+_DECISIONS_PRICING_FIELDS: Final[dict[str, dict[str, object]]] = {
+    "gpt-6-luna": {
+        "input_cost_per_token_decisions": _GPT_6_LUNA_DECISIONS_INPUT_RATE,
+        "cache_read_input_token_cost_decisions": _GPT_6_LUNA_DECISIONS_INPUT_RATE,
+        "cache_creation_input_token_cost_decisions": _GPT_6_LUNA_DECISIONS_INPUT_RATE,
+        "output_cost_per_token_decisions": 0.0,
+    },
+    "azure_ai/Microsoft-Decision-1": {"input_cost_per_token_decisions": _MICROSOFT_DECISION_1_DECISIONS_INPUT_RATE},
+}
+
+
+@pytest.fixture
+def decisions_pricing_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key, fields in _DECISIONS_PRICING_FIELDS.items():
+        monkeypatch.setitem(litellm.model_cost, key, {**litellm.model_cost[key], **fields})
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("provider", "model", "url", "upstream_model"), _PROVIDERS)
 async def test_adecisions_sends_the_provider_wire_contract(
@@ -323,6 +342,79 @@ def test_decisions_cost_uses_litellm_token_pricing() -> None:
 
     assert expected_cost > 0
     assert cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.asyncio
+async def test_openai_decisions_uses_evaluation_pricing_and_explicit_base_model(
+    respx_mock: respx.MockRouter,
+    decisions_pricing_fields: None,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    response: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="caller-key",
+        api_base="https://api.openai.com/v1",
+    )
+    chat_cost: Mapping[str, object] = litellm.model_cost["gpt-6-luna"]
+    expected_chat_cost: Final = (
+        (_INPUT_TOKENS - _CACHED_TOKENS - _CACHE_WRITE_TOKENS) * float(chat_cost["input_cost_per_token"])
+        + _CACHED_TOKENS * float(chat_cost["cache_read_input_token_cost"])
+        + _CACHE_WRITE_TOKENS * float(chat_cost["cache_creation_input_token_cost"])
+        + _OUTPUT_TOKENS * float(chat_cost["output_cost_per_token"])
+    )
+
+    assert route.called
+    assert response._hidden_params["model"] == "openai/gpt-6-luna"
+    assert response._hidden_params["provider_response_model"] == "openai/gpt-6-luna"
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        _INPUT_TOKENS * _GPT_6_LUNA_DECISIONS_INPUT_RATE
+    )
+    assert litellm.completion_cost(completion_response=response, call_type="acompletion") == pytest.approx(
+        expected_chat_cost
+    )
+
+
+@pytest.mark.asyncio
+async def test_systemone_uses_evaluation_pricing(respx_mock: respx.MockRouter, decisions_pricing_fields: None) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    response: Final = await litellm.asystemone(
+        model="openai/gpt-6-luna",
+        state="The package arrived broken.",
+        questions=_QUESTIONS,
+        api_key="caller-key",
+        api_base="https://api.openai.com/v1",
+    )
+
+    assert route.called
+    assert response._hidden_params["model"] == "openai/gpt-6-luna"
+    assert response._hidden_params["provider_response_model"] == "openai/gpt-6-luna"
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        _INPUT_TOKENS * _GPT_6_LUNA_DECISIONS_INPUT_RATE
+    )
+
+
+@pytest.mark.asyncio
+async def test_systemone_falls_back_to_plain_pricing_without_decisions_row(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://decisions.example/v1/decisions").respond(json=_RESPONSE)
+    response: Final = await litellm.asystemone(
+        model="perplexity/sonar",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_key="caller-key",
+        api_base="https://decisions.example/v1",
+    )
+    plain_cost: Mapping[str, object] = litellm.model_cost["perplexity/sonar"]
+
+    assert route.called
+    assert response._hidden_params["provider_response_model"] == "perplexity/sonar"
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        _INPUT_TOKENS * float(plain_cost["input_cost_per_token"])
+        + _OUTPUT_TOKENS * float(plain_cost["output_cost_per_token"])
+    )
 
 
 @pytest.mark.parametrize(
@@ -1312,6 +1404,7 @@ async def test_openai_decisions_translate_systemone_to_the_openai_wire_contract_
     url: str,
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
+    decisions_pricing_fields: None,
 ) -> None:
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
@@ -1351,13 +1444,7 @@ async def test_openai_decisions_translate_systemone_to_the_openai_wire_contract_
     }
     assert response.answers == {"is_defect": NoulAnswer(type="noul", noul=0.9)}
     assert response.hidden_params["custom_llm_provider"] == "openai"
-    luna_cost: Final = litellm.model_cost["gpt-6-luna"]
-    expected_cost: Final = (
-        (_INPUT_TOKENS - _CACHED_TOKENS - _CACHE_WRITE_TOKENS) * float(luna_cost["input_cost_per_token"])
-        + _CACHED_TOKENS * float(luna_cost["cache_read_input_token_cost"])
-        + _CACHE_WRITE_TOKENS * float(luna_cost["cache_creation_input_token_cost"])
-        + _OUTPUT_TOKENS * float(luna_cost["output_cost_per_token"])
-    )
+    expected_cost: Final = _INPUT_TOKENS * _GPT_6_LUNA_DECISIONS_INPUT_RATE
     assert expected_cost > 0
     assert litellm.completion_cost(completion_response=response) == pytest.approx(expected_cost)
 
@@ -2035,6 +2122,28 @@ async def test_azure_ai_decision_posts_deployment_to_foundry_systemone_route(
     }
     assert response.answers == {"is_defect": NoulAnswer(type="noul", noul=0.9)}
     assert response._hidden_params["model"] == "azure_ai/decision-1"
+
+
+@pytest.mark.asyncio
+async def test_azure_ai_systemone_uses_its_decisions_pricing_fields(
+    respx_mock: respx.MockRouter, decisions_pricing_fields: None
+) -> None:
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+    response: Final = await litellm.asystemone(
+        model="azure_ai/Microsoft-Decision-1",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_base="https://res.services.ai.azure.com",
+        api_key="foundry-key",
+    )
+
+    assert route.called
+    assert response._hidden_params["provider_response_model"] == "azure_ai/Microsoft-Decision-1"
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        _INPUT_TOKENS * _MICROSOFT_DECISION_1_DECISIONS_INPUT_RATE
+    )
 
 
 @pytest.mark.asyncio
