@@ -19,7 +19,6 @@ from integration.cost_calculation.cost_tracking_case import (
     SseResponse,
     WavUpload,
 )
-from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_key
 from pydantic import JsonValue
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 
@@ -7851,12 +7850,11 @@ GPT_6_1_SOL_INPUT_TEXT: Final = CostTrackingTestCase(
 )
 
 
-_OPENAI_GPT_6_LUNA_DECISIONS_MODEL: Final = decisions_pricing_key("openai", "gpt-6-luna")
 _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS: Final = 367
 _OPENAI_GPT_6_LUNA_DECISIONS_OUTPUT_TOKENS: Final = 3
 _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_RATE: Final = cast(
     float,
-    COST_MAP[_OPENAI_GPT_6_LUNA_DECISIONS_MODEL].input_cost_per_token,
+    COST_MAP["gpt-6-luna"].input_cost_per_token_decisions,
 )
 _OPENAI_GPT_6_LUNA_DECISIONS_SPEND: Final = (
     _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS * _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_RATE
@@ -7906,7 +7904,7 @@ OPENAI_GPT_6_LUNA_DECISIONS: Final = CostTrackingTestCase(
 OPENAI_GPT_6_LUNA_SYSTEMONE: Final = CostTrackingTestCase(
     name="openai-gpt-6-luna-systemone-evaluation-pricing",
     covers="quota_management.spend_tracking.decisions_costs",
-    model=_OPENAI_GPT_6_LUNA_DECISIONS_MODEL,
+    model="gpt-6-luna",
     endpoint="/v1/systemone",
     deployment=Deployment(model="openai/gpt-6-luna"),
     request={

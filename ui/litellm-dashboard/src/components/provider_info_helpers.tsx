@@ -488,15 +488,6 @@ export const getPlaceholder = (selectedProvider: string): string => {
   return providerPlaceholderMap[resolvedProvider] ?? "gpt-3.5-turbo";
 };
 
-// Mirrors litellm_core_utils/decisions_pricing.is_decisions_pricing_key: a
-// `<provider>/decisions/<model>` key is a pricing row for /v1/decisions and
-// /v1/systemone, not a deployable model.
-const isDecisionsPricingKey = (key: string, row: unknown): boolean => {
-  const provider =
-    row !== null && typeof row === "object" ? (row as { litellm_provider?: unknown }).litellm_provider : undefined;
-  return typeof provider === "string" && key.startsWith(`${provider}/decisions/`);
-};
-
 export const getProviderModels = (provider: string, modelMap: any): Array<string> => {
   let providerKey = provider;
   let custom_llm_provider = providerKey ? resolveLitellmProviderSlug(providerKey) : undefined;
@@ -550,5 +541,5 @@ export const getProviderModels = (provider: string, modelMap: any): Array<string
     }
   }
 
-  return providerModels.filter((key) => !isDecisionsPricingKey(key, modelMap[key]));
+  return providerModels;
 };

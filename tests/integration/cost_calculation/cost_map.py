@@ -6,20 +6,6 @@ from typing import Final
 
 from pydantic import JsonValue
 
-from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_key
-
-_PERPLEXITY_DECISION_COST: Final[dict[str, JsonValue]] = {
-    "input_cost_per_token": 4e-08,
-    "litellm_provider": "perplexity",
-    "max_input_tokens": 262144,
-    "mode": "evaluation",
-    "output_cost_per_token": 0.0,
-}
-_PERPLEXITY_DECISIONS_PRICING_COST: Final[dict[str, JsonValue]] = {
-    **_PERPLEXITY_DECISION_COST,
-    "mode": "decisions",
-}
-
 COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
     "dashscope/qwen4-max": {
         "litellm_provider": "dashscope",
@@ -48,23 +34,16 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
     },
     "gpt-6-luna": {
         "cache_creation_input_token_cost": 1.25e-07,
+        "cache_creation_input_token_cost_decisions": 1e-07,
         "cache_read_input_token_cost": 1e-08,
+        "cache_read_input_token_cost_decisions": 1e-07,
         "input_cost_per_token": 1e-07,
+        "input_cost_per_token_decisions": 1e-07,
         "litellm_provider": "openai",
         "max_input_tokens": 922000,
         "mode": "chat",
         "output_cost_per_token": 5e-07,
-    },
-    "openai/decisions/gpt-6-luna": {
-        "input_cost_per_token": 1e-07,
-        "input_cost_per_token_above_272k_tokens": 2e-07,
-        "litellm_provider": "openai",
-        "max_input_tokens": 922000,
-        "mode": "decisions",
-        "output_cost_per_token": 0.0,
-        "regional_processing_uplift_multiplier_eu": 1.1,
-        "regional_processing_uplift_multiplier_us": 1.1,
-        "source": "https://developers.openai.com/api/docs/guides/decisions#pricing-and-availability",
+        "output_cost_per_token_decisions": 0.0,
     },
     "perplexity/sonar-next": {
         "litellm_provider": "perplexity",
@@ -101,8 +80,13 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "input_cost_per_token": 0.0,
         "output_cost_per_token": 0.0,
     },
-    "perplexity/pplx-decider-v1-27b": _PERPLEXITY_DECISION_COST,
-    decisions_pricing_key("perplexity", "pplx-decider-v1-27b"): _PERPLEXITY_DECISIONS_PRICING_COST,
+    "perplexity/pplx-decider-v1-27b": {
+        "input_cost_per_token": 4e-08,
+        "litellm_provider": "perplexity",
+        "max_input_tokens": 262144,
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+    },
     "deepseek/deepseek-v4-chat": {
         "litellm_provider": "deepseek",
         "mode": "chat",

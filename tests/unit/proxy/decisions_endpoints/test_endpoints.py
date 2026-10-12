@@ -16,7 +16,7 @@ from pydantic import TypeAdapter
 from starlette.routing import Match
 
 import litellm
-from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_key
+from litellm.litellm_core_utils.decisions_pricing import apply_decisions_pricing
 from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeature, attach_lazy_features
 from litellm.proxy.decisions_endpoints.endpoints import decisions, router, systemone
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import SafeRouteAdder
@@ -566,12 +566,12 @@ def test_openai_format_decisions_reach_an_openai_deployment_unchanged_including_
 ) -> None:
     monkeypatch.setitem(
         litellm.model_cost,
-        decisions_pricing_key("openai", "gpt-6-luna"),
+        "gpt-6-luna",
         {
-            "litellm_provider": "openai",
-            "mode": "decisions",
-            "input_cost_per_token": 1e-07,
-            "output_cost_per_token": 0.0,
+            **litellm.model_cost["gpt-6-luna"],
+            "input_cost_per_token_decisions": 1e-07,
+            "cache_read_input_token_cost_decisions": 1e-07,
+            "output_cost_per_token_decisions": 0.0,
         },
     )
     monkeypatch.setattr(litellm, "api_base", None)
@@ -625,7 +625,7 @@ def test_openai_format_decisions_reach_an_openai_deployment_unchanged_including_
     body: Final = response.json()
     assert body["answers"] == _OPENAI_FORMAT_ANSWERS
     assert body["usage"] == upstream_usage
-    luna_decisions_cost: Final = litellm.model_cost[decisions_pricing_key("openai", "gpt-6-luna")]
+    luna_decisions_cost: Final = apply_decisions_pricing(litellm.model_cost["gpt-6-luna"])
     expected_cost: Final = _INPUT_TOKENS * float(luna_decisions_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
         luna_decisions_cost["output_cost_per_token"]
     )

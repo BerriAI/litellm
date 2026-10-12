@@ -8,7 +8,6 @@ from typing_extensions import assert_never
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import RESPONSE_COST_HEADER, normalize_drop_params
-from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_model
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.decisions.transformation import (
@@ -264,11 +263,7 @@ def _format_response(response: DecisionsIRResponse, call: DecisionsCall) -> Deci
         {
             "model": f"{call.custom_llm_provider}/{call.model}",
             "custom_llm_provider": call.custom_llm_provider,
-            "provider_response_model": decisions_pricing_model(
-                call.custom_llm_provider,
-                call.model,
-                litellm.model_cost,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
-            ),
+            "provider_response_model": f"{call.custom_llm_provider}/{call.model}",
             **({"additional_headers": {RESPONSE_COST_HEADER: provider_cost}} if provider_cost is not None else {}),
         }
     )

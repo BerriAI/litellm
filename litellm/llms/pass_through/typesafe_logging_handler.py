@@ -6,7 +6,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
-from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_model
+from litellm.litellm_core_utils.decisions_pricing import apply_decisions_pricing
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.litellm_logging import (
     get_standard_logging_object_payload,  # pyright: ignore[reportUnknownVariableType]  # legacy helper has an untyped signature
@@ -52,7 +52,9 @@ def _pricing_for(model_keys: tuple[str, ...]) -> _RegistryPricing:
             continue
         try:
             return _REGISTRY_PRICING_ADAPTER.validate_python(
-                litellm.model_cost[model_key]  # pyright: ignore[reportUnknownMemberType]  # registry is dynamically typed
+                apply_decisions_pricing(
+                    litellm.model_cost[model_key]  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # registry is dynamically typed
+                )
             )
         except ValidationError:
             continue
@@ -86,13 +88,7 @@ class TypeSafePassthroughLoggingHandler:
         input_tokens: Final = usage.input_tokens
         output_tokens: Final = usage.output_tokens
         candidate_model_keys: Final = tuple(
-            decisions_pricing_model(
-                custom_llm_provider,
-                model,
-                litellm.model_cost,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # model cost map is dynamically loaded
-            )
-            for model in (response_model, request_model)
-            if model is not None
+            f"{custom_llm_provider}/{model}" for model in (response_model, request_model) if model is not None
         )
         pricing: Final = _pricing_for(candidate_model_keys)
         response_cost: Final = (

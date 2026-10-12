@@ -6,7 +6,6 @@ import httpx
 import pytest
 
 import litellm
-from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_key
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.typesafe_passthrough_logging_handler import (
     TypeSafePassthroughLoggingHandler,
@@ -73,24 +72,17 @@ def test_uses_registry_pricing_and_standard_usage():
     assert response["kwargs"]["combined_usage_object"].total_tokens == 360
 
 
-def test_uses_decisions_pricing_row_when_available(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_uses_decisions_pricing_fields_when_the_row_has_them(monkeypatch: pytest.MonkeyPatch) -> None:
     model: Final = "nimble-latest"
-    plain_key: Final = f"bespoke/{model}"
-    decisions_key: Final = decisions_pricing_key("bespoke", model)
-    plain_pricing: Final = {
+    pricing: Final = {
         "input_cost_per_token": 1.0,
+        "input_cost_per_token_decisions": 2.0,
         "output_cost_per_token": 1.0,
+        "output_cost_per_token_decisions": 3.0,
         "litellm_provider": "bespoke",
         "mode": "chat",
     }
-    decisions_pricing: Final = {
-        "input_cost_per_token": 2.0,
-        "output_cost_per_token": 3.0,
-        "litellm_provider": "bespoke",
-        "mode": "evaluation",
-    }
-    monkeypatch.setitem(litellm.model_cost, plain_key, plain_pricing)
-    monkeypatch.setitem(litellm.model_cost, decisions_key, decisions_pricing)
+    monkeypatch.setitem(litellm.model_cost, f"bespoke/{model}", pricing)
     result: Final = TypeSafePassthroughLoggingHandler.typesafe_passthrough_handler(
         httpx_response=_response(),
         response_body={"model": model, "usage": {"input_tokens": 2, "output_tokens": 1}},
@@ -206,9 +198,7 @@ async def test_oss_gateway_accounts_for_checkpoint_usage_and_registered_cost(
         "litellm_provider": provider,
         "mode": mode,
     }
-    decisions_pricing_row: Final = {**pricing_row, "mode": "decisions"}
     monkeypatch.setitem(litellm.model_cost, model, pricing_row)
-    monkeypatch.setitem(litellm.model_cost, decisions_pricing_key(provider, checkpoint), decisions_pricing_row)
     start: Final = datetime.now()
     logging_obj: Final = Logging(
         model=requested,
@@ -221,6 +211,7 @@ async def test_oss_gateway_accounts_for_checkpoint_usage_and_registered_cost(
         kwargs={},
     )
     from fastapi import Request
+
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import HttpPassThroughEndpointHelpers
 
