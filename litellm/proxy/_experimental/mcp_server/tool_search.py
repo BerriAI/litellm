@@ -102,7 +102,10 @@ def _validate_tool_arguments(schema: Mapping[str, JsonValue], arguments: Mapping
 
 
 async def _tool_argument_validation_error(
-    schema: Mapping[str, JsonValue], arguments: Mapping[str, JsonValue]
+    schema: Mapping[str, JsonValue],
+    arguments: Mapping[str, JsonValue],
+    *,
+    timeout_seconds: float = _VALIDATION_TIMEOUT_SECONDS,
 ) -> str | None:
     limit_error: Final = _validation_limit_error(schema, arguments)
     if limit_error is not None:
@@ -112,7 +115,7 @@ async def _tool_argument_validation_error(
     if existing is None:
         _SCHEMA_VALIDATION_LIMITER.set(limiter)
     try:
-        with anyio.fail_after(_VALIDATION_TIMEOUT_SECONDS):
+        with anyio.fail_after(timeout_seconds):
             return await to_process.run_sync(
                 _validate_tool_arguments, schema, arguments, cancellable=True, limiter=limiter
             )

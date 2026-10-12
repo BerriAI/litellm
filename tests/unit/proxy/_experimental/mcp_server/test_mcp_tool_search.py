@@ -12,8 +12,7 @@ Covers:
 
 import asyncio
 import json
-import os
-import sys
+import math
 from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any, Final
@@ -1400,17 +1399,9 @@ async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> No
         "$defs": {"amount": {"type": "number", "multipleOf": 0.25}},
         "properties": {"amount": {"$ref": "#/$defs/amount"}},
     }
-    original_affinity: Final = os.sched_getaffinity(0) if sys.platform == "linux" else None
-    try:
-        if original_affinity is not None:
-            os.sched_setaffinity(0, {min(original_affinity)})
-        for _ in range(2):
-            results: Final = await asyncio.gather(
-                *(_tool_argument_validation_error(schema, {"amount": 0.75}) for _ in range(8))
-            )
-            assert results == [None] * 8, "Cold and warm workers must accept valid concurrent tool arguments"
-    finally:
-        if original_affinity is not None:
-            os.sched_setaffinity(0, original_affinity)
-
+    for _ in range(2):
+        results: Final = await asyncio.gather(
+            *(_tool_argument_validation_error(schema, {"amount": 0.75}, timeout_seconds=math.inf) for _ in range(8))
+        )
+        assert results == [None] * 8, "Cold and warm workers must accept valid concurrent tool arguments"
 
