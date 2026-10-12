@@ -252,32 +252,19 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             assert row.spend == 0, f"{case.name}: failure spend was {row.spend}"
             return
         assert response.is_success, f"{case.name}: proxy returned {response.status_code}: {response.text[:400]}"
-        if case.endpoint == "/v1/systemone":
+        if case.upstream_body is not None:
             observed: Final = JSON_OBJECT.validate_json(
                 httpx.get(f"{gateway.upstream_url}/__observations", timeout=5, trust_env=False).content
             )
-            decision_observations: Final = tuple(
-                value
+            upstream_bodies: Final = tuple(
+                value.get("body")
                 for value in observed["requests"]
-                if isinstance(value, dict) and value.get("path") == f"/{scenario_id}/v1/decisions"
+                if isinstance(value, dict)
+                and value.get("method") == "POST"
+                and str(value.get("path", "")).startswith(f"/{scenario_id}/")
             )
-            assert decision_observations == (
-                {
-                    "path": f"/{scenario_id}/v1/decisions",
-                    "authorization": "Bearer sk-scripted-provider",
-                    "method": "POST",
-                    "api_key": "",
-                    "body": {
-                        "model": "pplx-decider-v1-27b",
-                        "state": {"source": "cost-tracking"},
-                        "questions": {
-                            "is_defect": {
-                                "type": "noul",
-                                "instructions": "Is this a defect?",
-                            }
-                        },
-                    },
-                },
+            assert upstream_bodies == (case.upstream_body,), (
+                f"{case.name}: upstream received {upstream_bodies}, expected exactly {case.upstream_body}"
             )
         if case.response.content_type == "text/event-stream":
             _assert_stream_has_no_error(response.text)

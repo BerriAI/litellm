@@ -43,6 +43,37 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
             "search_context_size_high": 0.012,
         },
     },
+    "gpt-6-luna": {
+        "litellm_provider": "openai",
+        "mode": "chat",
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 5e-07,
+        "cache_read_input_token_cost": 1e-08,
+    },
+    "typesafe/jev-latest": {
+        "litellm_provider": "typesafe",
+        "mode": "evaluation",
+        "input_cost_per_token": 4.2e-08,
+        "output_cost_per_token": 0.0,
+    },
+    "cloudflare/@cf/cloudflare/clef-flash": {
+        "litellm_provider": "cloudflare",
+        "mode": "evaluation",
+        "input_cost_per_token": 9e-08,
+        "output_cost_per_token": 0.0,
+    },
+    "databricks/databricks-openjev-qwen35-4b": {
+        "litellm_provider": "databricks",
+        "mode": "evaluation",
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    },
+    "openrouter/typesafe/jev-1.13": {
+        "litellm_provider": "openrouter",
+        "mode": "evaluation",
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    },
     "perplexity/pplx-decider-v1-27b": {
         "input_cost_per_token": 4e-08,
         "litellm_provider": "perplexity",
