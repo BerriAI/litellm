@@ -4,8 +4,8 @@
 the proxy runs auth, routing, logging and spend for every request while the provider call costs nothing,
 plus a pool of keys scoped to it, all torn down by `ResourceManager`. `PerfRig.measure` drives Locust
 through a warm-up phase that is discarded and a measured phase that is kept, reading every worker's RSS
-over the network from /debug/memory/summary before and after so the proxy can run anywhere. `PerfRig.check`
-asserts the run against one `PerfBudget` and prints the numbers so the build log carries them
+over the network from /debug/memory/summary before and after so the proxy can run anywhere. `PerfRig.problems`
+reports what the run broke in one `PerfBudget` and prints the numbers so the build log carries them
 """
 
 from __future__ import annotations
@@ -152,10 +152,14 @@ class PerfRig:
         after: Final = _sample_workers(self.proxy)
         return PerfRun(load=load, rss_growth_mb=_worst_worker_growth_mb(before, after))
 
-    def check(self, label: str, run: PerfRun, budget: PerfBudget) -> None:
+    def problems(self, label: str, run: PerfRun, budget: PerfBudget) -> tuple[str, ...]:
+        """Everything wrong with the run, empty when it held the budget, printed so the build log carries the numbers."""
         report: Final = run.report()
         print(f"\n{label}: {report}")  # noqa: T201  # the numbers the perf suite exists to report, read off the CI log
-        assert run.load.failures == 0, f"{run.load.failures} requests failed: {run.load.diagnosis()}; {report}"
-        assert not run.load.generator_warnings, f"locust saturated itself, run invalid: {run.load.generator_warnings}"
-        failed: Final = budget.violations(run)
-        assert not failed, "; ".join((*failed, report))
+        failures: Final = (f"{run.load.failures} requests failed: {run.load.diagnosis()}",) if run.load.failures else ()
+        saturated: Final = (
+            (f"locust saturated itself, run invalid: {run.load.generator_warnings}",)
+            if run.load.generator_warnings
+            else ()
+        )
+        return (*failures, *saturated, *budget.violations(run))

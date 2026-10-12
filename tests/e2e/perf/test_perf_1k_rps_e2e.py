@@ -43,4 +43,5 @@ class TestThousandRps:
     def test_gateway_holds_1k_rps_over_mocked_providers(self, perf_rig: PerfRig) -> None:
         group: Final = perf_rig.mocked_group(PROVIDER_MODELS)
         run: Final = perf_rig.measure(group, ENDPOINTS, SHAPE)
-        perf_rig.check("1k rps", run, BUDGET)
+        problems: Final = perf_rig.problems("1k rps", run, BUDGET)
+        assert not problems, "; ".join((*problems, run.report()))
