@@ -27,6 +27,7 @@ import { useMediaQuery } from "usehooks-ts";
 import { Ellipsis } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTitle, PopoverTrigger } from "@/components/ui/popover";
+import { CommandPaletteTrigger } from "@/components/CommandPalette/CommandPaletteTrigger";
 
 // Top bar for the dashboard shell. Sits only over the content column (the brand
 // lives in the sidebar header); mirrors the design's breadcrumb-left / tools-right layout.
@@ -62,6 +63,8 @@ export function DashboardHeader({ navigationTrigger }: { navigationTrigger?: Rea
         </BreadcrumbList>
       </Breadcrumb>
 
+      <CommandPaletteTrigger />
+
       <div className="flex flex-none items-center gap-1 max-md:hidden">
         {showWorkerSwitch && (
           <>
@@ -78,6 +81,7 @@ export function DashboardHeader({ navigationTrigger }: { navigationTrigger?: Rea
         <NotificationsBell />
       </div>
       <div className="flex shrink-0 items-center gap-1 md:hidden">
+        <CommandPaletteTrigger mobile />
         <NotificationsBell />
         <Popover open={!isDesktop && mobileToolsOpen} onOpenChange={setMobileToolsOpen}>
           <PopoverTrigger render={<Button variant="ghost" size="icon" className="size-11" aria-label="More options" />}>

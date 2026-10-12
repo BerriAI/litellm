@@ -3972,6 +3972,61 @@ async def test_async_success_handler_prevents_reprocessing_for_pass_through_endp
     )
 
 
+class _StreamSuccessRecorder(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.logged_contents: list[str | None] = []
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+        self.logged_contents.append(response_obj.choices[0].message.content)
+
+
+@pytest.mark.asyncio
+async def test_async_success_handler_logs_a_completed_stream_only_once():
+    recorder: Final = _StreamSuccessRecorder()
+    start: Final = dt_object(2026, 1, 1)
+    logging_obj: Final = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=start,
+        litellm_call_id="stream-once",
+        function_id="stream-once",
+        dynamic_async_success_callbacks=[recorder],
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-4o",
+        user=None,
+        optional_params={},
+        litellm_params={"litellm_call_id": "stream-once", "metadata": {}},
+        custom_llm_provider="openai",
+    )
+
+    await logging_obj.async_success_handler(
+        result=ModelResponse(
+            model="gpt-4o",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello there"}, "finish_reason": "stop"}],
+            usage={"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+        ),
+        start_time=start,
+        end_time=start,
+    )
+    await logging_obj.async_success_handler(
+        result=ModelResponse(
+            model="gpt-4o",
+            choices=[{"index": 0, "message": {"role": "assistant", "content": "Hello again"}, "finish_reason": "stop"}],
+        ),
+        start_time=start,
+        end_time=start,
+    )
+
+    assert recorder.logged_contents == ["Hello there"]
+    assert logging_obj.model_call_details["async_complete_streaming_response"].choices[0].message.content == (
+        "Hello there"
+    )
+
+
 @pytest.mark.asyncio
 async def test_async_success_handler_sets_standard_logging_object_for_streaming_pass_through():
     """
@@ -10384,7 +10439,7 @@ def test_truncate_standard_logging_payload():
     1. the payload passed in is never modified, since every callback of the request shares it
     2. the `messages`, `response`, and `error_str` in the returned payload are truncated
     """
-    from tests.local_testing.create_mock_standard_logging_payload import (
+    from tests.unit.create_mock_standard_logging_payload import (
         create_standard_logging_payload_with_long_content,
     )
 
@@ -11563,3 +11618,45 @@ class CompletionCustomHandler(
         except Exception:
             print(f"Assertion Error: {traceback.format_exc()}")
             self.errors.append(traceback.format_exc())
+
+
+def test_masking_function_isolated_from_other_loggers():
+    from litellm.litellm_core_utils.litellm_logging import (
+        scrub_sensitive_keys_in_metadata,
+    )
+
+    def my_masking_fn(data):
+        return data
+
+    litellm_params = {
+        "metadata": {
+            "langfuse_masking_function": my_masking_fn,
+            "other_key": "other_value",
+        }
+    }
+
+    result = scrub_sensitive_keys_in_metadata(litellm_params)
+
+    assert "langfuse_masking_function" not in result["metadata"]
+
+    assert result.get("_langfuse_masking_function") == my_masking_fn
+
+    assert result["metadata"]["other_key"] == "other_value"
+
+
+def test_masking_function_not_in_metadata_when_not_provided():
+    from litellm.litellm_core_utils.litellm_logging import (
+        scrub_sensitive_keys_in_metadata,
+    )
+
+    litellm_params = {
+        "metadata": {
+            "some_key": "some_value",
+        }
+    }
+
+    result = scrub_sensitive_keys_in_metadata(litellm_params)
+
+    assert "_langfuse_masking_function" not in result
+
+    assert result["metadata"]["some_key"] == "some_value"
