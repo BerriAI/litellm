@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
-from typing import Final
+from typing import Final, Optional
 
 import jsonschema
 
@@ -225,15 +225,13 @@ COST_DESCRIPTIONS: dict[str, str] = {
 }
 
 
-def cost_description(key: str) -> str | None:
+def cost_description(key: str) -> Optional[str]:
     if key in COST_DESCRIPTIONS:
         return COST_DESCRIPTIONS[key]
     if key.endswith("_flex"):
         return "Flex service-tier rate for the same-named base field."
     if key.endswith("_priority"):
         return "Priority service-tier rate for the same-named base field."
-    if key.endswith("_decisions"):
-        return "Rate for /v1/decisions and /v1/systemone calls, overriding the same-named base field on those routes only."
     if "_above_" in key:
         return "Rate applied once the prompt exceeds the token threshold in the field name."
     return None
@@ -293,7 +291,7 @@ def string_key_schemas(modes: tuple) -> dict[str, JsonSchema]:
     }
 
 
-def classify(key: str, modes: tuple) -> JsonSchema | None:
+def classify(key: str, modes: tuple) -> Optional[JsonSchema]:
     curated = {**OBJECT_KEYS, **ARRAY_KEYS, **string_key_schemas(modes), **INTEGER_KEYS, **NUMBER_KEYS}
     if key in curated:
         return curated[key]

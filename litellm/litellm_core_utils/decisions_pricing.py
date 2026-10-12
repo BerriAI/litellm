@@ -18,7 +18,7 @@ def is_decisions_call_type(call_type: str) -> bool:
     return call_type in DECISIONS_CALL_TYPES
 
 
-def decisions_pricing_fields(row: Mapping[str, object]) -> dict[str, object]:
+def decisions_pricing_fields(row: Mapping[str, object]) -> Mapping[str, object]:
     """Return ``{plain_field: value}`` for every ``<plain_field>_decisions`` field on ``row``."""
     return {
         key.removesuffix(DECISIONS_PRICING_SUFFIX): value
@@ -27,7 +27,7 @@ def decisions_pricing_fields(row: Mapping[str, object]) -> dict[str, object]:
     }
 
 
-def apply_decisions_pricing(row: Mapping[str, object]) -> dict[str, object]:
+def apply_decisions_pricing(row: Mapping[str, object]) -> Mapping[str, object]:
     """Return ``row`` priced for a Decisions call: ``_decisions`` values replace their plain fields."""
     plain: Final = {key: value for key, value in row.items() if not key.endswith(DECISIONS_PRICING_SUFFIX)}
     return {**plain, **decisions_pricing_fields(row)}

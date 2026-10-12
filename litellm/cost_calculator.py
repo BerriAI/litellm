@@ -584,9 +584,9 @@ def cost_per_token(
                 custom_llm_provider=custom_llm_provider,
                 service_tier=service_tier,
                 data_residency=data_residency,
-                model_info=cast(
+                model_info=cast(  # cast-ok: _decisions fields override same-named ModelInfo rates
                     ModelInfo, {**decisions_model_info, **decisions_overrides}
-                ),  # cast-ok: _decisions fields override same-named ModelInfo rates
+                ),
             )
     if call_type == "speech" or call_type == "aspeech":
         lyria_generation_cost: Final = (
