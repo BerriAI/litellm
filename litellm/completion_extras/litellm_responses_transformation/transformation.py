@@ -317,9 +317,7 @@ def _shift_annotation(annotation: ChatCompletionAnnotation, offset: int) -> Chat
         key: value + offset if key in ("start_index", "end_index") and isinstance(value, int) else value
         for key, value in annotation.items()
     }
-    return cast(
-        ChatCompletionAnnotation, shifted
-    )  # cast-ok: the TypedDict omits the flat url_citation fields passed through
+    return cast(ChatCompletionAnnotation, shifted)
 
 
 def _message_annotations(message: "Message") -> Sequence[ChatCompletionAnnotation]:
