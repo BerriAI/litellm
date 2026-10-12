@@ -26,7 +26,7 @@ export const pageDescriptions: Record<string, string> = {
   lens: "Review agent activity and investigate patterns with supporting evidence",
   "guardrails-monitor": "Monitor guardrail performance and view logs",
   users: "Manage internal user accounts and permissions",
-  customers: "Manage end-user spend, budgets, rate limits and model access",
+  customers: "Manage end-user spend, budgets, rate limits, model and MCP access",
   teams: "Create and manage teams for access control",
   organizations: "Manage organizations and their members",
   projects: "Manage projects within teams",

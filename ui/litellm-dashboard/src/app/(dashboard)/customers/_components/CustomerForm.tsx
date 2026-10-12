@@ -80,9 +80,14 @@ export function CustomerForm({
     defaultValues: initialValues,
   });
   const hasLinkedBudget = isEdit && Boolean(initialValues.budget_id);
-  const budgetDescription = isEdit
-    ? "Leaving both budget fields empty keeps the current budget"
-    : "Choose a budget or enter a maximum below";
+  const budgetFieldCopy = hasLinkedBudget
+    ? { emptyOption: "Keep current budget", description: "Select another budget to change the link" }
+    : {
+        emptyOption: "No budget",
+        description: isEdit
+          ? "Leaving both budget fields empty keeps the current budget"
+          : "Choose a budget or enter a maximum below",
+      };
   const handleSubmit = form.handleSubmit(async (values) => {
     if (hasLinkedBudget && !values.budget_id && values.max_budget.trim()) {
       form.setError("max_budget", {
@@ -94,7 +99,7 @@ export function CustomerForm({
   });
   const selectedBudgetId = form.watch("budget_id");
   const budgetOptions = [
-    { value: "", label: "No budget" },
+    { value: "", label: budgetFieldCopy.emptyOption },
     ...(selectedBudgetId && !budgets.some((budget) => budget.budget_id === selectedBudgetId)
       ? [{ value: selectedBudgetId, label: selectedBudgetId }]
       : []),
@@ -126,16 +131,7 @@ export function CustomerForm({
           {({ ref, ...control }) => <Input {...control} ref={ref} />}
         </FormField>
 
-        <FormField
-          control={form.control}
-          name="budget_id"
-          label="Budget"
-          description={
-            hasLinkedBudget
-              ? "No budget keeps the current linked budget; select another budget to change the link"
-              : budgetDescription
-          }
-        >
+        <FormField control={form.control} name="budget_id" label="Budget" description={budgetFieldCopy.description}>
           {({ id, value, onChange }) => (
             <Select items={budgetOptions} value={value} onValueChange={(selected) => onChange(selected ?? "")}>
               <SelectTrigger id={id} className="w-full">

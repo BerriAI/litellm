@@ -518,7 +518,7 @@ describe("Customers management", () => {
     expect(screen.queryByRole("button", { name: "Save Changes" })).not.toBeInTheDocument();
   });
 
-  it("rejects a max budget after clearing a shared budget link", async () => {
+  it("rejects a max budget when keeping a shared budget link", async () => {
     const user = userEvent.setup();
     const budget = { budget_id: "shared-budget", max_budget: 100, created_at: "2026-01-01T00:00:00Z" };
     const linkedCustomers: EndUser[] = customers.map((customer) => ({
@@ -534,7 +534,7 @@ describe("Customers management", () => {
     }));
     renderWithProviders(<CustomersPanel />, { searchParams: "customer=alice%40example.test&edit=true" });
     expect(screen.getByRole("tab", { name: "Settings" })).toHaveAttribute("aria-selected", "true");
-    await chooseSelectOption(user, screen.getByLabelText("Budget"), "No budget");
+    await chooseSelectOption(user, screen.getByLabelText("Budget"), "Keep current budget");
     fireEvent.change(screen.getByLabelText("Max Budget (USD)"), { target: { value: "25" } });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
