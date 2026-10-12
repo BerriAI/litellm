@@ -9077,6 +9077,13 @@ class ProviderConfigManager:
                 )
 
                 return AzureAnthropicMessagesConfig()
+        elif litellm.LlmProviders.DATABRICKS == provider:
+            if "claude" in model_lower:
+                from litellm.llms.databricks.messages.transformation import (
+                    DatabricksAnthropicMessagesConfig,
+                )
+
+                return DatabricksAnthropicMessagesConfig()
         elif litellm.LlmProviders.MINIMAX == provider:
             from litellm.llms.minimax.messages.transformation import (
                 MinimaxMessagesConfig,

@@ -4,6 +4,7 @@ from typing import Any, ClassVar, Final
 import httpx
 
 from litellm._logging import verbose_logger
+from litellm.anthropic_beta_headers_manager import is_beta_header_supported
 from litellm.exceptions import AuthenticationError
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -107,6 +108,17 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
     def should_filter_anthropic_beta_headers(self) -> bool:
         return self._resolved_provider != "anthropic"
+
+    def supports_safeguards(self) -> bool:
+        """
+        The ``safeguards`` body field and the dangerous-tool-use beta travel together: a
+        platform that takes the beta runs the classifier, any other platform gets neither
+        so the turn stays a 200 without a verdict instead of a 400 on an unknown field.
+        """
+        provider: Final = self._resolved_provider
+        return provider == "anthropic" or is_beta_header_supported(
+            ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value, provider
+        )
 
     def _remove_scope_from_cache_control(self, anthropic_messages_request: dict) -> None:
         """
@@ -590,6 +602,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 status_code=400,
             )
 
+        if "safeguards" in anthropic_messages_optional_request_params and not self.supports_safeguards():
+            anthropic_messages_optional_request_params.pop("safeguards")  # pyright: ignore[reportUnknownMemberType]  # the request params arrive as a bare dict
+
         self._translate_reasoning_effort_to_anthropic(
             model=model,
             optional_params=anthropic_messages_optional_request_params,
@@ -700,8 +715,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             litellm_logging_obj=litellm_logging_obj,
         )
 
-    @staticmethod
     def _update_headers_with_anthropic_beta(
+        self,
         headers: dict,
         optional_params: dict,
         custom_llm_provider: str = "anthropic",
@@ -794,9 +809,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             else ()
         )
         all_beta_values: Final = beta_values.union(thinking_display_betas, tool_change_betas)
+        dangerous_tool_use: Final = ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value
+        forwarded_beta_values: Final = (  # pyright: ignore[reportUnknownVariableType]  # derived from the bare beta set
+            all_beta_values - {dangerous_tool_use}
+            if dangerous_tool_use in all_beta_values and not self.supports_safeguards()
+            else all_beta_values
+        )
 
         if not all_beta_values:
             return headers
         merged: Final = {key: value for key, value in headers.items() if key.lower() != "anthropic-beta"}
-        merged["anthropic-beta"] = ",".join(sorted(all_beta_values))
+        if forwarded_beta_values:
+            merged["anthropic-beta"] = ",".join(sorted(forwarded_beta_values))
         return merged

@@ -12,6 +12,7 @@ Authentication priority:
 
 import os
 import re
+from types import MappingProxyType
 from typing import Final, Literal
 from urllib.parse import urlsplit, urlunsplit
 
@@ -20,6 +21,16 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 class DatabricksException(BaseLLMException):
     pass
+
+
+DATABRICKS_ANTHROPIC_MESSAGES_PATH: Final = "/anthropic/v1/messages"
+DATABRICKS_ENDPOINT_PATHS: Final = MappingProxyType(
+    {
+        "chat_completions": "/chat/completions",
+        "embeddings": "/embeddings",
+        "anthropic_messages": DATABRICKS_ANTHROPIC_MESSAGES_PATH,
+    }
+)
 
 
 class DatabricksBase:
@@ -309,11 +320,11 @@ class DatabricksBase:
         self,
         api_key: str | None,
         api_base: str | None,
-        endpoint_type: Literal["chat_completions", "embeddings"],
+        endpoint_type: Literal["chat_completions", "embeddings", "anthropic_messages"],
         custom_endpoint: bool | None,
         headers: dict | None,
         custom_user_agent: str | None = None,
-    ) -> tuple[str, dict]:
+    ) -> tuple[str, dict[str, str]]:  # mutable-ok: becomes the outbound headers
         """
         Validate and configure the Databricks environment.
 
@@ -325,7 +336,7 @@ class DatabricksBase:
         Args:
             api_key: Personal access token (PAT)
             api_base: Databricks workspace URL with /serving-endpoints
-            endpoint_type: Type of endpoint (chat_completions or embeddings)
+            endpoint_type: Type of endpoint (chat_completions, embeddings or anthropic_messages)
             custom_endpoint: Whether using a custom endpoint URL
             headers: Existing headers dict
             custom_user_agent: Optional custom user agent to prefix
@@ -392,9 +403,5 @@ class DatabricksBase:
         # Debug logging with redaction (never log actual tokens)
         verbose_logger.debug("Databricks request headers: %s", self.redact_headers_for_logging(headers))
 
-        if endpoint_type == "chat_completions" and custom_endpoint is not True:
-            api_base = f"{api_base}/chat/completions"
-        elif endpoint_type == "embeddings" and custom_endpoint is not True:
-            api_base = f"{api_base}/embeddings"
-
-        return api_base, headers
+        endpoint_path: Final = "" if custom_endpoint is True else DATABRICKS_ENDPOINT_PATHS[endpoint_type]
+        return f"{api_base}{endpoint_path}", headers

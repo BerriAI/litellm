@@ -2009,11 +2009,40 @@ def test_provider_specific_header():
     )
     # Verify multi-provider support: anthropic headers work across multiple providers
     assert data["provider_specific_header"] == {
-        "custom_llm_provider": "anthropic,bedrock,bedrock_mantle,vertex_ai",
+        "custom_llm_provider": "anthropic,bedrock,bedrock_mantle,databricks,vertex_ai",
         "extra_headers": {
             "anthropic-beta": "prompt-caching-2024-07-31",
         },
     }
+
+
+def test_anthropic_api_headers_reach_databricks_claude_deployments():
+    """Claude Code sends `anthropic-beta: dangerous-tool-use-2026-09-03` next to `safeguards`. A
+    Databricks Claude serving endpoint takes the Anthropic Messages wire format, so the header has
+    to reach it the way it reaches Anthropic, Bedrock, and Vertex, or the workspace answers 400
+    "safeguards: Extra inputs are not permitted" (probed 2026-10-12)."""
+    from litellm.litellm_core_utils.get_provider_specific_headers import ProviderSpecificHeaderUtils
+    from litellm.proxy.litellm_pre_call_utils import add_provider_specific_headers_to_request
+
+    data: Final[dict] = {"model": "databricks-claude-sonnet-4-6"}  # mutable-ok: the function under test writes into it
+    add_provider_specific_headers_to_request(
+        data=data,
+        headers={
+            "content-type": "application/json",
+            "anthropic-beta": "dangerous-tool-use-2026-09-03",
+            "anthropic-version": "2023-06-01",
+        },
+    )
+
+    assert ProviderSpecificHeaderUtils.get_provider_specific_headers(
+        provider_specific_header=data["provider_specific_header"], custom_llm_provider="databricks"
+    ) == {"anthropic-beta": "dangerous-tool-use-2026-09-03", "anthropic-version": "2023-06-01"}
+    assert (
+        ProviderSpecificHeaderUtils.get_provider_specific_headers(
+            provider_specific_header=data["provider_specific_header"], custom_llm_provider="azure_ai"
+        )
+        == {}
+    )
 
 
 def test_provider_specific_header_multi_provider():
@@ -2081,7 +2110,7 @@ def test_provider_specific_header_multi_provider():
     assert "provider_specific_header" in data
     assert (
         data["provider_specific_header"]["custom_llm_provider"]
-        == "anthropic,bedrock,bedrock_mantle,vertex_ai"
+        == "anthropic,bedrock,bedrock_mantle,databricks,vertex_ai"
     )
     assert data["provider_specific_header"]["extra_headers"] == {
         "anthropic-beta": "context-1m-2025-08-07",

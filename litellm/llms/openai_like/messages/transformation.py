@@ -63,6 +63,9 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
     def should_filter_anthropic_beta_headers(self) -> bool:
         return False
 
+    def supports_safeguards(self) -> bool:
+        return False
+
     def supports_cache_control_ttl(self) -> bool:
         return self._cache_control_ttl
 
