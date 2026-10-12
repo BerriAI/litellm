@@ -37,6 +37,7 @@ from integration.providers._coralbricks import (
     provider_calls,
     rates_of,
     raw_deployment,
+    row_of,
     ready,
     spend_row,
 )
@@ -462,7 +463,7 @@ def test_model_info_reports_the_coralbricks_cost_map_row(gateway: Gateway) -> No
         assert number(info["input_cost_per_token"]) == pytest.approx(rates.input), info
         assert number(info["output_cost_per_token"]) == pytest.approx(rates.output), info
         assert number(info["cache_creation_input_token_cost"]) == pytest.approx(rates.cache_write), info
-        assert info["max_input_tokens"] == 1048576 and info["mode"] == "chat", info
+        assert info["max_input_tokens"] == row_of(MODEL)["max_input_tokens"] and info["mode"] == "chat", info
         assert info["supports_function_calling"] is True and info["supports_prompt_caching"] is True, info
 
 
@@ -480,6 +481,22 @@ def test_models_listing_and_model_group_info_carry_the_coralbricks_deployment(ga
         assert mine[0]["providers"] == [PROVIDER], mine[0]
         assert number(mine[0]["input_cost_per_token"]) == pytest.approx(rates.input), mine[0]
         assert number(mine[0]["output_cost_per_token"]) == pytest.approx(rates.output), mine[0]
+
+
+def test_wildcard_deployment_lists_every_coralbricks_catalog_row(gateway: Gateway) -> None:
+    with wire_server(provider("unused")) as wire, gateway.scenario() as scenario:
+        created: Final = gateway.post(
+            "/model/new",
+            {
+                "model_name": f"{PROVIDER}/*",
+                "litellm_params": {"model": f"{PROVIDER}/*", "api_base": f"{wire.url}/v1", "api_key": API_KEY},
+            },
+        )
+        scenario.cleanups.callback(scenario.delete_model, string_value(object_value(created["model_info"])["id"]))
+        listed: Final = gateway.get("/v1/models")["data"]
+        assert isinstance(listed, list)
+        listed_names: Final = {object_value(entry)["id"] for entry in listed}
+        assert {f"{PROVIDER}/{model}" for model in MODELS} <= listed_names, sorted(listed_names)
 
 
 def test_health_probe_reaches_coralbricks_with_the_deployment_key(gateway: Gateway) -> None:

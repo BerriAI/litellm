@@ -55,9 +55,14 @@ def number(value: JsonValue) -> float:
     return float(value)
 
 
-def rates_of(model: str) -> Rates:
+def row_of(model: str) -> Mapping[str, JsonValue]:
     row: Final = object_value(JSON_OBJECT.validate_json(COST_MAP.read_bytes())[f"{PROVIDER}/{model}"])
     assert row["litellm_provider"] == PROVIDER, row
+    return row
+
+
+def rates_of(model: str) -> Rates:
+    row: Final = row_of(model)
     return Rates(
         input=number(row["input_cost_per_token"]),
         output=number(row["output_cost_per_token"]),

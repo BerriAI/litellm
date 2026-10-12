@@ -717,6 +717,7 @@ aws_polly_models: Set = set()
 transcribe_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
+coralbricks_models: Set[str] = set()
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
@@ -754,7 +755,7 @@ def is_openai_finetune_model(key: str) -> bool:
     return key.startswith("ft:") and not key.count(":") > 1
 
 
-def _populate_provider_model_sets(model_cost_map: Dict) -> None:
+def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, object]]) -> None:
     for key, value in model_cost_map.items():
         if value.get("litellm_provider") == "openai" and not is_openai_finetune_model(key):
             open_ai_chat_completion_models.add(key)
@@ -1004,6 +1005,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             gigachat_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
             llamagate_models.add(key)
+        elif value.get("litellm_provider") == "coralbricks":
+            coralbricks_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
@@ -1137,6 +1140,7 @@ model_list = list(
     | docker_model_runner_models
     | reducto_models
     | bedrock_mantle_models
+    | coralbricks_models
     | set(clarifai_models)
 )
 
@@ -1254,6 +1258,7 @@ def _build_models_by_provider() -> dict:
         "transcribe": transcribe_models,
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
+        "coralbricks": coralbricks_models,
         "reducto": reducto_models,
         "bedrock_mantle": bedrock_mantle_models,
     }

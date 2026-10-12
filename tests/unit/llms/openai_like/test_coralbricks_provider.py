@@ -372,6 +372,12 @@ async def test_coralbricks_anthropic_messages_cost_includes_cache_write_and_free
     )
 
 
+def test_coralbricks_rows_are_listed_for_wildcard_expansion():
+    catalog: Final = {name for name, info in litellm.model_cost.items() if info.get("litellm_provider") == "coralbricks"}
+    assert CORALBRICKS_MODEL in catalog
+    assert set(litellm.get_valid_models(custom_llm_provider="coralbricks")) == catalog
+
+
 def test_coralbricks_cost_map_backup_mirrors_main():
     main_map: Final = json.loads(
         (Path(litellm.__file__).parent.parent / "model_prices_and_context_window.json").read_text()
