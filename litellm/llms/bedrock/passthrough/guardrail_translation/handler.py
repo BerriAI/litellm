@@ -1,12 +1,9 @@
 import copy
-import json
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
-from itertools import chain, groupby
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias
 
-from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -18,18 +15,16 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     scoped_structured_message_indices,
     unappliable_request_rewrite,
 )
-from litellm.types.llms.openai import (
-    AllMessageValues,
-    ChatCompletionAssistantMessage,
-    ChatCompletionAssistantToolCall,
-    ChatCompletionSystemMessage,
-    ChatCompletionTextObject,
-    ChatCompletionToolCallFunctionChunk,
-    ChatCompletionToolMessage,
-    ChatCompletionToolParam,
-    ChatCompletionToolParamFunctionChunk,
-    ChatCompletionUserMessage,
+from litellm.llms.bedrock.chat.converse_to_openai import (
+    ConverseRow,
+    JsonPath,
+    as_json_array,
+    as_json_object,
+    converse_rows,
+    converse_tools,
+    parse_converse_request,
 )
+from litellm.llms.bedrock.passthrough.guardrail_translation.structured_edits import Edit, structured_edits
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -168,429 +163,37 @@ def _extract_converse_texts(
     return texts, holders
 
 
-class _ConverseModel(BaseModel):
-    model_config = ConfigDict(extra="ignore", frozen=True)
-
-
-class _ConverseGuardText(_ConverseModel):
-    text: str = ""
-
-
-class _ConverseGuardContent(_ConverseModel):
-    text: _ConverseGuardText | None = None
-
-
-class _ConverseToolUse(_ConverseModel):
-    tool_use_id: str = Field(default="", alias="toolUseId")
-    name: str = ""
-    tool_input: object = Field(default=None, alias="input")
-
-
-class _ConverseToolResultContent(_ConverseModel):
-    text: str = ""
-    json_value: object = Field(default=None, alias="json")
-
-
-class _ConverseToolResult(_ConverseModel):
-    tool_use_id: str = Field(default="", alias="toolUseId")
-    content: tuple[_ConverseToolResultContent, ...] = ()
-
-
-class _ConverseContentBlock(_ConverseModel):
-    text: str = ""
-    guard_content: _ConverseGuardContent | None = Field(default=None, alias="guardContent")
-    tool_use: _ConverseToolUse | None = Field(default=None, alias="toolUse")
-    tool_result: _ConverseToolResult | None = Field(default=None, alias="toolResult")
-
-
-class _ConverseMessage(_ConverseModel):
-    role: str = ""
-    content: tuple[_ConverseContentBlock, ...] = ()
-
-
-class _ConverseToolInputSchema(_ConverseModel):
-    json_schema: Mapping[str, object] | None = Field(default=None, alias="json")
-
-
-class _ConverseToolSpec(_ConverseModel):
-    name: str = ""
-    description: str = ""
-    input_schema: _ConverseToolInputSchema | None = Field(default=None, alias="inputSchema")
-
-
-class _ConverseTool(_ConverseModel):
-    tool_spec: _ConverseToolSpec | None = Field(default=None, alias="toolSpec")
-
-
-class _ConverseToolConfig(_ConverseModel):
-    tools: tuple[_ConverseTool, ...] = ()
-
-
-class _ConverseRequest(_ConverseModel):
-    system: tuple[_ConverseContentBlock, ...] = ()
-    messages: tuple[_ConverseMessage, ...] = ()
-    tool_config: _ConverseToolConfig | None = Field(default=None, alias="toolConfig")
-
-
-def _parse_converse_request(validate: Callable[[], _ConverseRequest]) -> _ConverseRequest | None:
-    try:
-        return validate()
-    except ValidationError:
-        verbose_proxy_logger.debug("BedrockPassthroughGuardrailHandler: Converse body not convertible to messages")
-        return None
-
-
-def _converse_block_text(block: _ConverseContentBlock) -> str:
-    if block.text:
-        return block.text
-    guard_text: Final = block.guard_content.text if block.guard_content else None
-    return guard_text.text if guard_text else ""
-
-
 @dataclass(frozen=True, slots=True)
-class _BlockRef:
-    message_index: int | None
-    block_index: int
-    path: tuple[str | int, ...] = ()
+class _Scope:
+    skip_system: bool
+    skip_tool: bool
+    scan_only_tool_results: bool
 
 
-@dataclass(frozen=True, slots=True)
-class _ConvertedMessage:
-    message: AllMessageValues
-    text_blocks: tuple[_BlockRef, ...]
-    tool_result: tuple[_BlockRef, _ConverseToolResult] | None = None
-    tool_uses: tuple[tuple[_BlockRef, _ConverseToolUse], ...] = ()
+def _flat_texts(body: dict, scope: _Scope) -> tuple[list[str], list[_StringHolder]]:
+    return _extract_converse_texts(body, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results)
 
 
-_IndexedBlock: TypeAlias = tuple[_BlockRef, _ConverseContentBlock]
-_TEXT_PARTS: Final = TypeAdapter(tuple[ChatCompletionTextObject, ...])
-_OBJECT: Final = TypeAdapter(Mapping[str, object])
-_ITEMS: Final = TypeAdapter(Sequence[object])
-_PARSED_JSON: Final = TypeAdapter(object)
-_TextEdit: TypeAlias = tuple[_BlockRef, object]
-_JsonPair: TypeAlias = tuple[tuple[str | int, ...], object, object]
-
-
-def _indexed_blocks(message_index: int | None, blocks: Sequence[_ConverseContentBlock]) -> tuple[_IndexedBlock, ...]:
-    return tuple((_BlockRef(message_index, block_index), block) for block_index, block in enumerate(blocks))
-
-
-def _text_blocks(blocks: Sequence[_IndexedBlock]) -> tuple[tuple[_BlockRef, str], ...]:
-    return tuple((ref, text) for ref, block in blocks if (text := _converse_block_text(block)))
-
-
-def _text_content(text_blocks: Sequence[tuple[_BlockRef, str]]) -> tuple[ChatCompletionTextObject, ...]:
-    return tuple(ChatCompletionTextObject(type="text", text=text) for _, text in text_blocks)
-
-
-def _refs(text_blocks: Sequence[tuple[_BlockRef, str]]) -> tuple[_BlockRef, ...]:
-    return tuple(ref for ref, _ in text_blocks)
-
-
-def _scannable_tool_parts(tool_result: _ConverseToolResult) -> tuple[tuple[int, _ConverseToolResultContent], ...]:
-    return tuple(
-        (index, part) for index, part in enumerate(tool_result.content) if part.text or part.json_value is not None
-    )
-
-
-def _converse_tool_message(tool_result: _ConverseToolResult) -> ChatCompletionToolMessage:
-    return ChatCompletionToolMessage(
-        role="tool",
-        tool_call_id=tool_result.tool_use_id,
-        content="\n".join(part.text or json.dumps(part.json_value) for _, part in _scannable_tool_parts(tool_result)),
-    )
-
-
-def _converse_tool_call(tool_use: _ConverseToolUse) -> ChatCompletionAssistantToolCall:
-    return ChatCompletionAssistantToolCall(
-        id=tool_use.tool_use_id,
-        type="function",
-        function=ChatCompletionToolCallFunctionChunk(
-            name=tool_use.name,
-            arguments="{}" if tool_use.tool_input is None else json.dumps(tool_use.tool_input),
-        ),
-    )
-
-
-def _converse_user_group(is_tool_result: bool, group: Sequence[_IndexedBlock]) -> tuple[_ConvertedMessage, ...]:
-    if is_tool_result:
-        return tuple(
-            _ConvertedMessage(_converse_tool_message(block.tool_result), (), (ref, block.tool_result))
-            for ref, block in group
-            if block.tool_result
-        )
-    text_blocks: Final = _text_blocks(group)
-    if not text_blocks:
-        return ()
-    message: Final = ChatCompletionUserMessage(role="user", content=list(_text_content(text_blocks)))
-    return (_ConvertedMessage(message, _refs(text_blocks)),)
-
-
-def _converse_user_messages(blocks: Sequence[_IndexedBlock]) -> tuple[_ConvertedMessage, ...]:
-    return tuple(
-        chain.from_iterable(
-            _converse_user_group(is_tool_result, tuple(group))
-            for is_tool_result, group in groupby(blocks, key=lambda item: item[1].tool_result is not None)
-        )
-    )
-
-
-def _converse_assistant_messages(
-    blocks: Sequence[_IndexedBlock], include_tool_calls: bool
-) -> tuple[_ConvertedMessage, ...]:
-    text_blocks: Final = _text_blocks(blocks)
-    content: Final = list(_text_content(text_blocks))
-    tool_calls: Final = [
-        _converse_tool_call(block.tool_use) for _, block in blocks if block.tool_use and include_tool_calls
-    ]
-    if tool_calls:
-        message: Final = ChatCompletionAssistantMessage(
-            role="assistant", content=content or None, tool_calls=tool_calls
-        )
-        return (
-            _ConvertedMessage(
-                message,
-                _refs(text_blocks),
-                tool_uses=tuple((ref, block.tool_use) for ref, block in blocks if block.tool_use),
-            ),
-        )
-    if not content:
-        return ()
-    return (_ConvertedMessage(ChatCompletionAssistantMessage(role="assistant", content=content), _refs(text_blocks)),)
-
-
-def _converse_message(
-    message_index: int, message: _ConverseMessage, include_tool_calls: bool
-) -> tuple[_ConvertedMessage, ...]:
-    blocks: Final = _indexed_blocks(message_index, message.content)
-    if message.role == "assistant":
-        return _converse_assistant_messages(blocks, include_tool_calls)
-    return _converse_user_messages(blocks)
-
-
-def _converse_structured_messages(request: _ConverseRequest, include_tool_calls: bool) -> tuple[_ConvertedMessage, ...]:
-    converted: Final = tuple(
-        chain.from_iterable(
-            _converse_message(index, message, include_tool_calls) for index, message in enumerate(request.messages)
-        )
-    )
-    system_blocks: Final = _text_blocks(_indexed_blocks(None, request.system))
-    if not system_blocks:
-        return converted
-    system: Final = ChatCompletionSystemMessage(role="system", content=list(_text_content(system_blocks)))
-    return (_ConvertedMessage(system, _refs(system_blocks)), *converted)
-
-
-def _without(mapping: Mapping[str, object], key: str) -> tuple[tuple[str, object], ...]:
-    return tuple(sorted(((name, value) for name, value in mapping.items() if name != key), key=lambda item: item[0]))
-
-
-def _without_content(message: Mapping[str, object]) -> tuple[tuple[str, object], ...]:
-    return _without(message, "content")
-
-
-def _fields(message: AllMessageValues) -> Mapping[str, object]:
-    return message
-
-
-def _as_object(value: object) -> Mapping[str, object] | None:
-    try:
-        return _OBJECT.validate_python(value)
-    except ValidationError:
-        return None
-
-
-def _returned_text_parts(message: Mapping[str, object]) -> tuple[str, ...] | None:
-    content: Final = message.get("content")
-    if isinstance(content, str):
-        return (content,)
-    try:
-        parts: Final = _TEXT_PARTS.validate_python(content)
-    except ValidationError:
-        return None
-    return tuple(part["text"] for part in parts)
-
-
-def _merged_edits(children: Sequence[tuple[_TextEdit, ...] | None]) -> tuple[_TextEdit, ...] | None:
-    if any(child is None for child in children):
-        return None
-    return tuple(chain.from_iterable(child for child in children if child is not None))
-
-
-def _json_children(path: tuple[str | int, ...], original: object, returned: object) -> tuple[_JsonPair, ...] | None:
-    original_object: Final = _as_object(original)
-    returned_object: Final = _as_object(returned)
-    if original_object is not None and returned_object is not None:
-        if original_object.keys() != returned_object.keys():
-            return None
-        return tuple(((*path, key), value, returned_object[key]) for key, value in original_object.items())
-    original_items: Final = _as_items(original)
-    returned_items: Final = _as_items(returned)
-    if original_items is None or returned_items is None or len(original_items) != len(returned_items):
-        return None
-    return tuple(((*path, index), value, returned_items[index]) for index, value in enumerate(original_items))
-
-
-def _json_edits(
-    ref: _BlockRef, path: tuple[str | int, ...], original: object, returned: object
-) -> tuple[_TextEdit, ...] | None:
-    """Only write changed leaves, preserving independent flat-text redactions."""
-    pending: Final[list[_JsonPair]] = [(path, original, returned)]  # mutable-ok: work stack instead of recursion
-    edits: Final[list[_TextEdit]] = []  # mutable-ok: collects the leaves the work stack visits
-    while pending:
-        leaf_path, before, after = pending.pop()
-        if before == after:
-            continue
-        if isinstance(before, str) and isinstance(after, str):
-            edits.append((_BlockRef(ref.message_index, ref.block_index, leaf_path), after))
-            continue
-        if (children := _json_children(leaf_path, before, after)) is None:
-            return None
-        pending.extend(children)
-    return tuple(edits)
-
-
-def _as_items(value: object) -> Sequence[object] | None:
-    if not isinstance(value, list):
-        return None
-    try:
-        return _ITEMS.validate_python(value)
-    except ValidationError:
-        return None
-
-
-def _tool_part_edits(
-    ref: _BlockRef, index: int, part: _ConverseToolResultContent, text: str
-) -> tuple[_TextEdit, ...] | None:
-    if part.text:
-        return ((_BlockRef(ref.message_index, ref.block_index, ("toolResult", "content", index, "text")), text),)
-    try:
-        value: Final = _PARSED_JSON.validate_json(text)
-    except ValidationError:
-        return None
-    return _json_edits(ref, ("toolResult", "content", index, "json"), part.json_value, value)
-
-
-def _tool_result_edits(converted: _ConvertedMessage, returned: Mapping[str, object]) -> tuple[_TextEdit, ...] | None:
-    if converted.tool_result is None or _without_content(returned) != _without_content(converted.message):
-        return None
-    ref, result = converted.tool_result
-    texts: Final = _returned_text_parts(returned)
-    parts: Final = _scannable_tool_parts(result)
-    if texts is None or len(texts) != len(parts):
-        return None
-    return _merged_edits(tuple(_tool_part_edits(ref, index, part, text) for (index, part), text in zip(parts, texts)))
-
-
-def _call_function(call: object) -> Mapping[str, object] | None:
-    call_object: Final = _as_object(call)
-    return _as_object(call_object.get("function")) if call_object is not None else None
-
-
-def _tool_call_edits(
-    tool_use: tuple[_BlockRef, _ConverseToolUse], before: object, after: object
-) -> tuple[_TextEdit, ...] | None:
-    if before == after:
-        return ()
-    before_call: Final = _as_object(before)
-    after_call: Final = _as_object(after)
-    before_function: Final = _call_function(before)
-    after_function: Final = _call_function(after)
-    if before_call is None or after_call is None or before_function is None or after_function is None:
-        return None
-    arguments: Final = after_function.get("arguments")
-    if (
-        not isinstance(arguments, str)
-        or _without(after_call, "function") != _without(before_call, "function")
-        or _without(after_function, "arguments") != _without(before_function, "arguments")
-    ):
-        return None
-    try:
-        value: Final = _PARSED_JSON.validate_json(arguments)
-    except ValidationError:
-        return None
-    ref, tool = tool_use
-    return _json_edits(ref, ("toolUse", "input"), tool.tool_input, value)
-
-
-def _tool_calls_edits(
-    tool_uses: Sequence[tuple[_BlockRef, _ConverseToolUse]], before: object, after: object
-) -> tuple[_TextEdit, ...] | None:
-    before_calls: Final = _as_items(before)
-    after_calls: Final = _as_items(after)
-    if before_calls is None or after_calls is None or len(before_calls) != len(after_calls):
-        return None
-    return _merged_edits(
-        tuple(
-            _tool_call_edits(tool_use, original, returned)
-            for tool_use, original, returned in zip(tool_uses, before_calls, after_calls)
-        )
-    )
-
-
-def _carries_no_text(content: object) -> bool:
-    match content:
-        case None | "" | []:
-            return True
-        case _:
-            return False
-
-
-def _content_edits(converted: _ConvertedMessage, returned: Mapping[str, object]) -> tuple[_TextEdit, ...] | None:
-    original: Final = _fields(converted.message)
-    if returned.get("content") == original.get("content"):
-        return ()
-    if not converted.text_blocks and _carries_no_text(returned.get("content")):
-        return ()
-    texts: Final = _returned_text_parts(returned)
-    before_texts: Final = _returned_text_parts(original)
-    if texts is None or before_texts is None or len(texts) != len(converted.text_blocks):
-        return None
-    return tuple((ref, text) for ref, before, text in zip(converted.text_blocks, before_texts, texts) if text != before)
-
-
-def _message_text_edits(converted: _ConvertedMessage, returned: Mapping[str, object]) -> tuple[_TextEdit, ...] | None:
-    if returned == converted.message:
-        return ()
-    if converted.tool_result is not None:
-        return _tool_result_edits(converted, returned)
-    original_calls: Final = _fields(converted.message).get("tool_calls")
-    call_edits: Final = (
-        _tool_calls_edits(converted.tool_uses, original_calls, returned.get("tool_calls"))
-        if converted.tool_uses
-        else ()
-    )
-    comparable: Final = {**returned, "tool_calls": original_calls} if converted.tool_uses else returned
-    if call_edits is None or _without_content(comparable) != _without_content(converted.message):
-        return None
-    return _merged_edits((call_edits, _content_edits(converted, comparable)))
+def _texts_applied_rows(body: Mapping[str, object], texts: Sequence[str], scope: _Scope) -> tuple[ConverseRow, ...]:
+    rewritten: Final = copy.deepcopy(dict(body))
+    _write_back_texts(texts, _flat_texts(rewritten, scope)[1])
+    request: Final = parse_converse_request(rewritten)
+    return converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
 
 
 def _child(node: object, key: str | int) -> object:
     match key:
         case str():
-            fields: Final = _as_object(node)
-            if fields is not None:
-                return fields[key]
+            fields: Final = as_json_object(node)
+            return None if fields is None else fields.get(key)
         case int():
-            items: Final = _as_items(node)
-            if items is not None:
-                return items[key]
-    raise KeyError(key)
+            items: Final = as_json_array(node)
+            return items[key] if items is not None and 0 <= key < len(items) else None
 
 
-def _has_text(block: object) -> bool:
-    fields: Final = _as_object(block)
-    return fields is not None and bool(fields.get("text"))
-
-
-def _leaf(body: Mapping[str, object], ref: _BlockRef) -> _StringHolder:
-    blocks: Final = (
-        body["system"] if ref.message_index is None else _child(_child(body["messages"], ref.message_index), "content")
-    )
-    block: Final = _child(blocks, ref.block_index)
-    path: Final = ref.path or (("text",) if _has_text(block) else ("guardContent", "text", "text"))
-    return reduce(_child, path[:-1], block), path[-1]
+def _holder(body: object, path: JsonPath) -> _StringHolder | None:
+    container: Final = reduce(_child, path[:-1], body)
+    return (container, path[-1]) if isinstance(_child(container, path[-1]), str) else None
 
 
 def _leaf_identity(holder: _StringHolder) -> tuple[int, str | int]:
@@ -606,89 +209,20 @@ def _changed_leaves(
     )
 
 
-def _texts_applied_view(
-    body: Mapping[str, object], texts: Sequence[str], skip_system: bool, skip_tool: bool, scan_only_tool_results: bool
-) -> tuple[_ConvertedMessage, ...]:
-    rewritten: Final = copy.deepcopy(dict(body))
-    _, holders = _extract_converse_texts(rewritten, skip_system, skip_tool, scan_only_tool_results)
-    _write_back_texts(texts, holders)
-    return _converse_structured_messages(_ConverseRequest.model_validate(rewritten), not skip_tool)
-
-
-def _same_content(expected: Mapping[str, object], returned: Mapping[str, object]) -> bool:
-    if expected.get("content") == returned.get("content"):
-        return True
-    expected_parts: Final = _returned_text_parts(expected)
-    returned_parts: Final = _returned_text_parts(returned)
-    return (
-        expected_parts is not None
-        and returned_parts is not None
-        and "\n".join(expected_parts) == "\n".join(returned_parts)
-    )
-
-
-def _reproduces(rewritten: _ConvertedMessage, returned: Mapping[str, object] | None) -> bool:
-    """Whether the flat-text rewrite already yields the row the guardrail returned."""
-    return (
-        returned is not None
-        and _without_content(returned) == _without_content(rewritten.message)
-        and _same_content(rewritten.message, returned)
-    )
-
-
-def _structured_text_edits(
-    leaf: Callable[[_BlockRef], _StringHolder],
-    converted: Sequence[_ConvertedMessage],
-    scoped_indices: Sequence[int],
-    returned: Sequence[object],
-    flat_changes: frozenset[tuple[int, str | int]],
-    flat_view: Callable[[], tuple[_ConvertedMessage, ...]],
-) -> tuple[tuple[_StringHolder, object], ...] | None:
-    """
-    Structured edits for the leaves the flat texts left unchanged.
-
-    A row whose rewrite cannot be mapped back onto its Converse blocks is accepted only when
-    the flat-text rewrite already produces it.
-    """
-    if len(returned) != len(scoped_indices):
+def _holder_edits(
+    body: Mapping[str, object], edits: Sequence[Edit], flat_changes: frozenset[tuple[int, str | int]]
+) -> tuple[tuple[_StringHolder, str], ...] | None:
+    resolved: Final = tuple((_holder(body, path), text) for path, text in edits)
+    if any(holder is None for holder, _ in resolved):
         return None
-    rows: Final = tuple(_as_object(message) for message in returned)
-    proposed: Final = tuple(
-        _message_text_edits(converted[index], row) if row is not None else None
-        for index, row in zip(scoped_indices, rows)
+    return tuple(
+        (holder, text) for holder, text in resolved if holder is not None and _leaf_identity(holder) not in flat_changes
     )
-    unmapped: Final = tuple((index, row) for index, row, edits in zip(scoped_indices, rows, proposed) if edits is None)
-    if unmapped:
-        view: Final = flat_view()
-        if len(view) != len(converted):
-            return None
-        if not all(_reproduces(view[index], row) for index, row in unmapped):
-            return None
-    resolved: Final = tuple(
-        (leaf(ref), text) for ref, text in chain.from_iterable(edits for edits in proposed if edits is not None)
-    )
-    return tuple((holder, text) for holder, text in resolved if _leaf_identity(holder) not in flat_changes)
 
 
-def _write_back_structured_texts(edits: Sequence[tuple[_StringHolder, object]]) -> None:
+def _write_back_structured_texts(edits: Sequence[tuple[_StringHolder, str]]) -> None:
     for (container, key), text in edits:
         container[key] = text
-
-
-def _converse_tools(request: _ConverseRequest) -> tuple[ChatCompletionToolParam, ...]:
-    tools: Final = request.tool_config.tools if request.tool_config else ()
-    return tuple(
-        ChatCompletionToolParam(
-            type="function",
-            function=ChatCompletionToolParamFunctionChunk(
-                name=spec.name,
-                description=spec.description,
-                parameters=dict(spec.input_schema.json_schema),
-            ),
-        )
-        for tool in tools
-        if (spec := tool.tool_spec) and spec.name and spec.input_schema and spec.input_schema.json_schema is not None
-    )
 
 
 def _extract_converse_output_texts(
@@ -991,30 +525,29 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
             return data
 
-        skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
-        skip_tool: Final = effective_skip_tool_message_for_guardrail(guardrail_to_apply)
-
-        scan_only_tool_results: Final = effective_scan_only_tool_results_for_guardrail(guardrail_to_apply)
-        texts, holders = _extract_converse_texts(body, skip_system, skip_tool, scan_only_tool_results)
-        converse_request: Final = _parse_converse_request(lambda: _ConverseRequest.model_validate(body))
-        converted: Final = _converse_structured_messages(converse_request, not skip_tool) if converse_request else ()
-        structured_messages: Final = tuple(item.message for item in converted)
-        scoped_message_indices: Final = scoped_structured_message_indices(
-            structured_messages,
-            scan_only_tool_results=scan_only_tool_results,
-            skip_system=skip_system,
-            skip_tool=skip_tool,
+        scope: Final = _Scope(
+            skip_system=effective_skip_system_message_for_guardrail(guardrail_to_apply),
+            skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
+            scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(guardrail_to_apply),
+        )
+        texts, holders = _flat_texts(body, scope)
+        request: Final = parse_converse_request(body)
+        rows: Final = converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
+        scoped_indices: Final = scoped_structured_message_indices(
+            tuple(row.message for row in rows),
+            scan_only_tool_results=scope.scan_only_tool_results,
+            skip_system=scope.skip_system,
+            skip_tool=scope.skip_tool,
         )
 
-        if not texts and not scoped_message_indices:
+        if not texts and not scoped_indices:
             return data
 
+        sent_messages: Final = [rows[index].message for index in scoped_indices]
         inputs: Final = GenericGuardrailAPIInputs(texts=list(texts))
-        if scoped_message_indices:
-            inputs["structured_messages"] = copy.deepcopy(
-                [structured_messages[index] for index in scoped_message_indices]
-            )
-        tools: Final = _converse_tools(converse_request) if converse_request and not scan_only_tool_results else ()
+        if sent_messages:
+            inputs["structured_messages"] = copy.deepcopy(sent_messages)
+        tools: Final = converse_tools(request) if request and not scope.scan_only_tool_results else ()
         if tools:
             inputs["tools"] = list(tools)
         model: Final = data.get("model")
@@ -1030,7 +563,6 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
         guardrailed_messages: Final = guardrailed_inputs.get("structured_messages")
-        sent_messages: Final = [structured_messages[index] for index in scoped_message_indices]
         rewritten_rows: Final = (
             guardrailed_messages
             if sent_messages and isinstance(guardrailed_messages, list) and guardrailed_messages != sent_messages
@@ -1039,23 +571,23 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         applied_texts: Final = (
             texts if rewritten_rows is not None and len(guardrailed_texts) != len(texts) else guardrailed_texts
         )
-        edits: Final = (
+        row_edits: Final = (
             ()
             if rewritten_rows is None
-            else _structured_text_edits(
-                partial(_leaf, body),
-                converted,
-                scoped_message_indices,
-                rewritten_rows,
-                _changed_leaves(holders, texts, applied_texts),
-                partial(_texts_applied_view, body, applied_texts, skip_system, skip_tool, scan_only_tool_results),
+            else structured_edits(
+                rows, scoped_indices, rewritten_rows, partial(_texts_applied_rows, body, applied_texts, scope)
             )
         )
-        if edits is None:
+        holder_edits: Final = (
+            None
+            if row_edits is None
+            else _holder_edits(body, row_edits, _changed_leaves(holders, texts, applied_texts))
+        )
+        if holder_edits is None:
             raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
         if applied_texts:
             _write_back_texts(applied_texts, holders)
-        _write_back_structured_texts(edits)
+        _write_back_structured_texts(holder_edits)
 
         return data
 
