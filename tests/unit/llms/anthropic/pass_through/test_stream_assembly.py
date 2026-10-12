@@ -390,3 +390,80 @@ def test_multiple_message_usage_events_preserve_native_accounting(output_tokens:
     chunks: Final = original[:-1] + (extra,) + original[-1:]
     assert compact_content_block_deltas(chunks) is not None
     assert _response_payload(_stream_response(chunks)) == _response_payload(_stream_response(chunks, legacy=True))
+
+
+@pytest.mark.parametrize(
+    "position,extra",
+    [
+        (
+            3,
+            _frame(
+                "ping",
+                {"type": "content_block_delta", "index": 0, "delta": {"type": "thinking_delta", "thinking": "extra"}},
+            ),
+        ),
+        (
+            3,
+            _frame(
+                "content_block_delta",
+                {
+                    "type": "content_block_delta",
+                    "index": 0,
+                    "delta": {"type": "thinking_delta", "thinking": "extra", "unknown": True},
+                },
+            ),
+        ),
+        (
+            3,
+            _frame(
+                "content_block_start",
+                {"type": "content_block_start", "index": 1, "content_block": {"type": "thinking", "thinking": ""}},
+            ),
+        ),
+        (
+            1,
+            _frame(
+                "content_block_start",
+                {
+                    "type": "content_block_start",
+                    "index": 0,
+                    "content_block": {"type": "redacted_thinking", "data": "opaque"},
+                },
+            ),
+        ),
+        (
+            3,
+            _frame(
+                "content_block_delta",
+                {"type": "content_block_delta", "index": 9, "delta": {"type": "thinking_delta", "thinking": "extra"}},
+            ),
+        ),
+        (1, _frame("content_block_stop", {"type": "content_block_stop", "index": 9})),
+        (3, _frame("extension", {"type": "extension"})),
+    ],
+    ids=[
+        "event-type-mismatch",
+        "extra-delta-field",
+        "overlapping-block",
+        "unknown-block",
+        "wrong-delta-index",
+        "stop-without-block",
+        "unknown-event",
+    ],
+)
+def test_unfamiliar_block_frames_retain_native_response(position: int, extra: bytes) -> None:
+    original: Final = _mixed_stream((("thinking", ("a", "b")),))
+    chunks: Final = original[:position] + (extra,) + original[position:]
+    assert compact_content_block_deltas(chunks) is None
+    assert _response_payload(_stream_response(chunks)) == _response_payload(_stream_response(chunks, legacy=True))
+
+
+def test_signature_outside_thinking_retains_native_response() -> None:
+    original: Final = _mixed_stream((("tool_use", ('{"x":', "1}")),))
+    signature: Final = _frame(
+        "content_block_delta",
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "signature_delta", "signature": "opaque"}},
+    )
+    chunks: Final = original[:3] + (signature,) + original[3:]
+    assert compact_content_block_deltas(chunks) is None
+    assert _response_payload(_stream_response(chunks)) == _response_payload(_stream_response(chunks, legacy=True))
