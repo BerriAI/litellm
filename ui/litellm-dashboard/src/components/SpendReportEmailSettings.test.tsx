@@ -42,7 +42,7 @@ describe("SpendReportEmailSettings", () => {
     await waitFor(() => {
       expect(
         screen.getByText(
-          "Automatically send daily and/or monthly spend reports to configured email addresses. Includes cumulative breakdowns by team, API keys, and models.",
+          "Automatically send daily, weekly, and/or monthly spend reports to configured email addresses. Includes cumulative breakdowns by team, API keys, and models.",
         ),
       ).toBeInTheDocument();
       expect(screen.getAllByDisplayValue("finance@example.com").length).toBeGreaterThan(0);
@@ -383,6 +383,80 @@ describe("SpendReportEmailSettings", () => {
 
     await waitFor(() => {
       expect(screen.getByText("Send Time (CEST)")).toBeInTheDocument();
+    });
+  });
+
+  it("renders weekly alerts with day of week selector and tooltip", async () => {
+    vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
+      values: {
+        alerts: [
+          {
+            id: "weekly-alert",
+            name: "Weekly Friday Spend",
+            enabled: true,
+            frequency: "weekly",
+            day_of_week: "friday",
+            send_time: "09:00",
+            recipient_emails: ["leadership@example.com"],
+            group_by: ["team"],
+            team_id: null,
+          },
+        ],
+      },
+      field_schema: {},
+    });
+
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Weekly Friday Spend")).toBeInTheDocument();
+      expect(screen.getByText("Day of Week")).toBeInTheDocument();
+      expect(screen.getByText("Friday")).toBeInTheDocument();
+      expect(screen.getAllByText("Weekly").length).toBeGreaterThan(0);
+    });
+  });
+
+  it("sends a test email report for a weekly alert with frequency weekly", async () => {
+    vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
+      values: {
+        alerts: [
+          {
+            id: "weekly-test-alert",
+            name: "Weekly Test",
+            enabled: true,
+            frequency: "weekly",
+            day_of_week: "monday",
+            send_time: "09:00",
+            recipient_emails: ["weekly-test@example.com"],
+            group_by: ["team"],
+            team_id: null,
+          },
+        ],
+      },
+      field_schema: {},
+    });
+    vi.mocked(networking.sendSpendReportEmailTest).mockResolvedValue({
+      total_spend: 99.5,
+      total_requests: 120,
+    });
+
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Weekly Test")).toBeInTheDocument();
+    });
+
+    const testButton = screen.getByRole("button", { name: "Send Test Report Now" });
+    fireEvent.click(testButton);
+
+    await waitFor(() => {
+      expect(networking.sendSpendReportEmailTest).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          frequency: "weekly",
+          recipient_emails: ["weekly-test@example.com"],
+        }),
+      );
     });
   });
 

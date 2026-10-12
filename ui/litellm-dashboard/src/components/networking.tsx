@@ -5804,7 +5804,8 @@ export interface SpendReportEmailAlertItem {
   id: string;
   name: string;
   enabled: boolean;
-  frequency: "daily" | "monthly";
+  frequency: "daily" | "weekly" | "monthly";
+  day_of_week?: string | null;
   send_time: string;
   recipient_emails: string[];
   group_by: ("team" | "team_key" | "team_model" | "team_key_model")[];
@@ -5838,7 +5839,7 @@ export const updateSpendReportEmailSettings = async (
 export const sendSpendReportEmailTest = async (
   accessToken: string,
   payload: {
-    frequency?: "daily" | "monthly";
+    frequency?: "daily" | "weekly" | "monthly";
     recipient_emails?: string[];
     group_by?: string[];
     start_date?: string;

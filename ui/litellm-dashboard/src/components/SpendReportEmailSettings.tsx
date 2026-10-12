@@ -8,7 +8,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
-import { Plus, Trash2, Send, ChevronDown, ChevronUp } from "lucide-react";
+import { Plus, Trash2, Send, ChevronDown, ChevronUp, CircleHelp } from "lucide-react";
 import { toast } from "@/lib/toast";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { isProxyAdminRole } from "@/utils/roles";
@@ -57,10 +57,21 @@ const GROUP_BY_OPTIONS: readonly GroupByOption[] = [
   },
 ];
 
-const FREQUENCY_LABELS: Record<"daily" | "monthly", string> = {
+const FREQUENCY_LABELS: Record<"daily" | "weekly" | "monthly", string> = {
   daily: "Daily (Previous Day)",
+  weekly: "Weekly",
   monthly: "Monthly (1st of Month)",
 };
+
+const DAY_OF_WEEK_OPTIONS: readonly { readonly id: string; readonly label: string }[] = [
+  { id: "monday", label: "Monday" },
+  { id: "tuesday", label: "Tuesday" },
+  { id: "wednesday", label: "Wednesday" },
+  { id: "thursday", label: "Thursday" },
+  { id: "friday", label: "Friday" },
+  { id: "saturday", label: "Saturday" },
+  { id: "sunday", label: "Sunday" },
+];
 
 const buildInitialAlerts = (values: SpendReportEmailSettingsValues): SpendReportEmailAlertItem[] => {
   if (values.alerts && values.alerts.length > 0) {
@@ -177,6 +188,7 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
       name: `Spend Report Alert ${alerts.length + 1}`,
       enabled: true,
       frequency: "daily",
+      day_of_week: "monday",
       send_time: "09:00",
       recipient_emails: [],
       group_by: ["team"],
@@ -301,8 +313,8 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
               </Badge>
             </div>
             <CardDescription className="text-sm text-muted-foreground">
-              Automatically send daily and/or monthly spend reports to configured email addresses. Includes cumulative
-              breakdowns by team, API keys, and models.
+              Automatically send daily, weekly, and/or monthly spend reports to configured email addresses. Includes
+              cumulative breakdowns by team, API keys, and models.
             </CardDescription>
           </div>
           <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
@@ -348,8 +360,8 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
             <div className="text-center py-12 border border-dashed rounded-lg space-y-3">
               <p className="text-sm font-medium text-foreground">No scheduled spend report alerts configured</p>
               <p className="text-xs text-muted-foreground max-w-md mx-auto">
-                Configure daily or monthly alerts for your entire proxy or specific teams to keep stakeholders informed
-                of LLM spend.
+                Configure daily, weekly, or monthly alerts for your entire proxy or specific teams to keep stakeholders
+                informed of LLM spend.
               </p>
               <Button
                 type="button"
@@ -432,12 +444,14 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
                       <CardContent className="px-4 sm:px-6 pb-4 pt-0 space-y-4">
                         <Separator className="mb-4" />
 
-                        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div
+                          className={`grid grid-cols-1 ${alert.frequency === "weekly" ? "md:grid-cols-4" : "md:grid-cols-3"} gap-4`}
+                        >
                           <div className="space-y-1.5">
                             <label className="text-xs font-medium text-foreground">Frequency</label>
                             <Select
                               value={alert.frequency}
-                              onValueChange={(val: "daily" | "monthly" | null) => {
+                              onValueChange={(val: "daily" | "weekly" | "monthly" | null) => {
                                 if (val) handleUpdateAlert(alert.id, { frequency: val });
                               }}
                             >
@@ -448,10 +462,42 @@ export const SpendReportEmailSettings: React.FC<SpendReportEmailSettingsProps> =
                               </SelectTrigger>
                               <SelectContent>
                                 <SelectItem value="daily">Daily (Previous Day)</SelectItem>
+                                <SelectItem value="weekly">Weekly</SelectItem>
                                 <SelectItem value="monthly">Monthly (1st of Month)</SelectItem>
                               </SelectContent>
                             </Select>
                           </div>
+
+                          {alert.frequency === "weekly" && (
+                            <div className="space-y-1.5">
+                              <div className="flex items-center gap-1.5">
+                                <label className="text-xs font-medium text-foreground">Day of Week</label>
+                                <SimpleTooltip content="Reports cover the 7 days prior to the selected send day (e.g., selecting Friday covers last Friday through Thursday midnight).">
+                                  <CircleHelp className="h-3.5 w-3.5 text-muted-foreground cursor-help" />
+                                </SimpleTooltip>
+                              </div>
+                              <Select
+                                value={alert.day_of_week || "monday"}
+                                onValueChange={(val: string | null) => {
+                                  if (val) handleUpdateAlert(alert.id, { day_of_week: val });
+                                }}
+                              >
+                                <SelectTrigger className="w-full h-9 text-xs">
+                                  <SelectValue placeholder="Select day">
+                                    {DAY_OF_WEEK_OPTIONS.find((d) => d.id === (alert.day_of_week || "monday"))?.label ||
+                                      "Monday"}
+                                  </SelectValue>
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {DAY_OF_WEEK_OPTIONS.map((day) => (
+                                    <SelectItem key={day.id} value={day.id}>
+                                      {day.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                          )}
 
                           <div className="space-y-1.5">
                             <label className="text-xs font-medium text-foreground">Send Time ({timezoneLabel})</label>

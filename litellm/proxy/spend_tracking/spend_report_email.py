@@ -91,9 +91,13 @@ class SpendReportEmailAlert(BaseModel):
         default=True,
         description="Whether this alert is enabled",
     )
-    frequency: Literal["daily", "monthly"] = Field(
+    frequency: Literal["daily", "weekly", "monthly"] = Field(
         default="daily",
-        description="Alert frequency: 'daily' or 'monthly'",
+        description="Alert frequency: 'daily', 'weekly', or 'monthly'",
+    )
+    day_of_week: str | None = Field(
+        default="monday",
+        description="Day of week for weekly alerts (e.g. 'monday', 'friday'). Defaults to 'monday'",
     )
     send_time: str = Field(
         default="09:00",
@@ -139,9 +143,9 @@ class SpendReportEmailSendRequest(BaseModel):
         default=None,
         description="Optional list of recipients. Defaults to configured recipient_emails",
     )
-    frequency: Literal["daily", "monthly"] = Field(
+    frequency: Literal["daily", "weekly", "monthly"] = Field(
         default="daily",
-        description="Report frequency to generate: 'daily' or 'monthly'",
+        description="Report frequency to generate: 'daily', 'weekly', or 'monthly'",
     )
     group_by: tuple[SpendReportGroupBy, ...] | None = Field(
         default=None,
@@ -544,6 +548,31 @@ GROUP_BY_COLUMNS: Final[Mapping[SpendReportGroupBy, Sequence[tuple[str, str, str
 }
 
 
+_DAY_OF_WEEK_MAP: Final[Mapping[str, str]] = {
+    "monday": "mon",
+    "mon": "mon",
+    "tuesday": "tue",
+    "tue": "tue",
+    "wednesday": "wed",
+    "wed": "wed",
+    "thursday": "thu",
+    "thu": "thu",
+    "friday": "fri",
+    "fri": "fri",
+    "saturday": "sat",
+    "sat": "sat",
+    "sunday": "sun",
+    "sun": "sun",
+}
+
+
+def _parse_day_of_week(val: str | None) -> str:
+    if not val:
+        return "mon"
+    cleaned: Final = val.strip().lower()
+    return _DAY_OF_WEEK_MAP.get(cleaned, "mon")
+
+
 def parse_send_time(time_str: str) -> tuple[int, int]:
     parts: Final = time_str.strip().split(":")
     if len(parts) != 2:
@@ -562,6 +591,13 @@ def get_daily_report_date_range(ref_date: date | None = None) -> tuple[date, dat
     current_date: Final = ref_date or datetime.now().astimezone().date()
     yesterday: Final = current_date - timedelta(days=1)
     return (yesterday, yesterday)
+
+
+def get_weekly_report_date_range(ref_date: date | None = None) -> tuple[date, date]:
+    current_date: Final = ref_date or datetime.now().astimezone().date()
+    end_date: Final = current_date - timedelta(days=1)
+    start_date: Final = current_date - timedelta(days=7)
+    return (start_date, end_date)
 
 
 def get_monthly_report_date_range(ref_date: date | None = None) -> tuple[date, date]:
@@ -809,6 +845,9 @@ def _resolve_report_date_range(
     if frequency == "daily":
         d_start, d_end = get_daily_report_date_range()
         return (d_start.strftime("%Y-%m-%d"), d_end.strftime("%Y-%m-%d"))
+    if frequency == "weekly":
+        w_start, w_end = get_weekly_report_date_range()
+        return (w_start.strftime("%Y-%m-%d"), w_end.strftime("%Y-%m-%d"))
     m_start, m_end = get_monthly_report_date_range()
     return (m_start.strftime("%Y-%m-%d"), m_end.strftime("%Y-%m-%d"))
 
@@ -827,7 +866,7 @@ def _resolve_prisma_client(provided: object | None) -> object:
 
 
 async def send_spend_report_email(
-    frequency: Literal["daily", "monthly"] = "daily",
+    frequency: Literal["daily", "weekly", "monthly"] = "daily",
     recipient_emails: Sequence[str] | None = None,
     group_by: Sequence[SpendReportGroupBy] | None = None,
     start_date: str | None = None,
@@ -1002,6 +1041,18 @@ def _setup_alert_jobs(
             add_job_fn(
                 runner_fn,
                 "cron",
+                hour=hour,
+                minute=minute,
+                id=job_id,
+                replace_existing=True,
+            )
+            _registered_spend_report_job_ids.add(job_id)
+        elif alert.frequency == "weekly":
+            dow = _parse_day_of_week(alert.day_of_week)
+            add_job_fn(
+                runner_fn,
+                "cron",
+                day_of_week=dow,
                 hour=hour,
                 minute=minute,
                 id=job_id,

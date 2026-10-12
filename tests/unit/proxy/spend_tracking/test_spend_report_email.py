@@ -8,12 +8,14 @@ import pytest
 from litellm.proxy.spend_tracking.spend_report_email import (
     SpendReportEmailAlert,
     SpendReportEmailSettings,
+    _parse_day_of_week,
     build_spend_report_email_html,
     check_spend_report_email_status,
     default_email_sender,
     fetch_grouped_spend_data,
     get_daily_report_date_range,
     get_monthly_report_date_range,
+    get_weekly_report_date_range,
     parse_send_time,
     send_spend_report_email,
     setup_email_spend_report_jobs,
@@ -33,6 +35,23 @@ def test_parse_send_time() -> None:
     assert parse_send_time("12:-1") == (9, 0)
 
 
+def test_parse_day_of_week() -> None:
+    assert _parse_day_of_week("monday") == "mon"
+    assert _parse_day_of_week("mon") == "mon"
+    assert _parse_day_of_week("Monday") == "mon"
+    assert _parse_day_of_week("tuesday") == "tue"
+    assert _parse_day_of_week("Wednesday") == "wed"
+    assert _parse_day_of_week("thursday") == "thu"
+    assert _parse_day_of_week("friday") == "fri"
+    assert _parse_day_of_week("Friday") == "fri"
+    assert _parse_day_of_week("FRI") == "fri"
+    assert _parse_day_of_week("saturday") == "sat"
+    assert _parse_day_of_week("sunday") == "sun"
+    assert _parse_day_of_week("") == "mon"
+    assert _parse_day_of_week(None) == "mon"
+    assert _parse_day_of_week("invalid_day") == "mon"
+
+
 def test_get_daily_report_date_range() -> None:
     start_date, end_date = get_daily_report_date_range(ref_date=date(2026, 10, 9))
     assert start_date == date(2026, 10, 8)
@@ -41,6 +60,23 @@ def test_get_daily_report_date_range() -> None:
     jan1_start, jan1_end = get_daily_report_date_range(ref_date=date(2026, 1, 1))
     assert jan1_start == date(2025, 12, 31)
     assert jan1_end == date(2025, 12, 31)
+
+
+def test_get_weekly_report_date_range() -> None:
+    fri_start, fri_end = get_weekly_report_date_range(ref_date=date(2026, 10, 16))
+    assert fri_start == date(2026, 10, 9)
+    assert fri_end == date(2026, 10, 15)
+    assert (fri_end - fri_start).days + 1 == 7
+
+    mon_start, mon_end = get_weekly_report_date_range(ref_date=date(2026, 10, 12))
+    assert mon_start == date(2026, 10, 5)
+    assert mon_end == date(2026, 10, 11)
+    assert (mon_end - mon_start).days + 1 == 7
+
+    jan_start, jan_end = get_weekly_report_date_range(ref_date=date(2026, 1, 3))
+    assert jan_start == date(2025, 12, 27)
+    assert jan_end == date(2026, 1, 2)
+    assert (jan_end - jan_start).days + 1 == 7
 
 
 def test_get_monthly_report_date_range() -> None:
@@ -76,6 +112,13 @@ def test_spend_report_email_settings_validation() -> None:
 
     invalid_filtered: Final = SpendReportEmailAlert(group_by=["invalid", "team_model"])  # pyright: ignore[reportArgumentType]
     assert invalid_filtered.group_by == ("team_model",)
+
+    weekly_alert: Final = SpendReportEmailAlert(frequency="weekly", day_of_week="friday")
+    assert weekly_alert.frequency == "weekly"
+    assert weekly_alert.day_of_week == "friday"
+
+    weekly_default_dow: Final = SpendReportEmailAlert(frequency="weekly")
+    assert weekly_default_dow.day_of_week == "monday"
 
 
 @pytest.mark.asyncio
@@ -677,6 +720,7 @@ async def test_default_email_sender_resend(monkeypatch: pytest.MonkeyPatch) -> N
 @pytest.mark.asyncio
 async def test_default_email_sender_import_error_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     import builtins
+
     from litellm.proxy.spend_tracking.spend_report_email import default_email_sender
 
     monkeypatch.setenv("SENDGRID_API_KEY", "sg-test-key")
@@ -719,9 +763,9 @@ def test_parse_send_time_invalid() -> None:
 def test_settings_from_config_and_memory(monkeypatch: pytest.MonkeyPatch) -> None:
     import litellm
     from litellm.proxy.spend_tracking.spend_report_email import (
-        get_spend_report_email_settings,
         _settings_from_config,
         _settings_from_memory,
+        get_spend_report_email_settings,
     )
 
     assert _settings_from_config(None) is None
@@ -813,15 +857,50 @@ async def test_send_spend_report_email_date_inference(monkeypatch: pytest.Monkey
     )
     assert result_monthly.status == "success"
 
+    result_weekly: Final = await send_spend_report_email(
+        frequency="weekly",
+        recipient_emails=["dev@example.com"],
+        prisma_client=mock_prisma,
+        email_sender=mock_send,
+    )
+    assert result_weekly.status == "success"
+    assert result_weekly.frequency == "weekly"
+
 
 @pytest.mark.asyncio
 async def test_send_spend_report_email_no_prisma(monkeypatch: pytest.MonkeyPatch) -> None:
-    from litellm.proxy.spend_tracking.spend_report_email import send_spend_report_email
     import litellm.proxy.proxy_server as ps
+    from litellm.proxy.spend_tracking.spend_report_email import send_spend_report_email
 
     monkeypatch.setattr(ps, "prisma_client", None)
     with pytest.raises(RuntimeError, match="Prisma client is not connected"):
         await send_spend_report_email(frequency="daily", recipient_emails=["test@example.com"], prisma_client=None)
+
+
+def test_setup_alert_jobs_weekly() -> None:
+    from litellm.proxy.spend_tracking.spend_report_email import (
+        SpendReportEmailAlert,
+        _setup_alert_jobs,
+    )
+
+    added: Final[dict[str, object]] = {}
+
+    def mock_add_job(fn: object, trigger: str, **kwargs: object) -> None:
+        added[str(kwargs.get("id"))] = kwargs
+
+    alert: Final = SpendReportEmailAlert(
+        id="weekly-test-1",
+        name="Weekly Ops",
+        frequency="weekly",
+        day_of_week="friday",
+        send_time="14:45",
+        recipient_emails=["ops@example.com"],
+    )
+    _setup_alert_jobs(mock_add_job, [alert])
+    assert "email_spend_report_weekly-test-1" in added
+    assert added["email_spend_report_weekly-test-1"]["day_of_week"] == "fri"
+    assert added["email_spend_report_weekly-test-1"]["hour"] == 14
+    assert added["email_spend_report_weekly-test-1"]["minute"] == 45
 
 
 def test_setup_alert_jobs_monthly() -> None:
@@ -869,11 +948,11 @@ def test_safe_remove_job() -> None:
 
 @pytest.mark.asyncio
 async def test_run_scheduled_email_spend_alert(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.proxy_server as ps
     from litellm.proxy.spend_tracking.spend_report_email import (
         SpendReportEmailAlert,
         run_scheduled_email_spend_alert,
     )
-    import litellm.proxy.proxy_server as ps
 
     mock_send: Final = AsyncMock()
     monkeypatch.setattr("litellm.proxy.spend_tracking.spend_report_email.send_spend_report_email", mock_send)
@@ -914,12 +993,12 @@ async def test_run_scheduled_email_spend_alert(monkeypatch: pytest.MonkeyPatch) 
 
 @pytest.mark.asyncio
 async def test_run_scheduled_email_spend_alert_skips_deleted_or_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.proxy_server as ps
     from litellm.proxy.spend_tracking.spend_report_email import (
         SpendReportEmailAlert,
         SpendReportEmailSettings,
         run_scheduled_email_spend_alert,
     )
-    import litellm.proxy.proxy_server as ps
 
     mock_send: Final = AsyncMock()
     monkeypatch.setattr("litellm.proxy.spend_tracking.spend_report_email.send_spend_report_email", mock_send)
@@ -962,12 +1041,12 @@ async def test_run_scheduled_email_spend_alert_skips_deleted_or_disabled(monkeyp
 
 @pytest.mark.asyncio
 async def test_run_scheduled_email_spend_alert_uses_persisted_recipients(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm.proxy.proxy_server as ps
     from litellm.proxy.spend_tracking.spend_report_email import (
         SpendReportEmailAlert,
         SpendReportEmailSettings,
         run_scheduled_email_spend_alert,
     )
-    import litellm.proxy.proxy_server as ps
 
     mock_send: Final = AsyncMock()
     monkeypatch.setattr("litellm.proxy.spend_tracking.spend_report_email.send_spend_report_email", mock_send)
