@@ -1,0 +1,14 @@
+{
+  "results": {
+    "template_options": [
+      "1M Context | Routes across models with 1M-token context windows: GPT-6 Luna for simple queries, GPT-5.6 Terra for medium, GPT-6 Sol for complex, Opus 5.5 at high thinking for reasoning. | Replaces tier models and their parameters",
+      "Anthropic Family | Routes across the Claude model family: Haiku for simple queries, Sonnet for medium, Opus 5.5 for complex, Fable 5.1 at high thinking for reasoning. | Replaces tier models and their parameters",
+      "Gemini Family | Routes across the Gemini model family: Flash Lite 3.5 for simple queries, Flash 3.8 for medium and complex queries, Pro 3.1 for reasoning-heavy requests. | Replaces tier models and their parameters",
+      "Lite | Cost-optimized routing across providers: DeepSeek V4 Flash for simple queries, Muse Spark 1.3 at xhigh for medium, Kimi K3 at max for complex, Claude Opus 5.5 for reasoning. | Replaces tier models and their parameters",
+      "OpenAI Family | Routes across the GPT model family: GPT-6 Luna for simple queries, GPT-5.6 Terra for medium, GPT-6 Sol for complex, GPT-6 Astra at xhigh thinking for reasoning. | Replaces tier models and their parameters",
+      "Start from scratch | Clears tier models, switches to Heuristics, and resets routing settings"
+    ],
+    "lite_visible_desc": []
+  },
+  "log": []
+}

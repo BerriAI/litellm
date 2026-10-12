@@ -1,0 +1,22 @@
+{
+  "db_model": true,
+  "classifier_type": "heuristic",
+  "jev_classifier_config": null,
+  "classifier_llm_config": null,
+  "classification_mode": "every_request",
+  "tiers": {
+    "MEDIUM": [
+      "claude-sonnet-5"
+    ],
+    "SIMPLE": [
+      "claude-haiku-4-5"
+    ],
+    "COMPLEX": [
+      "claude-opus-5-5"
+    ],
+    "REASONING": [
+      "claude-fable-5-1"
+    ]
+  },
+  "custom_tier_set": null
+}

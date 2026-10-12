@@ -1,0 +1,342 @@
+{
+  "results": {
+    "c5ad_fus": {
+      "before": {
+        "family": [
+          "LLM",
+          "All tiers (soft floor) \u2014 router can pick across tiers, depending on the best fit for the prompt"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 10,
+        "adaptive": "true",
+        "ui_tiers": {
+          "simple": [
+            "claude-haiku-4-5"
+          ],
+          "medium": [
+            "gpt-5.6-terra"
+          ],
+          "complex": [
+            "gpt-6-astra"
+          ],
+          "reasoning": [
+            "gpt-6-astra"
+          ]
+        }
+      },
+      "confirm": "Change classification method?\n\nThis change may remove models from incompatible tiers or disable adaptive routing. Your classifier settings will remain available when you switch back, but removed tier models will not.\n\nKeep current settings\nChange method",
+      "cancelled": {
+        "family": [
+          "LLM",
+          "All tiers (soft floor) \u2014 router can pick across tiers, depending on the best fit for the prompt"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 10,
+        "adaptive": "true"
+      },
+      "applied": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Fuse v2",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 3,
+        "adaptive": "<none>"
+      },
+      "back_confirm": null,
+      "back": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 7,
+        "adaptive": "false"
+      }
+    },
+    "c5ad_cap": {
+      "before": {
+        "family": [
+          "LLM",
+          "All tiers (soft floor) \u2014 router can pick across tiers, depending on the best fit for the prompt"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 10,
+        "adaptive": "true",
+        "ui_tiers": {
+          "simple": [
+            "claude-haiku-4-5"
+          ],
+          "medium": [
+            "gpt-5.6-terra"
+          ],
+          "complex": [
+            "gpt-6-astra"
+          ],
+          "reasoning": [
+            "gpt-6-astra"
+          ]
+        }
+      },
+      "confirm": "Change classification method?\n\nThis change may remove models from incompatible tiers or disable adaptive routing. Your classifier settings will remain available when you switch back, but removed tier models will not.\n\nKeep current settings\nChange method",
+      "cancelled": {
+        "family": [
+          "LLM",
+          "All tiers (soft floor) \u2014 router can pick across tiers, depending on the best fit for the prompt"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 10,
+        "adaptive": "true"
+      },
+      "applied": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 3,
+        "adaptive": "<none>"
+      },
+      "back_confirm": null,
+      "back": {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 7,
+        "adaptive": "true"
+      }
+    }
+  },
+  "log": [
+    [
+      "c5ad_fus before",
+      {
+        "family": [
+          "LLM",
+          "All tiers (soft floor) \u2014 router can pick across tiers, depending on the best fit for the prompt"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 10,
+        "adaptive": "true",
+        "ui_tiers": {
+          "simple": [
+            "claude-haiku-4-5"
+          ],
+          "medium": [
+            "gpt-5.6-terra"
+          ],
+          "complex": [
+            "gpt-6-astra"
+          ],
+          "reasoning": [
+            "gpt-6-astra"
+          ]
+        }
+      }
+    ],
+    [
+      "c5ad_fus cancelled",
+      {
+        "family": [
+          "LLM",
+          "All tiers (soft floor) \u2014 router can pick across tiers, depending on the best fit for the prompt"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 10,
+        "adaptive": "true"
+      }
+    ],
+    [
+      "c5ad_fus applied",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Fuse v2",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 3,
+        "adaptive": "<none>"
+      }
+    ],
+    [
+      "c5ad_fus back",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 7,
+        "adaptive": "false"
+      }
+    ],
+    [
+      "c5ad_cap before",
+      {
+        "family": [
+          "LLM",
+          "All tiers (soft floor) \u2014 router can pick across tiers, depending on the best fit for the prompt"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 10,
+        "adaptive": "true",
+        "ui_tiers": {
+          "simple": [
+            "claude-haiku-4-5"
+          ],
+          "medium": [
+            "gpt-5.6-terra"
+          ],
+          "complex": [
+            "gpt-6-astra"
+          ],
+          "reasoning": [
+            "gpt-6-astra"
+          ]
+        }
+      }
+    ],
+    [
+      "c5ad_cap cancelled",
+      {
+        "family": [
+          "LLM",
+          "All tiers (soft floor) \u2014 router can pick across tiers, depending on the best fit for the prompt"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 10,
+        "adaptive": "true"
+      }
+    ],
+    [
+      "c5ad_cap applied",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Capability",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "<hidden>",
+        "tpl_disabled": null,
+        "tier_names": [],
+        "tier_models": 3,
+        "adaptive": "<none>"
+      }
+    ],
+    [
+      "c5ad_cap back",
+      {
+        "family": [
+          "LLM"
+        ],
+        "heur": "<none>",
+        "approach": "Complexity",
+        "decision": "<none>",
+        "judge": "claude-fable-5-1",
+        "freq": "Every new user message",
+        "template": "Use a template",
+        "tpl_disabled": false,
+        "tier_names": [],
+        "tier_models": 7,
+        "adaptive": "true"
+      }
+    ]
+  ]
+}

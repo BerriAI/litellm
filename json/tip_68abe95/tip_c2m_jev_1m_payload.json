@@ -1,0 +1,51 @@
+{
+  "model_name": "tip-c2m-jev-1m",
+  "litellm_params": {
+    "model": "auto_router/complexity_router",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": [
+          "gpt-6-luna"
+        ],
+        "MEDIUM": [
+          "gpt-5.6-terra"
+        ],
+        "COMPLEX": [
+          "gpt-6-sol"
+        ],
+        "REASONING": [
+          "claude-opus-5-5"
+        ]
+      },
+      "tier_model_configs": {
+        "REASONING": [
+          {
+            "model_name": "claude-opus-5-5",
+            "litellm_params": {
+              "reasoning_effort": "high"
+            }
+          }
+        ]
+      },
+      "classifier_type": "oss_classifier",
+      "opensource_classifier_config": {
+        "deployment_name": "jev-decider",
+        "provider": "jev",
+        "model": "jev-latest",
+        "timeout_ms": 3000
+      },
+      "classifier_context_window_size": 3,
+      "classifier_context_budget_chars": 8000,
+      "classification_mode": "user_turn",
+      "session_affinity": false,
+      "deployment_affinity": true,
+      "modality_routing": false,
+      "modality_pin_override": false,
+      "escalation_keywords": [
+        "LITELLM ESCALATE"
+      ]
+    },
+    "complexity_router_default_model": "gpt-5.6-terra"
+  },
+  "model_info": {}
+}

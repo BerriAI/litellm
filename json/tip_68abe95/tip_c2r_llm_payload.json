@@ -1,0 +1,50 @@
+{
+  "model_name": "tip-c2r-llm",
+  "litellm_params": {
+    "model": "auto_router/complexity_router",
+    "complexity_router_config": {
+      "tiers": {
+        "SIMPLE": [
+          "claude-haiku-4-5"
+        ],
+        "MEDIUM": [
+          "claude-sonnet-5"
+        ],
+        "COMPLEX": [
+          "claude-opus-5-5"
+        ],
+        "REASONING": [
+          "claude-fable-5-1"
+        ]
+      },
+      "tier_model_configs": {
+        "REASONING": [
+          {
+            "model_name": "claude-fable-5-1",
+            "litellm_params": {
+              "reasoning_effort": "high"
+            }
+          }
+        ]
+      },
+      "classifier_type": "llm",
+      "classifier_llm_config": {
+        "model": "claude-fable-5-1",
+        "timeout_ms": 3000,
+        "classification_rubric": "agentic"
+      },
+      "classifier_context_window_size": 3,
+      "classifier_context_budget_chars": 8000,
+      "classification_mode": "user_turn",
+      "session_affinity": false,
+      "deployment_affinity": true,
+      "modality_routing": false,
+      "modality_pin_override": false,
+      "escalation_keywords": [
+        "LITELLM ESCALATE"
+      ]
+    },
+    "complexity_router_default_model": "claude-sonnet-5"
+  },
+  "model_info": {}
+}
