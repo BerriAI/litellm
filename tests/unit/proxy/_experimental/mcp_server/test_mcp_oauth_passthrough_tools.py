@@ -347,7 +347,7 @@ async def test_aggregate_list_tools_absorbs_one_unauthenticated_server():
     ), patch.object(
         mcp_operations, "filter_tools_by_key_team_permissions", AsyncMock(side_effect=lambda tools, **k: tools)
     ), patch.object(
-        mcp_operations.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+        mcp_operations.global_mcp_server_manager, "get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
     ):
         listing = await mcp_operations._get_tools_from_mcp_servers(
             user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
@@ -370,7 +370,7 @@ async def test_single_server_route_also_absorbs_upstream_auth_error():
     from unittest.mock import patch
 
     from litellm.proxy._experimental.mcp_server import server as mcp_server
-    from litellm.proxy._experimental.mcp_server.mcp_context import _mcp_gateway_server_name
+    from litellm.proxy._experimental.mcp_server.mcp_context import mcp_gateway_server_name
     from litellm.proxy._types import UserAPIKeyAuth
 
     delegate = _http_server(
@@ -381,14 +381,14 @@ async def test_single_server_route_also_absorbs_upstream_auth_error():
         raise MCPUpstreamAuthError(status_code=401, www_authenticate=None, server_name=server.name)
 
     # /<server>/mcp sets the path-derived single-server scope; absorption must hold even then.
-    token = _mcp_gateway_server_name.set("delegate_docs")
+    token = mcp_gateway_server_name.set("delegate_docs")
     try:
         with patch.object(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[delegate])), patch.object(
             mcp_operations, "_prefetch_oauth_creds_for_user", AsyncMock(return_value={})
         ), patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
             mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
         ), patch.object(
-            mcp_operations.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+            mcp_operations.global_mcp_server_manager, "get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
         ):
             listing = await mcp_operations._get_tools_from_mcp_servers(
                 user_api_key_auth=UserAPIKeyAuth(token="h", user_id="u1"),
@@ -398,7 +398,7 @@ async def test_single_server_route_also_absorbs_upstream_auth_error():
         assert listing.tools == []
         assert listing.outcomes["delegate_docs"].tag == "auth_required"
     finally:
-        _mcp_gateway_server_name.reset(token)
+        mcp_gateway_server_name.reset(token)
 
 
 @pytest.mark.asyncio
@@ -425,7 +425,7 @@ async def test_aggregate_with_single_accessible_server_still_absorbs():
     ), patch.object(mcp_operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None))), patch.object(
         mcp_operations, "_get_user_oauth_extra_headers_from_db", AsyncMock(return_value=None)
     ), patch.object(
-        mcp_operations.global_mcp_server_manager, "_get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
+        mcp_operations.global_mcp_server_manager, "get_tools_from_server", AsyncMock(side_effect=fake_get_tools)
     ):
         # Aggregate route: no explicit server filter, even though only one server is accessible.
         listing = await mcp_operations._get_tools_from_mcp_servers(
@@ -470,7 +470,7 @@ async def test_client_creation_failure_logs_sanitized_exchange(monkeypatch, capl
     request = httpx.Request("POST", "https://upstream/mcp?credential=query-secret")
     response = httpx.Response(500, request=request, json={"error":"missing_scope"})
     error = httpx.HTTPStatusError("query-secret", request=request, response=response)
-    monkeypatch.setattr(manager, "_create_mcp_client", AsyncMock(side_effect=error))
+    monkeypatch.setattr(manager, "create_mcp_client", AsyncMock(side_effect=error))
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
         with pytest.raises(MCPServerListError):
             await manager._get_tools_from_server(server)

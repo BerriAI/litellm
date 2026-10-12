@@ -21,10 +21,13 @@ class _ConfigSyncPubSub(Protocol):
     def aclose(self) -> Awaitable[object]: ...
 
 
+ConfigSyncPubSub = _ConfigSyncPubSub
+
+
 class _ConfigSyncPubSubClient(Protocol):
     def publish(self, channel: str, message: str) -> Awaitable[int]: ...
 
-    def pubsub(self) -> _ConfigSyncPubSub: ...
+    def pubsub(self) -> ConfigSyncPubSub: ...
 
 
 CONFIG_SYNC_CHANNEL: Final = "litellm_proxy.config_change"
@@ -82,11 +85,14 @@ def config_sync_channel(redis_cache: "RedisCache") -> str:
     return f"{redis_cache.namespace}:{CONFIG_SYNC_CHANNEL}"
 
 
-def _pubsub_capable_client(redis_cache: "RedisCache") -> _ConfigSyncPubSubClient:
+def pubsub_capable_client(redis_cache: "RedisCache") -> _ConfigSyncPubSubClient:
     return cast(  # cast-ok: protocol view of the pub/sub-capable async redis client
         _ConfigSyncPubSubClient,
         redis_cache.init_pubsub_client(),  # pyright: ignore[reportUnknownMemberType]  # redis generics
     )
+
+
+_pubsub_capable_client: Final = pubsub_capable_client
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,7 +108,7 @@ async def publish_config_change(redis_cache: "RedisCache | None", object_type: s
     if redis_cache is None:
         return
     try:
-        client: Final = _pubsub_capable_client(redis_cache)
+        client: Final = pubsub_capable_client(redis_cache)
         await client.publish(config_sync_channel(redis_cache), _config_change_message_json(object_type))
     except Exception as e:  # noqa: BLE001  # best-effort publish; writes must never fail on redis errors
         verbose_proxy_logger.warning("config sync publish for %s failed: %s", object_type, e)
@@ -222,7 +228,7 @@ class ConfigSyncSubscriber:
         backoff_seconds = self._backoff_initial_seconds
         while True:
             try:
-                client = _pubsub_capable_client(self._redis_cache)
+                client = pubsub_capable_client(self._redis_cache)
                 pubsub = client.pubsub()
                 try:
                     await pubsub.subscribe(config_sync_channel(self._redis_cache))
@@ -241,7 +247,7 @@ class ConfigSyncSubscriber:
                 await self._sleep(backoff_seconds)
                 backoff_seconds = min(backoff_seconds * 2, self._backoff_max_seconds)
 
-    async def _consume(self, pubsub: _ConfigSyncPubSub) -> None:
+    async def _consume(self, pubsub: ConfigSyncPubSub) -> None:
         while True:
             message = await pubsub.get_message(ignore_subscribe_messages=True, timeout=_POLL_TIMEOUT_SECONDS)
             if message is None:
@@ -265,7 +271,7 @@ class ConfigSyncSubscriber:
         await self._sleep(seconds_until_next_resync)
 
     @staticmethod
-    async def _drain_pending(pubsub: _ConfigSyncPubSub) -> None:
+    async def _drain_pending(pubsub: ConfigSyncPubSub) -> None:
         while await pubsub.get_message(ignore_subscribe_messages=True, timeout=0) is not None:
             pass
 
@@ -277,7 +283,7 @@ class ConfigSyncSubscriber:
                 verbose_proxy_logger.warning("config sync resync callback failed: %s", e)
 
     @staticmethod
-    async def _close_pubsub(pubsub: _ConfigSyncPubSub) -> None:
+    async def _close_pubsub(pubsub: ConfigSyncPubSub) -> None:
         try:
             await pubsub.aclose()
         except Exception as e:  # noqa: BLE001  # best-effort close of a possibly-broken connection

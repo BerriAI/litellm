@@ -568,6 +568,20 @@ def test_redis_semantic_cache_set_cache_flattens_structured_responses_input():
     )
 
 
+def test_redis_semantic_cache_prompt_extraction_reads_function_call_output_blocks():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(
+        input=[
+            {"role": "user", "content": "update the config"},
+            {"type": "function_call", "call_id": "c1", "name": "write_file", "arguments": '{"path": "a"}'},
+            {"type": "function_call_output", "call_id": "c1", "output": [{"type": "input_text", "text": "wrote a"}]},
+        ]
+    )
+
+    assert prompt == "update the config\nwrote a"
+
+
 def test_redis_semantic_cache_prompt_extraction_prefers_messages():
     from litellm.caching.redis_semantic_cache import RedisSemanticCache
 
@@ -1416,3 +1430,23 @@ async def test_redis_async_embedding_truncates_off_the_event_loop(monkeypatch):
     assert embedding == [0.1, 0.2]
     assert _token_count("sem-embed", router.aembedding.call_args.kwargs["input"]) == 5
     assert_loop_stayed_free(took, lags)
+
+
+def test_redis_semantic_cache_prompt_extraction_keeps_tool_result_text():
+    from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+    prompt = RedisSemanticCache._get_prompt_from_kwargs(
+        messages=[
+            {"role": "user", "content": "list the files"},
+            {
+                "role": "assistant",
+                "content": [{"type": "tool_use", "id": "toolu_1", "name": "Bash", "input": {"command": "ls"}}],
+            },
+            {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "calc.py test_calc.py"}],
+            },
+        ]
+    )
+
+    assert prompt == "list the filescalc.py test_calc.py"

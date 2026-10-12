@@ -2,6 +2,8 @@
 Translate from OpenAI's `/v1/chat/completions` to Perplexity's `/v1/chat/completions`
 """
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 import httpx
@@ -17,11 +19,16 @@ from litellm.types.utils import ModelResponse, PromptTokensDetailsWrapper, Usage
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
+_PERPLEXITY_ATTRIBUTION_HEADERS: Final[Mapping[str, str]] = MappingProxyType({"X-Pplx-Integration": "litellm"})
+
 
 class PerplexityChatConfig(OpenAIGPTConfig):
     @property
     def custom_llm_provider(self) -> str | None:
         return "perplexity"
+
+    def get_attribution_headers(self) -> Mapping[str, str]:
+        return _PERPLEXITY_ATTRIBUTION_HEADERS
 
     def _get_openai_compatible_provider_info(
         self, api_base: str | None, api_key: str | None

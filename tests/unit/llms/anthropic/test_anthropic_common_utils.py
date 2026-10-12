@@ -14,12 +14,17 @@ import json
 import os
 import sys
 import threading
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Final
 from unittest.mock import patch
 
 import httpx
 import pytest
+import respx
+
+import litellm
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../../..")))
 
@@ -29,6 +34,55 @@ from litellm.proxy._types import SpecialHeaders  # noqa: E402  # sys.path must b
 FAKE_OAUTH_TOKEN = "sk-ant-oat01-fake-token-for-testing-123456789abcdef"
 FAKE_REGULAR_KEY = "sk-ant-api03-regular-key-for-testing-123456789"
 FAKE_AUTH_TOKEN = "sk-ant-aut01-fake-auth-token-for-testing-123456789"
+
+
+@pytest.mark.parametrize(
+    ("url", "expected"),
+    [
+        pytest.param("https://api.anthropic.com/v1/messages", True, id="anthropic-host"),
+        pytest.param("http://127.0.0.1:8190/v1/messages", True, id="local-messages-route"),
+        pytest.param("https://gateway.example.com/anthropic/v1/messages/", True, id="alternate-host-messages-route"),
+        pytest.param("https://gateway.example.com/v1/messages/batches", False, id="generic-batches-route"),
+        pytest.param("https://gateway.example.com/v1/messages/count_tokens", False, id="generic-count-tokens-route"),
+        pytest.param("https://gateway.example.com/v1/other", False, id="generic-route"),
+    ],
+)
+def test_is_anthropic_messages_url(url: str, expected: bool) -> None:
+    from litellm.llms.anthropic.common_utils import is_anthropic_messages_url
+
+    assert is_anthropic_messages_url(url) is expected
+
+
+def test_anthropic_model_not_found_maps_to_not_found_but_authentication_error_does_not() -> None:
+    with respx.mock(assert_all_called=True) as router:
+        router.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(
+                404,
+                json={"type": "error", "error": {"type": "not_found_error", "message": "model not found"}},
+            )
+        )
+        with pytest.raises(litellm.NotFoundError):
+            litellm.completion(
+                model="anthropic/claude-opus-5",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="test-api-key",
+                client=HTTPHandler(),
+            )
+
+    with respx.mock(assert_all_called=True) as router:
+        router.post("https://api.anthropic.com/v1/messages").mock(
+            return_value=httpx.Response(
+                401,
+                json={"type": "error", "error": {"type": "authentication_error", "message": "invalid key"}},
+            )
+        )
+        with pytest.raises(litellm.AuthenticationError):
+            litellm.completion(
+                model="anthropic/claude-opus-5",
+                messages=[{"role": "user", "content": "Hello"}],
+                api_key="test-api-key",
+                client=HTTPHandler(),
+            )
 
 
 @pytest.mark.parametrize(
@@ -2518,7 +2572,6 @@ class TestWifTierPrecedence:
         assert [record for record in caplog.records if "takes precedence" in record.getMessage()] == []
 
 
-
 class TestWifZeroBehaviorChange:
     def test_unconfigured_raises_same_authentication_error(self, clean_anthropic_env):
         """No WIF config and no keys: same AuthenticationError as today (message
@@ -2535,6 +2588,29 @@ class TestWifZeroBehaviorChange:
         assert "ANTHROPIC_ORGANIZATION_ID" in exc_info.value.message
         assert "ANTHROPIC_SERVICE_ACCOUNT_ID" in exc_info.value.message
         assert "ANTHROPIC_IDENTITY_TOKEN_FILE" in exc_info.value.message
+
+    def test_a_token_file_credential_missing_an_id_names_the_id_not_the_key(self, clean_anthropic_env: None, tmp_path: Path):
+        import litellm
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        with pytest.raises(litellm.AuthenticationError) as exc_info:
+            AnthropicModelInfo().validate_environment(
+                headers={},
+                model="claude-haiku-5-5",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={},
+                litellm_params={
+                    "anthropic_federation_rule_id": "fdrl_1",
+                    "anthropic_identity_token_file": str(tmp_path / "token"),
+                },
+                api_key=None,
+                api_base=None,
+            )
+
+        assert (
+            "anthropic_identity_token_file is set, but anthropic_organization_id is not set" in exc_info.value.message
+        )
+        assert "Missing Anthropic API Key" not in exc_info.value.message
 
 
 class TestWifHeaderContract:
@@ -3721,7 +3797,10 @@ class TestWifServerOwnedParamsAreUnconditional:
         router.py merges request kwargs OVER deployment params, so it also beat the configured one."""
         from litellm.proxy.auth.auth_utils import is_request_body_safe
 
-        with pytest.raises(Exception, match="server-owned workload identity federation parameter"):
+        with pytest.raises(
+            Exception,
+            match="server-owned workload identity federation or OAuth token exchange parameter",
+        ):
             is_request_body_safe(
                 request_body={"model": "claude-sonnet-5", "anthropic_federation_workspace_id": "wrkspc_abc"},
                 general_settings={},
