@@ -132,11 +132,13 @@ def _is_stopped(process: psutil.Process) -> bool:
 def _suspend(process: psutil.Process) -> None:
     process.suspend()
     deadline: Final = time.monotonic() + STRICT_HEALTHCHECK_SECONDS
-    while not _is_stopped(process):
-        assert time.monotonic() < deadline, (
-            f"Process {process.pid} did not stop within {STRICT_HEALTHCHECK_SECONDS}s of SIGSTOP"
-        )
+    while not _is_stopped(process) and time.monotonic() < deadline:
         time.sleep(0.01)
+    if _is_stopped(process):
+        return
+    with suppress(psutil.NoSuchProcess):
+        process.resume()
+    raise AssertionError(f"Process {process.pid} did not stop within {STRICT_HEALTHCHECK_SECONDS}s of SIGSTOP")
 
 
 def _is_reaped(process: psutil.Process) -> bool:
