@@ -143,7 +143,7 @@ if [ "$suite" = security ]; then
   export INTEGRATION_WORKERS=4
 fi
 if [ "$suite" = mcp ]; then
-  export INTEGRATION_WORKERS=4 INTEGRATION_COVERAGE=1
+  export INTEGRATION_WORKERS=2 INTEGRATION_COVERAGE=1
 fi
 isolated_workers=false
 if [ "${INTEGRATION_WORKERS:-1}" -gt 1 ]; then
