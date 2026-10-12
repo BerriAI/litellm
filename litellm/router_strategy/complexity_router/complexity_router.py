@@ -2351,19 +2351,21 @@ class ComplexityRouter(CustomLogger):
                 # policy decision about the verdict, not a health failure, so the breaker closes.
                 if breaker is not None and permit is not None:
                     breaker.record_success(permit)
-                refused: Final = _with_signal(
-                    self._classifier_failure_outcome(
-                        f"jev classifier route-down refused ({refusal_reason}, verdict {tier_name}, "
-                        f"confidence {answer.confidence:.4f})",
-                        prompt,
-                        system_prompt,
-                        signal=f"jev-refused:{refusal_reason}",
-                    ),
-                    f"jev-classifier:{tier_name}",
+                refused: Final = self._classifier_failure_outcome(
+                    f"{config.provider} classifier route-down refused ({refusal_reason}, verdict {tier_name}, "
+                    f"confidence {answer.confidence:.4f})",
+                    prompt,
+                    system_prompt,
+                    failure_reason="declined",
+                    signal=f"{config.provider}-refused:{refusal_reason}",
                 )
                 # Keep the verdict and its cost on the refusal for provenance: the request paid
-                # for the Jev call, and the routing decision still logs what it answered.
-                return refused._replace(classifier_cost=verdict.cost, jev_verdict=verdict)
+                # for the classifier call, and the routing decision still logs what it answered.
+                return refused._replace(
+                    signals=(*refused.signals, f"{config.provider}-classifier:{tier_name}"),
+                    classifier_cost=verdict.cost,
+                    jev_verdict=verdict,
+                )
             if breaker is not None and permit is not None:
                 breaker.record_success(permit)
             return ClassificationOutcome(
@@ -2398,7 +2400,7 @@ class ComplexityRouter(CustomLogger):
 
     @staticmethod
     def _jev_route_down_refusal_reason(
-        config: JevClassifierConfig,
+        config: OpenSourceClassifierConfig,
         chosen_tier: str,
         strongest_tier: str,
         confidence: float,
