@@ -7,7 +7,7 @@ All values are configurable via proxy config.yaml.
 
 import math
 import re
-import warnings
+import sys
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from enum import Enum
@@ -27,8 +27,12 @@ from pydantic import (
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
-with warnings.catch_warnings():
-    warnings.simplefilter("ignore", DeprecationWarning)
+# Python 3.11 moved the regex parser into re._parser / re._constants; the top-level
+# sre_parse / sre_constants shims were deprecated then and removed in Python 3.15.
+if sys.version_info >= (3, 11):
+    from re import _constants as sre_constants
+    from re import _parser as sre_parse
+else:
     import sre_constants
     import sre_parse
 
