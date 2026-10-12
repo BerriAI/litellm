@@ -11,9 +11,22 @@ import psutil
 import pytest
 from pydantic import JsonValue
 
-from tests.integration._support.client import Gateway, Scenario, eventually, object_value, string_value
+from tests.integration._support.client import (
+    Gateway,
+    Scenario,
+    eventually,
+    gateway_from_environment,
+    object_value,
+    string_value,
+)
 from tests.integration._support.database import read_rows
-from tests.integration._support.process import OwnedProxy, owned_proxy_process
+from tests.integration._support.process import (
+    MIGRATE_DEPLOY,
+    OwnedProxy,
+    owned_proxy_process,
+    setup_only_proxy_run,
+    worker_configuration,
+)
 from tests.integration._support.redis_process import owned_redis
 
 pytestmark: Final = pytest.mark.timeout(300)
@@ -21,6 +34,20 @@ pytestmark: Final = pytest.mark.timeout(300)
 PROVIDER_KEY: Final = "integration-provider-key"
 EVICTION_WARNING: Final = "config cache eviction of router_settings failed"
 REFUSED: Final = frozenset({401, 403})
+PROXY_CONFIG: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
+
+
+@pytest.fixture(scope="module")
+def migrated_database(tmp_path_factory: pytest.TempPathFactory) -> None:
+    with gateway_from_environment() as gateway:
+        completed: Final = setup_only_proxy_run(
+            gateway,
+            {},
+            config=worker_configuration(PROXY_CONFIG, tmp_path_factory.mktemp("migrate")),
+            workers=1,
+            database_setup=MIGRATE_DEPLOY,
+        )
+    assert completed.returncode == 0, completed.stdout[-3000:] + completed.stderr[-3000:]
 
 
 @pytest.fixture
@@ -334,6 +361,7 @@ def test_context_window_and_content_policy_types_persist(gateway: Gateway) -> No
         assert policy in covered, covered
 
 
+@pytest.mark.usefixtures("migrated_database")
 def test_fallback_write_survives_a_redis_outage(gateway: Gateway, tmp_path: Path) -> None:
     with owned_redis(tmp_path) as cache:
         overrides: Final = {"REDIS_HOST": cache.host, "REDIS_PORT": str(cache.port)}
@@ -357,6 +385,7 @@ def test_fallback_write_survives_a_redis_outage(gateway: Gateway, tmp_path: Path
                 cache.start()
 
 
+@pytest.mark.usefixtures("migrated_database")
 def test_fallback_write_survives_a_worker_kill(gateway: Gateway, tmp_path: Path) -> None:
     with owned_proxy_process(gateway, tmp_path, {}, workers=2, database_setup=()) as owned:
         with owned.gateway.scenario() as scenario:

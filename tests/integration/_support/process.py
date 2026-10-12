@@ -355,7 +355,12 @@ def _proxy_environment(
 
 
 def setup_only_proxy_run(
-    gateway: Gateway, overrides: Mapping[str, str], *, config: Path, workers: int
+    gateway: Gateway,
+    overrides: Mapping[str, str],
+    *,
+    config: Path,
+    workers: int,
+    database_setup: tuple[str, ...] = DB_PUSH,
 ) -> subprocess.CompletedProcess[str]:
     """The proxy CLI's `--skip_server_startup` pass (the image's setup step), run to completion with the
     environment an owned proxy gets."""
@@ -368,7 +373,7 @@ def setup_only_proxy_run(
             str(config),
             "--num_workers",
             str(workers),
-            *DB_PUSH,
+            *database_setup,
             "--skip_server_startup",
         ),
         cwd=_proxy_root(),
