@@ -1519,23 +1519,75 @@ _SHARED_ALIAS_DB_SERVERS = (
 )
 
 
-def _make_ambiguity_prisma(existing_tool_permissions=None):
+def _make_ambiguity_prisma(
+    existing_tool_permissions: dict[str, list[str]] | None = None,
+    existing_row_override: LiteLLM_ObjectPermissionTable | None = None,
+) -> MagicMock:
     """Mock prisma client whose MCP server table holds _SHARED_ALIAS_DB_SERVERS and whose
     object permission row (if any) stores the given mcp_tool_permissions JSON string."""
-    mock_prisma = MagicMock()
+    mock_prisma: Final = MagicMock()
     mock_prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=list(_SHARED_ALIAS_DB_SERVERS))
     mock_prisma.db.litellm_objectpermissiontable.create = AsyncMock(
         return_value=MagicMock(object_permission_id="perm-id")
     )
-    existing_row = None
-    if existing_tool_permissions is not None:
-        existing_row = MagicMock()
-        existing_row.model_dump.return_value = {
-            "object_permission_id": "perm-id",
-            "mcp_tool_permissions": json.dumps(existing_tool_permissions),
-        }
+    stored_row: Final = (
+        MagicMock(
+            model_dump=MagicMock(
+                return_value={
+                    "object_permission_id": "perm-id",
+                    "mcp_tool_permissions": json.dumps(existing_tool_permissions),
+                }
+            )
+        )
+        if existing_tool_permissions is not None
+        else None
+    )
+    existing_row: Final = existing_row_override if existing_row_override is not None else stored_row
     mock_prisma.db.litellm_objectpermissiontable.find_unique = AsyncMock(return_value=existing_row)
     return mock_prisma
+
+
+@pytest.mark.asyncio
+async def test_prepare_object_permission_upsert_omits_unsent_fields_on_create():
+    permission: Final = LiteLLM_ObjectPermissionBase(mcp_toolsets=["toolset-id"])
+    mock_prisma: Final = _make_ambiguity_prisma()
+
+    upsert: Final = await prepare_object_permission_upsert(
+        new_object_permission=permission.model_dump(),
+        existing_object_permission_id=None,
+        prisma_client=mock_prisma,
+    )
+
+    assert upsert.object_permission_id
+    assert upsert.record == {
+        "object_permission_id": upsert.object_permission_id,
+        "mcp_toolsets": permission.mcp_toolsets,
+    }
+
+
+@pytest.mark.asyncio
+async def test_prepare_object_permission_upsert_preserves_unsent_grants_on_update():
+    existing_row: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="perm-id",
+        mcp_servers=["solo-id"],
+        mcp_tool_permissions={"solo-id": ["tool1"]},
+    )
+    permission: Final = LiteLLM_ObjectPermissionBase(mcp_toolsets=["toolset-id"])
+    mock_prisma: Final = _make_ambiguity_prisma(existing_row_override=existing_row)
+
+    upsert: Final = await prepare_object_permission_upsert(
+        new_object_permission=permission.model_dump(),
+        existing_object_permission_id=existing_row.object_permission_id,
+        prisma_client=mock_prisma,
+    )
+
+    assert upsert.object_permission_id == existing_row.object_permission_id
+    assert upsert.record == {
+        "object_permission_id": existing_row.object_permission_id,
+        "mcp_servers": existing_row.mcp_servers,
+        "mcp_tool_permissions": json.dumps(existing_row.mcp_tool_permissions),
+        "mcp_toolsets": permission.mcp_toolsets,
+    }
 
 
 @pytest.mark.asyncio

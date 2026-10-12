@@ -1,4 +1,6 @@
+from collections.abc import Mapping
 from contextlib import contextmanager
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -9,6 +11,7 @@ from fastapi.testclient import TestClient
 
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
+    LiteLLM_ObjectPermissionTable,
     LitellmUserRoles,
     ProxyException,
 )
@@ -1004,6 +1007,42 @@ def test_customer_update_applies_nonempty_object_permission(mock_prisma_client, 
     assert mock_prisma_client.db.litellm_endusertable.update.call_args.kwargs["data"]["object_permission_id"] == (
         "permission-1"
     )
+
+
+def test_customer_update_creates_partial_toolset_permission(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: None
+) -> None:
+    async def persist_permission(
+        *, where: Mapping[str, str], data: Mapping[str, Mapping[str, object]]
+    ) -> LiteLLM_ObjectPermissionTable:
+        assert data["create"] == {
+            "object_permission_id": where["object_permission_id"],
+            "mcp_toolsets": ["toolset-id"],
+        }
+        assert data["update"] == data["create"]
+        return LiteLLM_ObjectPermissionTable.model_validate(data["create"])
+
+    mock_prisma_client.configure_mock(
+        **{
+            "db.litellm_endusertable.find_first": AsyncMock(
+                return_value=LiteLLM_EndUserTable(user_id="customer-id", blocked=False)
+            ),
+            "db.litellm_objectpermissiontable.find_unique": AsyncMock(return_value=None),
+            "db.litellm_objectpermissiontable.upsert": AsyncMock(side_effect=persist_permission),
+            "db.litellm_endusertable.update": AsyncMock(
+                return_value=LiteLLM_EndUserTable(user_id="customer-id", blocked=False)
+            ),
+        }
+    )
+
+    response: Final = client.post(
+        "/customer/update",
+        json={"user_id": "customer-id", "object_permission": {"mcp_toolsets": ["toolset-id"]}},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["user_id"] == "customer-id"
 
 
 def test_char_delete_body(mock_prisma_client, mock_user_api_key_auth):
