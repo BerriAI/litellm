@@ -5,7 +5,7 @@ import socket
 import subprocess
 import time
 import uuid
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -172,7 +172,11 @@ def _started(
 
 
 @contextmanager
-def owned_redis(directory: Path, choose_port: Callable[[], int] = free_loopback_port) -> Iterator[OwnedRedis]:
+def owned_redis(
+    directory: Path,
+    choose_port: Callable[[], int] = free_loopback_port,
+    inherited: Mapping[str, str] = os.environ,
+) -> Iterator[OwnedRedis]:
     binary: Final = shutil.which("redis-server")
     if binary:
         host: Final = "127.0.0.1"
@@ -190,7 +194,7 @@ def owned_redis(directory: Path, choose_port: Callable[[], int] = free_loopback_
         ).strip()
         assert host, "CircleCI owned Redis container has no address"
         prefix: Final = ("docker", "exec", "redis-cache", "redis-server")
-    output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
+    output: Final = Path(inherited.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
     directory.mkdir(parents=True, exist_ok=True)
     with (output / f"owned-redis-{uuid.uuid4().hex}.log").open("w") as log:
