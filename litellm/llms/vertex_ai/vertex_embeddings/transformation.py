@@ -1,6 +1,10 @@
 import types
 from collections.abc import Mapping
-from typing import Final, Literal, cast
+from typing import (
+    Final,
+    Literal,
+    cast,  # noqa: TID251  # untyped predict response dict is the only source of the unknown key type
+)
 
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.llms.base import LiteLLMBaseModel
