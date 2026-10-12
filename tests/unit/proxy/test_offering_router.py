@@ -265,6 +265,13 @@ async def test_body_model_override_cannot_bypass_offering_authority() -> None:
         {"model_id": "unrestricted"},
         {"disable_fallbacks": False},
         {"mock_response": "bypassed"},
+        {"additional_drop_params": ["provider"]},
+        {"additional_drop_params": ["extra_body"]},
+        {"additional_drop_params": ["extra_body.provider"]},
+        {"additional_drop_params": ["provider.only"]},
+        {"additional_drop_params": ["provider.allow_fallbacks"]},
+        {"drop_params": True},
+        {"allowed_openai_params": ["provider"]},
     ),
 )
 async def test_pinned_policy_rejects_caller_routing_even_through_alias(override: dict[str, object]) -> None:

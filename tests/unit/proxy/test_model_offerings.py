@@ -762,6 +762,30 @@ async def test_provider_policy_reaches_upstream_body_on_every_chat_surface(
         assert len(requests) == 1
         assert requests[0].url.path.endswith("/responses" if surface == "responses" else "/chat/completions")
         assert response_cache.cache.get_cache("shared-fixture-key") == {"response": "unrelated endpoint output"}
+        for control in (
+            {"additional_drop_params": ["provider"]},
+            {"additional_drop_params": ["extra_body"]},
+            {"additional_drop_params": ["extra_body.provider"]},
+            {"additional_drop_params": ["provider.only"]},
+            {"drop_params": True},
+            {"allowed_openai_params": ["provider"]},
+            {"extra_body": {"provider": policy, "temperature": 0.5, "additional_drop_params": ["provider"]}},
+        ):
+            with pytest.raises(litellm.BadRequestError, match="configured offering provider policy"):
+                if surface in ("responses", "responses_chat"):
+                    await manager.router.aresponses(input="fixture", client=handler, **{**shaped, **control})
+                elif surface == "messages":
+                    await manager.router.anthropic_messages(
+                        messages=[{"role": "user", "content": "fixture"}],
+                        max_tokens=10,
+                        client=handler,
+                        **{**shaped, **control},
+                    )
+                else:
+                    await manager.router.acompletion(
+                        messages=[{"role": "user", "content": "fixture"}], client=handler, **{**shaped, **control}
+                    )
+        assert len(requests) == 1
 
 
 async def test_endpoint_policy_reload_isolates_aliases_identity_and_metadata(

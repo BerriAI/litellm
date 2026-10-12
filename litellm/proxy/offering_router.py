@@ -38,25 +38,29 @@ _MODEL_MUTATIONS: Final = frozenset(("set_model_list", "add_deployment", "upsert
 _VIEW_MEMBERS: Final = frozenset(("publish_snapshot", "pin_snapshot", "serving_snapshot", "latest_snapshot"))
 _METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _POLICY_CALLS: Final = frozenset(("acompletion", "completion", "aresponses", "responses", "anthropic_messages"))
-_ROUTING_OVERRIDES: Final = frozenset(
-    (
-        "provider",
-        "models",
-        "route",
-        "fallbacks",
-        "default_fallbacks",
-        "context_window_fallbacks",
-        "content_policy_fallbacks",
-        "model_list",
-        "deployment_id",
-        "specific_deployment",
-        "model_id",
-        "disable_fallbacks",
-        "mock_response",
-        "mock_tool_calls",
-        "mock_timeout",
-        "mock_provider_error",
+_PARAMETER_CONTROLS: Final = frozenset(("additional_drop_params", "drop_params", "allowed_openai_params"))
+_ROUTING_OVERRIDES: Final = (
+    frozenset(
+        (
+            "provider",
+            "models",
+            "route",
+            "fallbacks",
+            "default_fallbacks",
+            "context_window_fallbacks",
+            "content_policy_fallbacks",
+            "model_list",
+            "deployment_id",
+            "specific_deployment",
+            "model_id",
+            "disable_fallbacks",
+            "mock_response",
+            "mock_tool_calls",
+            "mock_timeout",
+            "mock_provider_error",
+        )
     )
+    | _PARAMETER_CONTROLS
 )
 
 
@@ -315,9 +319,11 @@ class OfferingAccessGuard(CustomLogger):
         if (
             call_type is None
             or call_type.value not in _POLICY_CALLS
+            or any(kwargs.get(name) is not None for name in _PARAMETER_CONTROLS)
             or any(kwargs.get(name) is not None for name in ("provider", "models", "route"))
             or not isinstance(extra_body, Mapping)
             or extra_body.get("provider") != policy.request_body()
+            or bool(_PARAMETER_CONTROLS.intersection(extra_body))
             or any(name in extra_body for name in ("model", "models", "route", "extra_body"))
         ):
             raise litellm.BadRequestError(
