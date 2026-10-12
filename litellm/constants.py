@@ -827,6 +827,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "docker_model_runner",
     "amazon_nova",
     "scaledown",
+    "clinepass",
 ]
 
 # Resolving these providers runs an OAuth device flow (their provider info IS the login), so any

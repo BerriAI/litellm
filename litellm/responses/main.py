@@ -2476,10 +2476,13 @@ async def _aresponses_websocket(
 
     resolved_api_key: Final = (
         dynamic_api_key
+        or api_key
         or litellm_params.api_key
-        or litellm.api_key
-        or litellm.openai_key
-        or get_secret_str("OPENAI_API_KEY")
+        or (
+            (litellm.api_key or litellm.openai_key or get_secret_str("OPENAI_API_KEY"))
+            if responses_api_provider_config is not None
+            else None
+        )
     )
 
     # Extract params that we're passing explicitly to avoid duplicates in **kwargs
