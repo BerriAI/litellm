@@ -176,3 +176,54 @@ async def test_malformed_multipart_upload_is_a_400_on_the_file_param(form: dict[
     assert exc_info.value.type == "invalid_request_error"
     assert exc_info.value.param == "file"
     assert message in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_unparseable_multipart_form_is_a_400() -> None:
+    request: Final = _multipart_request({})
+    request.form = AsyncMock(side_effect=ValueError("missing boundary"))
+
+    with pytest.raises(OCRRequestError) as exc_info:
+        await _parse_ocr_request(request)
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert "Failed to parse multipart form data: missing boundary" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_multipart_file_over_the_size_limit_is_a_400_on_the_file_param(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("litellm.proxy.ocr_endpoints.endpoints._MAX_FILE_BYTES", 4)
+    form: Final = {"model": "mistral-ocr", "file": UploadFile(file=io.BytesIO(b"12345"), filename="big.pdf")}
+
+    with pytest.raises(OCRRequestError) as exc_info:
+        await _parse_ocr_request(_multipart_request(form))
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.param == "file"
+    assert exc_info.value.message == "OCR file exceeds the size limit"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body, message",
+    [
+        (b"", "Empty request body."),
+        (b"{not json", "Invalid JSON in request body:"),
+        (
+            orjson.dumps({"model": "mistral-ocr", "document": {"type": "file", "file": "/etc/passwd"}}),
+            "document type 'file' is not supported through the JSON API.",
+        ),
+    ],
+    ids=["empty-body", "invalid-json", "document-type-file"],
+)
+async def test_malformed_json_ocr_request_is_a_400(body: bytes, message: str) -> None:
+    request: Final = _json_request({}, {})
+    request.body = AsyncMock(return_value=body)
+
+    with pytest.raises(OCRRequestError) as exc_info:
+        await _parse_ocr_request(request)
+
+    assert exc_info.value.code == "400"
+    assert exc_info.value.type == "invalid_request_error"
+    assert exc_info.value.message.startswith(message)
