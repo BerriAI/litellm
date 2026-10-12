@@ -194,11 +194,19 @@ async def test_native_failure_never_reroutes_to_python(
     async def python() -> str:
         return calls.python()
 
-    with pytest.raises(type(failure), match="unsupported"):
+    async def dispatch() -> str:
         if asynchronous:
-            await runtime.arun(CONTEXT, binding=binding(calls.rust), native=native, python=python, rules=rules(rollout))
-        else:
-            run(rollout, calls)
+            return await runtime.arun(
+                CONTEXT,
+                binding=binding(calls.rust),
+                native=native,
+                python=python,
+                rules=rules(rollout),
+            )
+        return run(rollout, calls)
+
+    with pytest.raises(type(failure), match="unsupported"):
+        await dispatch()
 
     assert calls.calls == (RUST,)
 
