@@ -596,6 +596,43 @@ def test_model_info_team_key_cannot_see_other_teams_byok_model(
     assert _BYOK_INTERNAL_NAME not in surfaced_names
 
 
+@pytest.mark.parametrize("path", ["/v1/model/info", "/model/info"])
+def test_model_info_lists_routing_group_rows(client, auth_as, monkeypatch, path):
+    """A routing group is callable by its own name, so /model/info surfaces the
+    rows a configured router materializes for it next to the member deployment.
+    """
+    from litellm.proxy._types import LitellmUserRoles
+
+    member = {
+        "model_name": "gpt-6-luna",
+        "litellm_params": {"model": "openai/gpt-6-luna", "api_key": "sk-test"},
+        "model_info": {"id": "luna-deployment-id", "mode": "chat"},
+    }
+    router = litellm.Router(
+        model_list=[member],
+        routing_groups=[
+            {
+                "group_name": "decision-balanced",
+                "models": ["gpt-6-luna"],
+                "routing_strategy": "simple-shuffle",
+            }
+        ],
+    )
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "llm_model_list", [member])
+    monkeypatch.setattr(proxy_server, "user_model", None)
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+
+    with auth_as(role=LitellmUserRoles.PROXY_ADMIN, user_id="admin"):
+        response = client.get(path)
+
+    assert response.status_code == 200, response.text
+    surfaced = {m["model_name"]: m for m in response.json()["data"]}
+    assert set(surfaced) == {"gpt-6-luna", "decision-balanced"}
+    assert surfaced["decision-balanced"]["model_info"]["id"] == "luna-deployment-id"
+    assert surfaced["decision-balanced"]["model_info"]["mode"] == "chat"
+
+
 # ---------------------------------------------------------------------------
 # GET /model_group/info
 # ---------------------------------------------------------------------------

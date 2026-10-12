@@ -2,7 +2,7 @@ import { z } from "zod";
 import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 import { withRequiredHeaders } from "@/components/llm_calls/request_headers";
 import { createApiClient } from "@/lib/http/client";
-import { isDecisionMode } from "@/lib/decisionModels";
+import { isDecisionModel } from "@/lib/decisionModels";
 import {
   systemOneResponseSchema,
   type PlaygroundRequest,
@@ -25,8 +25,15 @@ export type PlaygroundDecisionRequest =
   | { endpoint: "/v1/systemone"; payload: PlaygroundRequest }
   | { endpoint: "/v1/decisions"; payload: OpenAIDecisionsRequest };
 
-const modelGroupInfoSchema = z.object({
-  data: z.array(z.object({ model_group: z.string(), mode: z.string().nullish() })),
+const modelInfoSchema = z.object({
+  data: z.array(
+    z.object({
+      model_name: z.string(),
+      model_info: z
+        .object({ mode: z.string().nullish(), supported_endpoints: z.array(z.string()).nullish() })
+        .nullish(),
+    }),
+  ),
 });
 
 function proxyClient(customBaseUrl?: string) {
@@ -50,15 +57,15 @@ export async function fetchDecisionModels(
   customBaseUrl?: string,
   signal?: AbortSignal,
 ): Promise<string[]> {
-  const body = await proxyClient(customBaseUrl).get<unknown>("/model_group/info", {
+  const body = await proxyClient(customBaseUrl).get<unknown>("/model/info", {
     headers: authHeaders(accessToken),
     signal,
   });
-  return modelGroupInfoSchema
+  const decisionModelNames = modelInfoSchema
     .parse(body)
-    .data.filter((group) => isDecisionMode(group.mode))
-    .map((group) => group.model_group)
-    .sort((a, b) => a.localeCompare(b));
+    .data.filter((deployment) => isDecisionModel(deployment.model_info ?? {}))
+    .map((deployment) => deployment.model_name);
+  return [...new Set(decisionModelNames)].sort((a, b) => a.localeCompare(b));
 }
 
 async function sendDecisionRequest<T>(

@@ -16,15 +16,15 @@ import type { SystemOneResponse } from "./lib/schemas";
 import type { OpenAIDecisionsResponse } from "./lib/openAIDecisions";
 import { curlPayload } from "./lib/curlCommand";
 
-interface ModelGroupInfo {
-  model_group: string;
+interface Deployment {
+  model_name: string;
   mode: string;
 }
 
-const DECISION_AND_CHAT_MODELS: ModelGroupInfo[] = [
-  { model_group: "gpt-5.5", mode: "chat" },
-  { model_group: "jev-latest", mode: "evaluation" },
-  { model_group: "pplx-decider", mode: "evaluation" },
+const DECISION_AND_CHAT_MODELS: Deployment[] = [
+  { model_name: "gpt-5.5", mode: "chat" },
+  { model_name: "jev-latest", mode: "evaluation" },
+  { model_name: "pplx-decider", mode: "evaluation" },
 ];
 
 const responseBody: SystemOneResponse = {
@@ -46,8 +46,19 @@ const render = (ui: ReactElement) =>
     </QueryClientProvider>,
   );
 
-const modelGroupInfoResponse = (groups: ModelGroupInfo[]) =>
-  ({ ok: true, status: 200, text: async () => JSON.stringify({ data: groups }) }) as Response;
+const modelInfoResponse = (deployments: Deployment[]) =>
+  ({
+    ok: true,
+    status: 200,
+    text: async () =>
+      JSON.stringify({
+        data: deployments.map(({ model_name, mode }) => ({
+          model_name,
+          litellm_params: { model: `openai/${model_name}` },
+          model_info: { id: model_name, mode },
+        })),
+      }),
+  }) as Response;
 
 const EXPIRED_KEY_RESPONSE = {
   ok: false,
@@ -56,7 +67,7 @@ const EXPIRED_KEY_RESPONSE = {
     JSON.stringify({ error: { message: "Authentication Error - Expired Key.", type: "expired_key", code: "401" } }),
 } as Response;
 
-const isModelLookup = (input: RequestInfo | URL) => String(input).endsWith("/model_group/info");
+const isModelLookup = (input: RequestInfo | URL) => String(input).endsWith("/model/info");
 
 const lookupAuthHeaders = (calls: Parameters<typeof fetch>[]) =>
   calls.map(([, init]) => Object.values((init?.headers ?? {}) as Record<string, string>));
@@ -99,7 +110,7 @@ describe("SystemOneUI integration", () => {
       isModelLookup(input) ? mockModelLookup(input, init) : mockFetch(input, init),
     );
     mockFetch.mockResolvedValue(createResponse(responseBody));
-    mockModelLookup.mockResolvedValue(modelGroupInfoResponse([]));
+    mockModelLookup.mockResolvedValue(modelInfoResponse([]));
   });
 
   afterEach(() => {
@@ -147,7 +158,7 @@ describe("SystemOneUI integration", () => {
 
   it("keeps the preset label after picking a model and keeps that model when clearing", async () => {
     const user = userEvent.setup();
-    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    mockModelLookup.mockResolvedValue(modelInfoResponse(DECISION_AND_CHAT_MODELS));
     render(<SystemOneUI accessToken="session-key" />);
     const modelPicker = screen.getByRole("combobox", { name: "Decision model" });
     await waitFor(() => expect(modelPicker).toHaveValue("jev-latest"));
@@ -203,7 +214,7 @@ describe("SystemOneUI integration", () => {
 
   it("opens on /v1/systemone with the first decision model the key can call", async () => {
     const user = userEvent.setup();
-    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    mockModelLookup.mockResolvedValue(modelInfoResponse(DECISION_AND_CHAT_MODELS));
     render(<SystemOneUI accessToken="session-key" />);
 
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest"));
@@ -221,7 +232,7 @@ describe("SystemOneUI integration", () => {
 
   it("sends each endpoint's real shape and switches existing responses between cards and JSON without resending", async () => {
     const user = userEvent.setup();
-    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    mockModelLookup.mockResolvedValue(modelInfoResponse(DECISION_AND_CHAT_MODELS));
     render(<SystemOneUI accessToken="session-key" />);
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest"));
     fireEvent.change(screen.getByRole("textbox", { name: "Input" }), { target: { value: "An outage" } });
@@ -431,7 +442,7 @@ describe("SystemOneUI integration", () => {
 
   it("offers only decision models and writes the picked one into the request", async () => {
     const user = userEvent.setup();
-    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    mockModelLookup.mockResolvedValue(modelInfoResponse(DECISION_AND_CHAT_MODELS));
     render(<SystemOneUI accessToken="session-key" />);
     const picker = await screen.findByRole("combobox", { name: "Decision model" });
 
@@ -451,11 +462,28 @@ describe("SystemOneUI integration", () => {
     expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string).model).toBe("pplx-decider");
   });
 
+  it("looks the decision models up again when the playground is reopened within the cache window", async () => {
+    mockModelLookup.mockResolvedValueOnce(modelInfoResponse([{ model_name: "gpt-5.5", mode: "chat" }]));
+    const queryClient = new QueryClient({ defaultOptions: { mutations: { retry: false } } });
+    const page = (
+      <QueryClientProvider client={queryClient}>
+        <SystemOneUI accessToken="session-key" />
+      </QueryClientProvider>
+    );
+    const first = rtlRender(page);
+    expect(await screen.findByRole("link", { name: "Add a decision model" })).toBeInTheDocument();
+    first.unmount();
+
+    mockModelLookup.mockResolvedValueOnce(modelInfoResponse(DECISION_AND_CHAT_MODELS));
+    rtlRender(page);
+    const picker = await screen.findByRole("combobox", { name: "Decision model" });
+    await waitFor(() => expect(picker).toHaveValue("jev-latest"));
+    expect(mockModelLookup).toHaveBeenCalledTimes(2);
+  });
+
   it("routes a configured TypeSafe model through the same proxy endpoint", async () => {
     const user = userEvent.setup();
-    mockModelLookup.mockResolvedValue(
-      modelGroupInfoResponse([{ model_group: "typesafe/jev-latest", mode: "evaluation" }]),
-    );
+    mockModelLookup.mockResolvedValue(modelInfoResponse([{ model_name: "typesafe/jev-latest", mode: "evaluation" }]));
     render(<SystemOneUI accessToken="session-key" />);
     await waitFor(() =>
       expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("typesafe/jev-latest"),
@@ -484,7 +512,7 @@ describe("SystemOneUI integration", () => {
 
   it("looks up a typed virtual key's decision models once, after typing settles", async () => {
     const user = userEvent.setup();
-    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    mockModelLookup.mockResolvedValue(modelInfoResponse(DECISION_AND_CHAT_MODELS));
     render(<SystemOneUI accessToken={null} disabledPersonalKeyCreation />);
 
     await user.type(screen.getByLabelText("Virtual Key", { exact: true }), "sk-typed-key");
@@ -515,7 +543,7 @@ describe("SystemOneUI integration", () => {
     fireEvent.change(screen.getByRole("textbox", { name: "Input" }), { target: { value: "edited" } });
 
     await act(async () => {
-      models.resolve(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+      models.resolve(modelInfoResponse(DECISION_AND_CHAT_MODELS));
       await new Promise((resolve) => setTimeout(resolve, 0));
     });
 
@@ -544,7 +572,7 @@ describe("SystemOneUI integration", () => {
       expect(mockFetch.mock.calls[0]?.[0]).toMatch(new RegExp(`${endpoint}$`));
       expect(JSON.parse(mockFetch.mock.calls[0]?.[1]?.body as string)).not.toHaveProperty("model");
       await act(async () => {
-        models.resolve(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+        models.resolve(modelInfoResponse(DECISION_AND_CHAT_MODELS));
         await models.promise;
       });
       expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("");
@@ -616,7 +644,7 @@ describe("SystemOneUI integration", () => {
 
   it("uses the requested model when the response omits it", async () => {
     const user = userEvent.setup();
-    mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+    mockModelLookup.mockResolvedValue(modelInfoResponse(DECISION_AND_CHAT_MODELS));
     mockFetch.mockResolvedValueOnce(
       createResponse({
         answers: responseBody.answers,
@@ -861,7 +889,7 @@ describe("SystemOneUI integration", () => {
 
     it("edits score levels and keeps instructions when a question changes type", async () => {
       const user = userEvent.setup();
-      mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
+      mockModelLookup.mockResolvedValue(modelInfoResponse(DECISION_AND_CHAT_MODELS));
       render(<SystemOneUI accessToken="session-key" />);
       await waitFor(() => expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest"));
 

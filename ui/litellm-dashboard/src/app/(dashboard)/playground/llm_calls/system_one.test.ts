@@ -195,7 +195,12 @@ describe("/v1/decisions requests", () => {
 
 describe("fetchDecisionModels", () => {
   const mockFetch = vi.fn<(input: RequestInfo | URL, init?: RequestInit) => Promise<Response>>();
-  const modelGroupInfo = (data: unknown) => ({ ok: true, text: async () => JSON.stringify({ data }) }) as Response;
+  const modelInfo = (data: unknown) => ({ ok: true, text: async () => JSON.stringify({ data }) }) as Response;
+  const deployment = (model_name: string, mode: string | null, supported_endpoints?: string[]) => ({
+    model_name,
+    litellm_params: { model: `openai/${model_name}` },
+    model_info: { id: `${model_name}-${mode}`, mode, supported_endpoints },
+  });
 
   beforeEach(() => {
     vi.stubGlobal("fetch", mockFetch);
@@ -208,11 +213,11 @@ describe("fetchDecisionModels", () => {
 
   it("lists the key's decision models from the proxy that answers the request, sorted by name", async () => {
     mockFetch.mockResolvedValueOnce(
-      modelGroupInfo([
-        { model_group: "pplx-decider", mode: "evaluation" },
-        { model_group: "gpt-5.5", mode: "chat" },
-        { model_group: "jev-latest", mode: "evaluation" },
-        { model_group: "unknown-mode", mode: null },
+      modelInfo([
+        deployment("pplx-decider", "evaluation"),
+        deployment("gpt-5.5", "chat", ["/v1/chat/completions", "/v1/responses"]),
+        deployment("jev-latest", "evaluation"),
+        deployment("unknown-mode", null),
       ]),
     );
 
@@ -221,7 +226,7 @@ describe("fetchDecisionModels", () => {
       "pplx-decider",
     ]);
     expect(mockFetch).toHaveBeenCalledWith(
-      "https://custom.example.com/model_group/info",
+      "https://custom.example.com/model/info",
       expect.objectContaining({
         method: "GET",
         headers: expect.objectContaining({ Authorization: "Bearer virtual-key" }),
@@ -229,8 +234,40 @@ describe("fetchDecisionModels", () => {
     );
   });
 
-  it("rejects a response that is not a model group list", async () => {
-    mockFetch.mockResolvedValueOnce(modelGroupInfo([{ mode: "evaluation" }]));
+  it("lists a routing group row the proxy materializes over a default-mode decision deployment", async () => {
+    mockFetch.mockResolvedValueOnce(
+      modelInfo([
+        deployment("gpt-6-luna", "chat", ["/v1/chat/completions", "/v1/decisions"]),
+        deployment("decision-balanced", "chat", ["/v1/chat/completions", "/v1/decisions"]),
+        deployment("chat-pool", "chat", ["/v1/chat/completions"]),
+      ]),
+    );
+
+    await expect(fetchDecisionModels("virtual-key")).resolves.toEqual(["decision-balanced", "gpt-6-luna"]);
+  });
+
+  it("lists a chat-mode model whose cost map entry serves a decision endpoint", async () => {
+    mockFetch.mockResolvedValueOnce(
+      modelInfo([
+        deployment("gpt-6-luna", "chat", ["/v1/chat/completions", "/v1/responses", "/v1/decisions"]),
+        deployment("clef", "chat", ["/v1/systemone"]),
+        deployment("gpt-5.5", "chat", ["/v1/chat/completions"]),
+      ]),
+    );
+
+    await expect(fetchDecisionModels("virtual-key")).resolves.toEqual(["clef", "gpt-6-luna"]);
+  });
+
+  it("lists a model group once when several deployments share its name", async () => {
+    mockFetch.mockResolvedValueOnce(
+      modelInfo([deployment("jev-latest", "evaluation"), deployment("jev-latest", "evaluation")]),
+    );
+
+    await expect(fetchDecisionModels("virtual-key")).resolves.toEqual(["jev-latest"]);
+  });
+
+  it("rejects a response that is not a model list", async () => {
+    mockFetch.mockResolvedValueOnce(modelInfo([{ model_info: { mode: "evaluation" } }]));
 
     await expect(fetchDecisionModels("virtual-key")).rejects.toThrow();
   });
