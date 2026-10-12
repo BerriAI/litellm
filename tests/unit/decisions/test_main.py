@@ -354,7 +354,7 @@ async def test_openai_decisions_uses_evaluation_pricing_and_explicit_base_model(
         api_key="caller-key",
         api_base="https://api.openai.com/v1",
     )
-    chat_cost: Final = litellm.model_cost["gpt-6-luna"]
+    chat_cost: Mapping[str, object] = litellm.model_cost["gpt-6-luna"]
     expected_chat_cost: Final = (
         (_INPUT_TOKENS - _CACHED_TOKENS - _CACHE_WRITE_TOKENS) * float(chat_cost["input_cost_per_token"])
         + _CACHED_TOKENS * float(chat_cost["cache_read_input_token_cost"])
@@ -404,7 +404,7 @@ async def test_systemone_falls_back_to_plain_pricing_without_decisions_row(
         api_key="caller-key",
         api_base="https://decisions.example/v1",
     )
-    plain_cost: Final = litellm.model_cost["perplexity/sonar"]
+    plain_cost: Mapping[str, object] = litellm.model_cost["perplexity/sonar"]
 
     assert route.called
     assert response._hidden_params["provider_response_model"] == "perplexity/sonar"

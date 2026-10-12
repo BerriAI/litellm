@@ -1689,9 +1689,6 @@ if TYPE_CHECKING:
     from .llms.openrouter.decisions.transformation import (
         OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
     )
-    from .llms.fireworks_ai.decisions.transformation import (
-        FireworksAIDecisionsConfig as FireworksAIDecisionsConfig,
-    )
     from .llms.cloudflare.decisions.transformation import (
         CloudflareDecisionsConfig as CloudflareDecisionsConfig,
     )
