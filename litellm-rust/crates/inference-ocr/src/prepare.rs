@@ -21,14 +21,7 @@ pub(crate) fn prepare_request(
             Some("MISTRAL_AZURE_API_BASE"),
         ),
         LlmProviders::AzureAi => (None, Some("AZURE_AI_API_BASE")),
-        LlmProviders::Anthropic
-        | LlmProviders::AwsTextract
-        | LlmProviders::Bedrock
-        | LlmProviders::Cohere
-        | LlmProviders::Openai
-        | LlmProviders::OpenaiLike
-        | LlmProviders::Reducto
-        | LlmProviders::VertexAi => (None, None),
+        _ => (None, None),
     };
     let secret = |name: &str| secrets.truthy(name);
     let dynamic_api_key = credentials.dynamic_api_key.or_else(|| {
