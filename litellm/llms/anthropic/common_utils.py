@@ -910,7 +910,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         output_config: Final = optional_params.get("output_config")
         if not isinstance(output_config, dict):
             return False
-        return output_config.get("effort") in ("xhigh", "max")
+        return "effort" in output_config and output_config["effort"] in ("xhigh", "max")
 
     @staticmethod
     def _supports_legacy_thinking(model: str, custom_llm_provider: str) -> bool:
