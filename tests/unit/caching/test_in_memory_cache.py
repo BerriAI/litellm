@@ -278,8 +278,8 @@ def test_in_memory_cache_injected_clock_controls_expiry_and_eviction() -> None:
 
 
 def test_in_memory_cache_refresh_ttl_extends_a_live_key_and_rejects_an_absent_or_expired_one() -> None:
-    clock = MagicMock(return_value=0.0)
-    cache = InMemoryCache(clock=clock)
+    clock: Final = MagicMock(return_value=0.0)
+    cache: Final = InMemoryCache(clock=clock)
     cache.set_cache("live", "v", ttl=10)
     cache.set_cache("stale", "v", ttl=10)
     clock.return_value = 9.0
@@ -294,8 +294,8 @@ def test_in_memory_cache_refresh_ttl_extends_a_live_key_and_rejects_an_absent_or
 
 
 def test_in_memory_cache_repeated_refresh_ttl_keeps_the_heap_bounded() -> None:
-    clock = MagicMock(return_value=0.0)
-    cache = InMemoryCache(max_size_in_memory=10, clock=clock)
+    clock: Final = MagicMock(return_value=0.0)
+    cache: Final = InMemoryCache(max_size_in_memory=10, clock=clock)
     cache.set_cache("pin", "v", ttl=60)
     for tick in range(1, 1_001):
         clock.return_value = float(tick)
@@ -305,8 +305,8 @@ def test_in_memory_cache_repeated_refresh_ttl_keeps_the_heap_bounded() -> None:
 
 
 def test_in_memory_cache_refreshing_a_pin_behind_a_live_neighbour_keeps_the_heap_bounded() -> None:
-    clock = MagicMock(return_value=0.0)
-    cache = InMemoryCache(max_size_in_memory=3, clock=clock)
+    clock: Final = MagicMock(return_value=0.0)
+    cache: Final = InMemoryCache(max_size_in_memory=3, clock=clock)
     cache.set_cache("neighbour", "v", ttl=3600)
     cache.set_cache("pin", "v", ttl=3600)
     for tick in range(1, 1_001):
@@ -322,8 +322,8 @@ def test_in_memory_cache_refreshing_a_pin_behind_a_live_neighbour_keeps_the_heap
 
 
 def test_in_memory_cache_refresh_ttl_never_evicts_a_neighbour_from_a_full_cache() -> None:
-    clock = MagicMock(return_value=0.0)
-    cache = InMemoryCache(max_size_in_memory=2, clock=clock)
+    clock: Final = MagicMock(return_value=0.0)
+    cache: Final = InMemoryCache(max_size_in_memory=2, clock=clock)
     cache.set_cache("first", "v", ttl=60)
     cache.set_cache("second", "v", ttl=60)
     clock.return_value = 30.0
