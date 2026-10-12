@@ -24,7 +24,7 @@ from tests.integration._support.manifest import OWNED_DIRECTORIES
 from tests.integration._support.ordering import collected_case, fixture_groups, scheduling_groups
 from tests.integration._support.provider import SharedProvider, shared_provider
 from tests.integration._support.routing import RoutingPlugin
-from tests.integration._support.workers import worker_endpoints, worker_gateway
+from tests.integration._support.workers import gateway_profile, worker_endpoints, worker_gateway
 from tests.integration.run import GITHUB_FILES
 
 if TYPE_CHECKING:
@@ -84,8 +84,7 @@ def pytest_xdist_setupnodes(config: pytest.Config, specs: Sequence[XSpec]) -> No
     resources: Final = ExitStack()
     config.add_cleanup(resources.close)
     destination: Final = Path(os.environ["INTEGRATION_RESULTS_DIR"])
-    peer_needed: Final = bool(os.environ.get("INTEGRATION_PEER_URL"))
-    replica_needed: Final = bool(os.environ.get("INTEGRATION_PROXY_READ_REPLICA_URL"))
+    profile: Final = gateway_profile(os.environ)
     for index, spec in enumerate(specs):
         results: Final = destination / f"gw{index}"
         endpoints: Final = worker_endpoints()
@@ -93,9 +92,7 @@ def pytest_xdist_setupnodes(config: pytest.Config, specs: Sequence[XSpec]) -> No
             for name, value in endpoints.items():
                 environment.setenv(name, value)
             environment.setenv("INTEGRATION_RESULTS_DIR", str(results))
-            services: Final = resources.enter_context(
-                worker_gateway(results / "runtime", peer=peer_needed, replica=replica_needed)
-            )
+            services: Final = resources.enter_context(worker_gateway(results / "runtime", profile))
         spec.env = {
             **STRING_ENVIRONMENT.validate_python(spec.env),
             **endpoints,
