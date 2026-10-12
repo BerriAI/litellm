@@ -2,7 +2,7 @@ import asyncio
 import json
 from types import MappingProxyType, SimpleNamespace
 from typing import Final, Mapping, Optional, cast
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import pytest
 from fastapi import HTTPException
@@ -647,6 +647,7 @@ async def test_organization_member_add_budget_omission_and_null_leave_budget_uns
     from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
 
     user = LiteLLM_UserTable(user_id="user-1", user_role="internal_user")
+
     async def create_membership(data):
         return LiteLLM_OrganizationMembershipTable(
             user_id="user-1",
@@ -1581,22 +1582,35 @@ def _org_spend_counter_cache(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
     spend_counter_cache = MagicMock()
     spend_counter_cache.in_memory_cache = InMemoryCache()
     spend_counter_cache.in_memory_cache.set_cache(key="spend:org:org-1", value=4.2)
-    spend_counter_cache.redis_cache.async_delete_cache = AsyncMock()
+    spend_counter_cache.in_memory_cache.set_cache(key="spend_db_floor:spend:org:org-1", value=4.2)
+    spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls = AsyncMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", spend_counter_cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.publish_auth_cache_invalidations", AsyncMock())
     return spend_counter_cache
 
 
 @pytest.mark.asyncio
-async def test_legacy_update_with_spend_drops_the_org_spend_counter(monkeypatch):
-    """A direct spend write must drop the cross-pod counter, or the org stays at the stale value until the counter expires."""
+async def test_legacy_update_with_spend_sets_the_org_counter_and_its_floor_on_every_pod(monkeypatch):
+    """A direct spend write must SET the cross-pod counter and its floor marker: a pod that cached the old floor
+    would otherwise repair a deleted-and-reseeded counter back up, and the org stays at the stale value until
+    the counter expires."""
+    from litellm.proxy import proxy_server
+
     spend_counter_cache = _org_spend_counter_cache(monkeypatch)
 
     await _run_legacy_update_organization(
-        monkeypatch, body={"organization_id": "org-1", "spend": 0.0}, existing_budget_id="budget-1"
+        monkeypatch, body={"organization_id": "org-1", "spend": 1.5}, existing_budget_id="budget-1"
     )
 
-    spend_counter_cache.redis_cache.async_delete_cache.assert_awaited_once_with(key="spend:org:org-1")
-    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:org:org-1") is None
+    spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls.assert_awaited_once_with(
+        [("spend:org:org-1", 1.5, proxy_server.spend_counter_redis_ttl())]
+    )
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:org:org-1") == 1.5
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend_db_floor:spend:org:org-1") == 1.5
+    assert proxy_server.publish_auth_cache_invalidations.await_args_list == [
+        call(("spend:org:org-1",), new_value=1.5, ttl=60),
+        call(("spend_db_floor:spend:org:org-1",), new_value=1.5, ttl=proxy_server.SPEND_DB_FLOOR_CACHE_TTL_SECONDS),
+    ]
 
 
 @pytest.mark.asyncio
@@ -1607,5 +1621,5 @@ async def test_legacy_update_without_spend_keeps_the_org_spend_counter(monkeypat
         monkeypatch, body={"organization_id": "org-1", "organization_alias": "renamed"}, existing_budget_id="budget-1"
     )
 
-    spend_counter_cache.redis_cache.async_delete_cache.assert_not_awaited()
+    spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls.assert_not_awaited()
     assert spend_counter_cache.in_memory_cache.get_cache(key="spend:org:org-1") == 4.2

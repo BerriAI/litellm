@@ -498,11 +498,11 @@ def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseExcep
     _swallowed_redis_failures.set(_swallowed_redis_failures.get() + 1)
 
 
-async def _first_keys(scan: AsyncIterator[object], count: int) -> AsyncIterator[str]:
+async def _first_keys(scan: AsyncIterator[object], count: int | None) -> AsyncIterator[str]:
     taken: Final = itertools.count(1)
     async for key in scan:
         yield key.decode() if isinstance(key, bytes) else str(key)
-        if next(taken) >= count:
+        if count is not None and next(taken) >= count:
             return
 
 
@@ -1015,7 +1015,7 @@ class RedisCache(BaseCache):
         return _decoded_counts(await self._async_run_redis_mget_operation(keys=namespaced_keys))
 
     @_redis_circuit_breaker_guard
-    async def async_scan_iter(self, pattern: str, count: int = 100) -> list[str]:
+    async def async_scan_iter(self, pattern: str, count: int = 100, *, unbounded: bool = False) -> list[str]:
         start_time: Final = time.time()
         try:
             _redis_client: Final = self.init_async_client()
@@ -1029,7 +1029,7 @@ class RedisCache(BaseCache):
             keys: Final = [
                 key
                 async for key in _first_keys(
-                    _redis_client.scan_iter(match=namespaced_pattern + "*", count=count), count
+                    _redis_client.scan_iter(match=namespaced_pattern + "*", count=count), None if unbounded else count
                 )
             ]
 

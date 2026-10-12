@@ -16,6 +16,7 @@ from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
     evict_and_broadcast,
     publish_auth_cache_invalidation,
+    publish_auth_cache_invalidations,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
@@ -224,6 +225,56 @@ async def test_subscriber_deletes_additional_in_memory_cache_entry_on_message() 
         await subscriber.stop()
 
     assert spend_counter_in_memory_cache.get_cache("spend:team_member:u-1:t-1") is None
+
+
+@pytest.mark.asyncio
+async def test_publish_many_sends_one_message_per_five_hundred_keys() -> None:
+    client = _RecordingRedisClient()
+    keys = tuple(f"spend:key:{index}" for index in range(1001))
+    with patch(
+        "litellm.proxy.common_utils.auth_cache_invalidation_pubsub.coordination_redis_cache",
+        return_value=_FakeRedisCache(client=client),
+    ):
+        await publish_auth_cache_invalidations(cache_keys=keys, new_value=0.0, ttl=5)
+        await asyncio.gather(*pubsub_module._pending_publishes)
+
+    assert [channel for channel, _ in client.published] == [AUTH_CACHE_INVALIDATION_CHANNEL] * 3
+    assert [json.loads(message) for _, message in client.published] == [
+        {"cache_keys": list(keys[:500]), "new_value": 0.0, "ttl": 5},
+        {"cache_keys": list(keys[500:1000]), "new_value": 0.0, "ttl": 5},
+        {"cache_key": keys[1000], "new_value": 0.0, "ttl": 5},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_subscriber_sets_every_key_of_a_multi_key_message_in_additional_caches() -> None:
+    cache = UserApiKeyCache()
+    spend_counter_in_memory_cache = InMemoryCache()
+    spend_counter_in_memory_cache.set_cache("spend:key:a", 999.0)
+    spend_counter_in_memory_cache.set_cache("spend_db_floor:spend:key:a", 999.0)
+    message = {
+        "type": "message",
+        "data": json.dumps({"cache_keys": ["spend:key:a", "spend:key:b"], "new_value": 0.0, "ttl": 60}).encode(),
+    }
+
+    pubsub = _QueuePubSub(initial_messages=[message])
+    subscriber = AuthCacheInvalidationSubscriber(
+        redis_cache=_FakeRedisCache(client=_ScriptedPubSubRedisClient(pubsubs=[pubsub])),
+        user_api_key_cache=cache,
+        additional_in_memory_caches=(spend_counter_in_memory_cache,),
+    )
+    subscriber.start()
+    try:
+        for _ in range(200):
+            if spend_counter_in_memory_cache.get_cache("spend:key:b") == 0.0:
+                break
+            await asyncio.sleep(0.01)
+    finally:
+        await subscriber.stop()
+
+    assert spend_counter_in_memory_cache.get_cache("spend:key:a") == 0.0
+    assert spend_counter_in_memory_cache.get_cache("spend:key:b") == 0.0
+    assert spend_counter_in_memory_cache.get_cache("spend_db_floor:spend:key:a") == 999.0
 
 
 @pytest.mark.asyncio

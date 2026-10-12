@@ -3684,7 +3684,7 @@ async def global_spend_reset():
     3. LiteLLM_TeamTable spend will be set = 0
 
     """
-    from litellm.proxy.proxy_server import invalidate_spend_counters_with_prefix, prisma_client
+    from litellm.proxy.proxy_server import prisma_client, reset_spend_counters_with_prefix
 
     if prisma_client is None:
         raise ProxyException(
@@ -3696,8 +3696,8 @@ async def global_spend_reset():
 
     await _verification_token_table(prisma_client).update_many(data={"spend": 0.0}, where={})
     await _team_table(prisma_client).update_many(data={"spend": 0.0}, where={})
-    await invalidate_spend_counters_with_prefix(prefix="spend:key:")
-    await invalidate_spend_counters_with_prefix(prefix="spend:team:")
+    await reset_spend_counters_with_prefix(prefix="spend:key:")
+    await reset_spend_counters_with_prefix(prefix="spend:team:")
 
     return {
         "message": "Spend for all API Keys and Teams reset successfully",

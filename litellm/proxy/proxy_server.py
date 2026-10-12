@@ -66,6 +66,7 @@ from litellm.constants import (
     BASE_MCP_ROUTE,
     DAILY_TAG_SPEND_BATCH_MULTIPLIER,
     DEFAULT_MAX_RECURSE_DEPTH,
+    DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE,
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
@@ -418,6 +419,7 @@ from litellm.proxy.common_request_processing import (  # noqa: F401, RUF100  # l
 )
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     AuthCacheInvalidationSubscriber,
+    publish_auth_cache_invalidations,
 )
 from litellm.proxy.common_utils.callback_utils import initialize_callbacks_on_proxy
 from litellm.proxy.common_utils.codex_model_catalog import codex_model_list_body
@@ -2916,6 +2918,7 @@ async def _drain_spend_event_producer_on_shutdown() -> None:
 # Bounds authoritative DB re-reads when enforcing a budget against a
 # stale-low spend counter: at most one DB read per counter per window.
 SPEND_DB_FLOOR_CACHE_TTL_SECONDS: Final = 5
+SPEND_DB_FLOOR_MARKER_PREFIX: Final = "spend_db_floor:"
 _SPEND_COUNTER_TTL_BATCH_WRITE_MULTIPLE: Final = 10
 
 
@@ -3954,25 +3957,69 @@ _IN_MEMORY_COUNTER_KEYS: Final = TypeAdapter(tuple[str, ...])
 
 _SPEND_COUNTER_STORE_FAILURES: Final = (RedisError, RedisCircuitBreakerOpenError, OSError, ValidationError)
 
+_WINDOW_COUNTER_SEGMENT: Final = ":window:"
 
-@with_service_target(SPEND_COUNTERS_TARGET)
-async def invalidate_spend_counters_with_prefix(prefix: str) -> None:
-    for counter_key in _IN_MEMORY_COUNTER_KEYS.validate_python(tuple(spend_counter_cache.in_memory_cache.cache_dict)):
-        if counter_key.startswith(prefix):
-            spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
-    redis_cache: Final = spend_counter_cache.redis_cache
-    if redis_cache is None:
-        return
+
+def _spend_counter_keys_in_memory(prefix: str) -> frozenset[str]:
+    floor_prefix: Final = f"{SPEND_DB_FLOOR_MARKER_PREFIX}{prefix}"
+    cached_keys: Final = _IN_MEMORY_COUNTER_KEYS.validate_python(tuple(spend_counter_cache.in_memory_cache.cache_dict))
+    return frozenset(
+        key.removeprefix(SPEND_DB_FLOOR_MARKER_PREFIX) for key in cached_keys if key.startswith((prefix, floor_prefix))
+    )
+
+
+async def _spend_counter_keys_in_redis(redis_cache: RedisCache, prefix: str) -> frozenset[str]:
+    namespace_prefix: Final = f"{redis_cache.namespace}:" if redis_cache.namespace else ""
     try:
-        while scanned := await redis_cache.async_scan_iter(pattern=prefix, count=500):
-            await redis_cache.delete_cache_keys(scanned)
+        scanned: Final = await redis_cache.async_scan_iter(pattern=prefix, count=500, unbounded=True)
     except _SPEND_COUNTER_STORE_FAILURES:
         verbose_proxy_logger.warning(
-            "Unable to delete the spend counters %s* after the spend reset; budget checks use the stale counters until "
-            "they expire",
+            "Unable to list the spend counters %s* after the spend reset; budget checks on other pods use the stale "
+            "counters until they expire",
             prefix,
             exc_info=True,
         )
+        return frozenset()
+    return frozenset(key.removeprefix(namespace_prefix) for key in scanned)
+
+
+async def _write_spend_counters_to_redis(redis_cache: RedisCache, keys: Sequence[str], value: float) -> None:
+    ttl: Final = spend_counter_redis_ttl()
+    for start in range(0, len(keys), DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE):
+        await redis_cache.async_set_cache_pipeline_with_ttls(
+            [(key, value, ttl) for key in keys[start : start + DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE]]
+        )
+
+
+@with_service_target(SPEND_COUNTERS_TARGET)
+async def set_spend_counters_with_floor_and_broadcast(counter_keys: Collection[str], value: float) -> None:
+    """A spend reset SETs each counter and its spend_db_floor marker on every pod, never
+    deletes them: a pod that cached the pre-reset floor within SPEND_DB_FLOOR_CACHE_TTL_SECONDS
+    would otherwise repair the reseeded counter right back to the old total."""
+    keys: Final = tuple(sorted(counter_keys))
+    if len(keys) == 0:
+        return
+    floor_keys: Final = tuple(f"{SPEND_DB_FLOOR_MARKER_PREFIX}{key}" for key in keys)
+    for key, floor_key in zip(keys, floor_keys, strict=True):
+        spend_counter_cache.in_memory_cache.set_cache(key=key, value=value, ttl=60)
+        spend_counter_cache.in_memory_cache.set_cache(key=floor_key, value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
+    redis_cache: Final = spend_counter_cache.redis_cache
+    if redis_cache is not None:
+        await _write_spend_counters_to_redis(redis_cache, keys, value)
+    await publish_auth_cache_invalidations(keys, new_value=value, ttl=60)
+    await publish_auth_cache_invalidations(floor_keys, new_value=value, ttl=SPEND_DB_FLOOR_CACHE_TTL_SECONDS)
+
+
+@with_service_target(SPEND_COUNTERS_TARGET)
+async def reset_spend_counters_with_prefix(prefix: str) -> None:
+    redis_cache: Final = spend_counter_cache.redis_cache
+    in_redis: Final[frozenset[str]] = (
+        frozenset() if redis_cache is None else await _spend_counter_keys_in_redis(redis_cache, prefix)
+    )
+    counters: Final = frozenset(
+        key for key in _spend_counter_keys_in_memory(prefix) | in_redis if _WINDOW_COUNTER_SEGMENT not in key
+    )
+    await set_spend_counters_with_floor_and_broadcast(counters, value=0.0)
 
 
 async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> None:

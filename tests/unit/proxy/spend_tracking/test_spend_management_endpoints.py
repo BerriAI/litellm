@@ -7,7 +7,7 @@ import json
 import re
 import sqlite3
 from datetime import timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, call, patch
 
 import prisma
 import pytest
@@ -8071,45 +8071,79 @@ def _spend_counter_cache_for_reset(monkeypatch: pytest.MonkeyPatch, *, scan_resu
     spend_counter_cache: Final = MagicMock()
     spend_counter_cache.in_memory_cache = InMemoryCache()
     spend_counter_cache.in_memory_cache.set_cache(key="spend:key:aaa", value=0.5)
+    spend_counter_cache.in_memory_cache.set_cache(key="spend_db_floor:spend:key:aaa", value=0.5)
+    spend_counter_cache.in_memory_cache.set_cache(key="spend_db_floor:spend:key:floored", value=0.9)
+    spend_counter_cache.in_memory_cache.set_cache(key="spend:key:aaa:window:1d", value=0.3)
     spend_counter_cache.in_memory_cache.set_cache(key="spend:team:t1", value=0.5)
     spend_counter_cache.in_memory_cache.set_cache(key="spend:user:u1", value=0.5)
+    spend_counter_cache.redis_cache.namespace = "ns"
     spend_counter_cache.redis_cache.async_scan_iter = AsyncMock(side_effect=scan_results)
-    spend_counter_cache.redis_cache.delete_cache_keys = AsyncMock()
+    spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls = AsyncMock()
     monkeypatch.setattr(ps, "spend_counter_cache", spend_counter_cache)
+    monkeypatch.setattr(ps, "publish_auth_cache_invalidations", AsyncMock())
     return spend_counter_cache
 
 
+_RESET_KEY_COUNTERS: Final = ("spend:key:aaa", "spend:key:bbb", "spend:key:floored")
+
+
 @pytest.mark.asyncio
-async def test_global_spend_reset_drops_the_key_and_team_spend_counters(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_global_spend_reset_sets_every_key_and_team_counter_and_its_floor_to_zero(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Deleting the counters is not enough: a pod that cached the pre-reset floor within the last 5s would repair
+    the reseeded counter back to the old total for the whole counter TTL, so the reset SETs counter and floor
+    everywhere and leaves budget-window counters, which the reset does not touch in the DB, alone."""
     spend_counter_cache: Final = _spend_counter_cache_for_reset(
-        monkeypatch, scan_results=[["spend:key:aaa", "spend:key:bbb"], [], ["spend:team:t1"], []]
+        monkeypatch,
+        scan_results=[["ns:spend:key:aaa", "ns:spend:key:bbb", "ns:spend:key:bbb:window:1d"], ["ns:spend:team:t1"]],
     )
+    ttl: Final = ps.spend_counter_redis_ttl()
 
     response: Final = await spend_management_endpoints.global_spend_reset()
 
     assert response["status"] == "success"
-    assert [c.kwargs["pattern"] for c in spend_counter_cache.redis_cache.async_scan_iter.await_args_list] == [
-        "spend:key:",
-        "spend:key:",
-        "spend:team:",
-        "spend:team:",
+    assert [c.kwargs for c in spend_counter_cache.redis_cache.async_scan_iter.await_args_list] == [
+        {"pattern": "spend:key:", "count": 500, "unbounded": True},
+        {"pattern": "spend:team:", "count": 500, "unbounded": True},
     ]
-    assert [c.args for c in spend_counter_cache.redis_cache.delete_cache_keys.await_args_list] == [
-        (["spend:key:aaa", "spend:key:bbb"],),
-        (["spend:team:t1"],),
+    assert [c.args for c in spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls.await_args_list] == [
+        ([(counter, 0.0, ttl) for counter in _RESET_KEY_COUNTERS],),
+        ([("spend:team:t1", 0.0, ttl)],),
     ]
-    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:key:aaa") is None
-    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:team:t1") is None
-    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:user:u1") == 0.5
+    in_memory: Final = spend_counter_cache.in_memory_cache
+    assert [in_memory.get_cache(key=counter) for counter in (*_RESET_KEY_COUNTERS, "spend:team:t1")] == [0.0] * 4
+    assert [
+        in_memory.get_cache(key=f"spend_db_floor:{counter}") for counter in (*_RESET_KEY_COUNTERS, "spend:team:t1")
+    ] == [0.0] * 4
+    assert in_memory.get_cache(key="spend:key:aaa:window:1d") == 0.3
+    assert in_memory.get_cache(key="spend:user:u1") == 0.5
+    assert ps.publish_auth_cache_invalidations.await_args_list == [
+        call(_RESET_KEY_COUNTERS, new_value=0.0, ttl=60),
+        call(
+            tuple(f"spend_db_floor:{counter}" for counter in _RESET_KEY_COUNTERS),
+            new_value=0.0,
+            ttl=ps.SPEND_DB_FLOOR_CACHE_TTL_SECONDS,
+        ),
+        call(("spend:team:t1",), new_value=0.0, ttl=60),
+        call(("spend_db_floor:spend:team:t1",), new_value=0.0, ttl=ps.SPEND_DB_FLOOR_CACHE_TTL_SECONDS),
+    ]
 
 
 @pytest.mark.asyncio
-async def test_global_spend_reset_still_resets_the_rows_when_redis_is_down(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_global_spend_reset_still_resets_the_rows_and_this_pod_when_redis_is_down(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     spend_counter_cache: Final = _spend_counter_cache_for_reset(monkeypatch, scan_results=ConnectionError("redis down"))
+    ttl: Final = ps.spend_counter_redis_ttl()
 
     response: Final = await spend_management_endpoints.global_spend_reset()
 
     assert response["status"] == "success"
     ps.prisma_client.db.litellm_teamtable.update_many.assert_awaited_once_with(data={"spend": 0.0}, where={})
-    spend_counter_cache.redis_cache.delete_cache_keys.assert_not_awaited()
-    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:key:aaa") is None
+    assert [c.args for c in spend_counter_cache.redis_cache.async_set_cache_pipeline_with_ttls.await_args_list] == [
+        ([("spend:key:aaa", 0.0, ttl), ("spend:key:floored", 0.0, ttl)],),
+        ([("spend:team:t1", 0.0, ttl)],),
+    ]
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:key:aaa") == 0.0
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend_db_floor:spend:key:floored") == 0.0
