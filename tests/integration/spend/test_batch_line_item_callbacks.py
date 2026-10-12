@@ -13,7 +13,7 @@ from integration._support.client import JSON_OBJECT, Gateway, eventually, object
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.upstream import delete_scenario, register_scenario
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
 from pydantic import JsonValue
 
@@ -441,7 +441,67 @@ def test_batch_line_metadata_does_not_reach_router_rate_limit_counters(gateway: 
         assert datetime.now(UTC).strftime("%H-%M") == window, "the ITPM window rolled over mid-test"
 
 
-def test_line_events_follow_the_keys_message_logging_opt_out(gateway: Gateway, tmp_path: Path) -> None:
+_MESSAGE_LOGGING_OFF: Final[dict[str, JsonValue]] = {
+    "callback_name": "generic_api",
+    "callback_type": "success_and_failure",
+    "callback_vars": {"turn_off_message_logging": "true"},
+}
+
+
+def _completed_batch(candidate: Gateway, model: str, input_lines: tuple[str, ...], key: str) -> str:
+    file_response: Final = candidate.request_multipart(
+        "/v1/files",
+        {"purpose": "batch", "model": model},
+        {"file": ("in.jsonl", ("\n".join(input_lines) + "\n").encode(), "application/jsonl")},
+        key=key,
+    )
+    assert file_response.status_code == 200, file_response.text
+    batch_response: Final = candidate.request(
+        "POST",
+        "/v1/batches",
+        {
+            "input_file_id": string_value(JSON_OBJECT.validate_json(file_response.content)["id"]),
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+            "model": model,
+        },
+        key=key,
+    )
+    assert batch_response.status_code == 200, batch_response.text
+    batch_id: Final = string_value(JSON_OBJECT.validate_json(batch_response.content)["id"])
+    retrieval: Final = eventually(
+        lambda: candidate.request("GET", f"/v1/batches/{batch_id}", key=key),
+        lambda response: response.status_code == 200 and response.json()["status"] == "completed",
+        seconds=30,
+    )
+    assert retrieval.status_code == 200, retrieval.text
+    return batch_id
+
+
+def _delivered(endpoint: Wire, received: list[Request], key: str) -> tuple[dict[str, JsonValue], ...]:
+    received.extend(endpoint.drain())
+    key_hash: Final = sha256(key.encode()).hexdigest()
+    return tuple(
+        event
+        for batch in received
+        for event in json.loads(batch.body)
+        if object_value(event["metadata"]).get("user_api_key_hash") == key_hash
+    )
+
+
+def _line_events(events: tuple[dict[str, JsonValue], ...]) -> tuple[dict[str, JsonValue], ...]:
+    return tuple(event for event in events if _hidden(event).get("batch_custom_id") is not None)
+
+
+def _all_lines_delivered(endpoint: Wire, received: list[Request], key: str) -> tuple[dict[str, JsonValue], ...]:
+    return eventually(
+        lambda: _line_events(_delivered(endpoint, received, key)),
+        lambda values: {_hidden(event)["batch_custom_id"] for event in values} == set(ALL_CUSTOM_IDS),
+        seconds=40,
+    )
+
+
+def _assert_lines_follow_message_logging_opt_out(gateway: Gateway, tmp_path: Path, *, team_level: bool) -> None:
     marker: Final = "batch-line-redact-" + uuid.uuid4().hex[:12]
 
     with (
@@ -460,65 +520,93 @@ def test_line_events_follow_the_keys_message_logging_opt_out(gateway: Gateway, t
         input_lines: Final = _input_lines(routed_model, marker)
         handle: Final = register_scenario(marker, _provider_routes(input_lines))
         scenario.cleanups.callback(delete_scenario, handle)
-        key: Final = scenario.key(
-            models=[routed_model],
-            metadata={
-                "logging": [
-                    {
-                        "callback_name": "generic_api",
-                        "callback_type": "success_and_failure",
-                        "callback_vars": {"turn_off_message_logging": "true"},
-                    }
-                ]
-            },
+        key: Final = (
+            scenario.key(models=[routed_model], team_id=scenario.team(metadata={"logging": [_MESSAGE_LOGGING_OFF]}))
+            if team_level
+            else scenario.key(models=[routed_model], metadata={"logging": [_MESSAGE_LOGGING_OFF]})
         )
-        key_hash: Final = sha256(key.encode()).hexdigest()
-        file_response: Final = candidate.request_multipart(
-            "/v1/files",
-            {"purpose": "batch", "model": routed_model},
-            {"file": ("in.jsonl", ("\n".join(input_lines) + "\n").encode(), "application/jsonl")},
-            key=key,
-        )
-        assert file_response.status_code == 200, file_response.text
-        batch_response: Final = candidate.request(
-            "POST",
-            "/v1/batches",
-            {
-                "input_file_id": string_value(JSON_OBJECT.validate_json(file_response.content)["id"]),
-                "endpoint": "/v1/chat/completions",
-                "completion_window": "24h",
-                "model": routed_model,
-            },
-            key=key,
-        )
-        assert batch_response.status_code == 200, batch_response.text
-        batch_id: Final = string_value(JSON_OBJECT.validate_json(batch_response.content)["id"])
-        retrieval: Final = eventually(
-            lambda: candidate.request("GET", f"/v1/batches/{batch_id}", key=key),
-            lambda response: response.status_code == 200 and response.json()["status"] == "completed",
-            seconds=30,
-        )
-        assert retrieval.status_code == 200, retrieval.text
-        batches: Final[
-            list[Request]
-        ] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
+        _completed_batch(candidate, routed_model, input_lines, key)
+        received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier batches
 
-        def delivered_lines() -> tuple[dict[str, JsonValue], ...]:
-            batches.extend(endpoint.drain())
-            return tuple(
-                event
-                for batch in batches
-                for event in json.loads(batch.body)
-                if object_value(event["metadata"]).get("user_api_key_hash") == key_hash
-                and _hidden(event).get("batch_custom_id") is not None
-            )
-
-        line_events: Final = eventually(
-            delivered_lines,
-            lambda values: {_hidden(event)["batch_custom_id"] for event in values} == set(ALL_CUSTOM_IDS),
-            seconds=40,
-        )
-
-        for event in line_events:
+        for event in _all_lines_delivered(endpoint, received, key):
             assert event["messages"] == [{"role": "user", "content": "redacted-by-litellm"}], event["messages"]
             assert "answer " not in json.dumps(event["response"]), event["response"]
+
+
+def test_line_events_follow_the_keys_message_logging_opt_out(gateway: Gateway, tmp_path: Path) -> None:
+    _assert_lines_follow_message_logging_opt_out(gateway, tmp_path, team_level=False)
+
+
+def test_line_events_follow_the_teams_message_logging_opt_out(gateway: Gateway, tmp_path: Path) -> None:
+    _assert_lines_follow_message_logging_opt_out(gateway, tmp_path, team_level=True)
+
+
+def test_a_line_body_system_prompt_leads_the_logged_messages(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "batch-line-system-" + uuid.uuid4().hex[:12]
+    system_prompt: Final = f"{marker} answer tersely"
+
+    with (
+        wire_server(lambda _request: Reply()) as endpoint,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {"GENERIC_LOGGER_ENDPOINT": endpoint.url},
+            config=_line_item_config(Path("tests/integration/proxy_config.yaml"), tmp_path / "line_items_system.yaml"),
+        ) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        routed_model: Final = scenario.model(
+            api_base=f"{gateway.upstream_url}/{marker}", api_key="synthetic-provider-key"
+        )
+        input_lines: Final = tuple(
+            json.dumps({**line, "body": {**line["body"], "system": system_prompt}}, separators=(",", ":"))
+            for line in (json.loads(raw) for raw in _input_lines(routed_model, marker))
+        )
+        handle: Final = register_scenario(marker, _provider_routes(input_lines))
+        scenario.cleanups.callback(delete_scenario, handle)
+        key: Final = scenario.key(models=[routed_model])
+        _completed_batch(candidate, routed_model, input_lines, key)
+        received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier batches
+
+        for event in _all_lines_delivered(endpoint, received, key):
+            custom_id = string_value(_hidden(event)["batch_custom_id"])
+            assert event["messages"] == [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": f"{marker} {custom_id}"},
+            ], event["messages"]
+            assert event["call_type"] == "acompletion", event["call_type"]
+            assert "system" not in object_value(event["metadata"]), event["metadata"]
+
+
+def test_a_restarted_proxy_does_not_emit_a_completed_batchs_lines_again(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "batch-line-restart-" + uuid.uuid4().hex[:12]
+    config: Final = _line_item_config(Path("tests/integration/proxy_config.yaml"), tmp_path / "line_items_restart.yaml")
+    received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier batches
+
+    with wire_server(lambda _request: Reply()) as endpoint, gateway.scenario() as scenario:
+        routed_model: Final = scenario.model(
+            api_base=f"{gateway.upstream_url}/{marker}", api_key="synthetic-provider-key"
+        )
+        input_lines: Final = _input_lines(routed_model, marker)
+        handle: Final = register_scenario(marker, _provider_routes(input_lines))
+        scenario.cleanups.callback(delete_scenario, handle)
+        key: Final = scenario.key(models=[routed_model])
+        with owned_proxy(gateway, tmp_path, {"GENERIC_LOGGER_ENDPOINT": endpoint.url}, config=config) as first:
+            batch_id: Final = _completed_batch(first, routed_model, input_lines, key)
+            first_lines: Final = _all_lines_delivered(endpoint, received, key)
+        assert sorted(string_value(_hidden(event)["batch_custom_id"]) for event in first_lines) == list(ALL_CUSTOM_IDS)
+
+        with owned_proxy(gateway, tmp_path, {"GENERIC_LOGGER_ENDPOINT": endpoint.url}, config=config) as second:
+            retrieval: Final = second.request("GET", f"/v1/batches/{batch_id}", key=key)
+            assert retrieval.status_code == 200 and retrieval.json()["status"] == "completed", retrieval.text
+            events_after_restart: Final = eventually(
+                lambda: _delivered(endpoint, received, key),
+                lambda values: len([e for e in values if e["call_type"] == "aretrieve_batch"]) >= 2,
+                seconds=40,
+            )
+
+        assert sorted(
+            string_value(_hidden(event)["batch_custom_id"]) for event in _line_events(events_after_restart)
+        ) == list(ALL_CUSTOM_IDS), [
+            (event["call_type"], _hidden(event).get("batch_custom_id")) for event in events_after_restart
+        ]
