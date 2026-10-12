@@ -147,6 +147,13 @@ def test_same_inputs_same_key():
     assert _key() == _key()
 
 
+def test_key_changes_with_process_secret(monkeypatch):
+    monkeypatch.setattr(id_cache, "_CACHE_KEY_SECRET", b"\x00" * 32)
+    first = _key()
+    monkeypatch.setattr(id_cache, "_CACHE_KEY_SECRET", b"\x01" * 32)
+    assert _key() != first
+
+
 @pytest.mark.parametrize(
     "override",
     [
