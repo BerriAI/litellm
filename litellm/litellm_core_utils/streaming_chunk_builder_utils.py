@@ -412,7 +412,7 @@ class ChunkProcessor:
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason = "stop"
-        saw_tool_call = False
+        saw_tool_call = False  # rebind-ok: flipped to True inside the loop when a tool-call delta or message is seen
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
                 choice = chunk["choices"][0]
@@ -442,7 +442,7 @@ class ChunkProcessor:
             # finish_reason must aggregate to "tool_calls" (OpenAI spec),
             # not the default "stop" - otherwise callbacks (e.g. OpenTelemetry)
             # record a wrong finish reason for single-chunk streams. (litellm#45796)
-            finish_reason = "tool_calls"
+            finish_reason = "tool_calls"  # rebind-ok: aggregated finish reason for tool-calling streams (litellm#45796)
 
         # Initialize the response dictionary
         response = ModelResponse(
