@@ -1075,10 +1075,13 @@ async def test_dual_cache_async_get_cache_redis_first_serves_redis_over_the_loca
 
 
 @pytest.mark.asyncio
-async def test_dual_cache_async_get_cache_redis_first_treats_a_redis_miss_as_a_miss():
+async def test_dual_cache_async_get_cache_redis_first_treats_a_redis_miss_as_a_miss_and_drops_the_local_copy():
+    """Redis is the shared truth, so a copy it no longer holds must not come back from this process
+    once Redis goes down or the next continuation is not pinnable."""
     cache = DualCache(redis_cache=_RecordingRedis({}))
     await cache.in_memory_cache.async_set_cache("pin", "from-memory")
     assert await cache.async_get_cache_redis_first("pin") is None
+    assert await cache.in_memory_cache.async_get_cache("pin") is None
 
 
 @pytest.mark.asyncio

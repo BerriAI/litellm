@@ -48,7 +48,7 @@ class InMemoryCache(BaseCache):
 
         # in-memory cache
         self.cache_dict: dict = {}
-        self.ttl_dict: dict = {}
+        self.ttl_dict: dict[str, float] = {}
         self.expiration_heap: list[tuple[float, str]] = []
         self._increment_lock = threading.Lock()
         self._clock = clock if clock is not None else lambda: time.time()
@@ -109,8 +109,10 @@ class InMemoryCache(BaseCache):
             expiration_time, key = self.expiration_heap[0]
 
             # Case 1: Heap entry is outdated
-            if expiration_time != self.ttl_dict.get(key):
+            if expiration_time != (live_expiry := self.ttl_dict.get(key)):
                 heapq.heappop(self.expiration_heap)
+                if live_expiry is not None:
+                    heapq.heappush(self.expiration_heap, (live_expiry, key))
             # Case 2: Entry is valid but expired
             elif expiration_time <= current_time:
                 heapq.heappop(self.expiration_heap)
@@ -118,13 +120,6 @@ class InMemoryCache(BaseCache):
             else:
                 # Case 3: Entry is valid and not expired
                 break
-        if len(self.expiration_heap) > 2 * len(self.ttl_dict):
-            self._rebuild_heap()
-
-    def _rebuild_heap(self) -> None:
-        live_entries: Final = [(expires_at, key) for key, expires_at in self.ttl_dict.items()]
-        heapq.heapify(live_entries)
-        self.expiration_heap = live_entries
 
     def evict_cache(self):
         """
@@ -146,8 +141,10 @@ class InMemoryCache(BaseCache):
         while len(self.cache_dict) >= self.max_size_in_memory:
             expiration_time, key = heapq.heappop(self.expiration_heap)
             # Skip if key was removed or updated
-            if self.ttl_dict.get(key) == expiration_time:
+            if (live_expiry := self.ttl_dict.get(key)) == expiration_time:
                 self._remove_key(key)
+            elif live_expiry is not None:
+                heapq.heappush(self.expiration_heap, (live_expiry, key))
 
         # de-reference the removed item
         # https://www.geeksforgeeks.org/diagnosing-and-fixing-memory-leaks-in-python/
@@ -196,9 +193,7 @@ class InMemoryCache(BaseCache):
         self._prune_heap_roots(now)
         if key not in self.cache_dict:
             return False
-        expires_at: Final = now + float(ttl)
-        self.ttl_dict[key] = expires_at
-        heapq.heappush(self.expiration_heap, (expires_at, key))
+        self.ttl_dict[key] = now + float(ttl)
         return True
 
     async def async_set_cache_pipeline(self, cache_list, ttl=None, **kwargs):
@@ -290,7 +285,7 @@ class InMemoryCache(BaseCache):
     def delete_cache(self, key):
         self._remove_key(key)
 
-    async def async_get_ttl(self, key: str) -> int | None:
+    async def async_get_ttl(self, key: str) -> float | None:
         """
         Get the remaining TTL of a key in in-memory cache
         """

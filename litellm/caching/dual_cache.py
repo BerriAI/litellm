@@ -313,10 +313,12 @@ class DualCache(BaseCache):
                 with_traceback=True,
             )
             return await self.in_memory_cache.async_get_cache(key)
-        if redis_result is not None:
-            await self.in_memory_cache.async_set_cache(
-                key, redis_result, **self._backfill_kwargs({} if ttl is None else {"ttl": ttl})
-            )
+        if redis_result is None:
+            self.in_memory_cache.delete_cache(key)
+            return None
+        await self.in_memory_cache.async_set_cache(
+            key, redis_result, **self._backfill_kwargs({} if ttl is None else {"ttl": ttl})
+        )
         return redis_result
 
     def _reserve_redis_batch_keys(
@@ -752,7 +754,7 @@ class DualCache(BaseCache):
         for start in range(0, len(keys), DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE):
             await self.redis_cache.delete_cache_keys(keys[start : start + DEFAULT_MAX_REDIS_BATCH_CACHE_SIZE])
 
-    async def async_get_ttl(self, key: str) -> int | None:
+    async def async_get_ttl(self, key: str) -> float | None:
         """
         Get the remaining TTL of a key in in-memory cache or redis
         """

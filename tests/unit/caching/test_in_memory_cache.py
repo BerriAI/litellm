@@ -260,8 +260,8 @@ def test_in_memory_cache_injected_clock_controls_expiry_and_eviction() -> None:
         def __call__(self) -> float:
             return self.now
 
-    clock = Clock()
-    cache = InMemoryCache(max_size_in_memory=2, default_ttl=60, clock=clock)
+    clock: Final = Clock()
+    cache: Final = InMemoryCache(max_size_in_memory=2, default_ttl=60, clock=clock)
     cache.set_cache("first", "original", ttl=10)
     clock.now = 9.0
     cache.set_cache("second", "survivor")
@@ -319,6 +319,28 @@ def test_in_memory_cache_refreshing_a_pin_behind_a_live_neighbour_keeps_the_heap
     assert cache.get_cache("pin") == "v"
     assert cache.get_cache("third") == "v"
     assert cache.get_cache("fourth") == "v"
+
+
+def test_in_memory_cache_refresh_ttl_moves_the_eviction_deadline_without_adding_heap_records() -> None:
+    """A refresh only rewrites the key's deadline; the stale heap record is re-filed under the live deadline
+    when it surfaces, so the key is evicted in its new order and never leaves the heap without a record."""
+    clock: Final = MagicMock(return_value=0.0)
+    cache: Final = InMemoryCache(max_size_in_memory=2, clock=clock)
+    cache.set_cache("first", "v", ttl=10)
+    clock.return_value = 9.0
+    assert cache.refresh_ttl("first", 60) is True
+    cache.set_cache("second", "v", ttl=5_000)
+    clock.return_value = 10.001
+    assert cache.get_cache("first") == "v"
+    cache.set_cache("third", "v", ttl=100)
+    assert cache.get_cache("first") is None
+    assert cache.get_cache("second") == "v"
+    for tick in range(11, 1_011):
+        clock.return_value = float(tick)
+        assert cache.refresh_ttl("third", 10_000) is True
+    assert len(cache.expiration_heap) <= 2
+    clock.return_value = 11_010.001
+    assert cache.get_cache("third") is None
 
 
 def test_in_memory_cache_refresh_ttl_never_evicts_a_neighbour_from_a_full_cache() -> None:

@@ -1726,7 +1726,7 @@ class RedisCache(BaseCache):
         """GET that raises on a Redis failure, so a caller can tell a failed read from a miss."""
         return await self._async_get_reporting_to_service_hooks(key, parent_otel_span)
 
-    async def _async_get_reporting_to_service_hooks(self, key: str, parent_otel_span: Span | None) -> object:
+    async def _async_get_reporting_to_service_hooks(self, key: str, parent_otel_span: Span | None):  # noqa: ANN202  # a named return retypes async_get_cache for every caller
         commands: Final = self._async_commands()
         namespaced_key: Final = self.check_and_fix_namespace(key=key)
         start_time: Final = time.time()
