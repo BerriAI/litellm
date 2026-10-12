@@ -347,7 +347,6 @@ const routerUsageResponse = (saved: number): AutoRouterBenchmarksResponse => ({
     saved_spend: saved,
     baseline_spend: 10 + saved,
     saved_pct: (100 * saved) / (10 + saved),
-    saved_per_session: saved / 2,
     cache: {
       coverage_pct: 100,
       hit_rate_pct: 0,

@@ -2,7 +2,7 @@
 Unit tests for VertexAIRealtimeConfig.
 
 Validates:
-- URL construction (regional and global)
+- URL construction (regional, multi-region and global)
 - Auth headers (Bearer token + project header)
 - Session setup message format
 - Full text-in / text-out round-trip via RealTimeStreaming with a mocked
@@ -10,12 +10,14 @@ Validates:
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 import websockets.exceptions  # registers websockets.exceptions on the websockets namespace
 
 import litellm
+from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
 from litellm.llms.vertex_ai.realtime.transformation import VertexAIRealtimeConfig
 
 # ---------------------------------------------------------------------------
@@ -43,6 +45,26 @@ def test_get_complete_url_global():
         "wss://aiplatform.googleapis.com"
         "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
     )
+
+
+@pytest.mark.parametrize("location", ["us", "eu"])
+def test_get_complete_url_multi_region_uses_rep_host(location: str):
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location=location)
+    url: Final = cfg.get_complete_url(api_base=None, model="gemini-3.8-live")
+    # Google documents the multi-region Vertex endpoints as aiplatform.{us,eu}.rep.googleapis.com
+    # (https://docs.cloud.google.com/vertex-ai/generative-ai/docs/learn/locations, read 2026-10-07)
+    assert url == (
+        f"wss://aiplatform.{location}.rep.googleapis.com"
+        "/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
+    )
+
+
+@pytest.mark.parametrize("location", ["us", "eu", "global", "us-central1", "europe-west4"])
+def test_get_complete_url_host_matches_shared_vertex_host(location: str):
+    cfg: Final = VertexAIRealtimeConfig(access_token="tok", project="my-proj", location=location)
+    url: Final = cfg.get_complete_url(api_base=None, model="gemini-3.8-live")
+    shared_host: Final = get_vertex_base_url(location).removeprefix("https://")
+    assert url == f"wss://{shared_host}/ws/google.cloud.aiplatform.v1.LlmBidiService/BidiGenerateContent"
 
 
 def test_get_complete_url_custom_api_base():
@@ -243,6 +265,7 @@ async def test_vertex_realtime_text_in_text_out():
     VertexAIRealtimeConfig for message translation.  All I/O is mocked.
     """
     from litellm.litellm_core_utils.realtime_streaming import RealTimeStreaming
+    from litellm.litellm_core_utils.logging_worker import LoggingWorker
 
     cfg = VertexAIRealtimeConfig(
         access_token="fake-token",
@@ -292,7 +315,8 @@ async def test_vertex_realtime_text_in_text_out():
 
     backend_ws.send = AsyncMock(side_effect=_backend_send)
 
-    logging_obj = MagicMock()
+    logging_obj: Final = MagicMock(dispatch_success_handlers=AsyncMock(), dispatch_failure_handlers=AsyncMock())
+    logging_worker: Final = LoggingWorker()
     logging_obj.litellm_trace_id = "test-trace-id"
     logging_obj.pre_call = MagicMock()
     logging_obj.async_success_handler = AsyncMock()
@@ -302,6 +326,7 @@ async def test_vertex_realtime_text_in_text_out():
         websocket=client_ws,
         backend_ws=backend_ws,
         logging_obj=logging_obj,
+        logging_worker=logging_worker,
         provider_config=cfg,
         model="gemini-2.0-flash-live-001",
     )
@@ -309,6 +334,9 @@ async def test_vertex_realtime_text_in_text_out():
     # Run backend→client forwarding for the three queued messages, then stop.
     # We don't run client_ack_messages here to avoid the blocking receive loop.
     await streaming.backend_to_client_send_messages()
+    await logging_worker.flush()
+    await logging_worker.stop()
+    logging_obj.dispatch_success_handlers.assert_awaited_once_with(streaming.messages, prefer_async_handlers=True)
 
     # --- Assertions ---
 

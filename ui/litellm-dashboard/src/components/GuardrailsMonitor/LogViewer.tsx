@@ -5,8 +5,8 @@ import React, { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { uiSpendLogsCall } from "@/components/networking";
-import { LogDetailsDrawer } from "@/components/view_logs/LogDetailsDrawer";
-import type { LogEntry as ViewLogsLogEntry } from "@/components/view_logs/columns";
+import { LogDetailsDrawer } from "@/components/logs/detail";
+import type { LogEntry as ViewLogsLogEntry } from "@/components/logs/types";
 import type { LogEntry } from "./mockData";
 
 const actionConfig: Record<

@@ -12,11 +12,13 @@ from openai.types.responses.response_function_web_search import (
 )
 
 import litellm
+from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
 from litellm.responses.litellm_completion_transformation.transformation import (
     TOOL_CALLS_CACHE,
     LiteLLMCompletionResponsesConfig,
 )
+from litellm.types.llms.base import HiddenParams
 from litellm.types.responses.main import build_web_search_call
 from litellm.types.utils import (
     ChatCompletionMessageToolCall,
@@ -766,6 +768,43 @@ class TestLiteLLMCompletionResponsesConfig:
             "custom_llm_provider": "openai",
         }
 
+    @pytest.mark.parametrize(
+        "storage",
+        [
+            HiddenParams(model_id="m1", provider_specific_fields={"k": "v"}),
+            {"model_id": "m1", "provider_specific_fields": {"k": "v"}},
+        ],
+    )
+    def test_transform_chat_completion_response_preserves_hidden_params_storage_identity(
+        self, storage: dict[str, object] | HiddenParams
+    ) -> None:
+        chat_completion_response = ModelResponse(
+            id="test-response-id",
+            created=1234567890,
+            model="test-model",
+            object="chat.completion",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    index=0,
+                    message=Message(content="Test response", role="assistant"),
+                )
+            ],
+        )
+        setattr(chat_completion_response, HIDDEN_PARAMS_ATTR, storage)
+
+        responses_api_response = (
+            LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+                request_input="Test",
+                responses_api_request={},
+                chat_completion_response=chat_completion_response,
+            )
+        )
+
+        assert getattr(responses_api_response, HIDDEN_PARAMS_ATTR) is storage
+        assert responses_api_response.hidden_params["model_id"] == "m1"
+        assert responses_api_response.provider_specific_fields == {"k": "v"}
+
     def test_transform_chat_completion_response_handles_missing_hidden_params(self):
         """Test that missing _hidden_params defaults to empty dict"""
         # Setup - no _hidden_params set
@@ -1502,7 +1541,7 @@ class TestToolChoiceTransformation:
     def test_transform_tool_choice_for_responses_api_response(
         self, request_tool_choice: object, expected: str | dict[str, str]
     ) -> None:
-        result: Final = LiteLLMCompletionResponsesConfig._transform_tool_choice_for_responses_api_response(
+        result: Final = LiteLLMCompletionResponsesConfig.transform_tool_choice_for_responses_api_response(
             request_tool_choice
         )
         assert result == expected
@@ -2966,7 +3005,7 @@ class TestUsageTransformation:
         )
 
         # Execute
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3008,7 +3047,7 @@ class TestUsageTransformation:
         )
 
         # Execute
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3033,7 +3072,7 @@ class TestUsageTransformation:
             ),
         )
 
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=usage
         )
 
@@ -3060,7 +3099,7 @@ class TestUsageTransformation:
             completion_tokens_details=CompletionTokensDetailsWrapper(text_tokens=10),
         )
 
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=usage
         )
         details = response_usage.input_tokens_details
@@ -3071,7 +3110,7 @@ class TestUsageTransformation:
 
         from litellm.responses.utils import ResponseAPILoggingUtils
 
-        back = ResponseAPILoggingUtils._transform_response_api_usage_to_chat_usage(response_usage.model_dump())
+        back = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(response_usage.model_dump())
         assert back.prompt_tokens_details.image_tokens == 150
         assert back.prompt_tokens_details.video_tokens == 50
 
@@ -3104,7 +3143,7 @@ class TestUsageTransformation:
         )
 
         # Execute
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3147,7 +3186,7 @@ class TestUsageTransformation:
         )
 
         # Execute
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3195,7 +3234,7 @@ class TestUsageTransformation:
         )
 
         # Execute
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3229,7 +3268,7 @@ class TestUsageTransformation:
         )
 
         # Execute
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3272,7 +3311,7 @@ class TestUsageTransformation:
         )
 
         # Execute
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3312,7 +3351,7 @@ class TestUsageTransformation:
             ],
         )
 
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3348,7 +3387,7 @@ class TestUsageTransformation:
             ],
         )
 
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3381,7 +3420,7 @@ class TestUsageTransformation:
             ],
         )
 
-        response_usage = LiteLLMCompletionResponsesConfig._transform_chat_completion_usage_to_responses_usage(
+        response_usage = LiteLLMCompletionResponsesConfig.transform_chat_completion_usage_to_responses_usage(
             chat_completion_response=chat_completion_response
         )
 
@@ -3555,7 +3594,7 @@ class TestStreamingIDConsistency:
         mock_stream_wrapper = Mock(spec=litellm.CustomStreamWrapper)
         mock_logging_obj = Mock()
         mock_stream_wrapper.logging_obj = mock_logging_obj
-        mock_logging_obj._response_cost_calculator = Mock(return_value=0.001)
+        mock_logging_obj.response_cost_calculator = Mock(return_value=0.001)
 
         # Create the streaming iterator
         iterator = LiteLLMCompletionStreamingIterator(
@@ -3764,7 +3803,7 @@ class TestCompletedResponseLatchedOnStreamEnd:
 
         mock_wrapper = Mock(spec=litellm.CustomStreamWrapper)
         mock_wrapper.logging_obj = Mock()
-        mock_wrapper.logging_obj._response_cost_calculator = Mock(return_value=0.0)
+        mock_wrapper.logging_obj.response_cost_calculator = Mock(return_value=0.0)
         mock_wrapper.__aiter__ = Mock(return_value=mock_wrapper)
         mock_wrapper.__anext__ = Mock(side_effect=StopAsyncIteration)
 
@@ -3915,7 +3954,9 @@ class TestEnsureOutputItemContentPartAdded:
         iterator._tool_item_id_by_call_id = {}
         iterator._tool_call_id_by_index = {}
         iterator._ambiguous_tool_call_indexes = set()
-        iterator._next_tool_output_index = 1
+        iterator._next_output_index = 0
+        iterator._message_output_index = None
+        iterator._reasoning_output_index = None
         iterator._final_tool_events_queued = False
         iterator._custom_tool_names = set()
         iterator.responses_api_request = {}
@@ -4382,11 +4423,11 @@ class TestEnsureOutputItemContentPartAdded:
         namespace_map.assert_called_once_with(request["tools"])
 
 
-    def test_emit_response_completed_uses_stream_finish_reason(self):
+    def test_emit_terminal_event_uses_stream_finish_reason(self):
         """
-        When the assembled model response carries finish_reason="content_filter"
-        (snapshotted from the underlying stream before any pending events fire),
-        _emit_response_completed_event must produce status="incomplete".
+        The terminal stream event type must track the assembled response
+        status: finish_reason="content_filter" yields response.incomplete,
+        finish_reason="stop" yields response.completed.
         """
         from unittest.mock import Mock
 
@@ -4394,6 +4435,7 @@ class TestEnsureOutputItemContentPartAdded:
         from litellm.responses.litellm_completion_transformation.streaming_iterator import (
             LiteLLMCompletionStreamingIterator,
         )
+        from litellm.types.llms.openai import ResponsesAPIStreamEvents
 
         mock_stream_wrapper = Mock(spec=litellm.CustomStreamWrapper)
         mock_stream_wrapper.logging_obj = Mock()
@@ -4406,28 +4448,32 @@ class TestEnsureOutputItemContentPartAdded:
             custom_llm_provider="anthropic",
         )
 
-        litellm_model_response = ModelResponse(
-            id="chatcmpl-test",
-            created=1234567890,
-            model="anthropic/claude-sonnet-4-6",
-            object="chat.completion",
-            choices=[
-                Choices(
-                    finish_reason="content_filter",
-                    index=0,
-                    message=Message(content="", role="assistant"),
-                )
-            ],
-            usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
-        )
+        def _response(finish_reason: str) -> ModelResponse:
+            return ModelResponse(
+                id="chatcmpl-test",
+                created=1234567890,
+                model="anthropic/claude-sonnet-4-6",
+                object="chat.completion",
+                choices=[
+                    Choices(
+                        finish_reason=finish_reason,
+                        index=0,
+                        message=Message(content="Partial answer", role="assistant"),
+                    )
+                ],
+                usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
+            )
 
-        completed_event = iterator._emit_response_completed_event(
-            litellm_model_response
-        )
+        incomplete_event = iterator._emit_terminal_response_event(_response("content_filter"))
+        assert incomplete_event is not None
+        assert incomplete_event.type == ResponsesAPIStreamEvents.RESPONSE_INCOMPLETE
+        assert incomplete_event.response.status == "incomplete"
+        assert incomplete_event.response.output[0].status == "incomplete"
 
+        completed_event = iterator._emit_terminal_response_event(_response("stop"))
         assert completed_event is not None
-        assert completed_event.response.status == "incomplete"
-        assert completed_event.response.output[0].status == "incomplete"
+        assert completed_event.type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+        assert completed_event.response.status == "completed"
 
     def test_reasoning_item_does_not_emit_content_part_added(self):
         """Reasoning items should not get a content_part.added event."""
@@ -5016,7 +5062,7 @@ class TestStreamingSnapshotItemIds:
         )
         assert streamed_event is not None
 
-        completed_event = iterator._emit_response_completed_event(
+        completed_event = iterator._emit_terminal_response_event(
             _bridged_chat_completion_response()
         )
 
@@ -5031,7 +5077,7 @@ class TestStreamingSnapshotItemIds:
             self._make_chunk("apple")
         )
 
-        completed_event = iterator._emit_response_completed_event(
+        completed_event = iterator._emit_terminal_response_event(
             _bridged_chat_completion_response()
         )
 
@@ -5088,7 +5134,7 @@ class TestStreamingSnapshotItemIds:
         )
         assert streamed_event is not None
 
-        completed_event = iterator._emit_response_completed_event(
+        completed_event = iterator._emit_terminal_response_event(
             self._reasoning_chat_completion_response()
         )
 
@@ -5157,6 +5203,140 @@ def test_transform_chat_completion_response_incomplete_details():
     )
     assert result_existing.status == "incomplete"
     assert result_existing.incomplete_details == existing_details
+
+
+def test_transform_chat_completion_response_null_finish_reason_is_incomplete():
+    """
+    A choice with no finish signal (e.g. Gemini thinking consuming the whole
+    output budget, or a provider that never sent one) must not report
+    status "completed". Output at the requested cap reads as
+    max_output_tokens; below it, no reason can be claimed.
+    """
+    choice_at_cap = Choices.model_construct(
+        index=0,
+        finish_reason=None,
+        message=Message(content="", role="assistant"),
+    )
+    resp_at_cap = ModelResponse(
+        id="resp-null-cap",
+        choices=[choice_at_cap],
+        model="gemini-2.5-pro",
+        usage=Usage(prompt_tokens=10, completion_tokens=60, total_tokens=70),
+    )
+    result_at_cap = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={"max_output_tokens": 60},
+        chat_completion_response=resp_at_cap,
+    )
+    assert result_at_cap.status == "incomplete"
+    assert result_at_cap.incomplete_details is not None
+    assert result_at_cap.incomplete_details.reason == "max_output_tokens"
+
+    choice_under_cap = Choices.model_construct(
+        index=0,
+        finish_reason=None,
+        message=Message(content="", role="assistant"),
+    )
+    resp_under_cap = ModelResponse(
+        id="resp-null-under",
+        choices=[choice_under_cap],
+        model="gemini-2.5-pro",
+        usage=Usage(prompt_tokens=10, completion_tokens=30, total_tokens=40),
+    )
+    result_under_cap = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={"max_output_tokens": 60},
+        chat_completion_response=resp_under_cap,
+    )
+    assert result_under_cap.status == "incomplete"
+    assert result_under_cap.incomplete_details is None
+
+    resp_empty = ModelResponse(id="resp-empty", choices=[], model="gemini-2.5-pro")
+    result_empty = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp_empty,
+    )
+    assert result_empty.status == "incomplete"
+
+
+def test_transform_chat_completion_response_echoes_request_params():
+    """
+    A chat completion response never carries the caller's request fields, so
+    the bridged response echoes them from the request. Before this fix
+    temperature reported 0 and the rest reported None or empty defaults.
+    """
+    resp = ModelResponse(
+        id="resp-echo",
+        choices=[Choices(index=0, finish_reason="stop", message=Message(content="hi", role="assistant"))],
+        model="gpt-4o",
+    )
+    result = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={
+            "temperature": 0.7,
+            "top_p": 0.9,
+            "max_output_tokens": 128,
+            "instructions": "be terse",
+            "metadata": {"trace": "abc"},
+            "user": "user-123",
+            "truncation": "disabled",
+            "store": True,
+            "parallel_tool_calls": True,
+        },
+        chat_completion_response=resp,
+    )
+    assert result.temperature == 0.7
+    assert result.top_p == 0.9
+    assert result.max_output_tokens == 128
+    assert result.instructions == "be terse"
+    assert result.metadata == {"trace": "abc"}
+    assert result.user == "user-123"
+    assert result.truncation == "disabled"
+    assert result.store is True
+    assert result.parallel_tool_calls is True
+
+    # Fields the request never set fall back to the response defaults.
+    result_unset = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request={},
+        chat_completion_response=resp,
+    )
+    assert result_unset.temperature is None
+    assert result_unset.metadata == {}
+    assert result_unset.parallel_tool_calls is False
+    assert result_unset.tools == []
+    assert result_unset.text == {}
+
+
+@pytest.mark.parametrize(
+    ("field", "invalid_value", "expected"),
+    [
+        ("user", 123, None),
+        ("instructions", 5, None),
+        ("text", "plain", {}),
+        ("truncation", "bogus", None),
+        ("parallel_tool_calls", "maybe", False),
+    ],
+)
+def test_transform_drops_request_params_the_response_cannot_echo(
+    field: str, invalid_value: object, expected: object
+) -> None:
+    request: Final[dict[str, object]] = {"temperature": 0.7, field: invalid_value}
+    response: Final = ModelResponse(
+        id="resp-invalid-echo",
+        choices=[Choices(index=0, finish_reason="stop", message=Message(content="hi", role="assistant"))],
+        model="gpt-4o",
+    )
+
+    result: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_response_to_responses_api_response(
+        request_input="test prompt",
+        responses_api_request=request,
+        chat_completion_response=response,
+    )
+
+    assert getattr(result, field) == expected, f"invalid {field} value {invalid_value!r}"
+    assert result.temperature == 0.7, f"valid temperature was dropped with invalid {field}"
 
 
 @pytest.mark.parametrize("stream", [True, False])
