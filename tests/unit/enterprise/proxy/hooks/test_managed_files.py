@@ -2517,7 +2517,7 @@ async def test_store_batch_output_file_fills_only_an_unknown_size_on_an_unmarked
 @pytest.mark.usefixtures("_respx_sees_provider_calls")
 @pytest.mark.parametrize(
     ("provider", "expected_filename", "expected_bytes"),
-    [("xai", f"{_XAI_BATCH_ID}_results.jsonl", 2565), ("openai", "output.jsonl", 836)],
+    [("xai", _XAI_BATCH_ID, 2565), ("openai", "output.jsonl", 836)],
 )
 @pytest.mark.parametrize("has_marked_row", [False, True])
 @respx.mock
@@ -2568,7 +2568,7 @@ async def test_store_batch_output_file_keeps_its_measured_size_when_a_read_refre
         managed_file_table.rows["unified-output"] = placeholder.model_copy(
             update={
                 "file_object": placeholder.file_object.model_copy(
-                    update={"filename": f"{_XAI_BATCH_ID}_results.jsonl", "litellm_details_fallback": None}
+                    update={"filename": _XAI_BATCH_ID, "litellm_details_fallback": None}
                 )
             }
         )
@@ -2588,7 +2588,7 @@ async def test_store_batch_output_file_keeps_its_measured_size_when_a_read_refre
     stored: Final = managed_file_table.rows["unified-output"].file_object
     assert stored is not None
     assert (stored.filename, stored.bytes, stored.litellm_details_fallback) == (
-        f"{_XAI_BATCH_ID}_results.jsonl",
+        _XAI_BATCH_ID,
         2565,
         None,
     )
@@ -2613,7 +2613,7 @@ async def test_store_batch_output_file_from_a_batch_read_leaves_a_newer_row_alon
             update={
                 "file_object": placeholder.file_object.model_copy(
                     update={
-                        "filename": f"{_XAI_BATCH_ID}_results.jsonl",
+                        "filename": _XAI_BATCH_ID,
                         "bytes": 2565,
                         "litellm_details_fallback": None,
                     }
@@ -2635,7 +2635,7 @@ async def test_store_batch_output_file_from_a_batch_read_leaves_a_newer_row_alon
 
     stored: Final = managed_file_table.rows["unified-output"].file_object
     assert stored is not None
-    assert (stored.filename, stored.bytes) == (f"{_XAI_BATCH_ID}_results.jsonl", 2565)
+    assert (stored.filename, stored.bytes) == (_XAI_BATCH_ID, 2565)
     assert len(managed_file_table.update_many_calls) == 1
     assert len(managed_file_table.find_first_calls) - reads_before_store == 1
 
@@ -2669,7 +2669,7 @@ async def test_store_batch_output_file_sizes_the_refreshed_details_instead_of_re
         placeholder_row.model_copy(update={"file_object": recent_placeholder}),
         recent_placeholder.model_copy(
             update={
-                "filename": f"{_XAI_BATCH_ID}_results.jsonl",
+                "filename": _XAI_BATCH_ID,
                 "bytes": refreshed_bytes,
                 "litellm_details_fallback": None,
             }
@@ -2691,7 +2691,7 @@ async def test_store_batch_output_file_sizes_the_refreshed_details_instead_of_re
     stored: Final = table.rows["unified-output"].file_object
     assert stored is not None
     assert (stored.filename, stored.bytes, stored.litellm_details_fallback) == (
-        f"{_XAI_BATCH_ID}_results.jsonl",
+        _XAI_BATCH_ID,
         expected_bytes,
         None,
     )
@@ -2731,7 +2731,7 @@ async def test_store_batch_output_file_rereads_a_lost_row_from_the_writer_not_a_
         placeholder_row.model_copy(
             update={
                 "file_object": placeholder_row.file_object.model_copy(
-                    update={"filename": f"{_XAI_BATCH_ID}_results.jsonl", "litellm_details_fallback": None}
+                    update={"filename": _XAI_BATCH_ID, "litellm_details_fallback": None}
                 )
             }
         )
@@ -2753,7 +2753,7 @@ async def test_store_batch_output_file_rereads_a_lost_row_from_the_writer_not_a_
 
     stored: Final = writer.rows["unified-output"].file_object
     assert stored is not None
-    assert (stored.filename, stored.bytes) == (f"{_XAI_BATCH_ID}_results.jsonl", 2565)
+    assert (stored.filename, stored.bytes) == (_XAI_BATCH_ID, 2565)
 
 
 @pytest.mark.asyncio
@@ -2777,7 +2777,7 @@ async def test_afile_retrieve_refresh_keeps_the_registration_time_of_an_xai_plac
     assert (response.created_at, stored.created_at, stored.filename) == (
         123,
         123,
-        f"{_XAI_BATCH_ID}_results.jsonl",
+        _XAI_BATCH_ID,
     )
 
 
@@ -2804,7 +2804,7 @@ async def test_store_batch_output_file_keeps_the_registration_time_of_an_xai_pla
 
     stored: Final = managed_file_table.rows["unified-output"].file_object
     assert stored is not None
-    assert (stored.created_at, stored.bytes, stored.filename) == (123, 2565, f"{_XAI_BATCH_ID}_results.jsonl")
+    assert (stored.created_at, stored.bytes, stored.filename) == (123, 2565, _XAI_BATCH_ID)
 
 
 @pytest.mark.asyncio
@@ -2826,11 +2826,11 @@ async def test_afile_retrieve_refresh_keeps_the_known_size_when_the_provider_rep
     assert stored is not None
     assert (response.id, response.filename, response.bytes) == (
         "unified-output",
-        f"{_XAI_BATCH_ID}_results.jsonl",
+        _XAI_BATCH_ID,
         2565,
     )
     assert (stored.filename, stored.bytes, stored.litellm_details_fallback) == (
-        f"{_XAI_BATCH_ID}_results.jsonl",
+        _XAI_BATCH_ID,
         2565,
         None,
     )
@@ -2860,7 +2860,7 @@ async def test_afile_retrieve_refresh_keeps_a_size_the_batch_job_writes_while_it
     raced_row: Final = managed_file_table.rows["unified-output"].file_object
     assert raced_row is not None
     assert (raced_response.filename, raced_row.bytes, raced_row.filename) == (
-        f"{_XAI_BATCH_ID}_results.jsonl",
+        _XAI_BATCH_ID,
         2565,
         _XAI_BATCH_ID,
     )
@@ -2875,7 +2875,7 @@ async def test_afile_retrieve_refresh_keeps_a_size_the_batch_job_writes_while_it
     assert (next_response.bytes, stored.bytes, stored.filename, stored.litellm_details_fallback) == (
         2565,
         2565,
-        f"{_XAI_BATCH_ID}_results.jsonl",
+        _XAI_BATCH_ID,
         None,
     )
     assert len(managed_file_table.update_many_calls) == 2
@@ -2907,7 +2907,7 @@ async def test_afile_retrieve_refresh_that_loses_its_write_still_answers_with_th
     assert (response.bytes, response.created_at, response.filename) == (
         2565,
         123,
-        f"{_XAI_BATCH_ID}_results.jsonl",
+        _XAI_BATCH_ID,
     )
     assert managed_file_table.rows["unified-output"].file_object == newer_file_object
 

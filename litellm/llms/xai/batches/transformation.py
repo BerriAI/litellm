@@ -96,7 +96,7 @@ def xai_batch_results_file_object(batch: LiteLLMBatch) -> OpenAIFileObject:
         id=batch.output_file_id,
         object="file",
         purpose="batch_output",
-        filename=f"{batch.output_file_id}_results.jsonl",
+        filename=batch.output_file_id,
         bytes=0,
         created_at=int(time.time()),
         status="processed",

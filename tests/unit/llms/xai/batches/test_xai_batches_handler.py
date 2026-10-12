@@ -298,7 +298,7 @@ async def test_file_retrieve_of_a_batch_id_describes_its_results_from_one_batch_
     assert (file_object.id, file_object.purpose, file_object.filename, file_object.bytes, file_object.status) == (
         batch_id,
         "batch_output",
-        f"{batch_id}_results.jsonl",
+        batch_id,
         0,
         "processed",
     )

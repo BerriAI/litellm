@@ -186,7 +186,7 @@ def test_xai_batch_output_file_is_sized_by_the_batch_job_and_never_downloaded_or
         assert (first_detail["id"], first_detail["purpose"], first_detail["filename"]) == (
             output_id,
             "batch_output",
-            f"{raw_batch_id}_results.jsonl",
+            raw_batch_id,
         ), first_detail
 
         content: Final = gateway.request("GET", f"/v1/files/{output_id}/content", key=batch.owner_key)
@@ -206,7 +206,7 @@ def test_xai_batch_output_file_is_sized_by_the_batch_job_and_never_downloaded_or
             lambda detail: detail.get("bytes") == len(content.content),
             seconds=60,
         )
-        assert (sized["filename"], "litellm_details_fallback" in sized) == (f"{raw_batch_id}_results.jsonl", False)
+        assert (sized["filename"], "litellm_details_fallback" in sized) == (raw_batch_id, False)
 
         settled_reads: Final = _stable_results_reads(gateway, batch, raw_batch_id)
         reads: Final = (
@@ -217,7 +217,7 @@ def test_xai_batch_output_file_is_sized_by_the_batch_job_and_never_downloaded_or
         assert all(response.status_code == 200 for response in reads), [response.text for response in reads]
         listed_output: Final = next(value for value in reads[-1].json()["data"] if value.get("id") == output_id)
         assert (listed_output["filename"], listed_output["bytes"]) == (
-            f"{raw_batch_id}_results.jsonl",
+            raw_batch_id,
             len(content.content),
         ), listed_output
         assert _results_reads(gateway, batch, raw_batch_id) == settled_reads
@@ -244,7 +244,7 @@ def test_xai_batch_output_file_answers_at_once_while_results_are_unavailable_and
         assert unavailable.status_code == 200, unavailable.text
         unavailable_detail: Final = JSON_OBJECT.validate_json(unavailable.content)
         assert (unavailable_detail["filename"], unavailable_detail["bytes"]) == (
-            f"{raw_batch_id}_results.jsonl",
+            raw_batch_id,
             0,
         ), unavailable_detail
         assert elapsed < 5, elapsed
@@ -259,7 +259,7 @@ def test_xai_batch_output_file_answers_at_once_while_results_are_unavailable_and
             lambda detail: detail.get("bytes") == len(content.content),
             seconds=60,
         )
-        assert (recovered["purpose"], recovered["filename"]) == ("batch_output", f"{raw_batch_id}_results.jsonl")
+        assert (recovered["purpose"], recovered["filename"]) == ("batch_output", raw_batch_id)
 
         file_lookups: Final = tuple(
             path for path in _upstream_paths(gateway, batch.upstream.scenario_id) if "/v1/files/batch_" in path
@@ -276,11 +276,11 @@ def test_xai_batch_output_file_registered_by_the_batch_job_first_carries_the_dow
             lambda: gateway.request("GET", "/v1/files", key=batch.owner_key, params={"purpose": "batch_output"}).json()[
                 "data"
             ],
-            lambda values: any(value.get("filename") == f"{raw_batch_id}_results.jsonl" for value in values),
+            lambda values: any(value.get("filename") == raw_batch_id for value in values),
             seconds=60,
         )
         listed_output: Final = next(
-            value for value in listed if value.get("filename") == f"{raw_batch_id}_results.jsonl"
+            value for value in listed if value.get("filename") == raw_batch_id
         )
         content: Final = gateway.request("GET", f"/v1/files/{listed_output['id']}/content", key=batch.owner_key)
         assert content.status_code == 200, content.text
@@ -321,7 +321,7 @@ def test_xai_batch_output_file_left_as_a_placeholder_keeps_its_registration_time
             lambda detail: detail.get("created_at") == REGISTERED_AT,
             seconds=30,
         )
-        assert refreshed["filename"] == f"{raw_batch_id}_results.jsonl", refreshed
+        assert refreshed["filename"] == raw_batch_id, refreshed
         stored: Final = object_value(
             read_rows('SELECT file_object FROM "LiteLLM_ManagedFileTable" WHERE unified_file_id=%s', (output_id,))[0][
                 "file_object"
@@ -329,6 +329,6 @@ def test_xai_batch_output_file_left_as_a_placeholder_keeps_its_registration_time
         )
         assert (stored["created_at"], stored["filename"], stored.get("litellm_details_fallback")) == (
             REGISTERED_AT,
-            f"{raw_batch_id}_results.jsonl",
+            raw_batch_id,
             None,
         ), stored
