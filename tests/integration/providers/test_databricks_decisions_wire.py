@@ -10,6 +10,7 @@ import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.database import read_rows
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.timing import assert_within_factor_of_control
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from integration.cost_calculation.cost_tracking_case import JsonResponse
 from pydantic import JsonValue
@@ -111,10 +112,28 @@ def _upstream_calls(gateway: Gateway, handle: ScenarioHandle) -> list[dict[str, 
     return _calls_to(_observed(gateway), handle)
 
 
-def _timed_decide(gateway: Gateway, model: str) -> tuple[httpx.Response, float]:
-    started: Final = time.perf_counter()
-    response: Final = _decide(gateway, model)
-    return response, time.perf_counter() - started
+def _timed_decide_under_liveliness_probes(
+    gateway: Gateway, model: str
+) -> tuple[httpx.Response, float, tuple[tuple[int, float], ...]]:
+    liveliness: Final[list[tuple[int, float]]] = []
+    stop: Final = threading.Event()
+
+    def poll() -> None:
+        while not stop.is_set():
+            started: Final = time.perf_counter()
+            probe: Final = gateway.client.get("/health/liveliness")
+            liveliness.append((probe.status_code, time.perf_counter() - started))
+
+    poller: Final = threading.Thread(target=poll)
+    poller.start()
+    try:
+        started: Final = time.perf_counter()
+        response: Final = _decide(gateway, model)
+        elapsed: Final = time.perf_counter() - started
+    finally:
+        stop.set()
+        poller.join()
+    return response, elapsed, tuple(liveliness)
 
 
 def _spend_row(call_id: str) -> dict[str, JsonValue]:
@@ -623,23 +642,12 @@ def test_a_megabyte_model_name_is_refused_in_linear_time_while_liveliness_stays_
             "/v1/systemone", json={"model": model, "state": _STATE, "questions": _QUESTIONS}
         )
         assert anonymous.status_code == 401, anonymous.text[:300]
-        tenth_response, tenth_elapsed = _timed_decide(gateway, f"{prefix}/{_TENTH_MEGABYTE_NAME}")
-        liveliness: Final[list[tuple[int, float]]] = []
-        stop: Final = threading.Event()
-
-        def poll() -> None:
-            while not stop.is_set():
-                started: Final = time.perf_counter()
-                probe: Final = gateway.client.get("/health/liveliness")
-                liveliness.append((probe.status_code, time.perf_counter() - started))
-
-        poller: Final = threading.Thread(target=poll)
-        poller.start()
-        response, elapsed = _timed_decide(gateway, model)
-        stop.set()
-        poller.join()
+        tenth_response, tenth_elapsed, _ = _timed_decide_under_liveliness_probes(
+            gateway, f"{prefix}/{_TENTH_MEGABYTE_NAME}"
+        )
+        response, elapsed, liveliness = _timed_decide_under_liveliness_probes(gateway, model)
         assert tenth_response.status_code == 400, tenth_response.text[:300]
-        assert elapsed < 25 * tenth_elapsed, (elapsed, tenth_elapsed)
+        assert_within_factor_of_control(elapsed, control=tenth_elapsed, factor=25)
         assert liveliness and all(status == 200 for status, _ in liveliness), liveliness
         assert max(seconds for _, seconds in liveliness) < max(1.0, elapsed / 2), (elapsed, liveliness)
         assert response.status_code == 400, response.text[:300]

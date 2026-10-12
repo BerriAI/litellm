@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import signal
 import subprocess
 import uuid
 from collections.abc import Mapping
@@ -19,7 +18,7 @@ from anthropic import Anthropic
 from anthropic import APIError as AnthropicApiError
 from integration._support.client import JSON_OBJECT, Gateway, Scenario, eventually, object_value
 from integration._support.database import read_rows
-from integration._support.process import graceful_stop_seconds, owned_proxy_process, owned_upstream
+from integration._support.process import graceful_stop_seconds, owned_proxy_process, owned_upstream, paused
 from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
 from openai import APIError as OpenAiApiError
 from openai import OpenAI
@@ -261,25 +260,6 @@ def _landed_once(response_ids: tuple[str, ...]) -> tuple[tuple[Mapping[str, Json
     return rows
 
 
-def _is_worker(child: psutil.Process) -> bool:
-    try:
-        return "spawn_main" in " ".join(child.cmdline())
-    except psutil.Error:
-        return False
-
-
-def _worker_alive(worker: psutil.Process) -> bool:
-    try:
-        return worker.is_running() and worker.status() != psutil.STATUS_ZOMBIE
-    except psutil.NoSuchProcess:
-        return False
-
-
-def _alive_workers(process: subprocess.Popen[bytes]) -> tuple[psutil.Process, ...]:
-    children: Final = tuple(child for child in psutil.Process(process.pid).children() if _is_worker(child))
-    return tuple(child for child in children if _worker_alive(child))
-
-
 def _process_tree(process: subprocess.Popen[bytes]) -> str:
     root: Final = psutil.Process(process.pid)
     return "\n".join(_process_line(member) for member in (root, *root.children(recursive=True)))
@@ -313,12 +293,9 @@ def test_c01_upstream_pause_mid_burst_keeps_liveliness_and_lands_every_id_once(
         with ThreadPoolExecutor(max_workers=len(calls)) as pool:
             futures: Final = _submit(pool, clients, calls)
             eventually(partial(_done_count, futures), lambda done: done >= 1, seconds=60)
-            upstream.send_signal(signal.SIGSTOP)
-            try:
+            with paused(upstream):
                 done_at_pause: Final = _done_count(futures)
                 paused_liveliness: Final = tuple(_liveliness(gateway) for _ in range(3))
-            finally:
-                upstream.send_signal(signal.SIGCONT)
             done_at_resume: Final = _done_count(futures)
             outcomes: Final = tuple(future.result(timeout=180) for future in futures)
         record_property("c01_burst_size", len(calls))
@@ -358,27 +335,25 @@ def test_c02_worker_sigkill_mid_burst_keeps_serving_and_respawns(
                 partial(_every_worker_serves_every_kind, owned.gateway, deployments), lambda served: served, seconds=90
             )
             clients: Final = _clients(owned.gateway, deployments)
-            workers: Final = eventually(
-                partial(_alive_workers, owned.process), lambda found: len(found) == 2, seconds=60
-            )
+            workers: Final = eventually(owned.worker_pids, lambda found: len(found) == 2, seconds=60)
             record_property("c02_process_tree_before_kill", _process_tree(owned.process))
-            victim: Final = workers[0]
+            victim: Final = min(workers)
             calls: Final = _burst_calls(_CHAT_KINDS, 15)
             observations: Final = _Observations(slot.url)
             with ThreadPoolExecutor(max_workers=len(calls)) as pool:
                 futures: Final = _submit(pool, clients, calls)
                 eventually(partial(_done_count, futures), lambda done: done >= 1, seconds=60)
-                victim.kill()
-                eventually(partial(_worker_alive, victim), lambda alive: not alive, seconds=10)
-                done_at_kill: Final = _done_count(futures)
-                survivor: Final = eventually(
-                    lambda: _attempt(clients, _Call("chat", f"after-kill-{uuid.uuid4().hex}")),
-                    lambda outcome: isinstance(outcome, _Completed),
-                    seconds=30,
-                )
+                with owned.replacing_worker(victim) as kill:
+                    kill()
+                    done_at_kill: Final = _done_count(futures)
+                    survivor: Final = eventually(
+                        lambda: _attempt(clients, _Call("chat", f"after-kill-{uuid.uuid4().hex}")),
+                        lambda outcome: isinstance(outcome, _Completed),
+                        seconds=30,
+                    )
                 outcomes: Final = tuple(future.result(timeout=180) for future in futures)
             record_property("c02_burst_size", len(calls))
-            record_property("c02_killed_worker_pid", victim.pid)
+            record_property("c02_killed_worker_pid", victim)
             record_property("c02_done_at_kill", done_at_kill)
             assert isinstance(survivor, _Completed), survivor
             completed: Final = tuple(outcome for outcome in outcomes if isinstance(outcome, _Completed))
@@ -388,12 +363,12 @@ def test_c02_worker_sigkill_mid_burst_keeps_serving_and_respawns(
             record_property("c02_inflight_failure_errors", str(tuple(outcome.error for outcome in failed)))
             assert completed, outcomes
             respawned: Final = eventually(
-                partial(_alive_workers, owned.process),
-                lambda found: len(found) == 2 and victim.pid not in {worker.pid for worker in found},
+                owned.worker_pids,
+                lambda found: len(found) == 2 and victim not in found,
                 seconds=graceful_stop_seconds() + 60,
             )
             record_property("c02_process_tree_after_respawn", _process_tree(owned.process))
-            record_property("c02_respawned_worker_pids", str(tuple(worker.pid for worker in respawned)))
+            record_property("c02_respawned_worker_pids", str(tuple(sorted(respawned))))
             after_respawn: Final = eventually(
                 lambda: _attempt(clients, _Call("chat", f"after-respawn-{uuid.uuid4().hex}")),
                 lambda outcome: isinstance(outcome, _Completed),

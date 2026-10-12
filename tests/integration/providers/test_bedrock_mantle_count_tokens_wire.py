@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import signal
 import socket
 import threading
 import uuid
@@ -1270,10 +1269,11 @@ def test_worker_sigkill_mid_burst_leaves_the_sibling_counting(
         shares: Final = {pid: _accepted_client_ports(pid, proxy_url.port or 0) & ports for pid in workers}
         assert sum(map(len, shares.values())) == len(clients), shares
         victim: Final = min((pid for pid in workers if shares[pid]), key=lambda pid: len(shares[pid]))
-        psutil.Process(victim).send_signal(signal.SIGKILL)
-        release.set()
-        for port, result in (future.result(timeout=60) for future in futures):
-            assert result == (None if port in shares[victim] else (200, _MANTLE_COUNT)), (port, result, shares)
+        with owned.replacing_worker(victim) as kill:
+            kill()
+            release.set()
+            for port, result in (future.result(timeout=60) for future in futures):
+                assert result == (None if port in shares[victim] else (200, _MANTLE_COUNT)), (port, result, shares)
         second_wave: Final = _clients(stack, str(proxy_url), 6)
         assert tuple(_counted_on(client, owned.gateway.key, body) for client in second_wave) == (
             (200, _MANTLE_COUNT),

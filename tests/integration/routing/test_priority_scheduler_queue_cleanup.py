@@ -4,7 +4,6 @@ import asyncio
 import http.client
 import json
 import re
-import signal
 import threading
 import time
 import uuid
@@ -27,6 +26,7 @@ from integration._support.database import read_rows
 from integration._support.openai_wire import answering_model_discovery, chat_reply, openai_error, responses_reply
 from integration._support.process import graceful_stop_seconds, owned_proxy_process
 from integration._support.redis_process import OwnedRedis, owned_redis
+from integration._support.timing import assert_cut_short
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 from redis import Redis
@@ -624,7 +624,7 @@ def test_fresh_queue_during_a_cooldown_is_refused_at_once(pair: Pair) -> None:
         client.completions.create(model=group, prompt=new_marker(), extra_body={"priority": 1})
     assert refused.value.status_code == 429, refused.value.message
     assert NO_DEPLOYMENTS in refused.value.message
-    assert time.monotonic() - started < PROMPT_SECONDS
+    assert_cut_short(time.monotonic() - started, injected_delay=ROUTER_TIMEOUT_SECONDS)
     assert queue_entries(pair.cache, group) == []
 
 
@@ -825,18 +825,18 @@ def test_sibling_worker_keeps_serving_prioritized_requests_after_a_worker_is_kil
                 held_by: Final = {pid: established_upstream_connections(pid, wire) for pid in workers}
                 assert sum(held_by.values()) == 20, held_by
                 victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-                victim: Final = psutil.Process(victim_pid)
-                victim.suspend()
-                victim.send_signal(signal.SIGKILL)
-                upstream.release.set()
-                outcomes: Final = pending.result(timeout=90)
-            answered: Final = tuple(outcome for outcome in outcomes if isinstance(outcome[2], Answer))
-            failed: Final = tuple(outcome for outcome in outcomes if not isinstance(outcome[2], Answer))
-            assert len(answered) == held_by[survivor_pid], (held_by, len(answered))
-            assert len(failed) == held_by[victim_pid], (held_by, len(failed))
-            assert_all_served(answered)
-            follow_up: Final = new_marker()
-            served_eventually(owned.gateway, KILL_GROUP, follow_up)
+                with owned.replacing_worker(victim_pid) as kill:
+                    kill.freeze()
+                    kill()
+                    upstream.release.set()
+                    outcomes: Final = pending.result(timeout=90)
+                    answered: Final = tuple(outcome for outcome in outcomes if isinstance(outcome[2], Answer))
+                    failed: Final = tuple(outcome for outcome in outcomes if not isinstance(outcome[2], Answer))
+                    assert len(answered) == held_by[survivor_pid], (held_by, len(answered))
+                    assert len(failed) == held_by[victim_pid], (held_by, len(failed))
+                    assert_all_served(answered)
+                    follow_up: Final = new_marker()
+                    served_eventually(owned.gateway, KILL_GROUP, follow_up)
             eventually(
                 lambda: len(STARTED_WORKER.findall(owned.log.read_text())),
                 lambda count: count == 3,

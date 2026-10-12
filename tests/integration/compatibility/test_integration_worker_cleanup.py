@@ -13,6 +13,7 @@ from psycopg import sql
 from pydantic import BaseModel, ConfigDict
 
 from tests.integration._support.database import read_rows
+from tests.integration._support.process import stop_processes
 
 FAULT_CASE: Final = """import json, os, pathlib, psutil
 from urllib.parse import urlsplit
@@ -44,13 +45,7 @@ def _survivor(identity: tuple[int, float]) -> psutil.Process | None:
 
 
 def _clean_fault_resources(resources: CrashResources) -> None:
-    processes: Final = tuple(process for identity in resources.processes if (process := _survivor(identity)))
-    for process in processes:
-        process.terminate()
-    _stopped, alive = psutil.wait_procs(processes, timeout=5)
-    for process in alive:
-        process.kill()
-    psutil.wait_procs(alive, timeout=3)
+    stop_processes(process for identity in resources.processes if (process := _survivor(identity)))
     with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as admin:
         admin.execute(sql.SQL("DROP DATABASE IF EXISTS {} WITH (FORCE)").format(sql.Identifier(resources.database)))
 

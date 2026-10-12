@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import signal
 import threading
 import uuid
 from dataclasses import dataclass
@@ -215,12 +214,12 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_the_default_m
             held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
             follow_up: Final = _Call(route="/systemone", marker=f"ok-{uuid.uuid4().hex}", fail=False)
             (answered,) = await _burst(base_url, candidate.key, None, (follow_up,))
             await asyncio.to_thread(

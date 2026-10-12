@@ -1,7 +1,7 @@
 import asyncio
 import json
 import re
-import signal
+import threading
 import time
 import uuid
 from collections.abc import Callable, Iterator, Sequence
@@ -14,12 +14,12 @@ from queue import SimpleQueue
 from typing import Final
 
 import httpx
-import psutil
 import pytest
 import yaml
 from anthropic import Anthropic
 from integration._support.client import Gateway, eventually
 from integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
+from integration._support.timing import assert_not_delayed_by, timed
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, OpenAI
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
@@ -627,15 +627,21 @@ def test_langtrace_sink_outage_mid_burst_recovers_on_the_same_port(gateway: Gate
 
 
 def test_langtrace_slow_sink_does_not_delay_callers_or_duplicate_spans(gateway: Gateway, tmp_path: Path) -> None:
+    sink_delay: Final = 3
+    slowed: Final = threading.Event()
+
     def slow(request: Request) -> Reply:
-        time.sleep(1)
+        if slowed.is_set():
+            time.sleep(sink_delay)
         return _accepted(request)
 
     with _langtrace_rig(gateway, tmp_path, respond=slow) as rig:
-        started: Final = time.monotonic()
-        markers: Final = _burst(rig, 6)
-        assert time.monotonic() - started < 5
-        _assert_each_once(rig.sink, markers, seconds=40)
+        control: Final = timed(lambda: _burst(rig, 6))
+        _assert_each_once(rig.sink, control.value)
+        slowed.set()
+        observed: Final = timed(lambda: _burst(rig, 6))
+        assert_not_delayed_by((observed.seconds,), control=(control.seconds,), injected_delay=sink_delay)
+        _assert_each_once(rig.sink, observed.value, seconds=40)
 
 
 def test_langtrace_survives_a_killed_worker(gateway: Gateway, tmp_path: Path) -> None:
@@ -659,25 +665,10 @@ def test_langtrace_survives_a_killed_worker(gateway: Gateway, tmp_path: Path) ->
                 _assert_kill_and_recovery(owned, rig)
 
 
-def _cmdline(process: psutil.Process) -> str:
-    try:
-        return " ".join(process.cmdline())
-    except psutil.Error:
-        return ""
-
-
 def _assert_kill_and_recovery(owned: OwnedProxy, rig: _Rig) -> None:
     _assert_delivered(rig, _Surface(_chat_httpx, False), _marker())
 
-    def uvicorn_workers() -> tuple[psutil.Process, ...]:
-        return tuple(child for child in psutil.Process(owned.process.pid).children() if "spawn_main" in _cmdline(child))
-
-    workers: Final = uvicorn_workers()
+    workers: Final = owned.worker_pids()
     assert len(workers) == 2, workers
-    workers[0].send_signal(signal.SIGKILL)
-    eventually(
-        uvicorn_workers,
-        lambda value: len(value) == 2 and workers[0].pid not in {child.pid for child in value},
-        seconds=30,
-    )
+    owned.kill_worker(min(workers))
     _assert_each_once(rig.sink, _burst(rig, 6))

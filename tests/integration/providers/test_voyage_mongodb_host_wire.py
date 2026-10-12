@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import re
-import signal
 import socket
 import uuid
 from collections.abc import Callable, Iterator
@@ -11,7 +10,6 @@ from pathlib import Path
 from typing import Final
 
 import httpx
-import psutil
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, gateway_from_environment, object_value
@@ -675,12 +673,12 @@ async def test_worker_sigkill_mid_traffic_leaves_the_sibling_routing_by_key(gate
             _burst(str(candidate.client.base_url), candidate.key, 20, tolerate_transport_errors=True)
         )
         await asyncio.to_thread(eventually, lambda: forward.received.qsize(), lambda size: size >= 4, 60)
-        victim: Final = psutil.Process(workers[0])
-        victim.suspend()
-        victim.send_signal(signal.SIGKILL)
-        served: Final = await burst
-        for probe in served:
-            assert probe.response.status_code == REFUSED_STATUS, probe.response.text
+        with owned.replacing_worker(workers[0]) as kill:
+            kill.freeze()
+            await asyncio.to_thread(kill)
+            served: Final = await burst
+            for probe in served:
+                assert probe.response.status_code == REFUSED_STATUS, probe.response.text
         assert set(forward.targets()) <= {MONGODB_HOST, VOYAGE_HOST}
         follow_up: Final = _rerank(candidate, MONGODB_RERANK)
         _assert_dialed(forward, follow_up, MONGODB_HOST)

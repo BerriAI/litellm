@@ -1,7 +1,5 @@
 import asyncio
-import os
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Callable
@@ -209,11 +207,13 @@ async def test_worker_sigkill_mid_pdf_count_burst_leaves_the_sibling_pricing_pag
                 )
                 held_by: Final = MappingProxyType({pid: _held_upstream_connections(pid, wire.url) for pid in workers})
                 victim: Final = max(workers, key=held_by.__getitem__)
-                os.kill(victim, signal.SIGKILL)
+                with owned.replacing_worker(victim) as kill:
+                    await asyncio.to_thread(kill)
+                    release.set()
+                    served: Final = await burst
+                    wire.drain()
             finally:
                 release.set()
-            served: Final = await burst
-            wire.drain()
             baseline: Final = _baseline(owned.gateway)
             after: Final = await _fire_counts(owned_url, owned.gateway.key)
             after_received: Final = wire.drain()

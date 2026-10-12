@@ -13,7 +13,6 @@ from urllib.parse import quote, unquote
 
 import httpx
 import openai
-import psutil
 import pytest
 import yaml
 from _s3_v2_support import (
@@ -31,7 +30,7 @@ from _s3_v2_support import (
 from integration._support.client import Gateway, JsonValue, Scenario, eventually, object_value
 from integration._support.database import read_rows, scratch_database
 from integration._support.database_relay import database_relay
-from integration._support.process import OwnedProxy, group_members, owned_proxy_process
+from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 
 FLUSH: Final = {"DEFAULT_S3_FLUSH_INTERVAL_SECONDS": "1"}
@@ -1105,14 +1104,6 @@ def test_s3_v2_hour_slow_sink_batches_never_duplicate_an_upload(gateway: Gateway
     assert _batches_outside_layout(objects, "hour") == ()
 
 
-def _worker_processes(owned: OwnedProxy) -> tuple[int, ...]:
-    return tuple(
-        process.pid
-        for process in group_members(owned.process.pid)
-        if process.pid != owned.process.pid and "spawn_main" in " ".join(process.cmdline())
-    )
-
-
 def test_s3_v2_hour_worker_kill_mid_burst_keeps_the_other_worker_logging(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3hkill" + uuid.uuid4().hex[:8]
     upstream: Final = CountingUpstream()
@@ -1124,7 +1115,8 @@ def test_s3_v2_hour_worker_kill_mid_burst_keeps_the_other_worker_logging(gateway
         owned.gateway.scenario() as scenario,
     ):
         openai_model, _, key = _models(scenario, provider.url)
-        workers: Final = _worker_processes(owned)
+        workers: Final = owned.worker_pids()
+        assert len(workers) == 2, workers
         sent: Final = tuple(f"{marker}-{index}" for index in range(40))
 
         def send(prompt: str) -> tuple[str, bool]:
@@ -1143,13 +1135,14 @@ def test_s3_v2_hour_worker_kill_mid_burst_keeps_the_other_worker_logging(gateway
                 return prompt, False
             return prompt, response.status_code == 200 and response.json()["id"] == prompt
 
-        with ThreadPoolExecutor(max_workers=16) as pool:
-            futures: Final = tuple(pool.submit(send, prompt) for prompt in sent)
-            eventually(lambda: len(upstream.received()), lambda count: count >= 8, seconds=30)
-            psutil.Process(workers[0]).kill()
-            results: Final = tuple(future.result() for future in futures)
-        later: Final = tuple(f"{marker}-later-{index}" for index in range(8))
-        later_results: Final = tuple(send(prompt) for prompt in later)
+        with owned.replacing_worker(min(workers)) as kill:
+            with ThreadPoolExecutor(max_workers=16) as pool:
+                futures: Final = tuple(pool.submit(send, prompt) for prompt in sent)
+                eventually(lambda: len(upstream.received()), lambda count: count >= 8, seconds=30)
+                kill()
+                results: Final = tuple(future.result() for future in futures)
+            later: Final = tuple(f"{marker}-later-{index}" for index in range(8))
+            later_results: Final = tuple(send(prompt) for prompt in later)
         eventually(
             lambda: frozenset(str(payload["id"]) for payload in sink.payloads()),
             lambda landed: frozenset(later) <= landed,
@@ -1157,7 +1150,6 @@ def test_s3_v2_hour_worker_kill_mid_burst_keeps_the_other_worker_logging(gateway
         )
         payloads: Final = sink.payloads()
         objects: Final = sink.objects()
-    assert len(workers) == 2, workers
     assert all(ok for _, ok in later_results), "the surviving worker must keep serving after the kill"
     landed: Final = tuple(str(payload["id"]) for payload in payloads)
     assert frozenset(landed) <= frozenset((*sent, *later)), "only ids this test sent may land"
@@ -1215,7 +1207,7 @@ def test_s3_v2_hour_proxy_restart_mid_burst_keeps_the_layout_without_duplicates(
             with ThreadPoolExecutor(max_workers=16) as pool:
                 futures: Final = tuple(pool.submit(send, first.gateway, first_key, prompt) for prompt in sent)
                 eventually(lambda: len(upstream.received()), lambda count: count >= 8, seconds=30)
-                first.process.terminate()
+                first.begin_shutdown()
                 results: Final = tuple(future.result() for future in futures)
             first.process.wait(timeout=30)
         answered: Final = frozenset(prompt for prompt, ok in results if ok)

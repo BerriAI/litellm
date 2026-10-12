@@ -31,6 +31,7 @@ from typing_extensions import ReadOnly, TypedDict
 
 from tests.integration._support import process as process_support
 from tests.integration._support.async_server import LoopbackServer
+from tests.integration._support.budget import case_timeout_seconds
 from tests.integration._support.client import Gateway, eventually
 from tests.integration._support.database_relay import (
     DatabaseRelay,
@@ -102,8 +103,7 @@ def test_owned_readiness_rejects_a_healthy_listener_from_another_process(
                     process_support._wait_until_ready(launch)
                 assert process.poll() is None
             finally:
-                process.kill()
-                process.wait(timeout=3)
+                process_support.stop_child(process, grace_seconds=3)
 
 
 @pytest.mark.parametrize("factory", (database_relay, dropped_connection_relay, held_statement_relay))
@@ -177,7 +177,7 @@ async def test_owned_runtime_starts_the_entire_held_provider_burst_on_a_small_ru
                 release.set()
 
 
-@pytest.mark.timeout(90)
+@pytest.mark.timeout(case_timeout_seconds())
 def test_slow_worker_startup_survives_healthchecks_and_a_stalled_worker_is_replaced(
     gateway: Gateway, tmp_path: Path
 ) -> None:
@@ -205,23 +205,13 @@ def test_slow_worker_startup_survives_healthchecks_and_a_stalled_worker_is_repla
             "Proxy yielded before both workers finished startup"
         )
         assert owned.log.read_text().count("Application startup complete.") == 2
-        victim: Final = psutil.Process(workers[0])
-        victim.suspend()
-        try:
-            replacement: Final = eventually(
-                lambda: tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text())),
-                lambda pids: len(pids) == 3 and owned.log.read_text().count("Application startup complete.") == 3,
-                seconds=30,
-            )
-            assert replacement[-1] not in workers
-            assert not psutil.pid_exists(victim.pid), "Supervisor did not reap the stalled worker"
-            response: Final = owned.gateway.request("GET", "/health/readiness")
-            assert response.status_code == 200, response.text
-        finally:
-            try:
-                victim.kill()
-            except psutil.NoSuchProcess:
-                pass
+        replacement: Final = owned.stall_worker(workers[0])
+        assert replacement not in workers
+        assert tuple(int(pid) for pid in STARTED_WORKER.findall(owned.log.read_text()))[-1] == replacement
+        assert owned.log.read_text().count("Application startup complete.") == 3
+        assert not psutil.pid_exists(workers[0]), "Supervisor did not reap the stalled worker"
+        response: Final = owned.gateway.request("GET", "/health/readiness")
+        assert response.status_code == 200, response.text
 
 
 def test_interrupted_cleanup_reaps_the_owned_root_and_its_child() -> None:
@@ -261,8 +251,7 @@ def test_interrupted_cleanup_reaps_the_owned_root_and_its_child() -> None:
             assert process.poll() is not None
             eventually(lambda: process_support.group_members(process.pid), lambda members: not members, seconds=5)
         finally:
-            process_support.signal_group(process.pid, signal.SIGKILL)
-            process.wait(timeout=3)
+            process_support.stop_process_group(process, 3)
 
 
 @pytest.mark.parametrize("explicit_dotenv", (False, True))

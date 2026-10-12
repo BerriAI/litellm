@@ -5,6 +5,7 @@ from typing import Final
 
 import pytest
 from integration._support.client import JSON_OBJECT, Gateway
+from integration._support.timing import assert_cut_short, timed
 from integration._support.wire import Reply, Request, wire_server
 
 _UPSTREAM_STALL_SECONDS: Final = 4.0
@@ -46,13 +47,13 @@ def test_messages_endpoint_honors_configured_timeout_against_stalled_upstream(ga
             api_key="synthetic-anthropic-key",
             timeout=_CONFIGURED_TIMEOUT_SECONDS,
         )
-        started: Final = time.monotonic()
-        response: Final = gateway.request(
-            "POST",
-            "/v1/messages",
-            {"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": prompt}]},
+        response: Final = timed(
+            lambda: gateway.request(
+                "POST",
+                "/v1/messages",
+                {"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": prompt}]},
+            )
         )
-        elapsed: Final = time.monotonic() - started
-        assert response.status_code == 408, response.text
-        assert elapsed < _UPSTREAM_STALL_SECONDS, f"timed out only after {elapsed:.2f}s: {response.text}"
+        assert response.value.status_code == 408, response.value.text
+        assert_cut_short(response.seconds, injected_delay=_UPSTREAM_STALL_SECONDS)
         assert len(wire.drain()) == 1

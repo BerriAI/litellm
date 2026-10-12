@@ -24,6 +24,7 @@ import websockets
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy, owned_proxy_process
+from integration._support.timing import assert_cut_short, assert_enforced_within
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.upstream import (
     JsonResponse,
@@ -44,6 +45,8 @@ STALL_PROVIDER_MODEL: Final = "ws-stall-peer-model"
 DEAF_PROVIDER_MODEL: Final = "ws-deaf-peer-model"
 DEAF_RESPONSE_DELAY_SECONDS: Final = 10
 DEAF_READ_PAUSE_SECONDS: Final = 20
+MID_TURN_SECONDS: Final = 40
+DEAF_UNTIL_SECONDS: Final = MID_TURN_SECONDS + DEAF_RESPONSE_DELAY_SECONDS + DEAF_READ_PAUSE_SECONDS
 PEER_TEXT: Final = "responses websocket peer"
 TERMINAL: Final = frozenset({"response.completed", "response.failed", "error"})
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
@@ -52,6 +55,8 @@ LIMIT_CLOSE_REASON: Final = "Session duration limit reached"
 RELOAD_INTERVAL_SECONDS: Final = 3
 WORKER_SYNC_SECONDS: Final = RELOAD_INTERVAL_SECONDS + 7
 CAP_SECONDS: Final = 60
+CAP_CLOSE_SLACK_SECONDS: Final = 15
+DEAF_CLOSE_SLACK_SECONDS: Final = 3
 RESTORED_IDLE_SECONDS: Final = 75
 CAPPED_PATHS: Final = ("/v1/responses", "/responses")
 CAPPED_SOCKETS_MINIMUM: Final = 8
@@ -725,7 +730,7 @@ async def _mid_session(
             additional_headers={"Authorization": f"Bearer {key}"},
             open_timeout=10,
         ) as connection:
-            await asyncio.sleep(max(0, started + 40 - time.monotonic()))
+            await asyncio.sleep(max(0, started + MID_TURN_SECONDS - time.monotonic()))
             created, turn_error = await _stall_turn(connection, stall_model)
             remaining: Final = max(0, 75 - (time.monotonic() - started))
             close: Final = CloseResult(await _wait_for_close(connection, remaining), time.monotonic() - started)
@@ -982,19 +987,23 @@ async def _kill_workload(owned: OwnedProxy, key: str, model: str) -> KillResults
     )
     held_by: Final = MappingProxyType({pid: holders.count(pid) for pid in sorted(workers)})
     victim: Final = max(sorted(workers), key=held_by.__getitem__)
-    psutil.Process(victim).kill()
     victims: Final = tuple(
         connection for connection, holder in zip(connections, holders, strict=True) if holder == victim
     )
     survivors: Final = tuple(
         connection for connection, holder in zip(connections, holders, strict=True) if holder != victim
     )
-    victim_closes, survivor_turns = await asyncio.gather(
-        asyncio.gather(*tuple(_wait_for_close(connection, 30) for connection in victims)),
-        asyncio.gather(
-            *tuple(_turn_result(connection, _create(model, f"survivor-{uuid.uuid4().hex}")) for connection in survivors)
-        ),
-    )
+    with owned.replacing_worker(victim) as kill:
+        await asyncio.to_thread(kill)
+        victim_closes, survivor_turns = await asyncio.gather(
+            asyncio.gather(*tuple(_wait_for_close(connection, 30) for connection in victims)),
+            asyncio.gather(
+                *tuple(
+                    _turn_result(connection, _create(model, f"survivor-{uuid.uuid4().hex}"))
+                    for connection in survivors
+                )
+            ),
+        )
     health: Final = await asyncio.to_thread(
         eventually,
         lambda: _health_status(candidate),
@@ -1327,7 +1336,9 @@ def test_session_cap_closes_never_started_socket(cap_results: CapResults) -> Non
     assert cap_results.idle.outcome.closed, cap_results.idle
     assert cap_results.idle.outcome.close_code == 1000, cap_results.idle
     assert cap_results.idle.outcome.close_reason == "Session duration limit reached", cap_results.idle
-    assert 59 <= cap_results.idle.elapsed <= 75, cap_results.idle
+    assert_enforced_within(
+        cap_results.idle.elapsed, configured=CAP_SECONDS, slack=CAP_CLOSE_SLACK_SECONDS, not_before=CAP_SECONDS - 1
+    )
 
 
 def test_session_cap_closes_active_socket_and_provider(cap_results: CapResults) -> None:
@@ -1336,7 +1347,12 @@ def test_session_cap_closes_active_socket_and_provider(cap_results: CapResults) 
     assert cap_results.active.close.outcome.closed, cap_results.active
     assert cap_results.active.close.outcome.close_code == 1000, cap_results.active
     assert cap_results.active.close.outcome.close_reason == "Session duration limit reached", cap_results.active
-    assert 59 <= cap_results.active.close.elapsed <= 75, cap_results.active
+    assert_enforced_within(
+        cap_results.active.close.elapsed,
+        configured=CAP_SECONDS,
+        slack=CAP_CLOSE_SLACK_SECONDS,
+        not_before=CAP_SECONDS - 1,
+    )
     assert cap_results.active.provider_closed, cap_results.active
     assert all(snapshot.closed for snapshot in cap_results.provider), cap_results.provider
 
@@ -1347,7 +1363,9 @@ def test_session_cap_closes_mid_response_and_allows_new_session(cap_results: Cap
     assert cap_results.mid.close.outcome.closed, cap_results.mid
     assert cap_results.mid.close.outcome.close_code == 1000, cap_results.mid
     assert cap_results.mid.close.outcome.close_reason == "Session duration limit reached", cap_results.mid
-    assert 59 <= cap_results.mid.close.elapsed <= 75, cap_results.mid
+    assert_enforced_within(
+        cap_results.mid.close.elapsed, configured=CAP_SECONDS, slack=CAP_CLOSE_SLACK_SECONDS, not_before=CAP_SECONDS - 1
+    )
     assert cap_results.mid.provider_closed, cap_results.mid
     assert cap_results.mid.fresh_error is None, cap_results.mid
     assert cap_results.mid.fresh_completed, cap_results.mid
@@ -1359,7 +1377,13 @@ def test_session_cap_closes_client_promptly_when_provider_ignores_close(cap_resu
     assert cap_results.deaf.close.outcome.closed, cap_results.deaf
     assert cap_results.deaf.close.outcome.close_code == 1000, cap_results.deaf
     assert cap_results.deaf.close.outcome.close_reason == "Session duration limit reached", cap_results.deaf
-    assert 59 <= cap_results.deaf.close.elapsed <= 63, cap_results.deaf
+    assert_enforced_within(
+        cap_results.deaf.close.elapsed,
+        configured=CAP_SECONDS,
+        slack=DEAF_CLOSE_SLACK_SECONDS,
+        not_before=CAP_SECONDS - 1,
+    )
+    assert_cut_short(cap_results.deaf.close.elapsed, injected_delay=DEAF_UNTIL_SECONDS)
     assert cap_results.deaf.provider_closed, cap_results.deaf
     assert cap_results.deaf.fresh_error is None, cap_results.deaf
     assert cap_results.deaf.fresh_completed, cap_results.deaf
@@ -1420,7 +1444,10 @@ def test_db_override_caps_new_sessions_on_every_worker_without_restart(override_
     )
     assert all(socket.close.outcome.closed and socket.close.outcome.close_code == 1000 for socket in capped), capped
     assert all(socket.close.outcome.close_reason == LIMIT_CLOSE_REASON for socket in capped), capped
-    assert all(CAP_SECONDS - 1 <= socket.close.elapsed <= CAP_SECONDS + 15 for socket in capped), capped
+    for socket in capped:
+        assert_enforced_within(
+            socket.close.elapsed, configured=CAP_SECONDS, slack=CAP_CLOSE_SLACK_SECONDS, not_before=CAP_SECONDS - 1
+        )
     assert frozenset(socket.worker_pid for socket in capped) == override_results.workers, capped
 
 

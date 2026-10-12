@@ -1,5 +1,3 @@
-import os
-import signal
 import threading
 import uuid
 from collections.abc import Callable, Mapping, Sequence
@@ -11,7 +9,6 @@ from types import MappingProxyType
 from typing import Final
 
 import httpx
-import psutil
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
 from integration._support.process import owned_proxy_process
@@ -522,21 +519,17 @@ def _patch_status(candidate: Gateway, team: str) -> int | None:
         return None
 
 
-def _serving_workers(root: int) -> tuple[psutil.Process, ...]:
-    return tuple(child for child in psutil.Process(root).children() if child.children())
-
-
 @pytest.mark.timeout(240)
 def test_worker_kill_mid_burst_keeps_serving_and_leaves_no_empty_key(gateway: Gateway, tmp_path: Path) -> None:
     with owned_proxy_process(gateway, tmp_path, {}, workers=2) as owned, gateway.scenario() as scenario:
         teams: Final = _burst_teams(scenario)
-        workers: Final = eventually(
-            lambda: _serving_workers(owned.process.pid), lambda children: len(children) >= 2, seconds=30
-        )
-        attempts: Final = _burst(owned.gateway, tuple(teams), lambda: os.kill(workers[0].pid, signal.SIGKILL))
-        assert not workers[0].is_running() or workers[0].status() == psutil.STATUS_ZOMBIE, workers[0]
-        probe: Final = scenario.team()
-        eventually(lambda: _patch_status(owned.gateway, probe), lambda status_code: status_code == 200, seconds=60)
+        workers: Final = eventually(owned.worker_pids, lambda pids: len(pids) >= 2, seconds=30)
+        with owned.replacing_worker(min(workers)) as kill:
+            attempts: Final = _burst(owned.gateway, tuple(teams), kill)
+            probe: Final = scenario.team()
+            eventually(
+                lambda: _patch_status(owned.gateway, probe), lambda status_code: status_code == 200, seconds=60
+            )
         _assert_burst_reflected(owned.gateway, teams, attempts)
 
 
@@ -545,5 +538,5 @@ def test_rolling_restart_mid_burst_drains_without_empty_keys(gateway: Gateway, t
     with gateway.scenario() as scenario, owned_proxy_process(gateway, tmp_path, {}, workers=2) as replacement:
         teams: Final = _burst_teams(scenario)
         with owned_proxy_process(gateway, tmp_path, {}, workers=2) as retiring:
-            attempts: Final = _burst(retiring.gateway, tuple(teams), retiring.process.terminate)
+            attempts: Final = _burst(retiring.gateway, tuple(teams), retiring.begin_shutdown)
         _assert_burst_reflected(replacement.gateway, teams, attempts)

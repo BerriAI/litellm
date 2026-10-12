@@ -397,12 +397,15 @@ def test_fallback_write_survives_a_worker_kill(gateway: Gateway, tmp_path: Path)
                 _wait_until_served(owned.gateway, model)
             assert _create_fallback(owned.gateway, scenario, before, [target]).status_code == 200
             victim: Final = eventually(lambda: _workers(owned), lambda workers: len(workers) == 2)[0]
-            victim.kill()
             fresh: Final = scenario.cleanups.enter_context(
                 httpx.Client(base_url=owned.gateway.client.base_url, timeout=15, trust_env=False)
             )
             survivor: Final = Gateway(fresh, owned.gateway.key, owned.gateway.upstream_url)
-            degraded: Final = tuple(_create_fallback(survivor, scenario, model, [target]) for model in (after, last))
+            with owned.replacing_worker(victim.pid) as kill:
+                kill()
+                degraded: Final = tuple(
+                    _create_fallback(survivor, scenario, model, [target]) for model in (after, last)
+                )
             assert all(response.status_code == 200 for response in degraded), [r.text for r in degraded]
             covered: Final = _covered_models(_stored_fallbacks())
             assert {before, after, last} <= covered, covered

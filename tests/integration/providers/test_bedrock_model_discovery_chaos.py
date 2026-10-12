@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import signal
 import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
@@ -32,7 +31,7 @@ from integration._support.bedrock_discovery import (
     wait_for_replacement_worker,
 )
 from integration._support.client import Gateway, eventually, gateway_from_environment
-from integration._support.process import graceful_stop_seconds
+from integration._support.process import OwnedProxy, graceful_stop_seconds
 from integration._support.wire import Reply
 
 pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
@@ -43,6 +42,7 @@ class Rig:
     gateway: Gateway
     log: Path
     plane: ControlPlane
+    owned: OwnedProxy
 
 
 @pytest.fixture(scope="module")
@@ -51,7 +51,7 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     directory: Final = tmp_path_factory.mktemp("bedrock_discovery_chaos")
     with control_plane(directory, hosts) as plane, gateway_from_environment() as parent:
         with discovery_proxy(parent, directory, plane, check_provider_endpoint=True, workers=WORKERS) as owned:
-            yield Rig(owned.gateway, owned.log, plane)
+            yield Rig(owned.gateway, owned.log, plane, owned)
 
 
 def _victim(pids: tuple[int, ...], plane_url: str) -> int | None:
@@ -85,13 +85,14 @@ def test_worker_killed_mid_listing_leaves_the_sibling_serving_and_a_replacement_
                     seconds=LISTING_TIMEOUT_SECONDS,
                 )
                 assert victim is not None
-                psutil.Process(victim).send_signal(signal.SIGKILL)
-                sibling: Final = next(pid for pid in original if pid != victim)
-                for _ in range(5):
-                    assert rig.gateway.chat(CONTROL_MODEL)["choices"], "the sibling worker stopped answering"
-                assert psutil.pid_exists(sibling)
-                severed: Final = in_flight.exception(timeout=LISTING_TIMEOUT_SECONDS * 2)
-                assert severed is not None or in_flight.result().status_code >= 500
+                with rig.owned.replacing_worker(victim) as kill:
+                    kill()
+                    sibling: Final = next(pid for pid in original if pid != victim)
+                    for _ in range(5):
+                        assert rig.gateway.chat(CONTROL_MODEL)["choices"], "the sibling worker stopped answering"
+                    assert psutil.pid_exists(sibling)
+                    severed: Final = in_flight.exception(timeout=LISTING_TIMEOUT_SECONDS * 2)
+                    assert severed is not None or in_flight.result().status_code >= 500
             wait_for_replacement_worker(rig.log, original)
             release.set()
             assert discovered(rig.gateway, catalog, marker) == catalog.invocable_ids()

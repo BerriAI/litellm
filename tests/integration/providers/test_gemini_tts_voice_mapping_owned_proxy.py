@@ -8,9 +8,7 @@ so these rows boot their own proxy with ``GEMINI_API_BASE`` pointed at the scrip
 from __future__ import annotations
 
 import asyncio
-import os
 import re
-import signal
 import threading
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
@@ -306,11 +304,13 @@ async def test_worker_sigkill_mid_speech_burst_leaves_the_sibling_serving(gatewa
                         )
                         held_by: Final = MappingProxyType({pid: _held_connections(pid, wire.url) for pid in workers})
                         victim: Final = max(workers, key=held_by.__getitem__)
-                        os.kill(victim, signal.SIGKILL)
+                        with proxy.replacing_worker(victim) as kill:
+                            await asyncio.to_thread(kill)
+                            release.set()
+                            served: Final = await burst
+                            during: Final = wire.drain()
                     finally:
                         release.set()
-                    served: Final = await burst
-                during: Final = wire.drain()
                 after: Final = await _fire(url, proxy.gateway.key, model)
                 after_received: Final = wire.drain()
     assert sum(held_by.values()) == BURST, held_by
@@ -335,7 +335,7 @@ async def test_proxy_restart_mid_speech_burst_serves_the_next_burst_after_the_re
                 burst: Final = tasks.create_task(_fire(url, first.gateway.key, model, tolerate_transport_errors=True))
                 try:
                     await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= BURST, 90)
-                    first.process.terminate()
+                    first.begin_shutdown()
                 finally:
                     release.set()
                 served: Final = await burst

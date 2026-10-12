@@ -11,6 +11,7 @@ import httpx
 import pytest
 
 from tests._master_key import MASTER_KEY
+from tests.integration._support.process import stop_child
 
 MAX_IN_FLIGHT: Final = 8
 MAX_QUEUED: Final = 8
@@ -102,16 +103,6 @@ general_settings:
             assert len(rejected) >= REQUESTS - MAX_IN_FLIGHT - MAX_QUEUED, statuses
             assert all(result[1] for result in rejected), rejected
         finally:
-            proxy_process.terminate()
-            try:
-                proxy_process.wait(timeout=10)
-            except subprocess.TimeoutExpired:
-                proxy_process.kill()
-                proxy_process.wait()
+            stop_child(proxy_process)
     finally:
-        fake_process.terminate()
-        try:
-            fake_process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            fake_process.kill()
-            fake_process.wait()
+        stop_child(fake_process)

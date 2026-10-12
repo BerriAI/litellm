@@ -2,7 +2,6 @@ import asyncio
 import hashlib
 import itertools
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Mapping
@@ -422,12 +421,13 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_refusing_logins_and_s
                         owned, key, workers, control_port, held_markers, (), tasks
                     )
                     victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-                    victim: Final = psutil.Process(victim_pid)
-                    victim.suspend()
-                    victim.send_signal(signal.SIGKILL)
+                    with owned.replacing_worker(victim_pid) as kill:
+                        kill.freeze()
+                        await asyncio.to_thread(kill)
+                        release.set()
+                        answers: Final = await asyncio.gather(*bursts)
                 finally:
                     release.set()
-                answers: Final = await asyncio.gather(*bursts)
             served: Final = tuple(item for item in itertools.chain.from_iterable(answers) if item is not None)
             assert len(served) == held_by[survivor_pid], (held_by, len(served))
             for item in served:

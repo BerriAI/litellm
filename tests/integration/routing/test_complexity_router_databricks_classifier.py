@@ -2,7 +2,6 @@ import asyncio
 import json
 import os
 import re
-import signal
 import threading
 import time
 import uuid
@@ -1008,18 +1007,18 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_classifying_through_t
             held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, judge.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await burst
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            assert [item.cause for item in served] == ["jev_classifier"] * len(served), served
-            follow_up_prompt: Final = _prompt()
-            (answered,) = await _burst(
-                base_url, candidate.key, router, (("/v1/chat/completions", False),), (follow_up_prompt,)
-            )
-            assert (answered.cause, answered.text) == ("jev_classifier", _COMPLEX_TEXT), answered
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await burst
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                assert [item.cause for item in served] == ["jev_classifier"] * len(served), served
+                follow_up_prompt: Final = _prompt()
+                (answered,) = await _burst(
+                    base_url, candidate.key, router, (("/v1/chat/completions", False),), (follow_up_prompt,)
+                )
+                assert (answered.cause, answered.text) == ("jev_classifier", _COMPLEX_TEXT), answered
             await asyncio.to_thread(
                 eventually, lambda: _worker_startups(owned.log), lambda found: len(found[0]) == 3 and found[1] == 3, 180
             )

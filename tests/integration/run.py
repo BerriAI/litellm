@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import subprocess
@@ -8,7 +9,7 @@ import sys
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
-from types import MappingProxyType
+from types import MappingProxyType, ModuleType
 from typing import Final
 
 GROUPS: Final = MappingProxyType(
@@ -77,6 +78,16 @@ def worker_settings(group: str, workers: int) -> Mapping[str, str]:
     )
 
 
+def _budget() -> ModuleType:
+    specification: Final = importlib.util.spec_from_file_location(
+        "integration_budget", Path(__file__).with_name("_support") / "budget.py"
+    )
+    assert specification is not None and specification.loader is not None
+    module: Final = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(module)
+    return module
+
+
 def main() -> int:
     parser: Final = argparse.ArgumentParser()
     parser.add_argument("group", choices=tuple(GROUPS))
@@ -116,6 +127,12 @@ def main() -> int:
         "PYTHON_DOTENV_DISABLED": "1",
         **worker_settings(options.group, options.workers),
     }
+    budget: Final = _budget()
+    proxy_root: Final = Path(os.environ.get("INTEGRATION_PROXY_ROOT") or root)
+    imported: Final = float(
+        os.environ.get(budget.IMPORT_SECONDS_VARIABLE) or budget.measure_import_seconds(proxy_root, environment)
+    )
+    (output / "boot-calibration.json").write_text(budget.calibration(imported) + "\n")
     result: Final = subprocess.call(
         [
             sys.executable,
@@ -129,7 +146,7 @@ def main() -> int:
             "no:pytest-retry",
             "-p",
             "no:rerunfailures",
-            "--timeout=90",
+            f"--timeout={int(budget.case_timeout_for(imported))}",
             "--durations=15",
             "--tb=short",
             f"--hypothesis-seed={options.seed}",
@@ -144,7 +161,7 @@ def main() -> int:
             *(("--dist=loadgroup",) if options.workers > 1 else ()),
         ],
         cwd=root,
-        env=environment,
+        env={**environment, budget.IMPORT_SECONDS_VARIABLE: str(imported)},
     )
     if result != 0:
         return result

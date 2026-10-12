@@ -438,14 +438,16 @@ def test_worker_killed_before_burst_leaves_the_survivor_serving_and_never_pins_a
             before: Final = _workers(root)
             assert len(before) == WORKERS, [process.pid for process in before]
             victim: Final = before[0]
-            victim.kill()
-            victim.wait(timeout=10)
-            with httpx.Client(base_url=target, timeout=15, trust_env=False) as fresh:
-                readiness: Final = fresh.get("/health/readiness")
-            assert readiness.status_code == 200, f"/health/readiness with worker {victim.pid} dead: {readiness.text}"
-            burst: Final = Burst(target, key)
-            burst.start(pool, _burst_calls(fleet, PER_ENDPOINT // 2, STREAMS_PER_ENDPOINT // 2))
-            outcomes: Final = burst.outcomes()
+            with owned.replacing_worker(victim.pid) as kill:
+                kill()
+                with httpx.Client(base_url=target, timeout=15, trust_env=False) as fresh:
+                    readiness: Final = fresh.get("/health/readiness")
+                assert readiness.status_code == 200, (
+                    f"/health/readiness with worker {victim.pid} dead: {readiness.text}"
+                )
+                burst: Final = Burst(target, key)
+                burst.start(pool, _burst_calls(fleet, PER_ENDPOINT // 2, STREAMS_PER_ENDPOINT // 2))
+                outcomes: Final = burst.outcomes()
             respawned: Final = eventually(
                 lambda: tuple(process.pid for process in _workers(root)),
                 lambda pids: len(pids) == WORKERS and victim.pid not in pids,

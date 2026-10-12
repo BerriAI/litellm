@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import re
 import socket
+import sys
 import threading
 import time
 from collections.abc import Iterator, Mapping
@@ -33,11 +34,13 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, gateway_from_environment
 from integration._support.process import owned_proxy_process
+from integration._support.timing import assert_enforced_within
 from integration._support.wire import Reply, Request, wire_server
 
 SLOW_SECONDS: Final = 20
 FAST_SECONDS: Final = 3
-BOUND_SECONDS: Final = 8
+GUARDRAIL_TIMEOUT_SECONDS: Final = 1
+TIMEOUT_SLACK_SECONDS: Final = 7
 PROBE_CONCURRENCY: Final = 8
 TOKEN_PATH: Final = "/token"
 TOKEN_REPLY: Final = json.dumps(
@@ -173,6 +176,7 @@ class Sink:
     port: int
     seen: list[Seen] = field(default_factory=list)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    closing: threading.Event = field(default_factory=threading.Event)
     server: ThreadingHTTPServer | None = None
     thread: threading.Thread | None = None
 
@@ -194,7 +198,7 @@ class Sink:
                     )
                 is_token: Final = self.path.startswith(TOKEN_PATH)
                 if not is_token:
-                    time.sleep(SLOW_SECONDS if self.path.startswith("/slow/") else FAST_SECONDS)
+                    sink.closing.wait(SLOW_SECONDS if self.path.startswith("/slow/") else FAST_SECONDS)
                 payload: Final = TOKEN_REPLY if is_token else b"{}"
                 self.send_response(200)
                 self.send_header("content-type", "application/json")
@@ -212,8 +216,13 @@ class Sink:
 
         class Server(ThreadingHTTPServer):
             allow_reuse_address = True
-            daemon_threads = True
+            daemon_threads = False
+            block_on_close = True
             request_queue_size: Final = socket.SOMAXCONN
+
+            def handle_error(self, request: object, client_address: object) -> None:
+                if not isinstance(sys.exc_info()[1], ConnectionError):
+                    super().handle_error(request, client_address)
 
         self.server = Server(("127.0.0.1", self.port), Handler)
         self.port = self.server.server_port
@@ -222,6 +231,7 @@ class Sink:
 
     def stop(self) -> None:
         assert self.server is not None and self.thread is not None
+        self.closing.set()
         self.server.shutdown()
         self.server.server_close()
         self.thread.join(timeout=5)
@@ -323,7 +333,7 @@ def _rig_config(sink_url: str, root: Path) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["litellm_settings"]["cache"] = False
     config["guardrails"] = [
-        _guardrail(name, provider, sink_url, 1, dict(extra), mode)
+        _guardrail(name, provider, sink_url, GUARDRAIL_TIMEOUT_SECONDS, dict(extra), mode)
         for name, provider, extra, mode, _ in _provider_values()
     ] + [
         _guardrail("control-generic", "generic_guardrail_api", sink_url, None, {}, "pre_call"),
@@ -431,9 +441,7 @@ def test_litellm_params_timeout_bounds_outbound_call(
     outcome: Final = outcomes[name]
     calls: Final = rig.sink.calls_for(name)
     assert calls, f"{name}: sink saw no request for {provider}"
-    assert outcome.elapsed < BOUND_SECONDS, (
-        f"{name}: elapsed {outcome.elapsed:.2f}s, expected under {BOUND_SECONDS}s with timeout=1"
-    )
+    assert_enforced_within(outcome.elapsed, configured=GUARDRAIL_TIMEOUT_SECONDS, slack=TIMEOUT_SLACK_SECONDS)
     assert isinstance(outcome.response, httpx.Response), f"{name}: client gave up: {outcome.response!r}"
     assert outcome.response.status_code != 504, outcome.response.text
 

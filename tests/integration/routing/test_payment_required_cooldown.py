@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import signal
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -14,7 +13,6 @@ from typing import Final
 import anthropic
 import httpx
 import openai
-import psutil
 import pytest
 import yaml
 from integration._support.client import GATEWAY_LIMITS, Gateway, Scenario, eventually, gateway_from_environment
@@ -54,7 +52,6 @@ COOLED_DOWN: Final = "litellm_deployment_cooled_down_total"
 PRIMARY_GROUP: Final = new_group()
 FALLBACK_GROUP: Final = new_group()
 MARKER: Final = re.compile(rb"pr402-[0-9a-f]{32}(?:-\d+)?")
-WORKER_PID: Final = re.compile(r"Started server process \[(\d+)\]")
 
 
 @dataclass(frozen=True, slots=True)
@@ -506,10 +503,6 @@ def burst_call(group: str, index: int) -> Call:
             return Call(marker, "/v1/responses", {"model": group, "input": marker, "stream": stream})
 
 
-def worker_pids(log: Path) -> tuple[int, ...]:
-    return tuple(int(pid) for pid in WORKER_PID.findall(log.read_text()))
-
-
 def ready_workers(log: Path) -> int:
     return log.read_text().count("Application startup complete.")
 
@@ -552,12 +545,7 @@ def test_chaos_burst_cooldown_holds_across_both_workers_and_a_worker_kill(tmp_pa
         assert_served(warm, chat_identity)
         assert markers_received(refusing) == ()
         assert markers_received(healthy) == markers(warm)
-        victim: Final = next(pid for pid in sorted(worker_pids(owned.log)) if psutil.pid_exists(pid))
-        ready_before: Final = ready_workers(owned.log)
-        psutil.Process(victim).send_signal(signal.SIGKILL)
-        eventually(
-            lambda: ready_workers(owned.log), lambda ready: ready > ready_before, seconds=graceful_stop_seconds()
-        )
+        owned.kill_worker(min(owned.worker_pids()))
         after_kill: Final = tuple(raw_chat(patient, group, new_marker()) for _ in range(20))
         assert_served(after_kill, chat_identity)
         assert markers_received(refusing) == ()

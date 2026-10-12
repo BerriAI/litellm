@@ -1,9 +1,9 @@
 import asyncio
 import json
 import threading
+from contextlib import AsyncExitStack
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
-from pathlib import Path
 from queue import SimpleQueue
 from types import MappingProxyType
 from typing import Final
@@ -11,8 +11,8 @@ from typing import Final
 import httpx
 import openai
 import pytest
-from integration._support.client import Gateway, gateway_from_environment
-from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.client import Gateway, eventually, gateway_from_environment
+from integration._support.process import OwnedProxy, WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request
 from integration.providers._assistants_route_errors_support import (
     ASSISTANT_MODEL,
@@ -28,6 +28,7 @@ from integration.providers._assistants_route_errors_support import (
     STATUS_TABLE,
     UNMAPPED_500,
     Call,
+    Held,
     Mapped,
     Route,
     answer_all,
@@ -42,7 +43,6 @@ from integration.providers._assistants_route_errors_support import (
     held_error_peer,
     held_one_by_one,
     held_upstream_connections,
-    live_worker_pids,
     new_marker,
     openai_assistants_config,
     owned_config,
@@ -71,15 +71,19 @@ _AZURE_CREDENTIALS: Final = (
 _PRIVATE_DETAILS: Final = ("10.20.30.40", "/etc/litellm/secrets/db.yaml", "sk-proj-" + "a1B2c3D4" * 5)
 _URL_MODEL: Final = "http://169.254.169.254/latest"
 _BURST_STATUSES: Final = (400, 401, 404, 429, 500, 503)
+_BURST_PER_WORKER: Final = 24
 _SDK_ERRORS: Final = MappingProxyType({404: openai.NotFoundError, 429: openai.RateLimitError})
 _BODY_VARIANTS: Final = ("text_502", "empty_503", "hostile_400", "null_message_404", "garbage_200")
 
 
 @dataclass(frozen=True, slots=True)
 class _Scripted:
-    gateway: Gateway
+    owned: OwnedProxy
     port: int
-    log: Path
+
+    @property
+    def gateway(self) -> Gateway:
+        return self.owned.gateway
 
 
 @pytest.fixture(scope="module")
@@ -89,9 +93,11 @@ def scripted(tmp_path_factory: pytest.TempPathFactory) -> Iterator[_Scripted]:
     config: Final = openai_assistants_config(directory, port, _DEPLOYMENT_TIMEOUT_SECONDS)
     with (
         gateway_from_environment() as shared,
-        owned_proxy_process(shared, directory, {}, config=config, workers=2) as owned,
+        owned_proxy_process(
+            shared, directory, {}, config=config, workers=2, healthcheck=WorkerHealthcheck.LENIENT
+        ) as owned,
     ):
-        yield _Scripted(owned.gateway, port, owned.log)
+        yield _Scripted(owned, port)
 
 
 @pytest.fixture(scope="module")
@@ -372,7 +378,9 @@ def test_repeated_failing_request_answers_the_same_each_time(scripted: _Scripted
 
 
 async def test_mixed_status_burst_answers_each_request_with_its_own_status_and_marker(scripted: _Scripted) -> None:
-    calls: Final = tuple(Call(MARKED_ROUTES[index % len(MARKED_ROUTES)], new_marker()) for index in range(48))
+    calls: Final = tuple(
+        Call(MARKED_ROUTES[index % len(MARKED_ROUTES)], new_marker()) for index in range(2 * _BURST_PER_WORKER)
+    )
     status_by_marker: Final = MappingProxyType(
         {
             call.marker: _BURST_STATUSES[(index // len(MARKED_ROUTES)) % len(_BURST_STATUSES)]
@@ -381,18 +389,29 @@ async def test_mixed_status_burst_answers_each_request_with_its_own_status_and_m
     )
     release: Final = threading.Event()
     arrived: Final[SimpleQueue[str]] = SimpleQueue()
-    workers: Final = live_worker_pids(scripted.log)
-    assert len(workers) == 2, workers
+    owned: Final = scripted.owned
+    first, second = sorted(eventually(owned.worker_pids, lambda pids: len(pids) == 2))
     with assistants_wire(held_error_peer(status_by_marker, arrived, release), port=scripted.port) as wire:
         try:
-            async with held_one_by_one(scripted.gateway, calls, arrived, lambda: False) as held:
-                held_by: Final = await asyncio.to_thread(held_upstream_connections, workers, scripted.port, len(calls))
+            async with AsyncExitStack() as bursts:
+                with owned.suspended(second):
+                    on_first: Final = await bursts.enter_async_context(
+                        held_one_by_one(owned.gateway, calls[:_BURST_PER_WORKER], arrived, lambda: False)
+                    )
+                with owned.suspended(first):
+                    on_second: Final = await bursts.enter_async_context(
+                        held_one_by_one(owned.gateway, calls[_BURST_PER_WORKER:], arrived, lambda: False)
+                    )
+                held: Final = Held(on_first.calls + on_second.calls, on_first.pending + on_second.pending)
+                held_by: Final = await asyncio.to_thread(
+                    held_upstream_connections, (first, second), scripted.port, len(calls)
+                )
                 release.set()
                 answers: Final = await held.answers()
         finally:
             release.set()
         received: Final = wire.drain()
-    assert sum(held_by.values()) == len(calls) and min(held_by.values()) > 0, held_by
+    assert held_by == {first: _BURST_PER_WORKER, second: _BURST_PER_WORKER}, held_by
     assert len(answers) == len(calls)
     for answer in answers:
         assert_answered_with_its_own_marker(answer, MAPPED_BY_STATUS[status_by_marker[answer.call.marker]])

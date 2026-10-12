@@ -853,13 +853,6 @@ def _spawned_worker(child: psutil.Process) -> bool:
         return False
 
 
-def _exited(process: psutil.Process) -> bool:
-    try:
-        return process.status() == psutil.STATUS_ZOMBIE
-    except psutil.NoSuchProcess:
-        return True
-
-
 def _workers(root: psutil.Process) -> tuple[psutil.Process, ...]:
     return tuple(
         sorted((child for child in root.children() if _spawned_worker(child)), key=lambda process: process.pid)
@@ -913,16 +906,16 @@ async def _sessions_on_every_worker(
 
 
 async def _sessions_through_worker_kill(
-    url: str, key: str, workers: tuple[psutil.Process, ...]
+    url: str, key: str, owned: OwnedProxy, workers: tuple[psutil.Process, ...]
 ) -> tuple[tuple[Session, bool], ...]:
     opened: Final = await _sessions_on_every_worker(url, key, workers, ())
     sockets: Final = tuple(session.socket for session in opened)
     try:
         on_killed_worker: Final = tuple(session.pid == workers[0].pid for session in opened)
-        workers[0].kill()
-        await asyncio.to_thread(eventually, lambda: _exited(workers[0]), bool, graceful_stop_seconds())
-        turns: Final = (_turn_or_close(socket, label) for socket, label in zip(sockets, _labels(len(sockets))))
-        sessions: Final = await asyncio.wait_for(asyncio.gather(*turns), 90)
+        with owned.replacing_worker(workers[0].pid) as kill:
+            await asyncio.to_thread(kill)
+            turns: Final = (_turn_or_close(socket, label) for socket, label in zip(sockets, _labels(len(sockets))))
+            sessions: Final = await asyncio.wait_for(asyncio.gather(*turns), 90)
         return tuple(zip(sessions, on_killed_worker))
     finally:
         await asyncio.gather(*(socket.close() for socket in sockets))
@@ -941,7 +934,7 @@ def test_worker_kill_leaves_the_surviving_sessions_with_only_their_own_frames(ga
             workers: Final = _workers(root)
             assert len(workers) == WORKERS, [process.pid for process in workers]
             outcomes: Final = asyncio.run(
-                _sessions_through_worker_kill(_session_url(_owned_url(owned), f"model={model}"), key, workers)
+                _sessions_through_worker_kill(_session_url(_owned_url(owned), f"model={model}"), key, owned, workers)
             )
             served: Final = tuple(label for label, (_, killed) in zip(_labels(len(outcomes)), outcomes) if not killed)
             assert [session.types for session, _ in outcomes] == [

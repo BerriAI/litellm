@@ -2067,18 +2067,18 @@ async def _open_sessions(ws_base: str, model: str, key: str) -> tuple[ClientConn
     return sockets
 
 
-async def _sessions_through_worker_kill(ws_base: str, model: str, key: str, root: psutil.Process) -> KillOutcome:
+async def _sessions_through_worker_kill(ws_base: str, model: str, key: str, owned: OwnedProxy) -> KillOutcome:
     sockets: Final = await _open_sessions(ws_base, model, key)
     try:
-        workers: Final = _workers(root)
-        assert len(workers) == WORKERS, [process.pid for process in workers]
+        workers: Final = tuple(sorted(owned.worker_pids()))
+        assert len(workers) == WORKERS, workers
         victim: Final = workers[0]
-        victim.kill()
-        await asyncio.to_thread(victim.wait, 10)
-        served: Final = await asyncio.wait_for(
-            asyncio.gather(*(_one_transcript_or_close(socket) for socket in sockets)), 60
-        )
-        return KillOutcome(served.count(True), served.count(False), victim.pid)
+        with owned.replacing_worker(victim) as kill:
+            await asyncio.to_thread(kill)
+            served: Final = await asyncio.wait_for(
+                asyncio.gather(*(_one_transcript_or_close(socket) for socket in sockets)), 60
+            )
+        return KillOutcome(served.count(True), served.count(False), victim)
     finally:
         await asyncio.gather(*(socket.close() for socket in sockets))
 
@@ -2138,7 +2138,7 @@ def test_worker_kill_then_proxy_restart_keep_transcription_sessions_uninjected(
                 blocked_after_restart.scenario_id,
             )
             root: Final = psutil.Process(owned.process.pid)
-            outcome: Final = asyncio.run(_sessions_through_worker_kill(_ws_base(owned_url), model, key, root))
+            outcome: Final = asyncio.run(_sessions_through_worker_kill(_ws_base(owned_url), model, key, owned))
             record_property(
                 "worker_kill", {"served": outcome.served, "closed": outcome.closed, "killed": outcome.killed_pid}
             )

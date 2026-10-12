@@ -1,10 +1,8 @@
 import asyncio
 import json
 import re
-import signal
 import threading
-from collections.abc import Callable, Iterator
-from contextlib import contextmanager
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
@@ -15,7 +13,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually, object_value
 from integration._support.database import read_rows
-from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.process import WorkerHealthcheck, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
@@ -58,16 +56,6 @@ def _held_connections(pid: int, port: int) -> int:
         for connection in psutil.Process(pid).net_connections(kind="tcp")
         if connection.status == psutil.CONN_ESTABLISHED and connection.raddr and connection.raddr.port == port
     )
-
-
-@contextmanager
-def _suspended_worker(pid: int) -> Iterator[None]:
-    worker: Final = psutil.Process(pid)
-    worker.suspend()
-    try:
-        yield
-    finally:
-        worker.resume()
 
 
 def _error_information(call_id: str) -> dict[str, JsonValue]:
@@ -166,21 +154,19 @@ async def test_passthrough_worker_sigkill_leaves_sibling_serving_and_logging(gat
     with wire_server(_held_reply(release)) as wire:
         config["environment_variables"] = {"GEMINI_API_BASE": wire.url, "GEMINI_API_KEY": "scripted"}
         path.write_text(yaml.safe_dump(config))
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(
+            gateway, tmp_path, {}, config=path, workers=2, healthcheck=WorkerHealthcheck.LENIENT
+        ) as owned:
             candidate: Final = owned.gateway
-            workers: Final = eventually(
-                lambda: tuple(int(pid) for pid in _STARTED_WORKER.findall(owned.log.read_text())),
-                lambda pids: len(pids) == 2,
-                seconds=30,
-            )
+            workers: Final = tuple(sorted(eventually(owned.worker_pids, lambda pids: len(pids) == 2, seconds=30)))
             async with asyncio.TaskGroup() as tasks:
                 try:
-                    with _suspended_worker(workers[0]):
+                    with owned.suspended(workers[0]):
                         seed: Final = tasks.create_task(
                             _fire_burst(str(candidate.client.base_url), candidate.key, 1, tolerate_transport_errors=True)
                         )
                         await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= 1, 30)
-                    with _suspended_worker(workers[1]):
+                    with owned.suspended(workers[1]):
                         rest: Final = tasks.create_task(
                             _fire_burst(
                                 str(candidate.client.base_url),
@@ -194,16 +180,18 @@ async def test_passthrough_worker_sigkill_leaves_sibling_serving_and_logging(gat
                     peer_port: Final = int(wire.url.rsplit(":", 1)[1])
                     held_by: Final = {pid: _held_connections(pid, peer_port) for pid in workers}
                     assert sum(held_by.values()) == 20 and min(held_by.values()) > 0, held_by
-                    victim: Final = psutil.Process(max(workers, key=held_by.__getitem__))
-                    victim.suspend()
-                    victim_ports: Final = frozenset(
-                        connection.raddr.port for connection in victim.net_connections(kind="tcp") if connection.raddr
-                    )
-                    victim.send_signal(signal.SIGKILL)
-                    victim.wait(timeout=5)
+                    with owned.replacing_worker(max(workers, key=held_by.__getitem__)) as kill:
+                        victim: Final = kill.freeze()
+                        victim_ports: Final = frozenset(
+                            connection.raddr.port
+                            for connection in victim.net_connections(kind="tcp")
+                            if connection.raddr
+                        )
+                        kill()
+                        release.set()
+                        served: Final = (*await seed, *await rest)
                 finally:
                     release.set()
-                served: Final = (*await seed, *await rest)
             for item in served:
                 assert item.response.status_code in (200, 404, 500, 502), item.response.status_code
             follow_up: Final = candidate.request(

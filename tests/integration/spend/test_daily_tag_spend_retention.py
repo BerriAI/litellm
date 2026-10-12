@@ -1,12 +1,10 @@
 import json
 import os
-import signal
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Final
 
-import psutil
 import psycopg
 import pytest
 import yaml
@@ -14,7 +12,7 @@ from pydantic import JsonValue, TypeAdapter
 
 from tests.integration._support.client import Gateway, eventually, string_value
 from tests.integration._support.database import read_rows
-from tests.integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
+from tests.integration._support.process import owned_proxy, owned_proxy_process
 
 CLEANUP_EVERY_MINUTE: Final = "* * * * *"
 RETENTION_SETTING: Final = "maximum_daily_tag_spend_retention_period"
@@ -80,15 +78,6 @@ def _store_retention_setting(value: JsonValue) -> None:
             "WHERE param_name = %s",
             (RETENTION_SETTING, json.dumps(value), "general_settings"),
         )
-
-
-def _listening_workers(owned: OwnedProxy) -> tuple[psutil.Process, ...]:
-    port: Final = owned.gateway.client.base_url.port
-    return tuple(
-        child
-        for child in psutil.Process(owned.process.pid).children(recursive=True)
-        if any(conn.status == psutil.CONN_LISTEN and conn.laddr.port == port for conn in child.net_connections("inet"))
-    )
 
 
 def _listed_retention_value(gateway: Gateway) -> JsonValue:
@@ -216,13 +205,11 @@ def test_daily_tag_spend_cleanup_completes_after_one_of_two_workers_is_killed(ga
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as owned:
             with owned.gateway.scenario() as scenario:
                 model: Final = scenario.model()
-                workers: Final = eventually(
-                    lambda: _listening_workers(owned), lambda found: len(found) == 2, seconds=30
-                )
-                workers[0].send_signal(signal.SIGKILL)
-                eventually(lambda: workers[0].is_running(), lambda alive: not alive, seconds=10)
-                ids: Final = tuple(_completion_id(owned.gateway, model) for _ in range(6))
-                assert len(set(ids)) == 6 and all(identity.startswith("chatcmpl-") for identity in ids), ids
+                workers: Final = eventually(owned.worker_pids, lambda found: len(found) == 2, seconds=30)
+                with owned.replacing_worker(min(workers)) as kill:
+                    kill()
+                    ids: Final = tuple(_completion_id(owned.gateway, model) for _ in range(6))
+                    assert len(set(ids)) == 6 and all(identity.startswith("chatcmpl-") for identity in ids), ids
                 remaining: Final = eventually(
                     lambda: _remaining_days(tag), lambda days: expired not in days, seconds=150
                 )

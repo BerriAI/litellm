@@ -10,6 +10,7 @@ import httpx
 import openai
 import pytest
 from integration._support.client import Gateway, Scenario, eventually, object_value, string_value
+from integration._support.timing import assert_within_factor_of_control, timed
 from integration._support.upstream import _aws_event_frame
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -765,6 +766,10 @@ def test_the_worst_case_lookaround_input_scans_in_linear_time(gateway: Gateway) 
         "type": "object",
         "properties": {"collection": {"type": "string", "pattern": pattern}},
     }
+    benign: Final[dict[str, JsonValue]] = {
+        "type": "object",
+        "properties": {"collection": {"type": "string", "pattern": "a" * len(pattern)}},
+    }
     liveliness: Final[list[tuple[float, int]]] = []
     stop: Final = threading.Event()
 
@@ -774,16 +779,24 @@ def test_the_worst_case_lookaround_input_scans_in_linear_time(gateway: Gateway) 
 
     with wire_server(_bedrock_peer) as wire, gateway.scenario() as scenario:
         model: Final = _deployment(scenario, wire, f"bedrock/{_KIMI}")
+        control: Final = timed(
+            lambda: gateway.request("POST", _path("chat"), _body("chat", model, (_openai_tool(_TOOL, benign),)))
+        )
+        _assert_tool_call_relayed("chat", control.value)
+        assert len(wire.drain()) == 1
         poller: Final = threading.Thread(target=poll)
         poller.start()
-        started: Final = time.perf_counter()
-        response: Final = gateway.request("POST", _path("chat"), _body("chat", model, (_openai_tool(_TOOL, schema),)))
-        elapsed: Final = time.perf_counter() - started
+        worst: Final = timed(
+            lambda: gateway.request("POST", _path("chat"), _body("chat", model, (_openai_tool(_TOOL, schema),)))
+        )
         stop.set()
         poller.join()
-        _assert_tool_call_relayed("chat", response)
-        assert elapsed < 30, elapsed
-        assert liveliness and max(latency for latency, _ in liveliness) < 5, liveliness
+        _assert_tool_call_relayed("chat", worst.value)
+        assert_within_factor_of_control(worst.seconds, control=control.seconds, factor=10)
+        assert liveliness, liveliness
+        assert_within_factor_of_control(
+            max(latency for latency, _ in liveliness), control=control.seconds, factor=10
+        )
         assert {status for _, status in liveliness} == {200}, liveliness
         assert len(wire.drain()) == 1
 
