@@ -1,8 +1,11 @@
 import asyncio
+import random
 import time
+from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final, Literal, TypeAlias
 
 from pydantic import TypeAdapter
@@ -17,6 +20,8 @@ from litellm.constants import (
     SPEND_LOG_CLEANUP_MAX_CONSECUTIVE_BATCH_FAILURES,
     SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP,
     SPEND_LOG_CLEANUP_RUN_BUDGET_SECONDS,
+    SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS,
+    SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS,
     SPEND_LOG_RUN_LOOPS,
 )
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
@@ -93,6 +98,22 @@ SPEND_LOG_CLEANUP_BOUND_SETTINGS: Final = (
     "maximum_spend_logs_cleanup_run_budget",
     "maximum_spend_logs_cleanup_batch_timeout",
 )
+
+
+def first_cleanup_run_kwargs(settings: Mapping[str, object], now: datetime) -> Mapping[str, datetime]:
+    """
+    Extra ``add_job`` kwargs for the interval cleanup job. Empty unless
+    ``maximum_spend_logs_cleanup_run_on_startup`` is true, so the first run otherwise stays one interval out.
+    """
+    if (
+        settings.get("maximum_spend_logs_cleanup_cron")
+        or settings.get("maximum_spend_logs_cleanup_run_on_startup") is not True
+    ):
+        return MappingProxyType({})
+    delay_seconds: Final = SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS + random.randint(
+        0, SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS
+    )
+    return MappingProxyType({"next_run_time": now + timedelta(seconds=delay_seconds)})
 
 
 class SpendLogCleanup:

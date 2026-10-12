@@ -846,6 +846,59 @@ def _mock_scheduled_proxy_config() -> MagicMock:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("run_on_startup", [False, True])
+async def test_startup_moves_first_retention_cleanup_up_only_when_opted_in(
+    monkeypatch: pytest.MonkeyPatch, run_on_startup: bool
+) -> None:
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.constants import SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS, SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    settings: Final = {
+        "maximum_health_check_retention_period": "90d",
+        "maximum_spend_logs_cleanup_run_on_startup": run_on_startup,
+    }
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+    scheduler: Final = AsyncIOScheduler()
+    before: Final = datetime.now(timezone.utc)
+    try:
+        with (
+            patch(  # test-quality-ok: the startup cleanup block reads these module globals, there is no seam to inject them
+                "litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()
+            ),
+            patch("litellm.proxy.proxy_server.store_model_in_db", False),  # test-quality-ok: same module globals
+            patch("litellm.proxy.proxy_server.general_settings", settings),  # test-quality-ok: same module globals
+            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings=settings,
+                prisma_client=mock_prisma_client,
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=5,
+                proxy_logging_obj=mock_proxy_logging,
+            )
+        job: Final = scheduler.get_job("spend_log_cleanup_job")
+        assert job is not None
+        delay: Final = (job.next_run_time - before).total_seconds()
+        if run_on_startup:
+            assert SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS - 5 <= delay
+            assert delay <= SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS + SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS + 5
+        else:
+            assert delay >= 24 * 3600 - 5
+    finally:
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_loads_credentials_only_through_add_deployment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -16,7 +16,7 @@ import re
 from collections.abc import Mapping
 from contextlib import nullcontext
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import MappingProxyType, SimpleNamespace
 from typing import Any, Dict, Final
@@ -26,6 +26,7 @@ import pytest
 from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
+from litellm.constants import SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS, SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS
 from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.types.router import Deployment, LiteLLM_Params
@@ -4233,6 +4234,28 @@ def _paused_scheduler(monkeypatch):
     monkeypatch.setattr("litellm.proxy.proxy_server.scheduler", real_scheduler)
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
     return real_scheduler
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("run_on_startup", [None, False, True])
+async def test_ProxyConfig__reschedule_spend_log_cleanup_job_first_run_only_moves_up_when_opted_in(
+    monkeypatch, run_on_startup
+):
+    real_scheduler = _paused_scheduler(monkeypatch)
+    settings = {"maximum_health_check_retention_period": "90d", "maximum_spend_logs_retention_interval": "1d"}
+    if run_on_startup is not None:
+        settings["maximum_spend_logs_cleanup_run_on_startup"] = run_on_startup
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", settings)
+    before = datetime.now(timezone.utc)
+    try:
+        await ProxyConfig()._reschedule_spend_log_cleanup_job()
+        delay = (real_scheduler.get_job("spend_log_cleanup_job").next_run_time - before).total_seconds()
+        if run_on_startup:
+            assert delay <= SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS + SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS + 5
+        else:
+            assert delay >= 86400 - 5
+    finally:
+        real_scheduler.shutdown(wait=False)
 
 
 def _scheduler_whose_first_add_job_raises(monkeypatch):
