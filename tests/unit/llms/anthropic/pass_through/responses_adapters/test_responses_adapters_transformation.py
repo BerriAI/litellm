@@ -2156,7 +2156,7 @@ class TestPromptCacheBreakpointToResponses:
             }
         ]
 
-    def test_assistant_and_tool_result_blocks_drop_breakpoint(self):
+    def test_assistant_blocks_drop_breakpoint_and_a_tool_result_keeps_it_on_its_last_output_part(self):
         items = _ADAPTER.translate_messages_to_responses_input(
             [
                 {"role": "user", "content": [{"type": "text", "text": "q"}]},
@@ -2180,8 +2180,14 @@ class TestPromptCacheBreakpointToResponses:
                 },
             ]
         )
-        assert len(items) == 4
-        assert not _contains_key(items, "prompt_cache_breakpoint")
+        *earlier_items, tool_output = items
+        assert len(earlier_items) == 3
+        assert not _contains_key(earlier_items, "prompt_cache_breakpoint")
+        assert tool_output == {
+            "type": "function_call_output",
+            "call_id": "toolu_01",
+            "output": [{"type": "input_text", "text": "r", "prompt_cache_breakpoint": self.EXPLICIT}],
+        }
 
     def test_prompt_cache_options_forwarded_to_responses_kwargs(self):
         from litellm.llms.anthropic.pass_through.responses_adapters.handler import (

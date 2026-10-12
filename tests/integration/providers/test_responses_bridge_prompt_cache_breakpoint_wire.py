@@ -367,6 +367,142 @@ def test_anthropic_sdk_system_string_gets_the_injected_marker(bridge: _Bridge) -
     bridge.spend.landed(bridge.injecting_off, raw.headers["x-litellm-call-id"], None)
 
 
+_EPHEMERAL: Final[anthropic.types.CacheControlEphemeralParam] = {"type": "ephemeral"}
+_OPTED_IN: Final[Mapping[str, JsonValue]] = {"prompt_cache_options": {"mode": "explicit"}}
+
+
+def _anthropic_message(
+    client: anthropic.Anthropic,
+    model: str,
+    messages: Sequence[anthropic.types.MessageParam],
+    *,
+    system: Sequence[anthropic.types.TextBlockParam] = (),
+    stream: bool = False,
+) -> anthropic.types.Message:
+    if not stream:
+        return client.messages.create(
+            model=model, max_tokens=64, system=system, messages=messages, extra_body=dict(pcb.NO_CACHE)
+        )
+    with client.messages.stream(
+        model=model, max_tokens=64, system=system, messages=messages, extra_body=dict(pcb.NO_CACHE)
+    ) as events:
+        return events.get_final_message()
+
+
+def _marked_system() -> list[anthropic.types.TextBlockParam]:
+    return [
+        {"type": "text", "text": "Answer briefly"},
+        {"type": "text", "text": "Stable rules", "cache_control": _EPHEMERAL},
+    ]
+
+
+def _marked_user(marker: str) -> anthropic.types.MessageParam:
+    return {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": pcb.prompt(marker), "cache_control": _EPHEMERAL},
+            {"type": "text", "text": "and nothing else"},
+        ],
+    }
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["unary", "stream"])
+def test_anthropic_sdk_cache_control_reaches_the_responses_wire_as_a_prompt_cache_breakpoint_on_the_same_block(
+    bridge: _Bridge, stream: bool
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with bridge.gateway.scenario() as scenario, _anthropic(bridge) as client:
+        model: Final = scenario.model(model=pcb.MODEL, api_base=bridge.api_base, **_OPTED_IN)
+        message: Final = _anthropic_message(
+            client, model, [_marked_user(marker)], system=_marked_system(), stream=stream
+        )
+    _anthropic_text(message, marker)
+    body: Final = _wire_body(pcb.posted(bridge.wire, marker), stream=stream)
+    assert "instructions" not in body, body
+    assert body["input"] == [
+        {
+            "type": "message",
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "Answer briefly"},
+                {"type": "input_text", "text": "Stable rules", "prompt_cache_breakpoint": pcb.EXPLICIT},
+            ],
+        },
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": pcb.prompt(marker), "prompt_cache_breakpoint": pcb.EXPLICIT},
+                {"type": "input_text", "text": "and nothing else"},
+            ],
+        },
+    ], body
+
+
+def test_anthropic_sdk_cache_control_sends_no_mark_to_a_deployment_that_does_not_read_breakpoints(
+    bridge: _Bridge,
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with _anthropic(bridge) as client:
+        message: Final = _anthropic_message(client, bridge.off, [_marked_user(marker)], system=_marked_system())
+    _anthropic_text(message, marker)
+    request: Final = pcb.posted(bridge.wire, marker)
+    body: Final = _wire_body(request)
+    assert body["instructions"] == "Answer briefly\nStable rules", body
+    assert body["input"] == [
+        {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": pcb.prompt(marker)},
+                {"type": "input_text", "text": "and nothing else"},
+            ],
+        }
+    ], body
+    assert b"cache_control" not in request.body and b"prompt_cache_breakpoint" not in request.body, request.body
+
+
+def test_anthropic_sdk_cache_control_on_a_tool_result_marks_its_function_call_output(bridge: _Bridge) -> None:
+    marker: Final = uuid.uuid4().hex
+    messages: Final[list[anthropic.types.MessageParam]] = [
+        {"role": "user", "content": pcb.prompt(marker)},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "call_1", "name": "lookup", "input": {}}]},
+        {
+            "role": "user",
+            "content": [
+                {"type": "tool_result", "tool_use_id": "call_1", "content": "found it", "cache_control": _EPHEMERAL}
+            ],
+        },
+    ]
+    with bridge.gateway.scenario() as scenario, _anthropic(bridge) as client:
+        model: Final = scenario.model(model=pcb.MODEL, api_base=bridge.api_base, **_OPTED_IN)
+        message: Final = _anthropic_message(client, model, messages)
+    _anthropic_text(message, marker)
+    request: Final = pcb.posted(bridge.wire, marker)
+    _wire_body(request)
+    assert pcb.function_output(pcb.input_items(request), "call_1") == [
+        {"type": "input_text", "text": "found it", "prompt_cache_breakpoint": pcb.EXPLICIT}
+    ], "OpenAI caches up to a breakpoint on a function_call_output part (prompt caching guide, read 2026-10-12)"
+
+
+def test_anthropic_sdk_cache_control_on_an_assistant_turn_is_dropped(bridge: _Bridge) -> None:
+    marker: Final = uuid.uuid4().hex
+    messages: Final[list[anthropic.types.MessageParam]] = [
+        {"role": "user", "content": "first question"},
+        {"role": "assistant", "content": [{"type": "text", "text": "earlier answer", "cache_control": _EPHEMERAL}]},
+        {"role": "user", "content": pcb.prompt(marker)},
+    ]
+    with bridge.gateway.scenario() as scenario, _anthropic(bridge) as client:
+        model: Final = scenario.model(model=pcb.MODEL, api_base=bridge.api_base, **_OPTED_IN)
+        message: Final = _anthropic_message(client, model, messages)
+    _anthropic_text(message, marker)
+    request: Final = pcb.posted(bridge.wire, marker)
+    _wire_body(request)
+    assert pcb.content_of(pcb.input_items(request), "assistant") == [
+        {"type": "output_text", "text": "earlier answer"}
+    ], "OpenAI accepts a breakpoint on output_text but writes no cache for it (live gpt-5.6, 2026-10-12)"
+
+
 def test_native_responses_request_never_enters_the_bridge(bridge: _Bridge) -> None:
     marker: Final = uuid.uuid4().hex
     block: Final[dict[str, JsonValue]] = {"type": "input_text", "text": pcb.prompt(marker)}
