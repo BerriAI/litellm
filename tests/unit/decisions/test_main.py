@@ -1846,13 +1846,14 @@ async def test_images_are_dropped_from_the_wire_under_drop_params(
     }
 
 
-_MALFORMED_IMAGES: Final[tuple[object, ...]] = (
-    _PNG_DATA_URL,
-    [{"url": _PNG_DATA_URL}],
-    [{"type": "image_url", "image_url": {"url": _PNG_DATA_URL}}],
-    [{"content_type": "image/png", "base64": "AA==", "detail": "high"}],
+_MALFORMED_IMAGE_ENTRIES: Final[tuple[Mapping[str, object], ...]] = (
+    {"url": _PNG_DATA_URL},
+    {"type": "image_url", "image_url": {"url": _PNG_DATA_URL}},
+    {"content_type": "image/png", "base64": "AA==", "detail": "high"},
 )
-_MALFORMED_IMAGE_IDS: Final = ("bare_string", "url_object", "chat_image_url", "extra_key")
+_MALFORMED_IMAGE_ENTRY_IDS: Final = ("url_object", "chat_image_url", "extra_key")
+_MALFORMED_IMAGES: Final[tuple[object, ...]] = (_PNG_DATA_URL, *([entry] for entry in _MALFORMED_IMAGE_ENTRIES))
+_MALFORMED_IMAGE_IDS: Final = ("bare_string", *_MALFORMED_IMAGE_ENTRY_IDS)
 
 
 @pytest.mark.usefixtures("cloudflare_account")
@@ -1887,6 +1888,29 @@ async def test_malformed_images_are_dropped_from_the_wire_under_drop_params(
         "state": _SCREEN_TEXT,
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.usefixtures("cloudflare_account")
+@pytest.mark.parametrize("entry", _MALFORMED_IMAGE_ENTRIES, ids=_MALFORMED_IMAGE_ENTRY_IDS)
+async def test_a_malformed_image_under_drop_params_keeps_the_well_formed_ones(
+    entry: Mapping[str, object], respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post(f"{_CLOUDFLARE_RUN_URL}/clef").respond(json=_RESPONSE)
+
+    await litellm.asystemone(
+        model="cloudflare/clef",
+        state=_SCREEN_TEXT,
+        questions=_SYSTEMONE_PREDICATE,
+        images=[entry, _PNG_DATA_URL, {"content_type": "image/png", "base64": "AA=="}],
+        drop_params=True,
+    )
+
+    assert json.loads(route.calls[0].request.content)["images"] == [
+        _PNG_DATA_URL,
+        {"content_type": "image/png", "base64": "AA=="},
+    ]
 
 
 @pytest.mark.asyncio

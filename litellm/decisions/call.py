@@ -61,13 +61,28 @@ _IMAGES_ADAPTER: Final[TypeAdapter[tuple[DecisionsImage, ...] | None]] = TypeAda
 _HANDLER: Final = BaseLLMHTTPHandler()
 
 
+_IMAGE_ADAPTER: Final[TypeAdapter[DecisionsImage]] = TypeAdapter(DecisionsImage, config=ConfigDict(title="images"))
+_IMAGE_ENTRIES_ADAPTER: Final[TypeAdapter[tuple[object, ...]]] = TypeAdapter(tuple[object, ...])
+
+
+def _valid_image(image: object) -> DecisionsImage | None:
+    try:
+        return _IMAGE_ADAPTER.validate_python(image)
+    except ValidationError:
+        return None
+
+
+def _image_entries(images: object) -> tuple[object, ...]:
+    try:
+        return _IMAGE_ENTRIES_ADAPTER.validate_python(images)
+    except ValidationError:
+        return ()
+
+
 def _request_images(images: object, drops_params: bool) -> tuple[DecisionsImage, ...]:
     if not drops_params:
         return _IMAGES_ADAPTER.validate_python(images) or ()
-    try:
-        return _IMAGES_ADAPTER.validate_python(images) or ()
-    except ValidationError:
-        return ()
+    return tuple(image for image in map(_valid_image, _image_entries(images)) if image is not None)
 
 
 @dataclass(frozen=True, slots=True)
