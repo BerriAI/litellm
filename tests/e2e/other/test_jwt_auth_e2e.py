@@ -12,7 +12,7 @@ from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import UnauthorizedError, UnknownApiError, unwrap
 from idp import SHORT_LIVED_CLIENT_ID, WRONG_AUDIENCE_CLIENT_ID, Identity
 from lifecycle import ResourceManager
-from models import ChatBody, ChatMessage, TeamNewBody
+from models import ChatBody, ChatMessage, TeamNewBody, UserNewBody
 from other_client import OtherClient
 from pydantic import BaseModel
 from e2e_metadata import Domain, Mode, Provider, Subject, meta
@@ -149,6 +149,38 @@ class TestJwtAuth:
         assert row.user == identity.user_id, (
             f"spend row must carry the user from the JWT sub claim {identity.user_id!r}, got {row.user!r}"
         )
+
+    @pytest.mark.covers("other.auth.jwt.proxy_admin_personal_budget_enforced")
+    @meta(
+        Subject(
+            domain=Domain.PROXY_AUTH,
+            models=(CHEAP_OPENAI_MODEL,),
+            mode=Mode.NONSTREAM,
+        )
+    )
+    def test_proxy_admin_token_is_blocked_once_its_personal_budget_is_spent(
+        self, client: OtherClient, resources: ResourceManager
+    ) -> None:
+        identity: Final = client.idp.provision_user(
+            marker=unique_marker(), groups=(), group_ids=(), defer=resources.defer
+        )
+        resources.defer(lambda: client.proxy.delete_user(identity.user_id))
+        unwrap(
+            client.user_new(
+                UserNewBody(
+                    user_id=identity.user_id,
+                    user_email=f"{identity.username}@example.com",
+                    user_role="proxy_admin",
+                    auto_create_key=False,
+                    max_budget=0.0,
+                )
+            )
+        )
+
+        blocked: Final = client.proxy.chat(client.idp.access_token(identity), _ping())
+        assert isinstance(blocked, UnknownApiError), f"proxy_admin JWT must be stopped by its max_budget, got {blocked}"
+        assert (blocked.status_code, "ExceededBudget" in blocked.body) == (422, True), blocked
+        assert f"User={identity.user_id}" in blocked.body, f"budget denial must name the JWT's user: {blocked.body}"
 
     @pytest.mark.covers("other.auth.jwt.invalid_signature_denied")
     @meta(
