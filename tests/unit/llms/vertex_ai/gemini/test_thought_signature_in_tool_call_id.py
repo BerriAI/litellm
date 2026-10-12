@@ -322,13 +322,13 @@ def test_get_thought_signature_rejects_decodable_tampering():
     )
 
     assert _is_valid_thought_signature(decodable_but_wrong) is True
-    assert _get_thought_signature_from_tool({"id": tampered_id, "type": "function"}) is None
+    assert get_thought_signature_from_tool({"id": tampered_id, "type": "function"}) is None
 
 
 def test_get_thought_signature_rejects_unsigned_embedded_signature():
     unsigned_id = f"call_abc123{THOUGHT_SIGNATURE_SEPARATOR}{REAL_SIGNATURE}"
 
-    assert _get_thought_signature_from_tool({"id": unsigned_id, "type": "function"}) is None
+    assert get_thought_signature_from_tool({"id": unsigned_id, "type": "function"}) is None
 
 
 def test_get_thought_signature_drops_client_mangled_id_suffix():

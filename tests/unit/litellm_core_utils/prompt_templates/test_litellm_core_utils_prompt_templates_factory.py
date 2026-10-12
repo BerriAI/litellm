@@ -1,4 +1,4 @@
-import asyncio, base64, importlib, uuid
+import asyncio, base64, hashlib, importlib, uuid
 import json
 import logging
 import os
@@ -83,7 +83,12 @@ def test_function_call_prompt_lets_the_model_answer_after_a_function_result() ->
 @pytest.mark.parametrize(
     ("thought_signature", "expected"),
     [
-        ("encoded-signature", "call_123__thought__encoded-signature"),
+        (
+            "encoded-signature",
+            "call_123__checksum__"
+            + hashlib.sha256(b"encoded-signature").hexdigest()
+            + "__thought__encoded-signature",
+        ),
         (None, "call_123"),
         ("", "call_123"),
     ],
@@ -101,8 +106,12 @@ def test_encode_tool_call_id_with_signature(thought_signature, expected):
             "function-signature",
         ),
         (
-            {"id": encode_tool_call_id_with_signature("call_123", "embedded-signature")},
-            "embedded-signature",
+            {
+                "id": encode_tool_call_id_with_signature(
+                    "call_123", "ZW1iZWRkZWQtc2lnbmF0dXJl"
+                )
+            },
+            "ZW1iZWRkZWQtc2lnbmF0dXJl",
         ),
         ({}, None),
     ],
