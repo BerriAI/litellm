@@ -223,5 +223,14 @@
     "base_url": "https://api.reka.ai/v1",
     "api_key_env": "REKA_API_KEY",
     "api_base_env": "REKA_API_BASE"
+  },
+  "rodiumai": {
+    "base_url": "https://api.rodiumai.io/v1",
+    "api_key_env": "RODIUMAI_API_KEY",
+    "api_base_env": "RODIUMAI_API_BASE",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    },
+    "supported_endpoints": ["/v1/chat/completions"]
   }
 }
