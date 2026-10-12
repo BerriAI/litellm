@@ -150,9 +150,21 @@ async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Er
 
 #[rstest]
 #[tokio::test]
-async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: MessagesCall) {
+async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(
+    call: MessagesCall,
+    #[values("anthropic", "minimax")] provider: &str,
+) {
     let upstream = upstream([sse_response()]).await;
-    let host = RecordingStreamHost::new(streaming(call, upstream.uri()), usize::MAX);
+    let host = RecordingStreamHost::new(
+        streaming(
+            MessagesCall {
+                custom_llm_provider: Some(provider.into()),
+                ..call
+            },
+            upstream.uri(),
+        ),
+        usize::MAX,
+    );
 
     let outcome = stream_through(&host).await.expect("streamed call succeeds");
 
@@ -346,6 +358,7 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
         .execute(
             MessagesCall {
                 custom_llm_provider: Some(provider.into()),
+                litellm_params: Default::default(),
                 ..streaming(call, upstream.uri())
             },
             &(),
@@ -470,6 +483,7 @@ async fn a_host_on_anthropic_sse_is_relayed_byte_for_byte(call: MessagesCall) {
     let host = RecordingStreamHost::new(
         MessagesCall {
             custom_llm_provider: Some("azure_ai".into()),
+            litellm_params: Default::default(),
             ..streaming(call, upstream.uri())
         },
         usize::MAX,

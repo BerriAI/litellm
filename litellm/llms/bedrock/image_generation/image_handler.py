@@ -27,6 +27,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_httpx_client,
 )
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.llms.bedrock import BearerPreparedRequest
 from litellm.types.utils import ImageResponse
 
 from ..base_aws_llm import BaseAWSLLM, bedrock_bearer_token
@@ -44,7 +45,7 @@ class BedrockImagePreparedRequest(LiteLLMBaseModel):
     """
 
     endpoint_url: str
-    prepped: AWSPreparedRequest
+    prepped: AWSPreparedRequest | BearerPreparedRequest
     body: bytes
     data: dict
 
