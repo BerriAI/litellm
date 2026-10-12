@@ -1,4 +1,4 @@
-use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
+use litellm_llms_types::headers::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
 pub fn get_provider_specific_headers(

@@ -49,6 +49,7 @@ longer signal it.
 
 ### Fixed
 
+- **user**: `litellm_user` updates no longer send `blocked`, which `/user/update` writes into the user table where no such column exists, so every update failed with a 400 (`Could not find field at upsertOneLiteLLM_UserTable.create.blocked`). Create still sends `blocked`, including `false`, so a `default_internal_user_params.blocked` on the proxy cannot block the auto-created key. Changing `blocked` after creation has no effect, since the proxy has no user-level block; use `litellm_key_block` instead
 - **model**: `litellm_model` refresh now reads the `{"data": [...]}` envelope `/model/info` returns, so `model_info` fields changed outside Terraform show up as drift instead of silently keeping the previous state
 - **key**: An update that changes `team_id` and fails because the key was already cascade-deleted along with its previous team now recovers by recreating the key under the new team, instead of aborting the apply. The key's absence is confirmed against the proxy first, so an unrelated failure still errors out, and a `team_id` change between two teams that both still exist stays a plain in-place update
 - **credential**: create now reports a `credential_name` collision as a clear error naming the `terraform import` command that adopts the existing credential, instead of surfacing the proxy's raw 500 with a Prisma `Unique constraint failed` message. New `adopt_existing` argument (default `false`) opts into taking the existing credential over during create, which makes `apply` idempotent again once state loses track of a credential that still exists on the proxy. Requires a proxy that answers 409 on the collision; older proxies are still detected by their 500 message
@@ -60,6 +61,7 @@ longer signal it.
 - **key**: Updates no longer send an empty `budget_duration`, which the proxy rejects with a 400; any update to a key without a configured `budget_duration` previously failed outright
 - **key**: A config-supplied `key` value (write-only) is now forwarded to `/key/generate`; previously it was silently dropped and the proxy generated a random key instead
 - **security**: The `litellm_key` data source and `litellm_key_block` resource normalize raw `sk-` keys to their SHA-256 token hash before building request URLs and resource IDs, so plaintext keys no longer land in reverse-proxy access logs, Terraform plan output, or state IDs
+- **unified_access_group**: create now accepts any 2xx response instead of requiring exactly HTTP 200; `POST /v1/unified_access_group` legitimately returns 201, so creation previously succeeded on the proxy but failed in the provider, leaving the group out of state and forcing a `terraform import` to recover on the next apply's 409. Same fix and shape as the one already applied to `mcp_server`/`model`/`key`/`organization_member`; `handleResponse` (shared by several other resources) was the one status-check helper that fix didn't reach. The legacy `litellm_access_group` resource calls the unrelated `/access_group/new` endpoint, which already returns 200, so it was never affected
 
 ### Changed
 

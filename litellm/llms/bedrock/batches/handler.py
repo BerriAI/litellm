@@ -1,6 +1,6 @@
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final, Literal
 
 from openai.types.batch import BatchRequestCounts
 from openai.types.batch import Metadata as OpenAIBatchMetadata
@@ -17,10 +17,15 @@ if TYPE_CHECKING:
 # AWS Bedrock model-invocation-job statuses → OpenAI Batch statuses.
 # Mirrors the mapping used by `BedrockBatchesConfig.transform_create_batch_response`
 # so create / retrieve return consistent statuses.
-_BEDROCK_MIJ_STATUS_TO_OPENAI: Final = {
+_BEDROCK_MIJ_STATUS_TO_OPENAI: Final[
+    Mapping[
+        str,
+        Literal["validating", "failed", "in_progress", "finalizing", "completed", "expired", "cancelling", "cancelled"],
+    ]
+] = {
     "Submitted": "validating",
     "Validating": "validating",
-    "Scheduled": "validating",
+    "Scheduled": "in_progress",
     "InProgress": "in_progress",
     "Stopping": "cancelling",
     "Stopped": "cancelled",
@@ -92,7 +97,7 @@ def _record_counts_from_response(response: Mapping[str, object]) -> BatchRequest
     )
 
 
-def _to_epoch(value: Any) -> int | None:
+def _to_epoch(value: object) -> int | None:
     if value is None:
         return None
     if isinstance(value, (int, float)):
@@ -162,7 +167,7 @@ class BedrockBatchesHandler:
         )
 
         def job_status() -> "LiteLLMBatch":
-            return BedrockBatchesHandler._handle_model_invocation_job_status(
+            return BedrockBatchesHandler.handle_model_invocation_job_status(
                 batch_id=batch_id,
                 aws_region_name=region,
                 logging_obj=logging_obj,
@@ -182,7 +187,7 @@ class BedrockBatchesHandler:
         return job_status()
 
     @staticmethod
-    def _handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
+    def handle_async_invoke_status(batch_id: str, aws_region_name: str, logging_obj=None, **kwargs) -> "LiteLLMBatch":
         """
         Handle async invoke status check for AWS Bedrock.
 
@@ -205,7 +210,7 @@ class BedrockBatchesHandler:
             embedding_handler: Final = BedrockEmbedding()
 
             # Get the status of the async invoke job
-            status_response: Final = await embedding_handler._get_async_invoke_status(
+            status_response: Final = await embedding_handler.get_async_invoke_status(
                 invocation_arn=batch_id,
                 aws_region_name=aws_region_name,
                 logging_obj=logging_obj,
@@ -258,8 +263,10 @@ class BedrockBatchesHandler:
             future: Final = executor.submit(run_in_thread)
             return future.result()
 
+    _handle_async_invoke_status = handle_async_invoke_status
+
     @staticmethod
-    def _handle_model_invocation_job_status(
+    def handle_model_invocation_job_status(
         batch_id: str,
         aws_region_name: str | None = None,
         logging_obj=None,
@@ -349,10 +356,7 @@ class BedrockBatchesHandler:
             )
 
         bedrock_status: Final = str(response.get("status", ""))
-        openai_status: Final = cast(
-            Any,
-            _BEDROCK_MIJ_STATUS_TO_OPENAI.get(bedrock_status, "in_progress"),
-        )
+        openai_status: Final = _BEDROCK_MIJ_STATUS_TO_OPENAI.get(bedrock_status, "in_progress")
 
         input_uri: Final = response.get("inputDataConfig", {}).get("s3InputDataConfig", {}).get("s3Uri", "")
         output_prefix: Final = response.get("outputDataConfig", {}).get("s3OutputDataConfig", {}).get("s3Uri", "")
@@ -404,3 +408,5 @@ class BedrockBatchesHandler:
             input_file_id=input_uri,
             output_file_id=output_file_uri if openai_status == "completed" else None,
         )
+
+    _handle_model_invocation_job_status = handle_model_invocation_job_status

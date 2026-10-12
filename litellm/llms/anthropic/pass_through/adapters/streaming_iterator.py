@@ -11,6 +11,7 @@ from typing import (
     Final,
     Literal,
     Protocol,
+    cast,
     get_args,
 )
 
@@ -19,6 +20,7 @@ from typing_extensions import assert_never
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.exceptions import MidStreamFallbackError
+from litellm.litellm_core_utils.hidden_params import set_hidden_params
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.llms.anthropic import (
     AppliedEdit,
@@ -35,6 +37,7 @@ from litellm.types.utils import AdapterCompletionStreamWrapper, Delta
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObject
+    from litellm.types.llms.openai import AllMessageValues
     from litellm.types.utils import ModelResponseStream
 
 
@@ -64,6 +67,12 @@ def _error_status_and_message(exc: Exception) -> tuple[int, str]:
     if isinstance(exc, (BaseLLMException, MidStreamFallbackError)):
         return exc.status_code, exc.message
     return 500, str(exc) or "Upstream stream ended before completion"
+
+
+def _provider_error(exc: Exception) -> Exception:
+    if isinstance(exc, MidStreamFallbackError) and exc.original_exception is not None:
+        return exc.original_exception
+    return exc
 
 
 def _mid_stream_error_sse_event(exc: Exception) -> bytes:
@@ -115,6 +124,18 @@ class _CombinedChunkSplitter:
         self._async_iter: AsyncIterator[ModelResponseStream] | None = None
         self._buffer: deque[ModelResponseStream] = deque()
 
+    @property
+    def chunks(self) -> "list[ModelResponseStream] | None":
+        return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
+            "list[ModelResponseStream] | None", getattr(self._stream, "chunks", None)
+        )
+
+    @property
+    def messages(self) -> "list[AllMessageValues] | None":
+        return cast(  # cast-ok: messages is a list of AllMessageValues on the inner stream
+            "list[AllMessageValues] | None", getattr(self._stream, "messages", None)
+        )
+
     @staticmethod
     def _is_combined(chunk: "ModelResponseStream") -> bool:
         """True if ``chunk`` carries response content AND a finish_reason."""
@@ -151,7 +172,7 @@ class _CombinedChunkSplitter:
             chunk.usage = None
         hidden_params: Final = getattr(chunk, "_hidden_params", None)
         if isinstance(hidden_params, dict) and "usage" in hidden_params:
-            chunk._hidden_params = {key: value for key, value in hidden_params.items() if key != "usage"}
+            set_hidden_params(chunk, {key: value for key, value in hidden_params.items() if key != "usage"})
 
     @staticmethod
     def _split_by_payload_kind(chunk: "ModelResponseStream") -> "tuple[ModelResponseStream, ...]":
@@ -321,6 +342,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         self._message_id: str = f"msg_{uuid.uuid4()}"
         if litellm_logging_obj is not None:
             litellm_logging_obj.record_streamed_anthropic_message_id(self._message_id)
+        self.litellm_logging_obj = litellm_logging_obj
         # Mapping of truncated tool names to original names (for OpenAI's 64-char limit)
         self.tool_name_mapping = tool_name_mapping or {}
         # Polyfill applied_edits on final message_delta.
@@ -351,6 +373,18 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
             text="",
         )
 
+    @property
+    def chunks(self) -> "list[ModelResponseStream] | None":
+        return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
+            "list[ModelResponseStream] | None", getattr(self.completion_stream, "chunks", None)
+        )
+
+    @property
+    def messages(self) -> "list[AllMessageValues] | None":
+        return cast(  # cast-ok: messages is a list of AllMessageValues on the inner stream
+            "list[AllMessageValues] | None", getattr(self.completion_stream, "messages", None)
+        )
+
     def _merge_usage_into_held_stop_reason_chunk(self, chunk: Any) -> MessageBlockDelta:
         """Merge usage data from ``chunk`` into the held ``message_delta`` chunk.
 
@@ -369,7 +403,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
 
         from .transformation import LiteLLMAnthropicMessagesAdapter
 
-        usage_dict: UsageDelta = LiteLLMAnthropicMessagesAdapter._translate_openai_usage_to_anthropic_usage_delta(
+        usage_dict: UsageDelta = LiteLLMAnthropicMessagesAdapter.translate_openai_usage_to_anthropic_usage_delta(
             chunk.usage
         )
         if self.applied_edits and "context_management" not in merged_chunk:
@@ -1014,7 +1048,25 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 else:
                     yield chunk
         except Exception as e:  # noqa: BLE001  # boundary before the socket: any upstream failure becomes an Anthropic error event
-            verbose_logger.exception("Anthropic Adapter - mid-stream error, emitting Anthropic error event: %s", e)
+            verbose_logger.exception("Anthropic Adapter - mid-stream error: %s", e)
+            logging_obj: Final = self.litellm_logging_obj
+            provider_error: Final = _provider_error(e)
+            if logging_obj is not None and logging_obj.on_detached_stream_failure is not None:
+                if provider_error is e:
+                    raise
+                raise provider_error from e
+            if logging_obj is not None:
+                try:
+                    await logging_obj.dispatch_failure_handlers(
+                        exception=provider_error,
+                        traceback_exception=traceback.format_exc(),
+                        prefer_async_handlers=True,
+                    )
+                except Exception as failure_handler_error:  # noqa: BLE001  # a failing failure handler must not also drop the error frame
+                    verbose_logger.exception(
+                        "Anthropic Adapter - failure handler raised while reporting a mid-stream error: %s",
+                        failure_handler_error,
+                    )
             yield _mid_stream_error_sse_event(e)
 
     def _increment_content_block_index(self):
@@ -1136,7 +1188,7 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
         (
             block_type,
             content_block_start,
-        ) = LiteLLMAnthropicMessagesAdapter()._translate_streaming_openai_chunk_to_anthropic_content_block(
+        ) = LiteLLMAnthropicMessagesAdapter().translate_streaming_openai_chunk_to_anthropic_content_block(
             choices=chunk.choices
         )
 
@@ -1173,3 +1225,35 @@ class AnthropicStreamWrapper(AdapterCompletionStreamWrapper):
                 return True
 
         return False
+
+
+class AnthropicSSEStream(AsyncIterator[bytes]):
+    """
+    AsyncIterator[bytes] view of AnthropicStreamWrapper returned to callers of
+    translate_completion_output_params_streaming. Keeps the wrapper reachable so
+    the proxy's disconnect-time partial billing can read the inner chat stream's
+    collected chunks, messages, and model; a bare async generator would hide them.
+    """
+
+    def __init__(self, anthropic_wrapper: AnthropicStreamWrapper) -> None:
+        self._anthropic_wrapper = anthropic_wrapper
+        self._byte_stream: Final[AsyncIterator[bytes]] = anthropic_wrapper.async_anthropic_sse_wrapper()
+        self._hidden_params: dict[str, object] = {}
+
+    @property
+    def chunks(self) -> "list[ModelResponseStream] | None":
+        return self._anthropic_wrapper.chunks
+
+    @property
+    def messages(self) -> "list[AllMessageValues] | None":
+        return self._anthropic_wrapper.messages
+
+    @property
+    def model(self) -> str:
+        return self._anthropic_wrapper.model
+
+    async def __anext__(self) -> bytes:
+        return await self._byte_stream.__anext__()
+
+    async def aclose(self) -> None:
+        await self._byte_stream.aclose()

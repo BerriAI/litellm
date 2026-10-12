@@ -1,5 +1,4 @@
-import asyncio
-import base64
+import asyncio, base64, importlib
 import copy
 import json
 import uuid
@@ -12,13 +11,12 @@ import pytest
 
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
-
 import litellm
 from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeConfig,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-
+from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 ONE_PIXEL_PNG = base64.b64decode(
     "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
@@ -93,9 +91,7 @@ def local_beta_headers_config(monkeypatch):
 
 def test_get_supported_params_thinking():
     config = AmazonAnthropicClaudeConfig()
-    params = config.get_supported_openai_params(
-        model="anthropic.claude-sonnet-4-20250514-v1:0"
-    )
+    params = config.get_supported_openai_params(model="anthropic.claude-sonnet-4-20250514-v1:0")
     assert "thinking" in params
 
 
@@ -148,53 +144,23 @@ def test_aws_params_filtered_from_request_body():
     result_json = json.dumps(result)
 
     # Verify AWS authentication params are NOT in the request body
-    assert (
-        "aws_access_key_id" not in result_json
-    ), "AWS access key should not be in request body"
-    assert (
-        "aws_secret_access_key" not in result_json
-    ), "AWS secret key should not be in request body"
-    assert (
-        "aws_session_token" not in result_json
-    ), "AWS session token should not be in request body"
-    assert (
-        "aws_region_name" not in result_json
-    ), "AWS region should not be in request body"
-    assert (
-        "aws_role_name" not in result_json
-    ), "AWS role name should not be in request body"
-    assert (
-        "aws_session_name" not in result_json
-    ), "AWS session name should not be in request body"
-    assert (
-        "aws_profile_name" not in result_json
-    ), "AWS profile name should not be in request body"
-    assert (
-        "aws_web_identity_token" not in result_json
-    ), "AWS web identity token should not be in request body"
-    assert (
-        "aws_sts_endpoint" not in result_json
-    ), "AWS STS endpoint should not be in request body"
-    assert (
-        "aws_bedrock_runtime_endpoint" not in result_json
-    ), "AWS bedrock endpoint should not be in request body"
-    assert (
-        "aws_external_id" not in result_json
-    ), "AWS external ID should not be in request body"
-    assert (
-        "aws_session_tags" not in result_json
-    ), "AWS session tags should not be in request body"
+    assert "aws_access_key_id" not in result_json, "AWS access key should not be in request body"
+    assert "aws_secret_access_key" not in result_json, "AWS secret key should not be in request body"
+    assert "aws_session_token" not in result_json, "AWS session token should not be in request body"
+    assert "aws_region_name" not in result_json, "AWS region should not be in request body"
+    assert "aws_role_name" not in result_json, "AWS role name should not be in request body"
+    assert "aws_session_name" not in result_json, "AWS session name should not be in request body"
+    assert "aws_profile_name" not in result_json, "AWS profile name should not be in request body"
+    assert "aws_web_identity_token" not in result_json, "AWS web identity token should not be in request body"
+    assert "aws_sts_endpoint" not in result_json, "AWS STS endpoint should not be in request body"
+    assert "aws_bedrock_runtime_endpoint" not in result_json, "AWS bedrock endpoint should not be in request body"
+    assert "aws_external_id" not in result_json, "AWS external ID should not be in request body"
+    assert "aws_session_tags" not in result_json, "AWS session tags should not be in request body"
 
     # Also check that the sensitive values themselves are not in the response
-    assert (
-        "AKIAIOSFODNN7EXAMPLE" not in result_json
-    ), "AWS access key value leaked in request body"
-    assert (
-        "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" not in result_json
-    ), "AWS secret key value leaked in request body"
-    assert (
-        "arn:aws:iam::123456789012:role/test-role" not in result_json
-    ), "AWS role ARN leaked in request body"
+    assert "AKIAIOSFODNN7EXAMPLE" not in result_json, "AWS access key value leaked in request body"
+    assert "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY" not in result_json, "AWS secret key value leaked in request body"
+    assert "arn:aws:iam::123456789012:role/test-role" not in result_json, "AWS role ARN leaked in request body"
     assert "test-session" not in result_json, "AWS session name leaked in request body"
 
     # Verify normal params ARE still in the request body
@@ -203,9 +169,7 @@ def test_aws_params_filtered_from_request_body():
     assert result["top_p"] == 0.9, "top_p should be in request body"
 
     # Verify Bedrock-specific params are added
-    assert (
-        result["anthropic_version"] == "bedrock-2023-05-31"
-    ), "anthropic_version should be set"
+    assert result["anthropic_version"] == "bedrock-2023-05-31", "anthropic_version should be set"
     assert "model" not in result, "model should be removed for Bedrock Invoke API"
     assert "stream" not in result, "stream should be removed for Bedrock Invoke API"
 
@@ -262,9 +226,7 @@ def test_output_format_conversion_to_inline_schema():
     )
 
     # Verify output_format was removed from the request
-    assert (
-        "output_format" not in result
-    ), "output_format should be removed from request body"
+    assert "output_format" not in result, "output_format should be removed from request body"
 
     # Verify the schema was added to the last user message content
     assert "messages" in result
@@ -415,9 +377,7 @@ def test_opus_4_5_model_detection():
     ]
 
     for model in non_opus_4_5_models:
-        assert not config._is_claude_opus_4_5(
-            model
-        ), f"Should not detect {model} as Opus 4.5"
+        assert not config._is_claude_opus_4_5(model), f"Should not detect {model} as Opus 4.5"
 
 
 # def test_structured_outputs_beta_header_filtered_for_bedrock_invoke():
@@ -595,9 +555,7 @@ def test_output_config_format_forwarded_for_bedrock_chat_invoke_request(local_mo
         ("anthropic.claude-opus-4-7", "xhigh"),
     ],
 )
-def test_output_config_effort_normalized_for_bedrock_chat_invoke_request(
-    model, expected_effort
-):
+def test_output_config_effort_normalized_for_bedrock_chat_invoke_request(model, expected_effort):
     """Bedrock Invoke chat path accepts ``xhigh`` and forwards the provider-safe effort."""
     config = AmazonAnthropicClaudeConfig()
 
@@ -668,9 +626,9 @@ def test_output_format_removed_from_bedrock_invoke_request():
     )
 
     # Verify output_format is not in the request
-    assert (
-        "output_format" not in result
-    ), f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+    assert "output_format" not in result, (
+        f"output_format should be removed for Bedrock Invoke, got keys: {result.keys()}"
+    )
 
 
 def test_bedrock_chat_invoke_forwards_output_config_format_natively(local_model_cost_map):
@@ -866,7 +824,9 @@ async def test_bedrock_invoke_claude_async_completion_inlines_remote_images_off_
     assert async_only_image_fetch.base64_png in captured["body"]
 
 
-async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sources_off_the_event_loop(async_only_image_fetch):
+async def test_bedrock_invoke_claude_async_completion_inlines_document_url_sources_off_the_event_loop(
+    async_only_image_fetch,
+):
     pdf_url = f"http://docs.example/{uuid.uuid4()}.pdf"
     captured = {}
 
@@ -958,6 +918,62 @@ def test_bedrock_chat_invoke_tool_search_beta_follows_model_map(
     assert result.get("anthropic_beta") == expected_betas
 
 
+def test_bedrock_chat_invoke_adds_thinking_display_updates_beta(
+    local_model_cost_map, local_beta_headers_config
+) -> None:
+    from litellm.types.llms.anthropic import ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-opus-5"
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            "max_tokens": 512,
+            "thinking": {"type": "adaptive", "display": "updates"},
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    result: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive", "display": "updates"}
+    assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in result.get("anthropic_beta", [])
+
+
+def test_bedrock_chat_invoke_preserves_display_when_translating_legacy_thinking(
+    local_model_cost_map, local_beta_headers_config
+) -> None:
+    from litellm.types.llms.anthropic import ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER
+
+    config: Final = AmazonAnthropicClaudeConfig()
+    model: Final = "us.anthropic.claude-opus-5"
+    optional_params: Final = config.map_openai_params(
+        non_default_params={
+            "max_tokens": 512,
+            "thinking": {"type": "enabled", "budget_tokens": 2048, "display": "updates"},
+        },
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    result: Final = config.transform_request(
+        model=model,
+        messages=[{"role": "user", "content": "Reply with OK"}],
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result.get("thinking") == {"type": "adaptive", "display": "updates"}
+    assert ANTHROPIC_THINKING_DISPLAY_UPDATES_BETA_HEADER in result.get("anthropic_beta", [])
+
+
 FINE_GRAINED_TOOL_STREAMING_BETA: Final = "fine-grained-tool-streaming-2025-05-14"
 EAGER_TOOL_SCHEMA: Final = {"type": "object", "properties": {"path": {"type": "string"}}, "required": ["path"]}
 
@@ -1015,7 +1031,10 @@ def test_bedrock_chat_invoke_eager_input_streaming_beta_not_duplicated_with_clie
 
 def _mid_conversation_system_conversation() -> list[dict]:
     return [
-        {"role": "system", "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}]},
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "You are terse.", "cache_control": {"type": "ephemeral"}}],
+        },
         {"role": "user", "content": "First question"},
         {"role": "assistant", "content": "First answer"},
         {"role": "user", "content": "Second question"},
@@ -1074,7 +1093,11 @@ def _preserved_thinking_turns(reminder_after_user: bool) -> tuple[list[dict], li
     second_question = {"role": "user", "content": "Second question"}
     second_turn = [second_question, reminder] if reminder_after_user else [reminder, second_question]
     turn_n_plus_one = [*turn_n, _thinking_reply("First answer"), *second_turn]
-    turn_n_plus_two = [*turn_n_plus_one, _thinking_reply("Second answer"), {"role": "user", "content": "Third question"}]
+    turn_n_plus_two = [
+        *turn_n_plus_one,
+        _thinking_reply("Second answer"),
+        {"role": "user", "content": "Third question"},
+    ]
     return turn_n, turn_n_plus_one, turn_n_plus_two
 
 
@@ -1102,7 +1125,11 @@ def test_chat_flagged_model_replays_a_byte_identical_prefix_around_a_mid_convers
     request must be a byte-identical prefix of turn N+1's or the block is dropped."""
     requests = [
         AmazonAnthropicClaudeConfig().transform_request(
-            model="invoke/us.anthropic.claude-fable-5-1", messages=copy.deepcopy(turn), optional_params={}, litellm_params={}, headers={}
+            model="invoke/us.anthropic.claude-fable-5-1",
+            messages=copy.deepcopy(turn),
+            optional_params={},
+            litellm_params={},
+            headers={},
         )
         for turn in _preserved_thinking_turns(reminder_after_user)
     ]
@@ -1110,3 +1137,555 @@ def test_chat_flagged_model_replays_a_byte_identical_prefix_around_a_mid_convers
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant", "user", "system"]
     assert [m["role"] for m in requests[2]["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+
+
+@pytest.fixture()
+def _vcr_outcome_gate(request, vcr):
+    install_live_call_probe(request, vcr)
+    yield
+    record_vcr_outcome(request, vcr)
+
+@pytest.fixture(scope="session")
+def event_loop():
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+    yield loop
+    loop.close()
+
+@pytest.fixture(scope="function")
+def setup_and_teardown(event_loop):
+    import litellm
+
+    original_state = {}
+    for attr in (
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "_async_success_callback",
+        "_async_failure_callback",
+    ):
+        if hasattr(litellm, attr):
+            val = getattr(litellm, attr)
+            original_state[attr] = val.copy() if val else []
+    for attr in _SCALAR_DEFAULTS:
+        if hasattr(litellm, attr):
+            original_state[attr] = getattr(litellm, attr)
+    from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+
+    asyncio.run(GLOBAL_LOGGING_WORKER.clear_queue())
+    importlib.reload(litellm)
+    asyncio.set_event_loop(event_loop)
+    yield
+    for attr, original_value in original_state.items():
+        if hasattr(litellm, attr):
+            setattr(litellm, attr, original_value)
+    pending = asyncio.all_tasks(event_loop)
+    for task in pending:
+        task.cancel()
+    if pending:
+        event_loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+
+_SCALAR_DEFAULTS = {
+    "num_retries": getattr(litellm, "num_retries", None),
+    "set_verbose": getattr(litellm, "set_verbose", False),
+    "cache": getattr(litellm, "cache", None),
+    "allowed_fails": getattr(litellm, "allowed_fails", 3),
+    "disable_aiohttp_transport": getattr(litellm, "disable_aiohttp_transport", False),
+    "force_ipv4": getattr(litellm, "force_ipv4", False),
+    "drop_params": getattr(litellm, "drop_params", None),
+    "modify_params": getattr(litellm, "modify_params", False),
+    "api_base": getattr(litellm, "api_base", None),
+    "api_key": getattr(litellm, "api_key", None),
+    "cohere_key": getattr(litellm, "cohere_key", None),
+}
+
+LARGE_DOCUMENT_FOR_CACHING = (
+    """
+This is a comprehensive legal agreement between Party A and Party B.
+
+ARTICLE 1: DEFINITIONS
+1.1 "Agreement" means this document and all attachments.
+1.2 "Confidential Information" means any non-public information.
+1.3 "Effective Date" means the date of last signature.
+1.4 "Term" means the period during which this Agreement is in effect.
+
+ARTICLE 2: SCOPE OF SERVICES
+2.1 Party A agrees to provide the following services...
+2.2 Party B agrees to compensate Party A for services rendered...
+2.3 All services shall be performed in a professional manner...
+
+ARTICLE 3: PAYMENT TERMS
+3.1 Payment shall be made within 30 days of invoice receipt.
+3.2 Late payments shall accrue interest at 1.5% per month.
+3.3 All fees are non-refundable unless otherwise specified.
+
+ARTICLE 4: INTELLECTUAL PROPERTY
+4.1 All pre-existing IP remains with the original owner.
+4.2 Work product created under this Agreement shall be owned by Party B.
+4.3 Party A grants a license to use any tools or methodologies.
+
+ARTICLE 5: CONFIDENTIALITY
+5.1 Both parties agree to maintain confidentiality of all shared information.
+5.2 Confidential information shall not be disclosed to third parties.
+5.3 This obligation survives termination of the Agreement.
+
+ARTICLE 6: TERMINATION
+6.1 Either party may terminate with 30 days written notice.
+6.2 Immediate termination is permitted for material breach.
+6.3 Upon termination, all confidential information must be returned.
+
+ARTICLE 7: LIMITATION OF LIABILITY
+7.1 Neither party shall be liable for consequential damages.
+7.2 Total liability shall not exceed fees paid in the prior 12 months.
+7.3 This limitation does not apply to willful misconduct.
+
+ARTICLE 8: DISPUTE RESOLUTION
+8.1 Disputes shall first be addressed through good faith negotiation.
+8.2 If negotiation fails, disputes shall be submitted to arbitration.
+8.3 Arbitration shall be conducted under AAA rules.
+
+ARTICLE 9: GENERAL PROVISIONS
+9.1 This Agreement constitutes the entire understanding between parties.
+9.2 Amendments must be in writing and signed by both parties.
+9.3 This Agreement shall be governed by the laws of Delaware.
+9.4 Neither party may assign this Agreement without consent.
+9.5 Waiver of any provision shall not constitute ongoing waiver.
+
+IN WITNESS WHEREOF, the parties have executed this Agreement.
+"""
+    * 8
+)  # Repeat to ensure we have enough tokens (need 1024+ for Claude models)
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestBedrockAnthropicPromptCachingRegression:
+    """
+    Regression tests for prompt caching support across bedrock/invoke and bedrock/converse.
+
+    Issue: Prompt caching broke between invoke and converse routing due to:
+    - Different cache_control syntax expectations
+    - Incorrect beta header handling
+    - Missing transformation for cachePoint vs cache_control
+    """
+
+    @pytest.mark.parametrize(
+        "model_prefix",
+        [
+            "bedrock/invoke/",
+            "bedrock/converse/",
+        ],
+    )
+    def test_prompt_caching_cache_control_transforms_correctly(self, model_prefix):
+        """
+        Test that cache_control in messages is correctly transformed for both invoke and converse APIs.
+
+        Regression test: Ensure cache_control works the same way for both routing methods.
+        - bedrock/invoke uses cache_control directly in the Anthropic Messages API format
+        - bedrock/converse should transform to cachePoint format
+        """
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+            AmazonAnthropicClaudeConfig,
+        )
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": LARGE_DOCUMENT_FOR_CACHING,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        "type": "text",
+                        "text": "What are the payment terms?",
+                    },
+                ],
+            },
+        ]
+
+        if "converse" in model_prefix:
+            config = AmazonConverseConfig()
+            result = config.transform_request(
+                model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
+
+            print(f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}")
+
+            # For converse, cache_control should be transformed to cachePoint
+            assert "messages" in result
+            user_msg = result["messages"][0]
+            assert "content" in user_msg
+
+            # Check that cachePoint is present (Bedrock Converse format)
+            has_cache_point = any(isinstance(c, dict) and "cachePoint" in c for c in user_msg["content"])
+            # The transformation should preserve the cache marking in some form
+            assert "messages" in result, "messages should be present in converse request"
+
+        else:
+            config = AmazonAnthropicClaudeConfig()
+            result = config.transform_request(
+                model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
+
+            print(f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}")
+
+            # For invoke, cache_control should be preserved in messages content
+            assert "messages" in result
+            user_msg = result["messages"][0]
+            assert "content" in user_msg
+
+            # Check that cache_control is preserved
+            has_cache_control = any(isinstance(c, dict) and "cache_control" in c for c in user_msg["content"])
+            assert has_cache_control, "cache_control should be present in invoke messages"
+
+    @pytest.mark.parametrize(
+        "model_prefix",
+        [
+            "bedrock/invoke/",
+            "bedrock/converse/",
+        ],
+    )
+    def test_prompt_caching_no_beta_header_added(self, model_prefix):
+        """
+        Test that prompt-caching-2024-07-31 beta header is NOT added for Bedrock.
+
+        Regression test: Bedrock recognizes prompt caching via cache_control in the
+        request body, NOT through beta headers. Adding the beta header breaks requests.
+
+        This was a critical bug where litellm was incorrectly adding the Anthropic API
+        beta header to Bedrock requests.
+        """
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+            AmazonAnthropicClaudeConfig,
+        )
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": "Hello",
+                        "cache_control": {"type": "ephemeral"},
+                    }
+                ],
+            }
+        ]
+
+        if "converse" in model_prefix:
+            config = AmazonConverseConfig()
+            result = config._transform_request_helper(
+                model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                system_content_blocks=[],
+                optional_params={},
+                messages=messages,
+                headers={},
+            )
+        else:
+            config = AmazonAnthropicClaudeConfig()
+            result = config.transform_request(
+                model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers={},
+            )
+
+        # Verify prompt-caching beta header is NOT present
+        if "anthropic_beta" in result:
+            assert "prompt-caching-2024-07-31" not in result["anthropic_beta"], (
+                f"{model_prefix}: prompt-caching-2024-07-31 should NOT be added as a beta header for Bedrock. "
+                "Bedrock recognizes prompt caching via cache_control in the request body, not beta headers."
+            )
+
+        # For converse, also check additionalModelRequestFields
+        if "converse" in model_prefix and "additionalModelRequestFields" in result:
+            additional_fields = result["additionalModelRequestFields"]
+            if "anthropic_beta" in additional_fields:
+                assert "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestBedrockAnthropic1MContextRegression:
+    """
+    Regression tests for 1M context window support across bedrock/invoke and bedrock/converse.
+
+    Issue: 1M context support broke between invoke and converse routing due to:
+    - Missing anthropic-beta header passthrough in converse
+    - Incorrect handling of context-1m-2025-08-07 beta header
+    """
+
+    @pytest.mark.parametrize(
+        "model_prefix",
+        [
+            "bedrock/invoke/",
+            "bedrock/converse/",
+        ],
+    )
+    def test_1m_context_beta_header_is_passed_via_transformation(self, model_prefix):
+        """
+        Test that the 1M context beta header is correctly passed to Bedrock API.
+
+        Regression test: Ensure anthropic-beta: context-1m-2025-08-07 header
+        is correctly included in the request for both invoke and converse.
+
+        This test verifies the transformation layer directly to avoid async complexity.
+        """
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+            AmazonAnthropicClaudeConfig,
+        )
+
+        headers = {"anthropic-beta": "context-1m-2025-08-07"}
+        messages = [{"role": "user", "content": "Test message"}]
+
+        if "converse" in model_prefix:
+            config = AmazonConverseConfig()
+            result = config._transform_request_helper(
+                model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                system_content_blocks=[],
+                optional_params={},
+                messages=messages,
+                headers=headers,
+            )
+
+            print(f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}")
+
+            # For converse, beta header should be in additionalModelRequestFields
+            assert "additionalModelRequestFields" in result, (
+                f"{model_prefix}: additionalModelRequestFields should be present for anthropic-beta headers"
+            )
+            additional_fields = result["additionalModelRequestFields"]
+            assert "anthropic_beta" in additional_fields, (
+                f"{model_prefix}: anthropic_beta should be in additionalModelRequestFields"
+            )
+            assert "context-1m-2025-08-07" in additional_fields["anthropic_beta"], (
+                f"{model_prefix}: context-1m-2025-08-07 should be in anthropic_beta array"
+            )
+        else:
+            config = AmazonAnthropicClaudeConfig()
+            result = config.transform_request(
+                model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers=headers,
+            )
+
+            print(f"\n{model_prefix} Request body: {json.dumps(result, indent=2, default=str)}")
+
+            # For invoke, beta header should be in top-level request
+            assert "anthropic_beta" in result, f"{model_prefix}: anthropic_beta should be in request body"
+            assert "context-1m-2025-08-07" in result["anthropic_beta"], (
+                f"{model_prefix}: context-1m-2025-08-07 should be in anthropic_beta array"
+            )
+
+    @pytest.mark.parametrize(
+        "model_prefix",
+        [
+            "bedrock/invoke/",
+            "bedrock/converse/",
+        ],
+    )
+    def test_1m_context_beta_header_transformation(self, model_prefix):
+        """
+        Test that the 1M context beta header is correctly transformed at the config level.
+
+        This is a unit test that verifies the transformation logic directly without
+        making actual API calls.
+        """
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+            AmazonAnthropicClaudeConfig,
+        )
+
+        headers = {"anthropic-beta": "context-1m-2025-08-07"}
+        messages = [{"role": "user", "content": "Test"}]
+
+        if "converse" in model_prefix:
+            config = AmazonConverseConfig()
+            result = config._transform_request_helper(
+                model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                system_content_blocks=[],
+                optional_params={},
+                messages=messages,
+                headers=headers,
+            )
+
+            # Verify beta header is in additionalModelRequestFields
+            assert "additionalModelRequestFields" in result
+            additional_fields = result["additionalModelRequestFields"]
+            assert "anthropic_beta" in additional_fields
+            assert "context-1m-2025-08-07" in additional_fields["anthropic_beta"]
+
+        else:
+            config = AmazonAnthropicClaudeConfig()
+            result = config.transform_request(
+                model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers=headers,
+            )
+
+            # Verify beta header is in top-level request
+            assert "anthropic_beta" in result
+            assert "context-1m-2025-08-07" in result["anthropic_beta"]
+
+    @pytest.mark.parametrize(
+        "model_prefix",
+        [
+            "bedrock/invoke/",
+            "bedrock/converse/",
+        ],
+    )
+    def test_1m_context_with_multiple_beta_headers(self, model_prefix):
+        """
+        Test that 1M context header works alongside other beta headers.
+
+        Ensures that multiple anthropic-beta values (comma-separated) are all
+        correctly passed through.
+        """
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+            AmazonAnthropicClaudeConfig,
+        )
+
+        # Multiple beta headers including 1M context
+        headers = {"anthropic-beta": "context-1m-2025-08-07,computer-use-2024-10-22"}
+        messages = [{"role": "user", "content": "Test"}]
+
+        if "converse" in model_prefix:
+            config = AmazonConverseConfig()
+            result = config._transform_request_helper(
+                model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                system_content_blocks=[],
+                optional_params={},
+                messages=messages,
+                headers=headers,
+            )
+
+            additional_fields = result["additionalModelRequestFields"]
+            beta_headers = additional_fields["anthropic_beta"]
+
+        else:
+            config = AmazonAnthropicClaudeConfig()
+            result = config.transform_request(
+                model="us.anthropic.claude-haiku-4-5-20251001-v1:0",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers=headers,
+            )
+
+            beta_headers = result["anthropic_beta"]
+
+        # Verify both headers are present
+        assert "context-1m-2025-08-07" in beta_headers
+        assert "computer-use-2024-10-22" in beta_headers
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestBedrockAnthropicCombinedRegressions:
+    """
+    Tests that combine multiple features to ensure they work together.
+    """
+
+    @pytest.mark.parametrize(
+        "model_prefix",
+        [
+            "bedrock/invoke/",
+            "bedrock/converse/",
+        ],
+    )
+    def test_1m_context_with_prompt_caching(self, model_prefix):
+        """
+        Test that 1M context and prompt caching work together.
+
+        This is a real-world scenario where a user might want to use both features
+        simultaneously.
+        """
+        from litellm.llms.bedrock.chat.converse_transformation import (
+            AmazonConverseConfig,
+        )
+        from litellm.llms.bedrock.chat.invoke_transformations.anthropic_claude3_transformation import (
+            AmazonAnthropicClaudeConfig,
+        )
+
+        headers = {"anthropic-beta": "context-1m-2025-08-07"}
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "text",
+                        "text": LARGE_DOCUMENT_FOR_CACHING,
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                    {
+                        "type": "text",
+                        "text": "Summarize this document.",
+                    },
+                ],
+            }
+        ]
+
+        if "converse" in model_prefix:
+            config = AmazonConverseConfig()
+            result = config._transform_request_helper(
+                model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                system_content_blocks=[],
+                optional_params={},
+                messages=messages,
+                headers=headers,
+            )
+
+            # Should have 1M context header
+            additional_fields = result["additionalModelRequestFields"]
+            assert "anthropic_beta" in additional_fields
+            assert "context-1m-2025-08-07" in additional_fields["anthropic_beta"]
+
+            # Should NOT have prompt-caching header
+            assert "prompt-caching-2024-07-31" not in additional_fields["anthropic_beta"]
+
+        else:
+            config = AmazonAnthropicClaudeConfig()
+            result = config.transform_request(
+                model="us.anthropic.claude-sonnet-4-5-20250929-v1:0",
+                messages=messages,
+                optional_params={},
+                litellm_params={},
+                headers=headers,
+            )
+
+            # Should have 1M context header
+            assert "anthropic_beta" in result
+            assert "context-1m-2025-08-07" in result["anthropic_beta"]
+
+            # Should NOT have prompt-caching header
+            assert "prompt-caching-2024-07-31" not in result["anthropic_beta"]
+
+            # Should have cache_control in messages
+            user_msg = result["messages"][0]
+            has_cache_control = any(isinstance(c, dict) and "cache_control" in c for c in user_msg["content"])
+            assert has_cache_control
