@@ -31,7 +31,11 @@ from litellm.constants import (
 from litellm.constants import (
     MAX_STRING_LENGTH_PROMPT_IN_DB as DEFAULT_MAX_STRING_LENGTH_PROMPT_IN_DB,
 )
-from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, without_classifier_audit
+from litellm.litellm_core_utils.classifier_logging import (
+    CLASSIFIER_AUDIT_FIELDS,
+    classifier_audit_fields,
+    without_classifier_audit,
+)
 from litellm.litellm_core_utils.core_helpers import (
     get_litellm_metadata_from_kwargs,
     proxy_stamped_used_client_oauth_token,
@@ -1619,7 +1623,6 @@ _CLIENT_IP_HEADERS: Final = frozenset(
     }
 )
 _REQUEST_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
-_ORIGINATING_REQUEST_KEY: Final = "originating_request_masked"
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[object, object])
 _OBJECT_LIST: Final = TypeAdapter(list[object])
 _IP_ADDRESS_CHARACTERS: Final = "0123456789abcdefABCDEF.:"
@@ -1721,12 +1724,12 @@ def _request_metadata_without_requester_ip_address(request_body: Mapping[object,
 
 
 def _stored_request_without_requester_ip_address(request_body: Mapping[object, object]) -> Mapping[object, object]:
-    """The request body, and the originating request a classifier row stores in it, with `requester_ip_address` set
-    to null, client-IP forwarding headers dropped and every IP address in the other header values and in the error
-    text masked inside their metadata."""
+    """The request body, and the classifier input and originating request a classifier row stores in it, with
+    `requester_ip_address` set to null, client-IP forwarding headers dropped and every IP address in the other header
+    values and in the error text masked inside their metadata."""
     return {
         key: _request_metadata_without_requester_ip_address(_OBJECT_MAPPING.validate_python(value))
-        if key == _ORIGINATING_REQUEST_KEY and isinstance(value, Mapping)
+        if key in CLASSIFIER_AUDIT_FIELDS and isinstance(value, Mapping)
         else value
         for key, value in _request_metadata_without_requester_ip_address(request_body).items()
     }

@@ -6625,6 +6625,10 @@ def test_stored_request_without_requester_ip_address_drops_or_masks_only_ip_fiel
                 "headers": {"x-forwarded-for": "203.0.113.9", "host": "10.0.0.5:4000"},
             },
         },
+        "classifier_input": {
+            "input": [{"role": "user", "content": "203.0.113.9"}],
+            "metadata": {"requester_ip_address": "203.0.113.9", "user_agent": "curl"},
+        },
     }
 
     assert _stored_request_without_requester_ip_address(body) == {
@@ -6648,6 +6652,10 @@ def test_stored_request_without_requester_ip_address_drops_or_masks_only_ip_fiel
         "originating_request_masked": {
             "messages": [{"role": "user", "content": "203.0.113.9"}],
             "metadata": {"requester_ip_address": None, "headers": {"host": "REDACTED_BY_LITELM:4000"}},
+        },
+        "classifier_input": {
+            "input": [{"role": "user", "content": "203.0.113.9"}],
+            "metadata": {"requester_ip_address": None, "user_agent": "curl"},
         },
     }
 
