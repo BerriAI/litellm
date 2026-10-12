@@ -1,5 +1,8 @@
+from __future__ import annotations
+
 import asyncio
 from collections.abc import Mapping, Sequence
+from functools import lru_cache
 from types import MappingProxyType, TracebackType
 from typing import (
     TYPE_CHECKING,
@@ -10,7 +13,6 @@ from typing import (
 )
 
 from fastapi import APIRouter, Depends, status
-from prisma import models
 from pydantic import BaseModel, TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
@@ -42,6 +44,7 @@ from litellm.types.proxy.management_endpoints.virtual_model_endpoints import (
 )
 
 if TYPE_CHECKING:
+    from prisma import models
     from prisma.models import (
         LiteLLM_VirtualModelTable as PrismaVirtualModelTable,
     )
@@ -52,14 +55,14 @@ router: Final = APIRouter()
 class _VirtualModelTableClient(Protocol):
     async def find_unique(
         self, where: Mapping[str, object], include: Mapping[str, object] | None = None
-    ) -> "PrismaVirtualModelTable | None": ...
+    ) -> PrismaVirtualModelTable | None: ...
 
     async def update(
         self,
         where: Mapping[str, object],
         data: Mapping[str, object],
         include: Mapping[str, object] | None = None,
-    ) -> "PrismaVirtualModelTable | None": ...
+    ) -> PrismaVirtualModelTable | None: ...
 
 
 class _VirtualModelMemberTableClient(Protocol):
@@ -87,23 +90,39 @@ class _TransactionManager(Protocol):
     ) -> bool | None: ...
 
 
-_PROXY_MODEL_ROWS: Final = TypeAdapter(tuple[models.LiteLLM_ProxyModelTable, ...])
-_VIRTUAL_MODEL_ROWS: Final = TypeAdapter(tuple[models.LiteLLM_VirtualModelTable, ...])
-_VIRTUAL_MODEL_ROW: Final = TypeAdapter(models.LiteLLM_VirtualModelTable)
+@lru_cache(maxsize=1)
+def _proxy_model_rows_adapter() -> TypeAdapter[tuple[models.LiteLLM_ProxyModelTable, ...]]:
+    from prisma import models
+
+    return TypeAdapter(tuple[models.LiteLLM_ProxyModelTable, ...])
+
+
+@lru_cache(maxsize=1)
+def _virtual_model_rows_adapter() -> TypeAdapter[tuple[models.LiteLLM_VirtualModelTable, ...]]:
+    from prisma import models
+
+    return TypeAdapter(tuple[models.LiteLLM_VirtualModelTable, ...])
+
+
+@lru_cache(maxsize=1)
+def _virtual_model_row_adapter() -> TypeAdapter[models.LiteLLM_VirtualModelTable]:
+    from prisma import models
+
+    return TypeAdapter(models.LiteLLM_VirtualModelTable)
 
 
 def _validate_proxy_models(raw: object) -> tuple[models.LiteLLM_ProxyModelTable, ...]:
-    return _PROXY_MODEL_ROWS.validate_python(raw)
+    return _proxy_model_rows_adapter().validate_python(raw)
 
 
 def _validate_virtual_models(raw: object) -> tuple[models.LiteLLM_VirtualModelTable, ...]:
-    return _VIRTUAL_MODEL_ROWS.validate_python(raw)
+    return _virtual_model_rows_adapter().validate_python(raw)
 
 
 def _validate_virtual_model(raw: object) -> models.LiteLLM_VirtualModelTable:
     if raw is None:
         raise ValueError("Expected non-None virtual model")
-    return _VIRTUAL_MODEL_ROW.validate_python(raw)
+    return _virtual_model_row_adapter().validate_python(raw)
 
 
 async def _resolve_live_deployments_by_id(

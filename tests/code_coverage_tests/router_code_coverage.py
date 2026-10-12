@@ -112,6 +112,13 @@ ignored_function_names = [
     "_get_wildcard_deployments",  # Tested through the get_model_list_of_routed_group wildcard test in test_router.py
     "_is_fallback_hop",  # Tested through the order fallback hop tests in test_router_order_fallback.py
     "_deployment_that_just_failed",  # Tested through the same-boundary hop test in test_router_order_fallback.py
+    "virtual_model_members",  # Property on Router, so its reads in tests are never an ast.Call
+    "virtual_model_configs",  # Property on Router, so its reads in tests are never an ast.Call
+    "_virtual_model_names",  # Property on Router, so its reads in tests are never an ast.Call
+    "_virtual_model_selectors",  # Property on Router, so its reads in tests are never an ast.Call
+    "model_names",  # Property on Router, so its reads in tests are never an ast.Call
+    "_get_virtual_model_deployments",  # Tested through virtual model routing tests in test_router_virtual_models.py
+    "_with_model_alias",  # Tested through virtual model routing tests in test_router_virtual_models.py
 ]
 
 

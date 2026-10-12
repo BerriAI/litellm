@@ -33,7 +33,17 @@ CREATE TABLE IF NOT EXISTS "LiteLLM_VirtualModelMemberTable" (
 CREATE INDEX IF NOT EXISTS "LiteLLM_VirtualModelMemberTable_model_id_idx" ON "LiteLLM_VirtualModelMemberTable"("model_id");
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_VirtualModelMemberTable" ADD CONSTRAINT "LiteLLM_VirtualModelMemberTable_virtual_model_id_fkey" FOREIGN KEY ("virtual_model_id") REFERENCES "LiteLLM_VirtualModelTable"("virtual_model_id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_VirtualModelMemberTable_virtual_model_id_fkey') THEN
+        ALTER TABLE "LiteLLM_VirtualModelMemberTable" ADD CONSTRAINT "LiteLLM_VirtualModelMemberTable_virtual_model_id_fkey" FOREIGN KEY ("virtual_model_id") REFERENCES "LiteLLM_VirtualModelTable"("virtual_model_id") ON DELETE CASCADE ON UPDATE CASCADE;
+    END IF;
+END $$;
 
 -- AddForeignKey
-ALTER TABLE "LiteLLM_VirtualModelMemberTable" ADD CONSTRAINT "LiteLLM_VirtualModelMemberTable_model_id_fkey" FOREIGN KEY ("model_id") REFERENCES "LiteLLM_ProxyModelTable"("model_id") ON DELETE CASCADE ON UPDATE CASCADE;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'LiteLLM_VirtualModelMemberTable_model_id_fkey') THEN
+        ALTER TABLE "LiteLLM_VirtualModelMemberTable" ADD CONSTRAINT "LiteLLM_VirtualModelMemberTable_model_id_fkey" FOREIGN KEY ("model_id") REFERENCES "LiteLLM_ProxyModelTable"("model_id") ON DELETE CASCADE ON UPDATE CASCADE;
+    END IF;
+END $$;

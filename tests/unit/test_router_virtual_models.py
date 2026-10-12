@@ -1048,6 +1048,43 @@ def test_is_recognized_model_recognizes_virtual_model_names():
     assert router.is_recognized_model("dep1-model"), "regular model name must still be recognized"
 
 
+def test_virtual_model_has_alternatives_contract():
+    """virtual_model_has_alternatives is True only for members of multi-member virtual models."""
+    multi = f"{VIRTUAL_MODEL_PREFIX}multi"
+    solo = f"{VIRTUAL_MODEL_PREFIX}solo"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "dep1-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key1"},
+                "model_info": {"id": "dep1"},
+            },
+            {
+                "model_name": "dep2-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key2"},
+                "model_info": {"id": "dep2"},
+            },
+            {
+                "model_name": "dep3-model",
+                "litellm_params": {"model": "gpt-4o", "api_key": "key3"},
+                "model_info": {"id": "dep3"},
+            },
+        ],
+    )
+
+    router.set_virtual_models(
+        {
+            multi: VirtualModelRouterState(members={"dep1": 1, "dep2": 2}),
+            solo: VirtualModelRouterState(members={"dep3": 1}),
+        }
+    )
+
+    assert router.virtual_model_has_alternatives("dep1") is True
+    assert router.virtual_model_has_alternatives("dep2") is True
+    assert router.virtual_model_has_alternatives("dep3") is False
+    assert router.virtual_model_has_alternatives("no-such-dep") is False
+
+
 @pytest.mark.asyncio
 async def test_aembedding_routes_through_virtual_model_member():
     """router.aembedding routes through a virtual model member."""
