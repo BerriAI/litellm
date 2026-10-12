@@ -1,9 +1,10 @@
+from collections.abc import Mapping
 from typing import Final, Literal
 
 import httpx
 from pydantic import TypeAdapter
 
-OPENAI_LIKE_HEADERS_ADAPTER: Final[TypeAdapter[dict[str, str] | None]] = TypeAdapter(dict[str, str] | None)
+OPENAI_LIKE_HEADERS_ADAPTER: Final[TypeAdapter[Mapping[str, str] | None]] = TypeAdapter(Mapping[str, str] | None)
 
 
 class OpenAILikeError(Exception):
@@ -24,7 +25,7 @@ class OpenAILikeBase:
         api_key: str | None,
         api_base: str | None,
         endpoint_type: Literal["chat_completions", "embeddings"],
-        headers: dict[str, str] | None,
+        headers: Mapping[str, str] | None,
         custom_endpoint: bool | None,
     ) -> tuple[str, dict[str, str]]:
         if api_key is None and headers is None:
