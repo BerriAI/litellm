@@ -68,7 +68,7 @@ After: the same request comes back with real token counts, so the dashboard show
 - [ ] The handful of test files covering my change pass locally, e.g. `uv run pytest tests/unit/<your_test_file>.py -v`. Leave the suites (`make test-unit-*`, `make test-unit`) to CI: it finishes in ~15 minutes where a laptop takes an hour or more
 - [ ] My PR passes all required CI/CD checks (e.g., lint, schema.d.ts sync check, etc.)
 - [ ] My PR's scope is as isolated as possible; it only solves 1 specific problem
-- [ ] I have received a Greptile **Confidence Score of at least 4/5** before requesting a maintainer review (Greptile reviews automatically once the PR is opened; only comment `@greptileai` to re-request a review after pushing changes)
+- [ ] I have addressed or replied to every automated review finding on my PR's latest commit before requesting a maintainer review
 
 ## Delays in PR merge?
 
