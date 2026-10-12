@@ -30,6 +30,7 @@ _UNAPPLIABLE: Final = "rewrote the request in a way this endpoint cannot apply"
 _GENERIC_MODES: Final = (
     "masksm",
     "masksm_flat",
+    "masksm_blank",
     "smonly",
     "sm_partial",
     "echo_sm",
@@ -70,6 +71,10 @@ def _normalised_first_part(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]
     return {**row, "content": [{**first, "text": text.strip() + " "}, *content[1:]]}
 
 
+def _blank_content(row: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
+    return {**row, "content": ""} if row.get("content") is None else dict(row)
+
+
 def _generic_verdict(mode: str, body: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     texts: Final = list_value(body.get("texts") or [])
     rows: Final = tuple(object_value(row) for row in list_value(body.get("structured_messages") or []))
@@ -83,6 +88,11 @@ def _generic_verdict(mode: str, body: Mapping[str, JsonValue]) -> dict[str, Json
             "action": "GUARDRAIL_INTERVENED",
             "texts": masked_texts,
             "structured_messages": [_flattened(object_value(row)) for row in masked_rows],
+        },
+        "masksm_blank": lambda: {
+            "action": "GUARDRAIL_INTERVENED",
+            "texts": masked_texts,
+            "structured_messages": [_blank_content(object_value(row)) for row in masked_rows],
         },
         "smonly": lambda: {"action": "GUARDRAIL_INTERVENED", "structured_messages": masked_rows},
         "sm_partial": lambda: {
@@ -403,6 +413,22 @@ def test_tool_call_arguments_in_history_reach_bedrock_masked(rig: _Rig) -> None:
         ]
     }
     sent: Final = _forwarded(rig, _converse(rig, "gga-masksm", body))
+    assert sent["messages"] == [
+        _user({"text": "Check my card."}),
+        _assistant(_tool_use(_MASK)),
+        _user(_tool_result({"text": "card is active"})),
+    ]
+
+
+def test_vendor_that_blanks_an_empty_assistant_turn_still_reaches_bedrock_masked(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [
+            _user({"text": "Check my card."}),
+            _assistant(_tool_use(_CARD)),
+            _user(_tool_result({"text": "card is active"})),
+        ]
+    }
+    sent: Final = _forwarded(rig, _converse(rig, "gga-masksm_blank", body))
     assert sent["messages"] == [
         _user({"text": "Check my card."}),
         _assistant(_tool_use(_MASK)),

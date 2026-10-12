@@ -528,9 +528,19 @@ def _tool_calls_edits(
     )
 
 
+def _carries_no_text(content: object) -> bool:
+    match content:
+        case None | "" | []:
+            return True
+        case _:
+            return False
+
+
 def _content_edits(converted: _ConvertedMessage, returned: Mapping[str, object]) -> tuple[_TextEdit, ...] | None:
     original: Final = _fields(converted.message)
     if returned.get("content") == original.get("content"):
+        return ()
+    if not converted.text_blocks and _carries_no_text(returned.get("content")):
         return ()
     texts: Final = _returned_text_parts(returned)
     before_texts: Final = _returned_text_parts(original)
@@ -556,12 +566,31 @@ def _message_text_edits(converted: _ConvertedMessage, returned: Mapping[str, obj
     return _merged_edits((call_edits, _content_edits(converted, comparable)))
 
 
-def _leaf(body: Mapping[str, Any], ref: _BlockRef) -> _StringHolder:
-    blocks: Final = body["system"] if ref.message_index is None else body["messages"][ref.message_index]["content"]
-    block: Final = blocks[ref.block_index]
-    if not ref.path:
-        return (block, "text") if block.get("text") else (block["guardContent"]["text"], "text")
-    return reduce(lambda node, key: node[key], ref.path[:-1], block), ref.path[-1]
+def _child(node: object, key: str | int) -> object:
+    match key:
+        case str():
+            fields: Final = _as_object(node)
+            if fields is not None:
+                return fields[key]
+        case int():
+            items: Final = _as_items(node)
+            if items is not None:
+                return items[key]
+    raise KeyError(key)
+
+
+def _has_text(block: object) -> bool:
+    fields: Final = _as_object(block)
+    return fields is not None and bool(fields.get("text"))
+
+
+def _leaf(body: Mapping[str, object], ref: _BlockRef) -> _StringHolder:
+    blocks: Final = (
+        body["system"] if ref.message_index is None else _child(_child(body["messages"], ref.message_index), "content")
+    )
+    block: Final = _child(blocks, ref.block_index)
+    path: Final = ref.path or (("text",) if _has_text(block) else ("guardContent", "text", "text"))
+    return reduce(_child, path[:-1], block), path[-1]
 
 
 def _leaf_identity(holder: _StringHolder) -> tuple[int, str | int]:
@@ -578,7 +607,7 @@ def _changed_leaves(
 
 
 def _texts_applied_view(
-    body: Mapping[str, Any], texts: Sequence[str], skip_system: bool, skip_tool: bool, scan_only_tool_results: bool
+    body: Mapping[str, object], texts: Sequence[str], skip_system: bool, skip_tool: bool, scan_only_tool_results: bool
 ) -> tuple[_ConvertedMessage, ...]:
     rewritten: Final = copy.deepcopy(dict(body))
     _, holders = _extract_converse_texts(rewritten, skip_system, skip_tool, scan_only_tool_results)

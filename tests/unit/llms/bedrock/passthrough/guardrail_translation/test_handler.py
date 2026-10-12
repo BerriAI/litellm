@@ -9,7 +9,14 @@ Validates that:
 - Non-converse endpoints skip guardrail execution
 """
 
+import copy
 from datetime import datetime
+from typing import Literal
+from unittest.mock import AsyncMock, MagicMock
+
+import pytest
+
+import litellm
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -17,12 +24,6 @@ from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
-from typing import Literal
-import litellm
-
-import copy
-import pytest
-from unittest.mock import AsyncMock, MagicMock
 
 from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.llms.bedrock.passthrough.guardrail_translation.handler import (
@@ -200,7 +201,9 @@ class TestExtractConverseTexts:
         """Tool definitions are app-authored config, so nothing under
         toolConfig.tools reaches the guardrail as input content."""
         body = {
-            "messages": [{"role": "user", "content": [{"text": "How much lag is there in my data?"}]}],
+            "messages": [
+                {"role": "user", "content": [{"text": "How much lag is there in my data?"}]}
+            ],
             "toolConfig": {
                 "tools": [
                     {
@@ -245,7 +248,11 @@ class TestExtractConverseTexts:
     def test_tool_config_definitions_not_extracted_when_tool_messages_skipped(self):
         body = {
             "messages": [{"role": "user", "content": [{"text": "hi"}]}],
-            "toolConfig": {"tools": [{"toolSpec": {"name": "fn", "description": "tool description"}}]},
+            "toolConfig": {
+                "tools": [
+                    {"toolSpec": {"name": "fn", "description": "tool description"}}
+                ]
+            },
         }
         texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=True)
         assert texts == ["hi"]
@@ -263,7 +270,11 @@ class TestExtractConverseTexts:
                     ],
                 }
             ],
-            "toolConfig": {"tools": [{"toolSpec": {"name": "fn", "description": "tool description"}}]},
+            "toolConfig": {
+                "tools": [
+                    {"toolSpec": {"name": "fn", "description": "tool description"}}
+                ]
+            },
         }
         texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         assert texts == ["hi", "user secret"]
@@ -271,7 +282,9 @@ class TestExtractConverseTexts:
     def test_extracts_additional_model_request_fields(self):
         body = {
             "messages": [{"role": "user", "content": [{"text": "hi"}]}],
-            "additionalModelRequestFields": {"reasoning_config": {"prompt": "blocked extra field"}},
+            "additionalModelRequestFields": {
+                "reasoning_config": {"prompt": "blocked extra field"}
+            },
         }
         texts, _ = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         assert "blocked extra field" in texts
@@ -337,7 +350,11 @@ class TestWriteBackTexts:
         assert body["inferenceConfig"] == original["inferenceConfig"]
 
     def test_fewer_guardrailed_texts_logs_warning(self, monkeypatch):
-        body = {"messages": [{"role": "user", "content": [{"text": "a"}, {"text": "b"}]}]}
+        body = {
+            "messages": [
+                {"role": "user", "content": [{"text": "a"}, {"text": "b"}]}
+            ]
+        }
         _, holders = _extract_converse_texts(body, skip_system=False, skip_tool=False)
         assert len(holders) == 2
 
@@ -412,7 +429,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
                 }
             }
         )
-        guardrail = _make_guardrail({"texts": ["You are helpful.", "Hello world", "[REDACTED]"]})
+        guardrail = _make_guardrail(
+            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
+        )
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
@@ -435,7 +454,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
                 }
             }
         )
-        guardrail = _make_guardrail({"texts": ["You are helpful.", "Hello world", "[REDACTED]"]})
+        guardrail = _make_guardrail(
+            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
+        )
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
@@ -449,8 +470,12 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         """Blocked text hidden in toolUse.input must be scanned and masked."""
         handler = BedrockPassthroughGuardrailHandler()
         data = _converse_data()
-        data["data"]["messages"][0]["content"][1]["toolUse"]["input"] = {"query": "email john@example.com"}
-        guardrail = _make_guardrail({"texts": ["You are helpful.", "Hello world", "[REDACTED]"]})
+        data["data"]["messages"][0]["content"][1]["toolUse"]["input"] = {
+            "query": "email john@example.com"
+        }
+        guardrail = _make_guardrail(
+            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
+        )
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
@@ -464,7 +489,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         """A blocking guardrail must reject content hidden in toolUse.input."""
         handler = BedrockPassthroughGuardrailHandler()
         data = _converse_data()
-        data["data"]["messages"][0]["content"][1]["toolUse"]["input"] = {"query": "blocked content"}
+        data["data"]["messages"][0]["content"][1]["toolUse"]["input"] = {
+            "query": "blocked content"
+        }
         guardrail = MagicMock()
         guardrail.guardrail_name = "block-guard"
         guardrail.skip_system_message_in_guardrail = False
@@ -509,7 +536,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         be blocked because a denied term appears in a tool definition."""
         handler = BedrockPassthroughGuardrailHandler()
         data = _converse_data()
-        data["data"]["toolConfig"] = {"tools": [{"toolSpec": {"name": "fn", "description": "blocked content"}}]}
+        data["data"]["toolConfig"] = {
+            "tools": [{"toolSpec": {"name": "fn", "description": "blocked content"}}]
+        }
 
         async def _block_on_denied_term(**kwargs):
             texts = kwargs["inputs"]["texts"]
@@ -536,7 +565,9 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         handler = BedrockPassthroughGuardrailHandler()
         data = _converse_data()
         data["data"]["additionalModelRequestFields"] = {"note": "ssn 123-45-6789"}
-        guardrail = _make_guardrail({"texts": ["You are helpful.", "Hello world", "[REDACTED]"]})
+        guardrail = _make_guardrail(
+            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
+        )
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
 
@@ -947,9 +978,13 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
             },
             "stopReason": "end_turn",
         }
-        guardrail = _make_guardrail({"texts": ["[V]", "[REASON]", "[INPUT]"]})
+        guardrail = _make_guardrail(
+            {"texts": ["[V]", "[REASON]", "[INPUT]"]}
+        )
 
-        result = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
+        result = await handler.process_output_response(
+            response=response, guardrail_to_apply=guardrail
+        )
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
         assert "thinking about john@example.com" in sent_texts
@@ -974,7 +1009,9 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
                         {
                             "citationsContent": {
                                 "content": [{"text": "Contact john@example.com"}],
-                                "citations": [{"source": "https://example.com", "title": "Example"}],
+                                "citations": [
+                                    {"source": "https://example.com", "title": "Example"}
+                                ],
                             }
                         }
                     ],
@@ -984,7 +1021,9 @@ class TestBedrockPassthroughGuardrailHandlerOutput:
         }
         guardrail = _make_guardrail({"texts": ["[CITED]"]})
 
-        result = await handler.process_output_response(response=response, guardrail_to_apply=guardrail)
+        result = await handler.process_output_response(
+            response=response, guardrail_to_apply=guardrail
+        )
 
         sent_texts = guardrail.apply_guardrail.call_args.kwargs["inputs"]["texts"]
         assert sent_texts == ["Contact john@example.com"]
@@ -1064,6 +1103,52 @@ def _build_event_stream_frame(event_type: str, payload: dict) -> bytes:
     return prelude + prelude_crc_b + headers_bytes + payload_bytes + msg_crc_b
 
 
+_TEST_CARD = "4111 1111 1111 1111"
+
+
+class _CardMaskingGuardrail(CustomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(guardrail_name="card-mask", event_hook=GuardrailEventHooks.post_call, default_on=True)
+        self.received_texts: list[list[str]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        texts = inputs.get("texts", [])
+        self.received_texts.append(list(texts))
+        return {**inputs, "texts": [text.replace(_TEST_CARD, "****") for text in texts]}
+
+
+async def _run_post_call_guardrail_on_stream(
+    stream_bytes: bytes, guardrail: CustomGuardrail, monkeypatch: pytest.MonkeyPatch
+) -> bytes:
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    logging_obj = LiteLLMLoggingObj(
+        model="claude",
+        messages=[],
+        stream=True,
+        call_type="allm_passthrough_route",
+        start_time=datetime(2026, 1, 1),
+        litellm_call_id="test-call",
+        function_id="test-function",
+    )
+    return await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
+        body_bytes=stream_bytes,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        data={
+            "model": "claude",
+            "custom_llm_provider": "bedrock",
+            "endpoint": "model/claude/converse-stream",
+            "litellm_logging_obj": logging_obj,
+        },
+    )
+
+
 class TestDeAnonymizeConverseStream:
     def _make_proxy_logging(self, mock_hook) -> MagicMock:
         proxy_logging_obj = MagicMock()
@@ -1113,6 +1198,78 @@ class TestDeAnonymizeConverseStream:
             if msg.headers.get(":event-type") == "contentBlockDelta"
         ]
         assert "".join(texts) == "John Doe works at Acme Corp"
+
+    @staticmethod
+    def _deltas_by_block(result: bytes, field: str) -> dict[int, str]:
+        import json
+        from botocore.eventstream import EventStreamBuffer
+
+        buf = EventStreamBuffer()
+        buf.add_data(result)
+        blocks: dict[int, str] = {}
+        for msg in buf:
+            if msg.headers.get(":event-type") != "contentBlockDelta":
+                continue
+            payload = json.loads(msg.payload)
+            delta = payload["delta"]
+            value = delta["toolUse"]["input"] if field == "toolUse" else delta[field]
+            blocks[payload["contentBlockIndex"]] = blocks.get(payload["contentBlockIndex"], "") + value
+        return blocks
+
+    @pytest.mark.asyncio
+    async def test_text_blocks_are_guardrailed_separately(self, monkeypatch):
+        stream_bytes = (
+            _build_event_stream_frame("messageStart", {"role": "assistant"})
+            + _build_event_stream_frame(
+                "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": f"Card: {_TEST_CARD}."}}
+            )
+            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0})
+            + _build_event_stream_frame(
+                "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Thanks for sailing with us!"}}
+            )
+            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 1})
+            + _build_event_stream_frame("messageStop", {"stopReason": "end_turn"})
+        )
+        guardrail = _CardMaskingGuardrail()
+
+        result = await _run_post_call_guardrail_on_stream(stream_bytes, guardrail, monkeypatch)
+
+        assert guardrail.received_texts == [[f"Card: {_TEST_CARD}.", "Thanks for sailing with us!"]]
+        assert self._deltas_by_block(result, "text") == {0: "Card: ****.", 1: "Thanks for sailing with us!"}
+
+    @pytest.mark.asyncio
+    async def test_parallel_tool_use_inputs_stay_in_their_own_block(self, monkeypatch):
+        import json
+
+        first_input = f'{{"ship":"AU","cardNumber":"{_TEST_CARD}"}}'
+        second_input = '{"ship":"AU"}'
+        stream_bytes = (
+            _build_event_stream_frame(
+                "contentBlockStart",
+                {"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": "tooluse_a", "name": "book"}}},
+            )
+            + _build_event_stream_frame(
+                "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"toolUse": {"input": first_input}}}
+            )
+            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0})
+            + _build_event_stream_frame(
+                "contentBlockStart",
+                {"contentBlockIndex": 1, "start": {"toolUse": {"toolUseId": "tooluse_b", "name": "ship_info"}}},
+            )
+            + _build_event_stream_frame(
+                "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"toolUse": {"input": second_input}}}
+            )
+            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 1})
+            + _build_event_stream_frame("messageStop", {"stopReason": "tool_use"})
+        )
+        guardrail = _CardMaskingGuardrail()
+
+        result = await _run_post_call_guardrail_on_stream(stream_bytes, guardrail, monkeypatch)
+
+        assert guardrail.received_texts == [[first_input, second_input]]
+        inputs = self._deltas_by_block(result, "toolUse")
+        assert json.loads(inputs[0]) == {"ship": "AU", "cardNumber": "****"}
+        assert json.loads(inputs[1]) == {"ship": "AU"}
 
     @pytest.mark.asyncio
     async def test_tokens_split_across_chunks_reassembled(self):
@@ -1309,7 +1466,9 @@ class TestDeAnonymizeConverseStream:
         buf = EventStreamBuffer()
         buf.add_data(result)
         return [
-            json.loads(msg.payload)["delta"] for msg in buf if msg.headers.get(":event-type") == "contentBlockDelta"
+            json.loads(msg.payload)["delta"]
+            for msg in buf
+            if msg.headers.get(":event-type") == "contentBlockDelta"
         ]
 
     @pytest.mark.asyncio
@@ -1335,7 +1494,9 @@ class TestDeAnonymizeConverseStream:
 
         result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
             body_bytes=stream_bytes,
-            proxy_logging_obj=self._make_proxy_logging(self._token_replacing_hook({"<PERSON_1>": "Alice"})),
+            proxy_logging_obj=self._make_proxy_logging(
+                self._token_replacing_hook({"<PERSON_1>": "Alice"})
+            ),
             user_api_key_dict=MagicMock(),
             data={},
         )
@@ -1355,7 +1516,9 @@ class TestDeAnonymizeConverseStream:
 
         result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
             body_bytes=stream_bytes,
-            proxy_logging_obj=self._make_proxy_logging(self._token_replacing_hook({"<PERSON_1>": "Alice"})),
+            proxy_logging_obj=self._make_proxy_logging(
+                self._token_replacing_hook({"<PERSON_1>": "Alice"})
+            ),
             user_api_key_dict=MagicMock(),
             data={},
         )
@@ -1381,7 +1544,9 @@ class TestDeAnonymizeConverseStream:
 
         result = await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
             body_bytes=stream_bytes,
-            proxy_logging_obj=self._make_proxy_logging(self._token_replacing_hook({"<PERSON_1>": "Alice"})),
+            proxy_logging_obj=self._make_proxy_logging(
+                self._token_replacing_hook({"<PERSON_1>": "Alice"})
+            ),
             user_api_key_dict=MagicMock(),
             data={},
         )
@@ -1397,7 +1562,9 @@ class TestDeAnonymizeConverseStream:
         captured = {}
 
         async def mock_hook(data, user_api_key_dict, response):
-            captured["texts"] = [b["text"] for b in response["output"]["message"]["content"]]
+            captured["texts"] = [
+                b["text"] for b in response["output"]["message"]["content"]
+            ]
             mapping = {"<PERSON_1>": "Alice", "<ORG_2>": "Acme"}
             for block in response["output"]["message"]["content"]:
                 text = block["text"]
@@ -1446,78 +1613,6 @@ class TestDeAnonymizeConverseStream:
 
         hook_spy.assert_not_called()
         assert result is stream_bytes
-
-    @pytest.mark.asyncio
-    async def test_parallel_tool_use_inputs_stay_in_their_own_block(self, monkeypatch):
-        import json
-
-        first_input = f'{{"ship":"AU","cardNumber":"{_TEST_CARD}"}}'
-        second_input = '{"ship":"AU"}'
-        stream_bytes = (
-            _build_event_stream_frame(
-                "contentBlockStart",
-                {"contentBlockIndex": 0, "start": {"toolUse": {"toolUseId": "tooluse_a", "name": "book"}}},
-            )
-            + _build_event_stream_frame(
-                "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"toolUse": {"input": first_input}}}
-            )
-            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0})
-            + _build_event_stream_frame(
-                "contentBlockStart",
-                {"contentBlockIndex": 1, "start": {"toolUse": {"toolUseId": "tooluse_b", "name": "ship_info"}}},
-            )
-            + _build_event_stream_frame(
-                "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"toolUse": {"input": second_input}}}
-            )
-            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 1})
-            + _build_event_stream_frame("messageStop", {"stopReason": "tool_use"})
-        )
-        guardrail = _CardMaskingGuardrail()
-
-        result = await _run_post_call_guardrail_on_stream(stream_bytes, guardrail, monkeypatch)
-
-        assert guardrail.received_texts == [[first_input, second_input]]
-        inputs = self._deltas_by_block(result, "toolUse")
-        assert json.loads(inputs[0]) == {"ship": "AU", "cardNumber": "****"}
-        assert json.loads(inputs[1]) == {"ship": "AU"}
-
-    @pytest.mark.asyncio
-    async def test_text_blocks_are_guardrailed_separately(self, monkeypatch):
-        stream_bytes = (
-            _build_event_stream_frame("messageStart", {"role": "assistant"})
-            + _build_event_stream_frame(
-                "contentBlockDelta", {"contentBlockIndex": 0, "delta": {"text": f"Card: {_TEST_CARD}."}}
-            )
-            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 0})
-            + _build_event_stream_frame(
-                "contentBlockDelta", {"contentBlockIndex": 1, "delta": {"text": "Thanks for sailing with us!"}}
-            )
-            + _build_event_stream_frame("contentBlockStop", {"contentBlockIndex": 1})
-            + _build_event_stream_frame("messageStop", {"stopReason": "end_turn"})
-        )
-        guardrail = _CardMaskingGuardrail()
-
-        result = await _run_post_call_guardrail_on_stream(stream_bytes, guardrail, monkeypatch)
-
-        assert guardrail.received_texts == [[f"Card: {_TEST_CARD}.", "Thanks for sailing with us!"]]
-        assert self._deltas_by_block(result, "text") == {0: "Card: ****.", 1: "Thanks for sailing with us!"}
-
-    @staticmethod
-    def _deltas_by_block(result: bytes, field: str) -> dict[int, str]:
-        import json
-        from botocore.eventstream import EventStreamBuffer
-
-        buf = EventStreamBuffer()
-        buf.add_data(result)
-        blocks: dict[int, str] = {}
-        for msg in buf:
-            if msg.headers.get(":event-type") != "contentBlockDelta":
-                continue
-            payload = json.loads(msg.payload)
-            delta = payload["delta"]
-            value = delta["toolUse"]["input"] if field == "toolUse" else delta[field]
-            blocks[payload["contentBlockIndex"]] = blocks.get(payload["contentBlockIndex"], "") + value
-        return blocks
 
 
 class TestConverseRewriteRegressions:
@@ -1629,6 +1724,89 @@ class TestConverseRewriteRegressions:
         assert result["data"]["messages"][0]["content"] == [
             {"toolUse": {"toolUseId": "t1", "name": "pay", "input": {"card": "[CARD]", "name": "[NAME]"}}}
         ]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("blank", ["", []])
+    async def test_blank_content_on_a_tool_call_only_turn_is_not_an_edit(self, blank):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [{"toolUse": {"toolUseId": "t1", "name": "pay", "input": {"card": "4111"}}}],
+                    }
+                ]
+            },
+        }
+        guard = _make_guardrail(
+            {
+                "texts": ["[CARD]"],
+                "structured_messages": [
+                    {
+                        "role": "assistant",
+                        "content": blank,
+                        "tool_calls": [
+                            {
+                                "id": "t1",
+                                "type": "function",
+                                "function": {"name": "pay", "arguments": '{"card":"[CARD]"}'},
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert result["data"]["messages"][0]["content"] == [
+            {"toolUse": {"toolUseId": "t1", "name": "pay", "input": {"card": "[CARD]"}}}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_text_cleared_only_in_structured_rows_is_written_back(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {"messages": [{"role": "user", "content": [{"text": "card 4111"}]}]},
+        }
+        guard = _make_guardrail({"structured_messages": [{"role": "user", "content": ""}]})
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert result["data"]["messages"][0]["content"] == [{"text": ""}]
+
+    @pytest.mark.asyncio
+    async def test_new_text_on_a_tool_call_only_turn_fails_closed(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": [{"toolUse": {"toolUseId": "t1", "name": "pay", "input": {"card": "4111"}}}],
+                    }
+                ]
+            },
+        }
+        original = copy.deepcopy(data)
+        guard = _make_guardrail(
+            {
+                "texts": ["[CARD]"],
+                "structured_messages": [
+                    {
+                        "role": "assistant",
+                        "content": "added text",
+                        "tool_calls": [
+                            {
+                                "id": "t1",
+                                "type": "function",
+                                "function": {"name": "pay", "arguments": '{"card":"[CARD]"}'},
+                            }
+                        ],
+                    }
+                ],
+            }
+        )
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+        assert data == original
 
     @pytest.mark.asyncio
     async def test_tool_only_scopes_both_flat_and_structured_inputs(self):
@@ -2081,49 +2259,3 @@ class TestConverseRewriteRegressions:
         result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
         assert result == original
         guard.apply_guardrail.assert_not_called()
-
-
-async def _run_post_call_guardrail_on_stream(
-    stream_bytes: bytes, guardrail: CustomGuardrail, monkeypatch: pytest.MonkeyPatch
-) -> bytes:
-    monkeypatch.setattr(litellm, "callbacks", [guardrail])
-    logging_obj = LiteLLMLoggingObj(
-        model="claude",
-        messages=[],
-        stream=True,
-        call_type="allm_passthrough_route",
-        start_time=datetime(2026, 1, 1),
-        litellm_call_id="test-call",
-        function_id="test-function",
-    )
-    return await BedrockPassthroughGuardrailHandler.de_anonymize_event_stream(
-        body_bytes=stream_bytes,
-        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
-        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
-        data={
-            "model": "claude",
-            "custom_llm_provider": "bedrock",
-            "endpoint": "model/claude/converse-stream",
-            "litellm_logging_obj": logging_obj,
-        },
-    )
-
-
-_TEST_CARD = "4111 1111 1111 1111"
-
-
-class _CardMaskingGuardrail(CustomGuardrail):
-    def __init__(self) -> None:
-        super().__init__(guardrail_name="card-mask", event_hook=GuardrailEventHooks.post_call, default_on=True)
-        self.received_texts: list[list[str]] = []
-
-    async def apply_guardrail(
-        self,
-        inputs: GenericGuardrailAPIInputs,
-        request_data: dict,
-        input_type: Literal["request", "response"],
-        logging_obj: LiteLLMLoggingObj | None = None,
-    ) -> GenericGuardrailAPIInputs:
-        texts = inputs.get("texts", [])
-        self.received_texts.append(list(texts))
-        return {**inputs, "texts": [text.replace(_TEST_CARD, "****") for text in texts]}
