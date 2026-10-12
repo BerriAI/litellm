@@ -8014,7 +8014,7 @@ class ProxyConfig:
             id="spend_log_cleanup_job",
             replace_existing=True,
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-            **first_cleanup_run_kwargs(general_settings, datetime.now(timezone.utc)),
+            **first_cleanup_run_kwargs(_current_general_settings(), datetime.now(timezone.utc)),
         )
         verbose_proxy_logger.info("Spend log cleanup rescheduled with trigger: %s", trigger)
 

@@ -5,10 +5,10 @@ from collections.abc import Mapping
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from types import MappingProxyType
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias, TypedDict
 
 from pydantic import TypeAdapter
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching import RedisCache
@@ -100,7 +100,11 @@ SPEND_LOG_CLEANUP_BOUND_SETTINGS: Final = (
 )
 
 
-def first_cleanup_run_kwargs(settings: Mapping[str, object], now: datetime) -> Mapping[str, datetime]:
+class FirstCleanupRunKwargs(TypedDict, total=False):
+    next_run_time: ReadOnly[datetime]
+
+
+def first_cleanup_run_kwargs(settings: Mapping[str, object], now: datetime) -> FirstCleanupRunKwargs:
     """
     Extra ``add_job`` kwargs for the interval cleanup job. Empty unless
     ``maximum_spend_logs_cleanup_run_on_startup`` is true, so the first run otherwise stays one interval out.
@@ -109,11 +113,11 @@ def first_cleanup_run_kwargs(settings: Mapping[str, object], now: datetime) -> M
         settings.get("maximum_spend_logs_cleanup_cron")
         or settings.get("maximum_spend_logs_cleanup_run_on_startup") is not True
     ):
-        return MappingProxyType({})
+        return {}
     delay_seconds: Final = SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS + random.randint(
         0, SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS
     )
-    return MappingProxyType({"next_run_time": now + timedelta(seconds=delay_seconds)})
+    return {"next_run_time": now + timedelta(seconds=delay_seconds)}
 
 
 class SpendLogCleanup:

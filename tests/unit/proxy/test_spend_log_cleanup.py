@@ -6,7 +6,7 @@ import asyncio
 import logging
 import math
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Final
@@ -46,7 +46,7 @@ from tests.unit.proxy.db.fake_prisma_engine import engine_call
         },
     ],
 )
-def test_first_cleanup_run_kwargs_leaves_the_schedule_alone_unless_opted_in(settings):
+def test_first_cleanup_run_kwargs_leaves_the_schedule_alone_unless_opted_in(settings: Mapping[str, object]):
     assert dict(first_cleanup_run_kwargs(settings, datetime(2026, 1, 1, tzinfo=timezone.utc))) == {}
 
 
