@@ -389,7 +389,7 @@ class ChunkProcessor:
     def _read_tool_calls(payload: object) -> object:
         """Return a delta/message payload's ``tool_calls``, dict or object form."""
         if isinstance(payload, dict):
-            return cast(dict[str, object], payload).get("tool_calls")
+            return cast(dict[str, object], payload).get("tool_calls")  # cast-ok: payload narrowed to dict
         if isinstance(payload, Delta):
             return payload.tool_calls
         return None
@@ -457,9 +457,9 @@ class ChunkProcessor:
                 if hasattr(choice, "finish_reason"):
                     # StreamingChoices is a dynamic OpenAIObject: the attribute may
                     # or may not exist at runtime, so read via literal getattr.
-                    chunk_finish_reason = cast(str, getattr(choice, "finish_reason", None))
+                    chunk_finish_reason = cast(str, getattr(choice, "finish_reason", None))  # cast-ok: dynamic attr
                 elif "finish_reason" in choice:
-                    chunk_finish_reason = cast(str, choice["finish_reason"])
+                    chunk_finish_reason = cast(str, choice["finish_reason"])  # cast-ok: key checked
                 if chunk_finish_reason is not None:
                     finish_reason = chunk_finish_reason
         if finish_reason == "stop" and saw_tool_call:
