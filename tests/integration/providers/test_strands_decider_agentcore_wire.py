@@ -3,7 +3,6 @@ import json
 import os
 import re
 import threading
-import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
@@ -21,6 +20,7 @@ from integration._support.database import read_rows
 from integration._support.forward_proxy import ForwardProxy, tunnelling_forward_proxy
 from integration._support.process import owned_proxy
 from integration._support.sigv4 import encoded_path, signature
+from integration._support.timing import Timed, assert_within_factor_of_control, timed
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -167,6 +167,8 @@ _load_yaml: Final[Callable[[str], object]] = yaml.safe_load
 _JSON: Final[TypeAdapter[JsonValue]] = TypeAdapter(JsonValue)
 _OWNED_PROXY_CELL_SECONDS: Final = 2 * max(30.0, float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS") or 70)) + 120
 pytestmark: Final = pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+_LINEAR_FACTOR: Final = 20
+_CLASSIFIER_SAMPLES: Final = 5
 
 
 def _host(region: str) -> str:
@@ -418,7 +420,7 @@ def test_an_arn_deployment_answers_on_every_decisions_route_signed_for_bedrock_a
         assert call.headers[_SESSION_HEADER] == _default_session("audit_signed"), dict(call.headers)
         _assert_signed(call)
     for response, route in zip(responses, _ROUTES, strict=True):
-        row = _spend_row(response.headers["x-litellm-call-id"])
+        row: Final = _spend_row(response.headers["x-litellm-call-id"])
         assert row == {
             "status": "success",
             "call_type": _ROUTE_CALL_TYPES[route.path],
@@ -795,6 +797,10 @@ def test_a_plain_api_base_forwards_amazon_shaped_extra_headers_unchanged(gateway
         assert json.loads(call.body) == _UPSTREAM_BODY, call.body
 
 
+def _fastest(operation: Callable[[], str]) -> Timed[str]:
+    return min((timed(operation) for _ in range(_CLASSIFIER_SAMPLES)), key=lambda sample: sample.seconds)
+
+
 def _worst_case_api_base() -> str:
     return "arn:aws" + "-a" * 131072 + "!"
 
@@ -803,31 +809,28 @@ def test_a_worst_case_runtime_arn_pattern_input_is_classified_in_linear_time(
     gateway: Gateway, record_property: Callable[[str, object], None]
 ) -> None:
     worst: Final = _worst_case_api_base()
-    started: Final = time.perf_counter()
-    url: Final = StrandsDeciderDecisionsConfig().get_complete_url(worst, _BODY_MODEL)
-    classified: Final = time.perf_counter() - started
-    record_property("classifier_seconds", f"{classified:.6f}")
-    assert url == f"{worst}/v1/systemone"
-    assert classified < 0.5, classified
+    matching: Final = f"{worst.removesuffix('!')}:bedrock-agentcore:{_US_EAST}:123456789012:runtime/decider"
+    config: Final = StrandsDeciderDecisionsConfig()
+    control: Final = _fastest(lambda: config.get_complete_url(matching, _BODY_MODEL))
+    classified: Final = _fastest(lambda: config.get_complete_url(worst, _BODY_MODEL))
+    record_property("classifier_seconds", f"{classified.seconds:.6f}")
+    assert control.value.endswith("/invocations"), control.value[-200:]
+    assert classified.value == f"{worst}/v1/systemone"
+    assert_within_factor_of_control(classified.seconds, control=control.seconds, factor=_LINEAR_FACTOR)
     with wire_server(_answering) as wire, gateway.scenario() as scenario:
         model: Final = _plain_model(scenario, wire, configurable_clientside_auth_params=["api_base"])
+        answered: Final = timed(lambda: _decide(gateway, model))
+        _assert_answered(answered.value, model)
+        assert len(wire.drain()) == 1
         with ThreadPoolExecutor(max_workers=2) as pool:
-            timed: Final = pool.submit(_timed_decide, gateway, model, worst)
-            liveliness_started: Final = time.perf_counter()
-            liveliness: Final = gateway.request("GET", "/health/liveliness")
-            liveliness_seconds: Final = time.perf_counter() - liveliness_started
-            response, decide_seconds = timed.result()
-        record_property("decide_seconds", f"{decide_seconds:.6f}")
-        record_property("liveliness_seconds", f"{liveliness_seconds:.6f}")
-        assert liveliness.status_code == 200, liveliness.text
-        assert 500 <= response.status_code < 600, response.text
-        assert "litellm.APIConnectionError" in response.text, response.text[:2000]
-        assert decide_seconds < 5, decide_seconds
-        assert liveliness_seconds < 2, liveliness_seconds
+            pending: Final = pool.submit(timed, lambda: _decide(gateway, model, api_base=worst))
+            liveliness: Final = timed(lambda: gateway.request("GET", "/health/liveliness"))
+            decided: Final = pending.result()
+        record_property("decide_seconds", f"{decided.seconds:.6f}")
+        record_property("liveliness_seconds", f"{liveliness.seconds:.6f}")
+        assert liveliness.value.status_code == 200, liveliness.value.text
+        assert 500 <= decided.value.status_code < 600, decided.value.text
+        assert "litellm.APIConnectionError" in decided.value.text, decided.value.text[:2000]
+        assert_within_factor_of_control(decided.seconds, control=answered.seconds, factor=_LINEAR_FACTOR)
+        assert_within_factor_of_control(liveliness.seconds, control=answered.seconds, factor=_LINEAR_FACTOR)
         assert wire.drain() == ()
-
-
-def _timed_decide(gateway: Gateway, model: str, api_base: str) -> tuple[httpx.Response, float]:
-    started: Final = time.perf_counter()
-    response: Final = _decide(gateway, model, api_base=api_base)
-    return response, time.perf_counter() - started

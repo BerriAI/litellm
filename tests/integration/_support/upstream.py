@@ -42,7 +42,7 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response, StreamingResponse
 from starlette.routing import Route, WebSocketRoute
-from starlette.websockets import WebSocket
+from starlette.websockets import WebSocket, WebSocketDisconnect
 
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 INTERNAL_FIELDS: Final = frozenset(
@@ -317,7 +317,7 @@ class Provider:
             self.observations.put(
                 Observation(request.url.path, request.headers.get("authorization", ""), body, request.method)
             )
-        elif request.method == "GET":
+        elif request.method in {"DELETE", "GET"}:
             self.observations.put(
                 Observation(request.url.path, request.headers.get("authorization", ""), {}, request.method)
             )
@@ -405,6 +405,14 @@ class Provider:
         if not isinstance(response, RealtimeResponse):
             await websocket.close(code=4404)
             return
+        try:
+            await self._realtime_frames(websocket, response, scenario_id, authorization, api_key)
+        except WebSocketDisconnect:
+            return
+
+    async def _realtime_frames(
+        self, websocket: WebSocket, response: RealtimeResponse, scenario_id: str, authorization: str, api_key: str
+    ) -> None:
         await websocket.accept()
         session: Final = _realtime_session(response, scenario_id, websocket.query_params.get("model", ""))
         for _ in range(response.created_repeats):
@@ -572,6 +580,7 @@ class Provider:
                 ),
                 Route("/{path:path}", self.scripted, methods=["POST"]),
                 Route("/{path:path}", self.scripted, methods=["GET"]),
+                Route("/{path:path}", self.scripted, methods=["DELETE"]),
                 WebSocketRoute("/v1/realtime", self.realtime),
                 WebSocketRoute("/openai/v1/realtime", self.realtime),
                 WebSocketRoute("/openai/realtime", self.realtime),
@@ -744,6 +753,7 @@ def main() -> None:
         port=cast(int, arguments.port),
         access_log=False,
         timeout_keep_alive=125,
+        timeout_graceful_shutdown=5,
         ssl_certfile=cast(str | None, arguments.ssl_certfile),
         ssl_keyfile=cast(str | None, arguments.ssl_keyfile),
     )

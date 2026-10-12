@@ -77,6 +77,30 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
             "search_context_size_high": 0.012,
         },
     },
+    "typesafe/jev-latest": {
+        "litellm_provider": "typesafe",
+        "mode": "evaluation",
+        "input_cost_per_token": 4.2e-08,
+        "output_cost_per_token": 0.0,
+    },
+    "cloudflare/@cf/cloudflare/clef-flash": {
+        "litellm_provider": "cloudflare",
+        "mode": "evaluation",
+        "input_cost_per_token": 9e-08,
+        "output_cost_per_token": 0.0,
+    },
+    "databricks/databricks-openjev-qwen35-4b": {
+        "litellm_provider": "databricks",
+        "mode": "evaluation",
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    },
+    "openrouter/typesafe/jev-1.13": {
+        "litellm_provider": "openrouter",
+        "mode": "evaluation",
+        "input_cost_per_token": 0.0,
+        "output_cost_per_token": 0.0,
+    },
     "perplexity/pplx-decider-v1-27b": _PERPLEXITY_DECISION_COST,
     decisions_pricing_key("perplexity", "pplx-decider-v1-27b"): _PERPLEXITY_DECISIONS_PRICING_COST,
     "deepseek/deepseek-v4-chat": {

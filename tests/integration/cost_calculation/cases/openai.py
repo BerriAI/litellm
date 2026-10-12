@@ -20,6 +20,7 @@ from integration.cost_calculation.cost_tracking_case import (
     WavUpload,
 )
 from litellm.litellm_core_utils.decisions_pricing import decisions_pricing_key
+from pydantic import JsonValue
 from integration.cost_calculation.stream_parity.case import StreamParityTestCase, sse_frames
 
 
@@ -7860,6 +7861,11 @@ _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_RATE: Final = cast(
 _OPENAI_GPT_6_LUNA_DECISIONS_SPEND: Final = (
     _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_TOKENS * _OPENAI_GPT_6_LUNA_DECISIONS_INPUT_RATE
 )
+_OPENAI_GPT_6_LUNA_DECISIONS_UPSTREAM_BODY: Final[dict[str, JsonValue]] = {
+    "model": "gpt-6-luna",
+    "input": "The package arrived broken.",
+    "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+}
 _OPENAI_GPT_6_LUNA_DECISIONS_RESPONSE: Final = JsonResponse(
     content_type="application/json",
     body={
@@ -7886,6 +7892,7 @@ OPENAI_GPT_6_LUNA_DECISIONS: Final = CostTrackingTestCase(
         "input": "The package arrived broken.",
         "questions": [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
     },
+    upstream_body=_OPENAI_GPT_6_LUNA_DECISIONS_UPSTREAM_BODY,
     response=_OPENAI_GPT_6_LUNA_DECISIONS_RESPONSE,
     expected=ExactExpected(
         spend=_OPENAI_GPT_6_LUNA_DECISIONS_SPEND,
@@ -7907,6 +7914,7 @@ OPENAI_GPT_6_LUNA_SYSTEMONE: Final = CostTrackingTestCase(
         "state": "The package arrived broken.",
         "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
     },
+    upstream_body=_OPENAI_GPT_6_LUNA_DECISIONS_UPSTREAM_BODY,
     response=_OPENAI_GPT_6_LUNA_DECISIONS_RESPONSE,
     expected=ExactExpected(
         spend=_OPENAI_GPT_6_LUNA_DECISIONS_SPEND,

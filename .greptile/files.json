@@ -29,6 +29,13 @@
       ]
     },
     {
+      "path": "litellm/rust_bridge/host/AGENTS.md",
+      "description": "Conventions for code under litellm/rust_bridge/host/",
+      "scope": [
+        "litellm/rust_bridge/host/**"
+      ]
+    },
+    {
       "path": "litellm/tracing/AGENTS.md",
       "description": "Conventions for code under litellm/tracing/",
       "scope": [
@@ -267,10 +274,24 @@
       ]
     },
     {
+      "path": "litellm-rust/crates/llms/src/bedrock/claude_platform/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/bedrock/claude_platform/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/bedrock/claude_platform/messages/**"
+      ]
+    },
+    {
       "path": "litellm-rust/crates/llms/src/bedrock/messages/AGENTS.md",
       "description": "Conventions for code under litellm-rust/crates/llms/src/bedrock/messages/",
       "scope": [
         "litellm-rust/crates/llms/src/bedrock/messages/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/bedrock_mantle/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/bedrock_mantle/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/bedrock_mantle/messages/**"
       ]
     },
     {
@@ -285,6 +306,13 @@
       "description": "Conventions for code under litellm-rust/crates/llms/src/deepseek/messages/",
       "scope": [
         "litellm-rust/crates/llms/src/deepseek/messages/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/minimax/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/minimax/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/minimax/messages/**"
       ]
     },
     {
@@ -309,10 +337,24 @@
       ]
     },
     {
+      "path": "litellm-rust/crates/llms/src/openrouter/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/openrouter/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/openrouter/messages/**"
+      ]
+    },
+    {
       "path": "litellm-rust/crates/llms/src/reducto/ocr/AGENTS.md",
       "description": "Conventions for code under litellm-rust/crates/llms/src/reducto/ocr/",
       "scope": [
         "litellm-rust/crates/llms/src/reducto/ocr/**"
+      ]
+    },
+    {
+      "path": "litellm-rust/crates/llms/src/tencent/messages/AGENTS.md",
+      "description": "Conventions for code under litellm-rust/crates/llms/src/tencent/messages/",
+      "scope": [
+        "litellm-rust/crates/llms/src/tencent/messages/**"
       ]
     },
     {
