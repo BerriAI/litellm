@@ -13,6 +13,7 @@ from typing_extensions import assert_never
 from litellm._internal_context import with_service_target
 from litellm._logging import verbose_logger
 from litellm.batches.batch_utils import (
+    BatchProvider,
     BatchResultFiles,
     _batch_response_was_successful,  # pyright: ignore[reportPrivateUsage]  # batch-internal helper shared with the aggregate cost path by design
     _fetch_batch_managed_file_content,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # same reuse; helper is untyped upstream
@@ -35,11 +36,6 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
 
-_BatchLineProvider: TypeAlias = Literal[
-    "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"
-]
-
-
 _SECRET_PARAM_KEYS: Final = frozenset(
     {
         "api_key",
@@ -55,7 +51,7 @@ _SECRET_PARAM_KEYS: Final = frozenset(
 )
 
 
-def _supported_line_provider(value: str) -> _BatchLineProvider | None:
+def _supported_line_provider(value: str) -> BatchProvider | None:
     match value:
         case "openai" | "azure" | "vertex_ai" | "hosted_vllm" | "anthropic" | "bedrock" | "mistral":
             return value
@@ -203,7 +199,7 @@ def _line_status_code(entry: Mapping[str, object], custom_llm_provider: str) -> 
     return None
 
 
-def _line_error_payload(entry: Mapping[str, object], custom_llm_provider: _BatchLineProvider) -> object:
+def _line_error_payload(entry: Mapping[str, object], custom_llm_provider: BatchProvider) -> object:
     if custom_llm_provider == "anthropic":
         return (
             (_as_object_mapping(entry.get("result")) or _EMPTY_BODY).get("error") or entry.get("result") or _EMPTY_BODY
@@ -246,7 +242,7 @@ _BatchLineResult: TypeAlias = "ModelResponse | EmbeddingResponse | ResponsesAPIR
 
 def _line_result(
     call_type: str,
-    custom_llm_provider: _BatchLineProvider,
+    custom_llm_provider: BatchProvider,
     model: str,
     response_body: Mapping[str, object],
 ) -> _BatchLineResult:
@@ -273,7 +269,7 @@ def _line_result(
 
 def _line_result_or_none(
     request_call_type: str,
-    custom_llm_provider: _BatchLineProvider,
+    custom_llm_provider: BatchProvider,
     model: str,
     response_body: Mapping[str, object],
     custom_id: object,
@@ -348,7 +344,7 @@ async def _emit_line_event(
     entry: Mapping[str, object],
     requests_by_id: Mapping[str, Mapping[str, object]],
     batch: LiteLLMBatch,
-    custom_llm_provider: _BatchLineProvider,
+    custom_llm_provider: BatchProvider,
     parent: "Logging",
     parent_params: Mapping[str, object],
     model_name: str | None,
@@ -442,7 +438,7 @@ async def _emit_line_event(
 
 async def _fetch_managed_file_or_empty(
     file_id: str | None,
-    custom_llm_provider: _BatchLineProvider,
+    custom_llm_provider: BatchProvider,
     fetch_params: dict[str, object] | None,  # mutable-ok: batch_utils file fetch takes the shared litellm_params dict
 ) -> bytes:
     if file_id is None or file_id in _NO_FILE_IDS:

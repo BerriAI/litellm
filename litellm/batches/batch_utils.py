@@ -3,7 +3,7 @@ from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
 from dataclasses import replace as dataclasses_replace
 from enum import Enum
-from typing import Any, Final, Literal, cast
+from typing import Any, Final, Literal, TypeAlias, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -19,6 +19,8 @@ from litellm.types.llms.openai import Batch
 from litellm.types.utils import ModelInfo, Usage
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS
 from litellm.utils import token_counter
+
+BatchProvider: TypeAlias = Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -79,7 +81,7 @@ def batch_cost_is_final(batch: Batch) -> bool:
 
 async def calculate_batch_cost_and_usage(
     file_content_dictionary: list[dict[str, object]],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: BatchProvider,
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
 ) -> BatchCostUsageResult:
@@ -106,7 +108,7 @@ async def calculate_batch_cost_and_usage(
 
 async def handle_completed_batch(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: BatchProvider,
     model_name: str | None = None,
     litellm_params: dict[str, object] | None = None,
     model_info: ModelInfo | None = None,
@@ -137,7 +139,7 @@ async def handle_completed_batch(
 
 async def handle_completed_batch_with_files(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: BatchProvider,
     model_name: str | None = None,
     litellm_params: Mapping[str, object] | None = None,
     model_info: ModelInfo | None = None,
@@ -215,7 +217,7 @@ class _BatchOutputLineStats:
 
 def _classify_output_line_stats(
     entries: Iterable[dict[str, object]],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: BatchProvider,
     model_name: str | None,
     model_info: ModelInfo | None,
 ) -> Iterator[_BatchOutputLineStats | _LineOutcome]:
@@ -234,7 +236,7 @@ def _classify_output_line_stats(
 
 def _safe_output_line_stats(
     entry: Mapping[str, object],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: BatchProvider,
     model_name: str | None,
     model_info: ModelInfo | None,
 ) -> _BatchOutputLineStats | None:
@@ -256,7 +258,7 @@ def _safe_output_line_stats(
 
 def _compute_output_line_stats(
     entry: Mapping[str, object],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: BatchProvider,
     model_name: str | None,
     model_info: ModelInfo | None,
 ) -> _BatchOutputLineStats:
@@ -298,7 +300,7 @@ def _ocr_usage_info_from_response_body(response_body: Mapping[str, object]) -> O
 def _output_line_cost(
     response_body: Mapping[str, object],
     usage: Usage,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: BatchProvider,
     model_name: str | None,
     response_model: str | None,
     model_info: ModelInfo | None,
@@ -327,7 +329,7 @@ def _output_line_cost(
 
 def _aggregate_batch_cost_usage_models(
     entries: Iterable[dict[str, object]],
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: BatchProvider,
     model_name: str | None = None,
     model_info: ModelInfo | None = None,
 ) -> BatchCostUsageResult:
@@ -466,9 +468,7 @@ def _provider_output_file_id(output_file_id: str) -> str:
 
 async def _fetch_batch_managed_file_content(
     file_id: str,
-    custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"
-    ] = "openai",
+    custom_llm_provider: BatchProvider = "openai",
     litellm_params: Mapping[str, object] | None = None,
 ) -> bytes:
     """
@@ -499,9 +499,7 @@ async def _fetch_batch_managed_file_content(
 
 async def _fetch_batch_output_file_content(
     batch: Batch,
-    custom_llm_provider: Literal[
-        "openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"
-    ] = "openai",
+    custom_llm_provider: BatchProvider = "openai",
     litellm_params: Mapping[str, object] | None = None,
 ) -> bytes:
     """
@@ -523,7 +521,7 @@ async def _fetch_batch_output_file_content(
 
 async def fetch_batch_error_file_content(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: BatchProvider,
     litellm_params: Mapping[str, object] | None,
 ) -> bytes | None:
     """Fetch the batch's separate error file bytes; None when it has none or the fetch fails."""
@@ -544,7 +542,7 @@ def count_error_file_failed_requests_from_content(content: bytes | None) -> int:
 
 async def count_error_file_failed_requests(
     batch: Batch,
-    custom_llm_provider: Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "bedrock", "mistral"],
+    custom_llm_provider: BatchProvider,
     litellm_params: Mapping[str, object] | None,
 ) -> int:
     """Count failed requests reported only in the batch's separate error file.
