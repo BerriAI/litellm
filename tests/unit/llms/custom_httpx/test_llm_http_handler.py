@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, Mock, patch
 
 import httpx
 import pytest
+import respx
 from botocore.credentials import RefreshableCredentials
 
 import litellm
@@ -157,6 +158,37 @@ async def test_get_search_preserves_tinyfish_http_error_formatting(is_async: boo
             )
             assert error.value.headers is not None
             assert error.value.headers["retry-after"] == "7"
+
+
+def test_a_caller_fake_stream_is_honored_and_kept_off_the_wire(respx_mock: respx.MockRouter) -> None:
+    route: Final = respx_mock.post("https://api.mistral.ai/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-fake-stream",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "mistral-small-latest",
+                "choices": [{"index": 0, "message": {"role": "assistant", "content": "ok"}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    chunks: Final = list(
+        litellm.completion(
+            model="mistral/mistral-small-latest",
+            api_key="fake-mistral-key",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=True,
+            fake_stream=True,
+        )
+    )
+
+    sent: Final = json.loads(route.calls.last.request.content)
+    assert "fake_stream" not in sent, sent
+    assert sent.get("stream") is not True, sent
+    assert "".join(chunk.choices[0].delta.content or "" for chunk in chunks) == "ok"
 
 
 def test_prepare_fake_stream_request():
