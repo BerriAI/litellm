@@ -3356,6 +3356,7 @@ class ProxyLogging:
             original_exception=original_exception,
             error_type=error_type,
             route=user_api_key_dict.request_route,
+            team_id=user_api_key_dict.team_id,
         ):
             await self._handle_logging_proxy_only_error(
                 request_data=request_data,
@@ -3413,6 +3414,7 @@ class ProxyLogging:
         original_exception: Exception,
         error_type: ProxyErrorTypes | None = None,
         route: str | None = None,
+        team_id: str | None = None,
     ) -> bool:
         """
         Return True if the error is a Proxy Only LLM API Error
@@ -3436,6 +3438,9 @@ class ProxyLogging:
         if route is None:
             return False
         if not (RouteChecks.is_llm_api_route(route) or RouteChecks.is_info_route(route)):
+            return False
+        # Dashboard session keys poll info routes in the background; their failures are not user requests.
+        if RouteChecks.is_dashboard_session_info_route(route, team_id):
             return False
 
         return isinstance(original_exception, _PROXY_ONLY_LLM_API_ERRORS) or (error_type == ProxyErrorTypes.auth_error)
