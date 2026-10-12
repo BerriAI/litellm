@@ -180,6 +180,12 @@
     "api_key_env": "COGNITION_API_KEY",
     "api_base_env": "COGNITION_API_BASE"
   },
+  "coralbricks": {
+    "base_url": "https://inference.coralbricks.ai/v1",
+    "api_key_env": "CORALBRICKS_API_KEY",
+    "api_base_env": "CORALBRICKS_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
   "cortecs": {
     "base_url": "https://api.cortecs.ai/v1",
     "api_key_env": "CORTECS_API_KEY",
