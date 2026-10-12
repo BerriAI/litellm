@@ -47,9 +47,6 @@ class OpenAIEmbeddingsPayload(BaseModel):
 
 
 class SagemakerOpenAIEmbeddingConfig(BaseEmbeddingConfig):
-    def __init__(self) -> None:
-        pass
-
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseConfig returns a list
         return list(SUPPORTED_OPENAI_PARAMS)
 

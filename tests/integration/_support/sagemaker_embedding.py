@@ -17,6 +17,7 @@ VOYAGE_SERVED_MODEL: Final = "voyage-served-model"
 ENDPOINT_PREFIX: Final = "integration-embed-"
 COMPONENT_HEADER: Final = "x-amzn-sagemaker-inference-component"
 JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+NOT_JSON_BODY: Final = b"<html>upstream gateway error</html>"
 EXPECTED_SHAPE: Final = "Expected an OpenAI embeddings object with a 'data' list of {'embedding': [...]} rows"
 NON_STRING_MODEL_ID: Final = "model_id must be the inference component name as a string"
 IC_REQUIRED: Final = (
@@ -156,7 +157,7 @@ def respond(request: Request) -> Reply:
         case "hfshape":
             return json_reply([vector(0)])
         case "notjson":
-            return Reply(body=b"<html>upstream gateway error</html>", content_type="text/html")
+            return Reply(body=NOT_JSON_BODY, content_type="text/html")
         case "err400":
             return aws_error(
                 400, "ValidationError", "1 validation error detected: Value at 'body' failed to satisfy constraint"

@@ -24,6 +24,17 @@ from .openai_transformation import SagemakerOpenAIEmbeddingConfig
 OPENAI_COMPATIBLE_ROUTE: Final = "openai/"
 
 
+def _model_specific_config(model: str) -> BaseEmbeddingConfig | None:
+    if model.startswith(OPENAI_COMPATIBLE_ROUTE):
+        return SagemakerOpenAIEmbeddingConfig()
+    model_lower: Final = model.lower()
+    if "voyage" in model_lower:
+        return VoyageEmbeddingConfig()
+    if "cohere" in model_lower:
+        return SagemakerCohereEmbeddingConfig()
+    return None
+
+
 class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
     """
     SageMaker embedding configuration factory for supporting embedding parameters
@@ -44,28 +55,16 @@ class SagemakerEmbeddingConfig(BaseEmbeddingConfig):
         Returns:
             Appropriate embedding config instance
         """
-        if model.startswith(OPENAI_COMPATIBLE_ROUTE):
-            return SagemakerOpenAIEmbeddingConfig()
-        model_lower: Final = model.lower()
-        if "voyage" in model_lower:
-            return VoyageEmbeddingConfig()
-        if "cohere" in model_lower:
-            return SagemakerCohereEmbeddingConfig()
-        return cls()
+        specific_config: Final = _model_specific_config(model)
+        return cls() if specific_config is None else specific_config
 
     @staticmethod
     def get_endpoint_name(model: str) -> str:
         return model.removeprefix(OPENAI_COMPATIBLE_ROUTE)
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        if model.startswith(OPENAI_COMPATIBLE_ROUTE):
-            return SagemakerOpenAIEmbeddingConfig().get_supported_openai_params(model)
-        model_lower: Final = model.lower()
-        if "voyage" in model_lower:
-            return VoyageEmbeddingConfig().get_supported_openai_params(model)
-        if "cohere" in model_lower:
-            return SagemakerCohereEmbeddingConfig().get_supported_openai_params(model)
-        return []
+        specific_config: Final = _model_specific_config(model)
+        return [] if specific_config is None else specific_config.get_supported_openai_params(model)
 
     def map_openai_params(
         self,

@@ -34,9 +34,7 @@ def test_sagemaker_response_stream_shape_lazy_loads_once():
     import litellm.llms.sagemaker.common_utils as mod
 
     sentinel = MagicMock()
-    with patch.object(
-        mod, "_load_sagemaker_response_stream_shape", return_value=sentinel
-    ) as mock_load:
+    with patch.object(mod, "_load_sagemaker_response_stream_shape", return_value=sentinel) as mock_load:
         assert mod.get_sagemaker_response_stream_shape() is sentinel
         assert mod.get_sagemaker_response_stream_shape() is sentinel
         mock_load.assert_called_once()
@@ -96,9 +94,7 @@ def test_sagemaker_response_stream_shape_is_structure_shape():
     from litellm.llms.sagemaker.common_utils import get_sagemaker_response_stream_shape
 
     shape = get_sagemaker_response_stream_shape()
-    assert (
-        shape is not None
-    ), "get_sagemaker_response_stream_shape() is None — botocore may not be installed"
+    assert shape is not None, "get_sagemaker_response_stream_shape() is None — botocore may not be installed"
     assert isinstance(shape, StructureShape)
     assert shape.name == "InvokeEndpointWithResponseStreamOutput"
 
@@ -278,38 +274,36 @@ class TestSagemakerTransform:
         assert result == {"temperature": 0.7, "max_new_tokens": 200}
 
 
+NULL_MESSAGE_ERROR = ClientError(
+    {"Error": {"Code": "InternalFailure", "Message": None}, "ResponseMetadata": {"HTTPStatusCode": 500}},
+    "InvokeEndpoint",
+)
+DROPPED_CONNECTION_ERROR = ConnectionClosedError(endpoint_url="https://runtime.sagemaker.test/x")
+HTTPX_STATUS_ERROR = httpx.HTTPStatusError(
+    "boom", request=httpx.Request("POST", "https://runtime.sagemaker.test/x"), response=httpx.Response(400)
+)
+PLAIN_ERROR = RuntimeError("plain failure")
+
+
 @pytest.mark.parametrize(
-    ("error", "expected_status", "expected_text"),
+    ("error", "expected_status", "expected_message"),
     [
         (
             ClientError(
-                {"Error": {"Code": "ValidationError", "Message": "bad input"}, "ResponseMetadata": {"HTTPStatusCode": 400}},
+                {
+                    "Error": {"Code": "ValidationError", "Message": "bad input"},
+                    "ResponseMetadata": {"HTTPStatusCode": 400},
+                },
                 "InvokeEndpoint",
             ),
             400,
             "bad input",
         ),
-        (
-            ClientError(
-                {"Error": {"Code": "InternalFailure", "Message": None}, "ResponseMetadata": {"HTTPStatusCode": 500}},
-                "InvokeEndpoint",
-            ),
-            500,
-            "InternalFailure",
-        ),
-        (ConnectionClosedError(endpoint_url="https://runtime.sagemaker.test/x"), 500, "Connection was closed"),
-        (
-            httpx.HTTPStatusError(
-                "boom", request=httpx.Request("POST", "https://runtime.sagemaker.test/x"), response=httpx.Response(400)
-            ),
-            500,
-            "boom",
-        ),
-        (RuntimeError("plain failure"), 500, "plain failure"),
+        (NULL_MESSAGE_ERROR, 500, str(NULL_MESSAGE_ERROR)),
+        (DROPPED_CONNECTION_ERROR, 500, str(DROPPED_CONNECTION_ERROR)),
+        (HTTPX_STATUS_ERROR, 500, str(HTTPX_STATUS_ERROR)),
+        (PLAIN_ERROR, 500, str(PLAIN_ERROR)),
     ],
 )
-def test_client_error_details_reads_every_error_shape(error, expected_status, expected_text):
-    status_code, message = client_error_details(error)
-
-    assert status_code == expected_status
-    assert expected_text in message
+def test_client_error_details_reads_every_error_shape(error, expected_status, expected_message):
+    assert client_error_details(error) == (expected_status, expected_message)

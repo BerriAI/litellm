@@ -8,6 +8,7 @@ import httpx
 import openai
 import pytest
 import yaml
+from botocore.exceptions import ConnectionClosedError
 from integration._support.client import Gateway, eventually, gateway_from_environment
 from integration._support.database import read_rows
 from integration._support.process import owned_proxy
@@ -20,6 +21,7 @@ from integration._support.sagemaker_embedding import (
     IC_REQUIRED,
     JSON_OBJECT,
     NON_STRING_MODEL_ID,
+    NOT_JSON_BODY,
     PASS_IN_HINT,
     REMOVE_HINT,
     SERVED_MODEL,
@@ -478,8 +480,10 @@ def test_openai_route_rejects_a_container_body_that_is_not_an_openai_embeddings_
 
 def test_openai_route_reports_a_non_json_container_body_as_a_server_error(proxy: Gateway, wire: Wire) -> None:
     response: Final = _embed(proxy, "sm-openai-notjson", [_text()])
+    with pytest.raises(json.JSONDecodeError) as decode_error:
+        json.loads(NOT_JSON_BODY)
     assert response.status_code == 500, response.text
-    assert "Expecting value" in response.text, response.text
+    assert str(decode_error.value) in response.text, response.text
     assert _only_request(wire).headers[COMPONENT_HEADER] == COMPONENT
     assert _spend_row(response)["status"] == "failure"
 
@@ -536,7 +540,7 @@ def test_container_outage_errors_reach_the_caller_and_every_attempt_carries_the_
 def test_dropped_connection_reaches_the_caller_as_a_server_error(proxy: Gateway, wire: Wire) -> None:
     response: Final = _embed(proxy, "sm-openai-drop", [_text()])
     assert response.status_code == 503, response.text
-    assert "Connection was closed" in response.text, response.text
+    assert ConnectionClosedError.fmt.partition(":")[0] in response.text, response.text
     attempts: Final = wire.drain()
     assert len(attempts) >= 1, attempts
     assert {attempt.headers[COMPONENT_HEADER] for attempt in attempts} == {COMPONENT}, attempts

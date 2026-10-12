@@ -8,6 +8,7 @@ for every SageMaker embedding config.
 
 import asyncio
 import json
+from collections.abc import Mapping
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -46,7 +47,7 @@ def fake_sagemaker_session(response_body: object) -> tuple[MagicMock, MagicMock]
     return session, client
 
 
-def invoke_kwargs(client: MagicMock) -> dict:
+def invoke_kwargs(client: MagicMock) -> Mapping[str, object]:
     client.invoke_endpoint.assert_called_once()
     return client.invoke_endpoint.call_args.kwargs
 
@@ -191,10 +192,9 @@ class TestSagemakerEmbeddingInferenceComponents:
     def setup_method(self):
         self.sagemaker_llm = SagemakerLLM()
 
-    def run_embedding(self, model: str, optional_params: dict, response_body: object) -> tuple[EmbeddingResponse, dict]:
-        session, client = fake_sagemaker_session(response_body)
+    def embed_with(self, session: MagicMock, model: str, optional_params: Mapping[str, object]) -> EmbeddingResponse:
         with patch("boto3.Session", return_value=session):
-            result = self.sagemaker_llm.embedding(
+            return self.sagemaker_llm.embedding(
                 model=model,
                 input=["hello", "good morning"],
                 model_response=EmbeddingResponse(),
@@ -203,6 +203,12 @@ class TestSagemakerEmbeddingInferenceComponents:
                 logging_obj=MagicMock(),
                 optional_params={"aws_region_name": "us-east-1", **optional_params},
             )
+
+    def run_embedding(
+        self, model: str, optional_params: Mapping[str, object], response_body: object
+    ) -> tuple[EmbeddingResponse, Mapping[str, object]]:
+        session, client = fake_sagemaker_session(response_body)
+        result = self.embed_with(session, model, optional_params)
         return result, invoke_kwargs(client)
 
     def test_openai_route_forwards_component_and_keeps_it_out_of_the_body(self):
@@ -265,16 +271,8 @@ class TestSagemakerEmbeddingInferenceComponents:
             },
             "InvokeEndpoint",
         )
-        with patch("boto3.Session", return_value=session), pytest.raises(SagemakerError) as raised:
-            self.sagemaker_llm.embedding(
-                model="my-embed-endpoint",
-                input=["hello"],
-                model_response=EmbeddingResponse(),
-                print_verbose=print,
-                encoding=None,
-                logging_obj=MagicMock(),
-                optional_params={"aws_region_name": "us-east-1", "model_id": "stray-component"},
-            )
+        with pytest.raises(SagemakerError) as raised:
+            self.embed_with(session, "my-embed-endpoint", {"model_id": "stray-component"})
 
         assert raised.value.status_code == 400
         assert raised.value.message == (
@@ -283,59 +281,37 @@ class TestSagemakerEmbeddingInferenceComponents:
 
     def test_null_error_message_surfaces_the_error_code(self):
         session, client = fake_sagemaker_session(OPENAI_RESPONSE)
-        client.invoke_endpoint.side_effect = ClientError(
+        error = ClientError(
             {
                 "Error": {"Code": "InternalFailure", "Message": None},
                 "ResponseMetadata": {"HTTPStatusCode": 500},
             },
             "InvokeEndpoint",
         )
-        with patch("boto3.Session", return_value=session), pytest.raises(SagemakerError) as raised:
-            self.sagemaker_llm.embedding(
-                model="openai/my-embed-endpoint",
-                input=["hello"],
-                model_response=EmbeddingResponse(),
-                print_verbose=print,
-                encoding=None,
-                logging_obj=MagicMock(),
-                optional_params={"aws_region_name": "us-east-1", "model_id": "x" * 2048},
-            )
+        client.invoke_endpoint.side_effect = error
+        with pytest.raises(SagemakerError) as raised:
+            self.embed_with(session, "openai/my-embed-endpoint", {"model_id": "x" * 2048})
 
         assert raised.value.status_code == 500
-        assert "InternalFailure" in raised.value.message
+        assert raised.value.message == str(error)
 
     def test_dropped_connection_surfaces_as_a_server_error(self):
         session, client = fake_sagemaker_session(OPENAI_RESPONSE)
-        client.invoke_endpoint.side_effect = ConnectionClosedError(endpoint_url="https://runtime.sagemaker.test/x")
-        with patch("boto3.Session", return_value=session), pytest.raises(SagemakerError) as raised:
-            self.sagemaker_llm.embedding(
-                model="openai/my-embed-endpoint",
-                input=["hello"],
-                model_response=EmbeddingResponse(),
-                print_verbose=print,
-                encoding=None,
-                logging_obj=MagicMock(),
-                optional_params={"aws_region_name": "us-east-1", "model_id": "my-component"},
-            )
+        error = ConnectionClosedError(endpoint_url="https://runtime.sagemaker.test/x")
+        client.invoke_endpoint.side_effect = error
+        with pytest.raises(SagemakerError) as raised:
+            self.embed_with(session, "openai/my-embed-endpoint", {"model_id": "my-component"})
 
         assert raised.value.status_code == 500
-        assert "Connection was closed" in raised.value.message
+        assert raised.value.message == str(error)
 
     def test_non_string_model_id_is_rejected_before_the_call(self):
         session, client = fake_sagemaker_session(OPENAI_RESPONSE)
-        with patch("boto3.Session", return_value=session), pytest.raises(SagemakerError) as raised:
-            self.sagemaker_llm.embedding(
-                model="openai/my-embed-endpoint",
-                input=["hello"],
-                model_response=EmbeddingResponse(),
-                print_verbose=print,
-                encoding=None,
-                logging_obj=MagicMock(),
-                optional_params={"aws_region_name": "us-east-1", "model_id": ["my-component"]},
-            )
+        with pytest.raises(SagemakerError) as raised:
+            self.embed_with(session, "openai/my-embed-endpoint", {"model_id": ["my-component"]})
 
         assert raised.value.status_code == 400
-        assert "model_id" in raised.value.message
+        assert raised.value.message == "model_id must be the inference component name as a string"
         client.invoke_endpoint.assert_not_called()
 
 
