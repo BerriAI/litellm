@@ -16,6 +16,8 @@ pub enum LlmProviders {
     AzureAi,
     #[strum(serialize = "bedrock")]
     Bedrock,
+    #[strum(serialize = "bedrock_mantle")]
+    BedrockMantle,
     #[strum(serialize = "cohere")]
     Cohere,
     #[strum(serialize = "deepseek")]
@@ -28,8 +30,12 @@ pub enum LlmProviders {
     Openai,
     #[strum(serialize = "openai_like")]
     OpenaiLike,
+    #[strum(serialize = "openrouter")]
+    Openrouter,
     #[strum(serialize = "reducto")]
     Reducto,
+    #[strum(serialize = "tencent")]
+    Tencent,
     #[strum(serialize = "vertex_ai")]
     VertexAi,
 }

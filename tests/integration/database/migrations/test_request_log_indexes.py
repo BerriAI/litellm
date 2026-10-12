@@ -36,7 +36,7 @@ requires_db: Final = pytest.mark.skipif(
     reason="requires a postgres database (DATABASE_URL)",
 )
 
-REPO: Final = Path(__file__).resolve().parents[2]
+REPO: Final = Path(__file__).resolve().parents[4]
 PACKAGE: Final = REPO / "litellm-proxy-extras" / "litellm_proxy_extras"
 PARTITION_SCRIPT: Final = REPO / "db_scripts" / "partition_spend_logs.sql"
 API_KEY_INDEX_MIGRATION: Final = "20260823000000_add_spend_logs_api_key_starttime_index"

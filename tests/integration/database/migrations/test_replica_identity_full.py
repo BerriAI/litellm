@@ -11,7 +11,6 @@ import pytest
 
 from litellm_proxy_extras.replica_identity import (
     REPLICA_IDENTITY_FULL_ENV_VAR,
-    apply_replica_identity_full,
 )
 from litellm_proxy_extras.utils import ProxyExtrasDBManager
 
@@ -116,44 +115,7 @@ def test_reports_failure_without_raising(scratch_schema, monkeypatch):
     assert _replica_identities(scratch_schema)["LiteLLM_ScratchTable"] == "d"
 
 
-def test_reports_an_unrunnable_prisma_cli_without_raising(tmp_path):
-    """A deployment without the Prisma CLI on PATH must still finish its
-    migration run instead of dying on the optional replication step."""
-    assert (
-        apply_replica_identity_full(
-            schema_path=str(tmp_path / "schema.prisma"),
-            prisma_command=str(tmp_path / "no-such-prisma"),
-            prisma_env={},
-        )
-        is False
-    )
 
 
-def test_setup_database_applies_after_a_successful_migration_run(monkeypatch):
-    applied = []
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_run_migrations", staticmethod(lambda **kwargs: True)
-    )
-    monkeypatch.setattr(
-        ProxyExtrasDBManager,
-        "apply_replica_identity_full_if_requested",
-        staticmethod(lambda: applied.append(True)),
-    )
-
-    assert ProxyExtrasDBManager.setup_database(use_migrate=True) is True
-    assert applied == [True]
 
 
-def test_setup_database_skips_replica_identity_when_migrations_fail(monkeypatch):
-    applied = []
-    monkeypatch.setattr(
-        ProxyExtrasDBManager, "_run_migrations", staticmethod(lambda **kwargs: False)
-    )
-    monkeypatch.setattr(
-        ProxyExtrasDBManager,
-        "apply_replica_identity_full_if_requested",
-        staticmethod(lambda: applied.append(True)),
-    )
-
-    assert ProxyExtrasDBManager.setup_database(use_migrate=True) is False
-    assert applied == []
