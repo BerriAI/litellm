@@ -190,8 +190,8 @@ PERPLEXITY_PPLX_DECIDER_V1_27B_DECISIONS: Final = CostTrackingTestCase(
         },
     ),
     expected=ExactExpected(
-        spend=3.92e-06,
-        input_cost=3.92e-06,
+        spend=1.96e-06,
+        input_cost=1.96e-06,
         output_cost=0.0,
         prompt_tokens=98,
         completion_tokens=1,
@@ -221,8 +221,8 @@ PERPLEXITY_PPLX_DECIDER_V1_27B_SYSTEMONE: Final = CostTrackingTestCase(
         },
     ),
     expected=ExactExpected(
-        spend=3.92e-06,
-        input_cost=3.92e-06,
+        spend=1.96e-06,
+        input_cost=1.96e-06,
         output_cost=0.0,
         prompt_tokens=98,
         completion_tokens=1,

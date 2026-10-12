@@ -82,7 +82,7 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "output_cost_per_token": 0.0,
     },
     "perplexity/pplx-decider-v1-27b": {
-        "input_cost_per_token": 4e-08,
+        "input_cost_per_token": 2e-08,
         "litellm_provider": "perplexity",
         "max_input_tokens": 262144,
         "mode": "evaluation",
