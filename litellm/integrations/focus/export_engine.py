@@ -25,14 +25,19 @@ class FocusExportEngine:
         export_format: str,
         prefix: str,
         destination_config: dict[str, Any] | None = None,
+        destination: FocusDestination | None = None,
     ) -> None:
         self.provider = provider
         self.export_format = export_format
         self.prefix = prefix
-        self.destination = FocusDestinationFactory.create(
-            provider=self.provider,
-            prefix=self.prefix,
-            config=destination_config,
+        self.destination = (
+            destination
+            if destination is not None
+            else FocusDestinationFactory.create(
+                provider=self.provider,
+                prefix=self.prefix,
+                config=destination_config,
+            )
         )
         self.serializer = self._init_serializer()
         self.transformer = FocusTransformer()

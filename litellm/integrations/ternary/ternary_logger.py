@@ -2,132 +2,35 @@
 
 from __future__ import annotations
 
-import json
 import os
-from collections.abc import Sequence
-from datetime import date, datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Final, TypeAlias
+from collections.abc import Awaitable, Callable
+from datetime import datetime, timedelta, timezone
+from typing import TYPE_CHECKING, Final, Protocol
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.focus.destinations.base import FocusTimeWindow
-from litellm.integrations.focus.export_engine import FocusExportEngine
+from litellm.integrations.focus.destinations.ternary_destination import FocusTernaryDestination
 from litellm.integrations.focus.focus_logger import FocusLogger
 
 if TYPE_CHECKING:
-    import polars as pl
-    from apscheduler.schedulers.asyncio import AsyncIOScheduler
-else:
-    AsyncIOScheduler: TypeAlias = object
+    from litellm.integrations.focus.export_engine import FocusExportEngine
 
 TERNARY_USAGE_DATA_JOB_NAME: Final = "ternary_export_usage_data"
 
 _SUPPORTED_FREQUENCIES: Final = frozenset({"daily", "interval"})
 
-_TOKEN_TAG_KEYS: Final = (
-    "prompt_tokens",
-    "completion_tokens",
-    "cache_read_input_tokens",
-    "cache_creation_input_tokens",
-)
 
+class _JobScheduler(Protocol):
+    """The slice of ``AsyncIOScheduler`` this module uses, which ships no type information"""
 
-def _merge_token_tags(normalized: pl.DataFrame, source: pl.DataFrame) -> pl.DataFrame:
-    """Zip transformed rows with the row-aligned source and add token keys to each row's Tags; degrades to unchanged on any mismatch."""
-    import polars as pl
-
-    if "Tags" not in normalized.columns:
-        verbose_logger.warning(
-            "Ternary export: transformed data has no `Tags` column; token counts not merged into %d row(s)",
-            normalized.height,
-        )
-        return normalized
-    if normalized.height != source.height:
-        verbose_logger.warning(
-            "Ternary export: row-count mismatch (normalized=%d, source=%d); token counts not merged",
-            normalized.height,
-            source.height,
-        )
-        return normalized
-    token_cols: Final = tuple(c for c in _TOKEN_TAG_KEYS if c in source.columns)
-    if not token_cols:
-        return normalized
-
-    token_rows: Final = source.select(token_cols).to_dicts()
-    tags_values: Final = normalized["Tags"].to_list()
-
-    merged: Final[list[str]] = []  # mutable-ok: per-row accumulator built in the zip loop
-    for tags_json, tokens in zip(tags_values, token_rows):
-        try:
-            parsed = json.loads(tags_json) if tags_json else {}  # mutable-ok: fresh per-row tag dict
-            if not isinstance(parsed, dict):
-                parsed = {}  # mutable-ok: non-object Tags degrades to empty
-        except (json.JSONDecodeError, TypeError):
-            parsed = {}  # mutable-ok: malformed Tags degrades to empty
-        for key, value in tokens.items():
-            if value is not None:
-                parsed[key] = str(value)
-        merged.append(json.dumps(parsed))
-
-    return normalized.with_columns(pl.Series("Tags", merged))
-
-
-def _drop_days_before(data: pl.DataFrame, floor: datetime) -> pl.DataFrame:
-    """Drop source rows for days older than the window start, so whole-day replace-by-day never truncates a partial older day."""
-    import polars as pl
-
-    if "date" not in data.columns:
-        return data
-    floor_date: Final = floor.astimezone(timezone.utc).date()
-    date_col: Final = pl.col("date").cast(pl.Utf8)  # cast-ok: polars dtype cast, not typing.cast
-    parsed: Final = date_col.str.strptime(pl.Date, "%Y-%m-%d", strict=False)
-    kept: Final = data.filter(parsed >= floor_date)
-    if data.height > 0 and kept.height == 0:
-        verbose_logger.warning(
-            "Ternary export: day-window floor %s dropped all %d rows (unparseable or older `date`?)",
-            floor_date,
-            data.height,
-        )
-    return kept
-
-
-def _canonical_day(raw: object) -> str | None:
-    """Return the zero-padded YYYY-MM-DD for a `date` value, or None when it is missing or unparseable."""
-    if isinstance(raw, date):
-        return raw.isoformat()
-    if not isinstance(raw, str):
-        return None
-    try:
-        parsed: Final = datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    except ValueError:
-        return None
-    return parsed.date().isoformat()
-
-
-def _partition_by_day(data: pl.DataFrame) -> Sequence[tuple[str, pl.DataFrame]]:
-    """Split source rows by their UTC `date` (one upload per day); rows with no parseable date are dropped."""
-    if "date" not in data.columns:
-        verbose_logger.warning("Ternary export: source data has no `date` column; %d row(s) not exported", data.height)
-        return ()
-    days: Final[list[tuple[str, pl.DataFrame]]] = []  # mutable-ok: per-day parts, sorted and returned as a tuple
-    undated = 0  # rebind-ok: running count of rows dropped for an unusable `date`
-    for key, part in data.partition_by("date", as_dict=True, maintain_order=True).items():
-        partition_key: object = key[0]  # pyright: ignore[reportAny]  # polars partition keys are stubbed as Any
-        day = _canonical_day(partition_key)
-        if day is None:
-            undated += part.height
-            continue
-        days.append((day, part))
-    if undated:
-        verbose_logger.warning("Ternary export: dropped %d row(s) with a missing or unparseable `date`", undated)
-    return tuple(sorted(days, key=lambda entry: entry[0]))
-
-
-def _day_window(day: str, frequency: str) -> FocusTimeWindow:
-    """The single UTC day a per-day upload covers."""
-    start: Final = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    return FocusTimeWindow(start_time=start, end_time=start + timedelta(days=1), frequency=frequency)
+    def add_job(
+        self,
+        func: Callable[[], Awaitable[None]],
+        /,
+        **trigger: str | int,  # kwargs-ok: APScheduler add_job trigger options
+    ) -> object: ...
 
 
 def _parse_interval(raw: str | int | None) -> int | None:
@@ -139,58 +42,6 @@ def _parse_interval(raw: str | int | None) -> int | None:
     except (ValueError, TypeError):
         verbose_logger.warning("Invalid TERNARY_EXPORT_INTERVAL_SECONDS value: %s, ignoring", raw)
         return None
-
-
-class _TernaryExportEngine(FocusExportEngine):
-    """FocusExportEngine that drops pre-window days and merges token counts into Tags before delivery."""
-
-    async def export_window(self, *, window: FocusTimeWindow, limit: int | None) -> None:
-        data: Final = await self._database.get_usage_data(
-            limit=limit,
-            start_time_utc=window.start_time,
-            end_time_utc=window.end_time,
-        )
-        await self._deliver_enriched(_drop_days_before(data, window.start_time), window)
-
-    async def export_all(self, *, limit: int | None) -> None:
-        data: Final = await self._database.get_usage_data(limit=limit)
-        now: Final = datetime.now(timezone.utc)
-        window: Final = FocusTimeWindow(
-            start_time=now.replace(hour=0, minute=0, second=0, microsecond=0),
-            end_time=now,
-            frequency="all",
-        )
-        await self._deliver_enriched(data, window)
-
-    async def _deliver_enriched(self, data: pl.DataFrame, window: FocusTimeWindow) -> None:
-        if data.is_empty():
-            verbose_logger.debug("Ternary export: no usage data for window %s", window)
-            return
-        failed: Final[list[str]] = []  # mutable-ok: days whose upload failed, reported once after all days run
-        for day, day_data in _partition_by_day(data):
-            try:
-                await self._deliver_day(day_data, _day_window(day, window.frequency))
-            except Exception as e:  # noqa: BLE001  # one day's failure must not block the rest; logged and re-raised
-                verbose_logger.warning("Ternary export: upload for %s failed: %s", day, e)
-                failed.append(day)
-        if failed:
-            raise RuntimeError(f"Ternary export: {len(failed)} day(s) failed to upload: {', '.join(failed)}")
-
-    async def _deliver_day(self, data: pl.DataFrame, window: FocusTimeWindow) -> None:
-        transformed: Final = self._transformer.transform(data)
-        if transformed.is_empty():
-            verbose_logger.debug("Ternary export: normalized data empty for %s", window.start_time.date())
-            return
-        enriched: Final = _merge_token_tags(transformed, data)
-        payload: Final = self._serializer.serialize(enriched)
-        if not payload:
-            verbose_logger.debug("Ternary export: serializer returned empty payload for %s", window.start_time.date())
-            return
-        await self._destination.deliver(
-            content=payload,
-            time_window=window,
-            filename=self._build_filename(window),
-        )
 
 
 class TernaryLogger(FocusLogger):
@@ -262,13 +113,13 @@ class TernaryLogger(FocusLogger):
         return FocusTimeWindow(start_time=start_time, end_time=now_utc, frequency=self.frequency)
 
     def _ensure_engine(self) -> FocusExportEngine:
-        """Use the Ternary export engine (day-window filtering + Tags token enrichment)."""
+        """Instantiate the polars-backed Ternary export engine lazily."""
         if self._engine is None:
-            self._engine = _TernaryExportEngine(
-                provider=self.provider,
-                export_format=self.export_format,
+            from .export_engine import TernaryExportEngine  # noqa: PLC0415  # polars is a proxy extra
+
+            self._engine = TernaryExportEngine(
                 prefix=self.prefix,
-                destination_config=self._destination_config,
+                destination=FocusTernaryDestination(prefix=self.prefix, config=self._destination_config),
             )
         return self._engine
 
@@ -293,7 +144,7 @@ class TernaryLogger(FocusLogger):
 
     @staticmethod
     async def init_ternary_background_job(
-        scheduler: AsyncIOScheduler,
+        scheduler: _JobScheduler,
     ) -> None:
         """Register the Ternary export job with the provided scheduler."""
         ternary_loggers: Final[list[CustomLogger]] = (  # mutable-ok: list returned by the shared callback manager

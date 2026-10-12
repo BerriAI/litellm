@@ -241,36 +241,34 @@ def test_should_accept_https_or_loopback_base_url(url):
     assert dest.base_url == url.rstrip("/")
 
 
-def test_factory_creates_ternary_destination_from_config():
+def test_generic_focus_factory_does_not_build_a_ternary_destination():
     from litellm.integrations.focus.destinations.factory import FocusDestinationFactory
 
-    dest = FocusDestinationFactory.create(
-        provider="ternary",
-        prefix="exports",
-        config={"api_key": "k", "connection_id": "c", "base_url": "https://ternary.test"},
-    )
-    assert isinstance(dest, FocusTernaryDestination)
-    assert dest.connection_id == "c"
+    with pytest.raises(NotImplementedError, match="'ternary' not supported"):
+        FocusDestinationFactory.create(
+            provider="ternary",
+            prefix="exports",
+            config={"api_key": "k", "connection_id": "c", "base_url": "https://ternary.test"},
+        )
 
 
-def test_factory_resolves_ternary_config_from_env(monkeypatch):
+def test_ternary_logger_resolves_its_destination_from_env(monkeypatch):
     monkeypatch.setenv("TERNARY_API_KEY", "envk")
     monkeypatch.setenv("TERNARY_CONNECTION_ID", "envc")
     monkeypatch.setenv("TERNARY_BASE_URL", "https://ternary.test")
-    from litellm.integrations.focus.destinations.factory import FocusDestinationFactory
+    from litellm.integrations.ternary.ternary_logger import TernaryLogger
 
-    dest = FocusDestinationFactory.create(provider="ternary", prefix="exports")
+    dest = TernaryLogger()._ensure_engine().destination
     assert isinstance(dest, FocusTernaryDestination)
-    assert dest.api_key == "envk"
-    assert dest.connection_id == "envc"
+    assert (dest.api_key, dest.connection_id, dest.base_url) == ("envk", "envc", "https://ternary.test")
 
 
 @pytest.mark.parametrize("missing", ["TERNARY_API_KEY", "TERNARY_CONNECTION_ID", "TERNARY_BASE_URL"])
-def test_factory_requires_each_ternary_env_var(monkeypatch, missing):
+def test_ternary_logger_requires_each_env_var(monkeypatch, missing):
     for var in ("TERNARY_API_KEY", "TERNARY_CONNECTION_ID", "TERNARY_BASE_URL"):
         monkeypatch.setenv(var, "https://ternary.test" if var == "TERNARY_BASE_URL" else "x")
     monkeypatch.delenv(missing, raising=False)
-    from litellm.integrations.focus.destinations.factory import FocusDestinationFactory
+    from litellm.integrations.ternary.ternary_logger import TernaryLogger
 
     with pytest.raises(ValueError, match=missing):
-        FocusDestinationFactory.create(provider="ternary", prefix="exports")
+        TernaryLogger()._ensure_engine()

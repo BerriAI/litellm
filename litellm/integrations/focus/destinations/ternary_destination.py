@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Protocol
 from urllib.parse import quote, urlparse
 
@@ -23,7 +24,7 @@ _LOOPBACK_HOSTS: Final = frozenset({"localhost", "127.0.0.1", "::1"})
 class TernaryUploadUrlBody(TypedDict):
     url: ReadOnly[NotRequired[str]]
     method: ReadOnly[NotRequired[str]]
-    headers: ReadOnly[NotRequired[dict[str, str]]]
+    headers: ReadOnly[NotRequired[Mapping[str, str]]]
 
 
 class _UploadUrlResponse(Protocol):
@@ -54,7 +55,11 @@ def _require_gcs_url(url: str) -> None:
 class _NoRedirectHTTPHandler(AsyncHTTPHandler):
     """AsyncHTTPHandler that disables redirects on every client it creates (SSRF guard)."""
 
-    def create_client(self, *args: object, **kwargs: object) -> httpx.AsyncClient:
+    def create_client(
+        self,
+        *args: object,
+        **kwargs: object,  # kwargs-ok: passthrough to AsyncHTTPHandler.create_client
+    ) -> httpx.AsyncClient:
         client: Final = super().create_client(*args, **kwargs)  # pyright: ignore[reportArgumentType]  # passthrough
         client.follow_redirects = False
         return client
@@ -69,7 +74,7 @@ class FocusTernaryDestination(FocusDestination):
         prefix: str,
         config: dict[str, str] | None = None,  # mutable-ok: FocusDestination(config) factory contract
     ) -> None:
-        resolved_config: Final = config or {}  # mutable-ok: read-only local; empty fallback for absent config
+        resolved_config: Final = config or {}
         api_key: Final = resolved_config.get("api_key")
         connection_id: Final = resolved_config.get("connection_id")
         base_url: Final = resolved_config.get("base_url")
@@ -135,8 +140,8 @@ class FocusTernaryDestination(FocusDestination):
         endpoint: Final = f"{self.base_url}/external-cost-sources/v1/{quote(self.connection_id, safe='')}/upload-url"
         response: Final = await client.post(
             endpoint,
-            headers={"Authorization": f"Bearer {self.api_key}"},  # mutable-ok: request headers for the client
-            json={"day": day},  # mutable-ok: JSON request body for the client
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={"day": day},
             timeout=TERNARY_UPLOAD_TIMEOUT_SECONDS,
         )
         if response.status_code >= 400:

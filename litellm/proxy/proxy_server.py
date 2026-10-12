@@ -11343,7 +11343,9 @@ class ProxyStartupEvent:
             TernaryLogger,
         )
 
-        await TernaryLogger.init_ternary_background_job(scheduler=scheduler)
+        await TernaryLogger.init_ternary_background_job(
+            scheduler=scheduler,  # pyright: ignore[reportUnknownArgumentType]  # APScheduler ships no type information
+        )
 
         ########################################################
         # Prometheus Background Job

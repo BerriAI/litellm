@@ -13,16 +13,21 @@ import pytest
 
 from litellm.integrations.focus.destinations.base import FocusTimeWindow
 from litellm.integrations.focus.focus_logger import FocusLogger
-from litellm.integrations.ternary.ternary_logger import (
-    TERNARY_USAGE_DATA_JOB_NAME,
-    TernaryLogger,
+from litellm.integrations.focus.destinations.ternary_destination import FocusTernaryDestination
+from litellm.integrations.focus.serializers import FocusCsvSerializer
+from litellm.integrations.ternary.export_engine import (
+    TernaryExportEngine,
     _canonical_day,
     _day_window,
     _drop_days_before,
     _merge_token_tags,
     _partition_by_day,
-    _TernaryExportEngine,
 )
+from litellm.integrations.ternary.ternary_logger import (
+    TERNARY_USAGE_DATA_JOB_NAME,
+    TernaryLogger,
+)
+from tests.test_litellm_rust.support.child_interpreter import run_child_interpreter
 
 
 def _logger() -> TernaryLogger:
@@ -120,8 +125,9 @@ async def test_daily_export_resends_yesterday_whole_including_spend_flushed_afte
 
     engine = MagicMock()
 
-    async def fake_get_usage_data(*, limit, start_time_utc, end_time_utc):
-        return rows.filter((pl.col("updated_at") >= start_time_utc) & (pl.col("updated_at") <= end_time_utc))
+    async def fake_get_usage_data(*, limit, start_time_utc, end_time_utc=None):
+        kept = rows.filter(pl.col("updated_at") >= start_time_utc)
+        return kept if end_time_utc is None else kept.filter(pl.col("updated_at") <= end_time_utc)
 
     engine._database.get_usage_data = fake_get_usage_data
     captured = {}
@@ -130,7 +136,7 @@ async def test_daily_export_resends_yesterday_whole_including_spend_flushed_afte
         captured["data"] = data
 
     engine._deliver_enriched = fake_deliver
-    await _TernaryExportEngine.export_window(engine, window=window, limit=None)
+    await TernaryExportEngine.export_window(engine, window=window, limit=None)
 
     sent = captured["data"]
     assert sent.filter(pl.col("date") == "2026-10-07")["spend"].sum() == 3.0
@@ -178,7 +184,7 @@ async def test_export_window_interposes_drop_days_before():
         end_time=datetime(2026, 9, 4, 12, 0, tzinfo=timezone.utc),
         frequency="daily",
     )
-    await _TernaryExportEngine.export_window(engine, window=window, limit=None)
+    await TernaryExportEngine.export_window(engine, window=window, limit=None)
 
     assert captured["data"]["date"].to_list() == ["2026-09-03", "2026-09-04"]
 
@@ -325,7 +331,7 @@ def _fake_engine(*, transformed: pl.DataFrame, payload: bytes) -> MagicMock:
     engine._serializer.serialize = MagicMock(return_value=payload)
     engine._destination.deliver = AsyncMock()
     engine._build_filename = MagicMock(return_value="usage.csv")
-    engine._deliver_day = lambda data, window: _TernaryExportEngine._deliver_day(engine, data, window)
+    engine._deliver_day = lambda data, window: TernaryExportEngine._deliver_day(engine, data, window)
     return engine
 
 
@@ -335,7 +341,7 @@ async def test_transform_enrich_deliver_enriches_tags_then_delivers():
     transformed = pl.DataFrame({"Tags": [json.dumps({"team_id": "t1"})]})
     engine = _fake_engine(transformed=transformed, payload=b"csv-bytes")
 
-    await _TernaryExportEngine._deliver_enriched(engine, data, _window())
+    await TernaryExportEngine._deliver_enriched(engine, data, _window())
 
     serialized_frame = engine._serializer.serialize.call_args.args[0]
     assert json.loads(serialized_frame["Tags"][0])["prompt_tokens"] == "7"
@@ -349,7 +355,7 @@ async def test_transform_enrich_deliver_enriches_tags_then_delivers():
 @pytest.mark.asyncio
 async def test_transform_enrich_deliver_skips_empty_data():
     engine = _fake_engine(transformed=pl.DataFrame(), payload=b"")
-    await _TernaryExportEngine._deliver_enriched(engine, pl.DataFrame(), _window())
+    await TernaryExportEngine._deliver_enriched(engine, pl.DataFrame(), _window())
     engine._destination.deliver.assert_not_awaited()
 
 
@@ -362,7 +368,7 @@ def _real_engine() -> MagicMock:
     engine._serializer = FocusCsvSerializer()
     engine._destination.deliver = AsyncMock()
     engine._build_filename = MagicMock(side_effect=lambda w: f"usage_{w.start_time:%Y%m%d}.csv")
-    engine._deliver_day = lambda data, window: _TernaryExportEngine._deliver_day(engine, data, window)
+    engine._deliver_day = lambda data, window: TernaryExportEngine._deliver_day(engine, data, window)
     return engine
 
 
@@ -393,7 +399,7 @@ async def test_delivers_one_upload_per_utc_day_through_the_real_transformer():
     engine = _real_engine()
     data = _source_rows(["2026-10-06", "2026-10-05", "2026-10-06"])
 
-    await _TernaryExportEngine._deliver_enriched(engine, data, _window())
+    await TernaryExportEngine._deliver_enriched(engine, data, _window())
 
     calls = engine._destination.deliver.await_args_list
     assert [c.kwargs["time_window"].start_time.date().isoformat() for c in calls] == ["2026-10-05", "2026-10-06"]
@@ -422,7 +428,7 @@ async def test_a_failed_day_does_not_block_the_remaining_days():
     engine._destination.deliver = deliver
 
     with pytest.raises(RuntimeError, match=r"1 day\(s\) failed to upload: 2026-10-05"):
-        await _TernaryExportEngine._deliver_enriched(engine, data, _window())
+        await TernaryExportEngine._deliver_enriched(engine, data, _window())
 
     assert attempted == ["2026-10-04", "2026-10-05", "2026-10-06"]
 
@@ -502,7 +508,7 @@ async def test_export_all_delivers_with_all_window():
         captured["rows"] = data.height
 
     engine._deliver_enriched = fake_deliver
-    await _TernaryExportEngine.export_all(engine, limit=None)
+    await TernaryExportEngine.export_all(engine, limit=None)
     assert captured["rows"] == 1
     assert captured["window"].frequency == "all"
 
@@ -511,7 +517,7 @@ async def test_export_all_delivers_with_all_window():
 async def test_transform_enrich_deliver_skips_when_transform_empty():
     data = pl.DataFrame({"date": ["2026-09-03"], "Tags": [json.dumps({"team_id": "t"})], "prompt_tokens": [1]})
     engine = _fake_engine(transformed=pl.DataFrame(), payload=b"")
-    await _TernaryExportEngine._deliver_enriched(engine, data, _window())
+    await TernaryExportEngine._deliver_enriched(engine, data, _window())
     engine._destination.deliver.assert_not_awaited()
 
 
@@ -520,15 +526,98 @@ async def test_transform_enrich_deliver_skips_when_payload_empty():
     data = pl.DataFrame({"date": ["2026-09-03"], "Tags": [json.dumps({"team_id": "t"})]})
     transformed = pl.DataFrame({"Tags": [json.dumps({"team_id": "t"})]})
     engine = _fake_engine(transformed=transformed, payload=b"")
-    await _TernaryExportEngine._deliver_enriched(engine, data, _window())
+    await TernaryExportEngine._deliver_enriched(engine, data, _window())
     engine._destination.deliver.assert_not_awaited()
 
 
 def test_ensure_engine_builds_ternary_export_engine():
     logger = _logger()
     engine = logger._ensure_engine()
-    assert isinstance(engine, _TernaryExportEngine)
+    assert isinstance(engine, TernaryExportEngine)
+    assert isinstance(engine.destination, FocusTernaryDestination)
+    assert isinstance(engine.serializer, FocusCsvSerializer)
     assert logger._ensure_engine() is engine
+
+
+def test_logger_registry_and_ternary_logger_import_without_polars():
+    result = run_child_interpreter(
+        "import sys\n"
+        "sys.modules['polars'] = None\n"
+        "from litellm.litellm_core_utils.custom_logger_registry import CustomLoggerRegistry\n"
+        "from litellm.integrations.ternary.ternary_logger import TernaryLogger\n"
+        "assert CustomLoggerRegistry.CALLBACK_CLASS_STR_TO_CLASS_TYPE['ternary'] is TernaryLogger\n"
+        "TernaryLogger(api_key='k', connection_id='c', base_url='https://ternary.test')\n",
+        timeout=120,
+    )
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.asyncio
+async def test_export_window_reads_a_day_before_the_floor_with_no_upper_bound():
+    from datetime import datetime, timezone
+
+    engine = MagicMock()
+    captured = {}
+
+    async def fake_get_usage_data(**kwargs):
+        captured.update(kwargs)
+        return pl.DataFrame({"date": ["2026-09-03"], "spend": [1.0]})
+
+    engine._database.get_usage_data = fake_get_usage_data
+    engine._deliver_enriched = AsyncMock()
+    window = FocusTimeWindow(
+        start_time=datetime(2026, 9, 3, 0, 0, tzinfo=timezone.utc),
+        end_time=datetime(2026, 9, 5, 13, 0, tzinfo=timezone.utc),
+        frequency="interval",
+    )
+    await TernaryExportEngine.export_window(engine, window=window, limit=None)
+
+    assert captured == {"limit": None, "start_time_utc": datetime(2026, 9, 2, 0, 0, tzinfo=timezone.utc)}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("session_offset_hours", [-12, -7, 0, 9, 14])
+async def test_export_window_keeps_every_row_of_a_day_whatever_the_session_offset(session_offset_hours):
+    """Emulate Postgres reading naive-UTC `updated_at` in a session `session_offset_hours` east of UTC."""
+    from datetime import datetime, timezone
+
+    rows = pl.DataFrame(
+        {
+            "date": ["2026-09-02", "2026-09-03", "2026-09-03", "2026-09-05"],
+            "updated_at": [
+                datetime(2026, 9, 2, 12, 0, tzinfo=timezone.utc),
+                datetime(2026, 9, 3, 1, 0, tzinfo=timezone.utc),
+                datetime(2026, 9, 3, 20, 0, tzinfo=timezone.utc),
+                datetime(2026, 9, 5, 12, 50, tzinfo=timezone.utc),
+            ],
+            "spend": [8.0, 1.0, 2.0, 4.0],
+        }
+    )
+    session_offset = timedelta(hours=session_offset_hours)
+
+    async def session_filtered(*, limit, start_time_utc, end_time_utc=None):
+        as_read = pl.col("updated_at") - session_offset
+        kept = rows.filter(as_read >= start_time_utc)
+        return kept if end_time_utc is None else kept.filter(as_read <= end_time_utc)
+
+    engine = MagicMock()
+    engine._database.get_usage_data = session_filtered
+    captured = {}
+
+    async def fake_deliver(data, _window):
+        captured["data"] = data
+
+    engine._deliver_enriched = fake_deliver
+    window = FocusTimeWindow(
+        start_time=datetime(2026, 9, 3, 0, 0, tzinfo=timezone.utc),
+        end_time=datetime(2026, 9, 5, 13, 0, tzinfo=timezone.utc),
+        frequency="interval",
+    )
+    await TernaryExportEngine.export_window(engine, window=window, limit=None)
+
+    sent = captured["data"]
+    assert sent["date"].to_list() == ["2026-09-03", "2026-09-03", "2026-09-05"]
+    assert sent["spend"].sum() == 7.0
 
 
 def test_init_custom_logger_compatible_class_returns_cached_ternary_logger(monkeypatch):
