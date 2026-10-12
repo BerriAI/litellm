@@ -191,12 +191,15 @@ def run_gateway_load(
     users: int,
     spawn_rate: float,
     duration_seconds: float,
+    processes: int = 1,
 ) -> LoadResult:
     """Drive `endpoints` from headless locust and aggregate what it reported.
 
     Each simulated user picks one of `api_keys`, so auth and budget lookups spread over a
     pool of virtual keys instead of keeping one key's cache entry permanently warm, and one
     of `endpoints` round robin, so the run covers every route the caller asked for.
+    `processes` above 1 has locust fork that many workers behind one master on this host,
+    which is how a single generator gets past the throughput one Python process can push.
     """
     with tempfile.TemporaryDirectory(prefix="e2e-load-") as report_dir:
         csv_prefix = Path(report_dir) / _CSV_PREFIX
@@ -221,6 +224,7 @@ def run_gateway_load(
                 f"{int(duration_seconds)}s",
                 "--exit-code-on-error",
                 "0",
+                *(("--processes", str(processes)) if processes > 1 else ()),
             ],
             env={
                 **os.environ,
