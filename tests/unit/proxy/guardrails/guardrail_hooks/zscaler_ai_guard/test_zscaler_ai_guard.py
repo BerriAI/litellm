@@ -10,11 +10,15 @@ Tests covering:
 - resolve-and-execute-policy endpoint (policyId omission)
 """
 
+import asyncio
 import importlib
 import os
+from typing import Final, Literal
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 from fastapi import HTTPException
 
 import litellm
@@ -561,3 +565,47 @@ def setup_and_teardown():
         if hasattr(litellm, "in_memory_llm_clients_cache"):
             litellm.in_memory_llm_clients_cache.flush_cache()
     yield
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("input_type", ["request", "response"])
+@pytest.mark.parametrize(
+    ("request_data", "expected_body_user"),
+    [
+        ({"user": "alice@example.com"}, "alice@example.com"),
+        ({}, None),
+        ({"user": None}, None),
+        ({"user": ""}, None),
+        ({"user": 12345}, None),
+        ({"user": ["alice@example.com"]}, None),
+    ],
+)
+async def test_apply_guardrail_sends_request_user_in_execute_policy_body(
+    request_data: dict[str, object],
+    expected_body_user: str | None,
+    input_type: Literal["request", "response"],
+) -> None:
+    received: Final = asyncio.Queue[object]()
+
+    async def execute_policy(request: web.Request) -> web.Response:
+        await received.put(await request.json())
+        return web.json_response({"statusCode": 200, "action": "ALLOW"})
+
+    app: Final = web.Application()
+    app.router.add_post("/v1/detection/execute-policy", execute_policy)
+    async with TestServer(app) as server:
+        guardrail: Final = ZscalerAIGuard(
+            api_key="test_key",
+            api_base=str(server.make_url("/v1/detection/execute-policy")),
+            policy_id=1,
+        )
+        await guardrail.apply_guardrail({"texts": ["hello"]}, request_data, input_type)
+
+    body: Final = received.get_nowait()
+    assert received.empty()
+    assert body == {
+        "direction": "OUT" if input_type == "response" else "IN",
+        "content": "hello",
+        "policyId": 1,
+        **({"user": expected_body_user} if expected_body_user is not None else {}),
+    }
