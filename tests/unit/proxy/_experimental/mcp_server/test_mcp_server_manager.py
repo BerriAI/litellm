@@ -2212,6 +2212,31 @@ class TestMCPServerManager:
         assert mock_client.call_tool.call_args.kwargs.get("raise_on_error") is True
 
     @pytest.mark.asyncio
+    async def test_managed_scope_challenge_requires_reauthorization_without_retry(self):
+        server = MCPServer(
+            server_id="managed-scope", name="managed-scope", alias="managed-scope",
+            url="https://up.example.com/mcp", transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code",
+        )
+        upstream_error = self._upstream_status_error(
+            403, 'Bearer error="insufficient_scope", scope="tools.write", resource_metadata="https://untrusted.test/metadata"'
+        )
+        manager = MCPServerManager()
+        client = AsyncMock()
+        client.call_tool = AsyncMock(side_effect=upstream_error)
+        manager.create_mcp_client = AsyncMock(return_value=client)
+
+        with pytest.raises(MCPUpstreamAuthError) as raised:
+            await self._run_call_regular(manager, server)
+
+        response = raised.value.to_http_exception("https://gateway.test", "/managed-scope/mcp")
+        assert response.status_code == 403
+        assert response.headers == {
+            "www-authenticate": 'Bearer resource_metadata="https://gateway.test/.well-known/oauth-protected-resource/managed-scope/mcp", error="insufficient_scope", scope="tools.write"'
+        }
+        assert client.call_tool.await_count == 1
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("is_error", [False, True])
     async def test_call_passthrough_returns_tool_result_unchanged(self, is_error):
         """The relay only re-raises transport failures. A tool that RETURNS a result (a success, or a
@@ -4533,6 +4558,7 @@ class TestMCPServerManager:
             f"{issuer}/.well-known/oauth-authorization-server",
             {
                 "issuer": issuer,
+                "response_types_supported": ["code"],
                 "authorization_endpoint": "https://idp.example.com/authorize",
                 "token_endpoint": "https://idp.example.com/token",
                 "scopes_supported": ["read", "write"],
@@ -4553,6 +4579,11 @@ class TestMCPServerManager:
         assert result.scopes == ["read", "write"]
 
         assert result.client_id_metadata_document_supported is True
+
+        assert result.authorization_server_metadata is not None
+        assert result.authorization_server_metadata["scopes_supported"] == ["read", "write"]
+        merged = manager._merge_discovered_oauth_metadata(self._passthrough_call_server(MCPAuth.oauth2), result)
+        assert merged.authorization_server_metadata == result.authorization_server_metadata
 
     @pytest.mark.asyncio
     async def test_fetch_single_authorization_server_metadata_rejects_issuer_mismatch(self):
@@ -7254,6 +7285,47 @@ class TestMCPServerManager:
     @staticmethod
     def _unrestricted_auth() -> UserAPIKeyAuth:
         return UserAPIKeyAuth(api_key="sk-test")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("managed", [False, True])
+    async def test_tool_response_waits_only_for_managed_user_oauth_authorization(self, managed):
+        import asyncio
+
+        from mcp.server.context import ServerRequestContext
+        from starlette.requests import Request
+
+        from litellm.proxy._experimental.mcp_server.mcp_context import active_mcp_request_ctx_var
+        from litellm.proxy._experimental.mcp_server.scope_challenge import SCOPE_RESPONSE_KEY, OAuthScopeResponse
+
+        auth = self._unrestricted_auth()
+        manager, logging = self._manager_ready_for_call_tool(
+            [MCPTool(name="test_tool", inputSchema={"type": "object"})],
+            caller=ListedToolsCaller(user_api_key_auth=auth),
+        )
+        if managed:
+            manager.registry["test-server"] = manager.registry["test-server"].model_copy(update={
+                "auth_type": MCPAuth.oauth2, "oauth2_flow": "authorization_code",
+            })
+        send = AsyncMock()
+        gate = OAuthScopeResponse(send, "https://gateway.example", "/mcp/test-server")
+        context = ServerRequestContext(session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=Request({"type": "http", SCOPE_RESPONSE_KEY: gate}))
+        token = active_mcp_request_ctx_var.set(context)
+        await gate({"type": "http.response.start", "status": 200, "headers": []})
+        progress = asyncio.create_task(gate({"type": "http.response.body", "body": b"progress", "more_body": True}))
+
+        async def upstream_call(*args, **kwargs):
+            await asyncio.sleep(0)
+            assert send.await_count == (0 if managed else 2)
+            return CallToolResult(content=[], is_error=False)
+
+        manager.create_mcp_client.return_value.call_tool.side_effect = upstream_call
+        try:
+            result = await manager.call_tool(server_name="test-server", name="test_tool", arguments={}, user_api_key_auth=auth, proxy_logging_obj=logging)
+            assert not result.is_error
+        finally:
+            gate.allow()
+            await asyncio.wait_for(progress, 1)
+            active_mcp_request_ctx_var.reset(token)
 
     @pytest.mark.asyncio
     async def test_call_tool_hands_listed_tool_description_and_schema_to_pre_call_hooks(self):
@@ -18051,7 +18123,10 @@ async def test_unreusable_upstream_session_is_replaced_before_cleanup_finishes(
 
 @pytest.fixture
 def _active_mcp_request_context() -> Iterator[None]:
-    token: Final = active_mcp_request_ctx_var.set(cast(ServerRequestContext, object()))
+    context: Final = ServerRequestContext(
+        session=MagicMock(), lifespan_context={}, protocol_version="2025-11-25", method="tools/call", request=None
+    )
+    token: Final = active_mcp_request_ctx_var.set(context)
     try:
         yield
     finally:
@@ -19973,17 +20048,23 @@ def test_oauth_rebuild_retains_only_corroborated_cimd_capability(capability: boo
         transport=MCPTransport.http, auth_type=MCPAuth.oauth2,
         authorization_url="https://idp.example.com/authorize", token_url="https://idp.example.com/token",
         client_id_metadata_document_supported=capability,
+        authorization_server_metadata={"issuer": "https://idp.example.com", "response_types_supported": ["code"], "scopes_supported": ["offline_access"]},
     )
     rebuilt: Final = previous.model_copy(update={
         "client_id_metadata_document_supported": not capability if rebuild == "fresh_discovery" else None,
         "authorization_url": "https://changed.example.com/authorize" if rebuild == "repointed" else previous.authorization_url,
         "token_url": None,
+        "authorization_server_metadata": {"scopes_supported": []} if rebuild == "fresh_discovery" else None,
         "issuer": "https://idp.example.com" if rebuild == "anchored" else None,
         "issuer_is_anchored": rebuild == "anchored",
     })
     carry_forward_resolved_oauth_endpoints(rebuilt, previous)
     expected: Final = not capability if rebuild == "fresh_discovery" else None if rebuild in ("repointed", "anchored") else capability
     assert rebuilt.client_id_metadata_document_supported is expected
+    assert rebuilt.authorization_server_metadata == (
+        {"scopes_supported": []} if rebuild == "fresh_discovery"
+        else previous.authorization_server_metadata if rebuild == "same" else None
+    )
 
 
 @pytest.mark.asyncio

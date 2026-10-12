@@ -41,6 +41,7 @@ class _SessionCallbackMap(TypedDict):
     sampling_callback: ReadOnly[SamplingFnT | None]
     elicitation_callback: ReadOnly[ElicitationFnT | None]
     logging_callback: ReadOnly[LoggingFnT | None]
+    response_hooks: ReadOnly[tuple[Callable[[httpx2.Response], Awaitable[None]], ...]]
 
 
 from mcp.types import (
@@ -96,6 +97,7 @@ from litellm.constants import (
 )
 from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
+from litellm.proxy._experimental.mcp_server.mcp_context import get_active_mcp_request_ctx
 from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
 from litellm.proxy._experimental.mcp_server.result_conversion import (
     age_freshness,
@@ -120,6 +122,20 @@ from litellm.types.mcp import (
 if TYPE_CHECKING:
     from litellm.proxy._experimental.mcp_server.contracts import CatalogListRequest, CatalogListResult
     from litellm.proxy._experimental.mcp_server.legacy_callbacks import ElicitationCallback
+
+
+def _mcp_response_hooks() -> tuple[Callable[[httpx2.Response], Awaitable[None]], ...]:
+    if get_active_mcp_request_ctx() is None:
+        return (capture_upstream_error_response,)
+    from litellm.proxy._experimental.mcp_server.legacy_callbacks import (
+        get_scope_response,
+        record_upstream_tool_authorization,
+    )
+
+    return (
+        partial(record_upstream_tool_authorization, pending=get_scope_response()),
+        capture_upstream_error_response,
+    )
 
 
 def to_basic_auth(auth_value: str) -> str:
@@ -497,6 +513,7 @@ class MCPClient:
             "sampling_callback": self._sampling_callback,
             "elicitation_callback": self._elicitation_callback,
             "logging_callback": self._logging_callback,
+            "response_hooks": _mcp_response_hooks(),
         }
 
     def session_settings(self) -> tuple[MCPTransport, MCPUpstreamProtocol, float, bool, bool, bool]:
@@ -721,7 +738,9 @@ class MCPClient:
                         write_stream,
                         read_timeout_seconds=self.timeout,
                         message_handler=receive_message,
-                        **session_kwargs,
+                        sampling_callback=session_kwargs["sampling_callback"],
+                        elicitation_callback=session_kwargs["elicitation_callback"],
+                        logging_callback=session_kwargs["logging_callback"],
                     )
                     session: Final = await session_ctx.__aenter__()
                     try:
@@ -931,7 +950,14 @@ class MCPClient:
                 verify=ssl_config,
                 follow_redirects=True,
                 event_hooks=MappingProxyType(
-                    {"response": [capture_upstream_error_response], "request": [guard] if guard else []}
+                    {
+                        "response": list(
+                            self._session_callbacks_override["response_hooks"]
+                            if self._session_callbacks_override is not None
+                            else _mcp_response_hooks()
+                        ),
+                        "request": [guard] if guard else [],
+                    }
                 ),
             )
 
@@ -1582,6 +1608,7 @@ class PersistentMCPSession:
         self._initial_callbacks: Final[_SessionCallbackMap] = client.session_callbacks()
         self._current_callbacks: _SessionCallbackMap = self._initial_callbacks
         delegated_callbacks: Final[_SessionCallbackMap] = {
+            "response_hooks": (self._record_response,),
             "sampling_callback": (
                 self._delegate("sampling_callback")
                 if self._initial_callbacks["sampling_callback"] is not None
@@ -1598,6 +1625,10 @@ class PersistentMCPSession:
         }
         client.route_session_callbacks(delegated_callbacks)
         self._task: Final = loop.create_task(self._serve())
+
+    async def _record_response(self, response: httpx2.Response) -> None:
+        for hook in self._current_callbacks["response_hooks"]:
+            await hook(response)
 
     @overload
     def _delegate(self, name: Literal["sampling_callback"]) -> SamplingFnT: ...

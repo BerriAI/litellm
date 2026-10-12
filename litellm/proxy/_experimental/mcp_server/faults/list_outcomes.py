@@ -10,13 +10,15 @@ becomes an outcome, never a second failure.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
 from typing import Final, Literal, NamedTuple, NoReturn, TypeAlias
+from urllib.request import parse_http_list, parse_keqv_list
 
 import httpx
 import httpx2
 from mcp.types import Tool as MCPTool
-from pydantic import ConfigDict
+from pydantic import ConfigDict, TypeAdapter
 from typing_extensions import assert_never
 
 from litellm.proxy._experimental.mcp_server.exceptions import (
@@ -96,6 +98,29 @@ def upstream_auth_challenge(exc: BaseException) -> tuple[int, str | None] | None
         if response.status_code in (401, 403):
             return response.status_code, response.headers.get("www-authenticate")
     return None
+
+
+def upstream_insufficient_scope(exc: BaseException) -> str | None:
+    auth: Final = upstream_auth_challenge(exc)
+    if auth is None or auth[0] != 403 or not auth[1]:
+        return None
+    scheme, _, parameters = auth[1].partition(" ")
+    if scheme.lower() != "bearer":
+        return None
+    fields: Final = parse_http_list(parameters)
+    if any("=" not in field or not field.split("=", 1)[1] for field in fields):
+        return None
+    keys: Final = tuple(field.split("=", 1)[0].strip().lower() for field in fields)
+    if len(set(keys)) != len(keys) or any(re.fullmatch(r"[!#$%&'*+.^_`|~0-9a-z-]+", key) is None for key in keys):
+        return None
+    parsed: Final = TypeAdapter(dict[str, str]).validate_python(parse_keqv_list(fields))
+    values: Final = {key: value for key, value in zip(keys, parsed.values())}
+    if values.get("error") != "insufficient_scope":
+        return None
+    scope: Final = values.get("scope", "")
+    if scope and re.fullmatch(r"[!#-\[\]-~]+(?: [!#-\[\]-~]+)*", scope) is None:
+        return None
+    return scope
 
 
 def raise_classified_list_failure(
