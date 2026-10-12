@@ -14,6 +14,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -45,6 +46,7 @@ class ZscalerAIGuard(CustomGuardrail):
         send_user_api_key_user_id: bool | None = None,
         send_user_api_key_team_id: bool | None = None,
         timeout: float | None = None,
+        http_client: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -55,6 +57,7 @@ class ZscalerAIGuard(CustomGuardrail):
         )
         self.policy_id = policy_id if policy_id is not None else int(os.getenv("ZSCALER_AI_GUARD_POLICY_ID", -1))
         self.api_key = api_key or os.getenv("ZSCALER_AI_GUARD_API_KEY")
+        self.http_client = http_client
         self.send_user_api_key_alias = (
             send_user_api_key_alias
             if send_user_api_key_alias is not None
@@ -207,9 +210,6 @@ class ZscalerAIGuard(CustomGuardrail):
                 )
             verbose_proxy_logger.debug("inside apply_guardrail kwargs: %s", kwargs)
 
-            # Resolve user for payload (dashboard attribution on AI Guard)
-            # This is the top-level "user" field from the OpenAI chat completion request,
-            # independent of the user_api_key_* metadata sent via headers.
             user_for_payload: Final = request_data.get("user") or None
 
             zscaler_ai_guard_result = None
@@ -292,7 +292,9 @@ class ZscalerAIGuard(CustomGuardrail):
         return extra_headers
 
     async def _send_request(self, url, headers, data):
-        async_client: Final = get_async_httpx_client(llm_provider=httpxSpecialProvider.LoggingCallback)
+        async_client: Final = self.http_client or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.LoggingCallback
+        )
 
         response: Final = await async_client.post(
             f"{url}",
