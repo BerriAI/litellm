@@ -51404,6 +51404,70 @@
         "litellm_provider": "vertex_ai",
         "mode": "vector_store"
     },
+    "vertex_ai/semantic-ranker-default": {
+        "input_cost_per_query": 0.001,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://cloud.google.com/generative-ai-app-builder/pricing"
+    },
+    "vertex_ai/semantic-ranker-default-002": {
+        "input_cost_per_query": 0.001,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://cloud.google.com/generative-ai-app-builder/pricing"
+    },
+    "vertex_ai/semantic-ranker-default-003": {
+        "input_cost_per_query": 0.001,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://cloud.google.com/generative-ai-app-builder/pricing"
+    },
+    "vertex_ai/semantic-ranker-default-004": {
+        "input_cost_per_query": 0.001,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://cloud.google.com/generative-ai-app-builder/pricing"
+    },
+    "vertex_ai/semantic-ranker-default@latest": {
+        "input_cost_per_query": 0.001,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://cloud.google.com/generative-ai-app-builder/pricing"
+    },
+    "vertex_ai/semantic-ranker-fast": {
+        "input_cost_per_query": 0.001,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://cloud.google.com/generative-ai-app-builder/pricing"
+    },
+    "vertex_ai/semantic-ranker-fast-004": {
+        "input_cost_per_query": 0.001,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://cloud.google.com/generative-ai-app-builder/pricing"
+    },
+    "vertex_ai/semantic-ranker-fast@latest": {
+        "input_cost_per_query": 0.001,
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "vertex_ai",
+        "mode": "rerank",
+        "output_cost_per_token": 0.0,
+        "source": "https://cloud.google.com/generative-ai-app-builder/pricing"
+    },
     "openai/container": {
         "code_interpreter_cost_per_session": 0.03,
         "litellm_provider": "openai",
