@@ -14,7 +14,11 @@ export function RemoveButton({ label, onClick }: { label: string; onClick: () =>
 
 export function AddButton({ children, onClick }: { children: ReactNode; onClick: () => void }) {
   return (
-    <Button variant="outline" size="sm" className="w-fit" onClick={onClick}>
+    <Button
+      variant="outline"
+      className="w-full border-dashed text-muted-foreground shadow-none hover:text-foreground"
+      onClick={onClick}
+    >
       <Plus />
       {children}
     </Button>

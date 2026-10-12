@@ -75,9 +75,13 @@ const selectEndpoint = async (endpoint: "/v1/decisions" | "/v1/systemone") => {
 };
 
 const selectPreset = async (label: string) => {
-  screen.getByRole("combobox", { name: "Example" }).focus();
-  await userEvent.keyboard("{ArrowDown}");
-  await userEvent.click(await screen.findByRole("option", { name: label }));
+  await userEvent.click(screen.getByRole("button", { name: "Load example" }));
+  await userEvent.click(await screen.findByRole("menuitem", { name: label }));
+};
+
+const renderPopulated = async (ui: ReactElement) => {
+  render(ui);
+  await selectPreset("Triage a bug report");
 };
 
 const createResponse = (body: SystemOneResponse | OpenAIDecisionsResponse, status = 200, errorText = "") =>
@@ -108,36 +112,34 @@ describe("SystemOneUI integration", () => {
     document.cookie = "token=; path=/; max-age=0";
   });
 
-  it("switches between example presets and reads Custom once the request is edited", async () => {
+  it("starts empty with one blank question and loads examples from the menu", async () => {
     render(<SystemOneUI accessToken="session-key" />);
-    const input = screen.getByRole("textbox", { name: "Input" }) as HTMLTextAreaElement;
-    const example = input.value;
-    const picker = screen.getByRole("combobox", { name: "Example" });
-    expect(picker).toHaveTextContent("Triage a bug report");
+    expect(screen.getByRole("textbox", { name: "Input" })).toHaveValue("");
+    expect(screen.getAllByRole("group", { name: /Question / })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Clear form" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
 
-    fireEvent.change(input, { target: { value: "Something else" } });
-    expect(picker).toHaveTextContent("Custom");
     await selectPreset("Triage a bug report");
-    expect(screen.getByRole("textbox", { name: "Input" })).toHaveValue(example);
-    expect(picker).toHaveTextContent("Triage a bug report");
+    const input = screen.getByRole("textbox", { name: "Input" }) as HTMLTextAreaElement;
+    expect(input).toHaveDisplayValue(/streaming responses/);
+    expect(screen.getByRole("button", { name: "Clear form" })).toBeEnabled();
 
     await selectPreset("Score a sales lead");
-    expect(picker).toHaveTextContent("Score a sales lead");
     expect(await readCurlPayload()).toMatchObject({ questions: { fit: { type: "score" } } });
   });
 
   it("clears the whole request and lets a preset be picked from nothing", async () => {
     const user = userEvent.setup();
-    render(<SystemOneUI accessToken="session-key" />);
-    const clear = screen.getByRole("button", { name: "Clear" });
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
+    const clear = screen.getByRole("button", { name: "Clear form" });
     expect(screen.getByRole("textbox", { name: "Input" })).toHaveDisplayValue(/streaming responses/);
 
     await user.click(clear);
     expect(screen.getByRole("textbox", { name: "Input" })).toHaveValue("");
-    expect(screen.queryAllByRole("group", { name: /Question / })).toHaveLength(0);
+    expect(screen.getAllByRole("group", { name: /Question / })).toHaveLength(1);
+    expect(screen.getByRole("textbox", { name: "Instructions" })).toHaveValue("");
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     expect(clear).toBeDisabled();
-    expect(screen.getByRole("combobox", { name: "Example" })).toHaveTextContent("Custom");
 
     await selectPreset("Route a support ticket");
     expect(screen.getByRole("textbox", { name: "Input" })).toHaveDisplayValue(/charged twice/);
@@ -148,18 +150,16 @@ describe("SystemOneUI integration", () => {
   it("keeps the preset label after picking a model and keeps that model when clearing", async () => {
     const user = userEvent.setup();
     mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
     const modelPicker = screen.getByRole("combobox", { name: "Decision model" });
     await waitFor(() => expect(modelPicker).toHaveValue("jev-latest"));
-    const picker = screen.getByRole("combobox", { name: "Example" });
 
     await user.clear(modelPicker);
     await user.type(modelPicker, "p");
     await user.click(await screen.findByRole("option", { name: "pplx-decider" }));
-    expect(picker).toHaveTextContent("Triage a bug report");
     expect(await readCurlPayload()).toMatchObject({ model: "pplx-decider" });
 
-    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await user.click(screen.getByRole("button", { name: "Clear form" }));
     expect(await readCurlPayload()).toEqual({ model: "pplx-decider", state: "", questions: {} });
     await selectPreset("Score a sales lead");
     expect(await readCurlPayload()).toMatchObject({ model: "pplx-decider", questions: { fit: { type: "score" } } });
@@ -167,7 +167,7 @@ describe("SystemOneUI integration", () => {
 
   it("offers the same presets on /v1/decisions in the OpenAI shape and clears to an empty input", async () => {
     const user = userEvent.setup();
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
     await selectEndpoint("/v1/decisions");
     await selectPreset("Moderate a forum comment");
     const payload = await readCurlPayload();
@@ -176,13 +176,13 @@ describe("SystemOneUI integration", () => {
       { type: "predicate", name: "breaks_rules", instructions: "Does this comment break the community guidelines?" },
     ]);
 
-    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await user.click(screen.getByRole("button", { name: "Clear form" }));
     expect(await readCurlPayload()).toEqual({ input: "", questions: [] });
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 
   it("offers both literal proxy endpoints without TypeSafe or product prefixes", async () => {
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
 
     expect(screen.getByRole("combobox", { name: "Decision endpoint" })).toHaveTextContent("/v1/systemone");
     screen.getByRole("combobox", { name: "Decision endpoint" }).focus();
@@ -204,7 +204,7 @@ describe("SystemOneUI integration", () => {
   it("opens on /v1/systemone with the first decision model the key can call", async () => {
     const user = userEvent.setup();
     mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
 
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest"));
     expect(lookupAuthHeaders(mockModelLookup.mock.calls)).toEqual([expect.arrayContaining(["Bearer session-key"])]);
@@ -222,12 +222,13 @@ describe("SystemOneUI integration", () => {
   it("sends each endpoint's real shape and switches existing responses between cards and JSON without resending", async () => {
     const user = userEvent.setup();
     mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest"));
     fireEvent.change(screen.getByRole("textbox", { name: "Input" }), { target: { value: "An outage" } });
 
     await selectEndpoint("/v1/decisions");
     expect(screen.getByRole("textbox", { name: "Input" })).not.toHaveValue("An outage");
+    await selectPreset("Triage a bug report");
     expect(await readCurlPayload()).toMatchObject({
       input: expect.any(String),
       questions: expect.arrayContaining([expect.objectContaining({ type: "predicate" })]),
@@ -286,9 +287,9 @@ describe("SystemOneUI integration", () => {
   });
 
   it("validates /v1/decisions independently and preserves an invalid draft across switches", async () => {
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
     await selectEndpoint("/v1/decisions");
-    await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+    await userEvent.click(screen.getByRole("button", { name: "Clear form" }));
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     await selectEndpoint("/v1/systemone");
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
@@ -307,8 +308,9 @@ describe("SystemOneUI integration", () => {
         usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
       }),
     );
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
     await selectEndpoint("/v1/decisions");
+    await selectPreset("Triage a bug report");
     expect(screen.getByRole("tab", { name: "Form" })).toHaveAttribute("aria-selected", "true");
     fireEvent.change(screen.getByRole("textbox", { name: "Input" }), { target: { value: "Login is broken" } });
     const firstQuestion = within(screen.getByRole("group", { name: "Question 1" }));
@@ -343,8 +345,9 @@ describe("SystemOneUI integration", () => {
 
   it("adds and removes Decisions questions, boolean choices and score levels without stale fields", async () => {
     const user = userEvent.setup();
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
     await selectEndpoint("/v1/decisions");
+    await selectPreset("Triage a bug report");
     const question = (index: number) => within(screen.getByRole("group", { name: `Question ${index}` }));
     const pick = async (control: HTMLElement, label: string) => {
       control.focus();
@@ -412,6 +415,7 @@ describe("SystemOneUI integration", () => {
         <SystemOneUI accessToken="session-key" />
       </QueryClientProvider>,
     );
+    await selectPreset("Triage a bug report");
     await userEvent.click(screen.getByRole("button", { name: "Send" }));
     await screen.findByRole("button", { name: "Cancel request" });
     await selectEndpoint("/v1/decisions");
@@ -428,14 +432,15 @@ describe("SystemOneUI integration", () => {
     expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     expect(screen.queryByText("stale-model")).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: "Form" })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
+    expect(screen.queryByRole("button", { name: "Cancel request" })).not.toBeInTheDocument();
   });
 
   it("offers only decision models and writes the picked one into the request", async () => {
     const user = userEvent.setup();
     mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
-    render(<SystemOneUI accessToken="session-key" />);
-    const picker = await screen.findByRole("combobox", { name: "Decision model" });
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
+
+    const picker = screen.getByRole("combobox", { name: "Decision model" });
 
     await user.clear(picker);
     await user.type(picker, "p");
@@ -458,7 +463,7 @@ describe("SystemOneUI integration", () => {
     mockModelLookup.mockResolvedValue(
       modelGroupInfoResponse([{ model_group: "typesafe/jev-latest", mode: "evaluation" }]),
     );
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
     await waitFor(() =>
       expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("typesafe/jev-latest"),
     );
@@ -472,7 +477,7 @@ describe("SystemOneUI integration", () => {
   });
 
   it("links to Add Model when the key cannot call any decision model", async () => {
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
 
     expect(await screen.findByRole("link", { name: "Add a decision model" })).toHaveAttribute(
       "href",
@@ -498,7 +503,7 @@ describe("SystemOneUI integration", () => {
   it("keeps the admin signed in when a typed virtual key has expired", async () => {
     document.cookie = "token=ui-session; path=/";
     mockModelLookup.mockResolvedValue(EXPIRED_KEY_RESPONSE);
-    render(<SystemOneUI accessToken={null} disabledPersonalKeyCreation />);
+    await renderPopulated(<SystemOneUI accessToken={null} disabledPersonalKeyCreation />);
 
     fireEvent.change(screen.getByLabelText("Virtual Key", { exact: true }), { target: { value: "sk-expired" } });
 
@@ -513,7 +518,7 @@ describe("SystemOneUI integration", () => {
   it("keeps an edited request in place when decision models load afterwards", async () => {
     const models = Promise.withResolvers<Response>();
     mockModelLookup.mockReturnValue(models.promise);
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
     fireEvent.change(screen.getByRole("textbox", { name: "Input" }), { target: { value: "edited" } });
 
     await act(async () => {
@@ -537,9 +542,10 @@ describe("SystemOneUI integration", () => {
           usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 },
         }),
       );
-      render(<SystemOneUI accessToken="session-key" />);
+      await renderPopulated(<SystemOneUI accessToken="session-key" />);
       if (endpoint === "/v1/decisions") {
         await selectEndpoint(endpoint);
+        await selectPreset("Triage a bug report");
       }
       await userEvent.click(screen.getByRole("button", { name: "Send" }));
       expect(await screen.findByText("jev-latest")).toBeInTheDocument();
@@ -556,7 +562,7 @@ describe("SystemOneUI integration", () => {
   it("shows a read-only cURL command for the proxy with a key placeholder instead of the real key", async () => {
     const user = userEvent.setup();
     sessionStorage.setItem("customProxyBaseUrl", "https://proxy.example/");
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
     await user.click(screen.getByRole("tab", { name: "cURL" }));
 
     const command = screen.getByLabelText("cURL request");
@@ -570,13 +576,14 @@ describe("SystemOneUI integration", () => {
     expect(screen.getByRole("button", { name: "Copy cURL" })).toBeInTheDocument();
 
     await selectEndpoint("/v1/decisions");
+    await selectPreset("Triage a bug report");
     expect(screen.getByLabelText("cURL request")).toHaveTextContent("https://proxy.example/v1/decisions");
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
   });
 
   it("keeps Send below the form and shows results only after a request", async () => {
     const user = userEvent.setup();
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
 
     const send = screen.getByRole("button", { name: "Send" });
     const editor = screen.getByRole("region", { name: "Decisions request editor" });
@@ -599,8 +606,8 @@ describe("SystemOneUI integration", () => {
     ).toBeInTheDocument();
   });
 
-  it("ties each setup label to its control, numbers question cards and keeps the actions in the editor footer", () => {
-    render(<SystemOneUI accessToken="session-key" />);
+  it("ties each setup label to its control, numbers question cards and keeps the actions in the editor footer", async () => {
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
 
     expect(screen.getByText("Endpoint")).toHaveAttribute("for", screen.getByLabelText("Decision endpoint").id);
     expect(screen.getByText("Model")).toHaveAttribute("for", screen.getByLabelText("Decision model").id);
@@ -615,17 +622,22 @@ describe("SystemOneUI integration", () => {
     const card = within(editor).getByRole("group", { name: "Request editor" });
     const actions = within(card).getByRole("toolbar", { name: "Request actions" });
     const status = within(actions).getByRole("status");
-    const clear = within(actions).getByRole("button", { name: "Clear" });
     const send = within(actions).getByRole("button", { name: "Send" });
     expect(status).toHaveTextContent("Ready to send");
-    expect(status.compareDocumentPosition(clear) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(clear.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(status.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(within(actions).queryByRole("button", { name: "Clear form" })).not.toBeInTheDocument();
+    const clear = within(card).getByRole("button", { name: "Clear form" });
+    expect(clear.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(
+      within(card).getByRole("button", { name: "Load example" }).compareDocumentPosition(clear) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
   });
 
   it("sends to /v1/systemone even without discovered models and renders calibrated answers", async () => {
     const user = userEvent.setup();
     sessionStorage.setItem("customProxyBaseUrl", "https://stale.example.com/");
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
     sessionStorage.setItem("customProxyBaseUrl", "https://tenant.example.com/");
 
     await user.click(screen.getByRole("button", { name: "Send" }));
@@ -651,7 +663,7 @@ describe("SystemOneUI integration", () => {
         answers: responseBody.answers,
       }),
     );
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
 
     await waitFor(() => expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest"));
 
@@ -663,7 +675,7 @@ describe("SystemOneUI integration", () => {
 
   it("sends a native request without model so the proxy can select its default", async () => {
     const user = userEvent.setup();
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
     fireEvent.change(screen.getByRole("textbox", { name: "Input" }), { target: { value: "An outage" } });
     expect(screen.getByRole("button", { name: "Send" })).toBeEnabled();
     await user.click(screen.getByRole("button", { name: "Send" }));
@@ -684,6 +696,7 @@ describe("SystemOneUI integration", () => {
         <SystemOneUI accessToken="session-key" />
       </QueryClientProvider>,
     );
+    await selectPreset("Triage a bug report");
     await user.click(screen.getByRole("button", { name: "Send" }));
     await screen.findByRole("button", { name: "Cancel request" });
     fireEvent.change(screen.getByRole("textbox", { name: "Input" }), { target: { value: "A new request" } });
@@ -714,7 +727,7 @@ describe("SystemOneUI integration", () => {
 
   it("uses a custom virtual key when personal key creation is disabled", async () => {
     const user = userEvent.setup();
-    render(<SystemOneUI accessToken={null} disabledPersonalKeyCreation />);
+    await renderPopulated(<SystemOneUI accessToken={null} disabledPersonalKeyCreation />);
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
     fireEvent.change(screen.getByLabelText("Virtual Key", { exact: true }), {
       target: { value: "test-virtual-key" },
@@ -727,7 +740,7 @@ describe("SystemOneUI integration", () => {
   it("renders upstream errors inline", async () => {
     const user = userEvent.setup();
     mockFetch.mockResolvedValueOnce(createResponse(responseBody, 401, "Virtual key rejected"));
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
 
     await user.click(screen.getByRole("button", { name: "Send" }));
 
@@ -750,7 +763,7 @@ describe("SystemOneUI integration", () => {
           },
         }),
     } as Response);
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
 
     await user.click(screen.getByRole("button", { name: "Send" }));
 
@@ -760,7 +773,7 @@ describe("SystemOneUI integration", () => {
 
   it("clears a previous answer when the request editor changes", async () => {
     const user = userEvent.setup();
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
 
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("Selected choice")).toBeInTheDocument();
@@ -781,6 +794,8 @@ describe("SystemOneUI integration", () => {
         <SystemOneUI accessToken="session-key" />
       </QueryClientProvider>,
     );
+    await selectPreset("Triage a bug report");
+    await selectPreset("Triage a bug report");
 
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("Selected choice")).toBeInTheDocument();
@@ -804,7 +819,7 @@ describe("SystemOneUI integration", () => {
           });
         }),
     );
-    render(<SystemOneUI accessToken="session-key" />);
+    await renderPopulated(<SystemOneUI accessToken="session-key" />);
 
     await user.click(screen.getByRole("button", { name: "Send" }));
     await user.click(await screen.findByRole("button", { name: "Cancel request" }));
@@ -832,7 +847,7 @@ describe("SystemOneUI integration", () => {
 
     it("explains the yes / no answer type option", async () => {
       const user = userEvent.setup();
-      render(<SystemOneUI accessToken="session-key" />);
+      await renderPopulated(<SystemOneUI accessToken="session-key" />);
 
       question("has_repro_steps").getByRole("combobox", { name: "Answer type" }).focus();
       await user.keyboard("{ArrowDown}");
@@ -845,7 +860,7 @@ describe("SystemOneUI integration", () => {
 
     it("sends a choice and a yes/no question built in the form without opening JSON", async () => {
       const user = userEvent.setup();
-      render(<SystemOneUI accessToken="session-key" />);
+      await renderPopulated(<SystemOneUI accessToken="session-key" />);
       const input = screen.getByRole("textbox", { name: "Input" });
       fill(input, "The login page is blank after the upgrade");
       for (const name of ["area", "has_repro_steps", "severity"]) {
@@ -891,7 +906,7 @@ describe("SystemOneUI integration", () => {
     it("edits score levels and keeps instructions when a question changes type", async () => {
       const user = userEvent.setup();
       mockModelLookup.mockResolvedValue(modelGroupInfoResponse(DECISION_AND_CHAT_MODELS));
-      render(<SystemOneUI accessToken="session-key" />);
+      await renderPopulated(<SystemOneUI accessToken="session-key" />);
       await waitFor(() => expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("jev-latest"));
 
       const level = question("severity").getByRole("textbox", { name: "Level 0" });
@@ -925,7 +940,7 @@ describe("SystemOneUI integration", () => {
 
     it("refuses an empty or taken question name and trims a new one", async () => {
       const user = userEvent.setup();
-      render(<SystemOneUI accessToken="session-key" />);
+      await renderPopulated(<SystemOneUI accessToken="session-key" />);
       const name = question("severity").getByRole("textbox", { name: "Question name" });
       expect(name).toHaveAttribute("aria-invalid", "false");
 

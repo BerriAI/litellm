@@ -3,6 +3,12 @@
 import { Button, buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { SimpleTooltip } from "@/components/ui/tooltip";
 import { SearchSelect } from "@/components/shared/SearchSelect";
@@ -11,10 +17,10 @@ import { DECISIONS_DOCS_URL } from "@/lib/decisionModels";
 import { getGlobalLitellmHeaderName, getProxyBaseUrl } from "@/components/networking";
 import { uiHref } from "@/utils/uiHref";
 import { useMutation } from "@tanstack/react-query";
-import { BookOpen, Eraser, LoaderCircle, Send } from "lucide-react";
+import { BookOpen, ChevronDown, Eraser, FileText, LoaderCircle, Send } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { makePlaygroundDecisionRequest, type PlaygroundDecisionRequest } from "../../llm_calls/system_one";
-import { DECISION_PRESETS, emptyPayload, matchPreset, presetPayload, type DecisionPreset } from "./lib/example";
+import { DECISION_PRESETS, emptyPayload, presetPayload } from "./lib/example";
 import { payloadModel, withPayloadModel } from "./lib/payloadModel";
 import CurlPreview from "./CurlPreview";
 import ResponseView from "./ResponseView";
@@ -37,8 +43,6 @@ interface SystemOneSendVariables {
   signal: AbortSignal;
 }
 
-const CUSTOM_PRESET = "custom";
-
 function SetupField({ label, htmlFor, children }: { label: string; htmlFor: string; children: ReactNode }) {
   return (
     <div className="grid min-w-0 content-start gap-1.5">
@@ -50,30 +54,22 @@ function SetupField({ label, htmlFor, children }: { label: string; htmlFor: stri
   );
 }
 
-interface PresetPickerProps {
-  activePreset: DecisionPreset | undefined;
-  onPick: (id: string | null) => void;
-}
-
-function PresetPicker({ activePreset, onPick }: PresetPickerProps) {
+function ExamplesMenu({ onPick }: { onPick: (id: string) => void }) {
   return (
-    <Select value={activePreset?.id ?? CUSTOM_PRESET} onValueChange={onPick}>
-      <SelectTrigger className="w-48" aria-label="Example">
-        <SelectValue>{activePreset?.label ?? "Custom"}</SelectValue>
-      </SelectTrigger>
-      <SelectContent>
-        {activePreset === undefined && (
-          <SelectItem value={CUSTOM_PRESET} disabled>
-            Custom
-          </SelectItem>
-        )}
+    <DropdownMenu>
+      <DropdownMenuTrigger className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
+        <FileText className="text-muted-foreground" />
+        Load example
+        <ChevronDown className="text-muted-foreground" />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="w-48">
         {DECISION_PRESETS.map((preset) => (
-          <SelectItem key={preset.id} value={preset.id}>
+          <DropdownMenuItem key={preset.id} onClick={() => onPick(preset.id)}>
             {preset.label}
-          </SelectItem>
+          </DropdownMenuItem>
         ))}
-      </SelectContent>
-    </Select>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }
 
@@ -93,9 +89,8 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
   const [endpoint, setEndpoint] = useState<PlaygroundDecisionRequest["endpoint"]>("/v1/systemone");
   const [drafts, setDrafts] = useState<Partial<Record<PlaygroundDecisionRequest["endpoint"], string>>>({});
   const [view, setView] = useState<EditorView>("form");
-  const rawPayload = drafts[endpoint] ?? presetPayload(DECISION_PRESETS[0], endpoint, decisionModels[0]);
+  const rawPayload = drafts[endpoint] ?? emptyPayload(endpoint, decisionModels[0]);
   const draftModel = drafts[endpoint] === undefined ? decisionModels[0] : payloadModel(rawPayload);
-  const activePreset = matchPreset(endpoint, rawPayload);
   const clearedPayload = emptyPayload(endpoint, draftModel);
   const activeController = useRef<AbortController | null>(null);
   const validated = useMemo(
@@ -139,7 +134,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
     }
   }
 
-  function handlePresetPick(id: string | null) {
+  function handlePresetPick(id: string) {
     const preset = DECISION_PRESETS.find((candidate) => candidate.id === id);
     if (preset !== undefined) {
       handlePayloadChange(presetPayload(preset, endpoint, draftModel));
@@ -258,8 +253,19 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
                 <TabsTrigger value="curl">cURL</TabsTrigger>
               </TabsList>
               <div className="flex items-center gap-2">
-                <span className="text-xs text-muted-foreground">Example</span>
-                <PresetPicker activePreset={activePreset} onPick={handlePresetPick} />
+                <ExamplesMenu onPick={handlePresetPick} />
+                <SimpleTooltip content="Clear form">
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    aria-label="Clear form"
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={() => handlePayloadChange(clearedPayload)}
+                    disabled={rawPayload === clearedPayload || isLoading}
+                  >
+                    <Eraser />
+                  </Button>
+                </SimpleTooltip>
                 <SimpleTooltip content="How to call /v1/decisions and /v1/systemone">
                   <a
                     href={DECISIONS_DOCS_URL}
@@ -306,15 +312,6 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
             >
               <ValidationSummary validation={validation} />
               <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handlePayloadChange(clearedPayload)}
-                  disabled={rawPayload === clearedPayload}
-                >
-                  <Eraser />
-                  Clear
-                </Button>
                 {isLoading && (
                   <Button variant="outline" onClick={clearRequestState}>
                     Cancel request

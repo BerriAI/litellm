@@ -270,7 +270,8 @@ export default function SystemOneForm({ value, onChange, validation, onReset }: 
   }
 
   const questions = form.questions ?? {};
-  const names = Object.keys(questions);
+  const shownQuestions = Object.keys(questions).length === 0 ? { question: blankQuestion() } : questions;
+  const names = Object.keys(shownQuestions);
   const write = (next: FormPayload) => onChange(JSON.stringify(next, null, 2));
   const writeQuestions = (next: Record<string, FormQuestion>) => write({ ...form, questions: next });
 
@@ -289,7 +290,7 @@ export default function SystemOneForm({ value, onChange, validation, onReset }: 
           onChange={(event) => write({ ...form, state: event.target.value })}
         />
       </div>
-      {Object.entries(questions).map(([name, question], index) => (
+      {Object.entries(shownQuestions).map(([name, question], index) => (
         <QuestionCard
           key={index}
           name={name}
@@ -297,8 +298,8 @@ export default function SystemOneForm({ value, onChange, validation, onReset }: 
           question={question}
           taken={names}
           onChange={(next) => writeQuestions({ ...questions, [name]: next })}
-          onRename={(next) => writeQuestions(renameKey(questions, name, next))}
-          onRemove={() => writeQuestions(withoutKey(questions, name))}
+          onRename={(next) => writeQuestions(renameKey(shownQuestions, name, next))}
+          onRemove={() => writeQuestions(withoutKey(shownQuestions, name))}
         />
       ))}
       <AddButton onClick={() => writeQuestions({ ...questions, [freeName(names, "question")]: blankQuestion() })}>

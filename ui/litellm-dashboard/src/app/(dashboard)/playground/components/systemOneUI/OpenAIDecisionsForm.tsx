@@ -124,6 +124,15 @@ interface QuestionCardProps extends QuestionEditorProps {
   onRemove: () => void;
 }
 
+const blankDecisionsQuestion = (existing: DecisionsFormQuestion[]): DecisionsFormQuestion => ({
+  type: "predicate",
+  name: freeName(
+    existing.map((q) => q.name ?? ""),
+    "question",
+  ),
+  instructions: "",
+});
+
 function QuestionCard({ question, index, onChange, onRemove }: QuestionCardProps) {
   const instructionsId = useId();
 
@@ -202,6 +211,7 @@ export default function OpenAIDecisionsForm({ value, onChange, validation, onRes
   }
 
   const questions = form.questions ?? [];
+  const shownQuestions = questions.length === 0 ? [blankDecisionsQuestion([])] : questions;
   const write = (next: DecisionsFormPayload) => onChange(JSON.stringify(next, null, 2));
   const writeQuestions = (next: DecisionsFormQuestion[]) => write({ ...form, questions: next });
 
@@ -225,30 +235,16 @@ export default function OpenAIDecisionsForm({ value, onChange, validation, onRes
           </>
         )}
       </div>
-      {questions.map((question, index) => (
+      {shownQuestions.map((question, index) => (
         <QuestionCard
           key={index}
           index={index}
           question={question}
-          onChange={(next) => writeQuestions(replaceAt(questions, index, next))}
-          onRemove={() => writeQuestions(removeAt(questions, index))}
+          onChange={(next) => writeQuestions(replaceAt(shownQuestions, index, next))}
+          onRemove={() => writeQuestions(removeAt(shownQuestions, index))}
         />
       ))}
-      <AddButton
-        onClick={() =>
-          writeQuestions([
-            ...questions,
-            {
-              type: "predicate",
-              name: freeName(
-                questions.map((q) => q.name ?? ""),
-                "question",
-              ),
-              instructions: "",
-            },
-          ])
-        }
-      >
+      <AddButton onClick={() => writeQuestions([...shownQuestions, blankDecisionsQuestion(shownQuestions)])}>
         Add question
       </AddButton>
       <div className="grid gap-1.5">
