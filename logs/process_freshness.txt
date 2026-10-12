@@ -1,0 +1,3 @@
+source_root=/home/ubuntu/repos/litellm HEAD=68abe95c7b8d84c664187a43b8e7264b687dfd67 status_clean=yes
+port=4000 pid=5071 cwd=/home/ubuntu/repos/litellm started=Mon Oct 12 23:30:12 2026 cmd=/home/ubuntu/repos/litellm/.venv/bin/python /home/ubuntu/repos/litellm/.venv/bin/litellm --config <disposable> --port 4000 --num_wor
+port=3000 pid=2929 cwd=/home/ubuntu/repos/litellm/ui/litellm-dashboard started=Mon Oct 12 23:24:01 2026 cmd=next-server (v16.3.8)

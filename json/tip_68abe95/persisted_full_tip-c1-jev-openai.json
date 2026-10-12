@@ -1,0 +1,47 @@
+{
+  "model_name": "tip-c1-jev-openai",
+  "db_model": true,
+  "complexity_router_config": {
+    "tiers": {
+      "MEDIUM": [
+        "gpt-5.6-terra"
+      ],
+      "SIMPLE": [
+        "gpt-6-luna"
+      ],
+      "COMPLEX": [
+        "gpt-6-sol"
+      ],
+      "REASONING": [
+        "gpt-6-astra"
+      ]
+    },
+    "classifier_type": "oss_classifier",
+    "modality_routing": false,
+    "session_affinity": false,
+    "tier_model_configs": {
+      "REASONING": [
+        {
+          "model_name": "gpt-6-astra",
+          "litellm_params": {
+            "reasoning_effort": "xhigh"
+          }
+        }
+      ]
+    },
+    "classification_mode": "user_turn",
+    "deployment_affinity": true,
+    "escalation_keywords": [
+      "LITELLM ESCALATE"
+    ],
+    "modality_pin_override": false,
+    "opensource_classifier_config": {
+      "model": "jev-latest",
+      "provider": "jev",
+      "timeout_ms": 3000,
+      "deployment_name": "jev-decider"
+    },
+    "classifier_context_window_size": 3,
+    "classifier_context_budget_chars": 8000
+  }
+}

@@ -8,7 +8,7 @@ Candidate: 68abe95c7b8d84c664187a43b8e7264b687dfd67 (origin/litellm_fix_autorout
 
 ## Setup and freshness
 
-All runs were done at the candidate, which was checked out detached with a clean tree. `ui/litellm-dashboard/.next` was deleted before the dashboard started, and both processes were started at the SHA (see logs/proxy_start.txt and logs/ui_start.txt).
+All runs were done at the candidate, which was checked out detached with a clean tree. `ui/litellm-dashboard/.next` was deleted before the dashboard started, and both processes were started at the SHA (see logs/proxy_start.txt and logs/ui_start.txt). logs/process_freshness.txt records the live listener PIDs, cwd and start times for ports 4000 and 3000 at HEAD 68abe95 with a clean tree.
 
 ```
 cd litellm && git checkout --detach 68abe95c7b8d84c664187a43b8e7264b687dfd67 && rm -rf ui/litellm-dashboard/.next
@@ -28,8 +28,8 @@ Tests at 68abe95: `npx vitest run src/lib/autorouter_presets.test.ts src/compone
 | Case | Baseline 2717b5f | Candidate 68abe95 |
 |---|---|---|
 | C1 Decisions Model + jev-decider + Every new user message, then OpenAI Family, then save, read back and reopen | Heuristics, deployment lost, every_request saved | UI unchanged. Saved oss_classifier with deployment_name jev-decider and user_turn. Reopened router shows the same |
-| C2 matrix: 5 templates x Jev / Heuristics / LLM, user_turn, one saved router per cell (15) | Templates reset the classifier, the judge and the frequency | 15/15 cells pass. UI tiers equal payload tiers equal DB tiers. Classifier, deployment or judge, and frequency are unchanged in the UI. Within each family the non-tier config is byte-identical across all 5 templates |
-| C2 repeat: OpenAI, then Gemini, then Anthropic, for each family | Reset as above | Non-tier config is identical to the single-template cells. The payload has only the Anthropic tiers |
+| C2 matrix: 5 templates x Jev / Heuristics / LLM, user_turn, one saved router per cell (15) | Full 15-cell matrix not run on baseline. Representative sequences run: LLM with judge then OpenAI, Gemini, Anthropic (reset to Heuristics, judge dropped, every_request), and Heuristic v2 then 1M Context, Lite (frequency reset, Lite switched to LLM with a deepseek judge). C1 covers Jev then OpenAI | 15/15 cells pass. UI tiers equal payload tiers equal DB tiers. Classifier, deployment or judge, and frequency are unchanged in the UI. Within each family the non-tier config is byte-identical across all 5 templates |
+| C2 repeat: OpenAI, then Gemini, then Anthropic, for each family | Run for LLM only, reset as above | Non-tier config is identical to the single-template cells. The payload has only the Anthropic tiers |
 | Lite copy | Description claims an LLM classifier | Option text no longer mentions a classifier (screenshots/tip_68abe95/tip_lite_copy_dropdown.png) |
 | C3 classifier away and back | Deployment and judge lost, Heuristic v2 came back as Rule-based | Deployment, judge and Heuristic v2 come back. Payload has only the active engine |
 | C4 custom LEGAL tier, then a template | Template applied, LEGAL dropped | All 5 template options disabled (aria-disabled) with the hint "Restore built-in tiers to use a template". Draft unchanged. Restore defaults turns templates back on and Gemini applies with classifier settings kept. Start from scratch fully resets |
@@ -40,5 +40,7 @@ Tests at 68abe95: `npx vitest run src/lib/autorouter_presets.test.ts src/compone
 ## Finding (deployment, not code)
 
 With default settings the proxy serves templates from `LITELLM_AUTOROUTER_PRESETS_URL`, which is main's raw autorouter_presets.json, and only falls back to the bundled file on failure. A source build of 68abe95 without `LITELLM_LOCAL_AUTOROUTER_PRESETS=True` still showed the old Lite sentence, because main had not changed yet. The corrected copy reaches default deployments once the JSON lands on main. After that, every version that fetches the remote catalog shows the new text, including older releases whose Lite template still switches the classifier.
+
+The full persisted C1 config, including opensource_classifier_config with deployment_name jev-decider, is in json/tip_68abe95/persisted_full_tip-c1-jev-openai.json (read from GET /v2/model/info, no browser rerun).
 
 Layout: screenshots/{baseline_2717b5f,tip_68abe95}, json/ (sanitized request payloads, readback, results_*.json with the per-cell assertions), scripts/ (replay helpers), logs/
