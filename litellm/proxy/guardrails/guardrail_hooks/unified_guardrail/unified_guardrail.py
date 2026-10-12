@@ -216,7 +216,14 @@ def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> N
         BaseTranslation,
     )
 
-    BaseTranslation.merge_user_api_key_metadata_into_request(data, user_api_key_dict)
+    BaseTranslation.merge_user_api_key_metadata_into_request(
+        # cast-ok: `data` is the request payload, annotated here as a bare
+        # dict, so passing it on is an unknown argument type. _RequestData is
+        # this module's own alias for it and keeps the argument fully known
+        # without widening three signatures or naming Any again.
+        cast(_RequestData, data),
+        user_api_key_dict,
+    )
 
 
 class UnifiedLLMGuardrails(CustomLogger):
