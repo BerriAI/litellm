@@ -880,21 +880,37 @@ def _map_openai_like_exception(
 
 
 _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERN: Final = re.compile(r"prompt tokens \((\d+)\) exceed model maximum \((\d+)\)")
+_BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN: Final = re.compile(
+    r"""\\?["']code\\?["']\s*:\s*\\?["']context_length_exceeded\\?["']"""
+)
+_BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE: Final = (
+    "prompt is too long: your prompt exceeds the model's context window"
+)
+
+
+def _bedrock_mantle_context_window_response(original_exception: _ProviderHTTPException) -> httpx.Response:
+    original_response: Final = getattr(original_exception, "response", None)
+    if not isinstance(original_response, httpx.Response) or getattr(original_response, "_request", None) is None:
+        return httpx.Response(status_code=400, request=httpx.Request(method="POST", url="https://api.openai.com/v1/"))
+    if original_response.status_code == 400:
+        return original_response
+    return httpx.Response(status_code=400, headers=original_response.headers, request=original_response.request)
 
 
 def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
     """
-    Mantle reports context overflow as a structured validation error rather than
-    the plain-text patterns Bedrock itself uses, so it needs its own detection and a
-    message clients recognize as context overflow (litellm/litellm#36546).
+    Mantle reports context overflow as a validation_error carrying the token counts, or as
+    OpenAI's context_length_exceeded code, either in a 400 body or in a streamed error event
+    with no error type. Clients such as Claude Code only treat "prompt is too long" as
+    overflow (litellm/litellm#36546).
     """
-    if "invalid_request_error" not in error_str and "validation_error" not in error_str:
-        return None
     match = _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERN.search(error_str)
-    if match is None:
-        return None
-    prompt_tokens, max_tokens = match.groups()
-    return f"prompt is too long: {prompt_tokens} tokens > {max_tokens} maximum"
+    if match is not None:
+        prompt_tokens, max_tokens = match.groups()
+        return f"prompt is too long: {prompt_tokens} tokens > {max_tokens} maximum"
+    if _BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN.search(error_str) is not None:
+        return _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE
+    return None
 
 
 def _map_bedrock_exception(
@@ -914,7 +930,7 @@ def _map_bedrock_exception(
                 message=mantle_context_window_message,
                 model=model,
                 llm_provider=custom_llm_provider,
-                response=getattr(original_exception, "response", None),
+                response=_bedrock_mantle_context_window_response(original_exception),
             )
     if (
         "too many tokens" in error_str
