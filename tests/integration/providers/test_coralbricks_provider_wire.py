@@ -21,6 +21,7 @@ from integration.providers._coralbricks import (
     anthropic_client,
     assert_billed,
     assert_failed,
+    catalog_rows,
     async_anthropic_client,
     async_openai_client,
     closed_port,
@@ -493,10 +494,22 @@ def test_wildcard_deployment_lists_every_coralbricks_catalog_row(gateway: Gatewa
             },
         )
         scenario.cleanups.callback(scenario.delete_model, string_value(object_value(created["model_info"])["id"]))
+        catalog: Final = catalog_rows()
         listed: Final = gateway.get("/v1/models")["data"]
         assert isinstance(listed, list)
         listed_names: Final = {object_value(entry)["id"] for entry in listed}
-        assert {f"{PROVIDER}/{model}" for model in MODELS} <= listed_names, sorted(listed_names)
+        assert catalog <= listed_names, sorted(listed_names)
+        entries: Final = gateway.get("/model/info")["data"]
+        assert isinstance(entries, list)
+        expanded: Final = {
+            object_value(entry)["model_name"]: object_value(entry)
+            for entry in entries
+            if object_value(entry)["model_name"] in catalog
+        }
+        assert set(expanded) == catalog, [object_value(entry)["model_name"] for entry in entries]
+        for name, entry in expanded.items():
+            assert object_value(entry["litellm_params"])["model"] == name, entry
+            assert object_value(entry["model_info"])["litellm_provider"] == PROVIDER, entry
 
 
 def test_health_probe_reaches_coralbricks_with_the_deployment_key(gateway: Gateway) -> None:

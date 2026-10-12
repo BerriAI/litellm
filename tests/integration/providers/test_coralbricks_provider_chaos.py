@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Callable, Iterator
@@ -318,15 +317,15 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_serving_coralbricks(g
             held_by: Final = MappingProxyType({pid: open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            release.set()
-            served: Final = await task
-            assert held_by[survivor_pid] >= 10, held_by
-            assert len(served) == held_by[survivor_pid], (held_by, len(served))
-            for item in served:
-                assert_answered_with_its_own_marker(item)
+            with owned.replacing_worker(victim_pid) as kill:
+                kill.freeze()
+                await asyncio.to_thread(kill)
+                release.set()
+                served: Final = await task
+                assert held_by[survivor_pid] >= 10, held_by
+                assert len(served) == held_by[survivor_pid], (held_by, len(served))
+                for item in served:
+                    assert_answered_with_its_own_marker(item)
             follow_up: Final = Call(endpoint="chat", stream=False, marker=uuid.uuid4().hex)
             (answered,) = await burst(str(candidate.client.base_url), candidate.key, alias, (follow_up,))
             assert_answered_with_its_own_marker(answered)
@@ -361,7 +360,7 @@ async def test_proxy_sigterm_mid_burst_then_reboot_serves_coralbricks_again(gate
                 )
             )
             await asyncio.to_thread(eventually, held.qsize, lambda size: size == 20, 60)
-            owned.process.send_signal(signal.SIGTERM)
+            owned.begin_shutdown()
             release.set()
             served: Final = await task
             answered: Final = tuple(item for item in served if item.status == 200)

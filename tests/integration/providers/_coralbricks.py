@@ -61,6 +61,14 @@ def row_of(model: str) -> Mapping[str, JsonValue]:
     return row
 
 
+def catalog_rows() -> frozenset[str]:
+    rows: Final = frozenset(
+        key for key in JSON_OBJECT.validate_json(COST_MAP.read_bytes()) if key.startswith(f"{PROVIDER}/")
+    )
+    assert {f"{PROVIDER}/{model}" for model in MODELS} <= rows, sorted(rows)
+    return rows
+
+
 def rates_of(model: str) -> Rates:
     row: Final = row_of(model)
     return Rates(

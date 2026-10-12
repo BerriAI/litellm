@@ -443,7 +443,12 @@ def _billed_chat_cost(model_id: str) -> float:
 
 @pytest.mark.parametrize(
     ("deprecated_slug", "current_slug"),
-    (("glm-5.3-fp4", "glm-5.3-fast"), ("deepseek-v4.1-flash-fast-fp4", "deepseek-v4.1-flash-fast")),
+    (
+        ("glm-5.3-fp4", "glm-5.3-fast"),
+        ("glm-5.3", "glm-5.3-fast"),
+        ("deepseek-v4.1-flash-fast-fp4", "deepseek-v4.1-flash-fast"),
+        ("deepseek-v4.1-flash", "deepseek-v4.1-flash-fast"),
+    ),
 )
 def test_coralbricks_deprecated_slug_bills_like_its_current_slug(deprecated_slug: str, current_slug: str):
     current_cost: Final = _billed_chat_cost(current_slug)
