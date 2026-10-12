@@ -1624,7 +1624,7 @@ _CLIENT_IP_HEADERS: Final = frozenset(
 _REQUEST_METADATA_KEYS: Final = ("metadata", "litellm_metadata")
 _OBJECT_MAPPING: Final = TypeAdapter(Mapping[object, object])
 _OBJECT_LIST: Final = TypeAdapter(list[object])
-_IPV4_ADDRESS: Final = re.compile(r"(?<![0-9A-Za-z])(?<!\d\.)(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Za-z]|\.\d)")
+_IPV4_ADDRESS: Final = re.compile(r"(?<![0-9A-Za-z])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Za-z])")
 _IPV6_ADDRESS_CANDIDATE: Final = re.compile(
     r"(?:(?<![0-9A-Za-z:])|(?<=\w:))(?:[0-9A-Fa-f]{0,4}:){2,9}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])"
 )
@@ -1655,26 +1655,42 @@ def _error_information_without_ip_addresses(error_information: Mapping[object, o
     }
 
 
-def _error_information_in(metadata: object) -> object:
-    return _OBJECT_MAPPING.validate_python(metadata).get("error_information") if isinstance(metadata, Mapping) else None
-
-
-def _metadata_with_masked_error_text(metadata: object) -> object:
-    error_information: Final = _error_information_in(metadata)
-    if not isinstance(error_information, Mapping):
+def _with_masked_headers(metadata: Mapping[object, object]) -> Mapping[object, object]:
+    headers: Final = metadata.get("headers")
+    if not isinstance(headers, Mapping):
         return metadata
+    return {**metadata, "headers": _without_requester_ip_address(headers, headers=True)}
+
+
+def _metadata_with_masked_ip_text(metadata: object) -> object:
+    if not isinstance(metadata, Mapping):
+        return metadata
+    fields: Final = _with_masked_headers(_OBJECT_MAPPING.validate_python(metadata))
+    requester_metadata: Final = fields.get("requester_metadata")
+    error_information: Final = fields.get("error_information")
     return {
-        **_OBJECT_MAPPING.validate_python(metadata),
-        "error_information": _error_information_without_ip_addresses(
-            _OBJECT_MAPPING.validate_python(error_information)
+        **fields,
+        **(
+            {"requester_metadata": _with_masked_headers(_OBJECT_MAPPING.validate_python(requester_metadata))}
+            if isinstance(requester_metadata, Mapping)
+            else {}
+        ),
+        **(
+            {
+                "error_information": _error_information_without_ip_addresses(
+                    _OBJECT_MAPPING.validate_python(error_information)
+                )
+            }
+            if isinstance(error_information, Mapping)
+            else {}
         ),
     }
 
 
-def _stored_request_with_masked_error_text(request_body: Mapping[str, object]) -> Mapping[str, object]:
-    """The request body with every IP address in its metadata's error message and traceback masked."""
+def _stored_request_with_masked_ip_text(request_body: Mapping[str, object]) -> Mapping[str, object]:
+    """The request body with every IP address in its metadata's error message, traceback and request headers masked."""
     return {
-        key: _metadata_with_masked_error_text(value) if key in _REQUEST_METADATA_KEYS else value
+        key: _metadata_with_masked_ip_text(value) if key in _REQUEST_METADATA_KEYS else value
         for key, value in request_body.items()
     }
 
@@ -1753,7 +1769,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     perform_redaction(model_call_details=_request_body, result=None)
 
             _request_body = _sanitize_request_body_for_spend_logs_payload(
-                _stored_request_with_masked_error_text(_request_body) if drop_requester_ip_address else _request_body
+                _stored_request_with_masked_ip_text(_request_body) if drop_requester_ip_address else _request_body
             )
             stored_request_body: Final = _OBJECT_MAPPING.validate_python(_request_body)
             _request_body_json_str: Final = safe_dumps(

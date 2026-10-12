@@ -6668,6 +6668,34 @@ def test_stored_request_masks_ip_addresses_in_error_text_before_long_text_is_tru
     assert metadata["error_information"][error_field] == text
 
 
+@pytest.mark.parametrize("requester_metadata", [False, True], ids=["headers", "requester-metadata-headers"])
+def test_stored_request_masks_ip_addresses_in_request_headers_before_long_values_are_truncated(
+    monkeypatch: pytest.MonkeyPatch, requester_metadata: bool
+) -> None:
+    from litellm.proxy.proxy_server import general_settings
+
+    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", True)
+    monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "1000")
+    value: Final = "a" * 345 + " 203.0.113.9 " + "b" * 2000 + " 2001:db8::9 " + "c" * 644
+    headers: Final = {"x-edge-trace": value}
+    metadata: Final = {"requester_metadata": {"headers": headers}} if requester_metadata else {"headers": headers}
+
+    stored: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(
+            metadata=metadata,
+            litellm_params={"proxy_server_request": {"body": {"model": "gpt-5-mini", "metadata": metadata}}},
+            drop_requester_ip_address=True,
+        )
+    )
+
+    stored_metadata: Final = stored["metadata"]["requester_metadata"] if requester_metadata else stored["metadata"]
+    stored_value: Final = stored_metadata["headers"]["x-edge-trace"]
+    kept_head_and_tail: Final = stored_value[:350] + stored_value[-650:]
+    assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_value
+    assert kept_head_and_tail.startswith("a" * 345 + " REDA")
+    assert not any(char.isdigit() for char in kept_head_and_tail)
+    assert headers["x-edge-trace"] == value
+
 def test_stored_request_with_ip_logging_disabled_matches_setting_off_for_bodies_without_ip_fields(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -6749,9 +6777,10 @@ def test_failure_error_information_masks_every_ip_address_form_when_ip_logging_i
         ("label cafe:1:2:3:4:5:6:7:8:443", "label REDACTED_BY_LITELM"),
         ("socket_192.0.2.65 closed", "socket_REDACTED_BY_LITELM closed"),
         (
-            "at 2026-10-10T18:20:09 Error::Foo aa:bb:cc:dd:ee:ff 1.2.3.4.5 1203.0.113.9 qwen2.5.1.5",
-            "at 2026-10-10T18:20:09 Error::Foo aa:bb:cc:dd:ee:ff 1.2.3.4.5 1203.0.113.9 qwen2.5.1.5",
+            "at 2026-10-10T18:20:09 Error::Foo aa:bb:cc:dd:ee:ff 1203.0.113.9 qwen2.5.1.5",
+            "at 2026-10-10T18:20:09 Error::Foo aa:bb:cc:dd:ee:ff 1203.0.113.9 qwen2.5.1.5",
         ),
+        ("IP 192.0.2.1.443 > 10.0.0.2.80: Flags [S]", "IP REDACTED_BY_LITELM.443 > REDACTED_BY_LITELM.80: Flags [S]"),
     ],
 )
 def test_failure_error_information_masks_addresses_after_labels_and_before_ports(

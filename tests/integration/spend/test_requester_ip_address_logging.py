@@ -33,6 +33,7 @@ AKTO_GUARDRAIL: Final = "akto-requester-ip"
 PROVIDER_FAILURE: Final = "synthetic-requester-ip-provider-failure"
 LONG_PROVIDER_FAILURE: Final = "synthetic-requester-ip-long-provider-failure"
 UPSTREAM_IP: Final = "192.0.2.61"
+LONG_HEADER_IP: Final = "203.0.113.79"
 ADDRESS_FORMS_FAILURE: Final = "synthetic-requester-ip-address-forms-failure"
 UPSTREAM_ADDRESS_FORMS: Final = MappingProxyType(
     {
@@ -622,6 +623,29 @@ def test_long_provider_error_row_keeps_no_ip_fragment_at_the_truncation_cut(rigs
     assert re.search(r"[\d.]$", error_message[: cut.start()]) is None, error_message[: cut.start()][-60:]
     assert re.search(r"^[\d.]", error_message[cut.end() :]) is None, error_message[cut.end() :][:60]
     assert UPSTREAM_IP not in string_value(row["row_text"]), row
+
+
+def test_long_header_value_keeps_no_ip_fragment_at_the_truncation_cut(rigs: Mapping[bool, Rig]) -> None:
+    rig: Final = rigs[True]
+    response: Final = rig.proxy.request(
+        "POST",
+        "/v1/chat/completions",
+        {"model": rig.chat_model, "messages": [{"role": "user", "content": f"requester-ip-{uuid4().hex}"}]},
+        key=rig.key,
+        headers={"x-forwarded-for": FORWARDED_IP, "x-edge-trace": "a" * 710 + f" {LONG_HEADER_IP} " + "b" * 3000},
+    )
+    assert response.status_code == 200, response.text
+
+    row_text: Final = string_value(_row_for_call(response.headers["x-litellm-call-id"])["row_text"])
+    stored_request: Final = object_value(json.loads(row_text)["proxy_server_request"])
+    stored_value: Final = string_value(
+        object_value(object_value(stored_request["metadata"])["headers"])["x-edge-trace"]
+    )
+    cut: Final = re.search(r"\.\.\. \(litellm_truncated .*?\) \.\.\.", stored_value)
+
+    assert cut is not None, stored_value
+    assert re.search(r"[\d.]$", stored_value[: cut.start()]) is None, stored_value[: cut.start()][-60:]
+    assert LONG_HEADER_IP not in row_text, row_text
 
 
 @DISABLED
