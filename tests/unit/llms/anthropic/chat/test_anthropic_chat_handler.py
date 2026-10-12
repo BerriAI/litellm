@@ -2869,3 +2869,52 @@ def test_anthropic_streaming_invalid_key_maps_to_authentication_error() -> None:
     assert exc_info.value.status_code == 401
     assert exc_info.value.llm_provider == "anthropic"
     assert route.calls.last.request.headers["x-api-key"] == "bad-anthropic-key"
+
+
+def _message_stream_events(stop_reason: str, stop_details: dict | None) -> tuple[dict, ...]:
+    return (
+        {
+            "type": "message_start",
+            "message": {
+                "id": "msg_stop_details_test",
+                "type": "message",
+                "role": "assistant",
+                "content": [],
+                "usage": {"input_tokens": 12, "output_tokens": 1},
+            },
+        },
+        {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "I can't help with that."}},
+        {"type": "content_block_stop", "index": 0},
+        {
+            "type": "message_delta",
+            "delta": {"stop_reason": stop_reason, "stop_sequence": None, "stop_details": stop_details},
+            "usage": {"output_tokens": 9},
+        },
+        {"type": "message_stop"},
+    )
+
+
+def _assemble_stream(events: tuple[dict, ...]) -> litellm.ModelResponse:
+    iterator: Final = ModelResponseIterator(streaming_response=MagicMock(), sync_stream=True, json_mode=False)
+    chunks: Final = [iterator.chunk_parser(event) for event in events]
+    return litellm.stream_chunk_builder(chunks=chunks, messages=[{"role": "user", "content": "hi"}])
+
+
+def test_streamed_refusal_stop_details_reach_the_assembled_message():
+    stop_details: Final = {"type": "refusal", "category": "cyber", "explanation": "declined by a streaming classifier"}
+    assembled: Final = _assemble_stream(_message_stream_events("refusal", stop_details))
+
+    assert assembled.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = assembled.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"]["category"] == stop_details["category"]
+
+
+def test_streamed_end_turn_carries_no_stop_details():
+    assembled: Final = _assemble_stream(_message_stream_events("end_turn", None))
+
+    assert assembled.choices[0].finish_reason == "stop"
+    provider_fields: Final = assembled.choices[0].message.provider_specific_fields or {}
+    assert "stop_details" not in provider_fields
+    assert "stop_reason" not in provider_fields

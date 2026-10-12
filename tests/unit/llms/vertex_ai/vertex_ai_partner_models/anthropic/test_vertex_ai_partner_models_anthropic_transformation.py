@@ -2,6 +2,7 @@
 import copy
 import json
 from typing import Final
+from unittest.mock import MagicMock
 
 import httpx
 import pytest
@@ -1006,3 +1007,34 @@ def test_chat_flagged_model_replays_a_byte_identical_prefix_around_a_mid_convers
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant", "user", "system"]
     assert [m["role"] for m in requests[2]["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+
+
+def test_refusal_stop_details_kept_through_vertex_anthropic_transform():
+    stop_details: Final = {"type": "refusal", "category": "cyber", "explanation": "declined by a streaming classifier"}
+    body: Final = {
+        "id": "msg_stop_details_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": "I can't help with that request."}],
+        "stop_reason": "refusal",
+        "stop_sequence": None,
+        "stop_details": stop_details,
+        "usage": {"input_tokens": 12, "output_tokens": 9},
+    }
+    result: Final = VertexAIAnthropicConfig().transform_response(
+        model="claude-sonnet-5-5",
+        raw_response=httpx.Response(status_code=200, headers={}, json=body),
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"]["category"] == stop_details["category"]

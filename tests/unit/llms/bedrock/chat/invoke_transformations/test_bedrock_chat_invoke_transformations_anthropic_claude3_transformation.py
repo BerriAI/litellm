@@ -4,7 +4,7 @@ import json
 import uuid
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -1689,3 +1689,34 @@ class TestBedrockAnthropicCombinedRegressions:
             user_msg = result["messages"][0]
             has_cache_control = any(isinstance(c, dict) and "cache_control" in c for c in user_msg["content"])
             assert has_cache_control
+
+
+def test_refusal_stop_details_kept_through_bedrock_invoke_transform():
+    stop_details: Final = {"type": "refusal", "category": "cyber", "explanation": "declined by a streaming classifier"}
+    body: Final = {
+        "id": "msg_stop_details_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "anthropic.claude-sonnet-5-5-v1:0",
+        "content": [{"type": "text", "text": "I can't help with that request."}],
+        "stop_reason": "refusal",
+        "stop_sequence": None,
+        "stop_details": stop_details,
+        "usage": {"input_tokens": 12, "output_tokens": 9},
+    }
+    result: Final = AmazonAnthropicClaudeConfig().transform_response(
+        model="anthropic.claude-sonnet-5-5-v1:0",
+        raw_response=httpx.Response(status_code=200, headers={}, json=body),
+        model_response=litellm.ModelResponse(),
+        logging_obj=MagicMock(),
+        request_data={},
+        messages=[{"role": "user", "content": "hi"}],
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+    assert result.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"]["category"] == stop_details["category"]

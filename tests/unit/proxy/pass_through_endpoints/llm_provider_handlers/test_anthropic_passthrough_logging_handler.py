@@ -2905,3 +2905,64 @@ def test_get_user_from_metadata(end_user_id):
     )
 
     assert response == "test"
+
+
+def _anthropic_sse_stream(stop_reason: str, stop_details: dict | None) -> list[str]:
+    events: Final = (
+        (
+            "message_start",
+            {
+                "type": "message_start",
+                "message": {
+                    "id": "msg_stop_details_test",
+                    "type": "message",
+                    "role": "assistant",
+                    "model": "claude-sonnet-5-5",
+                    "content": [],
+                    "usage": {"input_tokens": 12, "output_tokens": 1},
+                },
+            },
+        ),
+        ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        (
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "I can't help with that."}},
+        ),
+        ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        (
+            "message_delta",
+            {
+                "type": "message_delta",
+                "delta": {"stop_reason": stop_reason, "stop_sequence": None, "stop_details": stop_details},
+                "usage": {"output_tokens": 9},
+            },
+        ),
+        ("message_stop", {"type": "message_stop"}),
+    )
+    return [f"event: {name}\ndata: {json.dumps(data)}\n\n" for name, data in events]
+
+
+def test_streamed_messages_refusal_stop_details_on_the_logged_response(mock_logging_obj):
+    stop_details: Final = {"type": "refusal", "category": "cyber", "explanation": "declined by a streaming classifier"}
+    logged: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
+        all_chunks=_anthropic_sse_stream("refusal", stop_details),
+        litellm_logging_obj=mock_logging_obj,
+        model="claude-sonnet-5-5",
+    )
+
+    assert logged.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = logged.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"]["category"] == stop_details["category"]
+
+
+def test_streamed_messages_end_turn_logs_no_stop_details(mock_logging_obj):
+    logged: Final = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
+        all_chunks=_anthropic_sse_stream("end_turn", None),
+        litellm_logging_obj=mock_logging_obj,
+        model="claude-sonnet-5-5",
+    )
+
+    assert logged.choices[0].finish_reason == "stop"
+    provider_fields: Final = logged.choices[0].message.provider_specific_fields or {}
+    assert "stop_details" not in provider_fields

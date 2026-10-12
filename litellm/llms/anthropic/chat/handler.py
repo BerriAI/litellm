@@ -56,7 +56,7 @@ from litellm.types.utils import (
 )
 
 from ...base import BaseLLM
-from ..common_utils import AnthropicError, process_anthropic_headers
+from ..common_utils import AnthropicError, process_anthropic_headers, refusal_provider_specific_fields
 from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig
 
 if TYPE_CHECKING:
@@ -964,7 +964,8 @@ class ModelResponseIterator:
                 # These are automatically handled by Anthropic API, we just pass them through
                 pass
             elif type_chunk == "message_delta":
-                finish_reason, usage, container = self._handle_message_delta(chunk)
+                finish_reason, usage, container, refusal_fields = self._handle_message_delta(chunk)
+                provider_specific_fields.update(refusal_fields)
                 if container:
                     provider_specific_fields["container"] = container
                     # Store container_id and re-emit code_interpreter_results
@@ -1083,7 +1084,9 @@ class ModelResponseIterator:
 
         return text, tool_use
 
-    def _handle_message_delta(self, chunk: dict) -> tuple[str, Usage | None, dict[str, Any] | None]:
+    def _handle_message_delta(
+        self, chunk: dict
+    ) -> tuple[str, Usage | None, dict[str, Any] | None, Mapping[str, object]]:
         """
         Handle message_delta event for finish_reason, usage, and container.
 
@@ -1103,7 +1106,7 @@ class ModelResponseIterator:
             self._handle_usage(anthropic_usage_chunk=message_delta["usage"]) if "usage" in message_delta else None
         )
         container: Final = message_delta["delta"].get("container")
-        return finish_reason, usage, container
+        return finish_reason, usage, container, refusal_provider_specific_fields(message_delta["delta"])
 
     def _handle_accumulated_json_chunk(self, data_str: str, is_final: bool = False) -> ModelResponseStream | None:
         """

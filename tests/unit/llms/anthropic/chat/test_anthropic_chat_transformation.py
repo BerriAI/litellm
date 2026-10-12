@@ -8332,3 +8332,55 @@ def test_completion_surfaces_response_citations_in_provider_specific_fields(resp
     assert response.choices[0].message.provider_specific_fields["citations"] == [
         [{**citation, "supported_text": "the grass is green"}]
     ]
+
+
+def _anthropic_message_body(stop_reason: str, stop_details: dict | None) -> dict:
+    return {
+        "id": "msg_stop_details_test",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "text", "text": "I can't help with that request."}],
+        "stop_reason": stop_reason,
+        "stop_sequence": None,
+        "stop_details": stop_details,
+        "usage": {"input_tokens": 12, "output_tokens": 9},
+    }
+
+
+def _transform_message_body(body: dict) -> litellm.ModelResponse:
+    return AnthropicConfig().transform_parsed_response(
+        completion_response=body,
+        raw_response=httpx.Response(status_code=200, headers={}),
+        model_response=litellm.ModelResponse(),
+        json_mode=False,
+        prefix_prompt=None,
+    )
+
+
+def test_refusal_stop_details_kept_in_provider_specific_fields():
+    stop_details: Final = {"type": "refusal", "category": "cyber", "explanation": "declined by a streaming classifier"}
+    result: Final = _transform_message_body(_anthropic_message_body("refusal", stop_details))
+
+    assert result.choices[0].finish_reason == "content_filter"
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert provider_fields["stop_details"]["category"] == stop_details["category"]
+    assert result._hidden_params["provider_specific_fields"]["stop_details"] == stop_details
+
+
+def test_refusal_without_stop_details_keeps_the_native_stop_reason():
+    result: Final = _transform_message_body(_anthropic_message_body("refusal", None))
+
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert provider_fields["stop_reason"] == "refusal"
+    assert "stop_details" not in provider_fields
+
+
+def test_end_turn_response_carries_no_stop_details():
+    result: Final = _transform_message_body(_anthropic_message_body("end_turn", None))
+
+    assert result.choices[0].finish_reason == "stop"
+    provider_fields: Final = result.choices[0].message.provider_specific_fields
+    assert "stop_details" not in provider_fields
+    assert "stop_reason" not in provider_fields

@@ -13,6 +13,7 @@ from urllib.parse import quote, urlparse
 
 import httpx
 from pydantic import ConfigDict, Field, StrictBool, TypeAdapter, ValidationError
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm.constants import (
@@ -2150,3 +2151,21 @@ def create_anthropic_model_list_response(
         "first_id": data[0]["id"] if data else None,
         "last_id": data[-1]["id"] if data else None,
     }
+
+
+class RefusalStopFields(TypedDict, total=False):
+    stop_reason: ReadOnly[object]
+    stop_details: ReadOnly[object]
+
+
+REFUSAL_STOP_FIELDS: Final = TypeAdapter(RefusalStopFields)
+
+
+def refusal_provider_specific_fields(message: Mapping[str, object]) -> Mapping[str, object]:
+    stop_reason: Final = message.get("stop_reason")
+    stop_details: Final = message.get("stop_details")
+    if stop_details is not None:
+        return {"stop_reason": stop_reason, "stop_details": stop_details}
+    if stop_reason == "refusal":
+        return {"stop_reason": stop_reason}
+    return {}

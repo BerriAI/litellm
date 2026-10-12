@@ -97,10 +97,12 @@ from litellm.utils import (
 )
 
 from ..common_utils import (
+    REFUSAL_STOP_FIELDS,
     AnthropicError,
     AnthropicModelInfo,
     eager_input_streaming_flag,
     process_anthropic_headers,
+    refusal_provider_specific_fields,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
 )
@@ -2647,7 +2649,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if compaction_blocks is not None:
             provider_specific_fields["compaction_blocks"] = compaction_blocks
 
-        return provider_specific_fields
+        refusal_fields: Final = refusal_provider_specific_fields(
+            REFUSAL_STOP_FIELDS.validate_python(completion_response)
+        )
+        return {**provider_specific_fields, **refusal_fields}
 
     def transform_parsed_response(
         self,
