@@ -9,10 +9,10 @@ from unittest.mock import patch
 import pytest
 
 import litellm
+from litellm.llms.anthropic.pass_through.caller_model_checks import CallerModelVerdict
 from litellm.llms.anthropic.pass_through.safeguards import (
     CLASSIFIER_MAX_TOKENS,
     CLASSIFIER_SYSTEM_PROMPT,
-    CLASSIFIER_TIMEOUT_SECONDS,
     TOOL_RESULT_CHAR_LIMIT,
     TRANSCRIPT_CHAR_BUDGET,
     TRANSCRIPT_LINE_CHAR_LIMIT,
@@ -57,13 +57,13 @@ class _RecordingClassifier:
 
 
 class _CallerGate:
-    def __init__(self, allowed: bool) -> None:
-        self._allowed = allowed
+    def __init__(self, verdict: CallerModelVerdict) -> None:
+        self._verdict: Final[CallerModelVerdict] = verdict
         self.models: list[str] = []
 
-    async def __call__(self, model: str) -> bool:
+    async def __call__(self, model: str) -> CallerModelVerdict:
         self.models.append(model)
-        return self._allowed
+        return self._verdict
 
 
 def _evaluator(classifier: _RecordingClassifier, **overrides: object) -> SafeguardsEvaluator:
@@ -74,7 +74,7 @@ def _evaluator(classifier: _RecordingClassifier, **overrides: object) -> Safegua
         "litellm_metadata": {"user_api_key": "hashed", "user_api_key_end_user_id": "end-user-7"},
         "allowed_model_region": None,
         "acompletion": classifier,
-        "caller_may_use_model": _CallerGate(allowed=True),
+        "caller_model_verdict": _CallerGate("allowed"),
         **overrides,
     }
     return SafeguardsEvaluator(**fields)
@@ -140,7 +140,7 @@ async def test_evaluate_sends_the_transcript_context_and_tool_calls_with_the_cal
     call: Final = classifier.calls[0]
     assert call["model"] == "classifier"
     assert call["max_tokens"] == CLASSIFIER_MAX_TOKENS
-    assert call["timeout"] == CLASSIFIER_TIMEOUT_SECONDS
+    assert "timeout" not in call
     assert call["num_retries"] == 0
     assert call["litellm_metadata"] == {"user_api_key": "hashed", "user_api_key_end_user_id": "end-user-7"}
     assert call["user"] == "end-user-7"
@@ -174,9 +174,22 @@ async def test_evaluate_with_no_tool_uses_answers_available_without_calling_the_
 @pytest.mark.asyncio
 async def test_evaluate_answers_unsupported_without_a_classifier_call_when_the_caller_may_not_use_the_model():
     classifier: Final = _RecordingClassifier([])
-    gate: Final = _CallerGate(allowed=False)
-    results: Final = await _evaluator(classifier, caller_may_use_model=gate).evaluate((LS, CURL_SH))
+    gate: Final = _CallerGate("denied")
+    results: Final = await _evaluator(classifier, caller_model_verdict=gate).evaluate((LS, CURL_SH))
     assert results == UNSUPPORTED
+    assert gate.models == ["classifier"]
+    assert classifier.calls == []
+
+
+@pytest.mark.asyncio
+async def test_a_caller_denied_for_now_gets_unavailable_verdicts_this_turn_and_no_classifier_call() -> None:
+    classifier: Final = _RecordingClassifier([])
+    gate: Final = _CallerGate("denied_for_now")
+    verdicts: Final = _verdicts(await _evaluator(classifier, caller_model_verdict=gate).evaluate((LS, CURL_SH)))
+    assert verdicts == {
+        "call_ls": {"type": "unavailable", "reason": "error"},
+        "call_curl": {"type": "unavailable", "reason": "error"},
+    }
     assert gate.models == ["classifier"]
     assert classifier.calls == []
 
@@ -196,9 +209,9 @@ async def test_evaluate_marks_truncated_tool_uses_and_sends_only_the_complete_on
 @pytest.mark.asyncio
 async def test_evaluate_with_only_truncated_tool_uses_checks_neither_the_caller_nor_the_classifier():
     classifier: Final = _RecordingClassifier([])
-    gate: Final = _CallerGate(allowed=False)
+    gate: Final = _CallerGate("denied")
     verdicts: Final = _verdicts(
-        await _evaluator(classifier, caller_may_use_model=gate).evaluate((TruncatedToolUse(id="call_cut"),))
+        await _evaluator(classifier, caller_model_verdict=gate).evaluate((TruncatedToolUse(id="call_cut"),))
     )
     assert verdicts == {"call_cut": {"type": "unavailable", "reason": "truncated"}}
     assert gate.models == []
@@ -290,7 +303,7 @@ async def test_evaluate_gives_up_on_a_classifier_that_never_answers():
         litellm_metadata={},
         allowed_model_region=None,
         acompletion=_StalledClassifier(),
-        caller_may_use_model=_CallerGate(allowed=True),
+        caller_model_verdict=_CallerGate("allowed"),
         timeout_seconds=0.05,
     )
     verdicts: Final = _verdicts(await evaluator.evaluate((LS,)))
@@ -307,6 +320,16 @@ def test_requested_dangerous_tool_use_finds_the_entry_or_nothing():
 class _Router:
     def __init__(self) -> None:
         self.calls: list[dict[str, object]] = []
+        self.model_group_alias: dict[str, str] = {}
+        self.model_name_to_deployment_indices: dict[str, list[int]] = {}
+
+    def get_model_names(self) -> list[str]:
+        return ["classifier", "kimi-k3"]
+
+    def get_model_access_groups(
+        self, model_name: str | None = None, team_id: str | None = None
+    ) -> dict[str, list[str]]:
+        return {}
 
     async def acompletion(self, **kwargs: object) -> ModelResponse:
         self.calls.append(kwargs)

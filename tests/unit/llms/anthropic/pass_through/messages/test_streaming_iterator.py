@@ -2,7 +2,7 @@ import asyncio
 import json
 from collections.abc import AsyncIterator, Mapping, Sequence
 from datetime import datetime
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import patch
 
 import pytest
@@ -1540,8 +1540,8 @@ class _OneVerdictClassifier:
         return ModelResponse(choices=[Choices(index=0, finish_reason="stop", message=Message(content=self._reply))])
 
 
-async def _caller_may_use(model: str) -> bool:
-    return True
+async def _caller_may_use(model: str) -> Literal["allowed"]:
+    return "allowed"
 
 
 def _safeguards_evaluator(classifier: _OneVerdictClassifier) -> SafeguardsEvaluator:
@@ -1552,7 +1552,7 @@ def _safeguards_evaluator(classifier: _OneVerdictClassifier) -> SafeguardsEvalua
         litellm_metadata={},
         allowed_model_region=None,
         acompletion=classifier,
-        caller_may_use_model=_caller_may_use,
+        caller_model_verdict=_caller_may_use,
     )
 
 

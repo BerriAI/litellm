@@ -11,7 +11,7 @@ from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack, assert_n
 
 import litellm
 from litellm._logging import verbose_logger
-from litellm.llms.anthropic.pass_through.caller_model_checks import caller_may_use_model
+from litellm.llms.anthropic.pass_through.caller_model_checks import CallerModelVerdict, caller_model_verdict
 from litellm.llms.anthropic.pass_through.utils import proxy_general_settings, proxy_spend_attribution_metadata
 from litellm.types.llms.anthropic import (
     SafeguardResult,
@@ -51,7 +51,7 @@ _CLASSIFIER_CONTEXT_KEYS: Final = (
 _GIT_STATE_KEYS: Final = ("cwd", "root", "branch", "default_branch", "visibility")
 _TRANSCRIPT_OMISSION_MARKER: Final = json.dumps({"meta": "earlier turns omitted"})
 _UnavailableReason: TypeAlias = Literal["timeout", "error", "refused", "input_too_long", "truncated"]
-CallerModelGate: TypeAlias = Callable[[str], Awaitable[bool]]
+CallerModelGate: TypeAlias = Callable[[str], Awaitable[CallerModelVerdict]]
 _MAPPING: Final = TypeAdapter(Mapping[str, object])
 _OBJECTS: Final = TypeAdapter(tuple[object, ...])
 _JSON_VALUE: Final = TypeAdapter(object)
@@ -84,7 +84,6 @@ Include every tool call id you were given exactly once."""
 class ClassifierCallKwargs(TypedDict):
     model: ReadOnly[str]
     max_tokens: ReadOnly[int]
-    timeout: ReadOnly[float]
     num_retries: ReadOnly[int]
     litellm_metadata: ReadOnly[Mapping[str, object]]
     user: ReadOnly[NotRequired[str]]
@@ -141,19 +140,13 @@ class SafeguardsEvaluator:
     litellm_metadata: Mapping[str, object]
     allowed_model_region: str | None
     acompletion: ClassifierAcompletion
-    caller_may_use_model: CallerModelGate
+    caller_model_verdict: CallerModelGate
     timeout_seconds: float = CLASSIFIER_TIMEOUT_SECONDS
 
     async def evaluate(self, tool_uses: Sequence[PendingToolUse]) -> Sequence[SafeguardResult]:
         complete: Final = tuple(use for use in tool_uses if isinstance(use, ToolUseUnderReview))
-        if complete and not await self.caller_may_use_model(self.classifier_model):
-            verbose_logger.warning(
-                "safeguards classifier %s is outside the caller's model access, budget, or rate limit",
-                self.classifier_model,
-            )
-            return _unsupported_results()
         verdicts: Final[Mapping[str, SafeguardToolUseVerdict] | ClassifierNotServed] = (
-            await self._verdicts(complete) if complete else {}
+            await self._verdicts_for_caller(complete) if complete else {}
         )
         if isinstance(verdicts, ClassifierNotServed):
             return _unsupported_results()
@@ -162,6 +155,28 @@ class SafeguardsEvaluator:
             "tool_uses": {use.id: _final_verdict(use, verdicts) for use in tool_uses},
         }
         return ({"type": DANGEROUS_TOOL_USE, "status": status},)
+
+    async def _verdicts_for_caller(
+        self, tool_uses: Sequence[ToolUseUnderReview]
+    ) -> Mapping[str, SafeguardToolUseVerdict] | ClassifierNotServed:
+        caller: Final = await self.caller_model_verdict(self.classifier_model)
+        match caller:
+            case "allowed":
+                return await self._verdicts(tool_uses)
+            case "denied":
+                verbose_logger.warning(
+                    "safeguards classifier %s is outside the caller's model access or budget", self.classifier_model
+                )
+                return ClassifierNotServed()
+            case "denied_for_now":
+                verbose_logger.warning(
+                    "safeguards classifier %s is over the caller's rate limit for this window, or the limit could "
+                    "not be read, so this turn's tool uses are unavailable",
+                    self.classifier_model,
+                )
+                return _every_tool_use_unavailable(tool_uses, "error")
+            case _:
+                assert_never(caller)
 
     async def _verdicts(
         self, tool_uses: Sequence[ToolUseUnderReview]
@@ -215,7 +230,6 @@ class SafeguardsEvaluator:
         base: Final[ClassifierCallKwargs] = {
             "model": self.classifier_model,
             "max_tokens": CLASSIFIER_MAX_TOKENS,
-            "timeout": self.timeout_seconds,
             "num_retries": 0,
             "litellm_metadata": self.litellm_metadata,
         }
@@ -277,8 +291,8 @@ def build_safeguards_evaluator(
         return None
     router_acompletion: Final[ClassifierAcompletion | None] = getattr(llm_router, "acompletion", None)
 
-    async def caller_may_use(model: str) -> bool:
-        return await caller_may_use_model(user_api_key_auth=user_api_key_auth, model=model, llm_router=llm_router)
+    async def caller_verdict(model: str) -> CallerModelVerdict:
+        return await caller_model_verdict(user_api_key_auth=user_api_key_auth, model=model, llm_router=llm_router)
 
     return SafeguardsEvaluator(
         classifier_model=classifier_model,
@@ -287,7 +301,7 @@ def build_safeguards_evaluator(
         litellm_metadata=proxy_spend_attribution_metadata(litellm_metadata),
         allowed_model_region=getattr(user_api_key_auth, "allowed_model_region", None),
         acompletion=router_acompletion if router_acompletion is not None else litellm.acompletion,
-        caller_may_use_model=caller_may_use,
+        caller_model_verdict=caller_verdict,
     )
 
 

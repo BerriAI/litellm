@@ -726,11 +726,12 @@ async def apply_compact_20260112(
     # Phase C: summarize. ``augmented_system`` carries any prior compaction
     # summary so multi-round compaction does not lose accumulated history —
     # ``effective_messages`` only contains turns since the last compaction.
-    if not await caller_can_call_model(
+    summary_access: Final = await caller_can_call_model(
         user_api_key_auth=user_api_key_auth,
         model=summary_model,
         llm_router=llm_router,
-    ):
+    )
+    if summary_access != "allowed":
         verbose_logger.warning(
             "compact_20260112: caller not authorized for summary_model=%s; skipping summary call",
             summary_model,
@@ -742,10 +743,11 @@ async def apply_compact_20260112(
             applied_edits=[applied],
         )
 
-    if not await caller_within_model_budget(
+    summary_budget: Final = await caller_within_model_budget(
         user_api_key_auth=user_api_key_auth,
         model=summary_model,
-    ):
+    )
+    if summary_budget != "allowed":
         verbose_logger.warning(
             "compact_20260112: caller over model budget for summary_model=%s; skipping summary call",
             summary_model,
@@ -757,10 +759,11 @@ async def apply_compact_20260112(
             applied_edits=[applied],
         )
 
-    if not await caller_within_model_rate_limit(
+    summary_rate_limit: Final = await caller_within_model_rate_limit(
         user_api_key_auth=user_api_key_auth,
         model=summary_model,
-    ):
+    )
+    if summary_rate_limit != "allowed":
         verbose_logger.warning(
             "compact_20260112: caller over rate limit for summary_model=%s; skipping summary call",
             summary_model,

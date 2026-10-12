@@ -8,7 +8,7 @@ before the sub-call runs.
 """
 
 from collections.abc import Awaitable, Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, TypeVar
 
 import litellm
 from litellm._logging import verbose_logger
@@ -23,6 +23,7 @@ if TYPE_CHECKING:
     from litellm.types.proxy.auth.user_api_key_auth import UserAPIKeyAuth
 
 _ScopeObject: Final = TypeVar("_ScopeObject")
+CallerModelVerdict: TypeAlias = Literal["allowed", "denied", "denied_for_now"]
 
 
 class _TeamMemberModelBudgetLimiter(Protocol):
@@ -77,46 +78,50 @@ class _ShouldRateLimit(Protocol):
     ) -> "Awaitable[RateLimitResponse]": ...
 
 
-async def caller_may_use_model(
+async def caller_model_verdict(
     user_api_key_auth: Optional["UserAPIKeyAuth"],
     model: str,
     llm_router: Optional["Router"],
-) -> bool:
-    """True when the caller passes the access, budget, and rate-limit checks for ``model``."""
-    return (
-        await caller_can_call_model(user_api_key_auth=user_api_key_auth, model=model, llm_router=llm_router)
-        and await caller_within_model_budget(user_api_key_auth=user_api_key_auth, model=model)
-        and await caller_within_model_rate_limit(user_api_key_auth=user_api_key_auth, model=model)
-    )
+) -> CallerModelVerdict:
+    """``denied`` when an allowlist or a per-model budget refuses ``model`` for the caller, which only an
+    admin or the next budget window changes; ``denied_for_now`` when a rate-limit window is full or a check
+    could not run, which the caller's next request may clear."""
+    access: Final = await caller_can_call_model(user_api_key_auth=user_api_key_auth, model=model, llm_router=llm_router)
+    if access != "allowed":
+        return access
+    budget: Final = await caller_within_model_budget(user_api_key_auth=user_api_key_auth, model=model)
+    if budget != "allowed":
+        return budget
+    return await caller_within_model_rate_limit(user_api_key_auth=user_api_key_auth, model=model)
 
 
 async def caller_can_call_model(
     user_api_key_auth: Optional["UserAPIKeyAuth"],
     model: str,
     llm_router: Optional["Router"],
-) -> bool:
-    """Return True when every model-allowlist scope on the parent request is
+) -> CallerModelVerdict:
+    """Return ``allowed`` when every model-allowlist scope on the parent request is
     satisfied for ``model``.
 
     Mirrors the model-scope enforcement that ``litellm.proxy.auth.common_checks``
     runs for the client-requested model: key, team, user (personal), project, and
     team-member allowlists.
 
-    Returns True (allow) when ``user_api_key_auth`` is not present — SDK
+    Returns ``allowed`` when ``user_api_key_auth`` is not present — SDK
     callers and tests run outside the proxy, where no key/team policy exists.
-    Returns False when any of the active allowlists denies the model
+    Returns ``denied`` when any of the active allowlists denies the model
     (``ProxyException`` from ``_can_object_call_model`` / ``can_*_model``).
-    Unexpected errors during an access check fail closed but are logged
-    separately so operators can distinguish them from a real access-denied
+    Unexpected errors during an access check answer ``denied_for_now`` and are
+    logged separately so operators can distinguish them from a real access-denied
     response. User and project lookup failures (object missing from cache or
     DB) skip the corresponding scope — matching ``common_checks``, which only
     enforces a scope when its backing object can be loaded. A failed team
-    membership read (a database outage) fails closed instead, since a member
+    membership read (a database outage) answers ``denied_for_now`` instead, since a member
     whose limits cannot be read must not have the model invoked with those
     limits dropped.
     """
     if user_api_key_auth is None:
-        return True
+        return "allowed"
     try:
         from litellm.proxy._types import ProxyException
         from litellm.proxy.auth.auth_checks import (
@@ -133,7 +138,7 @@ async def caller_can_call_model(
             user_api_key_cache,
         )
     except Exception:
-        return True
+        return "allowed"
 
     key_models: Final = list(getattr(user_api_key_auth, "models", None) or [])
     team_id: Final[str | None] = getattr(user_api_key_auth, "team_id", None)
@@ -159,7 +164,7 @@ async def caller_can_call_model(
                 object_type=object_type,
             )
         except ProxyException:
-            return False
+            return "denied"
         except Exception as e:
             verbose_logger.warning(
                 "proxy sub-call: unexpected error during %s-level access check for model=%s; denying access: %s",
@@ -167,7 +172,7 @@ async def caller_can_call_model(
                 model,
                 e,
             )
-            return False
+            return "denied_for_now"
 
     if user_id is not None and prisma_client is not None:
         user_obj: Final = await _scope_object_or_none(
@@ -189,14 +194,14 @@ async def caller_can_call_model(
                     user_object=user_obj,
                 )
             except ProxyException:
-                return False
+                return "denied"
             except Exception as e:
                 verbose_logger.warning(
                     "proxy sub-call: unexpected error during user-level access check for model=%s; denying access: %s",
                     model,
                     e,
                 )
-                return False
+                return "denied_for_now"
 
     if project_id is not None and prisma_client is not None:
         project_obj: Final = await _scope_object_or_none(
@@ -217,7 +222,7 @@ async def caller_can_call_model(
                     llm_router=llm_router,
                 )
             except ProxyException:
-                return False
+                return "denied"
             except Exception as e:
                 verbose_logger.warning(
                     "proxy sub-call: unexpected error during project-level access check for model=%s; "
@@ -225,7 +230,7 @@ async def caller_can_call_model(
                     model,
                     e,
                 )
-                return False
+                return "denied_for_now"
 
     if user_id is not None and team_id is not None and prisma_client is not None:
         try:
@@ -242,7 +247,7 @@ async def caller_can_call_model(
                 model,
                 e,
             )
-            return False
+            return "denied_for_now"
         member_allowed_models: Final = (
             team_membership.litellm_budget_table.allowed_models
             if team_membership is not None and team_membership.litellm_budget_table is not None
@@ -259,7 +264,7 @@ async def caller_can_call_model(
                     object_type="team",
                 )
             except ProxyException:
-                return False
+                return "denied"
             except Exception as e:
                 verbose_logger.warning(
                     "proxy sub-call: unexpected error during member-level access check for model=%s; "
@@ -267,9 +272,9 @@ async def caller_can_call_model(
                     model,
                     e,
                 )
-                return False
+                return "denied_for_now"
 
-    return True
+    return "allowed"
 
 
 async def _scope_object_or_none(lookup: Awaitable[_ScopeObject], *, scope: str, model: str) -> _ScopeObject | None:
@@ -289,12 +294,13 @@ async def _scope_object_or_none(lookup: Awaitable[_ScopeObject], *, scope: str, 
 async def caller_within_model_budget(
     user_api_key_auth: Optional["UserAPIKeyAuth"],
     model: str,
-) -> bool:
-    """Return True when the caller is within their per-model budget for ``model``.
+) -> CallerModelVerdict:
+    """Return ``allowed`` when the caller is within their per-model budget for ``model``.
 
     Mirrors the per-model budget enforcement that ``user_api_key_auth`` runs for
-    the client-requested model. Returns True outside the proxy or when no
-    per-model budget is configured.
+    the client-requested model. Returns ``allowed`` outside the proxy or when no
+    per-model budget is configured, ``denied`` over a budget, and ``denied_for_now``
+    when a budget read fails.
 
     Every scope is checked because the sub-call's spend is charged to every
     scope: the key, team, user, team-member and end-user budgets ride into the
@@ -302,11 +308,11 @@ async def caller_within_model_budget(
     increment a counter it can never be refused by.
     """
     if user_api_key_auth is None:
-        return True
+        return "allowed"
     try:
         from litellm.proxy.proxy_server import model_max_budget_limiter
     except Exception:
-        return True
+        return "allowed"
 
     model_max_budget: Final = getattr(user_api_key_auth, "model_max_budget", None)
     token: Final = getattr(user_api_key_auth, "token", None)
@@ -317,14 +323,14 @@ async def caller_within_model_budget(
                 model=model,
             )
         except litellm.BudgetExceededError:
-            return False
+            return "denied"
         except Exception as e:
             verbose_logger.warning(
                 "proxy sub-call: unexpected error during key model-budget check for model=%s; denying: %s",
                 model,
                 e,
             )
-            return False
+            return "denied_for_now"
 
     user_model_max_budget: Final = user_api_key_auth.user_model_max_budget
     user_id: Final = user_api_key_auth.user_id
@@ -336,14 +342,14 @@ async def caller_within_model_budget(
                 model=model,
             )
         except litellm.BudgetExceededError:
-            return False
+            return "denied"
         except Exception as e:  # noqa: BLE001  # a budget gate denies on any failure, as the key and end-user scopes do
             verbose_logger.warning(
                 "proxy sub-call: unexpected error during user model-budget check for model=%s; denying: %s",
                 model,
                 e,
             )
-            return False
+            return "denied_for_now"
 
     team_model_max_budget: Final = user_api_key_auth.team_model_max_budget
     team_id: Final = user_api_key_auth.team_id
@@ -356,14 +362,14 @@ async def caller_within_model_budget(
                 model=model,
             )
         except litellm.BudgetExceededError:
-            return False
+            return "denied"
         except Exception as e:  # noqa: BLE001  # a budget gate denies on any failure, as the other scopes do
             verbose_logger.warning(
                 "proxy sub-call: unexpected error during team model-budget check for model=%s; denying: %s",
                 model,
                 e,
             )
-            return False
+            return "denied_for_now"
 
     end_user_model_max_budget: Final[dict[str, object] | None] = getattr(
         user_api_key_auth, "end_user_model_max_budget", None
@@ -377,14 +383,14 @@ async def caller_within_model_budget(
                 model=model,
             )
         except litellm.BudgetExceededError:
-            return False
+            return "denied"
         except Exception as e:
             verbose_logger.warning(
                 "proxy sub-call: unexpected error during end-user model-budget check for model=%s; denying: %s",
                 model,
                 e,
             )
-            return False
+            return "denied_for_now"
 
     return await _caller_within_team_member_model_budget(
         user_api_key_auth=user_api_key_auth,
@@ -397,7 +403,7 @@ async def _caller_within_team_member_model_budget(
     user_api_key_auth: "UserAPIKeyAuth",
     model_max_budget_limiter: _TeamMemberModelBudgetLimiter,
     model: str,
-) -> bool:
+) -> CallerModelVerdict:
     team_member_model_max_budget: Final = user_api_key_auth.team_member_model_max_budget
     user_id: Final = user_api_key_auth.user_id
     team_id: Final = user_api_key_auth.team_id
@@ -407,7 +413,7 @@ async def _caller_within_team_member_model_budget(
         or not isinstance(user_id, str)
         or not isinstance(team_id, str)
     ):
-        return True
+        return "allowed"
     try:
         await model_max_budget_limiter.is_team_member_within_model_budget(
             user_id=user_id,
@@ -416,15 +422,15 @@ async def _caller_within_team_member_model_budget(
             model=model,
         )
     except litellm.BudgetExceededError:
-        return False
+        return "denied"
     except Exception as e:  # noqa: BLE001  # a budget gate denies on any failure, as the other scopes do
         verbose_logger.warning(
             "proxy sub-call: unexpected error during team member model-budget check for model=%s; denying: %s",
             model,
             e,
         )
-        return False
-    return True
+        return "denied_for_now"
+    return "allowed"
 
 
 def _without_parallel_request_gauges(
@@ -448,8 +454,8 @@ def _without_parallel_request_gauge(descriptor: "RateLimitDescriptor") -> "RateL
 async def caller_within_model_rate_limit(
     user_api_key_auth: Optional["UserAPIKeyAuth"],
     model: str,
-) -> bool:
-    """Return True when the caller is within their configured RPM/TPM limits for ``model``.
+) -> CallerModelVerdict:
+    """Return ``allowed`` when the caller is within their configured RPM/TPM limits for ``model``.
 
     This mirrors the read side of
     ``_PROXY_MaxParallelRequestsHandler_v3.async_pre_call_hook`` for ``model``:
@@ -460,24 +466,35 @@ async def caller_within_model_rate_limit(
     out of the check: the sub-call runs inside the caller's already admitted
     request, whose own slot would otherwise count against it.
 
-    Returns True (allow) outside the proxy, when the active limiter does not
+    Returns ``allowed`` outside the proxy, when the active limiter does not
     expose the read-only descriptor check (legacy limiter), or when the
-    descriptor set cannot be built — the deny signals are a definitive
-    ``OVER_LIMIT`` response and the limiter's own fail-closed rejection
+    descriptor set cannot be built. ``denied_for_now`` comes from a definitive
+    ``OVER_LIMIT`` response, which the next window clears, and from the limiter's own fail-closed rejection
     (``RateLimitUnverifiableError``, raised when ``fail_closed_rate_limit_enforcement``
     is on and the counters could not be verified), so any other internal error
     here lets the sub-call run rather than blocking every one.
     """
     if user_api_key_auth is None:
-        return True
+        return "allowed"
     try:
         from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
         from litellm.proxy.proxy_server import proxy_logging_obj
     except Exception:
-        return True
+        return "allowed"
 
     get_proxy_hook: Final[_GetProxyHook | None] = getattr(proxy_logging_obj, "get_proxy_hook", None)
     limiter: Final[object] = get_proxy_hook("parallel_request_limiter") if get_proxy_hook is not None else None
+    return await rate_limit_verdict(
+        user_api_key_auth=user_api_key_auth, model=model, limiter=limiter, unverifiable=RateLimitUnverifiableError
+    )
+
+
+async def rate_limit_verdict(
+    user_api_key_auth: "UserAPIKeyAuth",
+    model: str,
+    limiter: object,
+    unverifiable: type[Exception],
+) -> CallerModelVerdict:
     should_rate_limit_check: Final[_ShouldRateLimit | None] = getattr(limiter, "should_rate_limit", None)
     create_descriptors: Final[_CreateRateLimitDescriptors | None] = getattr(
         limiter, "create_rate_limit_descriptors", None
@@ -499,7 +516,7 @@ async def caller_within_model_rate_limit(
         or add_project_descriptor is None
         or create_org_descriptors is None
     ):
-        return True
+        return "allowed"
 
     try:
         metadata: Final[Mapping[str, object]] = getattr(user_api_key_auth, "metadata", None) or {}
@@ -525,25 +542,25 @@ async def caller_within_model_rate_limit(
             (*base_descriptors, *create_org_descriptors(user_api_key_auth, model))
         )
         if not descriptors:
-            return True
+            return "allowed"
         parent_otel_span: Final[object] = getattr(user_api_key_auth, "parent_otel_span", None)
         response: Final[RateLimitResponse] = await should_rate_limit_check(
             descriptors=descriptors,
             parent_otel_span=parent_otel_span,
             read_only=True,
         )
-    except RateLimitUnverifiableError as e:
+    except unverifiable as e:
         verbose_logger.warning(
-            "proxy sub-call: rate-limit counters for model=%s could not be verified; denying: %s",
+            "proxy sub-call: rate-limit counters for model=%s could not be verified; denying for now: %s",
             model,
-            e.detail,
+            e,
         )
-        return False
+        return "denied_for_now"
     except Exception as e:
         verbose_logger.warning(
             "proxy sub-call: unexpected error during rate-limit check for model=%s; allowing: %s",
             model,
             e,
         )
-        return True
-    return response.get("overall_code") != "OVER_LIMIT"
+        return "allowed"
+    return "allowed" if response.get("overall_code") != "OVER_LIMIT" else "denied_for_now"
