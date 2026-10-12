@@ -96,7 +96,7 @@ jobs:
           REDIS_HOST: 127.0.0.1
           REDIS_PORT: "6379"
         run: |
-          uv run --no-sync pytest tests/e2e/perf/test_redis_chaos_e2e.py -v --tb=short -rA -s
+          uv run --no-sync pytest tests/e2e/perf/test_redis_chaos.py -v --tb=short -rA -s
 
       - name: Show proxy log on failure
         if: failure()

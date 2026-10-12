@@ -78,7 +78,7 @@ jobs:
         env:
           E2E_WEEKLY_ANOMALY: "1"
         run: |
-          uv run --no-sync pytest tests/e2e/perf/test_weekly_session_anomaly_e2e.py -v --tb=short -rA
+          uv run --no-sync pytest tests/e2e/perf/test_weekly_session_anomaly.py -v --tb=short -rA
 
       - name: Show proxy log on failure
         if: failure()
