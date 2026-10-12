@@ -98,3 +98,43 @@ async def test_exactly_at_cap_passes():
         )
     assert result is None
     assert get_tokens.await_count == 1
+
+
+@pytest.mark.asyncio
+async def test_get_current_tokens_used_prefers_the_cross_pod_counter():
+    """A populated tokens:team counter is authoritative over the DB column."""
+    from litellm.proxy.proxy_server import get_current_tokens_used
+
+    async def _counter(counter_key):
+        return 500_000, None
+
+    with patch("litellm.proxy.proxy_server.read_spend_counter_cache_value", _counter):
+        used = await get_current_tokens_used(counter_key="tokens:team:t1", fallback_tokens=7)
+    assert used == 500_000
+
+
+@pytest.mark.asyncio
+async def test_get_current_tokens_used_falls_back_to_db_when_counter_cold():
+    """A cold counter (None) falls back to the tokens_used column loaded in auth."""
+    from litellm.proxy.proxy_server import get_current_tokens_used
+
+    async def _cold(counter_key):
+        return None, None
+
+    with patch("litellm.proxy.proxy_server.read_spend_counter_cache_value", _cold):
+        used = await get_current_tokens_used(counter_key="tokens:team:t1", fallback_tokens=1_234)
+    assert used == 1_234
+
+
+def test_extract_total_tokens_reads_the_standard_logging_payload():
+    """The counter delta is the StandardLoggingPayload total, the DB write's source."""
+    from litellm.proxy.hooks.proxy_track_cost_callback import _extract_total_tokens
+
+    assert _extract_total_tokens({"total_tokens": 4242}) == 4242
+
+
+def test_extract_total_tokens_is_zero_without_a_payload():
+    """No payload leaves the counter untouched rather than raising."""
+    from litellm.proxy.hooks.proxy_track_cost_callback import _extract_total_tokens
+
+    assert _extract_total_tokens(None) == 0
