@@ -10,6 +10,7 @@ import uuid as uuid_lib
 from typing import Final, cast
 
 import httpx
+from pydantic import ConfigDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
@@ -33,6 +34,7 @@ from litellm.types.llms.openai import (
     OpenAIRealtimeResponseTextDone,
     OpenAIRealtimeResponseUsage,
     OpenAIRealtimeStreamResponseBaseObject,
+    OpenAIRealtimeStreamResponseOutputItem,
     OpenAIRealtimeStreamResponseOutputItemAdded,
     OpenAIRealtimeStreamSession,
     OpenAIRealtimeStreamSessionEvents,
@@ -47,6 +49,15 @@ from litellm.types.realtime import (
 
 class BedrockContentEnd(LiteLLMBaseModel):
     stopReason: str | None = None
+    type: str | None = None
+
+
+class BedrockToolUse(LiteLLMBaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+
+    toolUseId: str
+    toolName: str
+    content: str = "{}"
 
 
 class BedrockUsageTokenDetails(LiteLLMBaseModel):
@@ -123,6 +134,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self._user_transcript_buffer = ""
         self._cumulative_usage = BedrockUsageEvent()
         self._reported_usage = BedrockUsageEvent()
+        self._response_function_call_items: tuple[OpenAIRealtimeStreamResponseOutputItem, ...] = ()
 
     def get_error_class(
         self,
@@ -203,7 +215,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         bedrock_tools: Final = []
         for tool in tools:
             if tool.get("type") == "function":
-                function = tool.get("function", {})
+                function = tool.get("function") or tool
                 bedrock_tool = {
                     "toolSpec": {
                         "name": function.get("name", ""),
@@ -1160,6 +1172,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             return [], None, None, None
 
         usage: Final = self._take_usage_delta()
+        output_items: Final = self._response_function_call_items
+        self._response_function_call_items = ()
         response_done: Final = OpenAIRealtimeDoneEvent(
             type="response.done",
             event_id=f"event_{uuid.uuid4()}",
@@ -1167,7 +1181,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 object="realtime.response",
                 id=current_response_id,
                 status="completed",
-                output=[],
+                output=list(output_items),
                 conversation_id=current_conversation_id,
                 usage=dict(usage),
             ),
@@ -1179,54 +1193,100 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
     def transform_tool_use_event(
         self,
         event: dict,
-        current_output_item_id: str | None,
         current_response_id: str | None,
+        current_conversation_id: str | None,
     ) -> tuple[list[OpenAIRealtimeEvents], str, str]:
         """
         Transform Bedrock toolUse event to OpenAI format.
 
         Args:
             event: Bedrock toolUse event
-            current_output_item_id: Current output item ID
             current_response_id: Current response ID
+            current_conversation_id: Current conversation ID
 
         Returns:
-            Tuple of (events, tool_call_id, tool_name) for tracking
+            Tuple of (events, response_id, conversation_id)
         """
         verbose_logger.debug("Handling toolUse")
-        tool_use: Final = event["toolUse"]
+        tool_use: Final = BedrockToolUse.model_validate(event["toolUse"])
+        verbose_logger.debug("Tool use event: %s (ID: %s)", tool_use.toolName, tool_use.toolUseId)
 
-        if not current_output_item_id or not current_response_id:
-            return [], "", ""
+        response_id: Final = current_response_id or f"resp_{uuid.uuid4()}"
+        conversation_id: Final = current_conversation_id or f"conv_{uuid.uuid4()}"
+        item_id: Final = f"item_{uuid.uuid4()}"
 
-        # Parse the tool input
-        tool_input = {}
-        if "input" in tool_use:
-            try:
-                tool_input = json.loads(tool_use["input"]) if isinstance(tool_use["input"], str) else tool_use["input"]
-            except json.JSONDecodeError:
-                tool_input = {}
+        response_created_events: Final[tuple[OpenAIRealtimeEvents, ...]] = (
+            (
+                OpenAIRealtimeStreamResponseBaseObject(
+                    type="response.created",
+                    event_id=f"event_{uuid.uuid4()}",
+                    response={
+                        "object": "realtime.response",
+                        "id": response_id,
+                        "status": "in_progress",
+                        "output": [],
+                        "conversation_id": conversation_id,
+                    },
+                ),
+            )
+            if current_response_id is None
+            else ()
+        )
 
-        tool_call_id: Final = tool_use.get("toolUseId", "")
-        tool_name: Final = tool_use.get("toolName", "")
+        output_item_added: Final = OpenAIRealtimeStreamResponseOutputItemAdded(
+            type="response.output_item.added",
+            response_id=response_id,
+            output_index=0,
+            item={
+                "id": item_id,
+                "object": "realtime.item",
+                "type": "function_call",
+                "status": "in_progress",
+                "call_id": tool_use.toolUseId,
+                "name": tool_use.toolName,
+                "arguments": "",
+            },
+        )
 
-        # Create a function call arguments done event
-        # This is a custom event format that matches what clients expect
         function_call_event: Final[dict[str, object]] = {
             "type": "response.function_call_arguments.done",
             "event_id": f"event_{uuid.uuid4()}",
-            "response_id": current_response_id,
-            "item_id": current_output_item_id,
+            "response_id": response_id,
+            "item_id": item_id,
             "output_index": 0,
-            "call_id": tool_call_id,
-            "name": tool_name,
-            "arguments": json.dumps(tool_input),
+            "call_id": tool_use.toolUseId,
+            "name": tool_use.toolName,
+            "arguments": tool_use.content,
         }
 
+        completed_item: Final[OpenAIRealtimeStreamResponseOutputItem] = {
+            "id": item_id,
+            "object": "realtime.item",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": tool_use.toolUseId,
+            "name": tool_use.toolName,
+            "arguments": tool_use.content,
+        }
+        output_item_done: Final = OpenAIRealtimeOutputItemDone(
+            type="response.output_item.done",
+            event_id=f"event_{uuid.uuid4()}",
+            output_index=0,
+            response_id=response_id,
+            item=completed_item,
+        )
+
+        self._response_function_call_items = self._response_function_call_items + (completed_item,)
+
         return (
-            [cast(OpenAIRealtimeEvents, function_call_event)],
-            tool_call_id,
-            tool_name,
+            [
+                *response_created_events,
+                output_item_added,
+                cast(OpenAIRealtimeEvents, function_call_event),
+                output_item_done,
+            ],
+            response_id,
+            conversation_id,
         )
 
     def transform_conversation_item_create_tool_result_event(self, json_message: dict) -> list[str]:
@@ -1377,6 +1437,15 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             events = self.transform_audio_output_event(event, current_output_item_id, current_response_id)
             returned_messages.extend(events)
 
+        elif "contentEnd" in event and BedrockContentEnd.model_validate(event["contentEnd"]).type == "TOOL":
+            (
+                done_events,
+                current_output_item_id,  # rebind-ok: same state-threading pattern as the adjacent event branches
+                current_response_id,  # rebind-ok: same state-threading pattern as the adjacent event branches
+                current_delta_type,  # rebind-ok: same state-threading pattern as the adjacent event branches
+            ) = self._response_done_events(current_response_id, current_conversation_id)
+            returned_messages.extend(done_events)
+
         elif "contentEnd" in event and self._user_transcript_active:
             self._user_transcript_active = False
             self._user_transcript_generation_stage = None
@@ -1407,12 +1476,10 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             self.transform_usage_event(BedrockUsageEvent.model_validate(event["usageEvent"]))
 
         elif "toolUse" in event:
-            events, tool_call_id, tool_name = self.transform_tool_use_event(
-                event, current_output_item_id, current_response_id
-            )
-            returned_messages.extend(events)
-            # Store tool call info for potential use
-            verbose_logger.debug("Tool use event: %s (ID: %s)", tool_name, tool_call_id)
+            tool_use_result: Final = self.transform_tool_use_event(event, current_response_id, current_conversation_id)
+            returned_messages.extend(tool_use_result[0])
+            current_response_id = tool_use_result[1]
+            current_conversation_id = tool_use_result[2]
 
         elif "promptEnd" in event or "completionEnd" in event:
             (

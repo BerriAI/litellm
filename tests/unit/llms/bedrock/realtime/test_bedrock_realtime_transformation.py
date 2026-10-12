@@ -110,6 +110,50 @@ class TestBedrockRealtimeConfig:
         assert schema["type"] == "object"
         assert "location" in schema["properties"]
 
+    def test_transform_tools_flat_realtime_shape(self):
+        """The flat OpenAI Realtime tool shape {type: function, name, parameters}
+        produces the same toolSpec as the nested chat-completions shape (LIT-9465)"""
+        config = BedrockRealtimeConfig()
+
+        nested = [
+            {
+                "type": "function",
+                "function": {
+                    "name": "get_weather",
+                    "description": "Get current weather for a city",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {"location": {"type": "string"}},
+                        "required": ["location"],
+                    },
+                },
+            }
+        ]
+        flat = [
+            {
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get current weather for a city",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"location": {"type": "string"}},
+                    "required": ["location"],
+                },
+            }
+        ]
+
+        assert config._transform_tools_to_bedrock_format(flat) == config._transform_tools_to_bedrock_format(nested)
+
+        flat_tools = config._transform_tools_to_bedrock_format(flat)
+        assert flat_tools[0]["toolSpec"]["name"] == "get_weather"
+        assert flat_tools[0]["toolSpec"]["description"] == "Get current weather for a city"
+        schema = json.loads(flat_tools[0]["toolSpec"]["inputSchema"]["json"])
+        assert schema["required"] == ["location"]
+
+        session_config = config.session_configuration_request("amazon.nova-2-sonic-v1:0", tools=flat)
+        prompt_start = json.loads(session_config)["prompt_start"]["event"]["promptStart"]
+        assert prompt_start["toolConfiguration"]["tools"][0]["toolSpec"]["name"] == "get_weather"
+
     def test_audio_format_mapping(self):
         """Test audio format to sample rate mapping"""
         config = BedrockRealtimeConfig()
@@ -528,7 +572,9 @@ class TestBedrockRealtimeResponseTransformation:
         assert audio_deltas[0]["delta"] == "base64_audio_content"
 
     def test_transform_tool_use_response(self):
-        """Test toolUse response transformation"""
+        """toolUse is forwarded with its arguments even when no assistant response is
+        active yet (Bedrock Nova Sonic sends the call inside a role TOOL block before
+        any ASSISTANT contentStart, LIT-9465)"""
         config = BedrockRealtimeConfig()
         logging_obj = MagicMock()
         logging_obj.litellm_trace_id = "trace_123"
@@ -536,9 +582,70 @@ class TestBedrockRealtimeResponseTransformation:
         tool_use_message = {
             "event": {
                 "toolUse": {
-                    "toolUseId": "tool_call_123",
+                    "completionId": "comp_1",
+                    "content": "{\"location\":\"New York\"}",
+                    "contentId": "content_1",
+                    "promptName": "prompt_1",
+                    "role": "TOOL",
+                    "sessionId": "sess_1",
                     "toolName": "get_weather",
-                    "input": json.dumps({"location": "San Francisco"}),
+                    "toolUseId": "tool_call_123",
+                }
+            }
+        }
+
+        result = config.transform_realtime_response(
+            json.dumps(tool_use_message),
+            "amazon.nova-sonic-v1:0",
+            logging_obj,
+            realtime_response_transform_input={
+                "session_configuration_request": json.dumps({"configured": True}),
+                "current_output_item_id": "item_message_1",
+                "current_response_id": None,
+                "current_conversation_id": None,
+                "current_delta_chunks": [],
+                "current_item_chunks": [],
+                "current_delta_type": None,
+            },
+        )
+
+        assert [e["type"] for e in result["response"]] == [
+            "response.created",
+            "response.output_item.added",
+            "response.function_call_arguments.done",
+            "response.output_item.done",
+        ]
+        response_created = result["response"][0]
+        assert response_created["response"]["id"] == result["current_response_id"]
+
+        function_call = result["response"][2]
+        assert function_call["call_id"] == "tool_call_123"
+        assert function_call["name"] == "get_weather"
+        assert function_call["arguments"] == "{\"location\":\"New York\"}"
+        assert function_call["response_id"] == result["current_response_id"]
+        assert function_call["item_id"] != "item_message_1"
+        assert function_call["item_id"] == result["response"][1]["item"]["id"]
+        assert result["response"][1]["item"]["type"] == "function_call"
+
+        done_item = result["response"][3]["item"]
+        assert done_item["type"] == "function_call"
+        assert done_item["status"] == "completed"
+        assert done_item["call_id"] == "tool_call_123"
+        assert done_item["arguments"] == "{\"location\":\"New York\"}"
+
+    def test_tool_use_reuses_active_response(self):
+        """A toolUse arriving while an assistant response is in flight must not emit a
+        second response.created and must reuse the active response id"""
+        config = BedrockRealtimeConfig()
+        logging_obj = MagicMock()
+        logging_obj.litellm_trace_id = "trace_123"
+
+        tool_use_message = {
+            "event": {
+                "toolUse": {
+                    "content": "{\"location\":\"New York\"}",
+                    "toolName": "get_weather",
+                    "toolUseId": "tool_call_123",
                 }
             }
         }
@@ -558,16 +665,13 @@ class TestBedrockRealtimeResponseTransformation:
             },
         )
 
-        # Check for function call event
-        assert len(result["response"]) == 1
-        function_call = result["response"][0]
-        assert function_call["type"] == "response.function_call_arguments.done"
-        assert function_call["call_id"] == "tool_call_123"
-        assert function_call["name"] == "get_weather"
-
-        # Verify arguments are properly formatted
-        args = json.loads(function_call["arguments"])
-        assert args["location"] == "San Francisco"
+        assert [e["type"] for e in result["response"]] == [
+            "response.output_item.added",
+            "response.function_call_arguments.done",
+            "response.output_item.done",
+        ]
+        assert result["current_response_id"] == "resp_123"
+        assert all(e.get("response_id") == "resp_123" for e in result["response"])
 
     def test_transform_content_end_text(self):
         """Test contentEnd for text response"""
@@ -1210,6 +1314,73 @@ class TestBedrockRealtimeUserEventsAndUsage:
         ]
         assert types.count("response.created") == 1
         assert types.count("response.done") == 1
+
+    def test_nova2_sonic_tool_call_sequence_forwards_each_call_with_arguments(self):
+        """The real Nova 2 Sonic event sequence for one question: a USER transcript
+        block, two role TOOL blocks each carrying a toolUse with a distinct toolUseId,
+        then the post-tool-result ASSISTANT answer (LIT-9465)"""
+        args_json: Final = "{\"location\":\"New York\"}"
+
+        def tool_block(tool_use_id: str) -> list[dict[str, object]]:
+            return [
+                {"event": {"contentStart": {"role": "TOOL", "type": "TOOL", "contentId": f"c_{tool_use_id}"}}},
+                {
+                    "event": {
+                        "toolUse": {
+                            "content": args_json,
+                            "contentId": f"c_{tool_use_id}",
+                            "role": "TOOL",
+                            "toolName": "get_weather",
+                            "toolUseId": tool_use_id,
+                        }
+                    }
+                },
+                {"event": {"contentEnd": {"stopReason": "TOOL_USE", "type": "TOOL", "contentId": f"c_{tool_use_id}"}}},
+            ]
+
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            [
+                {
+                    "event": {
+                        "contentStart": {
+                            "role": "USER",
+                            "type": "TEXT",
+                            "additionalModelFields": json.dumps({"generationStage": "FINAL"}),
+                        }
+                    }
+                },
+                {"event": {"textOutput": {"content": "ready"}}},
+                {"event": {"contentEnd": {"stopReason": "PARTIAL_TURN", "type": "TEXT"}}},
+            ]
+            + tool_block("tooluse_A")
+            + tool_block("tooluse_B")
+            + self._assistant_text_block(
+                "SPECULATIVE", "The current weather in New York is sunny and 72 degrees.", "END_TURN"
+            ),
+        )
+
+        function_calls: Final = [e for e in events if e["type"] == "response.function_call_arguments.done"]
+        assert [e["call_id"] for e in function_calls] == ["tooluse_A", "tooluse_B"]
+        assert all(e["name"] == "get_weather" for e in function_calls)
+        assert all(e["arguments"] == args_json for e in function_calls)
+        assert function_calls[0]["item_id"] != function_calls[1]["item_id"]
+
+        response_dones: Final = [e for e in events if e["type"] == "response.done"]
+        assert len(response_dones) == 3
+        tool_call_dones: Final = [d for d in response_dones if d["response"]["output"]]
+        assert len(tool_call_dones) == 2
+        assert tool_call_dones[0]["response"]["output"][0]["call_id"] == "tooluse_A"
+        assert tool_call_dones[1]["response"]["output"][0]["call_id"] == "tooluse_B"
+        for done, call in zip(tool_call_dones, function_calls):
+            assert len(done["response"]["output"]) == 1
+            assert done["response"]["output"][0]["type"] == "function_call"
+            assert done["response"]["output"][0]["status"] == "completed"
+            assert done["response"]["id"] == call["response_id"]
+        assert response_dones[2]["response"]["output"] == []
+
+        response_ids: Final = {d["response"]["id"] for d in response_dones}
+        assert len(response_ids) == 3
 
 
 if __name__ == "__main__":
