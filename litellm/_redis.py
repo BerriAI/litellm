@@ -49,6 +49,9 @@ _AWS_IAM_KWARG_NAMES: Final = (
     "aws_iam_serverless",
 )
 
+_SENTINEL_DISCOVERED_ADDRESS_KWARGS: Final = frozenset({"host", "port"})
+_SENTINEL_TRANSPORT_KWARG_PREFIXES: Final = ("socket_", "ssl")
+
 
 def _unwrapped_init_args(cls: type) -> frozenset[str]:
     """Every parameter on a single class's own ``__init__``, decorator-unwrapped.
@@ -709,7 +712,7 @@ def init_redis_cluster(redis_kwargs) -> redis.RedisCluster:
 
 def _get_redis_sentinel_connection_kwargs(redis_kwargs: dict) -> dict:
     connection_kwargs: Final = {}
-    args: Final = _get_redis_kwargs()
+    args: Final = _get_redis_kwargs() - _SENTINEL_DISCOVERED_ADDRESS_KWARGS
     for arg in redis_kwargs:
         if arg in args:
             connection_kwargs[arg] = redis_kwargs[arg]
@@ -723,7 +726,7 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     service_name: Final = redis_kwargs.get("service_name")
     connection_kwargs: Final = _get_redis_sentinel_connection_kwargs(redis_kwargs)
     connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
-    sentinel_kwargs: Final = _sentinel_auth_kwargs(connection_kwargs, sentinel_password)
+    sentinel_kwargs: Final = _sentinel_monitor_kwargs(connection_kwargs, sentinel_password)
 
     if not sentinel_nodes or not service_name:
         raise ValueError("Both 'sentinel_nodes' and 'service_name' are required for Redis Sentinel.")
@@ -741,13 +744,16 @@ def _init_redis_sentinel(redis_kwargs) -> redis.Redis:
     return sentinel.master_for(service_name, **connection_kwargs)
 
 
-def _sentinel_auth_kwargs(connection_kwargs: dict, sentinel_password: str | None) -> dict:
-    """The Sentinel monitors are separate servers that authenticate with their own password, so the
-    data node's credential provider never belongs on them: leaving it there makes redis-py send the
-    data node's token to a monitor, which fails whether the monitor is unauthenticated or has its
-    own password."""
-    kept: Final = ((k, v) for k, v in connection_kwargs.items() if k != "credential_provider")
-    return dict(kept, password=sentinel_password)
+def _sentinel_monitor_kwargs(
+    connection_kwargs: Mapping[str, object], sentinel_password: str | None
+) -> dict[str, object]:
+    """Sentinels are separate servers with their own password, so only the socket and TLS settings carry over
+    from the data node. redis-py builds each one as ``Redis(sentinel_host, sentinel_port, **sentinel_kwargs)``,
+    where a data node ``host`` or ``port`` raises ``TypeError`` and a ``db`` sends a ``SELECT`` Sentinels reject."""
+    transport: Final = {
+        key: value for key, value in connection_kwargs.items() if key.startswith(_SENTINEL_TRANSPORT_KWARG_PREFIXES)
+    }
+    return {**transport, "password": sentinel_password}
 
 
 def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
@@ -756,7 +762,7 @@ def _init_async_redis_sentinel(redis_kwargs) -> async_redis.Redis:
     service_name: Final = redis_kwargs.get("service_name")
     connection_kwargs: Final = _get_redis_sentinel_connection_kwargs(redis_kwargs)
     connection_kwargs.setdefault("socket_timeout", REDIS_SOCKET_TIMEOUT)
-    sentinel_kwargs: Final = _sentinel_auth_kwargs(connection_kwargs, sentinel_password)
+    sentinel_kwargs: Final = _sentinel_monitor_kwargs(connection_kwargs, sentinel_password)
 
     if not sentinel_nodes or not service_name:
         raise ValueError("Both 'sentinel_nodes' and 'service_name' are required for Redis Sentinel.")
