@@ -1,4 +1,4 @@
-from pydantic import Field
+from pydantic import ConfigDict, Field
 
 from litellm.models.budget import LiteLLM_BudgetTableFull
 from litellm.models.end_user import LiteLLM_EndUserTable
@@ -27,3 +27,21 @@ class UnblockUsersResponse(LiteLLMBaseModel):
 class DeleteCustomersResponse(LiteLLMBaseModel):
     deleted_customers: int
     message: str
+
+
+class CustomerUpdateResult(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    user_id: str
+    success: bool
+    updated_customer: CustomerResponse | None = None
+    error: str | None = None
+
+
+class BulkUpdateCustomerResponse(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    results: tuple[CustomerUpdateResult, ...]
+    total_requested: int
+    successful_updates: int
+    failed_updates: int

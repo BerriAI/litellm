@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from contextlib import contextmanager
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -8,14 +9,22 @@ from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 
 from litellm.proxy._types import (
     LiteLLM_EndUserTable,
     LiteLLM_ObjectPermissionTable,
+    LiteLLM_UserTable,
     LitellmUserRoles,
     ProxyException,
 )
+from litellm.proxy.auth.route_checks import RouteChecks
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
+    end_user_cache_key,
+    end_user_restricted_registry_cache_key,
+)
 from litellm.proxy.management_endpoints.customer_endpoints import _should_update_field, router
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
@@ -918,9 +927,7 @@ def test_customer_new_forwards_models_to_db(mock_prisma_client, mock_user_api_ke
 
 
 @pytest.mark.parametrize("bad_duration", ["0s", "-5m"])
-def test_customer_new_rejects_a_duration_that_never_advances(
-    mock_prisma_client, mock_user_api_key_auth, bad_duration
-):
+def test_customer_new_rejects_a_duration_that_never_advances(mock_prisma_client, mock_user_api_key_auth, bad_duration):
     """A zero-length window resets to "now", leaving the customer's budget row
     permanently due for the reset job to re-read every tick."""
     mock_prisma_client.db.litellm_endusertable.create = AsyncMock(return_value=_row(_FULL_DB_ROW))
@@ -1189,3 +1196,384 @@ def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_cl
         "end_user_id:c2",
         "end_user_restricted_registry",
     ]
+
+
+class _CustomerBatchDatabase:
+    def __init__(
+        self,
+        customers: tuple[LiteLLM_EndUserTable, ...],
+        permissions: tuple[LiteLLM_ObjectPermissionTable, ...] = (),
+    ) -> None:
+        self.customers: Mapping[str, LiteLLM_EndUserTable] = MappingProxyType(
+            {customer.user_id: customer for customer in customers}
+        )
+        self.permissions: Mapping[str, LiteLLM_ObjectPermissionTable] = MappingProxyType(
+            {permission.object_permission_id: permission for permission in permissions}
+        )
+
+    async def find_customer(
+        self, *, where: Mapping[str, str], include: Mapping[str, bool]
+    ) -> LiteLLM_EndUserTable | None:
+        return self.customers.get(where["user_id"])
+
+    async def update_customer(
+        self, *, where: Mapping[str, str], data: Mapping[str, object], include: Mapping[str, bool]
+    ) -> LiteLLM_EndUserTable:
+        existing: Final = self.customers[where["user_id"]]
+        updated: Final = LiteLLM_EndUserTable.model_validate({**existing.model_dump(), **data})
+        permission: Final = self.permissions.get(updated.object_permission_id or "")
+        saved: Final = updated.model_copy(update={"object_permission": permission})
+        self.customers = MappingProxyType({**self.customers, saved.user_id: saved})
+        return saved
+
+    async def find_permission(self, *, where: Mapping[str, str]) -> LiteLLM_ObjectPermissionTable | None:
+        return self.permissions.get(where["object_permission_id"])
+
+    async def upsert_permission(
+        self, *, where: Mapping[str, str], data: Mapping[str, Mapping[str, object]]
+    ) -> LiteLLM_ObjectPermissionTable:
+        stored: Final = data["update"] if where["object_permission_id"] in self.permissions else data["create"]
+        tool_permissions: Final = stored.get("mcp_tool_permissions")
+        decoded: Final = (
+            TypeAdapter(dict[str, list[str]]).validate_json(tool_permissions)
+            if isinstance(tool_permissions, str)
+            else tool_permissions
+        )
+        permission: Final = LiteLLM_ObjectPermissionTable.model_validate({**stored, "mcp_tool_permissions": decoded})
+        self.permissions = MappingProxyType({**self.permissions, permission.object_permission_id: permission})
+        return permission
+
+    def attach(self, prisma_client: MagicMock) -> None:
+        prisma_client.configure_mock(
+            **{
+                "db.litellm_endusertable.find_first": AsyncMock(side_effect=self.find_customer),
+                "db.litellm_endusertable.update": AsyncMock(side_effect=self.update_customer),
+                "db.litellm_objectpermissiontable.find_unique": AsyncMock(side_effect=self.find_permission),
+                "db.litellm_objectpermissiontable.upsert": AsyncMock(side_effect=self.upsert_permission),
+            }
+        )
+
+
+@pytest.mark.parametrize("route", ("/customer/bulk_update", "/end_user/bulk_update"))
+def test_customer_bulk_update_applies_each_customers_fields(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: None, route: str
+) -> None:
+    database: Final = _CustomerBatchDatabase(
+        (
+            LiteLLM_EndUserTable(user_id="bulk-a", alias="Original A", blocked=True, models=["model-a"]),
+            LiteLLM_EndUserTable(user_id="bulk-b", alias="Original B", blocked=False, models=["model-b"]),
+        )
+    )
+    database.attach(mock_prisma_client)
+
+    response: Final = client.post(
+        route,
+        json={
+            "customers": [
+                {"user_id": "bulk-a", "alias": "Updated A", "models": ["replacement-model"]},
+                {"user_id": "bulk-b", "blocked": True, "models": []},
+            ]
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert TypeAdapter(dict[str, object]).validate_json(response.content) == {
+        "total_requested": 2,
+        "successful_updates": 2,
+        "failed_updates": 0,
+        "results": [
+            {
+                "user_id": "bulk-a",
+                "success": True,
+                "updated_customer": CustomerResponse(
+                    user_id="bulk-a", alias="Updated A", blocked=True, models=["replacement-model"]
+                ).model_dump(mode="json"),
+                "error": None,
+            },
+            {
+                "user_id": "bulk-b",
+                "success": True,
+                "updated_customer": CustomerResponse(user_id="bulk-b", alias="Original B", blocked=True).model_dump(
+                    mode="json"
+                ),
+                "error": None,
+            },
+        ],
+    }
+    assert database.customers["bulk-a"].alias == "Updated A"
+    assert database.customers["bulk-a"].models == ["replacement-model"]
+    assert database.customers["bulk-b"].models == []
+
+
+@pytest.mark.parametrize("route", ("/customer/bulk_update", "/end_user/bulk_update"))
+def test_customer_bulk_update_reports_unknown_middle_item_and_updates_later_customer(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: None, route: str
+) -> None:
+    database: Final = _CustomerBatchDatabase(
+        (
+            LiteLLM_EndUserTable(user_id="bulk-a", blocked=False),
+            LiteLLM_EndUserTable(user_id="bulk-b", blocked=False),
+        )
+    )
+    database.attach(mock_prisma_client)
+
+    response: Final = client.post(
+        route,
+        json={
+            "customers": [
+                {"user_id": "bulk-a", "alias": "Updated A"},
+                {"user_id": "bulk-missing", "alias": "Unknown"},
+                {"user_id": "bulk-b", "alias": "Updated B"},
+            ]
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert TypeAdapter(dict[str, object]).validate_json(response.content) == {
+        "total_requested": 3,
+        "successful_updates": 2,
+        "failed_updates": 1,
+        "results": [
+            {
+                "user_id": "bulk-a",
+                "success": True,
+                "updated_customer": CustomerResponse(user_id="bulk-a", alias="Updated A", blocked=False).model_dump(
+                    mode="json"
+                ),
+                "error": None,
+            },
+            {
+                "user_id": "bulk-missing",
+                "success": False,
+                "updated_customer": None,
+                "error": "End User Id=bulk-missing does not exist in db",
+            },
+            {
+                "user_id": "bulk-b",
+                "success": True,
+                "updated_customer": CustomerResponse(user_id="bulk-b", alias="Updated B", blocked=False).model_dump(
+                    mode="json"
+                ),
+                "error": None,
+            },
+        ],
+    }
+    assert database.customers["bulk-a"].alias == "Updated A"
+    assert database.customers["bulk-b"].alias == "Updated B"
+    assert "bulk-missing" not in database.customers
+
+
+@pytest.mark.parametrize("route", ("/customer/bulk_update", "/end_user/bulk_update"))
+def test_customer_bulk_update_toolsets_only_preserves_each_customers_other_permissions(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: None, route: str
+) -> None:
+    permissions: Final = tuple(
+        LiteLLM_ObjectPermissionTable(
+            object_permission_id=f"permission-{suffix}",
+            mcp_servers=[f"server-{suffix}"],
+            mcp_access_groups=[f"group-{suffix}"],
+            mcp_tool_permissions={f"server-{suffix}": [f"read-{suffix}"]},
+            vector_stores=[f"vector-store-{suffix}"],
+            agents=[f"agent-{suffix}"],
+            agent_access_groups=[f"agent-group-{suffix}"],
+            models=[f"permission-model-{suffix}"],
+            mcp_toolsets=[f"old-toolset-{suffix}"],
+            blocked_tools=[f"blocked-tool-{suffix}"],
+            search_tools=[f"search-{suffix}"],
+            mcp_tool_search_enabled=suffix == "a",
+            skills=[f"skill-{suffix}"],
+        )
+        for suffix in ("a", "b")
+    )
+    database: Final = _CustomerBatchDatabase(
+        tuple(
+            LiteLLM_EndUserTable(user_id=f"bulk-{suffix}", blocked=False, object_permission_id=f"permission-{suffix}")
+            for suffix in ("a", "b")
+        ),
+        permissions,
+    )
+    database.attach(mock_prisma_client)
+
+    response: Final = client.post(
+        route,
+        json={
+            "customers": [
+                {"user_id": "bulk-a", "object_permission": {"mcp_toolsets": ["new-toolset"]}},
+                {"user_id": "bulk-b", "object_permission": {"mcp_toolsets": ["new-toolset"]}},
+            ]
+        },
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200, response.text
+    body: Final = TypeAdapter(dict[str, object]).validate_json(response.content)
+    assert (body["total_requested"], body["successful_updates"], body["failed_updates"]) == (2, 2, 0)
+    results: Final = TypeAdapter(tuple[dict[str, object], ...]).validate_python(body["results"])
+    assert len(results) == 2
+    for original, result in zip(permissions, results, strict=True):
+        expected: Final = original.model_copy(update={"mcp_toolsets": ["new-toolset"]})
+        customer: Final = CustomerResponse.model_validate(result["updated_customer"])
+        assert result["success"] is True
+        assert result["error"] is None
+        assert customer.object_permission == expected
+        assert database.permissions[original.object_permission_id] == expected
+        assert database.customers[customer.user_id].object_permission == expected
+
+
+@pytest.mark.parametrize("route", ("/customer/bulk_update", "/end_user/bulk_update"))
+@pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY))
+def test_customer_bulk_update_rejects_non_admins_without_writing(
+    mock_prisma_client: MagicMock, route: str, role: LitellmUserRoles
+) -> None:
+    original: Final = LiteLLM_EndUserTable(user_id="bulk-a", alias="Original", blocked=False)
+    database: Final = _CustomerBatchDatabase((original,))
+    database.attach(mock_prisma_client)
+    payload: Final[dict[str, object]] = {"customers": [{"user_id": "bulk-a", "alias": "Updated"}]}
+
+    def authorize_role(request: Request) -> UserAPIKeyAuth:
+        auth: Final = UserAPIKeyAuth(user_id="bulk-non-admin", user_role=role)
+        try:
+            RouteChecks.non_proxy_admin_allowed_routes_check(
+                user_obj=LiteLLM_UserTable(user_id="bulk-non-admin", user_role=role),
+                _user_role=role,
+                route=request.url.path,
+                request=request,
+                valid_token=auth,
+                request_data=payload,
+            )
+        except HTTPException:
+            raise
+        except Exception as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        return auth
+
+    with patch.dict(app.dependency_overrides, {user_api_key_auth: authorize_role}):
+        response: Final = client.post(route, json=payload, headers={"Authorization": "Bearer test-key"})
+
+    assert response.status_code == 403, response.text
+    assert route in response.text
+    assert database.customers == {"bulk-a": original}
+    mock_prisma_client.db.litellm_endusertable.update.assert_not_awaited()
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_not_awaited()
+
+
+@pytest.mark.parametrize("route", ("/customer/bulk_update", "/end_user/bulk_update"))
+def test_customer_bulk_update_evicts_every_updated_id_and_registry_only(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: None, route: str
+) -> None:
+    database: Final = _CustomerBatchDatabase(
+        (
+            LiteLLM_EndUserTable(user_id="bulk-a", blocked=False),
+            LiteLLM_EndUserTable(user_id="bulk-b", blocked=False),
+            LiteLLM_EndUserTable(user_id="bulk-untouched", blocked=False),
+        )
+    )
+    database.attach(mock_prisma_client)
+    cache: Final = UserApiKeyCache()
+    for user_id in ("bulk-a", "bulk-b", "bulk-missing", "bulk-untouched"):
+        cache.set_cache(key=end_user_cache_key(user_id), value=f"cached-{user_id}")
+    cache.set_cache(key=end_user_restricted_registry_cache_key(), value="cached-registry")
+
+    with patch.multiple("litellm.proxy.proxy_server", user_api_key_cache=cache, redis_usage_cache=None):
+        response: Final = client.post(
+            route,
+            json={
+                "customers": [
+                    {"user_id": "bulk-a", "alias": "Updated A"},
+                    {"user_id": "bulk-missing", "alias": "Unknown"},
+                    {"user_id": "bulk-b", "alias": "Updated B"},
+                ]
+            },
+            headers={"Authorization": "Bearer test-key"},
+        )
+
+    assert response.status_code == 200, response.text
+    body: Final = TypeAdapter(dict[str, object]).validate_json(response.content)
+    assert (body["successful_updates"], body["failed_updates"]) == (2, 1)
+    assert cache.get_cache(key=end_user_cache_key("bulk-a")) is None
+    assert cache.get_cache(key=end_user_cache_key("bulk-b")) is None
+    assert cache.get_cache(key=end_user_restricted_registry_cache_key()) is None
+    assert cache.get_cache(key=end_user_cache_key("bulk-missing")) == "cached-bulk-missing"
+    assert cache.get_cache(key=end_user_cache_key("bulk-untouched")) == "cached-bulk-untouched"
+
+
+@pytest.mark.parametrize("route", ("/customer/bulk_update", "/end_user/bulk_update"))
+@pytest.mark.parametrize(
+    "customers",
+    ([], [{"user_id": "bulk-a"}] * 501, [{"user_id": "bulk-a"}, {"alias": "Missing ID"}]),
+    ids=("empty", "over-limit", "malformed-item"),
+)
+def test_customer_bulk_update_rejects_invalid_batches_before_writing(
+    mock_prisma_client: MagicMock, mock_user_api_key_auth: None, route: str, customers: list[dict[str, object]]
+) -> None:
+    original: Final = LiteLLM_EndUserTable(user_id="bulk-a", alias="Original", blocked=False)
+    database: Final = _CustomerBatchDatabase((original,))
+    database.attach(mock_prisma_client)
+
+    response: Final = client.post(
+        route,
+        json={"customers": customers},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert database.customers == {"bulk-a": original}
+    mock_prisma_client.db.litellm_endusertable.find_first.assert_not_awaited()
+    mock_prisma_client.db.litellm_endusertable.update.assert_not_awaited()
+
+
+@pytest.mark.parametrize("route", ("/customer/bulk_update", "/end_user/bulk_update"))
+@pytest.mark.parametrize("role", (LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.ORG_ADMIN))
+def test_customer_bulk_update_rejects_org_admin_context_without_writing(
+    mock_prisma_client: MagicMock, route: str, role: LitellmUserRoles
+) -> None:
+    original: Final = LiteLLM_EndUserTable(user_id="bulk-a", alias="Original", blocked=False)
+    database: Final = _CustomerBatchDatabase((original,))
+    database.attach(mock_prisma_client)
+    payload: Final[dict[str, object]] = {
+        "organization_id": "bulk-organization",
+        "customers": [{"user_id": "bulk-a", "alias": "Updated"}],
+    }
+    user: Final = LiteLLM_UserTable.model_validate(
+        {
+            "user_id": "bulk-org-admin",
+            "user_role": role,
+            "organization_memberships": [
+                {
+                    "user_id": "bulk-org-admin",
+                    "organization_id": "bulk-organization",
+                    "user_role": LitellmUserRoles.ORG_ADMIN.value,
+                    "created_at": "2026-01-01T00:00:00+00:00",
+                    "updated_at": "2026-01-01T00:00:00+00:00",
+                }
+            ],
+        }
+    )
+
+    def authorize_role(request: Request) -> UserAPIKeyAuth:
+        auth: Final = UserAPIKeyAuth(user_id=user.user_id, user_role=role)
+        try:
+            RouteChecks.non_proxy_admin_allowed_routes_check(
+                user_obj=user,
+                _user_role=role,
+                route=request.url.path,
+                request=request,
+                valid_token=auth,
+                request_data=payload,
+            )
+        except HTTPException:
+            raise
+        except Exception as error:
+            raise HTTPException(status_code=403, detail=str(error)) from error
+        return auth
+
+    with patch.dict(app.dependency_overrides, {user_api_key_auth: authorize_role}):
+        response: Final = client.post(route, json=payload, headers={"Authorization": "Bearer test-key"})
+
+    assert response.status_code == 403, response.text
+    assert route in response.text
+    assert database.customers == {"bulk-a": original}
+    mock_prisma_client.db.litellm_endusertable.update.assert_not_awaited()
+    mock_prisma_client.db.litellm_objectpermissiontable.upsert.assert_not_awaited()
