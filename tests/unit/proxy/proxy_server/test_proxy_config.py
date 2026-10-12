@@ -28,7 +28,7 @@ from pydantic import JsonValue, TypeAdapter, ValidationError
 
 import litellm
 import litellm.proxy.proxy_server as proxy_server
-from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings
+from litellm.proxy._types import CommonProxyErrors, ConfigGeneralSettings, UserAPIKeyAuth
 from litellm.proxy.utils import PrismaClient
 from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
 from litellm.types.router import Deployment, LiteLLM_Params
@@ -209,8 +209,10 @@ async def test_db_router_rebuild_serves_same_proxy_caller_from_cache_and_isolate
     assert router is not None
 
     request: Final = [{"role": "user", "content": "cache canary"}]
-    caller_a: Final = {"user_api_key_hash": "hash-a"}
-    caller_b: Final = {"user_api_key_hash": "hash-b"}
+    # Use the proxy-injected authentication object, rather than a
+    # caller-controlled request field, while keeping the request body identical.
+    caller_a: Final = {"user_api_key_auth": UserAPIKeyAuth(token="hash-a", key_alias="caller-a")}
+    caller_b: Final = {"user_api_key_auth": UserAPIKeyAuth(token="hash-b", key_alias="caller-b")}
     first = await router.acompletion(model="fake-model", messages=request, metadata=caller_a)
     await cache_write_complete.wait()
     same_caller = await router.acompletion(model="fake-model", messages=request, metadata=caller_a)
