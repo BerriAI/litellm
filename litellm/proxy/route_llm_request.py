@@ -2,7 +2,7 @@ import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, cast  # noqa: TID251  # untyped request body, validated after
 
 import httpx
 from fastapi import HTTPException, status
@@ -586,13 +586,10 @@ _PER_REQUEST_ROUTER_SETTINGS: Final = (
 )
 
 
-_ROUTER_SETTINGS_OVERRIDE_ADAPTER: Final = TypeAdapter(dict[str, object])
-
-
-def _router_settings_to_merge(override_settings: object) -> dict[str, object]:
+def _router_settings_to_merge(override_settings: object) -> Mapping[str, object]:
     """Key/team router settings that may be merged into request kwargs."""
     try:
-        validated: Final = _ROUTER_SETTINGS_OVERRIDE_ADAPTER.validate_python(override_settings, strict=True)
+        validated: Final = JSON_OBJECT_ADAPTER.validate_python(override_settings, strict=True)
     except ValidationError:
         return {}
     return {key: validated[key] for key in _PER_REQUEST_ROUTER_SETTINGS if validated.get(key) is not None}
