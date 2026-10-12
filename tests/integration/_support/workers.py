@@ -4,8 +4,9 @@ import os
 import socket
 import time
 import uuid
-from collections.abc import Iterator, Mapping
-from contextlib import contextmanager, nullcontext
+from collections.abc import Callable, Iterator, Mapping
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -151,11 +152,13 @@ def cost_map_environment(upstream: str) -> Mapping[str, str]:
 
 
 @contextmanager
-def worker_services(directory: Path, *, replica: bool = False) -> Iterator[Mapping[str, str]]:
+def worker_services(
+    directory: Path, *, replica: bool = False, inherited: Mapping[str, str] = os.environ
+) -> Iterator[Mapping[str, str]]:
     directory.mkdir(parents=True, exist_ok=True)
     with (
         scratch_database(WORKER_DATABASE_PREFIX) as database,
-        owned_redis(directory) as cache,
+        owned_redis(directory, inherited=inherited) as cache,
     ):
         yield MappingProxyType(
             {
@@ -170,15 +173,17 @@ def worker_services(directory: Path, *, replica: bool = False) -> Iterator[Mappi
 
 
 @contextmanager
-def worker_gateway(directory: Path, profile: GatewayProfile) -> Iterator[Mapping[str, str]]:
+def worker_gateway(
+    directory: Path, profile: GatewayProfile, inherited: Mapping[str, str]
+) -> Iterator[Mapping[str, str]]:
     from tests.integration._support.process import owned_proxy, owned_upstream
 
-    upstream: Final = os.environ["INTEGRATION_UPSTREAM_URL"]
+    upstream: Final = inherited["INTEGRATION_UPSTREAM_URL"]
     port: Final = urlsplit(upstream).port
     assert port is not None
     key: Final = f"sk-{uuid.uuid4().hex}"
     removed: Final = ("LITELLM_LOCAL_MODEL_COST_MAP",) if profile.cost_map else ()
-    with worker_services(directory, replica=profile.replica) as services:
+    with worker_services(directory, replica=profile.replica, inherited=inherited) as services:
         overrides: Final = {
             **services,
             "DATABASE_URL": services["INTEGRATION_PROXY_DATABASE_URL"],
@@ -189,7 +194,7 @@ def worker_gateway(directory: Path, profile: GatewayProfile) -> Iterator[Mapping
             **(cost_map_environment(upstream) if profile.cost_map else {}),
         }
         with (
-            owned_upstream(directory, port=port),
+            owned_upstream(directory, port=port, inherited=inherited),
             httpx.Client(base_url="http://127.0.0.1:1", trust_env=False) as client,
             owned_proxy(
                 Gateway(client, key, upstream),
@@ -197,8 +202,16 @@ def worker_gateway(directory: Path, profile: GatewayProfile) -> Iterator[Mapping
                 overrides,
                 remove_environment=removed,
                 coverage_file=profile.coverage_file,
+                inherited=inherited,
             ) as primary,
-            owned_proxy(primary, directory, overrides, remove_environment=removed, coverage_file=profile.coverage_file)
+            owned_proxy(
+                primary,
+                directory,
+                overrides,
+                remove_environment=removed,
+                coverage_file=profile.coverage_file,
+                inherited=inherited,
+            )
             if profile.peer
             else nullcontext(None) as secondary,
         ):
@@ -215,3 +228,36 @@ def worker_gateway(directory: Path, profile: GatewayProfile) -> Iterator[Mapping
                     "INTEGRATION_UPSTREAM_URL": upstream,
                 }
             )
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerStack:
+    resources: ExitStack
+    environment: Mapping[str, str]
+
+
+def worker_stack(results: Path, profile: GatewayProfile) -> WorkerStack:
+    endpoints: Final = worker_endpoints()
+    inherited: Final = MappingProxyType({**os.environ, **endpoints, "INTEGRATION_RESULTS_DIR": str(results)})
+    resources: Final = ExitStack()
+    try:
+        services: Final = resources.enter_context(worker_gateway(results / "runtime", profile, inherited))
+    except BaseException:
+        resources.close()
+        raise
+    return WorkerStack(resources, MappingProxyType({**endpoints, **services, "INTEGRATION_RESULTS_DIR": str(results)}))
+
+
+def start_worker_stacks(
+    directories: tuple[Path, ...], build: Callable[[Path], WorkerStack], resources: ExitStack, concurrency: int
+) -> tuple[Mapping[str, str], ...]:
+    with ThreadPoolExecutor(max_workers=max(1, concurrency), thread_name_prefix="integration-worker-stack") as pool:
+        futures: Final = tuple(pool.submit(build, directory) for directory in directories)
+    for future in futures:
+        if future.exception() is None:
+            resources.enter_context(future.result().resources)
+    failure: Final = next((error for future in futures if (error := future.exception()) is not None), None)
+    if failure is not None:
+        resources.close()
+        raise failure
+    return tuple(future.result().environment for future in futures)
