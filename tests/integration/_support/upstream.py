@@ -753,6 +753,7 @@ def main() -> None:
         port=cast(int, arguments.port),
         access_log=False,
         timeout_keep_alive=125,
+        timeout_graceful_shutdown=5,
         ssl_certfile=cast(str | None, arguments.ssl_certfile),
         ssl_keyfile=cast(str | None, arguments.ssl_keyfile),
     )
