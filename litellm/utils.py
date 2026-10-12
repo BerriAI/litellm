@@ -9844,6 +9844,10 @@ class ProviderConfigManager:
             return get_hosted_vllm_video_config(model)
         elif LlmProviders.EDENAI == provider:
             return litellm.EdenAIVideoConfig()
+        elif LlmProviders.VOLCENGINE == provider:
+            from litellm.llms.volcengine.videos.transformation import VolcEngineVideoConfig
+
+            return VolcEngineVideoConfig()
         return None
 
     @staticmethod

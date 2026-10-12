@@ -58586,6 +58586,57 @@
             }
         ]
     },
+    "volcengine/doubao-seedance-2-5-260628": {
+        "litellm_provider": "volcengine",
+        "mode": "video_generation",
+        "source": "https://www.volcengine.com/docs/82379/1544106",
+        "output_cost_per_second": 0.216,
+        "output_cost_per_second_480p": 0.096075,
+        "output_cost_per_second_720p": 0.216,
+        "output_cost_per_second_1080p": 0.486,
+        "supported_modalities": ["text", "image", "video", "audio"],
+        "supported_output_modalities": ["video"],
+        "supported_endpoints": ["/v1/videos"],
+        "metadata": {"comment": "Ark bills per output token, not per second: tokens = width * height * 24 * seconds / 1024, so a per-second rate per resolution tier is exact for the 16:9 geometry Ark publishes (1280x720 is 21600 tokens/s). List 70 CNY per million tokens without a video input, converted at 7.0 CNY/USD like the other volcengine entries. 42 CNY per million tokens with a video input. Accepts up to 50 reference assets (30 images, 10 videos, 10 audios) and clips of 4-30s; per-asset billing beyond the free allowance is not encoded. Requests that do carry a video input bill at the lower CNY rate instead, which litellm's per-second tiers cannot express, so edit, extension and reference-video jobs are overestimated."}
+    },
+    "volcengine/doubao-seedance-2-0-260128": {
+        "litellm_provider": "volcengine",
+        "mode": "video_generation",
+        "source": "https://www.volcengine.com/docs/82379/1544106",
+        "output_cost_per_second": 0.141942857,
+        "output_cost_per_second_480p": 0.066003429,
+        "output_cost_per_second_720p": 0.141942857,
+        "output_cost_per_second_1080p": 0.319371429,
+        "output_cost_per_second_4k": 1.277485714,
+        "supported_modalities": ["text", "image", "video", "audio"],
+        "supported_output_modalities": ["video"],
+        "supported_endpoints": ["/v1/videos"],
+        "metadata": {"comment": "Ark bills per output token, not per second: tokens = width * height * 24 * seconds / 1024, so a per-second rate per resolution tier is exact for the 16:9 geometry Ark publishes (1280x720 is 21600 tokens/s; the 480p frame is 864x496, 10044 tokens/s, not the tier's nominal 854x480). List 46 CNY per million tokens without a video input, converted at 7.0 CNY/USD like the other volcengine entries. 28 CNY per million tokens with a video input. Clips of 4-15s; 4k is exclusive to this tier. Requests that do carry a video input bill at the lower CNY rate instead, which litellm's per-second tiers cannot express, so edit, extension and reference-video jobs are overestimated."}
+    },
+    "volcengine/doubao-seedance-2-0-fast-260128": {
+        "litellm_provider": "volcengine",
+        "mode": "video_generation",
+        "source": "https://www.volcengine.com/docs/82379/1544106",
+        "output_cost_per_second": 0.114171429,
+        "output_cost_per_second_480p": 0.053089714,
+        "output_cost_per_second_720p": 0.114171429,
+        "supported_modalities": ["text", "image", "video", "audio"],
+        "supported_output_modalities": ["video"],
+        "supported_endpoints": ["/v1/videos"],
+        "metadata": {"comment": "Ark bills per output token, not per second: tokens = width * height * 24 * seconds / 1024, so a per-second rate per resolution tier is exact for the 16:9 geometry Ark publishes (1280x720 is 21600 tokens/s; the 480p frame is 864x496, 10044 tokens/s, not the tier's nominal 854x480). List 37 CNY per million tokens without a video input, converted at 7.0 CNY/USD like the other volcengine entries. 22 CNY per million tokens with a video input. Clips of 4-15s at 480p or 720p. Requests that do carry a video input bill at the lower CNY rate instead, which litellm's per-second tiers cannot express, so edit, extension and reference-video jobs are overestimated."}
+    },
+    "volcengine/doubao-seedance-2-0-mini-260615": {
+        "litellm_provider": "volcengine",
+        "mode": "video_generation",
+        "source": "https://www.volcengine.com/docs/82379/1544106",
+        "output_cost_per_second": 0.070971429,
+        "output_cost_per_second_480p": 0.033001714,
+        "output_cost_per_second_720p": 0.070971429,
+        "supported_modalities": ["text", "image"],
+        "supported_output_modalities": ["video"],
+        "supported_endpoints": ["/v1/videos"],
+        "metadata": {"comment": "Ark bills per output token, not per second: tokens = width * height * 24 * seconds / 1024, so a per-second rate per resolution tier is exact for the 16:9 geometry Ark publishes (1280x720 is 21600 tokens/s; the 480p frame is 864x496, 10044 tokens/s, not the tier's nominal 854x480). List 23 CNY per million tokens without a video input, converted at 7.0 CNY/USD like the other volcengine entries. 14 CNY per million tokens with a video input. Clips of 4-15s at 480p or 720p. Only text and image inputs are declared; the mini tier's reference video and audio caps were not verified. Requests that do carry a video input bill at the lower CNY rate instead, which litellm's per-second tiers cannot express, so edit, extension and reference-video jobs are overestimated."}
+    },
     "bedrock/us-east-1/zai.glm-5": {
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 3.2e-06,

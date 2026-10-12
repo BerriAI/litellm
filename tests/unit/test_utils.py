@@ -1335,6 +1335,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
         # Add any model IDs that should be exempt from the cost validation
         # Example: "expensive-model-id",
         "runwayml/seedance2",  # 4K output is 150 credits/second = $1.50/second
+        "volcengine/doubao-seedance-2-0-260128",  # 4K output is 8.94 CNY/second = $1.28/second
         "fal_ai/bytedance/seedance-2.0/text-to-video",
         "fal_ai/bytedance/seedance-2.0/image-to-video",
         "fal_ai/bytedance/seedance-2.0/reference-to-video",
