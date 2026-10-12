@@ -1299,11 +1299,6 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
             elif "AUDIO" not in optional_params["responseModalities"]:
                 optional_params["responseModalities"].append("AUDIO")
 
-        # Set default temperature to 1.0 for Gemini 3 models if not specified
-        if VertexGeminiConfig._is_gemini_3_or_newer(model):
-            if "temperature" not in optional_params:
-                optional_params["temperature"] = 1.0
-
         self._drop_search_tools_mixed_with_functions(optional_params)
 
         return optional_params
@@ -2209,10 +2204,10 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
     @staticmethod
     def _set_stream_metadata_on_response(
         model_response: Any,
-        grounding_metadata: list[dict],
-        url_context_metadata: list[dict],
-        safety_ratings: list[dict],
-        citation_metadata: list[dict],
+        grounding_metadata: Sequence[Mapping[str, object]],
+        url_context_metadata: Sequence[Mapping[str, object]],
+        safety_ratings: Sequence[Mapping[str, object]],
+        citation_metadata: Sequence[Mapping[str, object]],
     ) -> None:
         setattr(model_response, "vertex_ai_grounding_metadata", grounding_metadata)
         if grounding_metadata:

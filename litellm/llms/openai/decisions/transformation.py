@@ -89,6 +89,8 @@ def _ir_question(question: OpenAIDecisionQuestion) -> DecisionsIRQuestion:
 def openai_request_to_ir(request: OpenAIDecisionRequestBody) -> DecisionsIRRequest:
     return DecisionsIRRequest(
         input=_ir_input(request.input),
+        audio=request.audio,
+        videos=request.videos,
         questions=tuple(_ir_question(question) for question in request.questions),
         safety_identifier=request.safety_identifier,
     )
@@ -165,6 +167,8 @@ def _has_one_option(question: DecisionsIRQuestion) -> bool:
 
 
 def ir_to_openai_request(model: str, request: DecisionsIRRequest) -> Mapping[str, object] | UnsupportedDecisionsRequest:
+    if request.audio or request.videos:
+        return UnsupportedDecisionsRequest(reason="audio/video input is not supported by this Decisions provider")
     if any(_has_one_option(question) for question in request.questions):
         return _SINGLE_OPTION
     return {
@@ -314,6 +318,12 @@ class OpenAIDecisionsConfig(BaseDecisionsConfig):
         self, api_key: str | None, api_base: str, litellm_params: Mapping[str, object]
     ) -> str | None:
         return resolve_openai_bearer_token(api_key=api_key, api_base=api_base, litellm_params=litellm_params)
+
+    def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
+        return False
+
+    def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
+        return False
 
     def transform_decisions_request(
         self,

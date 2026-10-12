@@ -440,6 +440,7 @@ autorouter_presets_url: str = os.getenv(
     "LITELLM_AUTOROUTER_PRESETS_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/proxy/public_endpoints/autorouter_presets.json",
 )
+whats_new_url: str | None = os.getenv("LITELLM_WHATS_NEW_URL")
 suppress_debug_info: bool = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
@@ -720,6 +721,7 @@ aws_polly_models: Set = set()
 transcribe_models: Set = set()
 gigachat_models: Set = set()
 llamagate_models: Set = set()
+coralbricks_models: Set[str] = set()
 reducto_models: Set = set()
 bedrock_mantle_models: Set = set()
 
@@ -1011,6 +1013,8 @@ def _populate_provider_model_sets(model_cost_map: Mapping[str, Mapping[str, obje
             gigachat_models.add(key)
         elif value.get("litellm_provider") == "llamagate":
             llamagate_models.add(key)
+        elif value.get("litellm_provider") == "coralbricks":
+            coralbricks_models.add(key)
         elif value.get("litellm_provider") == "reducto":
             reducto_models.add(key)
         elif value.get("litellm_provider") == "bedrock_mantle":
@@ -1145,6 +1149,7 @@ model_list = list(
     | docker_model_runner_models
     | reducto_models
     | bedrock_mantle_models
+    | coralbricks_models
     | set(clarifai_models)
 )
 
@@ -1264,6 +1269,7 @@ def _build_models_by_provider() -> dict:
         "transcribe": transcribe_models,
         "gigachat": gigachat_models,
         "llamagate": llamagate_models,
+        "coralbricks": coralbricks_models,
         "reducto": reducto_models,
         "bedrock_mantle": bedrock_mantle_models,
     }
@@ -1687,6 +1693,9 @@ if TYPE_CHECKING:
     )
     from .llms.openrouter.decisions.transformation import (
         OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
+    )
+    from .llms.fireworks_ai.decisions.transformation import (
+        FireworksAIDecisionsConfig as FireworksAIDecisionsConfig,
     )
     from .llms.cloudflare.decisions.transformation import (
         CloudflareDecisionsConfig as CloudflareDecisionsConfig,
@@ -2276,6 +2285,7 @@ if TYPE_CHECKING:
     supports_parallel_function_calling: Callable[..., bool]
     supports_vision: Callable[..., bool]
     supports_audio_input: Callable[..., bool]
+    supports_video_input: Callable[..., bool]
     supports_audio_output: Callable[..., bool]
     supports_system_messages: Callable[..., bool]
     supports_reasoning: Callable[..., bool]

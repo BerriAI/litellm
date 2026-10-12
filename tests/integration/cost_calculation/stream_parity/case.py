@@ -41,4 +41,5 @@ class StreamParityTestCase:
 
     @property
     def id(self) -> str:
-        return self.plain.name
+        """The plain case's name, or the streamed case's own name when it is a variant beyond a `-stream` twin."""
+        return self.plain.name if self.streamed.name == f"{self.plain.name}-stream" else self.streamed.name

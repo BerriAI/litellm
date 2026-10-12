@@ -8,6 +8,7 @@ import httpx
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
+import litellm
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.decisions import (
@@ -47,6 +48,7 @@ from litellm.types.decisions import (
     UnsupportedDecisionsRequest,
     systemone_choice_key,
 )
+from litellm.types.utils import is_decisions_model_mode
 
 _PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
 _SYSTEMONE_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
@@ -100,6 +102,8 @@ def _ir_question(name: str, question: DecisionQuestion) -> DecisionsIRQuestion:
 def systemone_request_to_ir(request: DecisionsRequestBody) -> DecisionsIRRequest:
     return DecisionsIRRequest(
         input=DecisionsIRState(state=request.state),
+        audio=request.audio,
+        videos=request.videos,
         questions=tuple(_ir_question(name, question) for name, question in request.questions.items()),
     )
 
@@ -166,8 +170,12 @@ def _systemone_question(question: DecisionsIRQuestion) -> Mapping[str, object]:
 
 
 def ir_to_systemone_request(
-    model: str, request: DecisionsIRRequest
+    model: str, request: DecisionsIRRequest, *, supports_audio: bool = False, supports_video: bool = False
 ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
+    if request.audio and not supports_audio:
+        return UnsupportedDecisionsRequest(reason="audio input is not supported by this Decisions model")
+    if request.videos and not supports_video:
+        return UnsupportedDecisionsRequest(reason="video input is not supported by this Decisions model")
     state: Final = _systemone_state(request.input)
     if isinstance(state, UnsupportedDecisionsRequest):
         return state
@@ -175,6 +183,16 @@ def ir_to_systemone_request(
     return {
         "model": model,
         "state": state,
+        **(
+            {"audio": [clip if isinstance(clip, str) else clip.model_dump() for clip in request.audio]}
+            if request.audio
+            else {}
+        ),
+        **(
+            {"videos": [clip if isinstance(clip, str) else clip.model_dump() for clip in request.videos]}
+            if request.videos
+            else {}
+        ),
         "questions": {key: _systemone_question(question) for key, question in keyed_questions},
     }
 
@@ -296,6 +314,14 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
     )
 
 
+def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
+    try:
+        model_mode: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get("mode")
+    except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which has no mode
+        return False
+    return is_decisions_model_mode(model_mode)
+
+
 class BaseDecisionsConfig(ABC):
     path: str = "/v1/systemone"
     api_key_env: tuple[str, ...] = ()
@@ -360,13 +386,28 @@ class BaseDecisionsConfig(ABC):
     ) -> tuple[Mapping[str, str], bytes | None]:
         return headers, None
 
+    def supports_audio_input(self, model: str, custom_llm_provider: str) -> bool:
+        return _is_decisions_model(model, custom_llm_provider) and litellm.supports_audio_input(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
+    def supports_video_input(self, model: str, custom_llm_provider: str) -> bool:
+        return _is_decisions_model(model, custom_llm_provider) and litellm.supports_video_input(
+            model=model, custom_llm_provider=custom_llm_provider
+        )
+
     def transform_decisions_request(
         self,
         model: str,
         request: DecisionsIRRequest,
         custom_llm_provider: str,
     ) -> Mapping[str, object] | UnsupportedDecisionsRequest:
-        return ir_to_systemone_request(self.request_model(model), request)
+        return ir_to_systemone_request(
+            self.request_model(model),
+            request,
+            supports_audio=self.supports_audio_input(model, custom_llm_provider),
+            supports_video=self.supports_video_input(model, custom_llm_provider),
+        )
 
     def unwrap_response(self, payload: object) -> object:
         return payload
