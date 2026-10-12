@@ -587,7 +587,6 @@ def cost_per_token(
                     ModelInfo, {**decisions_model_info, **decisions_overrides}
                 ),
             )
-    # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     if call_type == "speech" or call_type == "aspeech":
         lyria_generation_cost: Final = (
             get_vertex_ai_lyria_generation_cost(model=model_without_prefix)
