@@ -2168,14 +2168,14 @@ async def test_async_post_explicit_timeout_is_enforced_and_reported():
 
 
 def test_sync_post_timeout_message_reports_client_default_when_timeout_unset():
-    handler = HTTPHandler()
-    handler.client = _RecordingSyncClient()
+    client = _RecordingSyncClient()
+    handler = HTTPHandler(client=client)
 
     with pytest.raises(litellm.Timeout) as exc_info:
         handler.post("https://example.test/v1/chat", json={"ping": True})
 
     assert "None seconds" not in str(exc_info.value)
-    assert f"{COMPLETION_HTTP_FALLBACK_SECONDS}" in str(exc_info.value)
+    assert f"{client.timeout.read}" in str(exc_info.value)
 
 
 def test_sync_post_timeout_message_reports_custom_client_timeout():
