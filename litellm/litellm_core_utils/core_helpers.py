@@ -288,7 +288,7 @@ def add_missing_spend_metadata_to_litellm_metadata(litellm_metadata: dict, metad
     and user_api_key values are in 'metadata'.
     """
     potential_spend_tracking_metadata_substring: Final = "user_api_key"
-    for key, value in metadata.items():
+    for key, value in metadata.copy().items():
         if potential_spend_tracking_metadata_substring in key:
             litellm_metadata[key] = value
     return litellm_metadata
