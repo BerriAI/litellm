@@ -1,0 +1,23 @@
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  store_model_in_db: true
+  use_redis_transaction_buffer: true
+  proxy_batch_write_at: 60
+
+litellm_settings:
+  cache: true
+  cache_params:
+    type: redis
+    host: os.environ/REDIS_HOST
+    port: os.environ/REDIS_PORT
+    supported_call_types: []
+  callbacks:
+    - prometheus
+    - otel
+  service_callback:
+    - prometheus_system
+  require_auth_for_metrics_endpoint: false
+  drop_params: true
+  json_logs: true
+  request_timeout: 600
+  store_audit_logs: true
