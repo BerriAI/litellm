@@ -29455,7 +29455,7 @@ export interface components {
             disable_password_login_when_sso_enabled?: boolean | null;
             /**
              * Disable Requester Ip Address Logging
-             * @description If True, new spend log rows store requester_ip_address as null in the column, the metadata and the stored request. The stored request also drops client-IP forwarding headers such as x-forwarded-for, and IP addresses in stored error messages are masked. Guardrails, metrics and callbacks that read the standard logging payload still receive the IP. Default is False.
+             * @description If True, new spend log rows store requester_ip_address as null in the column, the metadata and the stored request. The stored request also drops client-IP forwarding headers such as x-forwarded-for, and IP addresses in its other header values and in stored error messages are masked. Guardrails, metrics and callbacks that read the standard logging payload still receive the IP. Default is False.
              */
             disable_requester_ip_address_logging?: boolean | null;
             /**
