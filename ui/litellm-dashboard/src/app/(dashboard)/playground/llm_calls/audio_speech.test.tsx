@@ -20,13 +20,15 @@ describe("audio_speech", () => {
     });
 
     // Mock the OpenAI constructor and its methods
-    (OpenAI as any).mockImplementation(() => ({
-      audio: {
-        speech: {
-          create: mockCreate,
+    (OpenAI as any).mockImplementation(function () {
+      return {
+        audio: {
+          speech: {
+            create: mockCreate,
+          },
         },
-      },
-    }));
+      };
+    });
   });
 
   afterEach(() => {
@@ -39,7 +41,7 @@ describe("audio_speech", () => {
   });
 
   it("should make a request to the audio speech API with basic parameters", async () => {
-    await makeOpenAIAudioSpeechRequest("Hello, world!", "alloy", mockUpdateUI, "tts-1", "sk-1234567890", []);
+    await makeOpenAIAudioSpeechRequest("Hello, world!", "alloy", mockUpdateUI, "tts-1", "sk-9876543210", []);
 
     expect(mockCreate).toHaveBeenCalledWith(
       {
@@ -61,7 +63,7 @@ describe("audio_speech", () => {
       "nova",
       mockUpdateUI,
       "tts-1-hd",
-      "sk-1234567890",
+      "sk-9876543210",
       ["tag1", "tag2"],
       signal,
       "mp3",
@@ -86,7 +88,7 @@ describe("audio_speech", () => {
     mockCreate.mockRejectedValue(mockError);
 
     await expect(
-      makeOpenAIAudioSpeechRequest("Hello, world!", "alloy", mockUpdateUI, "tts-1", "sk-1234567890", []),
+      makeOpenAIAudioSpeechRequest("Hello, world!", "alloy", mockUpdateUI, "tts-1", "sk-9876543210", []),
     ).rejects.toThrow("API Error");
 
     expect(mockUpdateUI).not.toHaveBeenCalled();

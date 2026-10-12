@@ -159,7 +159,7 @@ const ResponseMetrics: React.FC<ResponseMetricsProps> = ({ timeToFirstToken, tot
         />
       )}
 
-      {usage?.cost !== undefined && (
+      {typeof usage?.cost === "number" && Number.isFinite(usage.cost) && (
         <MetricItem
           label="Cost"
           tooltip="Cost"

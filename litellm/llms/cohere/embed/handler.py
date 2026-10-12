@@ -20,7 +20,7 @@ from litellm.types.utils import EmbeddingResponse
 from .v1_transformation import CohereEmbeddingConfig
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 def validate_environment(api_key, headers: dict):
@@ -60,7 +60,7 @@ async def async_embedding(
     api_base: str,
     api_key: str | None,
     headers: dict,
-    encoding: "tiktoken.Encoding | None",
+    encoding: "Tokenizer | None",
     client: AsyncHTTPHandler | None = None,
 ):
     ## LOGGING
@@ -103,7 +103,7 @@ async def async_embedding(
         raise e
 
     ## PROCESS RESPONSE ##
-    return CohereEmbeddingConfig()._transform_response(
+    return CohereEmbeddingConfig().transform_response(
         response=response,
         api_key=api_key,
         logging_obj=logging_obj,
@@ -122,7 +122,7 @@ def embedding(
     logging_obj: LiteLLMLoggingObj,
     optional_params: dict,
     headers: dict,
-    encoding: "tiktoken.Encoding | None",
+    encoding: "Tokenizer | None",
     data: dict | CohereEmbeddingRequest | None = None,
     complete_api_base: str | None = None,
     api_key: str | None = None,
@@ -168,7 +168,7 @@ def embedding(
 
     response: Final = client.post(embed_url, headers=headers, data=json.dumps(data))
 
-    return CohereEmbeddingConfig()._transform_response(
+    return CohereEmbeddingConfig().transform_response(
         response=response,
         api_key=api_key,
         logging_obj=logging_obj,

@@ -9,7 +9,6 @@ methods; richer repositories live in their own modules.
 
 from typing import TYPE_CHECKING, Any, Final, Generic
 
-from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
 from litellm.repositories.prisma_protocols import RowT_co, TableActions
 
 if TYPE_CHECKING:
@@ -21,8 +20,9 @@ class PrismaTableRepository(Generic[RowT_co]):
 
     table_name: str
 
-    def __init__(self, prisma_client: Any):
+    def __init__(self, prisma_client: object, *, use_writer: bool = False) -> None:
         self._prisma_client = prisma_client
+        self._use_writer = use_writer
 
     @property
     def prisma_client(self) -> Any:
@@ -32,7 +32,11 @@ class PrismaTableRepository(Generic[RowT_co]):
 
     @property
     def table(self) -> TableActions[RowT_co]:
-        actions: Final[TableActions[RowT_co]] = getattr(self.prisma_client.db, self.table_name)
+        from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
+
+        actions: Final[TableActions[RowT_co]] = getattr(
+            self.prisma_client.writer_db if self._use_writer else self.prisma_client.db, self.table_name
+        )
         return wrap_table_actions_for_config_sync(actions=actions, table_name=self.table_name)
 
 
@@ -42,6 +46,18 @@ class PolicyRepository(PrismaTableRepository["prisma_models.LiteLLM_PolicyTable"
 
 class AgentsRepository(PrismaTableRepository["prisma_models.LiteLLM_AgentsTable"]):
     table_name = "litellm_agentstable"
+
+
+class AgentIdentityRepository(PrismaTableRepository["prisma_models.LiteLLM_AgentIdentity"]):
+    table_name = "litellm_agentidentity"
+
+
+class RetiredAgentIdentityRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgentIdentity"]):
+    table_name = "litellm_retiredagentidentity"
+
+
+class VerifiedSubjectRepository(PrismaTableRepository["prisma_models.LiteLLM_VerifiedSubject"]):
+    table_name = "litellm_verifiedsubject"
 
 
 class ObjectPermissionRepository(PrismaTableRepository["prisma_models.LiteLLM_ObjectPermissionTable"]):
@@ -116,10 +132,6 @@ class JWTKeyMappingRepository(PrismaTableRepository["prisma_models.LiteLLM_JWTKe
     table_name = "litellm_jwtkeymapping"
 
 
-class ManagedFileRepository(PrismaTableRepository["prisma_models.LiteLLM_ManagedFileTable"]):
-    table_name = "litellm_managedfiletable"
-
-
 class MemoryRepository(PrismaTableRepository["prisma_models.LiteLLM_MemoryTable"]):
     table_name = "litellm_memorytable"
 
@@ -176,6 +188,10 @@ class PolicyAttachmentRepository(PrismaTableRepository["prisma_models.LiteLLM_Po
     table_name = "litellm_policyattachmenttable"
 
 
+class TeamRepository(PrismaTableRepository["prisma_models.LiteLLM_TeamTable"]):
+    table_name = "litellm_teamtable"
+
+
 class DeletedTeamRepository(PrismaTableRepository["prisma_models.LiteLLM_DeletedTeamTable"]):
     table_name = "litellm_deletedteamtable"
 
@@ -206,6 +222,10 @@ class SpendLogToolIndexRepository(PrismaTableRepository["prisma_models.LiteLLM_S
 
 class DailyToolSpendRepository(PrismaTableRepository["prisma_models.LiteLLM_DailyToolSpend"]):
     table_name = "litellm_dailytoolspend"
+
+
+class DailyModelUsageRepository(PrismaTableRepository["prisma_models.LiteLLM_DailyModelUsage"]):
+    table_name = "litellm_dailymodelusage"
 
 
 class SpendLogGuardrailIndexRepository(PrismaTableRepository["prisma_models.LiteLLM_SpendLogGuardrailIndex"]):
@@ -242,3 +262,13 @@ class AuditLogRepository(PrismaTableRepository["prisma_models.LiteLLM_AuditLog"]
 
 class AdaptiveRouterSessionRepository(PrismaTableRepository["prisma_models.LiteLLM_AdaptiveRouterSession"]):
     table_name = "litellm_adaptiveroutersession"
+
+
+class BackgroundInteractionSettlementRepository(
+    PrismaTableRepository["prisma_models.LiteLLM_BackgroundInteractionSettlement"]
+):
+    table_name = "litellm_backgroundinteractionsettlement"
+
+
+class RetiredAgentRepository(PrismaTableRepository["prisma_models.LiteLLM_RetiredAgent"]):
+    table_name = "litellm_retiredagent"

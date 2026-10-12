@@ -26,17 +26,12 @@ class WindowSpendTransaction(TypedDict):
     window_start is an ISO-8601 string rather than a datetime so the
     transaction survives the JSON round trip through the Redis buffer.
 
-    request_ids carries the LiteLLM_SpendLogs ids this spend came from. The
-    one-time seed for a window that has no row yet subtracts them from its
-    LiteLLM_SpendLogs aggregate, because the spend log writer flushes on its
-    own ~2s poll and will usually have persisted these rows before the window
-    queue flushes; without the exclusion the seed and the increment would each
-    count them.
-
-    started_at is the earliest request start in the batch. The seed only
-    subtracts a request_id whose LiteLLM_SpendLogs.startTime is at or after it,
-    so a client that replays an old id through x-litellm-call-id cannot make the
-    seed drop the historical row that id already paid for.
+    started_at is the earliest request start in the batch. The one-time seed for
+    a window that has no row yet uses it to tell this batch's own
+    LiteLLM_SpendLogs rows from everything else, because the spend log writer
+    flushes on its own ~2s poll and will usually have persisted this batch's
+    rows before the window queue flushes; without that split the seed and the
+    increment would each count them.
     """
 
     entity_type: ReadOnly[str]
@@ -44,8 +39,35 @@ class WindowSpendTransaction(TypedDict):
     window_duration: ReadOnly[str]
     window_start: ReadOnly[str]
     spend: ReadOnly[float]
-    request_ids: ReadOnly[Sequence[str]]
     started_at: ReadOnly[str | None]
+
+
+class WindowSpendWirePayload(WindowSpendTransaction):
+    """How an increment is encoded in the shared Redis buffer.
+
+    request_ids is dead weight here: workers built before this field was
+    dropped index it while merging whatever they pop, and the pop is
+    destructive, so a leader still running one of those during a rolling deploy
+    would raise on a payload without the key and lose those increments. It is
+    always empty, which only makes such a leader seed without exclusions.
+
+    TODO: remove once no supported version reads it, i.e. one release after the
+    field stopped being written.
+    """
+
+    request_ids: ReadOnly[Sequence[str]]
+
+
+def to_wire_payload(transaction: WindowSpendTransaction) -> WindowSpendWirePayload:
+    return WindowSpendWirePayload(
+        entity_type=transaction["entity_type"],
+        entity_id=transaction["entity_id"],
+        window_duration=transaction["window_duration"],
+        window_start=transaction["window_start"],
+        spend=transaction["spend"],
+        started_at=transaction.get("started_at"),
+        request_ids=(),
+    )
 
 
 def to_naive_utc(value: datetime) -> datetime:
@@ -72,7 +94,6 @@ def build_window_spend_transaction(
     window_duration: str,
     window_start: datetime,
     spend: float,
-    request_id: str | None = None,
     started_at: datetime | None = None,
 ) -> WindowSpendTransaction:
     return WindowSpendTransaction(
@@ -81,7 +102,6 @@ def build_window_spend_transaction(
         window_duration=window_duration,
         window_start=to_naive_utc(window_start).isoformat(timespec="microseconds"),
         spend=spend,
-        request_ids=() if request_id is None else (request_id,),
         started_at=None
         if started_at is None
         else to_naive_utc(started_at.astimezone(timezone.utc)).isoformat(timespec="microseconds"),
@@ -101,7 +121,6 @@ def _merge_window_spend_transactions(
         window_duration=first["window_duration"],
         window_start=first["window_start"],
         spend=math.fsum(payload["spend"] for payload in payloads),
-        request_ids=tuple(sorted(frozenset(chain.from_iterable(payload["request_ids"] for payload in payloads)))),
         started_at=min(started_ats) if started_ats else None,
     )
 
