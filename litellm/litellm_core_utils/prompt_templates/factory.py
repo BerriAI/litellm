@@ -1258,7 +1258,7 @@ def _is_valid_thought_signature(signature: str) -> bool:
     if not signature:
         return False
     try:
-        padding = "=" * (-len(signature) % 4)
+        padding: Final = "=" * (-len(signature) % 4)
         base64.b64decode(signature + padding, validate=True)
     except (binascii.Error, ValueError):
         return False
