@@ -297,8 +297,51 @@ def test_native_config_roundtrip_registers_requested_policy(mode, default_on):
 
 def test_native_initializer_refuses_conditional_mcp_modes():
     params = LitellmParams(guardrail="ismalicious", api_key=KEY, mode=Mode(tags={}, default="pre_mcp_call"))
-    with pytest.raises(ValueError, match="explicit MCP modes"):
+    with pytest.raises(TypeError, match="explicit MCP modes") as exc:
         initialize_guardrail(params, {"guardrail_name": "selected-gate", "litellm_params": params})
+    assert KEY not in str(exc.value)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("texts", [["First"], ["First", "Second å", "Third 🚀"]])
+@pytest.mark.parametrize("verdict", ["allow", "block"])
+async def test_response_array_validation_preserves_complete_batches(texts, verdict):
+    requests = []
+
+    def handler(request):
+        requests.append(request)
+        body = service_response(request, verdict).json()
+        body["injection"]["families"] = ["fixture-a", "fixture-b"]
+        body["injection"]["spans"] = [{"start": 0, "end": 1, "family": "fixture-a"}]
+        body["links"].append({"url": URL, "entity": "example.com", "verdict": "unknown", "sources": 0})
+        return httpx.Response(200, json=body)
+
+    inputs = {"texts": texts}
+    data = {}
+    if verdict == "block":
+        with pytest.raises(GuardrailRaisedException) as exc:
+            await guardrail(handler).apply_guardrail(inputs, data, "response")
+        assert KEY not in str(exc.value)
+        assert all(text not in str(exc.value) for text in texts)
+    else:
+        assert await guardrail(handler).apply_guardrail(inputs, data, "response") is inputs
+    assert inputs["texts"] is texts
+    assert len(requests) == 1
+    assert json.loads(json.loads(requests[0].content)["content"]) == texts
+    assert KEY not in json.dumps(data)
+
+
+@pytest.mark.parametrize(
+    "hooks",
+    [
+        [GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.post_mcp_call],
+        (GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.post_mcp_call),
+    ],
+)
+def test_readonly_hook_configuration_keeps_native_requested_modes(hooks):
+    callback = IsMaliciousGuardrail(api_key=KEY, event_hook=hooks, default_on=True)
+    assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_mcp_call)
+    assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.post_mcp_call)
 
 
 @pytest.mark.asyncio

@@ -1,6 +1,7 @@
 import base64
 import binascii
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Literal, NoReturn
 from urllib.parse import urlsplit
@@ -30,13 +31,13 @@ _REFUSAL: Final = "IsMalicious could not allow the inspected MCP content"
 
 
 class _Response(BaseModel):
-    model_config = ConfigDict(extra="allow", strict=True)
+    model_config = ConfigDict(extra="allow", strict=True, frozen=True)
     verdict: Literal["allow", "warn", "block"]
     latency_ms: int = Field(ge=0, le=2**63 - 1)
 
 
 class _Link(BaseModel):
-    model_config = ConfigDict(extra="allow", strict=True)
+    model_config = ConfigDict(extra="allow", strict=True, frozen=True)
     url: str
     entity: str
     verdict: Literal["clean", "suspicious", "malicious", "unknown"]
@@ -44,7 +45,7 @@ class _Link(BaseModel):
 
 
 class _Span(BaseModel):
-    model_config = ConfigDict(extra="allow", strict=True)
+    model_config = ConfigDict(extra="allow", strict=True, frozen=True)
     start: int = Field(ge=0)
     end: int = Field(ge=0)
     family: str
@@ -57,15 +58,15 @@ class _Span(BaseModel):
 
 
 class _Injection(BaseModel):
-    model_config = ConfigDict(extra="allow", strict=True)
+    model_config = ConfigDict(extra="allow", strict=True, frozen=True)
     score: float = Field(ge=0, le=1)
-    families: list[str]
-    spans: list[_Span]
+    families: tuple[str, ...]
+    spans: tuple[_Span, ...]
 
 
 class _Scan(_Response):
     injection: _Injection
-    links: list[_Link]
+    links: tuple[_Link, ...]
     links_truncated: bool
     mode: Literal["fast", "thorough"]
     source: _Link | None = None
@@ -98,7 +99,7 @@ def _verdict(response: httpx.Response, url: str | None) -> _Failure | None:
     return None
 
 
-def _encoded_body(texts: list[str]) -> bytes | _Failure:
+def _encoded_body(texts: Sequence[str]) -> bytes | _Failure:
     try:
         content: Final = json.dumps(texts, ensure_ascii=False, separators=(",", ":"))
         body: Final = json.dumps({"content": content, "mode": "fast"}, ensure_ascii=False).encode("utf-8")
@@ -129,7 +130,7 @@ class IsMaliciousGuardrail(CustomGuardrail):
         api_key: str | None = None,
         api_base: str | None = None,
         guardrail_name: str | None = None,
-        event_hook: GuardrailEventHooks | list[GuardrailEventHooks] | None = None,
+        event_hook: GuardrailEventHooks | Sequence[GuardrailEventHooks] | None = None,
         default_on: bool = False,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
@@ -144,7 +145,9 @@ class IsMaliciousGuardrail(CustomGuardrail):
             raise ValueError("IsMalicious requires a Base64 API key and secret pair")
         if api_base is not None and api_base.rstrip("/") != _API_BASE:
             raise ValueError("IsMalicious credentials may only be sent to its HTTPS API")
-        modes: Final = event_hook if isinstance(event_hook, list) else [event_hook]
+        modes: Final = (
+            tuple(event_hook) if isinstance(event_hook, Sequence) and not isinstance(event_hook, str) else (event_hook,)
+        )
         if not modes or any(mode not in self.get_supported_event_hooks() for mode in modes):
             raise ValueError("IsMalicious requires pre_mcp_call or post_mcp_call")
         self._headers = {"X-API-KEY": resolved_key, "Content-Type": "application/json"}
@@ -152,12 +155,16 @@ class IsMaliciousGuardrail(CustomGuardrail):
         super().__init__(  # pyright: ignore[reportUnknownMemberType]  # base guardrail accepts untyped kwargs
             guardrail_name=guardrail_name,
             supported_event_hooks=self.get_supported_event_hooks(),
-            event_hook=event_hook,
+            event_hook=list(event_hook)
+            if isinstance(event_hook, Sequence) and not isinstance(event_hook, str)
+            else event_hook,
             default_on=default_on,
         )
 
     @classmethod
-    def get_supported_event_hooks(cls) -> list[GuardrailEventHooks]:
+    def get_supported_event_hooks(
+        cls,
+    ) -> list[GuardrailEventHooks]:  # mutable-ok: native hook discovery requires a list return type
         return [GuardrailEventHooks.pre_mcp_call, GuardrailEventHooks.post_mcp_call]
 
     @staticmethod
@@ -215,7 +222,7 @@ class IsMaliciousGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
-        request_data: dict[str, object],
+        request_data: dict[str, object],  # mutable-ok: native logging writes audit metadata to this dictionary
         input_type: Literal["request", "response"],
         logging_obj: "LiteLLMLoggingObj | None" = None,
     ) -> GenericGuardrailAPIInputs:

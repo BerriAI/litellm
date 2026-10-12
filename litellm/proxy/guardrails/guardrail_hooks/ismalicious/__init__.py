@@ -9,7 +9,7 @@ from .ismalicious import IsMaliciousGuardrail
 def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) -> IsMaliciousGuardrail:
     modes: Final = [litellm_params.mode] if isinstance(litellm_params.mode, str) else litellm_params.mode
     if not isinstance(modes, list):
-        raise ValueError("IsMalicious requires explicit MCP modes")
+        raise TypeError("IsMalicious requires explicit MCP modes")
     callback: Final = IsMaliciousGuardrail(
         api_key=litellm_params.api_key,
         api_base=litellm_params.api_base,
