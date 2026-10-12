@@ -944,7 +944,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             model, custom_llm_provider
         ) and not AnthropicModelInfo._effort_rejects_between_tools(optional_params):
             litellm.verbose_logger.warning(REMAP_DISABLED_TO_BETWEEN_TOOLS_WARNING, model)
-            optional_params["thinking"] = {"type": "between_tools"}
+            optional_params["thinking"] = {"type": "between_tools"}  # rebind-ok: in-place out-param, see signature
             return
         litellm.verbose_logger.warning(
             DROP_DISABLED_THINKING_WARNING,
