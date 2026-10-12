@@ -10,7 +10,7 @@ from typing import Final
 import pytest
 import yaml
 from integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
-from integration._support.database import read_rows
+from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy
 from integration._support.upstream import delete_scenario, register_scenario
 from integration._support.wire import Reply, Request, Wire, wire_server
@@ -24,6 +24,9 @@ OUTPUT_FAILED_IDS: Final = ("r2",)
 ERROR_FILE_IDS: Final = ("r4", "r5")
 ALL_CUSTOM_IDS: Final = ("r1", "r2", "r3", "r4", "r5")
 LIVE_TOKENS: Final = 10
+_PROCESSED_BATCH_SQL: Final = (
+    'SELECT unified_object_id FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id=%s AND batch_processed'
+)
 
 
 def _successful_line(custom_id: str) -> str:
@@ -610,3 +613,84 @@ def test_a_restarted_proxy_does_not_emit_a_completed_batchs_lines_again(gateway:
         ) == list(ALL_CUSTOM_IDS), [
             (event["call_type"], _hidden(event).get("batch_custom_id")) for event in events_after_restart
         ]
+
+
+def test_a_managed_batch_emits_its_lines_once_across_the_poller_and_retrieves(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "batch-line-managed-" + uuid.uuid4().hex[:12]
+    received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier batches
+
+    with (
+        scratch_database() as database_url,
+        wire_server(lambda _request: Reply()) as endpoint,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {"GENERIC_LOGGER_ENDPOINT": endpoint.url, "DATABASE_URL": database_url},
+            config=_line_item_config(Path("tests/integration/proxy_config.yaml"), tmp_path / "line_items_managed.yaml"),
+        ) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        routed_model: Final = scenario.model(
+            api_base=f"{gateway.upstream_url}/{marker}", api_key="synthetic-provider-key"
+        )
+        input_lines: Final = _input_lines(routed_model, marker)
+        handle: Final = register_scenario(marker, _provider_routes(input_lines))
+        scenario.cleanups.callback(delete_scenario, handle)
+        key: Final = scenario.key(user_id=scenario.user(user_role="internal_user"), models=[routed_model])
+        uploaded: Final = candidate.request_multipart(
+            "/v1/files",
+            {"purpose": "batch", "target_model_names": routed_model},
+            {"file": ("in.jsonl", ("\n".join(input_lines) + "\n").encode(), "application/jsonl")},
+            key=key,
+        )
+        assert uploaded.status_code == 200, uploaded.text
+        created: Final = candidate.request(
+            "POST",
+            "/v1/batches",
+            {
+                "input_file_id": string_value(JSON_OBJECT.validate_json(uploaded.content)["id"]),
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "model": routed_model,
+            },
+            key=key,
+        )
+        assert created.status_code == 200, created.text
+        batch_id: Final = string_value(JSON_OBJECT.validate_json(created.content)["id"])
+
+        def line_events() -> tuple[dict[str, JsonValue], ...]:
+            received.extend(endpoint.drain())
+            return tuple(
+                event
+                for batch in received
+                for event in json.loads(batch.body)
+                if _hidden(event).get("batch_custom_id") is not None and marker in json.dumps(event["messages"])
+            )
+
+        retrievals: Final = [candidate.request("GET", f"/v1/batches/{batch_id}", key=key) for _ in range(3)]
+        assert all(response.status_code == 200 for response in retrievals), [r.text for r in retrievals]
+        eventually(
+            line_events,
+            lambda values: {_hidden(event)["batch_custom_id"] for event in values} == set(ALL_CUSTOM_IDS),
+            seconds=60,
+        )
+        later_retrievals: Final = [candidate.request("GET", f"/v1/batches/{batch_id}", key=key) for _ in range(3)]
+        assert all(response.status_code == 200 for response in later_retrievals), [r.text for r in later_retrievals]
+        eventually(lambda: read_rows(_PROCESSED_BATCH_SQL, (batch_id,), database_url=database_url), bool, seconds=30)
+        assert _live_chat(candidate, routed_model, key) == 200
+        live_events: Final = eventually(
+            lambda: tuple(
+                event
+                for event in _delivered(endpoint, received, key)
+                if event["call_type"] == "acompletion" and _hidden(event).get("batch_custom_id") is None
+            ),
+            bool,
+            seconds=30,
+        )
+        assert len(live_events) == 1, live_events
+        settled: Final = line_events()
+
+        assert sorted(string_value(_hidden(event)["batch_custom_id"]) for event in settled) == list(ALL_CUSTOM_IDS), [
+            (event["call_type"], _hidden(event).get("batch_custom_id")) for event in settled
+        ]
+        assert {_hidden(event)["batch_id"] for event in settled} == {batch_id}, settled

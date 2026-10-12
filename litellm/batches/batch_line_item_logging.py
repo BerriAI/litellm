@@ -22,6 +22,7 @@ from litellm.batches.batch_utils import (
     _uses_native_vertex_output,  # pyright: ignore[reportPrivateUsage]  # same reuse
 )
 from litellm.caching.caching import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     EmbeddingResponse,
@@ -74,7 +75,15 @@ _EMPTY_BODY: Final[Mapping[str, object]] = MappingProxyType({})
 
 _LINE_ITEM_CLAIM_TTL_SECONDS: Final = 30 * 24 * 60 * 60
 
-batch_line_item_claim_cache: Final = DualCache()
+# Without Redis each worker holds its claims in memory for the claim ttl, so the
+# in-memory tier keeps far more than its 200-entry default before evicting a claim
+_IN_MEMORY_CLAIM_CAPACITY: Final = 10_000
+
+batch_line_item_claim_cache: Final = DualCache(
+    in_memory_cache=InMemoryCache(
+        max_size_in_memory=_IN_MEMORY_CLAIM_CAPACITY, default_ttl=_LINE_ITEM_CLAIM_TTL_SECONDS
+    )
+)
 
 # asyncio holds tasks weakly, so each spawned line fan-out stays referenced here until it finishes
 _LINE_ITEM_TASKS: Final[set["asyncio.Task[int]"]] = set()  # mutable-ok: strong refs to running fan-outs

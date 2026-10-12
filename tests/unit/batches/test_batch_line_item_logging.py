@@ -26,6 +26,7 @@ import pytest
 
 import litellm
 from litellm.batches.batch_line_item_logging import (
+    _claim_line_items,
     _release_line_item_claim,
     batch_line_item_claim_cache,
     drain_batch_line_items,
@@ -1081,6 +1082,16 @@ async def test_line_items_emit_once_per_batch_id(recorder):
     assert second == 0
     assert len(recorder.success_events) == 1
     assert len(recorder.failure_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_an_in_memory_claim_survives_a_thousand_newer_batches():
+    first: Final = await _claim_line_items(batch_line_item_claim_cache, "batch_line_items_emitted:batch_old", "old")
+    for index in range(1_000):
+        await _claim_line_items(batch_line_item_claim_cache, f"batch_line_items_emitted:batch_{index}", str(index))
+    again: Final = await _claim_line_items(batch_line_item_claim_cache, "batch_line_items_emitted:batch_old", "again")
+
+    assert (first, again) == ("claimed", "already_claimed")
 
 
 @pytest.mark.asyncio
