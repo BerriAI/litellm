@@ -56956,6 +56956,23 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
                      * Input
                      * @description The text being judged, or user messages whose content mixes input_text and input_image parts
                      */
@@ -57076,6 +57093,23 @@ export interface operations {
                      * @description A stable id for your end user. Sent to OpenAI and dropped for other providers
                      */
                     safety_identifier?: string | null;
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
                 } & {
                     [key: string]: unknown;
                 };
@@ -71250,6 +71284,23 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
                      * Model
                      * @description A decision model from the proxy model_list
                      */
@@ -71338,6 +71389,23 @@ export interface operations {
                     state: string | {
                         [key: string]: unknown;
                     } | unknown[];
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
                 } & {
                     [key: string]: unknown;
                 };
@@ -76557,6 +76625,23 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
                      * Input
                      * @description The text being judged, or user messages whose content mixes input_text and input_image parts
                      */
@@ -76677,6 +76762,23 @@ export interface operations {
                      * @description A stable id for your end user. Sent to OpenAI and dropped for other providers
                      */
                     safety_identifier?: string | null;
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
                 } & {
                     [key: string]: unknown;
                 };
@@ -79887,6 +79989,23 @@ export interface operations {
                  */
                 "application/json": {
                     /**
+                     * Audio
+                     * @description Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    audio?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded audio bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description An audio/* media type, such as audio/wav
+                         */
+                        content_type: string;
+                    })[];
+                    /**
                      * Model
                      * @description A decision model from the proxy model_list
                      */
@@ -79975,6 +80094,23 @@ export interface operations {
                     state: string | {
                         [key: string]: unknown;
                     } | unknown[];
+                    /**
+                     * Videos
+                     * @description Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}
+                     * @default []
+                     */
+                    videos?: (string | {
+                        /**
+                         * Base64
+                         * @description Base64-encoded video bytes
+                         */
+                        base64: string;
+                        /**
+                         * Content Type
+                         * @description A video/* media type, such as video/mp4
+                         */
+                        content_type: string;
+                    })[];
                 } & {
                     [key: string]: unknown;
                 };
