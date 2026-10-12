@@ -408,6 +408,23 @@ def excluded_db_systems_from(value: object) -> frozenset[str]:
     return _normalize_excluded_services(excluded_service_names(value))
 
 
+def invalid_excluded_service_names(value: str) -> tuple[str, ...]:
+    names: Final = tuple(service.strip().lower() for service in value.split(","))
+    return tuple(
+        name
+        for name in names
+        if name != "none" and (not name or _resolved_db_system_for_excluded_service(name) is None)
+    )
+
+
+def parse_excluded_services(value: object) -> frozenset[str] | None:
+    if not isinstance(value, str):
+        return None
+    if value.strip().lower() == "none":
+        return frozenset()
+    return excluded_db_systems_from(value)
+
+
 def parse_capture_message_content(value: object) -> str | None:
     return value if isinstance(value, str) and value in CAPTURE_MESSAGE_CONTENT_VALUES else None
 
@@ -448,9 +465,13 @@ def _normalize_excluded_services(services: frozenset[str]) -> frozenset[str]:
 
 
 def _db_system_for_excluded_service(service: str) -> str | None:
-    resolved: Final = db_system(service) if service != POSTGRESQL else POSTGRESQL
+    resolved: Final = _resolved_db_system_for_excluded_service(service)
     if resolved is None:
         verbose_logger.error(
             "excluded_services: %r is not a datastore service; ignored. Allowed: postgres, redis", service
         )
     return resolved
+
+
+def _resolved_db_system_for_excluded_service(service: str) -> str | None:
+    return db_system(service) if service != POSTGRESQL else POSTGRESQL

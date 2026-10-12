@@ -8,11 +8,12 @@ redacted audit rows for callback mutations.
 
 import json
 from collections.abc import Iterator
-from typing import Final
+from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from fastapi import HTTPException, Request
+from pydantic import ValidationError
 
 import litellm
 from litellm.proxy._types import (
@@ -21,6 +22,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_config_validation import cross_entry_family_error
 from litellm.proxy.management.teams.authz import TeamAccess
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
@@ -28,6 +30,7 @@ from litellm.proxy.management_endpoints.team_callback_endpoints import (
     delete_team_callback,
     disable_team_logging,
     get_team_callbacks,
+    router,
 )
 
 
@@ -1434,7 +1437,7 @@ async def test_delete_team_callback_route_accepts_team_ids_containing_slashes():
     }
     mock_prisma = _patch_prisma(_team_row(team_id=team_id, metadata=metadata))
 
-    app = FastAPI()
+    app: Final = FastAPI()
     app.include_router(router)
     app.dependency_overrides[user_api_key_auth] = _admin_auth
 
@@ -1683,6 +1686,72 @@ async def test_a_second_entry_may_not_flip_the_span_scope(patched_prisma, caller
     patched_prisma.db.litellm_teamtable.update.assert_awaited_once()
 
 
+@pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.asyncio
+async def test_a_second_newrelic_entry_may_not_change_excluded_services(patched_prisma) -> None:
+    patched_prisma.get_data = AsyncMock(
+        return_value=_team_row(
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "newrelic",
+                        "callback_type": "success",
+                        "callback_vars": {"newrelic_api_key": "license-key", "excluded_services": "redis"},
+                    }
+                ]
+            }
+        )
+    )
+    data: Final = AddTeamCallback(
+        callback_name="newrelic",
+        callback_type="success_and_failure",
+        callback_vars={"newrelic_api_key": "license-key", "excluded_services": "postgres"},
+    )
+    with pytest.raises(HTTPException) as exc:
+        await add_team_callbacks(
+            data=data,
+            http_request=Mock(spec=Request),
+            team_id="team-victim",
+            user_api_key_dict=_admin_auth(),
+        )
+    assert exc.value.status_code == 400
+    assert "excluded_services" in str(exc.value.detail)
+    patched_prisma.db.litellm_teamtable.update.assert_not_called()
+
+
+@pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.asyncio
+async def test_a_second_newrelic_entry_accepts_equivalent_excluded_services(patched_prisma) -> None:
+    patched_prisma.get_data = AsyncMock(
+        return_value=_team_row(
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "newrelic",
+                        "callback_type": "success",
+                        "callback_vars": {
+                            "newrelic_api_key": "license-key",
+                            "excluded_services": "redis,postgres",
+                        },
+                    }
+                ]
+            }
+        )
+    )
+    data: Final = AddTeamCallback(
+        callback_name="newrelic",
+        callback_type="success_and_failure",
+        callback_vars={"newrelic_api_key": "license-key", "excluded_services": "postgres,redis"},
+    )
+    await add_team_callbacks(
+        data=data,
+        http_request=Mock(spec=Request),
+        team_id="team-victim",
+        user_api_key_dict=_admin_auth(),
+    )
+    patched_prisma.db.litellm_teamtable.update.assert_awaited_once()
+
+
 @pytest.mark.asyncio
 async def test_add_team_callbacks_rejects_out_of_range_arize_sampling_rate(patched_prisma):
     data = AddTeamCallback(
@@ -1772,3 +1841,59 @@ async def test_add_team_callbacks_stores_capture_message_content_in_the_existing
     patched_prisma.db.litellm_teamtable.update.assert_awaited_once()
     stored: Final = json.loads(patched_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
     assert [entry["callback_vars"].get("capture_message_content") for entry in stored["logging"]] == [capture]
+
+
+@pytest.mark.usefixtures("otel_v2_on")
+@pytest.mark.asyncio
+async def test_add_team_callbacks_stores_excluded_services_in_the_existing_callback_metadata(patched_prisma) -> None:
+    data: Final = AddTeamCallback(
+        callback_name="langfuse_otel",
+        callback_type="success",
+        callback_vars={
+            "langfuse_public_key": "pk",
+            "langfuse_secret_key": "sk",
+            "excluded_services": "redis,postgres",
+        },
+    )
+    await add_team_callbacks(
+        data=data,
+        http_request=Mock(spec=Request),
+        team_id="team-victim",
+        user_api_key_dict=_admin_auth(),
+    )
+    stored: Final = json.loads(patched_prisma.db.litellm_teamtable.update.await_args.kwargs["data"]["metadata"])
+    assert [entry["callback_vars"].get("excluded_services") for entry in stored["logging"]] == ["redis,postgres"]
+
+
+def test_add_team_callback_returns_http_422_for_unknown_excluded_services() -> None:
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    app = FastAPI()
+    app.include_router(router)
+    app.dependency_overrides[user_api_key_auth] = _admin_auth
+
+    response: Final = TestClient(app).post(
+        "/team/team-victim/callback",
+        json={
+            "callback_name": "langfuse_otel",
+            "callback_type": "success",
+            "callback_vars": {
+                "langfuse_public_key": "pk",
+                "langfuse_secret_key": "sk",
+                "excluded_services": "auth",
+            },
+        },
+    )
+
+    assert response.status_code == 422
+    assert "excluded_services" in response.text
+
+
+@pytest.mark.parametrize("callback_var", ["capture_message_content", "excluded_services"])
+@pytest.mark.parametrize("value", [None, 1])
+def test_add_team_callback_rejects_non_string_destination_callback_vars(callback_var: str, value: object) -> None:
+    callback_vars: Final = cast("dict[str, str]", {callback_var: value})
+    with pytest.raises(ValidationError) as exc:
+        AddTeamCallback(callback_name="newrelic", callback_vars=callback_vars)
+    assert f"{callback_var} must be a string, got {type(value).__name__}" in str(exc.value)
