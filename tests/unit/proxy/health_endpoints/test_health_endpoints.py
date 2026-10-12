@@ -882,7 +882,8 @@ async def test_test_model_connection_request_mode_wins_over_resolved_mode():
 
 
 @pytest.mark.asyncio
-async def test_test_model_connection_evaluation_mode_uses_decisions_handler():
+@pytest.mark.parametrize("mode", ("decisions", "evaluation"), ids=("decisions", "legacy-evaluation"))
+async def test_test_model_connection_decision_modes_are_forwarded(mode: str):
     deployment: Final = MappingProxyType(
         {
             "model_name": "typesafe/jev-latest",
@@ -893,14 +894,14 @@ async def test_test_model_connection_evaluation_mode_uses_decisions_handler():
     with _test_connection_probe(deployment) as ahealth_check:
         result: Final = await health_test_model_connection(
             request=MagicMock(),
-            mode="evaluation",
+            mode=mode,
             litellm_params={"model": "typesafe/jev-latest"},
             model_info={"id": "typesafe-jev-id"},
             user_api_key_dict=UserAPIKeyAuth(user_id="test-user", token="test-token"),
         )
 
     assert result["status"] == "success"
-    assert ahealth_check.call_args.kwargs["mode"] == "evaluation"
+    assert ahealth_check.call_args.kwargs["mode"] == mode
 
 
 @pytest.mark.asyncio
@@ -5011,7 +5012,8 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
     assert response.json()["status"] == "success"
 
 
-def test_test_model_connection_accepts_evaluation_mode(monkeypatch):
+@pytest.mark.parametrize("mode", ("decisions", "evaluation"), ids=("decisions", "legacy-evaluation"))
+def test_test_model_connection_accepts_decision_modes(monkeypatch, mode: str):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 
@@ -5036,7 +5038,7 @@ def test_test_model_connection_accepts_evaluation_mode(monkeypatch):
         response = client.post(
             "/health/test_connection",
             json={
-                "mode": "evaluation",
+                "mode": mode,
                 "litellm_params": {"model": "typesafe/jev-latest", "api_key": "sk-test"},
             },
         )

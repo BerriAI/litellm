@@ -16,10 +16,12 @@ from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
+    ListGuardrailsResponse,
     PatchGuardrailRequest,
     RegisterGuardrailRequest,
     TestCustomCodeGuardrailRequest,
     UpdateGuardrailRequest,
+    _get_guardrails_list_response,
     apply_guardrail,
     approve_guardrail_submission,
     create_guardrail,
@@ -68,6 +70,58 @@ MOCK_DB_GUARDRAIL = {
     "created_at": datetime.now(),
     "updated_at": datetime.now(),
 }
+
+
+def test_get_guardrails_list_response() -> None:
+    sample_config: Final = [
+        {
+            "guardrail_name": "test-guard",
+            "litellm_params": {
+                "guardrail": "test-guard",
+                "mode": "pre_call",
+                "api_key": "test-api-key",
+                "api_base": "test-api-base",
+            },
+            "guardrail_info": {
+                "params": [
+                    {
+                        "name": "toxicity_score",
+                        "type": "float",
+                        "description": "Score between 0-1",
+                    }
+                ]
+            },
+        }
+    ]
+
+    response: Final = _get_guardrails_list_response(sample_config)
+    assert isinstance(response, ListGuardrailsResponse)
+    assert response.guardrails[0].guardrail_name == "test-guard"
+    assert response.guardrails[0].guardrail_info == {
+        "params": [
+            {
+                "name": "toxicity_score",
+                "type": "float",
+                "description": "Score between 0-1",
+            }
+        ]
+    }
+
+    empty_response: Final = _get_guardrails_list_response([])
+    assert isinstance(empty_response, ListGuardrailsResponse)
+    assert empty_response.guardrails == []
+
+    minimal_response: Final = _get_guardrails_list_response(
+        [
+            {
+                "guardrail_name": "minimal-guard",
+                "litellm_params": {"guardrail": "minimal-guard", "mode": "pre_call"},
+            }
+        ]
+    )
+    assert isinstance(minimal_response, ListGuardrailsResponse)
+    assert minimal_response.guardrails[0].guardrail_name == "minimal-guard"
+    assert minimal_response.guardrails[0].guardrail_info is None
 
 _INVALID_SCOPE_LITELLM_PARAMS: Final = MappingProxyType(
     {
