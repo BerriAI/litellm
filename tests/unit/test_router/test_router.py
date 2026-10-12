@@ -18709,6 +18709,153 @@ def _retry_skip_deployment(deployment_id, host, litellm_params=None, model_info=
     }
 
 
+_UPSTREAM_404 = {
+    "message": "The model `gpt-5.6` does not exist or you do not have access to it.",
+    "type": "invalid_request_error",
+    "code": "model_not_found",
+}
+
+_UPSTREAM_SUCCESS = {
+    "id": "chatcmpl-failover",
+    "object": "chat.completion",
+    "created": 1,
+    "model": "gpt-5.6",
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi back"}, "finish_reason": "stop"}],
+    "usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3},
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status_code,upstream_error", [(404, _UPSTREAM_404), (400, _UPSTREAM_400)])
+async def test_router_non_retryable_error_fails_over_to_sibling_deployment(
+    monkeypatch: pytest.MonkeyPatch, status_code, upstream_error
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            _retry_skip_deployment("rejecting", "rejecting", litellm_params={"weight": 1}),
+            _retry_skip_deployment("accepting", "accepting", litellm_params={"weight": 0}),
+        ],
+        num_retries=2,
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        rejecting = respx_mock.post("https://rejecting.local/v1/chat/completions").mock(
+            return_value=httpx.Response(status_code, json={"error": upstream_error})
+        )
+        accepting = respx_mock.post("https://accepting.local/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=_UPSTREAM_SUCCESS)
+        )
+        response = await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert (rejecting.call_count, accepting.call_count) == (1, 1)
+    assert response.choices[0].message.content == "hi back"
+    assert response._hidden_params["model_id"] == "accepting"
+    assert response._hidden_params["additional_headers"]["x-litellm-attempted-retries"] == 1
+
+
+@pytest.mark.asyncio
+async def test_router_not_found_failover_still_cools_down_the_refusing_deployment(monkeypatch: pytest.MonkeyPatch):
+    from litellm.router_utils.cooldown_handlers import async_get_cooldown_deployments
+
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            _retry_skip_deployment("rejecting", "rejecting", litellm_params={"weight": 1}),
+            _retry_skip_deployment("accepting", "accepting", litellm_params={"weight": 0}),
+        ],
+        num_retries=2,
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        respx_mock.post("https://rejecting.local/v1/chat/completions").mock(
+            return_value=httpx.Response(404, json={"error": _UPSTREAM_404})
+        )
+        respx_mock.post("https://accepting.local/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=_UPSTREAM_SUCCESS)
+        )
+        await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == [
+        "rejecting"
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "status_code,upstream_error,expected_exception",
+    [(404, _UPSTREAM_404, litellm.NotFoundError), (400, _UPSTREAM_400, litellm.BadRequestError)],
+)
+async def test_router_non_retryable_error_on_single_deployment_group_is_not_retried(
+    monkeypatch: pytest.MonkeyPatch, status_code, upstream_error, expected_exception
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(model_list=[_retry_skip_deployment("only", "only")], num_retries=2)
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        only = respx_mock.post("https://only.local/v1/chat/completions").mock(
+            return_value=httpx.Response(status_code, json={"error": upstream_error})
+        )
+        with pytest.raises(expected_exception):
+            await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert only.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_router_non_retryable_error_fails_over_past_every_refusing_deployment(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            _retry_skip_deployment("first", "first", litellm_params={"weight": 1}),
+            _retry_skip_deployment("second", "second", litellm_params={"weight": 1}),
+            _retry_skip_deployment("accepting", "accepting", litellm_params={"weight": 0}),
+        ],
+        num_retries=2,
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        refusing = tuple(
+            respx_mock.post(f"https://{host}.local/v1/chat/completions").mock(
+                return_value=httpx.Response(404, json={"error": _UPSTREAM_404})
+            )
+            for host in ("first", "second")
+        )
+        accepting = respx_mock.post("https://accepting.local/v1/chat/completions").mock(
+            return_value=httpx.Response(200, json=_UPSTREAM_SUCCESS)
+        )
+        response = await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert tuple(route.call_count for route in (*refusing, accepting)) == (1, 1, 1)
+    assert response._hidden_params["model_id"] == "accepting"
+
+
+@pytest.mark.asyncio
+async def test_router_non_retryable_error_stops_once_every_deployment_refused(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router = litellm.Router(
+        model_list=[
+            _retry_skip_deployment("first", "first", litellm_params={"weight": 1}),
+            _retry_skip_deployment("second", "second", litellm_params={"weight": 0}),
+        ],
+        num_retries=3,
+        disable_cooldowns=True,
+    )
+
+    with respx.mock(assert_all_called=True) as respx_mock:
+        first = respx_mock.post("https://first.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        second = respx_mock.post("https://second.local/v1/chat/completions").mock(
+            return_value=httpx.Response(400, json={"error": _UPSTREAM_400})
+        )
+        with pytest.raises(litellm.BadRequestError) as exc_info:
+            await router.acompletion(model="gpt-5.6", messages=[{"role": "user", "content": "hi"}])
+
+    assert (first.call_count, second.call_count) == (1, 1)
+    assert exc_info.value.failed_deployment_id == "second"
+
+
 @pytest.mark.parametrize(
     "status_code,failed_deployment_id,already_skipped,expected",
     [
@@ -19500,7 +19647,7 @@ async def test_router_max_parallel_requests_overflow_is_429_without_cooldown_or_
     assert all("capped-deployment" in r.message and "max_parallel_requests=1" in r.message for r in rejected)
     assert route.call_count == 1
     assert sibling_route.call_count == 0
-    assert await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == []
+    assert await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == []
 
 
 @pytest.mark.asyncio
@@ -19619,7 +19766,7 @@ async def test_router_max_parallel_requests_overflow_takes_the_ordinary_429_fall
     assert len(results) == 3
     assert primary.call_count == 1
     assert fallback.call_count == 2
-    assert await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == []
+    assert await async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None) == []
 
 
 @pytest.mark.asyncio

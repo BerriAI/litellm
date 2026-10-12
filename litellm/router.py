@@ -502,6 +502,7 @@ _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_DEPLOYMENTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 
 
@@ -543,6 +544,12 @@ def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, obj
 
 def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
     return tuple(item for item in value if isinstance(item, str)) if isinstance(value, tuple) else ()
+
+
+def _has_untried_deployment(deployments: Sequence[Mapping[str, object]], tried_deployment_ids: tuple[str, ...]) -> bool:
+    return bool(tried_deployment_ids) and any(
+        _configured_model_info(deployment).get("id") not in tried_deployment_ids for deployment in deployments
+    )
 
 
 def _silent_experiment_targets(silent_model: object) -> tuple[str, ...]:
@@ -8103,6 +8110,10 @@ class Router:
                     num_retries = _retry_policy_retries
                     _retry_policy_applies = True
 
+            first_skipped_ids: Final = self._deployment_ids_to_skip_on_retry(
+                exception=original_exception,
+                already_skipped=kwargs.get("_retry_skipped_deployment_ids"),
+            )
             # raises an exception if this error should not be retries
             # Skip this check if retry policy applies (retry policy takes precedence)
             if not _retry_policy_applies:
@@ -8113,6 +8124,7 @@ class Router:
                     context_window_fallbacks=context_window_fallbacks,
                     regular_fallbacks=fallbacks,
                     content_policy_fallbacks=content_policy_fallbacks,
+                    tried_deployment_ids=first_skipped_ids,
                 )
             # Update max_retries after overrides (deployment_num_retries / retry_policy)
             _metadata["max_retries"] = num_retries
@@ -8120,10 +8132,6 @@ class Router:
             ## LOGGING
             if num_retries > 0:
                 kwargs = self.log_retry(kwargs=kwargs, e=original_exception)
-                first_skipped_ids: Final = self._deployment_ids_to_skip_on_retry(
-                    exception=original_exception,
-                    already_skipped=kwargs.get("_retry_skipped_deployment_ids"),
-                )
                 if first_skipped_ids:
                     kwargs["_retry_skipped_deployment_ids"] = first_skipped_ids  # rebind-ok: the next attempt reads it
             else:
@@ -8178,6 +8186,10 @@ class Router:
                     else:
                         _healthy_deployments = []
 
+                    skipped_ids = self._deployment_ids_to_skip_on_retry(
+                        exception=e,
+                        already_skipped=kwargs.get("_retry_skipped_deployment_ids"),
+                    )
                     # Check if this error is non-retryable (e.g., 400 context
                     # window exceeded). If so, raise immediately instead of
                     # continuing the retry loop. Respect retry policy
@@ -8191,14 +8203,11 @@ class Router:
                                 context_window_fallbacks=context_window_fallbacks,
                                 regular_fallbacks=fallbacks,
                                 content_policy_fallbacks=content_policy_fallbacks,
+                                tried_deployment_ids=skipped_ids,
                             )
                         except Exception:
                             raise e
 
-                    skipped_ids = self._deployment_ids_to_skip_on_retry(
-                        exception=e,
-                        already_skipped=kwargs.get("_retry_skipped_deployment_ids"),
-                    )
                     if skipped_ids:
                         kwargs["_retry_skipped_deployment_ids"] = skipped_ids  # rebind-ok: the next attempt reads it
                     _timeout = self._time_to_sleep_before_retry(
@@ -8270,10 +8279,13 @@ class Router:
         context_window_fallbacks: list | None = None,
         content_policy_fallbacks: list | None = None,
         regular_fallbacks: list | None = None,
+        tried_deployment_ids: tuple[str, ...] = (),
     ):
         """
         1. raise an exception for ContextWindowExceededError if context_window_fallbacks is not None
         2. raise an exception for ContentPolicyViolationError if content_policy_fallbacks is not None
+        3. raise a non-retryable error (e.g. 400, 404) unless a healthy deployment that has not yet
+            refused this request (`tried_deployment_ids`) can take the retry
 
         2. raise an exception for RateLimitError if
             - there are no fallbacks
@@ -8295,13 +8307,13 @@ class Router:
             raise error
 
         status_code: Final = getattr(error, "status_code", None)
-        if status_code is not None and not litellm.should_retry(status_code):
-            # 401/403 are special cases - allow retry if multiple deployments exist (handled below)
-            if status_code not in (401, 403):
+        # 401/403 are special cases - allow retry if multiple deployments exist (handled below)
+        if status_code is not None and not litellm.should_retry(status_code) and status_code not in (401, 403):
+            if not _has_untried_deployment(
+                _DEPLOYMENTS_ADAPTER.validate_python(healthy_deployments or ()), tried_deployment_ids
+            ):
                 raise error
-
-        if isinstance(error, litellm.NotFoundError):
-            raise error
+            return True
         # Error we should only retry if there are other deployments
         if isinstance(error, openai.RateLimitError):
             if (

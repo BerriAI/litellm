@@ -703,6 +703,67 @@ def test_no_retry_for_unprocessable_entity_error_422():
         print("Correctly raised UnprocessableEntityError without retry:", e)
 
 
+def _not_found() -> litellm.NotFoundError:
+    return litellm.NotFoundError(message="model not found", model="m", llm_provider="openai")
+
+
+def _bad_request() -> litellm.BadRequestError:
+    return litellm.BadRequestError(message="bad request", model="m", llm_provider="openai")
+
+
+def _deployments(*deployment_ids: str) -> list[dict[str, dict[str, str]]]:
+    return [{"model_info": {"id": deployment_id}} for deployment_id in deployment_ids]
+
+
+@pytest.mark.parametrize(
+    "error,tried_deployment_ids,healthy_deployment_ids",
+    [
+        (_not_found(), ("a",), ("a", "b")),
+        (_bad_request(), ("a",), ("a", "b")),
+        (_bad_request(), ("a",), ("b",)),
+    ],
+)
+def test_non_retryable_error_is_retried_on_an_untried_healthy_deployment(
+    error: Exception, tried_deployment_ids: tuple[str, ...], healthy_deployment_ids: tuple[str, ...]
+) -> None:
+    healthy_deployments: Final = _deployments(*healthy_deployment_ids)
+
+    assert (
+        _retry_test_router().should_retry_this_error(
+            error=error,
+            healthy_deployments=healthy_deployments,
+            all_deployments=healthy_deployments,
+            tried_deployment_ids=tried_deployment_ids,
+        )
+        is True
+    )
+
+
+@pytest.mark.parametrize(
+    "error,tried_deployment_ids,healthy_deployment_ids",
+    [
+        (_bad_request(), (), ("a", "b")),
+        (_bad_request(), ("a", "b"), ("a", "b")),
+        (_not_found(), ("a",), ("a",)),
+        (_not_found(), ("a",), ()),
+    ],
+)
+def test_non_retryable_error_is_raised_when_no_untried_healthy_deployment_is_left(
+    error: Exception, tried_deployment_ids: tuple[str, ...], healthy_deployment_ids: tuple[str, ...]
+) -> None:
+    healthy_deployments: Final = _deployments(*healthy_deployment_ids)
+
+    with pytest.raises(type(error)) as exc_info:
+        _retry_test_router().should_retry_this_error(
+            error=error,
+            healthy_deployments=healthy_deployments,
+            all_deployments=healthy_deployments,
+            tried_deployment_ids=tried_deployment_ids,
+        )
+
+    assert exc_info.value is error
+
+
 def test_no_retry_when_no_healthy_deployments():
     healthy_deployments = []
 
