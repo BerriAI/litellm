@@ -13,7 +13,7 @@ Coverage:
 """
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, Final, List
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -1198,6 +1198,7 @@ def _fake_user_api_key_auth(
     end_user_model_max_budget=None,
     end_user_id=None,
     user_model_max_budget=None,
+    team_member_model_max_budget=None,
     user_id=None,
     token=None,
 ):
@@ -1219,6 +1220,7 @@ def _fake_user_api_key_auth(
     auth.end_user_model_max_budget = end_user_model_max_budget
     auth.end_user_id = end_user_id
     auth.user_model_max_budget = user_model_max_budget
+    auth.team_member_model_max_budget = team_member_model_max_budget
     auth.user_id = user_id
     auth.token = token
     return auth
@@ -1659,6 +1661,120 @@ async def test_summary_model_denied_when_user_over_model_budget():
         assert kwarg in real_params, f"compact.py passes {kwarg}=, which the limiter no longer accepts"
 
 
+async def test_summary_model_denied_when_team_member_over_model_budget(monkeypatch: pytest.MonkeyPatch):
+    from litellm.caching.dual_cache import DualCache
+    from litellm.llms.anthropic.pass_through.context_management.constants import COMPACT_SUMMARY_MODEL_SETTING_KEY
+    from litellm.models.team_membership import LiteLLM_TeamMembership
+    from litellm.proxy._types import (
+        LiteLLM_BudgetTable,
+        LiteLLM_TeamTableCachedObj,
+        LitellmUserRoles,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.auth.auth_checks import get_team_member_default_budget
+    from litellm.proxy.auth.user_api_key_auth import _load_team_member_default_model_budget
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        UserApiKeyCache,
+        team_membership_reservation_cache_key,
+    )
+    from litellm.proxy.hooks.model_max_budget_limiter import PROXY_VirtualKeyModelMaxBudgetLimiter
+    from litellm.proxy.proxy_server import general_settings
+
+    import litellm.proxy.proxy_server as proxy_server
+
+    budget_id: Final = "summary-budget"
+    member_budget: Final = {"claude-haiku-4-5": {"max_budget": 0.0, "budget_duration": "1d"}}
+    user_id: Final = "member-over-budget"
+    team_id: Final = "team-1"
+    user_api_key_cache: Final = UserApiKeyCache()
+    prisma_client: Final = MagicMock()
+    team_object: Final = LiteLLM_TeamTableCachedObj(
+        team_id=team_id,
+        models=["all-proxy-models"],
+        metadata={"team_member_budget_id": budget_id},
+    )
+    membership: Final = LiteLLM_TeamMembership(
+        user_id=user_id,
+        team_id=team_id,
+        budget_id=budget_id,
+        litellm_budget_table=LiteLLM_BudgetTable(budget_id=budget_id, model_max_budget={}),
+    )
+    await user_api_key_cache.async_set_cache(
+        key=team_membership_reservation_cache_key(user_id=user_id, team_id=team_id),
+        value=membership,
+        model_type=LiteLLM_TeamMembership,
+    )
+    await user_api_key_cache.async_set_cache(
+        key=f"team_member_default_budget:{budget_id}",
+        value=LiteLLM_BudgetTable(budget_id=budget_id, model_max_budget=member_budget),
+        model_type=LiteLLM_BudgetTable,
+    )
+    await user_api_key_cache.async_set_cache(
+        key=f"team_id:{team_id}",
+        value=team_object,
+        model_type=LiteLLM_TeamTableCachedObj,
+    )
+
+    auth: Final = UserAPIKeyAuth(
+        token="hashed-token",
+        user_id=user_id,
+        team_id=team_id,
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        models=["all-proxy-models"],
+    )
+    await _load_team_member_default_model_budget(
+        user_api_key_auth_obj=auth,
+        team_object=team_object,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        skip_budget_checks=False,
+        proxy_logging_obj=None,
+    )
+    assert auth.team_member_model_max_budget == member_budget
+    assert (
+        await get_team_member_default_budget(
+            budget_id=budget_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            raise_on_lookup_error=True,
+        )
+    ).model_max_budget == member_budget
+
+    router: Final = litellm.Router(
+        model_list=[
+            {"model_name": MODEL, "litellm_params": {"model": MODEL}},
+            {
+                "model_name": "claude-haiku-4-5",
+                "litellm_params": {
+                    "model": "claude-haiku-4-5",
+                    "mock_response": "<summary>x</summary>",
+                },
+            },
+        ]
+    )
+    limiter: Final = PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    monkeypatch.setattr(proxy_server, "model_max_budget_limiter", limiter)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
+    monkeypatch.setitem(general_settings, COMPACT_SUMMARY_MODEL_SETTING_KEY, "claude-haiku-4-5")
+    messages: Final = [{"role": "user", "content": "hello " * 60_000}]
+
+    result: Final = await apply_compact_20260112(
+        model=MODEL,
+        messages=messages,
+        tools=None,
+        system=None,
+        edit_spec={"type": "compact_20260112", "trigger": {"type": "input_tokens", "value": 50_000}},
+        user_api_key_auth=auth,
+        llm_router=router,
+    )
+
+    assert result.applied_edits[0].get("error") == "summary_model_budget_exceeded"
+    assert result.compaction_block is None
+
+
 async def test_summary_model_denied_when_end_user_over_model_budget():
     """End-user per-model budget is enforced for the summary subrequest too."""
     import litellm
@@ -2022,9 +2138,7 @@ async def test_summary_model_denied_when_team_over_model_budget():
     limiter = MagicMock()
     limiter.is_key_within_model_budget = AsyncMock(return_value=True)
     limiter.is_team_within_model_budget = AsyncMock(
-        side_effect=litellm.BudgetExceededError(
-            message="over budget", current_cost=10, max_budget=5
-        )
+        side_effect=litellm.BudgetExceededError(message="over budget", current_cost=10, max_budget=5)
     )
 
     with (
@@ -2064,9 +2178,7 @@ async def test_summary_model_denied_when_team_over_model_budget():
         PROXY_VirtualKeyModelMaxBudgetLimiter,
     )
 
-    real_params = inspect.signature(
-        PROXY_VirtualKeyModelMaxBudgetLimiter.is_team_within_model_budget
-    ).parameters
+    real_params = inspect.signature(PROXY_VirtualKeyModelMaxBudgetLimiter.is_team_within_model_budget).parameters
     for kwarg in ("team_id", "team_model_max_budget", "key_model_max_budget", "model"):
         assert kwarg in real_params, f"compact.py passes {kwarg}=, which the limiter does not accept"
 
@@ -2585,6 +2697,9 @@ async def test_prepare_context_managed_request_forwards_proxy_litellm_metadata()
                 "user_api_key": "sk-parent",
                 "user_api_key_team_id": "team-abc",
                 "user_api_key_user_id": "user-xyz",
+                "user_api_key_team_member_model_max_budget": {
+                    "claude-haiku-4-5": {"budget_limit": 4.0, "time_period": "1d"}
+                },
                 "litellm_call_id": "call-1",
             },
             additional_drop_params=None,
@@ -2595,6 +2710,9 @@ async def test_prepare_context_managed_request_forwards_proxy_litellm_metadata()
     assert captured_summary_metadata.get("user_api_key") == "sk-parent"
     assert captured_summary_metadata.get("user_api_key_team_id") == "team-abc"
     assert captured_summary_metadata.get("user_api_key_user_id") == "user-xyz"
+    assert captured_summary_metadata.get("user_api_key_team_member_model_max_budget") == {
+        "claude-haiku-4-5": {"budget_limit": 4.0, "time_period": "1d"}
+    }
     assert captured_summary_metadata.get("litellm_call_id") == "call-1"
     # Anthropic-shape ``metadata.user_id`` must not leak in as a propagated field.
     assert "user_id" not in captured_summary_metadata

@@ -11,6 +11,7 @@ import pytest
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.pass_through.stream_assembly import extract_sse_data
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
@@ -2288,9 +2289,7 @@ class TestAnthropicUsageOnlyFallback:
     def test_extract_sse_data_handles_malformed_and_sentinel_lines(
         self, event_str, expected
     ):
-        assert (
-            AnthropicPassthroughLoggingHandler._extract_sse_data(event_str) == expected
-        )
+        assert extract_sse_data(event_str) == expected
 
     def _real_logging_obj(self):
         from litellm.litellm_core_utils.litellm_logging import Logging as RealLoggingObj
