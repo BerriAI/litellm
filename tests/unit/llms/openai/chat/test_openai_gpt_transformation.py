@@ -2217,12 +2217,23 @@ async def test_chat_sends_a_breakpoint_by_the_deployments_own_flag_not_a_sibling
     }
 
 
-def test_transform_choices_json_mode_reports_stop_when_tool_call_becomes_content():
-    """json_mode turns a tool call into JSON content; the choice must then report
-    finish_reason 'stop' instead of 'tool_calls' with no tool_calls attached."""
+@pytest.mark.parametrize(
+    "provider_finish_reason, expected_finish_reason",
+    [
+        ("tool_calls", "stop"),
+        ("function_call", "stop"),
+        ("length", "length"),
+        ("stop", "stop"),
+    ],
+)
+def test_transform_choices_json_mode_reports_stop_only_for_tool_call_reasons(
+    provider_finish_reason, expected_finish_reason
+):
+    """json_mode folds a tool call into JSON content. Only tool-call reasons become
+    'stop'; a truncated ('length') or already-final reason must survive untouched."""
     choice = [
         {
-            "finish_reason": "tool_calls",
+            "finish_reason": provider_finish_reason,
             "index": 0,
             "logprobs": None,
             "message": {
@@ -2243,4 +2254,4 @@ def test_transform_choices_json_mode_reports_stop_when_tool_call_becomes_content
 
     assert out[0].message.content == '{"a": 1}'
     assert out[0].message.tool_calls is None
-    assert out[0].finish_reason == "stop"
+    assert out[0].finish_reason == expected_finish_reason
