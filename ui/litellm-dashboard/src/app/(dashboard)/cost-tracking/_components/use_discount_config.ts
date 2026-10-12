@@ -14,7 +14,11 @@ export interface UseDiscountConfigReturn {
   setDiscountConfig: React.Dispatch<React.SetStateAction<DiscountConfig>>;
   fetchDiscountConfig: () => Promise<void>;
   saveDiscountConfig: (config: DiscountConfig) => Promise<void>;
-  handleAddProvider: (selectedProvider: string | undefined, newDiscount: string) => Promise<boolean>;
+  handleAddProvider: (
+    selectedProvider: string | undefined,
+    newDiscount: string,
+    modelPattern: string,
+  ) => Promise<boolean>;
   handleRemoveProvider: (provider: string) => Promise<void>;
   handleDiscountChange: (provider: string, value: string) => Promise<void>;
 }
@@ -79,7 +83,7 @@ export function useDiscountConfig({ accessToken }: UseDiscountConfigProps): UseD
   );
 
   const handleAddProvider = useCallback(
-    async (selectedProvider: string | undefined, newDiscount: string): Promise<boolean> => {
+    async (selectedProvider: string | undefined, newDiscount: string, modelPattern: string): Promise<boolean> => {
       if (!selectedProvider || !newDiscount) {
         toast.fromError("Please select a provider and enter discount percentage");
         return false;
@@ -91,6 +95,8 @@ export function useDiscountConfig({ accessToken }: UseDiscountConfigProps): UseD
         return false;
       }
 
+      const trimmedPattern = modelPattern.trim();
+
       const providerValue = getProviderBackendValue(selectedProvider);
 
       if (!providerValue) {
@@ -98,9 +104,12 @@ export function useDiscountConfig({ accessToken }: UseDiscountConfigProps): UseD
         return false;
       }
 
-      if (discountConfig[providerValue]) {
+      const configKey = trimmedPattern ? `${providerValue}/${trimmedPattern}` : providerValue;
+
+      if (configKey in discountConfig) {
+        const displayName = Providers[selectedProvider as keyof typeof Providers];
         toast.fromError(
-          `Discount for ${Providers[selectedProvider as keyof typeof Providers]} already exists. Edit it in the table above.`,
+          `Discount for ${displayName} (${trimmedPattern || "all models"}) already exists. Edit it in the table above.`,
         );
         return false;
       }
@@ -108,7 +117,7 @@ export function useDiscountConfig({ accessToken }: UseDiscountConfigProps): UseD
       const discountValue = percentageValue / 100;
       const updatedConfig = {
         ...discountConfig,
-        [providerValue]: discountValue,
+        [configKey]: discountValue,
       };
 
       setDiscountConfig(updatedConfig);

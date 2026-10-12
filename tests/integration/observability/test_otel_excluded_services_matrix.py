@@ -1,8 +1,6 @@
 import asyncio
 import json
-import os
 import re
-import signal
 import uuid
 from collections.abc import Callable, Generator, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -15,7 +13,6 @@ from typing import Final, Literal, Protocol, cast
 import anthropic
 import httpx
 import openai
-import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, gateway_from_environment, object_value
@@ -687,25 +684,22 @@ def test_stalled_tenant_destination_during_a_burst_does_not_block_responses(rig:
 
 @pytest.mark.timeout(300)
 def test_killing_one_of_two_workers_mid_burst_keeps_the_filter_on_the_survivor(rig: Rig) -> None:
-    root: Final = psutil.Process(rig.owned.process.pid)
-    workers: Final = eventually(
-        lambda: tuple(child for child in root.children() if "resource_tracker" not in " ".join(child.cmdline())),
-        lambda found: len(found) == 2,
-        seconds=30,
-    )
+    workers: Final = eventually(rig.owned.worker_pids, lambda found: len(found) == 2, seconds=30)
     cursors: Final = rig.cursors()
 
-    def one(index: int) -> Sent | str:
-        if index == 6:
-            os.kill(workers[0].pid, signal.SIGKILL)
-        try:
-            return rig.raw("chat", _marker(), stream=index % 2 == 0)
-        except (httpx.HTTPError, AssertionError) as error:
-            return repr(error)
+    with rig.owned.replacing_worker(min(workers)) as kill:
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        results: Final = tuple(pool.map(one, range(18)))
-    assert rig.owned.process.poll() is None, "Proxy root exited after a worker was killed"
+        def one(index: int) -> Sent | str:
+            if index == 6:
+                kill()
+            try:
+                return rig.raw("chat", _marker(), stream=index % 2 == 0)
+            except (httpx.HTTPError, AssertionError) as error:
+                return repr(error)
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results: Final = tuple(pool.map(one, range(18)))
+        assert rig.owned.process.poll() is None, "Proxy root exited after a worker was killed"
     failures: Final = tuple(result for result in results if isinstance(result, str))
     assert all(failure.startswith(("ReadError(", "RemoteProtocolError(", "ConnectError(")) for failure in failures), (
         failures
@@ -918,25 +912,22 @@ def test_unconfigured_tenant_outage_during_a_mixed_burst(unconfigured_rig: Rig) 
 
 @pytest.mark.timeout(300)
 def test_unconfigured_killing_one_of_two_workers_keeps_the_fan_out(unconfigured_rig: Rig) -> None:
-    root: Final = psutil.Process(unconfigured_rig.owned.process.pid)
-    workers: Final = eventually(
-        lambda: tuple(child for child in root.children() if "resource_tracker" not in " ".join(child.cmdline())),
-        lambda found: len(found) == 2,
-        seconds=30,
-    )
+    workers: Final = eventually(unconfigured_rig.owned.worker_pids, lambda found: len(found) == 2, seconds=30)
     cursors: Final = unconfigured_rig.cursors()
 
-    def one(index: int) -> Sent | str:
-        if index == 6:
-            os.kill(workers[0].pid, signal.SIGKILL)
-        try:
-            return unconfigured_rig.raw("chat", _marker(), stream=index % 2 == 0)
-        except (httpx.HTTPError, AssertionError) as error:
-            return repr(error)
+    with unconfigured_rig.owned.replacing_worker(min(workers)) as kill:
 
-    with ThreadPoolExecutor(max_workers=6) as pool:
-        results: Final = tuple(pool.map(one, range(18)))
-    assert unconfigured_rig.owned.process.poll() is None, "Proxy root exited after a worker was killed"
+        def one(index: int) -> Sent | str:
+            if index == 6:
+                kill()
+            try:
+                return unconfigured_rig.raw("chat", _marker(), stream=index % 2 == 0)
+            except (httpx.HTTPError, AssertionError) as error:
+                return repr(error)
+
+        with ThreadPoolExecutor(max_workers=6) as pool:
+            results: Final = tuple(pool.map(one, range(18)))
+        assert unconfigured_rig.owned.process.poll() is None, "Proxy root exited after a worker was killed"
     failures: Final = tuple(result for result in results if isinstance(result, str))
     assert all(failure.startswith(("ReadError(", "RemoteProtocolError(", "ConnectError(")) for failure in failures), (
         failures
