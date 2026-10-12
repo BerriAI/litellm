@@ -10,6 +10,7 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError,
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
+from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
 
 EMPTY_MAP: Final[Mapping[str, object]] = MappingProxyType({})
 _OBJECT_MAP_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -870,7 +871,11 @@ def _safe_remove_job(remove_fn: Callable[[str], object] | None, job_id: str) -> 
     try:
         remove_fn(job_id)
     except Exception as exc:  # noqa: BLE001  # scheduler job removal is best-effort cleanup
-        verbose_proxy_logger.debug("Spend report job %s could not be removed: %s", job_id, exc)
+        verbose_proxy_logger.debug(
+            "Spend report job %s could not be removed: %s",
+            sanitize_for_log(job_id),
+            sanitize_for_log(exc),
+        )
 
 
 async def _resolve_current_alert(alert_id: str) -> tuple[bool, SpendReportEmailAlert | None]:
@@ -888,7 +893,10 @@ async def _resolve_current_alert(alert_id: str) -> tuple[bool, SpendReportEmailA
                 matching: Final = next((a for a in from_cfg.alerts if a.id == alert_id), None)
                 return (True, matching)
         except Exception as exc:  # noqa: BLE001  # fallback to memory if config query fails
-            verbose_proxy_logger.debug("Failed to query current config for alert resolution: %s", exc)
+            verbose_proxy_logger.debug(
+                "Failed to query current config for alert resolution: %s",
+                sanitize_for_log(exc),
+            )
 
     from_mem: Final = _settings_from_memory()
     if from_mem is not None:
@@ -917,7 +925,7 @@ async def run_scheduled_email_spend_alert(
     if settings_found and (current_alert is None or not current_alert.enabled or not current_alert.recipient_emails):
         verbose_proxy_logger.info(
             "Skipping scheduled spend report alert %s: deleted, disabled, or has no recipients",
-            alert.id,
+            sanitize_for_log(alert.id),
         )
         return
 
@@ -932,8 +940,11 @@ async def run_scheduled_email_spend_alert(
         acquire_lock_fn: Final[Callable[..., Awaitable[bool]] | None] = getattr(pod_lock_manager, "acquire_lock", None)
         if acquire_lock_fn is not None:
             has_lock: Final = await acquire_lock_fn(cronjob_id=job_id, ttl=3600, allow_reentrant=False)
-            if not has_lock:
-                verbose_proxy_logger.info("Email spend report lock already acquired by another pod: %s", job_id)
+            if has_lock is False:
+                verbose_proxy_logger.info(
+                    "Email spend report lock already acquired by another pod: %s",
+                    sanitize_for_log(job_id),
+                )
                 return
 
     try:
@@ -944,7 +955,11 @@ async def run_scheduled_email_spend_alert(
             team_id=target_alert.team_id,
         )
     except Exception as e:  # noqa: BLE001  # scheduled job runner must catch top-level exceptions to prevent crash
-        verbose_proxy_logger.error("Failed to run scheduled email spend alert (%s): %s", target_alert.name, e)
+        verbose_proxy_logger.error(
+            "Failed to run scheduled email spend alert (%s): %s",
+            sanitize_for_log(target_alert.name),
+            sanitize_for_log(e),
+        )
 
 
 _registered_spend_report_job_ids: Final[set[str]] = set()  # mutable-ok: active background job registry
@@ -996,7 +1011,10 @@ def _fetch_current_jobs(get_jobs_fn: Callable[[], Sequence[object]]) -> Sequence
     try:
         return get_jobs_fn()
     except Exception as exc:  # noqa: BLE001  # scheduler job inspection is best-effort
-        verbose_proxy_logger.debug("Could not inspect current scheduler jobs: %s", exc)
+        verbose_proxy_logger.debug(
+            "Could not inspect current scheduler jobs: %s",
+            sanitize_for_log(exc),
+        )
         return ()
 
 

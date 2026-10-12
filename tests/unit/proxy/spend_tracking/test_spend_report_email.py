@@ -901,6 +901,16 @@ async def test_run_scheduled_email_spend_alert(monkeypatch: pytest.MonkeyPatch) 
         team_id=None,
     )
 
+    mock_send.reset_mock()
+    mock_lock.return_value = None
+    await run_scheduled_email_spend_alert(alert)
+    mock_send.assert_awaited_once_with(
+        frequency="daily",
+        recipient_emails=("test@example.com",),
+        group_by=("team",),
+        team_id=None,
+    )
+
 
 @pytest.mark.asyncio
 async def test_run_scheduled_email_spend_alert_skips_deleted_or_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
