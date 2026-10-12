@@ -472,6 +472,19 @@ async def get_authorized_credentials_for_model(
     )
 
 
+def _key_allowlist_covers(public_model_name: str, key_model_allowlist: Sequence[str]) -> bool:
+    from litellm.proxy.auth.auth_checks import model_matches_any_wildcard_pattern_in_list
+
+    if public_model_name in key_model_allowlist:
+        return True
+    if model_matches_any_wildcard_pattern_in_list(model=public_model_name, allowed_model_list=key_model_allowlist):
+        return True
+    return any(
+        model_matches_any_wildcard_pattern_in_list(model=key_model, allowed_model_list=(public_model_name,))
+        for key_model in key_model_allowlist
+    )
+
+
 def get_team_provider_credentials(
     llm_router: Optional["Router"],
     user_api_key_dict: "UserAPIKeyAuth",
@@ -496,7 +509,9 @@ def get_team_provider_credentials(
     model allowlist (``user_api_key_dict.models``), so neither a team nor a
     restricted key within a team can resolve a provider key for a deployment
     it isn't authorized to use. A key restricted to an explicit model list
-    only narrows the team scope; sentinel-bearing keys (all-proxy-models /
+    only narrows the team scope, matching a wildcard on either side the way
+    request authorization does (a key allowed ``gpt-4o`` may use the team's
+    ``openai/*`` deployment); sentinel-bearing keys (all-proxy-models /
     all-team-models) defer to the team scope instead of widening past it.
     Returns None when the router is unavailable or no authorized deployment
     matches, so the caller can fall back to default credential resolution.
@@ -532,12 +547,11 @@ def get_team_provider_credentials(
         if key_is_restricted
         else ()
     )
-    key_model_allowlist_set: Final = frozenset(key_model_allowlist)
 
     def _key_may_use(public_model_name: str | None) -> bool:
-        if not key_model_allowlist_set:
+        if not key_model_allowlist:
             return True
-        return public_model_name is not None and public_model_name in key_model_allowlist_set
+        return public_model_name is not None and _key_allowlist_covers(public_model_name, key_model_allowlist)
 
     def _provider_credentials(model_id: str) -> dict | None:
         credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)

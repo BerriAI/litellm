@@ -5,10 +5,13 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
 
+from litellm import Router
 from litellm.caching.caching import DualCache
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_unified_file_ids,
     get_credentials_for_model,
+    get_team_provider_credentials,
     is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
 )
@@ -652,3 +655,62 @@ async def test_batch_cancel_updates_database(caplog: pytest.LogCaptureFixture):
     assert "batch_processed" not in written
     assert json.loads(written["file_object"])["cancelled_at"] == 1234567999
     assert f"Updating batch {batch_id} status to cancelled after cancel" in caplog.messages
+
+
+def _team_openai_router(team_public_model_name: str, deployment_model: str) -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": team_public_model_name,
+                "litellm_params": {"model": deployment_model, "api_key": "team-openai-key"},
+                "model_info": {
+                    "id": "team-a-openai",
+                    "team_id": "team-a",
+                    "team_public_model_name": team_public_model_name,
+                },
+            },
+            {
+                "model_name": "claude-opus-4-6",
+                "litellm_params": {"model": "anthropic/claude-opus-4-6", "api_key": "anthropic-key"},
+            },
+        ]
+    )
+
+
+def _team_only_openai_credentials(
+    team_public_model_name: str, deployment_model: str, key_models: list[str]
+) -> dict | None:
+    return get_team_provider_credentials(
+        llm_router=_team_openai_router(team_public_model_name, deployment_model),
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key="test-key",
+            user_id="test-user",
+            team_id="team-a",
+            team_models=[team_public_model_name, "claude-opus-4-6"],
+            models=key_models,
+        ),
+        custom_llm_provider="openai",
+        include_accessible_deployments=False,
+    )
+
+
+@pytest.mark.parametrize(
+    "team_public_model_name, deployment_model, key_models",
+    [
+        ("openai/*", "openai/*", ["gpt-4o"]),
+        ("openai/*", "openai/*", ["openai/gpt-4o"]),
+        ("gpt-4o", "openai/gpt-4o", ["openai/*"]),
+    ],
+)
+def test_a_restricted_key_resolves_the_team_deployment_its_wildcard_or_model_covers(
+    team_public_model_name: str, deployment_model: str, key_models: list[str]
+):
+    credentials = _team_only_openai_credentials(team_public_model_name, deployment_model, key_models)
+
+    assert credentials is not None
+    assert credentials["api_key"] == "team-openai-key"
+
+
+@pytest.mark.parametrize("key_models", [["claude-opus-4-6"], ["anthropic/*"]])
+def test_a_restricted_key_outside_the_team_wildcard_never_resolves_its_credentials(key_models: list[str]):
+    assert _team_only_openai_credentials("openai/*", "openai/*", key_models) is None
