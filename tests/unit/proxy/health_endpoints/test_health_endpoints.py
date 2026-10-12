@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta
 from importlib import import_module
 from types import MappingProxyType, SimpleNamespace
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -5013,7 +5013,9 @@ def test_test_model_connection_accepts_image_edit_mode(monkeypatch):
 
 
 @pytest.mark.parametrize("mode", ("decisions", "evaluation"), ids=("decisions", "legacy-evaluation"))
-def test_test_model_connection_accepts_decision_modes(monkeypatch, mode: str):
+def test_test_model_connection_accepts_decision_modes(
+    monkeypatch, mode: Literal["evaluation", "decisions"]
+):
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
 

@@ -42,6 +42,8 @@ describe("displayMode", () => {
     expect(displayMode("decisions")).toBe("decisions");
     expect(displayMode("chat")).toBe("chat");
     expect(displayMode("embedding")).toBe("embedding");
+    expect(displayMode(null)).toBeUndefined();
+    expect(displayMode(undefined)).toBeUndefined();
   });
 });
 

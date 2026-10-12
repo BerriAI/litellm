@@ -269,7 +269,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
   const models = usePublicModelHubList(proxyConfigured);
   const modelFacets = usePublicModelHubFacets(proxyConfigured);
   const modeOptions = useMemo(
-    () => [...new Set(modelFacets.modes.map(displayMode))].map((mode) => ({ label: mode, value: mode })),
+    () => [...new Set(modelFacets.modes.flatMap((mode) => displayMode(mode) ?? []))].map((mode) => ({ label: mode, value: mode })),
     [modelFacets],
   );
   const featureOptions = useMemo(
@@ -691,7 +691,7 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                       </div>
                       <div>
                         <p className="font-medium">Mode:</p>
-                        <p>{selectedModel.mode ? displayMode(selectedModel.mode) : "Not specified"}</p>
+                        <p>{displayMode(selectedModel.mode) ?? "Not specified"}</p>
                       </div>
                       <div>
                         <p className="font-medium">Providers:</p>

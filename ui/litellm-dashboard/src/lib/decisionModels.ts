@@ -25,16 +25,17 @@ export interface DecisionCatalog {
 
 export const EMPTY_DECISION_CATALOG: DecisionCatalog = { models: new Set(), providers: new Map() };
 
-export const DECISIONS_MODE_LABEL = "decisions";
-export const DECISION_MODE_VALUES: readonly string[] = ["evaluation", DECISIONS_MODE_LABEL];
+export const DECISIONS_MODE = "decisions";
+const DECISION_MODE_VALUES: readonly string[] = ["evaluation", DECISIONS_MODE];
 
 export const isDecisionMode = (mode: string | null | undefined): boolean =>
   mode !== null && mode !== undefined && DECISION_MODE_VALUES.includes(mode);
 
-export const displayMode = (mode: string): string => (isDecisionMode(mode) ? DECISIONS_MODE_LABEL : mode);
+export const displayMode = (mode: string | null | undefined): string | undefined =>
+  isDecisionMode(mode) ? DECISIONS_MODE : mode ?? undefined;
 
 export const expandModeFilterValues = (modes: readonly string[]): readonly string[] =>
-  modes.flatMap((mode) => (mode === DECISIONS_MODE_LABEL ? DECISION_MODE_VALUES : [mode]));
+  modes.flatMap((mode) => (mode === DECISIONS_MODE ? DECISION_MODE_VALUES : [mode]));
 
 const isDecisionEntry = (entry: CostMapEntry): boolean =>
   isDecisionMode(entry.mode) || (entry.supported_endpoints ?? []).some((endpoint) => DECISION_ENDPOINTS.has(endpoint));

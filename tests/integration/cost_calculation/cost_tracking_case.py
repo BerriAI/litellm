@@ -44,8 +44,20 @@ class CostMapEntry(BaseModel):
     max_output_tokens: int | None = None
     supports_function_calling: bool | None = None
     input_cost_per_token: float | None = None
+    input_cost_per_token_decisions: float | None = None
     input_cost_per_query: float | None = None
     output_cost_per_token: float | None = None
+    output_cost_per_token_decisions: float | None = None
+    cache_read_input_token_cost_decisions: float | None = None
+    cache_creation_input_token_cost_decisions: float | None = None
+    input_cost_per_token_above_272k_tokens: float | None = None
+    input_cost_per_token_above_272k_tokens_decisions: float | None = None
+    output_cost_per_token_above_272k_tokens: float | None = None
+    output_cost_per_token_above_272k_tokens_decisions: float | None = None
+    cache_read_input_token_cost_above_272k_tokens: float | None = None
+    cache_read_input_token_cost_above_272k_tokens_decisions: float | None = None
+    cache_creation_input_token_cost_above_272k_tokens: float | None = None
+    cache_creation_input_token_cost_above_272k_tokens_decisions: float | None = None
     input_cost_per_token_batches: float | None = None
     output_cost_per_token_batches: float | None = None
     output_cost_per_image_token_batches: float | None = None
@@ -250,6 +262,7 @@ class CostTrackingTestCase(BaseModel):
             "/v1/images/generations",
             "/v1/images/edits",
             "/v1/systemone",
+            "/v1/decisions",
         ]
         | Annotated[str, Field(pattern=r"^/(gemini|anthropic|bedrock)/")]
     ) = "/v1/chat/completions"
@@ -260,6 +273,7 @@ class CostTrackingTestCase(BaseModel):
     expected: Expected
     fallback_from: StoredResponse | None = None
     disconnect_after_frames: int | None = Field(default=None, ge=1)
+    upstream_body: dict[str, JsonValue] | None = None
 
     @property
     def rates(self) -> CostMapEntry:
@@ -504,6 +518,9 @@ _PROVIDER_PREFIXES: Final[Mapping[str, str]] = MappingProxyType(
         "dashscope": "",
         "openrouter": "",
         "perplexity": "",
+        "typesafe": "typesafe",
+        "cloudflare": "cloudflare",
+        "databricks": "databricks",
         "deepseek": "",
         "xai": "",
         "azure_ai": "azure_ai",
@@ -548,6 +565,9 @@ _LITELLM_PARAMS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
         "openai": MappingProxyType({}),
         "dashscope": MappingProxyType({}),
         "openrouter": MappingProxyType({}),
+        "typesafe": MappingProxyType({}),
+        "cloudflare": MappingProxyType({}),
+        "databricks": MappingProxyType({}),
         "perplexity": MappingProxyType({}),
         "deepseek": MappingProxyType({}),
         "xai": MappingProxyType({}),

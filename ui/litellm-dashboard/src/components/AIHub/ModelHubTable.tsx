@@ -46,7 +46,7 @@ import { getLoginUrl } from "@/utils/returnUrlUtils";
 import { uiHref } from "@/utils/uiHref";
 import {
   DECISIONS_DOCS_URL,
-  DECISIONS_MODE_LABEL,
+  DECISIONS_MODE,
   SYSTEM_ONE_PLAYGROUND_ROUTE,
   displayMode,
   isDecisionMode,
@@ -98,7 +98,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   const [selectedModel, setSelectedModel] = useState<null | ModelHubData>(null);
   const [filteredData, setFilteredData] = useState<ModelHubData[]>([]);
   const [selectedMode, setSelectedMode] = useState<string>("");
-  const showDecisionGarden = !publicPage && (selectedMode === "" || selectedMode === DECISIONS_MODE_LABEL);
+  const showDecisionGarden = !publicPage && (selectedMode === "" || selectedMode === DECISIONS_MODE);
   const [isMakePublicModalVisible, setIsMakePublicModalVisible] = useState(false);
   // Agent Hub state
   const [agentHubData, setAgentHubData] = useState<AgentHubData[] | null>(null);
@@ -493,7 +493,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   <ModelFilters
                     modelHubData={modelHubData || []}
                     onFilteredDataChange={handleFilteredDataChange}
-                    extraModes={publicPage ? [] : [DECISIONS_MODE_LABEL]}
+                    extraModes={publicPage ? [] : [DECISIONS_MODE]}
                     onModeChange={setSelectedMode}
                   />
 
@@ -690,7 +690,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   </div>
                   <div>
                     <p className="font-medium">Mode:</p>
-                    <p>{selectedModel.mode ? displayMode(selectedModel.mode) : "Not specified"}</p>
+                    <p>{displayMode(selectedModel.mode) ?? "Not specified"}</p>
                   </div>
                   <div>
                     <p className="font-medium">Providers:</p>
