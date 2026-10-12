@@ -322,7 +322,7 @@ function DataTableBodyRow<TData>({
         aria-label={clickable ? getRowLabel?.(row.original) : undefined}
         className={cn(
           clickable
-            ? "cursor-pointer focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2"
+            ? "cursor-pointer hover:bg-muted focus-visible:outline-2 focus-visible:outline-primary focus-visible:-outline-offset-2"
             : "",
           size === "compact" ? "h-8" : "",
           rowClassName?.(row),
