@@ -1935,14 +1935,15 @@ async def test_a_malformed_clip_for_a_model_that_takes_media_is_refused_even_und
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("evaluation", "decisions"))
 async def test_media_support_is_read_per_kind_from_the_cost_map(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, mode: str
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setitem(
         litellm.model_cost,
         "typesafe/jev-hears",
-        {"litellm_provider": "typesafe", "mode": "evaluation", "supports_audio_input": True},
+        {"litellm_provider": "typesafe", "mode": mode, "supports_audio_input": True},
     )
     route: Final = respx_mock.post("https://example.com/v1/systemone").respond(200, json=dict(_RESPONSE))
     audio: Final = ["data:audio/wav;base64,YQ=="]

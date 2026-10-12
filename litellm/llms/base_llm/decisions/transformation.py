@@ -48,6 +48,7 @@ from litellm.types.decisions import (
     UnsupportedDecisionsRequest,
     systemone_choice_key,
 )
+from litellm.types.utils import is_decisions_model_mode
 
 _PAYLOAD_ADAPTER: Final[TypeAdapter[object]] = TypeAdapter(object)
 _SYSTEMONE_RESPONSE_ADAPTER: Final[TypeAdapter[DecisionsResponse]] = TypeAdapter(DecisionsResponse)
@@ -313,15 +314,12 @@ def ir_to_systemone_response(response: DecisionsIRResponse, request: DecisionsIR
     )
 
 
-DECISIONS_MODE: Final = "evaluation"
-
-
 def _is_decisions_model(model: str, custom_llm_provider: str) -> bool:
     try:
         model_mode: Final = litellm.get_model_info(model=model, custom_llm_provider=custom_llm_provider).get("mode")
     except Exception:  # noqa: BLE001  # get_model_info raises bare Exception for an unmapped model, which has no mode
         return False
-    return model_mode == DECISIONS_MODE
+    return is_decisions_model_mode(model_mode)
 
 
 class BaseDecisionsConfig(ABC):

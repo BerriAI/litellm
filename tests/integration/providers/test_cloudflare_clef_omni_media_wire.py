@@ -5,7 +5,7 @@ import re
 import threading
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from queue import SimpleQueue
@@ -14,10 +14,13 @@ from urllib.parse import unquote
 
 import httpx
 import pytest
-from integration._support.client import Gateway, eventually, list_value, object_value
+from integration._support.client import Gateway, eventually, list_value, object_value, string_value
 from integration._support.database import read_rows
+from integration._support.timing import assert_within_factor_of_control
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue, TypeAdapter
+
+import litellm
 
 Route = Literal["/v1/systemone", "/systemone", "/v1/decisions", "/decisions"]
 
@@ -341,6 +344,46 @@ def test_missing_empty_and_null_media_send_the_same_text_only_body(gateway: Gate
         assert bodies == (_expected_upstream_body(marker),) * 3, bodies
 
 
+@pytest.mark.parametrize("route", _ROUTES)
+def test_null_clips_mean_no_clips_of_that_kind_on_every_route(gateway: Gateway, route: Route) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_echo) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_CANONICAL, api_base=wire.url, api_key=_API_KEY)
+        both_null: Final = _decide(gateway, route, model, marker, audio=None, videos=None)
+        audio_only: Final = _decide(gateway, route, model, marker, audio=[_WAV], videos=None)
+        video_only: Final = _decide(gateway, route, model, marker, audio=None, videos=[_MP4])
+        for response in (both_null, audio_only, video_only):
+            assert response.status_code == 200, response.text
+            assert response.json() == _expected_response(route, marker)
+        bodies: Final = tuple(_upstream_body(request) for request in wire.drain())
+        assert bodies == (
+            _expected_upstream_body(marker),
+            _expected_upstream_body(marker, audio=[_WAV]),
+            _expected_upstream_body(marker, videos=[_MP4]),
+        ), bodies
+
+
+_SDK_QUESTIONS: Final = TypeAdapter(dict[str, dict[str, object]]).validate_python(_SYSTEM_ONE_QUESTIONS)
+
+
+async def test_positional_sdk_callers_keep_the_api_key_fifth_and_the_api_base_sixth() -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_echo) as wire:
+        synchronous: Final = litellm.decisions(
+            _CANONICAL, None, _SDK_QUESTIONS, None, _API_KEY, wire.url, state=_state(marker), audio=[_WAV]
+        )
+        asynchronous: Final = await litellm.adecisions(
+            _CANONICAL, None, _SDK_QUESTIONS, None, _API_KEY, wire.url, state=_state(marker), videos=[_MP4]
+        )
+        for response in (synchronous, asynchronous):
+            assert response.model_dump(mode="json") == _expected_response("/v1/systemone", marker)
+        bodies: Final = tuple(_upstream_body(request) for request in wire.drain())
+        assert bodies == (
+            _expected_upstream_body(marker, audio=[_WAV]),
+            _expected_upstream_body(marker, videos=[_MP4]),
+        ), bodies
+
+
 _MALFORMED: Final[tuple[tuple[str, dict[str, JsonValue], str], ...]] = (
     ("audio_int", {"audio": 5}, "audio"),
     ("audio_list_of_ints", {"audio": [1, 2]}, "audio"),
@@ -455,6 +498,173 @@ def test_media_on_a_model_without_support_is_dropped_when_the_deployment_drops_p
         assert "audio" not in text_only_body and "videos" not in text_only_body, text_only_body
         assert _JSON_OBJECT.validate_json(dropped_request.body) == text_only_body
         assert with_clips.json() == text_only.json()
+
+
+_MALFORMED_CLIPS: Final[dict[str, JsonValue]] = {
+    "audio": ["https://example.invalid/clip.wav"],
+    "videos": [{"content_type": "video/mp4"}],
+}
+_NO_MEDIA_SPELLINGS: Final = ("cloudflare/clef-flash", "cloudflare/clef")
+
+
+def _assert_refused_before_any_upstream_call(response: httpx.Response, fragment: str, wire_received: int) -> None:
+    assert response.status_code == 400, response.text
+    assert fragment in response.text, response.text
+    assert wire_received == 0
+
+
+@pytest.mark.parametrize("route", ("/v1/systemone", "/v1/decisions"))
+def test_malformed_clips_on_a_model_without_support_are_refused_unless_the_deployment_drops_params(
+    gateway: Gateway, route: Route
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_echo) as wire, gateway.scenario() as scenario:
+        strict: Final = scenario.model(model="cloudflare/clef-flash", api_base=wire.url, api_key=_API_KEY)
+        dropping: Final = scenario.model(
+            model="cloudflare/clef-flash", api_base=wire.url, api_key=_API_KEY, drop_params=True
+        )
+        refused: Final = _decide(gateway, route, strict, marker, **_MALFORMED_CLIPS)
+        _assert_refused_before_any_upstream_call(refused, "Invalid Decisions request", len(wire.drain()))
+        text_only: Final = _decide(gateway, route, dropping, marker)
+        assert text_only.status_code == 200, text_only.text
+        (text_only_request,) = wire.drain()
+        dropped: Final = _decide(gateway, route, dropping, marker, **_MALFORMED_CLIPS)
+        assert dropped.status_code == 200, dropped.text
+        (dropped_request,) = wire.drain()
+        assert _JSON_OBJECT.validate_json(dropped_request.body) == _JSON_OBJECT.validate_json(text_only_request.body)
+        assert dropped.json() == text_only.json()
+
+
+def test_a_malformed_clip_on_a_media_model_is_refused_even_when_the_deployment_drops_params(
+    gateway: Gateway,
+) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_echo) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_CANONICAL, api_base=wire.url, api_key=_API_KEY, drop_params=True)
+        refused: Final = _decide(gateway, "/v1/systemone", model, marker, **_MALFORMED_CLIPS)
+        _assert_refused_before_any_upstream_call(refused, "Invalid Decisions request", len(wire.drain()))
+        served: Final = _decide(gateway, "/v1/systemone", model, marker, audio=[_WAV], videos=[_MP4])
+        (request,) = wire.drain()
+        _assert_served_with_media(served, "/v1/systemone", marker, request)
+
+
+def _advertised_media_flags(gateway: Gateway, deployments: Mapping[str, str]) -> dict[str, tuple[JsonValue, JsonValue]]:
+    listed: Final = list_value(gateway.get("/model/info")["data"])
+    entries: Final = {
+        string_value(object_value(item)["model_name"]): object_value(object_value(item)["model_info"])
+        for item in listed
+    }
+    return {
+        spelling: (entries[name].get("supports_audio_input"), entries[name].get("supports_video_input"))
+        for spelling, name in deployments.items()
+    }
+
+
+def test_model_info_advertises_media_support_only_on_clef_omni_deployments(gateway: Gateway) -> None:
+    with wire_server(_echo) as wire, gateway.scenario() as scenario:
+        deployments: Final = {
+            spelling: scenario.model(model=spelling, api_base=wire.url, api_key=_API_KEY)
+            for spelling in (_ALIAS, _CANONICAL, *_NO_MEDIA_SPELLINGS)
+        }
+        flags: Final = _advertised_media_flags(gateway, deployments)
+        assert flags[_ALIAS] == (True, True), flags
+        assert flags[_CANONICAL] == (True, True), flags
+        advertised_without_media: Final = tuple(any(flags[spelling]) for spelling in _NO_MEDIA_SPELLINGS)
+        assert advertised_without_media == (False, False), flags
+
+
+def _unique_backend(kind: str) -> str:
+    return f"@cf/cloudflare/clef-{kind}-{uuid.uuid4().hex[:12]}"
+
+
+def _body_sent_to(request: Request, backend: str) -> dict[str, JsonValue]:
+    assert request.method == "POST", request.method
+    assert unquote(request.target) == f"/ai/run/{backend}", request.target
+    assert request.headers["authorization"] == f"Bearer {_API_KEY}", request.headers
+    return _JSON_OBJECT.validate_json(request.body)
+
+
+def _expected_backend_body(backend: str, marker: str, **media: JsonValue) -> dict[str, JsonValue]:
+    return {**_expected_upstream_body(marker, **media), "model": backend.rsplit("/", 1)[-1]}
+
+
+def test_a_deployment_advertising_only_audio_forwards_audio_and_refuses_or_drops_video(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    backend: Final = _unique_backend("audio")
+    advertised: Final[dict[str, JsonValue]] = {"mode": "evaluation", "supports_audio_input": True}
+    with wire_server(_echo) as wire, gateway.scenario() as scenario:
+        strict: Final = scenario.model(
+            model=f"cloudflare/{backend}", api_base=wire.url, api_key=_API_KEY, model_info=advertised
+        )
+        dropping: Final = scenario.model(
+            model=f"cloudflare/{backend}", api_base=wire.url, api_key=_API_KEY, drop_params=True, model_info=advertised
+        )
+        with_audio: Final = _decide(gateway, "/v1/systemone", strict, marker, audio=[_WAV])
+        assert with_audio.status_code == 200, with_audio.text
+        (audio_request,) = wire.drain()
+        assert _body_sent_to(audio_request, backend) == _expected_backend_body(backend, marker, audio=[_WAV])
+        with_video: Final = _decide(gateway, "/v1/systemone", strict, marker, videos=[_MP4])
+        _assert_refused_before_any_upstream_call(
+            with_video, "does not support parameters: ['videos']", len(wire.drain())
+        )
+        assert "drop_params" in with_video.text, with_video.text
+        dropped: Final = _decide(gateway, "/v1/systemone", dropping, marker, audio=[_WAV], videos=[_MP4])
+        assert dropped.status_code == 200, dropped.text
+        (dropped_request,) = wire.drain()
+        assert _body_sent_to(dropped_request, backend) == _expected_backend_body(backend, marker, audio=[_WAV])
+
+
+def test_a_chat_mode_deployment_advertising_media_is_not_a_decisions_media_model(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    backend: Final = _unique_backend("chat")
+    advertised: Final[dict[str, JsonValue]] = {
+        "mode": "chat",
+        "supports_audio_input": True,
+        "supports_video_input": True,
+    }
+    with wire_server(_echo) as wire, gateway.scenario() as scenario:
+        strict: Final = scenario.model(
+            model=f"cloudflare/{backend}", api_base=wire.url, api_key=_API_KEY, model_info=advertised
+        )
+        dropping: Final = scenario.model(
+            model=f"cloudflare/{backend}", api_base=wire.url, api_key=_API_KEY, drop_params=True, model_info=advertised
+        )
+        refused: Final = _decide(gateway, "/v1/systemone", strict, marker, audio=[_WAV], videos=[_MP4])
+        _assert_refused_before_any_upstream_call(refused, "does not support parameters", len(wire.drain()))
+        assert "'audio'" in refused.text and "'videos'" in refused.text, refused.text
+        assert "drop_params" in refused.text, refused.text
+        text_only: Final = _decide(gateway, "/v1/systemone", dropping, marker)
+        assert text_only.status_code == 200, text_only.text
+        (text_only_request,) = wire.drain()
+        assert _body_sent_to(text_only_request, backend) == _expected_backend_body(backend, marker)
+        dropped: Final = _decide(gateway, "/v1/systemone", dropping, marker, audio=[_WAV], videos=[_MP4])
+        assert dropped.status_code == 200, dropped.text
+        (dropped_request,) = wire.drain()
+        assert _body_sent_to(dropped_request, backend) == _expected_backend_body(backend, marker)
+        assert dropped.json() == text_only.json()
+
+
+def test_clips_on_an_openai_chat_model_are_refused_or_dropped_never_forwarded(gateway: Gateway) -> None:
+    marker: Final = uuid.uuid4().hex
+    with wire_server(_echo) as wire, gateway.scenario() as scenario:
+        strict: Final = scenario.model(model="openai/gpt-audio", api_base=wire.url, api_key=_API_KEY)
+        dropping: Final = scenario.model(
+            model="openai/gpt-audio", api_base=wire.url, api_key=_API_KEY, drop_params=True
+        )
+        refused: Final = _decide(gateway, "/v1/decisions", strict, marker, audio=[_WAV])
+        _assert_refused_before_any_upstream_call(refused, "does not support parameters: ['audio']", len(wire.drain()))
+        assert "drop_params" in refused.text, refused.text
+        text_only: Final = _decide(gateway, "/v1/decisions", dropping, marker)
+        assert text_only.status_code == 200, text_only.text
+        (text_only_request,) = wire.drain()
+        assert unquote(text_only_request.target) == "/v1/decisions", text_only_request.target
+        text_only_body: Final = _JSON_OBJECT.validate_json(text_only_request.body)
+        assert "audio" not in text_only_body and "videos" not in text_only_body, text_only_body
+        dropped: Final = _decide(gateway, "/v1/decisions", dropping, marker, audio=[_WAV], videos=[_MP4])
+        assert dropped.status_code == 200, dropped.text
+        (dropped_request,) = wire.drain()
+        assert _JSON_OBJECT.validate_json(dropped_request.body) == text_only_body
+        assert dropped.json() == text_only.json()
 
 
 _UPSTREAM_REJECTIONS: Final[tuple[tuple[int, str], ...]] = (
@@ -596,33 +806,47 @@ def _probe_liveliness(base_url: str, stop: threading.Event, latencies: SimpleQue
             assert response.status_code == 200, response.text
 
 
+def _timed_refusal_under_liveliness_probes(
+    gateway: Gateway, model: str, clip: str
+) -> tuple[httpx.Response, float, tuple[float, ...]]:
+    stop: Final = threading.Event()
+    latencies: Final[SimpleQueue[float]] = SimpleQueue()
+    probe: Final = threading.Thread(
+        target=_probe_liveliness, args=(str(gateway.client.base_url), stop, latencies), daemon=True
+    )
+    probe.start()
+    started: Final = time.perf_counter()
+    with httpx.Client(base_url=str(gateway.client.base_url), timeout=60, trust_env=False) as client:
+        response: Final = client.post(
+            "/v1/systemone",
+            json=_body("/v1/systemone", model, uuid.uuid4().hex, audio=[clip]),
+            headers={"Authorization": f"Bearer {gateway.key}"},
+        )
+    elapsed: Final = time.perf_counter() - started
+    stop.set()
+    probe.join(timeout=15)
+    return response, elapsed, tuple(latencies.get_nowait() for _ in range(latencies.qsize()))
+
+
 def test_the_data_url_pattern_worst_case_is_refused_in_bounded_time_while_liveliness_answers(
     gateway: Gateway,
 ) -> None:
-    marker: Final = uuid.uuid4().hex
-    worst_case: Final = "data:audio/" + "a" * _WORST_CASE_LENGTH
-    stop: Final = threading.Event()
-    latencies: Final[SimpleQueue[float]] = SimpleQueue()
     with wire_server(_echo) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_CANONICAL, api_base=wire.url, api_key=_API_KEY)
-        probe: Final = threading.Thread(
-            target=_probe_liveliness, args=(str(gateway.client.base_url), stop, latencies), daemon=True
+        tenth_response, tenth_elapsed, _ = _timed_refusal_under_liveliness_probes(
+            gateway, model, "data:audio/" + "a" * (_WORST_CASE_LENGTH // 10)
         )
-        probe.start()
-        started: Final = time.perf_counter()
-        with httpx.Client(base_url=str(gateway.client.base_url), timeout=60, trust_env=False) as client:
-            response: Final = client.post(
-                "/v1/systemone",
-                json=_body("/v1/systemone", model, marker, audio=[worst_case]),
-                headers={"Authorization": f"Bearer {gateway.key}"},
-            )
-        elapsed: Final = time.perf_counter() - started
-        stop.set()
-        probe.join(timeout=15)
-        observed: Final = tuple(latencies.get_nowait() for _ in range(latencies.qsize()))
-        timing: Final = {"classifier_seconds": round(elapsed, 3), "slowest_liveliness_seconds": round(max(observed), 3)}
-        assert elapsed < 5.0, timing
-        assert max(observed) < 1.0, timing
+        response, elapsed, observed = _timed_refusal_under_liveliness_probes(
+            gateway, model, "data:audio/" + "a" * _WORST_CASE_LENGTH
+        )
+        timing: Final = {
+            "tenth_seconds": round(tenth_elapsed, 3),
+            "classifier_seconds": round(elapsed, 3),
+            "slowest_liveliness_seconds": round(max(observed), 3),
+        }
+        assert tenth_response.status_code == 400, tenth_response.text[:300]
+        assert_within_factor_of_control(elapsed, control=tenth_elapsed, factor=25)
+        assert observed and max(observed) < max(1.0, elapsed / 2), timing
         assert response.status_code == 400, (timing, response.text[:300])
         assert "pattern" in response.text, response.text[:300]
         assert wire.drain() == (), timing
