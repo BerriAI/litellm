@@ -814,7 +814,8 @@ def test_s3_v2_worker_kill_mid_burst_keeps_surviving_deliveries(gateway: Gateway
         ):
             model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
             key: Final = scenario.key(models=[model])
-            sent: Final = tuple(f"{marker}-{index}" for index in range(REQUESTS))
+            burst: Final = tuple(f"{marker}-burst-{index}" for index in range(REQUESTS))
+            after: Final = tuple(f"{marker}-after-{index}" for index in range(REQUESTS // 4))
 
             def send(identity: str) -> tuple[str, bool]:
                 try:
@@ -836,18 +837,24 @@ def test_s3_v2_worker_kill_mid_burst_keeps_surviving_deliveries(gateway: Gateway
             assert workers, "no worker children found to kill"
             with owned.replacing_worker(min(workers)) as kill:
                 with ThreadPoolExecutor(max_workers=32) as pool:
-                    futures: Final = tuple(pool.submit(send, identity) for identity in sent)
+                    futures: Final = tuple(pool.submit(send, identity) for identity in burst)
                     time.sleep(0.5)
                     kill()
                     results: Final = tuple(future.result() for future in futures)
-                survivors: Final = frozenset(identity for identity, ok in results if ok)
-                assert survivors, "no request survived the worker kill"
-                readiness: Final = owned.gateway.client.get("/health/readiness")
-                assert readiness.status_code == 200, readiness.text
-            payloads: Final = collect_payloads(sink, len(survivors), seconds=90)
-    landed: Final = frozenset(payload["id"] for payload in payloads)
-    assert survivors <= landed, "an id whose response succeeded never landed"
-    assert landed <= frozenset(sent), "an id that was never sent landed"
+            readiness: Final = owned.gateway.client.get("/health/readiness")
+            assert readiness.status_code == 200, readiness.text
+            with ThreadPoolExecutor(max_workers=8) as pool:
+                after_results: Final = tuple(pool.map(send, after))
+            burst_survivors: Final = frozenset(identity for identity, ok in results if ok)
+            after_survivors: Final = frozenset(identity for identity, ok in after_results if ok)
+            assert burst_survivors, "no request survived the worker kill"
+            assert after_survivors == frozenset(after), "the proxy did not serve after the worker was replaced"
+            landed: Final = eventually(
+                lambda: frozenset(payload["id"] for payload in sink.payloads()),
+                lambda ids: after_survivors <= ids and bool(ids & burst_survivors),
+                seconds=90,
+            )
+    assert landed <= frozenset(burst) | frozenset(after), "an id that was never sent landed"
 
 
 @pytest.mark.covers("other.observability.s3_v2.sigterm_mid_burst_loses_only_inflight_without_duplicates")
