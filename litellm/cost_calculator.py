@@ -571,7 +571,6 @@ def cost_per_token(
     ):  # Option 3. if user passed model="bedrock/anthropic.claude-3", use model="anthropic.claude-3"
         model = model_without_prefix
 
-    # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     if is_decisions_call_type(call_type):
         decisions_model_info: Final = cached_get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider)
         decisions_overrides: Final = decisions_pricing_fields(
@@ -588,6 +587,7 @@ def cost_per_token(
                     ModelInfo, {**decisions_model_info, **decisions_overrides}
                 ),
             )
+    # see this https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models
     if call_type == "speech" or call_type == "aspeech":
         lyria_generation_cost: Final = (
             get_vertex_ai_lyria_generation_cost(model=model_without_prefix)
