@@ -1060,13 +1060,16 @@ class DBSpendUpdateWriter:
                 traceback.format_exc(),
             )
 
+        team_tokens: Final = payload.get(  # pyright: ignore[reportUnknownMemberType]  # SpendLogsPayload.get overload is partially unknown; total_tokens is a required int
+            "total_tokens", 0
+        )
         try:
             await self._update_team_db(
                 response_cost=response_cost,
                 team_id=team_id,
                 user_id=user_id,
                 prisma_client=prisma_client,
-                tokens=payload["total_tokens"] if "total_tokens" in payload else 0,
+                tokens=team_tokens,
             )
         except Exception:
             verbose_proxy_logger.debug(
