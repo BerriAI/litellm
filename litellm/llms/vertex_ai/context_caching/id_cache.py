@@ -19,7 +19,7 @@ Correctness invariants:
   "Invalid resource state for cache content <id>"), so the next request re-resolves.
 """
 
-import hmac
+import hashlib
 import json
 import re
 import secrets
@@ -115,7 +115,7 @@ def make_cache_id_key(
         },
         sort_keys=True,
     )
-    auth_id: Final = hmac.new(_CACHE_KEY_SECRET, credentials.encode(), digestmod="sha256").hexdigest()
+    auth_id: Final = hashlib.blake2b(credentials.encode(), key=_CACHE_KEY_SECRET, digest_size=32).hexdigest()
     return "|".join(
         (
             custom_llm_provider,
