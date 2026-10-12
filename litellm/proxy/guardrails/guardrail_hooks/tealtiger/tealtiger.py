@@ -14,24 +14,25 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
+
 from litellm._logging import verbose_proxy_logger
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # upstream decorator is untyped
 )
 from litellm.types.guardrails import GuardrailEventHooks, Mode
-from litellm.types.utils import GenericGuardrailAPIInputs
-
 from litellm.types.proxy.guardrails.guardrail_hooks.tealtiger import DEFAULT_POLICIES, Policy, PolicyMode
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 from .decision import NO_VIOLATIONS, Action, Decision
 from .engine import TealEngine
 from .request import identity_of, tool_name_of
 
 if TYPE_CHECKING:
+    from pydantic import BaseModel
+
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
-    from pydantic import BaseModel
 
 
 def _to_event_hook(

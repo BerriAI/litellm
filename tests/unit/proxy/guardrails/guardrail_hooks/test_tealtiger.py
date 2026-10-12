@@ -6,7 +6,6 @@ from unittest.mock import patch
 
 import pytest
 from fastapi import HTTPException
-from litellm.types.guardrails import GuardrailEventHooks
 from pydantic import ValidationError
 
 from litellm.proxy.guardrails.guardrail_hooks.tealtiger import budget as budget_module
@@ -21,6 +20,7 @@ from litellm.proxy.guardrails.guardrail_hooks.tealtiger.request import (
     tool_name_of,
 )
 from litellm.proxy.guardrails.guardrail_hooks.tealtiger.tealtiger import TealTigerGuardrail, _to_event_hook
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.proxy.guardrails.guardrail_hooks.tealtiger import (
     DEFAULT_POLICIES,
     CostPolicy,
