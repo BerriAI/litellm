@@ -483,6 +483,52 @@ async def test_deployment_callback_on_success(sync_mode):
 
 
 @pytest.mark.asyncio
+async def test_deployment_callback_on_success_counts_a_responses_websocket_turn():
+    """Each native Responses WebSocket turn logs under its own call, so the deployment's
+    tpm and rpm counters move once per turn, while a realtime session still counts nothing."""
+    import time
+
+    model_list = [
+        {
+            "model_name": "gpt-5-mini",
+            "litellm_params": {"model": "gpt-5-mini", "api_key": "sk-fake", "rpm": 100},
+            "model_info": {"id": "ws-deployment"},
+        }
+    ]
+    router = Router(model_list=model_list)
+    standard_logging_payload = create_standard_logging_payload()
+    standard_logging_payload["total_tokens"] = 17
+
+    def turn_kwargs(call_type: str) -> dict:
+        return {
+            "call_type": call_type,
+            "litellm_params": {
+                "metadata": {"model_group": "gpt-5-mini"},
+                "model_info": {"id": "ws-deployment"},
+            },
+            "standard_logging_object": standard_logging_payload,
+        }
+
+    tpm_key = await router.deployment_callback_on_success(
+        kwargs=turn_kwargs("_aresponses_websocket"),
+        completion_response=None,
+        start_time=time.time(),
+        end_time=time.time(),
+    )
+    assert tpm_key is not None
+    assert await router.cache.async_get_cache(key=tpm_key) == 17
+
+    realtime_key = await router.deployment_callback_on_success(
+        kwargs=turn_kwargs("_arealtime"),
+        completion_response=None,
+        start_time=time.time(),
+        end_time=time.time(),
+    )
+    assert realtime_key is None
+    assert await router.cache.async_get_cache(key=tpm_key) == 17
+
+
+@pytest.mark.asyncio
 async def test_deployment_callback_on_success_tracks_tpm_for_io_deployment():
     """
     An IO-limited deployment (itpm/otpm, no tpm/rpm) must still record TPM usage

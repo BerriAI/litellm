@@ -740,9 +740,11 @@ def get_or_create_request_stash() -> RequestRateLimiterStash:
 
 
 def claim_request_stash_for_data(data: dict) -> RequestRateLimiterStash:
+    from litellm.proxy.common_request_processing import request_litellm_call_id
+
     stash: Final = get_or_create_request_stash()
-    owner_call_id: Final = data.get("litellm_call_id")
-    if isinstance(owner_call_id, str):
+    owner_call_id: Final = request_litellm_call_id(_REQUEST_RATE_LIMIT_DATA.validate_python(data))
+    if owner_call_id is not None:
         stash.owner_litellm_call_id = owner_call_id
     return stash
 
@@ -5092,6 +5094,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         pipeline_operations=io_token_operations,
                         parent_otel_span=litellm_parent_otel_span,
                     )
+            if stash is not None:
+                stash.reservation_released = True
 
         except Exception as e:
             verbose_proxy_logger.exception("Error in rate limit success event: %s", e)
@@ -5293,8 +5297,29 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         TTL prunes it. The stashed acquisition's presence (not the key
         object's current max_parallel_requests configuration, which can
         change mid-request) decides whether there is anything to release.
+        A TPM, ITPM or OTPM reservation no callback settled is refunded the
+        same way, so a native Responses WebSocket connection, whose turns log
+        under their own call ids, hands back the estimate it reserved.
         """
-        await self._release_stashed_parallel_slot(get_request_stash(), None)
+        stash: Final = get_request_stash()
+        await self._release_stashed_parallel_slot(stash, None)
+        await self._refund_unsettled_reservation(stash)
+
+    async def _refund_unsettled_reservation(self, stash: RequestRateLimiterStash | None) -> None:
+        if stash is None or stash.reservation_released:
+            return
+        stash.reservation_released = True
+        await self._refund_reserved_tokens(scopes=tuple(stash.reserved_scopes), amount=stash.reserved_tokens)
+        await self._refund_reserved_tokens(
+            scopes=tuple(stash.itpm_reserved_scopes),
+            amount=stash.itpm_reserved_tokens,
+            reservation_windows=stash.itpm_reserved_window_identities,
+        )
+        await self._refund_reserved_tokens(
+            scopes=tuple(stash.otpm_reserved_scopes),
+            amount=stash.otpm_reserved_tokens,
+            reservation_windows=stash.otpm_reserved_window_identities,
+        )
 
     @with_service_target("rate_limits")
     async def async_post_call_success_hook(self, data: dict, user_api_key_dict: UserAPIKeyAuth, response) -> None:

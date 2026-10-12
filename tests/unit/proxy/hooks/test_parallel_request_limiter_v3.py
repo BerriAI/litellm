@@ -20,6 +20,7 @@ from litellm import Router
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.proxy_rate_limit_error import ProxyRateLimitError
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -4235,6 +4236,77 @@ async def test_release_on_disconnect_works_when_key_config_changed_v3():
     ) == 0
 
 
+async def _admit_with_tpm_reservation(
+    handler: _PROXY_MaxParallelRequestsHandler, local_cache: DualCache, user_api_key_dict: UserAPIKeyAuth
+) -> int:
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={
+            "model": "gpt-4o-mini",
+            "messages": [{"role": "user", "content": "hello"}],
+            "max_tokens": 50,
+            "litellm_call_id": "owner-call-id",
+        },
+        call_type="completion",
+    )
+    stash = get_request_stash()
+    assert stash is not None and stash.reserved_tokens > 0
+    return stash.reserved_tokens
+
+
+@pytest.mark.asyncio
+async def test_release_on_disconnect_refunds_an_unsettled_tpm_reservation_v3(monkeypatch):
+    """
+    A native Responses WebSocket connection reserves tokens at pre-call and logs its
+    turns under their own call ids, so no callback ever settles the connection's
+    reservation. The disconnect release must hand the estimate back.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    _api_key = hash_token("sk-ws-unsettled-reservation")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=10_000, max_parallel_requests=2)
+    tokens_key = handler.create_rate_limit_keys(key="api_key", value=_api_key, rate_limit_type="tokens")
+    reserved = await _admit_with_tpm_reservation(handler, local_cache, user_api_key_dict)
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == reserved
+
+    await handler.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 0
+    assert get_request_stash().reservation_released is True
+
+
+@pytest.mark.asyncio
+async def test_release_on_disconnect_keeps_a_settled_tpm_reservation_v3(monkeypatch):
+    """
+    When the owner's success event already settled the reservation to the actual
+    usage, the disconnect release must not refund the estimate a second time.
+    """
+    monkeypatch.delenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", raising=False)
+    _api_key = hash_token("sk-ws-settled-reservation")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, tpm_limit=10_000, max_parallel_requests=2)
+    tokens_key = handler.create_rate_limit_keys(key="api_key", value=_api_key, rate_limit_type="tokens")
+    await _admit_with_tpm_reservation(handler, local_cache, user_api_key_dict)
+
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_call_id": "owner-call-id",
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        },
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=7, completion_tokens=3, total_tokens=10)),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 10
+
+    await handler.async_release_max_parallel_requests_on_disconnect(user_api_key_dict)
+
+    assert int(await local_cache.async_get_cache(key=tokens_key) or 0) == 10
+
+
 @pytest.mark.asyncio
 async def test_post_call_failure_hook_releases_parallel_slot_v3():
     """
@@ -4325,6 +4397,75 @@ async def test_post_call_failure_hook_for_another_call_keeps_the_owner_slot_v3()
     )
 
     assert in_flight_after_turn_failure == 1
+    assert handler._gauge_in_flight_from_cache_value(await local_cache.async_get_cache(key=counter_key)) == 0
+
+
+def _pass_through_logging_obj(litellm_call_id: str) -> Logging:
+    return Logging(
+        model="gpt-4o-mini",
+        messages=[],
+        stream=False,
+        call_type="pass_through_endpoint",
+        start_time=datetime.now(),
+        litellm_call_id=litellm_call_id,
+        function_id="pass-through",
+    )
+
+
+async def _admit_pass_through_with_client_call_id(
+    handler: _PROXY_MaxParallelRequestsHandler, local_cache: DualCache, user_api_key_dict: UserAPIKeyAuth
+) -> Logging:
+    """
+    A pass-through body may carry its own litellm_call_id. The proxy books the request under the id of the
+    logging object it put in the same data, so that id, not the client's, must own the parallel slot.
+    """
+    logging_obj = _pass_through_logging_obj("proxy-call")
+    await handler.async_pre_call_hook(
+        user_api_key_dict=user_api_key_dict,
+        cache=local_cache,
+        data={"litellm_call_id": "client-chosen-id", "litellm_logging_obj": logging_obj},
+        call_type="pass_through_endpoint",
+    )
+    return logging_obj
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_releases_the_slot_the_proxy_call_id_owns_v3():
+    _api_key = hash_token("sk-passthrough-client-id-failure")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+    logging_obj = await _admit_pass_through_with_client_call_id(handler, local_cache, user_api_key_dict)
+
+    await handler.async_post_call_failure_hook(
+        request_data={"litellm_call_id": "proxy-call", "litellm_logging_obj": logging_obj},
+        original_exception=Exception("upstream unreachable"),
+        user_api_key_dict=user_api_key_dict,
+    )
+
+    assert handler._gauge_in_flight_from_cache_value(await local_cache.async_get_cache(key=counter_key)) == 0
+
+
+@pytest.mark.asyncio
+async def test_success_event_releases_the_slot_the_proxy_call_id_owns_v3():
+    _api_key = hash_token("sk-passthrough-client-id-success")
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(internal_usage_cache=InternalUsageCache(local_cache))
+    user_api_key_dict = UserAPIKeyAuth(api_key=_api_key, max_parallel_requests=1)
+    counter_key = f"{{api_key:{_api_key}}}:max_parallel_requests"
+    await _admit_pass_through_with_client_call_id(handler, local_cache, user_api_key_dict)
+
+    await handler.async_log_success_event(
+        kwargs={
+            "litellm_call_id": "proxy-call",
+            "standard_logging_object": {"metadata": {"user_api_key_hash": _api_key}},
+        },
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+
     assert handler._gauge_in_flight_from_cache_value(await local_cache.async_get_cache(key=counter_key)) == 0
 
 
