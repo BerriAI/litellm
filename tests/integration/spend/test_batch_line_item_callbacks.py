@@ -439,3 +439,86 @@ def test_batch_line_metadata_does_not_reach_router_rate_limit_counters(gateway: 
 
         assert _live_chat(candidate, limited_model, key) == 200
         assert datetime.now(UTC).strftime("%H-%M") == window, "the ITPM window rolled over mid-test"
+
+
+def test_line_events_follow_the_keys_message_logging_opt_out(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "batch-line-redact-" + uuid.uuid4().hex[:12]
+
+    with (
+        wire_server(lambda _request: Reply()) as endpoint,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {"GENERIC_LOGGER_ENDPOINT": endpoint.url},
+            config=_line_item_config(Path("tests/integration/proxy_config.yaml"), tmp_path / "line_items_redact.yaml"),
+        ) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        routed_model: Final = scenario.model(
+            api_base=f"{gateway.upstream_url}/{marker}", api_key="synthetic-provider-key"
+        )
+        input_lines: Final = _input_lines(routed_model, marker)
+        handle: Final = register_scenario(marker, _provider_routes(input_lines))
+        scenario.cleanups.callback(delete_scenario, handle)
+        key: Final = scenario.key(
+            models=[routed_model],
+            metadata={
+                "logging": [
+                    {
+                        "callback_name": "generic_api",
+                        "callback_type": "success_and_failure",
+                        "callback_vars": {"turn_off_message_logging": "true"},
+                    }
+                ]
+            },
+        )
+        key_hash: Final = sha256(key.encode()).hexdigest()
+        file_response: Final = candidate.request_multipart(
+            "/v1/files",
+            {"purpose": "batch", "model": routed_model},
+            {"file": ("in.jsonl", ("\n".join(input_lines) + "\n").encode(), "application/jsonl")},
+            key=key,
+        )
+        assert file_response.status_code == 200, file_response.text
+        batch_response: Final = candidate.request(
+            "POST",
+            "/v1/batches",
+            {
+                "input_file_id": string_value(JSON_OBJECT.validate_json(file_response.content)["id"]),
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+                "model": routed_model,
+            },
+            key=key,
+        )
+        assert batch_response.status_code == 200, batch_response.text
+        batch_id: Final = string_value(JSON_OBJECT.validate_json(batch_response.content)["id"])
+        retrieval: Final = eventually(
+            lambda: candidate.request("GET", f"/v1/batches/{batch_id}", key=key),
+            lambda response: response.status_code == 200 and response.json()["status"] == "completed",
+            seconds=30,
+        )
+        assert retrieval.status_code == 200, retrieval.text
+        batches: Final[
+            list[Request]
+        ] = []  # mutable-ok: drain() consumes the queue, later polls must keep earlier batches
+
+        def delivered_lines() -> tuple[dict[str, JsonValue], ...]:
+            batches.extend(endpoint.drain())
+            return tuple(
+                event
+                for batch in batches
+                for event in json.loads(batch.body)
+                if object_value(event["metadata"]).get("user_api_key_hash") == key_hash
+                and _hidden(event).get("batch_custom_id") is not None
+            )
+
+        line_events: Final = eventually(
+            delivered_lines,
+            lambda values: {_hidden(event)["batch_custom_id"] for event in values} == set(ALL_CUSTOM_IDS),
+            seconds=40,
+        )
+
+        for event in line_events:
+            assert event["messages"] == [{"role": "user", "content": "redacted-by-litellm"}], event["messages"]
+            assert "answer " not in json.dumps(event["response"]), event["response"]
