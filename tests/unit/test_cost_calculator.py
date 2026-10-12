@@ -1049,6 +1049,37 @@ def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():
     assert cost > 0
 
 
+def test_huggingface_rerank_uses_registered_input_cost_per_query():
+    """Registered per-query price must apply for huggingface/TEI rerank (#45975).
+
+    ``_get_model_info_helper`` used to return a synthetic zero-cost huggingface
+    description before consulting ``litellm.model_cost``, so a deployment priced
+    only via ``input_cost_per_query`` always billed $0 under that provider.
+    """
+    from litellm.cost_calculator import rerank_cost
+    from litellm.utils import cached_get_model_info_helper
+
+    cached_get_model_info_helper.cache_clear()
+    litellm.model_cost.pop("hf-tei-rerank-deployment", None)
+    litellm.register_model({"hf-tei-rerank-deployment": {"input_cost_per_query": 0.001}})
+
+    cost = rerank_cost(
+        model="hf-tei-rerank-deployment",
+        custom_llm_provider="huggingface",
+        billed_units={"search_units": 1},
+    )
+    assert cost == (0.001, 0.0)
+
+    # Unregistered huggingface models still get the synthetic zero-cost fallback.
+    cached_get_model_info_helper.cache_clear()
+    info = litellm.get_model_info(
+        model="unregistered-hf-tei-model-xyz",
+        custom_llm_provider="huggingface",
+    )
+    assert info["input_cost_per_token"] == 0
+    assert info["output_cost_per_token"] == 0
+
+
 def test_per_query_priced_rerank_deployment_completion_cost_is_nonzero():
     """A rerank deployment priced only via ``input_cost_per_query`` must resolve
     cost against its ``router_model_id`` entry: the shared backend alias has
