@@ -2661,7 +2661,7 @@ class TestCommonRequestProcessingHelpers:
         assert response.status_code == 200
         assert "".join(await self.consume_stream(response)) == (
             ANTHROPIC_PING_SSE_CHUNK
-            + 'event: error\ndata: {"type": "error", "error": {"type": "api_error", "message": "upstream unavailable"}}\n\n'
+            + 'event: error\ndata: {"type": "error", "error": {"type": "overloaded_error", "message": "upstream unavailable"}}\n\n'
         )
 
     async def test_create_streaming_response_disables_proxy_buffering(self):
