@@ -2261,6 +2261,7 @@ if TYPE_CHECKING:
     supports_parallel_function_calling: Callable[..., bool]
     supports_vision: Callable[..., bool]
     supports_audio_input: Callable[..., bool]
+    supports_video_input: Callable[..., bool]
     supports_audio_output: Callable[..., bool]
     supports_system_messages: Callable[..., bool]
     supports_reasoning: Callable[..., bool]

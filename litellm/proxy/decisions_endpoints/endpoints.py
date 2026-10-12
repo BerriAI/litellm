@@ -92,8 +92,11 @@ async def _invalid_request(
     )
 
 
+_FIELDS_CHECKED_AFTER_ROUTING: Final = frozenset({"safety_identifier", "audio", "videos"})
+
+
 def _fields_checked_before_routing(data: Mapping[str, object]) -> Mapping[str, object]:
-    return MappingProxyType({key: value for key, value in data.items() if key != "safety_identifier"})
+    return MappingProxyType({key: value for key, value in data.items() if key not in _FIELDS_CHECKED_AFTER_ROUTING})
 
 
 async def _request_data(request: Request, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:

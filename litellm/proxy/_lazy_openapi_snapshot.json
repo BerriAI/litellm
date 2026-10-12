@@ -10040,6 +10040,44 @@
                 "schema": {
                   "additionalProperties": true,
                   "properties": {
+                    "audio": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:audio/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded audio bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "An audio/* media type, such as audio/wav",
+                                "pattern": "^audio/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Audio",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 4,
+                      "title": "Audio",
+                      "type": "array"
+                    },
                     "input": {
                       "anyOf": [
                         {
@@ -10345,6 +10383,44 @@
                       ],
                       "description": "A stable id for your end user. Sent to OpenAI and dropped for other providers",
                       "title": "Safety Identifier"
+                    },
+                    "videos": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:video/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded video bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "A video/* media type, such as video/mp4",
+                                "pattern": "^video/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Video",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 2,
+                      "title": "Videos",
+                      "type": "array"
                     }
                   },
                   "required": [
@@ -10419,6 +10495,44 @@
                 "schema": {
                   "additionalProperties": true,
                   "properties": {
+                    "audio": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:audio/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded audio bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "An audio/* media type, such as audio/wav",
+                                "pattern": "^audio/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Audio",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 4,
+                      "title": "Audio",
+                      "type": "array"
+                    },
                     "model": {
                       "description": "A decision model from the proxy model_list",
                       "title": "Model",
@@ -10647,6 +10761,44 @@
                       ],
                       "description": "The thing being judged, such as a support ticket, a document or a chat transcript",
                       "title": "State"
+                    },
+                    "videos": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:video/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded video bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "A video/* media type, such as video/mp4",
+                                "pattern": "^video/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Video",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 2,
+                      "title": "Videos",
+                      "type": "array"
                     }
                   },
                   "required": [
@@ -10736,6 +10888,44 @@
                 "schema": {
                   "additionalProperties": true,
                   "properties": {
+                    "audio": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:audio/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded audio bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "An audio/* media type, such as audio/wav",
+                                "pattern": "^audio/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Audio",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 4,
+                      "title": "Audio",
+                      "type": "array"
+                    },
                     "input": {
                       "anyOf": [
                         {
@@ -11041,6 +11231,44 @@
                       ],
                       "description": "A stable id for your end user. Sent to OpenAI and dropped for other providers",
                       "title": "Safety Identifier"
+                    },
+                    "videos": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:video/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded video bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "A video/* media type, such as video/mp4",
+                                "pattern": "^video/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Video",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 2,
+                      "title": "Videos",
+                      "type": "array"
                     }
                   },
                   "required": [
@@ -11115,6 +11343,44 @@
                 "schema": {
                   "additionalProperties": true,
                   "properties": {
+                    "audio": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:audio/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded audio bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "An audio/* media type, such as audio/wav",
+                                "pattern": "^audio/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Audio",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 4,
+                      "title": "Audio",
+                      "type": "array"
+                    },
                     "model": {
                       "description": "A decision model from the proxy model_list",
                       "title": "Model",
@@ -11343,6 +11609,44 @@
                       ],
                       "description": "The thing being judged, such as a support ticket, a document or a chat transcript",
                       "title": "State"
+                    },
+                    "videos": {
+                      "default": [],
+                      "description": "Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}",
+                      "items": {
+                        "anyOf": [
+                          {
+                            "pattern": "^data:video/[^;,\\s]+;base64,.+$",
+                            "type": "string"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "base64": {
+                                "description": "Base64-encoded video bytes",
+                                "minLength": 1,
+                                "title": "Base64",
+                                "type": "string"
+                              },
+                              "content_type": {
+                                "description": "A video/* media type, such as video/mp4",
+                                "pattern": "^video/\\S+$",
+                                "title": "Content Type",
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "content_type",
+                              "base64"
+                            ],
+                            "title": "DecisionsBase64Video",
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "maxItems": 2,
+                      "title": "Videos",
+                      "type": "array"
                     }
                   },
                   "required": [
