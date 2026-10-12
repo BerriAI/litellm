@@ -1576,6 +1576,65 @@ def test_map_reasoning_effort_adds_summary_detailed(monkeypatch):
             del os.environ["LITELLM_REASONING_AUTO_SUMMARY"]
 
 
+_CITATION: Final = {"start_index": 0, "end_index": 5, "title": "Source", "url": "https://example.com"}
+_SHIFTED_CITATION: Final = {**_CITATION, "start_index": 7, "end_index": 12}
+
+
+def _citation_annotation(citation: Mapping[str, object], nested: bool) -> dict[str, object]:
+    return {"type": "url_citation", "url_citation": citation} if nested else {"type": "url_citation", **citation}
+
+
+def _multipart_message(annotation: dict[str, object], typed: bool) -> object:
+    parts = (("Hello, ", [annotation]), ("world!", [annotation]))
+    if typed:
+        return ResponseOutputMessage(
+            id="msg_multipart",
+            role="assistant",
+            status="completed",
+            type="message",
+            content=[
+                ResponseOutputText(type="output_text", text=text, annotations=annotations, logprobs=[])
+                for text, annotations in parts
+            ],
+        )
+    return {
+        "type": "message",
+        "id": "msg_multipart",
+        "role": "assistant",
+        "status": "completed",
+        "content": [{"type": "output_text", "text": text, "annotations": annotations} for text, annotations in parts],
+    }
+
+
+@pytest.mark.parametrize(
+    ("typed_item", "nested_citation"),
+    [(False, False), (False, True), (True, False)],
+    ids=["dict_item-flat_citation", "dict_item-nested_citation", "typed_item-flat_citation"],
+)
+def test_convert_response_output_joins_multipart_message_and_shifts_citations(typed_item, nested_citation):
+    """A Responses message with several output_text parts is one Chat Completions message, so the parts are
+    joined and the citations of later parts point into the joined text. The SDK only validates the flat
+    citation form, so the nested Chat Completions form is only reachable through dict items."""
+    from litellm.completion_extras.litellm_responses_transformation.transformation import (
+        LiteLLMResponsesTransformationHandler,
+    )
+
+    handler = LiteLLMResponsesTransformationHandler()
+    annotation = _citation_annotation(_CITATION, nested_citation)
+
+    choices = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(
+        output_items=[_multipart_message(annotation, typed_item)],
+        handle_raw_dict_callback=handler._handle_raw_dict_response_item,
+    )
+
+    assert len(choices) == 1
+    assert choices[0].message.content == "Hello, world!"
+    assert choices[0].message.annotations == [
+        annotation,
+        _citation_annotation(_SHIFTED_CITATION, nested_citation),
+    ]
+
+
 def test_transform_response_preserves_annotations():
     """
     Test that annotations from Responses API are preserved when transforming to Chat Completions format.

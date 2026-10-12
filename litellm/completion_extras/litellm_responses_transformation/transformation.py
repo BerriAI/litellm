@@ -21,6 +21,7 @@ from openai.types.responses.tool_choice_custom_param import ToolChoiceCustomPara
 from openai.types.responses.tool_choice_function_param import ToolChoiceFunctionParam
 from openai.types.responses.tool_param import FunctionToolParam
 from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly
 
 import litellm
 from litellm import ModelResponse
@@ -81,6 +82,52 @@ _CHAT_COMPLETION_FIELDS: Final = frozenset((*ModelResponse.model_fields, "usage"
 _RESPONSES_API_ONLY_FIELDS: Final = frozenset((*Response.model_fields, *ResponsesAPIResponse.model_fields)) - frozenset(
     ChatCompletion.model_fields
 )
+
+
+class _OutputTextPart(TypedDict):
+    type: ReadOnly[Literal["output_text"]]
+    text: ReadOnly[str]
+    annotations: ReadOnly[NotRequired[Sequence[Mapping[str, object]]]]
+
+
+_OUTPUT_TEXT_PART: Final = TypeAdapter(_OutputTextPart)
+
+
+def _output_text_part(part: object) -> _OutputTextPart | None:
+    try:
+        return _OUTPUT_TEXT_PART.validate_python(part)
+    except ValidationError:
+        return None
+
+
+def _offset_citation_indices(fields: Mapping[str, object], offset: int) -> Mapping[str, object]:
+    return {
+        key: value + offset if key in ("start_index", "end_index") and isinstance(value, int) else value
+        for key, value in fields.items()
+    }
+
+
+def _offset_annotation(annotation: Mapping[str, object], offset: int) -> ChatCompletionAnnotation:
+    citation: Final = annotation.get("url_citation")
+    shifted: Final = (
+        {**annotation, "url_citation": _offset_citation_indices(citation, offset)}
+        if isinstance(citation, dict)
+        else _offset_citation_indices(annotation, offset)
+    )
+    return cast(ChatCompletionAnnotation, shifted)  # cast-ok: the flat Responses form passes through unchanged
+
+
+def _join_output_text_parts(
+    parts: Sequence[tuple[str, Sequence[Mapping[str, object]] | None]],
+) -> tuple[str, Sequence[ChatCompletionAnnotation]]:
+    """A Chat Completions choice holds one message, so the parts of a Responses message become one text whose
+    citation indices are shifted by the text that precedes each part."""
+    offsets: Final = accumulate((len(text) for text, _ in parts), initial=0)
+    shifted_groups: Final = (
+        tuple(_offset_annotation(annotation, offset) for annotation in part_annotations or ())
+        for (_, part_annotations), offset in zip(parts, offsets)
+    )
+    return "".join(text for text, _ in parts), tuple(chain.from_iterable(shifted_groups))
 
 
 def _strip_prompt_cache_breakpoint_from_content_block(value: object) -> object:
@@ -469,22 +516,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Handle message items with output_text content
         if item_type == "message":
             content_list: Final = item.get("content", [])
-            for content_item in content_list:
-                if isinstance(content_item, dict):
-                    content_type = content_item.get("type")
-                    if content_type == "output_text":
-                        response_text = content_item.get("text", "")
-                        # Extract annotations from content if present
-                        annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
-                            content_item.get("annotations", None)
-                        )
-                        msg = Message(
-                            role=item.get("role", "assistant"),
-                            content=response_text if response_text else "",
-                            annotations=annotations,
-                        )
-                        choice = Choices(message=msg, finish_reason="stop", index=index)
-                        return choice, index + 1
+            text_parts: Final = tuple(part for raw in content_list if (part := _output_text_part(raw)) is not None)
+            if text_parts:
+                content, annotations = _join_output_text_parts(
+                    tuple((part["text"], part.get("annotations")) for part in text_parts)
+                )
+                msg: Final = Message(
+                    role=item.get("role", "assistant"), content=content, annotations=list(annotations) or None
+                )
+                return Choices(message=msg, finish_reason="stop", index=index), index + 1
 
         # function_call / custom_tool_call dicts are intercepted and accumulated by
         # _convert_response_output_to_choices before this callback is reached
@@ -881,36 +921,32 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 )
                 reasoning_content = " ".join(s["text"] for s in pending_reasoning_item["summary"] if s.get("text"))
 
-            elif isinstance(item, ResponseOutputMessage):
-                for content in item.content:
-                    response_text = getattr(content, "text", "")
-                    # Extract annotations from content if present
-                    raw_annotations = getattr(content, "annotations", None)
-                    annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
-                        raw_annotations
-                    )
-                    msg = Message(
-                        role=item.role,
-                        content=response_text if response_text else "",
-                        reasoning_content=reasoning_content,
-                        annotations=annotations,
-                        reasoning_items=cast(
-                            list[ChatCompletionReasoningItem] | None,
-                            ([pending_reasoning_item] if pending_reasoning_item is not None else None),
-                        ),
-                    )
-
-                    choices.append(
-                        Choices(
-                            message=msg,
-                            finish_reason="stop",
-                            index=index,
+            elif isinstance(item, ResponseOutputMessage) and item.content:
+                content, annotations = _join_output_text_parts(
+                    tuple(
+                        (
+                            getattr(part, "text", "") or "",
+                            LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+                                getattr(part, "annotations", None)
+                            ),
                         )
+                        for part in item.content
                     )
+                )
+                msg = Message(
+                    role=item.role,
+                    content=content,
+                    reasoning_content=reasoning_content,
+                    annotations=list(annotations) or None,
+                    reasoning_items=_as_chat_reasoning_items(
+                        (pending_reasoning_item,) if pending_reasoning_item is not None else ()
+                    ),
+                )
+                choices.append(Choices(message=msg, finish_reason="stop", index=index))
 
-                    reasoning_content = None  # flush
-                    pending_reasoning_item = None  # flush
-                    index += 1
+                reasoning_content = None  # flush
+                pending_reasoning_item = None  # flush
+                index += 1
 
             elif isinstance(item, ResponseFunctionToolCall):
                 from litellm.responses.litellm_completion_transformation.transformation import (
