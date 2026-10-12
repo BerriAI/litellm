@@ -6,7 +6,7 @@ import json
 import mimetypes
 import re
 import xml.etree.ElementTree as ET
-from collections.abc import Container, Iterator, Mapping, Sequence
+from collections.abc import Container, Iterable, Iterator, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import Any, Final, TypeAlias, TypedDict, cast, overload
@@ -1819,6 +1819,20 @@ def is_anthropic_tool_search_use(tool_id: str, tool_name: str) -> bool:
     return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) and tool_name in ANTHROPIC_TOOL_SEARCH_TOOL_NAMES
 
 
+def _tool_result_ids(answers: Iterable[AllMessageValues]) -> Iterator[str]:
+    for message in answers:
+        if message["role"] == "tool":
+            yield message["tool_call_id"]
+        elif message["role"] == "function" and (tool_call_id := message.get("tool_call_id")):
+            yield tool_call_id
+
+
+def answered_tool_call_ids(messages: Sequence[AllMessageValues], assistant_index: int) -> frozenset[str]:
+    following: Final = itertools.dropwhile(lambda message: message["role"] == "assistant", messages[assistant_index:])
+    answers: Final = itertools.takewhile(lambda message: message["role"] in ("tool", "function"), following)
+    return frozenset(_tool_result_ids(answers))
+
+
 def find_anthropic_server_tool_result(
     tool_id: str,
     web_search_results: Sequence[object] | None,
@@ -1840,6 +1854,7 @@ def convert_to_anthropic_tool_invoke(
     tool_calls: list[ChatCompletionAssistantToolCall],
     web_search_results: Sequence[object] | None = None,
     tool_results: Sequence[object] | None = None,
+    answered_tool_ids: Container[str] = frozenset(),
 ) -> list[_AnthropicToolInvokeItem]:
     """
     OpenAI tool invokes:
@@ -1911,7 +1926,7 @@ def convert_to_anthropic_tool_invoke(
                 }
             )
             anthropic_tool_invoke.append(server_tool_result)
-        elif is_anthropic_tool_search_use(tool_id, tool_name):
+        elif is_anthropic_tool_search_use(tool_id, tool_name) and tool_id not in answered_tool_ids:
             continue
         else:
             sanitized_tool_id = _sanitize_anthropic_tool_use_id(tool_id)
@@ -2654,6 +2669,7 @@ def anthropic_messages_pt(
                     assistant_tool_calls,
                     web_search_results=_web_search_results_tc,
                     tool_results=_tool_results_tc,
+                    answered_tool_ids=answered_tool_call_ids(messages, msg_i),
                 )
 
                 # Group tool invoke results into (server_tool_use, result) pairs
@@ -2837,6 +2853,7 @@ def anthropic_messages_pt(
                     assistant_tool_calls,
                     web_search_results=_web_search_results,
                     tool_results=_tool_results,
+                    answered_tool_ids=answered_tool_call_ids(messages, msg_i),
                 )
 
                 # Prevent "tool_use ids must be unique" errors by filtering duplicates

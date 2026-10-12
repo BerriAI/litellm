@@ -1897,6 +1897,33 @@ class TestToolTransformation:
 
         assert [tool["type"] for tool in result["tools"]] == ["function", "function"]
 
+    def test_dropping_the_search_tool_undefers_the_remaining_tools(self) -> None:
+        model: Final = "azure_ai/claude-sonnet-5-5"
+        assert litellm.supports_tool_search(model, "azure_ai") is False
+
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model=model,
+            input="What is the weather in Paris right now?",
+            responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
+            custom_llm_provider="azure_ai",
+        )
+
+        assert [tool["type"] for tool in result["tools"]] == ["function", "function"]
+        assert all("defer_loading" not in tool for tool in result["tools"])
+
+    def test_deferred_tools_without_a_search_tool_are_sent_undeferred(self) -> None:
+        tools: Final = [tool for tool in _deferred_tools_with_server_tool_search() if tool["type"] != "tool_search"]
+
+        result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
+            model="anthropic/claude-sonnet-5-5",
+            input="What is the weather in Paris right now?",
+            responses_api_request={"tools": tools},
+            custom_llm_provider="anthropic",
+        )
+
+        assert [tool["function"]["name"] for tool in result["tools"]] == ["get_weather", "finance__get_stock_price"]
+        assert all("defer_loading" not in tool for tool in result["tools"])
+
     def test_server_tool_search_follows_the_bedrock_route(self) -> None:
         transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request
         converse: Final = transform(

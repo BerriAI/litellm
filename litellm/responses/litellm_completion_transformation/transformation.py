@@ -388,19 +388,34 @@ class LiteLLMCompletionResponsesConfig:
     ) -> Sequence[ChatToolParam]:
         from litellm.utils import supports_tool_search
 
-        if not any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
+        has_search_tool: Final = any(is_anthropic_tool_search_chat_tool(tool) for tool in tools)
+        if (
+            has_search_tool
+            and supports_tool_search(model=model, custom_llm_provider=custom_llm_provider)
+            and provider_builds_anthropic_request(model, custom_llm_provider)
+        ):
             return tools
-        if supports_tool_search(
-            model=model, custom_llm_provider=custom_llm_provider
-        ) and provider_builds_anthropic_request(model, custom_llm_provider):
-            return tools
-        verbose_logger.warning(
-            "Dropping Responses API tool of type 'tool_search': model '%s' (provider '%s') cannot run tool search "
-            "on this route, so the target provider would reject or ignore it.",
-            model,
-            custom_llm_provider,
+        if has_search_tool:
+            verbose_logger.warning(
+                "Dropping Responses API tool of type 'tool_search' and the deferral of the other tools: model '%s' "
+                "(provider '%s') cannot run tool search on this route, so the target provider would reject or "
+                "ignore it.",
+                model,
+                custom_llm_provider,
+            )
+        return [
+            LiteLLMCompletionResponsesConfig._without_deferral(tool)
+            for tool in tools
+            if not is_anthropic_tool_search_chat_tool(tool)
+        ]
+
+    @staticmethod
+    def _without_deferral(tool: ChatToolParam) -> ChatToolParam:
+        if "defer_loading" not in tool:
+            return tool
+        return cast(  # cast-ok: a TypedDict minus one key has no typed construction, and only its deferral changes
+            ChatToolParam, {key: value for key, value in tool.items() if key != "defer_loading"}
         )
-        return [tool for tool in tools if not is_anthropic_tool_search_chat_tool(tool)]
 
     @staticmethod
     def _completion_bridges_back_to_responses_api(
