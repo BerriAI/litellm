@@ -37,6 +37,7 @@ from itertools import accumulate, chain, repeat
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Union, cast
 
+from openai.types.responses import ResponseReasoningItem
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
@@ -509,6 +510,10 @@ def _next_stream_sequence_number(responses_so_far: Sequence[object] | None) -> i
         for item in reversed(responses_so_far or ())
     )
     return next((n + 1 for n in sequence_numbers if isinstance(n, int)), 0)
+
+
+def _reasoning_text_parts(item: ResponseReasoningItem) -> tuple[tuple[int, str], ...]:
+    return tuple((content_idx, part.text) for content_idx, part in enumerate(item.content or ()) if part.text)
 
 
 class OpenAIResponsesHandler(BaseTranslation):
@@ -1490,6 +1495,10 @@ class OpenAIResponsesHandler(BaseTranslation):
             return False
 
         for output_item in response.output:
+            if isinstance(output_item, ResponseReasoningItem):
+                if _reasoning_text_parts(output_item):
+                    return True
+                continue
             if isinstance(output_item, BaseModel):
                 try:
                     generic_response_output_item = GenericResponseOutputItem.model_validate(output_item.model_dump())
@@ -1533,6 +1542,12 @@ class OpenAIResponsesHandler(BaseTranslation):
         if tool_call_item is not None:
             if tool_calls_to_check is not None:
                 tool_calls_to_check.append(tool_call_dict_from_output_item(tool_call_item, output_idx))
+            return
+
+        if isinstance(output_item, ResponseReasoningItem):
+            reasoning_parts: Final = _reasoning_text_parts(output_item)
+            texts_to_check.extend(text for _, text in reasoning_parts)
+            task_mappings.extend((output_idx, content_idx) for content_idx, _ in reasoning_parts)
             return
 
         # Handle both GenericResponseOutputItem and dict
@@ -1603,7 +1618,10 @@ class OpenAIResponsesHandler(BaseTranslation):
             output_item = response_output[output_idx]
 
             # Handle both GenericResponseOutputItem, BaseModel, and dict
-            if isinstance(output_item, GenericResponseOutputItem):
+            if isinstance(output_item, ResponseReasoningItem):
+                if output_item.content and content_idx < len(output_item.content):
+                    output_item.content[content_idx].text = guardrail_response
+            elif isinstance(output_item, GenericResponseOutputItem):
                 if output_item.content and content_idx < len(output_item.content):
                     content_item = output_item.content[content_idx]
                     if isinstance(content_item, OutputText):
