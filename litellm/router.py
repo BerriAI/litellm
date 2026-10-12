@@ -3259,6 +3259,26 @@ class Router:
         return None
 
     @staticmethod
+    def _extract_partial_responses_usage_best_effort(
+        source_iterator: "BaseResponsesAPIStreamingIterator",
+    ) -> Optional["ResponseAPIUsage"]:
+        """
+        Wrap _extract_partial_responses_usage so an unexpected stream shape
+        cannot abort a fallback that has already qualified. On failure the
+        primary's usage is treated as unknown (None), so the fallback's usage
+        is passed through unchanged instead of being merged with a made-up zero.
+        """
+        try:
+            return Router._extract_partial_responses_usage(source_iterator)
+        except Exception as exc:  # noqa: BLE001  # usage recovery is accounting only, never a reason to skip the fallback
+            verbose_router_logger.warning(
+                "aresponses fallback: could not extract partial usage from the failed stream, "
+                "continuing without it: %s",
+                exc,
+            )
+            return None
+
+    @staticmethod
     def _combine_responses_fallback_usage(
         fallback_item: "BaseLiteLLMOpenAIResponseObject",
         partial_usage: "ResponseAPIUsage",
@@ -3571,7 +3591,7 @@ class Router:
         """
         from litellm.exceptions import MidStreamFallbackError
 
-        partial_usage: Final = Router._extract_partial_responses_usage(source_iterator)
+        partial_usage: Final = Router._extract_partial_responses_usage_best_effort(source_iterator)
         fallback_response = None  # rebind-ok: pre-init so finally can close it if a fallback was actually attempted
         fallback_yielded = False  # rebind-ok: flipped on the first fallback item so a fallback that dies before its first event still replays the primary's held announcement
         try:

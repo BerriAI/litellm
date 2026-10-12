@@ -5379,6 +5379,70 @@ async def test_aresponses_streaming_iterator_combines_partial_usage():
     assert merged.total_tokens == 49
 
 
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_falls_back_when_partial_usage_extraction_raises():
+    """If reading the failed primary's partial usage raises, the already eligible
+    fallback still runs and its usage is passed through untouched (primary usage is
+    unknown, not zero)."""
+    from litellm.exceptions import MidStreamFallbackError
+    from litellm.types.llms.openai import (
+        ResponseAPIUsage,
+        ResponseCompletedEvent,
+        ResponsesAPIResponse,
+        ResponsesAPIStreamEvents,
+    )
+
+    router: Final = _make_router_with_fallback()
+    src: Final = _make_responses_iterator(
+        chunks=[MagicMock(type="response.output_text.delta")],
+        error=MidStreamFallbackError(
+            message="boom",
+            model="gpt-4",
+            llm_provider="openai",
+            is_pre_first_chunk=False,
+            generated_content="hello",
+        ),
+    )
+    fallback_response_object: Final = ResponsesAPIResponse(
+        id="resp_test", created_at=0, model="gpt-4", object="response", output=[]
+    )
+    fallback_response_object.usage = ResponseAPIUsage(input_tokens=20, output_tokens=15, total_tokens=35)
+    fallback_event: Final = ResponseCompletedEvent(
+        type=ResponsesAPIStreamEvents.RESPONSE_COMPLETED,
+        response=fallback_response_object,
+    )
+
+    with (
+        patch.object(
+            Router,
+            "_extract_partial_responses_usage",
+            side_effect=AttributeError("'dict' object has no attribute 'usage'"),
+        ) as mock_extract,
+        patch.object(
+            router,
+            "async_function_with_fallbacks_common_utils",
+            return_value=_AsyncList([fallback_event]),
+        ) as mock_fallback_utils,
+    ):
+        wrapped: Final = await router._aresponses_streaming_iterator(
+            response=src,
+            initial_kwargs={
+                "model": "gpt-4",
+                "stream": True,
+                "input": "hi",
+                "original_generic_function": litellm.aresponses,
+            },
+        )
+        collected: Final = [chunk async for chunk in wrapped]
+
+    mock_extract.assert_called_once()
+    mock_fallback_utils.assert_awaited_once()
+    assert collected[-1] is fallback_event
+    usage: Final = fallback_response_object.usage
+    assert isinstance(usage, ResponseAPIUsage)
+    assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (20, 15, 35)
+
+
 def _midstream_rate_limit_error():
     rate_limit_error = litellm.RateLimitError(
         message="vertex_ai_betaException - Resource exhausted.",
