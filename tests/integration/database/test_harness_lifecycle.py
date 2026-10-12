@@ -54,6 +54,17 @@ class ExitRecord(TypedDict):
 Relay = DatabaseRelay | DroppedConnectionRelay | HeldStatementRelay
 RelayFactory = Callable[[str, bytes], AbstractContextManager[tuple[Relay, str]]]
 STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
+NESTED_RUN_SECONDS: Final = 60.0
+WORKER_STACK_BOOT_SECONDS: Final = 30.0
+OUTER_TEST_SLACK_SECONDS: Final = 30.0
+
+
+def _nested_run_seconds(workers: int) -> float:
+    return NESTED_RUN_SECONDS + (workers * WORKER_STACK_BOOT_SECONDS if workers > 1 else 0.0)
+
+
+def _nested_run(*values: object, workers: int) -> object:
+    return pytest.param(*values, marks=pytest.mark.timeout(_nested_run_seconds(workers) + OUTER_TEST_SLACK_SECONDS))
 
 
 def _nested_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]:
@@ -62,6 +73,7 @@ def _nested_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]
             "INTEGRATION_RESULTS_DIR",
             "INTEGRATION_ROUTING",
             "INTEGRATION_WORKER_ISOLATION",
+            "INTEGRATION_COVERAGE_FILE",
             "INTEGRATION_CASE_SHARDS",
             "INTEGRATION_CASE_SHARD_INDEX",
             "CIRCLE_NODE_TOTAL",
@@ -451,7 +463,10 @@ def test_native_file_selection_reuses_fixtures_and_qualifies_an_empty_shard(
     )
 
 
-@pytest.mark.parametrize(("workers", "seed"), ((1, 1848224111), (2, 0), (2, 984872314)))
+@pytest.mark.parametrize(
+    ("workers", "seed"),
+    tuple(_nested_run(workers, seed, workers=workers) for workers, seed in ((1, 1848224111), (2, 0), (2, 984872314))),
+)
 @pytest.mark.parametrize("class_parameters", (False, True))
 def test_mixed_fixture_scopes_reuse_outer_and_inner_configurations(
     tmp_path: Path, workers: int, seed: int, class_parameters: bool
@@ -511,7 +526,7 @@ def test_mixed_fixture_scopes_reuse_outer_and_inner_configurations(
             env=_nested_pytest_environment(os.environ),
             capture_output=True,
             text=True,
-            timeout=60,
+            timeout=_nested_run_seconds(workers),
             check=False,
         )
         assert result.returncode == 0, result.stdout + result.stderr
@@ -536,16 +551,21 @@ def test_mixed_fixture_scopes_reuse_outer_and_inner_configurations(
     assert len(executed) == len(frozenset(executed)) == expected_passes
 
 
-@pytest.mark.parametrize("workers", (1, 2))
+@pytest.mark.parametrize("workers", tuple(_nested_run(workers, workers=workers) for workers in (1, 2)))
 def test_direct_and_dependent_consumers_reuse_the_same_module_parameter(tmp_path: Path, workers: int) -> None:
     source: Final = Path(__file__).resolve().parents[3]
     root: Final = tmp_path / "probe-root"
     for relative in (
         "pyproject.toml",
         "tests/__init__.py",
+        "tests/_fake_openai_endpoint_server.py",
         "tests/integration/__init__.py",
         "tests/integration/conftest.py",
         "tests/integration/run.py",
+        "tests/integration/proxy_config.yaml",
+        "tests/integration/mcp_coverage.toml",
+        "tests/integration/cost_calculation/cost_map.py",
+        "tests/integration/cost_calculation/cost_tracking_case.py",
     ):
         destination: Final = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -609,7 +629,7 @@ def test_direct_and_dependent_consumers_reuse_the_same_module_parameter(tmp_path
         ),
         capture_output=True,
         text=True,
-        timeout=60,
+        timeout=_nested_run_seconds(workers),
         check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr

@@ -34,6 +34,7 @@ DB_PUSH: Final = ("--use_prisma_db_push",)
 MIGRATE_DEPLOY: Final = ()
 LEGACY_MIGRATE_DEPLOY: Final = ("--use_legacy_migration_resolver",)
 CONFIGURATION: Final = TypeAdapter(dict[str, object])
+MCP_COVERAGE_CONFIG: Final = Path(__file__).resolve().parents[1] / "mcp_coverage.toml"
 
 
 def proxy_database_environment() -> Mapping[str, str]:
@@ -97,6 +98,7 @@ def owned_proxy(
     remove_environment: tuple[str, ...] = (),
     workers: int = 1,
     database_setup: tuple[str, ...] = DB_PUSH,
+    coverage_file: Path | None = None,
 ) -> Iterator[Gateway]:
     with owned_proxy_process(
         gateway,
@@ -106,6 +108,7 @@ def owned_proxy(
         remove_environment=remove_environment,
         workers=workers,
         database_setup=database_setup,
+        coverage_file=coverage_file,
     ) as owned:
         yield owned.gateway
 
@@ -396,14 +399,18 @@ def owned_proxy_process(
     workers: int = 1,
     database_setup: tuple[str, ...] = DB_PUSH,
     extra_arguments: tuple[str, ...] = (),
+    coverage_file: Path | None = None,
 ) -> Iterator[OwnedProxy]:
     root: Final = _proxy_root()
-    environment: Final = _proxy_environment(gateway, overrides, remove_environment)
+    environment: Final = _proxy_environment(
+        gateway, {**overrides, **({"COVERAGE_FILE": str(coverage_file)} if coverage_file else {})}, remove_environment
+    )
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
     command: Final = (
         sys.executable,
         "-m",
+        *(("coverage", "run", f"--rcfile={MCP_COVERAGE_CONFIG}", "-m") if coverage_file else ()),
         "integration._support.proxy",
         "--config",
         str(worker_configuration(config or root / "tests/integration/proxy_config.yaml", directory)),
@@ -620,9 +627,9 @@ def _harness_root() -> Path:
 
 
 @contextmanager
-def owned_upstream(directory: Path, *, tls: bool = False) -> Generator[UpstreamSlot]:
+def owned_upstream(directory: Path, *, tls: bool = False, port: int | None = None) -> Generator[UpstreamSlot]:
     certificate: Final = self_signed_certificate(directory) if tls else None
-    slot: Final = UpstreamSlot(directory, _free_port(), _harness_root(), certificate)
+    slot: Final = UpstreamSlot(directory, port or _free_port(), _harness_root(), certificate)
     try:
         slot.start()
         yield slot
