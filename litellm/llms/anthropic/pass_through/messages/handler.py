@@ -232,7 +232,13 @@ async def _try_websearch_short_circuit(
             kwargs=kwargs,
         )
         if response is not None:
-            anthropic_response = cast(AnthropicMessagesResponse, response)
+            anthropic_response = await with_safeguard_results(
+                cast(AnthropicMessagesResponse, response),
+                _short_circuit_safeguards_evaluator(
+                    _SAFEGUARD_KWARGS.validate_python(kwargs) if kwargs is not None else None,
+                    _SAFEGUARD_MESSAGES.validate_python(messages),
+                ),
+            )
             if stream:
                 from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
                     FakeAnthropicMessagesStreamIterator,
@@ -242,6 +248,14 @@ async def _try_websearch_short_circuit(
             return anthropic_response
 
     return None
+
+
+def _short_circuit_safeguards_evaluator(
+    kwargs: Mapping[str, object] | None, messages: Sequence[Mapping[str, object]]
+) -> SafeguardsEvaluator | None:
+    if kwargs is None or "safeguards" not in kwargs:
+        return None
+    return request_safeguards_evaluator(kwargs, messages)
 
 
 @client
