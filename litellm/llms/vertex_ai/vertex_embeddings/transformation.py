@@ -252,9 +252,13 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         model_response.object = "list"
         model_response.data = embedding_response
         model_response.model = model
-        _metadata: Final = cast("Mapping[str, object]", response).get("metadata")
+        _metadata: Final = cast(  # cast-ok: the predict payload is an untyped dict, only its key type is unknown
+            "Mapping[str, object]", response
+        ).get("metadata")
         _billable: Final = (
-            cast("Mapping[str, object]", _metadata).get("billableCharacterCount")
+            cast("Mapping[str, object]", _metadata).get(  # cast-ok: isinstance below narrows this to a Mapping
+                "billableCharacterCount"
+            )
             if isinstance(_metadata, Mapping)
             else None
         )
