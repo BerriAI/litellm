@@ -6537,8 +6537,10 @@ async def team_max_tokens_check(
     back to the ``tokens_used`` column loaded in auth. No budget set on the team
     means the check is skipped, so existing teams are unaffected.
     """
-    max_tokens_budget: Final = getattr(team_object, "max_tokens_budget", None)
-    if team_object is None or max_tokens_budget is None:
+    if team_object is None:
+        return
+    max_tokens_budget: Final = team_object.max_tokens_budget
+    if max_tokens_budget is None:
         return
 
     from litellm.proxy.proxy_server import get_current_tokens_used

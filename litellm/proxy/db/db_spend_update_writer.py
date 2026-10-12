@@ -1066,7 +1066,7 @@ class DBSpendUpdateWriter:
                 team_id=team_id,
                 user_id=user_id,
                 prisma_client=prisma_client,
-                tokens=int(payload.get("total_tokens") or 0),
+                tokens=payload["total_tokens"],
             )
         except Exception:
             verbose_proxy_logger.debug(
@@ -2187,7 +2187,7 @@ class DBSpendUpdateWriter:
                                     response_cost,
                                     token_increment,
                                 )
-                                team_update_data: Final = (
+                                team_update_data = (
                                     {
                                         "spend": {"increment": response_cost},
                                         "tokens_used": {"increment": token_increment},

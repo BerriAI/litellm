@@ -733,24 +733,15 @@ class _IncrementSpendCounters(Protocol):
     ) -> None: ...
 
 
-def _extract_total_tokens(kwargs: Mapping[str, object], completion_response: object) -> int:
+def _extract_total_tokens(sl_object: StandardLoggingPayload | None) -> int:
     """Total tokens for this request, for the team token-budget counter.
 
-    Prefers the StandardLoggingPayload (always populated for a billed call),
-    falling back to the response usage. Returns 0 when unknown, which leaves the
-    token counter untouched.
+    Read from the StandardLoggingPayload, the same source the batched tokens_used
+    DB write uses, so the cross-pod counter and the column stay in agreement.
     """
-    sl_object: Final = kwargs.get("standard_logging_object") or {}
-    sl_total: Final = sl_object.get("total_tokens")
-    if sl_total:
-        return int(sl_total)
-    usage: Final = (
-        completion_response.get("usage")
-        if isinstance(completion_response, dict)
-        else getattr(completion_response, "usage", None)
-    )
-    usage_total: Final = usage.get("total_tokens") if isinstance(usage, dict) else getattr(usage, "total_tokens", None)
-    return int(usage_total) if usage_total else 0
+    if sl_object is None:
+        return 0
+    return sl_object["total_tokens"]
 
 
 async def _update_database_and_spend_counters(
@@ -901,7 +892,11 @@ async def _update_database_and_spend_counters_in_batch(
     # Awaited like the spend counter above; best-effort so a counter hiccup
     # never fails a request that was already billed.
     if team_id is not None:
-        total_tokens: Final = _extract_total_tokens(kwargs=kwargs, completion_response=completion_response)
+        sl_object: Final = cast(  # cast-ok: typed shape of the untyped CustomLogger callback payload
+            "StandardLoggingPayload | None",
+            kwargs.get("standard_logging_object"),  # pyright: ignore[reportUnknownMemberType]  # untyped callback kwargs
+        )
+        total_tokens: Final = _extract_total_tokens(sl_object)
         if total_tokens:
             from litellm.proxy.proxy_server import increment_spend_counter_cache
 
