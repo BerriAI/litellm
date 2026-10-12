@@ -1621,6 +1621,24 @@ async def test_safeguarded_sse_stream_stamps_the_final_delta_across_chunk_bounda
 
 
 @pytest.mark.asyncio
+async def test_safeguarded_sse_stream_joins_split_data_lines_before_stamping():
+    classifier: Final = _OneVerdictClassifier('{"verdicts": {"call_curl": {"flagged": true}}}')
+    final_delta: Final = json.dumps(_TOOL_USE_STREAM_EVENTS[4])
+    split_at: Final = final_delta.index('"usage"')
+    split_lines: Final = f"data: {final_delta[:split_at]}\ndata: {final_delta[split_at:]}"
+    split_frame: Final = f"event: message_delta\n{split_lines}\n\n".encode()
+    frames: Final = (*_sse_frames(b"\n")[:4], split_frame, _sse_frames(b"\n")[5])
+    stream: Final = SafeguardedAnthropicSSEStream(_chunked(b"".join(frames), 4096), _safeguards_evaluator(classifier))
+    emitted: Final = await _drained(stream)
+    assert len(emitted) == len(frames)
+    stamped_delta: Final = _data_events(emitted[4:5])[0]
+    assert stamped_delta["delta"]["stop_reason"] == "tool_use"
+    assert stamped_delta["usage"] == {"output_tokens": 9}
+    assert stamped_delta["delta"]["safeguard_results"][0]["status"]["tool_uses"]["call_curl"]["outcome"] == "flagged"
+    assert classifier.calls == 1
+
+
+@pytest.mark.asyncio
 async def test_safeguarded_sse_stream_passes_an_unterminated_tail_and_non_json_frames_through():
     classifier: Final = _OneVerdictClassifier('{"verdicts": {}}')
     upstream: Final = (b": keep-alive\n\n", b"event: ping\ndata: {not json}\n\n", b"data: [DONE]")

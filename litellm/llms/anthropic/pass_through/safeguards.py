@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import accumulate, chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack, assert_never
@@ -436,14 +436,18 @@ def _unsupported_results() -> Sequence[SafeguardResult]:
     return ({"type": DANGEROUS_TOOL_USE, "status": unsupported},)
 
 
-class _ProviderError(Protocol):
-    llm_provider: str | None
+class _ProviderError(LiteLLMBaseModel):
+    model_config = ConfigDict(frozen=True, from_attributes=True)
+    llm_provider: str | None = None
 
 
 def _proxy_cannot_serve(error: Exception) -> bool:
     if not isinstance(error, litellm.BadRequestError):
         return False
-    return not cast(_ProviderError, error).llm_provider  # cast-ok: litellm exceptions leave llm_provider untyped
+    try:
+        return not _ProviderError.model_validate(error, from_attributes=True).llm_provider
+    except ValidationError:
+        return False
 
 
 def _every_tool_use_unavailable(
@@ -503,6 +507,7 @@ class StreamedSafeguardResults:
         self._by_index: Mapping[int, _StreamedToolUse] = MappingProxyType({})
         self._last_block_index: int | None = None
         self._results: Sequence[SafeguardResult] | None = None
+        self._backend_answered: bool = False
 
     async def observe(self, event: Mapping[str, object]) -> Mapping[str, object]:
         if self._evaluator is None:
@@ -518,7 +523,10 @@ class StreamedSafeguardResults:
             return event
         delta: Final = _mapping(event.get("delta"))
         stop_reason: Final = delta.get("stop_reason") if delta is not None else None
-        if delta is None or stop_reason is None or delta.get("safeguard_results") is not None:
+        if delta is None or stop_reason is None or self._backend_answered:
+            return event
+        if delta.get("safeguard_results") is not None:
+            self._backend_answered = True
             return event
         results: Final = await self._evaluated_once(self._evaluator, stop_reason == "max_tokens")
         return {**event, "delta": {**delta, "safeguard_results": results}}

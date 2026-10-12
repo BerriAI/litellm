@@ -405,11 +405,16 @@ _SSE_TERMINATOR_OVERLAP: Final = max(len(terminator) for terminator in _SSE_FRAM
 _SSE_EVENT: Final = TypeAdapter(Mapping[str, object])
 
 
+def _sse_data_payload(line: bytes) -> bytes | None:
+    return line[len(b"data:") :].removeprefix(b" ") if line.startswith(b"data:") else None
+
+
 def _sse_frame_event(frame: bytes) -> Mapping[str, object] | None:
-    decoded_lines: Final = (_decoded_sse_data_line(line) for line in frame.splitlines())
+    payloads: Final = (_sse_data_payload(line) for line in frame.splitlines())
+    data: Final = b"\n".join(payload for payload in payloads if payload is not None)
     try:
-        return _SSE_EVENT.validate_python(next((data for data in decoded_lines if data is not None), None))
-    except ValidationError:
+        return _SSE_EVENT.validate_python(json.loads(data))
+    except (ValueError, ValidationError):
         return None
 
 

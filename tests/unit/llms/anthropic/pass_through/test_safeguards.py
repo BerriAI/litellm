@@ -704,8 +704,10 @@ async def test_streamed_results_keep_a_final_delta_that_already_carries_backend_
         "delta": {"stop_reason": "tool_use", "safeguard_results": list(UNSUPPORTED)},
         "usage": {"output_tokens": 9},
     }
-    observed: Final = [await collector.observe(event) for event in (*_STREAM[:-2], backend_stop)]
-    assert observed[-1] is backend_stop
+    second_stop: Final = {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 9}}
+    observed: Final = [await collector.observe(event) for event in (*_STREAM[:-2], backend_stop, second_stop)]
+    assert observed[-2] is backend_stop
+    assert observed[-1] is second_stop
     assert classifier.calls == []
 
 
