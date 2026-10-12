@@ -444,3 +444,44 @@ def test_completion_fallbacks_sync(
 
     assert response.choices[0].message.content == "sync fallback answer"
     assert tuple(json.loads(call.request.content)["model"] for call in route.calls) == ("first", "second")
+
+
+@pytest.mark.asyncio
+async def test_async_completion_with_top_level_fallbacks(monkeypatch):
+    attempted_models: list[str] = []
+
+    async def _fake_acompletion(*, model: str, **kwargs):
+        attempted_models.append(model)
+        if model == "primary-model":
+            raise Exception("primary failed")
+        return {"model": model}
+
+    monkeypatch.setattr(litellm, "acompletion", _fake_acompletion)
+
+    response = await async_completion_with_fallbacks(
+        model="primary-model",
+        fallbacks=["fallback-model-1", "fallback-model-2"],
+    )
+    assert response["model"] == "fallback-model-1"
+    assert attempted_models == ["primary-model", "fallback-model-1"]
+
+
+@pytest.mark.asyncio
+async def test_async_completion_with_combined_top_level_and_nested_fallbacks(monkeypatch):
+    attempted_models: list[str] = []
+
+    async def _fake_acompletion(*, model: str, **kwargs):
+        attempted_models.append(model)
+        if model in ["primary-model", "top-fallback"]:
+            raise Exception(f"{model} failed")
+        return {"model": model}
+
+    monkeypatch.setattr(litellm, "acompletion", _fake_acompletion)
+
+    response = await async_completion_with_fallbacks(
+        model="primary-model",
+        fallbacks=["top-fallback"],
+        kwargs={"fallbacks": ["nested-fallback"]},
+    )
+    assert response["model"] == "nested-fallback"
+    assert attempted_models == ["primary-model", "top-fallback", "nested-fallback"]
