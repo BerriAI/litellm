@@ -1803,7 +1803,14 @@ async def test_clef_omni_media_reaches_upstream_in_both_formats(
 
 
 @pytest.mark.parametrize(
-    "model", ("cloudflare/clef", "cloudflare/clef-flash", "typesafe/jev-latest", "openai/decision")
+    "model",
+    (
+        "cloudflare/clef",
+        "cloudflare/clef-flash",
+        "typesafe/jev-latest",
+        "openai/decision",
+        "fireworks_ai/accounts/fireworks/routers/rune",
+    ),
 )
 @pytest.mark.parametrize(
     "media",

@@ -113,6 +113,8 @@ def _echo(request: Request) -> Reply:
     marker: Final = _marker_of(request)
     if request.target.endswith("/v1/decisions"):
         return Reply(body=json.dumps(_openai_decider_reply(marker)).encode())
+    if request.target.endswith("/systemone"):
+        return Reply(body=json.dumps(_upstream_reply(marker)["result"]).encode())
     return Reply(body=json.dumps(_upstream_reply(marker)).encode())
 
 
@@ -459,6 +461,8 @@ _UNSUPPORTED: Final[tuple[tuple[str, Route], ...]] = (
     ("cloudflare/@cf/cloudflare/clef-flash", "/v1/decisions"),
     ("openai/gpt-6-luna", "/v1/systemone"),
     ("openai/gpt-6-luna", "/v1/decisions"),
+    ("fireworks_ai/accounts/fireworks/routers/rune", "/v1/systemone"),
+    ("fireworks_ai/accounts/fireworks/routers/rune", "/v1/decisions"),
 )
 
 
