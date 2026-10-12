@@ -22,6 +22,7 @@ import pytest
 
 import litellm
 from litellm import Router, get_optional_params
+from litellm.constants import RESPONSE_FORMAT_TOOL_DESCRIPTION
 from litellm.llms.vertex_ai.gemini.transformation import _process_gemini_media
 from litellm.types.llms.vertex_ai import BlobType
 
@@ -2692,7 +2693,13 @@ def test_gemini_pro_json_schema_args_sent_httpx(
     request_body: Final = json.loads(route.calls[0].request.content)
     if "claude" in model:
         assert request_body["tool_choice"] == {"type": "tool", "name": "json_tool_call"}
-        assert request_body["tools"] == [{"name": "json_tool_call", "input_schema": _RECIPES_SCHEMA}]
+        assert request_body["tools"] == [
+            {
+                "name": "json_tool_call",
+                "description": RESPONSE_FORMAT_TOOL_DESCRIPTION,
+                "input_schema": _RECIPES_SCHEMA,
+            }
+        ]
     else:
         assert request_body["generationConfig"]["response_mime_type"] == "application/json"
         assert request_body["generationConfig"]["response_json_schema"] == _RECIPES_SCHEMA

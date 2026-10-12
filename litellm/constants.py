@@ -1586,6 +1586,9 @@ OPENAI_FINISH_REASONS: Final = [
 ]
 HUMANLOOP_PROMPT_CACHE_TTL_SECONDS: Final = int(os.getenv("HUMANLOOP_PROMPT_CACHE_TTL_SECONDS", 60))  # 1 minute
 RESPONSE_FORMAT_TOOL_NAME = "json_tool_call"  # default tool name used when converting response format to tool call
+RESPONSE_FORMAT_TOOL_DESCRIPTION: Final = (
+    "Return the final answer as this structured object, filling every required field."
+)
 
 ########################### Logging Callback Constants ###########################
 AZURE_STORAGE_MSFT_VERSION: Final = "2019-07-07"
