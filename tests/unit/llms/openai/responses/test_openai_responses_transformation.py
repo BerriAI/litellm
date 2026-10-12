@@ -1,5 +1,5 @@
 import json
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
@@ -2336,6 +2336,21 @@ def _marked_tool(cache_control: dict[str, str] | None) -> dict[str, object]:
     return {"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {}}, **mark}
 
 
+def _openai_like_responses_config() -> OpenAIResponsesAPIConfig:
+    from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
+
+    return OpenAILikeResponsesConfig()
+
+
+def _generated_sail_responses_config() -> OpenAIResponsesAPIConfig:
+    from litellm.llms.openai_like.dynamic_config import create_responses_config_class
+    from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+
+    sail = JSONProviderRegistry.get("sail")
+    assert sail is not None
+    return create_responses_config_class(sail)()
+
+
 class TestCacheControlBecomesPromptCacheBreakpoint:
     """Clients that speak Anthropic's dialect mark blocks with `cache_control`. On a deployment that
     reads OpenAI's `prompt_cache_breakpoint` the mark moves onto the same block instead of being
@@ -2367,6 +2382,9 @@ class TestCacheControlBecomesPromptCacheBreakpoint:
         ("litellm_params", "extra_params"),
         [
             pytest.param(_OPENAI_API, {}, id="api.openai.com"),
+            pytest.param(
+                GenericLiteLLMParams(base_url="https://api.openai.com/v1"), {}, id="api.openai.com-as-base_url"
+            ),
             pytest.param(GenericLiteLLMParams(), {}, id="default-host"),
             pytest.param(_OTHER_HOST, _EXPLICIT_OPT_IN, id="other-host-opted-in"),
         ],
@@ -2444,6 +2462,9 @@ class TestCacheControlBecomesPromptCacheBreakpoint:
         [
             pytest.param("gpt-4o", _OPENAI_API, id="model-older-than-gpt-5.6"),
             pytest.param("gpt-5.6", _OTHER_HOST, id="other-host-not-opted-in"),
+            pytest.param(
+                "gpt-5.6", GenericLiteLLMParams(base_url="https://gateway.example/v1"), id="other-host-as-base_url"
+            ),
         ],
     )
     def test_marks_are_still_stripped_where_the_deployment_does_not_read_breakpoints(
@@ -2459,6 +2480,21 @@ class TestCacheControlBecomesPromptCacheBreakpoint:
         from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
 
         config = HostedVLLMResponsesAPIConfig()
+        marked = self._transform("gpt-5.6", _OPENAI_API, _EPHEMERAL, _EXPLICIT_OPT_IN, config=config)
+        unmarked = self._transform("gpt-5.6", _OPENAI_API, None, _EXPLICIT_OPT_IN, config=config)
+
+        assert marked == unmarked
+        assert "prompt_cache_breakpoint" not in json.dumps(marked["input"])
+
+    @pytest.mark.parametrize(
+        "make_config", [_openai_like_responses_config, _generated_sail_responses_config], ids=["openai_like", "sail"]
+    )
+    def test_a_config_naming_its_provider_as_a_plain_str_still_strips_on_a_gpt_5_6_deployment(
+        self, make_config: Callable[[], OpenAIResponsesAPIConfig]
+    ) -> None:
+        config = make_config()
+        assert type(config.custom_llm_provider) is str
+
         marked = self._transform("gpt-5.6", _OPENAI_API, _EPHEMERAL, _EXPLICIT_OPT_IN, config=config)
         unmarked = self._transform("gpt-5.6", _OPENAI_API, None, _EXPLICIT_OPT_IN, config=config)
 

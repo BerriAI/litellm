@@ -60,6 +60,20 @@ _INPUT_ITEM: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str,
 _CONTENT_PARTS: Final[TypeAdapter[Sequence[Mapping[str, object]]]] = TypeAdapter(Sequence[Mapping[str, object]])
 
 
+class _DeploymentHost(BaseModel):
+    """`responses()` builds the params from raw kwargs, where callers may spell the host `base_url`."""
+
+    model_config = ConfigDict(frozen=True, extra="ignore", from_attributes=True)
+
+    api_base: object = None
+    base_url: object = None
+
+
+def _provider_name(provider: LlmProviders | str) -> str:
+    """Configs generated from a provider JSON file return the slug as a plain str."""
+    return provider.value if isinstance(provider, LlmProviders) else provider
+
+
 def _item_with_prompt_cache_breakpoints(item: object) -> object:
     """Marks on assistant output and on tools are left for the strip that follows: OpenAI writes no cache there."""
     try:
@@ -404,11 +418,11 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def _reads_prompt_cache_breakpoints(
         self, model: str, litellm_params: GenericLiteLLMParams, prompt_cache_options: object
     ) -> bool:
-        api_base: Final[object] = getattr(litellm_params, "api_base", None)
+        host: Final = _DeploymentHost.model_validate(litellm_params)
         return AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
             model=model,
-            custom_llm_provider=self.custom_llm_provider.value,
-            api_base=api_base,
+            custom_llm_provider=_provider_name(self.custom_llm_provider),
+            api_base=host.api_base or host.base_url,
             prompt_cache_options=prompt_cache_options,
         )
 
