@@ -9,7 +9,7 @@ from typing import Final, Literal
 from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from litellm.types.llms.base import LiteLLMBaseModel
-from litellm.types.utils import ModelResponse, ModelResponseStream
+from litellm.types.utils import ModelResponse, ModelResponseStream, StreamingChoices
 
 SERVED_OUTPUT_TEXTS_KEY: Final = "served_output_texts"
 
@@ -121,18 +121,28 @@ def served_stream_output_texts(chunks: Sequence[object]) -> ServedTexts | None:
     return _chat_texts(assembled) if assembled is not None else None
 
 
+def _stream_choice_index(choice: StreamingChoices) -> int:
+    # Some backends stream choices with `"index": null`; StreamingChoices stores the
+    # None as-is, so coalesce to the constructor's own default instead of crashing.
+    if choice.index is None:  # pyright: ignore[reportUnnecessaryComparison]  # backends do emit "index": null
+        return 0
+    return choice.index
+
+
 def _chat_stream_choice_text(chunks: Sequence[ModelResponseStream], index: int) -> str | None:
     contents: Final = tuple(
         content
         for chunk in chunks
         for choice in chunk.choices
-        if choice.index == index and isinstance(content := choice.delta.content, str)
+        if _stream_choice_index(choice) == index and isinstance(content := choice.delta.content, str)
     )
     return "".join(contents) if contents else None
 
 
 def _chat_stream_texts(chunks: Sequence[ModelResponseStream]) -> ServedTexts | None:
-    choice_count: Final = max((choice.index + 1 for chunk in chunks for choice in chunk.choices), default=0)
+    choice_count: Final = max(
+        (_stream_choice_index(choice) + 1 for chunk in chunks for choice in chunk.choices), default=0
+    )
     texts: Final = tuple(_chat_stream_choice_text(chunks, index) for index in range(choice_count))
     return texts if any(text is not None for text in texts) else None
 
