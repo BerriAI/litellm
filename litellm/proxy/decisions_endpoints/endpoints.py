@@ -1,6 +1,6 @@
 from collections.abc import Mapping
 from types import MappingProxyType
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import ORJSONResponse  # pyright: ignore[reportDeprecated]  # required endpoint contract
@@ -92,8 +92,11 @@ async def _invalid_request(
     )
 
 
+_FIELDS_CHECKED_AFTER_ROUTING: Final = frozenset({"safety_identifier", "audio", "videos"})
+
+
 def _fields_checked_before_routing(data: Mapping[str, object]) -> Mapping[str, object]:
-    return MappingProxyType({key: value for key, value in data.items() if key != "safety_identifier"})
+    return MappingProxyType({key: value for key, value in data.items() if key not in _FIELDS_CHECKED_AFTER_ROUTING})
 
 
 async def _request_data(request: Request, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:
@@ -109,6 +112,7 @@ async def _process_decisions(
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth,
     body_adapter: TypeAdapter[DecisionsRequestBody] | TypeAdapter[OpenAIDecisionRequestBody],
+    route_type: Literal["adecisions", "asystemone"],
 ) -> object:
     from litellm.proxy.proxy_server import (
         general_settings as proxy_general_settings,
@@ -146,7 +150,7 @@ async def _process_decisions(
             request=request,
             fastapi_response=fastapi_response,
             user_api_key_dict=user_api_key_dict,
-            route_type="adecisions",
+            route_type=route_type,
             proxy_logging_obj=proxy_logging_obj,
             llm_router=llm_router,
             general_settings=general_settings,
@@ -208,6 +212,7 @@ async def systemone(
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
         body_adapter=_DECISIONS_REQUEST_BODY_ADAPTER,
+        route_type="asystemone",
     )
 
 
@@ -250,4 +255,5 @@ async def decisions(
         fastapi_response=fastapi_response,
         user_api_key_dict=user_api_key_dict,
         body_adapter=_OPENAI_DECISION_REQUEST_BODY_ADAPTER,
+        route_type="adecisions",
     )

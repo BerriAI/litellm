@@ -10,6 +10,7 @@ vi.mock("@/components/networking", () => ({
   getGuardrailProviderSpecificParams: vi.fn(),
   getGuardrailUISettings: vi.fn(),
   modelAvailableCall: vi.fn(),
+  modelHubCall: vi.fn(),
 }));
 
 import * as networking from "@/components/networking";
@@ -63,6 +64,7 @@ describe("AddGuardrailForm create payload characterization", () => {
     vi.mocked(networking.getGuardrailUISettings).mockResolvedValue(uiSettings);
     vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue(providerParams);
     vi.mocked(networking.modelAvailableCall).mockResolvedValue({ data: [{ id: "gpt-5" }] });
+    vi.mocked(networking.modelHubCall).mockResolvedValue({ data: [] });
     vi.mocked(networking.createGuardrailCall).mockResolvedValue({ guardrail_id: "new" });
   });
 

@@ -440,6 +440,7 @@ autorouter_presets_url: str = os.getenv(
     "LITELLM_AUTOROUTER_PRESETS_URL",
     "https://raw.githubusercontent.com/BerriAI/litellm/main/litellm/proxy/public_endpoints/autorouter_presets.json",
 )
+whats_new_url: str | None = os.getenv("LITELLM_WHATS_NEW_URL")
 suppress_debug_info: bool = False
 dynamodb_table_name: Optional[str] = None
 s3_callback_params: Optional[Dict] = None
@@ -1490,6 +1491,7 @@ from .rust_bridge import rust
 from .rag.main import *
 from .sandbox.main import *
 from .decisions.main import *
+from .systemone.main import *
 from .tool_loop import ToolLoopMaxRoundsExceeded, arun_tool_loop, run_tool_loop
 from .search.main import *
 from .realtime_api.main import (
@@ -1686,6 +1688,9 @@ if TYPE_CHECKING:
     )
     from .llms.openrouter.decisions.transformation import (
         OpenRouterDecisionsConfig as OpenRouterDecisionsConfig,
+    )
+    from .llms.fireworks_ai.decisions.transformation import (
+        FireworksAIDecisionsConfig as FireworksAIDecisionsConfig,
     )
     from .llms.cloudflare.decisions.transformation import (
         CloudflareDecisionsConfig as CloudflareDecisionsConfig,
@@ -2275,6 +2280,7 @@ if TYPE_CHECKING:
     supports_parallel_function_calling: Callable[..., bool]
     supports_vision: Callable[..., bool]
     supports_audio_input: Callable[..., bool]
+    supports_video_input: Callable[..., bool]
     supports_audio_output: Callable[..., bool]
     supports_system_messages: Callable[..., bool]
     supports_reasoning: Callable[..., bool]
