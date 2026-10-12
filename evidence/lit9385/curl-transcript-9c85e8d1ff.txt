@@ -1,0 +1,72 @@
+# head 9c85e8d1ff, real xai/grok-4.20-0309-non-reasoning, 4 workers, batch cost job every 30s, 2026-10-12T22:45:22Z
+
+$ curl -s http://127.0.0.1:19395/v1/files -H "Authorization: Bearer $KEY" -F purpose=batch -F target_model_names=xai-batch -F file=@input.jsonl | jq '{id, purpose, bytes}'
+{
+  "id": "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9vY3RldC1zdHJlYW07dW5pZmllZF9pZCxmYjk2OWMxZi03ZWExLTRmN2EtYTg4Mi04YWM2NGExMTAzZjQ7dGFyZ2V0X21vZGVsX25hbWVzLHhhaS1iYXRjaDtsbG1fb3V0cHV0X2ZpbGVfaWQsZmlsZV9lNTQzNDA0My0wZmM2LTQ1NjEtYjYyZS00NDVjOTkwNjViODY7bGxtX291dHB1dF9maWxlX21vZGVsX2lkLHhhaS1iYXRjaC0x",
+  "purpose": "batch",
+  "bytes": 638
+}
+
+$ curl -s http://127.0.0.1:19395/v1/batches -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' -d '{"input_file_id": "$INPUT_FILE_ID", "endpoint": "/v1/chat/completions", "completion_window": "24h"}' | jq '{id, status}'
+{
+  "id": "bGl0ZWxsbV9wcm94eTttb2RlbF9pZDp4YWktYmF0Y2gtMTtsbG1fYmF0Y2hfaWQ6YmF0Y2hfM2EzMjhkOWItYjk1YS00YmQ5LWE5Y2MtZDljYmMzZGI1YmNh",
+  "status": "validating"
+}
+
+# provider batch id: batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca
+
+$ curl -s "http://127.0.0.1:19395/v1/files/batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca?provider=xai" -H "Authorization: Bearer $MASTER_KEY"   # batch not finished yet
+{"error":{"message":"xAI batch batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca has no results file until it completes (status=in_progress)","type":"invalid_request_error","param":null,"code":"404"}}
+HTTP 404
+
+$ curl -s http://127.0.0.1:19395/v1/batches/$BATCH_ID -H "Authorization: Bearer $KEY" | jq '{status, output_file_id, request_counts}'
+{
+  "status": "completed",
+  "output_file_id": "bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9qc29uO3VuaWZpZWRfaWQsYTM0NGI1OTctODY1Zi01NWNlLTlkOWYtNzZjMDc1NGU4YTQ2O3RhcmdldF9tb2RlbF9uYW1lcyx4YWktYmF0Y2g7bGxtX291dHB1dF9maWxlX2lkLGJhdGNoXzNhMzI4ZDliLWI5NWEtNGJkOS1hOWNjLWQ5Y2JjM2RiNWJjYTtsbG1fb3V0cHV0X2ZpbGVfbW9kZWxfaWQseGFpLWJhdGNoLTE",
+  "request_counts": {
+    "completed": 3,
+    "failed": 0,
+    "total": 3
+  }
+}
+
+$ curl -s http://127.0.0.1:19395/v1/files/$OUTPUT_FILE_ID -H "Authorization: Bearer $KEY"
+{"id":"bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9qc29uO3VuaWZpZWRfaWQsYTM0NGI1OTctODY1Zi01NWNlLTlkOWYtNzZjMDc1NGU4YTQ2O3RhcmdldF9tb2RlbF9uYW1lcyx4YWktYmF0Y2g7bGxtX291dHB1dF9maWxlX2lkLGJhdGNoXzNhMzI4ZDliLWI5NWEtNGJkOS1hOWNjLWQ5Y2JjM2RiNWJjYTtsbG1fb3V0cHV0X2ZpbGVfbW9kZWxfaWQseGFpLWJhdGNoLTE","bytes":0,"created_at":1791845131,"filename":"batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca","object":"file","purpose":"batch_output","status":"processed","expires_at":null,"status_details":null}
+HTTP 200
+
+$ curl -s "http://127.0.0.1:19395/v1/files/batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca?provider=xai" -H "Authorization: Bearer $MASTER_KEY"
+{"id":"batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca","bytes":0,"created_at":1791845131,"filename":"batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca","object":"file","purpose":"batch_output","status":"processed","expires_at":null,"status_details":null}
+HTTP 200
+
+$ curl -s "http://127.0.0.1:19395/v1/files/batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca?custom_llm_provider=xai" -H "Authorization: Bearer $MASTER_KEY"
+{"id":"batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca","bytes":0,"created_at":1791845132,"filename":"batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca","object":"file","purpose":"batch_output","status":"processed","expires_at":null,"status_details":null}
+HTTP 200
+
+# after the batch cost job ran
+
+$ curl -s http://127.0.0.1:19395/v1/files/$OUTPUT_FILE_ID -H "Authorization: Bearer $KEY"
+{"id":"bGl0ZWxsbV9wcm94eTphcHBsaWNhdGlvbi9qc29uO3VuaWZpZWRfaWQsYTM0NGI1OTctODY1Zi01NWNlLTlkOWYtNzZjMDc1NGU4YTQ2O3RhcmdldF9tb2RlbF9uYW1lcyx4YWktYmF0Y2g7bGxtX291dHB1dF9maWxlX2lkLGJhdGNoXzNhMzI4ZDliLWI5NWEtNGJkOS1hOWNjLWQ5Y2JjM2RiNWJjYTtsbG1fb3V0cHV0X2ZpbGVfbW9kZWxfaWQseGFpLWJhdGNoLTE","bytes":2565,"created_at":1791845131,"filename":"batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca","object":"file","purpose":"batch_output","status":"processed","expires_at":null,"status_details":null}
+HTTP 200
+
+$ curl -s "http://127.0.0.1:19395/v1/files?purpose=batch_output" -H "Authorization: Bearer $KEY" | jq '.data[] | {bytes, filename, purpose}'
+{
+  "bytes": 2565,
+  "filename": "batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca",
+  "purpose": "batch_output"
+}
+
+$ curl -s http://127.0.0.1:19395/v1/files/$OUTPUT_FILE_ID/content -H "Authorization: Bearer $KEY" | wc -lc
+       3    2565
+
+# every request the proxy sent to api.x.ai for batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca (forwarding recorder log)
+22:45:24.427 GET /v1/batches/batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca
+22:45:25.162 GET /v1/batches/batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca
+22:45:30.873 GET /v1/batches/batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca
+22:45:31.288 GET /v1/batches/batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca
+22:45:31.729 GET /v1/batches/batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca
+22:45:32.056 GET /v1/batches/batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca
+22:45:37.176 GET /v1/batches/batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca
+22:45:37.530 GET /v1/batches/batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca/results?limit=1000
+22:45:43.144 GET /v1/batches/batch_3a328d9b-b95a-4bd9-a9cc-d9cbc3db5bca/results?limit=1000
+
+# files-API lookups of the batch id: 0
