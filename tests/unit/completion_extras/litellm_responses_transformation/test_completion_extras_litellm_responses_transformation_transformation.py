@@ -5197,3 +5197,36 @@ def test_convert_response_output_folds_two_messages_and_function_call_into_one_c
             "index": 0,
         }
     ]
+
+
+def test_convert_response_output_folds_commentary_and_final_answer_into_one_choice() -> None:
+    commentary: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_commentary",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "commentary",
+            "content": [{"type": "output_text", "text": "Let me answer that.", "annotations": []}],
+        }
+    )
+    final_answer: Final = ResponseOutputMessage.model_validate(
+        {
+            "id": "msg_final",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "phase": "final_answer",
+            "content": [{"type": "output_text", "text": '{"city": "Paris"}', "annotations": []}],
+        }
+    )
+
+    choices: Final = LiteLLMResponsesTransformationHandler._convert_response_output_to_choices(  # pyright: ignore[reportPrivateUsage]  # exercises the converter directly
+        (commentary, final_answer)
+    )
+
+    assert len(choices) == 1
+    assert choices[0].index == 0
+    assert choices[0].finish_reason == "stop"
+    assert choices[0].message.content == 'Let me answer that.{"city": "Paris"}'
+    assert choices[0].message.tool_calls is None

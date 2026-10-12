@@ -589,13 +589,14 @@ _WEATHER_TOOL: Final[dict[str, JsonValue]] = {
 }
 
 
-def _message_item(item_id: str, text: str) -> dict[str, JsonValue]:
+def _message_item(item_id: str, text: str, phase: str | None = None) -> dict[str, JsonValue]:
     return {
         "type": "message",
         "id": item_id,
         "status": "completed",
         "role": "assistant",
         "content": [{"type": "output_text", "text": text, "annotations": []}],
+        **({} if phase is None else {"phase": phase}),
     }
 
 
@@ -669,6 +670,64 @@ def test_chat_over_responses_deployment_folds_two_messages_and_function_call_int
                             "index": 0,
                         }
                     ],
+                },
+            }
+        ], response.text
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/responses")]
+
+
+_COMMENTARY_THEN_FINAL_ANSWER: Final = (
+    _message_item("msg_commentary", "Let me answer that.", phase="commentary"),
+    _message_item("msg_final", '{"city": "Paris", "summary": "Sunny, 21C"}', phase="final_answer"),
+)
+
+
+def test_chat_over_responses_deployment_folds_commentary_and_final_answer_into_one_choice(
+    gateway: Gateway,
+) -> None:
+    identity: Final = "responses-bridge-commentary-final-" + uuid.uuid4().hex
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return Reply(body=b'{"object":"list","data":[]}')
+        assert request.method == "POST" and request.target == "/responses", request.target
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "resp_commentary_final",
+                    "object": "response",
+                    "created_at": 1789788253,
+                    "status": "completed",
+                    "model": "gpt-6-sol",
+                    "output": list(_COMMENTARY_THEN_FINAL_ANSWER),
+                    "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                }
+            ).encode()
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/responses/gpt-6-sol", api_base=wire.url, api_key="synthetic-openai-key"
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": f"Weather in Paris as JSON. {identity}"}],
+                "tools": [_WEATHER_TOOL],
+                "cache": {"no-cache": True},
+            },
+        )
+        assert response.status_code == 200, response.text
+        body: Final = response.json()
+        assert body["choices"] == [
+            {
+                "finish_reason": "stop",
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": 'Let me answer that.{"city": "Paris", "summary": "Sunny, 21C"}',
                 },
             }
         ], response.text
@@ -825,4 +884,72 @@ def test_chat_stream_over_responses_deployment_folds_two_messages_and_function_c
             == '{"city":"Paris"}'
         ), chunks
         assert [choice["finish_reason"] for choice in choices if choice.get("finish_reason")] == ["tool_calls"], chunks
+        assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/responses")]
+
+
+def test_chat_stream_over_responses_deployment_folds_commentary_and_final_answer_into_one_choice(
+    gateway: Gateway,
+) -> None:
+    identity: Final = "responses-bridge-commentary-final-stream-" + uuid.uuid4().hex
+    response_payload: Final[dict[str, JsonValue]] = {
+        "id": "resp_commentary_final_stream",
+        "object": "response",
+        "created_at": 1789788253,
+        "model": "gpt-6-sol",
+        "status": "in_progress",
+        "output": [],
+    }
+
+    def respond(request: Request) -> Reply:
+        if request.method == "GET" and request.target == "/v1/models":
+            return Reply(body=b'{"object":"list","data":[]}')
+        assert request.method == "POST" and request.target == "/responses", request.target
+        assert json.loads(request.body)["stream"] is True, request.body
+        return Reply(
+            content_type="text/event-stream",
+            chunks=(
+                _responses_frame("response.created", {"type": "response.created", "response": response_payload}),
+                *_message_item_frames(0, _COMMENTARY_THEN_FINAL_ANSWER[0]),
+                *_message_item_frames(1, _COMMENTARY_THEN_FINAL_ANSWER[1]),
+                _responses_frame(
+                    "response.completed",
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            **response_payload,
+                            "status": "completed",
+                            "output": list(_COMMENTARY_THEN_FINAL_ANSWER),
+                            "usage": {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+                        },
+                    },
+                ),
+            ),
+        )
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(
+            model="openai/responses/gpt-6-sol", api_base=wire.url, api_key="synthetic-openai-key"
+        )
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": f"Weather in Paris as JSON. {identity}"}],
+                "tools": [_WEATHER_TOOL],
+                "stream": True,
+                "cache": {"no-cache": True},
+            },
+        )
+        assert response.status_code == 200, response.text
+        chunks: Final = _sse_payloads(list(response.iter_lines()))
+        choices: Final = [object_value(choice) for chunk in chunks for choice in list_value(chunk["choices"])]
+        assert [choice["index"] for choice in choices] == [0] * len(choices), chunks
+        deltas: Final = [object_value(choice["delta"]) for choice in choices]
+        assert (
+            "".join(str(delta["content"]) for delta in deltas if delta.get("content"))
+            == 'Let me answer that.{"city": "Paris", "summary": "Sunny, 21C"}'
+        ), chunks
+        assert not [delta for delta in deltas if delta.get("tool_calls")], chunks
+        assert [choice["finish_reason"] for choice in choices if choice.get("finish_reason")] == ["stop"], chunks
         assert [(request.method, request.target) for request in wire.drain()] == [("POST", "/responses")]
