@@ -7,6 +7,8 @@ import pytest
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.llms.vertex_ai.gemini.long_decode import initial_prompt_tokens_of, with_initial_prompt_tokens
+from litellm.types.utils import Usage
 
 MODEL: Final = "gemini/gemini-3.8-flash"
 MESSAGES: Final = ({"role": "user", "content": "Prove it"},)
@@ -91,6 +93,7 @@ async def test_unary_long_decode_resends_the_original_request_with_the_token_and
     assert response.usage.prompt_tokens == 20
     assert response.usage.completion_tokens == 50
     assert response.usage.prompt_tokens_details.cached_tokens == 9
+    assert response.usage.prompt_tokens_details.initial_prompt_tokens == 10
 
 
 @pytest.mark.parametrize("hop_end", HOP_END_FINISH_REASONS)
@@ -119,6 +122,7 @@ async def test_unary_long_decode_stops_at_the_callers_cap_and_returns_the_token_
     assert len(sent) == expected_requests
     assert response.choices[0].finish_reason == "length"
     assert response.choices[0].message.provider_specific_fields["continuation_token"] == expected_token
+    assert response.usage.prompt_tokens_details.initial_prompt_tokens == (10 if expected_requests > 1 else None)
 
 
 @pytest.mark.asyncio
@@ -219,6 +223,7 @@ async def test_streaming_long_decode_chains_hops_into_one_stream_with_one_finish
     assert not any("continuation_token" in fields for fields in _delta_fields(chunks))
     assert chunks[-1].usage.prompt_tokens == 20
     assert chunks[-1].usage.completion_tokens == 50
+    assert chunks[-1].usage.prompt_tokens_details.initial_prompt_tokens == 10
 
 
 @pytest.mark.asyncio
@@ -246,3 +251,18 @@ async def test_streaming_failed_continuation_hop_ends_the_stream_with_length_and
     assert "".join(c.choices[0].delta.content or "" for c in chunks if c.choices) == "hello"
     assert [c.choices[0].finish_reason for c in chunks if c.choices and c.choices[0].finish_reason] == ["length"]
     assert {"continuation_token": "dG9rLTE="} in _delta_fields(chunks)
+
+
+def test_initial_prompt_tokens_is_absent_on_a_single_hop_and_the_first_hops_count_otherwise():
+    assert initial_prompt_tokens_of((HOP_1,)) is None
+    assert initial_prompt_tokens_of((HOP_1, HOP_2)) == 10
+
+
+def test_with_initial_prompt_tokens_adds_the_details_block_and_keeps_the_counts():
+    usage: Final = Usage(prompt_tokens=20, completion_tokens=50, total_tokens=70)
+
+    marked: Final = with_initial_prompt_tokens(usage, 10)
+
+    assert marked.prompt_tokens_details.initial_prompt_tokens == 10
+    assert (marked.prompt_tokens, marked.completion_tokens, marked.total_tokens) == (20, 50, 70)
+    assert usage.prompt_tokens_details is None

@@ -15,6 +15,7 @@ from litellm.types.llms.vertex_ai import (
     RequestBody,
     UsageMetadata,
 )
+from litellm.types.utils import PromptTokensDetailsWrapper, Usage
 
 from ..common_utils import VertexAIError
 
@@ -132,6 +133,24 @@ def merge_hops(hops: LongDecodeHops) -> GenerateContentResponseBody:
         "candidates": [merged_first, *(last.get("candidates") or [])[1:]],
         "usageMetadata": sum_usage_metadata(*(hop.get("usageMetadata", UsageMetadata()) for hop in hops)),
     }
+
+
+def initial_prompt_tokens_of(hops: LongDecodeHops) -> int | None:
+    if len(hops) == 1:
+        return None
+    return hops[0].get("usageMetadata", UsageMetadata()).get("promptTokenCount")
+
+
+def with_initial_prompt_tokens(usage: Usage, initial_prompt_tokens: int | None) -> Usage:
+    if initial_prompt_tokens is None:
+        return usage
+    details: Final = usage.prompt_tokens_details
+    marked: Final = (
+        details.model_copy(update={"initial_prompt_tokens": initial_prompt_tokens})
+        if isinstance(details, PromptTokensDetailsWrapper)
+        else PromptTokensDetailsWrapper(initial_prompt_tokens=initial_prompt_tokens)
+    )
+    return usage.model_copy(update={"prompt_tokens_details": marked})
 
 
 def parse_body(response: httpx.Response) -> GenerateContentResponseBody:

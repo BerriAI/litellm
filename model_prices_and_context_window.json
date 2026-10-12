@@ -30617,8 +30617,8 @@
     "gemini/gemini-4-argon": {
         "litellm_provider": "gemini",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
-        "max_tokens": 65536,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
         "mode": "chat",
         "source": "https://ai.google.dev/gemini-api/docs/pricing",
         "supported_endpoints": [
@@ -30652,8 +30652,8 @@
     "vertex_ai/gemini-4-argon": {
         "litellm_provider": "vertex_ai",
         "max_input_tokens": 1048576,
-        "max_output_tokens": 65536,
-        "max_tokens": 65536,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
         "mode": "chat",
         "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing",
         "supported_endpoints": [

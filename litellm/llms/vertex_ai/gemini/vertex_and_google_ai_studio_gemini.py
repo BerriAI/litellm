@@ -107,6 +107,7 @@ from .long_decode import (
     collect_hops_sync,
     hop_request,
     hops_original_response,
+    initial_prompt_tokens_of,
     log_failed_hop,
     merge_hops,
     next_hop_token,
@@ -114,6 +115,7 @@ from .long_decode import (
     output_tokens_of,
     parse_body,
     sum_usage_metadata,
+    with_initial_prompt_tokens,
 )
 from .transformation import (
     async_transform_request_body,
@@ -3284,13 +3286,18 @@ def _transform_long_decode_hops(
         original_response=hops_original_response(hops, first_response),
         additional_args={"complete_input_dict": request_body},
     )
-    return VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
+    merged: Final = VertexGeminiConfig().transform_google_generate_content_to_openai_model_response(
         completion_response=merge_hops(hops),
         model_response=model_response,
         model=model,
         logging_obj=logging_obj,
         raw_response=first_response,
     )
+    merged_usage: Final = getattr(merged, "usage", None)
+    if not isinstance(merged_usage, Usage):
+        return merged
+    marked: Final = with_initial_prompt_tokens(merged_usage, initial_prompt_tokens_of(hops))
+    return merged if marked is merged_usage else merged.model_copy(update={"usage": marked})
 
 
 class ModelResponseIterator:
@@ -3322,6 +3329,7 @@ class ModelResponseIterator:
         self._pending_hop_token: str | None = None
         self._usage_offset: UsageMetadata = UsageMetadata()
         self._hop_usage: UsageMetadata = UsageMetadata()
+        self._initial_prompt_tokens: int | None = None
 
     @property
     def accumulated_json(self) -> str:
@@ -3433,6 +3441,11 @@ class ModelResponseIterator:
             citation_metadata,
         )
 
+    def _marked_stream_usage(self, usage: Usage | None) -> Usage | None:
+        if usage is None or not self._usage_offset:
+            return usage
+        return with_initial_prompt_tokens(usage, self._initial_prompt_tokens)
+
     def _apply_stream_usage_metadata(
         self,
         processed_chunk: GenerateContentResponseBody,
@@ -3504,7 +3517,9 @@ class ModelResponseIterator:
                     citation_metadata,
                 ) = self._apply_stream_candidates(_candidates, model_response)
 
-            usage: Final = self._apply_stream_usage_metadata(processed_chunk, model_response, grounding_metadata)
+            usage: Final = self._marked_stream_usage(
+                self._apply_stream_usage_metadata(processed_chunk, model_response, grounding_metadata)
+            )
 
             setattr(model_response, "usage", usage)
             self._plan_resume(processed_chunk, model_response)
@@ -3519,6 +3534,8 @@ class ModelResponseIterator:
         if "usageMetadata" not in chunk:
             return chunk
         self._hop_usage = chunk["usageMetadata"]
+        if self._initial_prompt_tokens is None:
+            self._initial_prompt_tokens = self._hop_usage.get("promptTokenCount")
         if not self._usage_offset:
             return chunk
         return {**chunk, "usageMetadata": sum_usage_metadata(self._usage_offset, self._hop_usage)}

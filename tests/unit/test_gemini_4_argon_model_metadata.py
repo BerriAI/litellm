@@ -32,7 +32,7 @@ def test_gemini_4_argon_routes_to_its_provider_on_the_thinking_level_path(
     assert info["litellm_provider"] == expected_provider
     assert info["mode"] == "chat"
     assert info["max_input_tokens"] == 1_048_576
-    assert info["max_output_tokens"] == 65_536
+    assert info["max_output_tokens"] == 1_048_576
     assert info["supports_reasoning"] is True
     assert info["supports_function_calling"] is True
     assert info["supports_response_schema"] is True
