@@ -21,7 +21,7 @@ from litellm.types.llms.openai import (
 )
 
 JsonPath: TypeAlias = tuple[str | int, ...]
-_Node = TypeVar("_Node")
+_Node: Final = TypeVar("_Node")
 _OBJECT: Final = TypeAdapter(Mapping[str, object])
 _ITEMS: Final = TypeAdapter(Sequence[object])
 
@@ -177,8 +177,8 @@ def _text_slots(path: JsonPath, blocks: Iterable[tuple[int, _ContentBlock]]) -> 
     return tuple(slot for slot in slots if slot is not None)
 
 
-def _text_parts(slots: Sequence[TextSlot]) -> list[ChatCompletionTextObject]:
-    return [ChatCompletionTextObject(type="text", text=slot.text) for slot in slots]
+def _text_parts(slots: Sequence[TextSlot]) -> tuple[ChatCompletionTextObject, ...]:
+    return tuple(ChatCompletionTextObject(type="text", text=slot.text) for slot in slots)
 
 
 def _slot_text(slot: Slot) -> str:
@@ -217,7 +217,9 @@ def _user_group(
             if (result := block.tool_result) is not None
         )
     slots: Final = _text_slots(path, group)
-    return (ConverseRow(ChatCompletionUserMessage(role="user", content=_text_parts(slots)), slots),) if slots else ()
+    return (
+        (ConverseRow(ChatCompletionUserMessage(role="user", content=list(_text_parts(slots))), slots),) if slots else ()
+    )
 
 
 def _user_rows(path: JsonPath, blocks: Sequence[_ContentBlock]) -> tuple[ConverseRow, ...]:
@@ -250,7 +252,7 @@ def _assistant_rows(
     if uses:
         message: Final = ChatCompletionAssistantMessage(
             role="assistant",
-            content=_text_parts(slots) or None,
+            content=list(_text_parts(slots)) or None,
             tool_calls=[_tool_call(tool_use) for _, tool_use in uses],
         )
         calls: Final = tuple(
@@ -259,7 +261,7 @@ def _assistant_rows(
         return (ConverseRow(message, slots, calls),)
     if not slots:
         return ()
-    return (ConverseRow(ChatCompletionAssistantMessage(role="assistant", content=_text_parts(slots)), slots),)
+    return (ConverseRow(ChatCompletionAssistantMessage(role="assistant", content=list(_text_parts(slots))), slots),)
 
 
 def _message_rows(index: int, message: _Message, include_tool_calls: bool) -> tuple[ConverseRow, ...]:
@@ -272,13 +274,17 @@ def _message_rows(index: int, message: _Message, include_tool_calls: bool) -> tu
 def _system_rows(blocks: Sequence[_ContentBlock]) -> tuple[ConverseRow, ...]:
     slots: Final = _text_slots(("system",), enumerate(blocks))
     return (
-        (ConverseRow(ChatCompletionSystemMessage(role="system", content=_text_parts(slots)), slots),) if slots else ()
+        (ConverseRow(ChatCompletionSystemMessage(role="system", content=list(_text_parts(slots))), slots),)
+        if slots
+        else ()
     )
 
 
 def _request_field_rows(value: object) -> tuple[ConverseRow, ...]:
     slots: Final = _string_leaves(("additionalModelRequestFields",), value)
-    return (ConverseRow(ChatCompletionUserMessage(role="user", content=_text_parts(slots)), slots),) if slots else ()
+    return (
+        (ConverseRow(ChatCompletionUserMessage(role="user", content=list(_text_parts(slots))), slots),) if slots else ()
+    )
 
 
 def converse_rows(request: ConverseRequest, include_tool_calls: bool) -> tuple[ConverseRow, ...]:

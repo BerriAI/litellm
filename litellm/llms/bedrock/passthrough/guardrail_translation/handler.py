@@ -170,13 +170,10 @@ class _Scope:
     scan_only_tool_results: bool
 
 
-def _flat_texts(body: dict, scope: _Scope) -> tuple[list[str], list[_StringHolder]]:
-    return _extract_converse_texts(body, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results)
-
-
 def _texts_applied_rows(body: Mapping[str, object], texts: Sequence[str], scope: _Scope) -> tuple[ConverseRow, ...]:
     rewritten: Final = copy.deepcopy(dict(body))
-    _write_back_texts(texts, _flat_texts(rewritten, scope)[1])
+    _, holders = _extract_converse_texts(rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results)
+    _write_back_texts(texts, holders)
     request: Final = parse_converse_request(rewritten)
     return converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
 
@@ -530,7 +527,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
             scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(guardrail_to_apply),
         )
-        texts, holders = _flat_texts(body, scope)
+        texts, holders = _extract_converse_texts(body, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results)
         request: Final = parse_converse_request(body)
         rows: Final = converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
         scoped_indices: Final = scoped_structured_message_indices(
