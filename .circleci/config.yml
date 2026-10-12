@@ -1063,7 +1063,7 @@ jobs:
               docker build \
                 --label org.opencontainers.image.revision="$(git rev-parse HEAD)" \
                 -t litellm-docker-database:ci \
-                -f docker/Dockerfile.database .
+                -f Dockerfile .
             fi
             python3 .circleci/scripts/run_migration_tests.py record-image
 
