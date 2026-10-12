@@ -561,6 +561,12 @@ BEDROCK_INPUT_JSONL = b"\n".join(
                 "modelInput": {"messages": [{"role": "user", "content": "hi br-conv"}]},
             }
         ).encode(),
+        json.dumps(
+            {
+                "recordId": "br-err",
+                "modelInput": {"messages": [{"role": "user", "content": "hi br-err"}]},
+            }
+        ).encode(),
     ]
 )
 
@@ -596,6 +602,13 @@ BEDROCK_OUTPUT_JSONL = b"\n".join(
                     "usage": {"inputTokens": 5, "outputTokens": 6, "totalTokens": 11},
                     "metrics": {"latencyMs": 12},
                 },
+            }
+        ).encode(),
+        json.dumps(
+            {
+                "recordId": "br-err",
+                "modelInput": {"messages": [{"role": "user", "content": "hi br-err"}]},
+                "error": {"errorCode": 400, "errorMessage": "bad request"},
             }
         ).encode(),
     ]
@@ -882,6 +895,11 @@ async def test_line_items_bedrock_shapes(recorder):
     assert converse_line["prompt_tokens"] == 5
     assert converse_line["completion_tokens"] == 6
 
+    assert [_hidden(by_id[line])["batch_line_status_code"] for line in ("br-anth", "br-titan", "br-conv")] == [200] * 3
+    (failure,) = recorder.failure_events
+    assert (_hidden(failure)["batch_custom_id"], _hidden(failure)["batch_line_status_code"]) == ("br-err", 400)
+    assert "bad request" in _payload(failure)["error_str"]
+
 
 @pytest.mark.asyncio
 async def test_line_items_mistral_shape(recorder):
@@ -1042,6 +1060,7 @@ async def test_line_items_native_vertex_rows_are_skipped(recorder):
     assert len(recorder.success_events) == 1
     assert len(recorder.failure_events) == 0
     assert _hidden(recorder.success_events[0]).get("batch_custom_id") is None
+    assert "input-vtx" not in [call.kwargs.get("file_id") or call.args[0] for call in file_mock.call_args_list]
 
 
 class _NeverClaimsCache(DualCache):
@@ -1494,10 +1513,9 @@ async def test_native_vertex_skip_releases_the_claim(recorder):
             claim_cache=claim_cache,
         )
 
-    assert first == 0
-    assert second == 0
-    assert file_mock.await_count == 4, (
-        "a released claim must let the next retrieve reach the fetch step again; already_claimed would return early at 2 fetches"
+    assert (first, second) == (0, 0)
+    assert [call.kwargs["file_id"] for call in file_mock.await_args_list] == ["output-vtx-rel", "output-vtx-rel"], (
+        "a released claim must let the next retrieve reach the fetch step again; already_claimed would return early at 1 fetch"
     )
 
 

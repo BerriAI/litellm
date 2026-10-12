@@ -196,6 +196,13 @@ def _line_status_code(entry: Mapping[str, object], custom_llm_provider: str) -> 
         result: Final = _as_object_mapping(entry.get("result"))
         if result is not None and result.get("type") == "succeeded":
             return 200
+    if custom_llm_provider == "bedrock":
+        error: Final = _as_object_mapping(entry.get("error"))
+        error_code: Final = error.get("errorCode") if error is not None else None
+        if isinstance(error_code, int):
+            return error_code
+        if _batch_response_was_successful(entry, custom_llm_provider):
+            return 200
     return None
 
 
@@ -245,7 +252,7 @@ def _line_result(
     custom_llm_provider: BatchProvider,
     model: str,
     response_body: Mapping[str, object],
-) -> _BatchLineResult:
+) -> "_BatchLineResult | None":
     from litellm.types.utils import LlmProviders
     from litellm.utils import ProviderConfigManager
 
@@ -255,7 +262,7 @@ def _line_result(
         if transformed is not None:
             return transformed
         if custom_llm_provider == "bedrock":
-            raise ValueError(f"unrecognized bedrock batch output line shape. keys={sorted(response_body)}")
+            return None
     if call_type == "aembedding":
         return EmbeddingResponse(**response_body)  # pyright: ignore[reportArgumentType]  # provider output bodies are dicts expanded as response ctor kwargs
     if call_type == "aresponses":
@@ -275,14 +282,18 @@ def _line_result_or_none(
     custom_id: object,
 ) -> "_BatchLineResult | None":
     try:
-        return _line_result(request_call_type, custom_llm_provider, model, response_body)
+        result: Final = _line_result(request_call_type, custom_llm_provider, model, response_body)
     except Exception:  # noqa: BLE001  # one unparseable line must not drop the rest of the batch's line events
-        verbose_logger.warning(
-            "batch output line could not be reconstructed as a %s response, skipping it. custom_id=%s",
-            request_call_type,
-            custom_id,
-        )
-        return None
+        return _skipped_line(request_call_type, custom_id)
+    return result if result is not None else _skipped_line(request_call_type, custom_id)
+
+
+def _skipped_line(request_call_type: str, custom_id: object) -> None:
+    verbose_logger.warning(
+        "batch output line could not be reconstructed as a %s response, skipping it. custom_id=%s",
+        request_call_type,
+        custom_id,
+    )
 
 
 def _new_child_logging(
@@ -586,9 +597,6 @@ async def log_batch_line_items(
             dict(internal_mapping) if internal_mapping is not None else litellm_params
         )
 
-        input_file_content: Final = await _fetch_managed_file_or_empty(batch.input_file_id, line_provider, fetch_params)
-        requests_by_id: Final = _requests_by_custom_id(input_file_content)
-
         output_content: Final = (
             result_files.output
             if result_files is not None and result_files.output is not None
@@ -601,6 +609,8 @@ async def log_batch_line_items(
                 batch.id,
             )
             return 0
+        input_file_content: Final = await _fetch_managed_file_or_empty(batch.input_file_id, line_provider, fetch_params)
+        requests_by_id: Final = _requests_by_custom_id(input_file_content)
         error_content: Final = (
             result_files.error
             if result_files is not None and result_files.error is not None
