@@ -10,7 +10,10 @@ Covers:
 - call_tool_rest_api intercepts mcp_tool_call calls
 """
 
+import asyncio
 import json
+import os
+import sys
 from collections.abc import Mapping, Sequence
 from types import SimpleNamespace
 from typing import Any, Final
@@ -1386,3 +1389,28 @@ async def test_mcp_tool_search_leaves_the_listed_tools_slot_empty(monkeypatch: p
     assert result.is_error is False
     assert [hit["name"] for hit in json.loads(result.content[0].text)] == ["search-slot-echo"]
     assert listed == [None, None]
+
+
+@pytest.mark.asyncio
+async def test_cold_concurrent_schema_validation_accepts_valid_arguments() -> None:
+    from litellm.proxy._experimental.mcp_server.tool_search import _tool_argument_validation_error
+
+    schema: Final = {
+        "type": "object",
+        "$defs": {"amount": {"type": "number", "multipleOf": 0.25}},
+        "properties": {"amount": {"$ref": "#/$defs/amount"}},
+    }
+    original_affinity: Final = os.sched_getaffinity(0) if sys.platform == "linux" else None
+    try:
+        if original_affinity is not None:
+            os.sched_setaffinity(0, {min(original_affinity)})
+        for _ in range(2):
+            results: Final = await asyncio.gather(
+                *(_tool_argument_validation_error(schema, {"amount": 0.75}) for _ in range(8))
+            )
+            assert results == [None] * 8, "Cold and warm workers must accept valid concurrent tool arguments"
+    finally:
+        if original_affinity is not None:
+            os.sched_setaffinity(0, original_affinity)
+
+
