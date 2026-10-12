@@ -4,8 +4,10 @@ from typing import Final
 import httpx
 
 from litellm.decisions.call import (
+    DecisionsAudioClips,
     DecisionsCall,
     DecisionsImages,
+    DecisionsVideoClips,
     SystemOneQuestions,
     SystemOneRequestFields,
     asend,
@@ -24,6 +26,8 @@ def _prepare_systemone_call(
     questions: SystemOneQuestions | None,
     images: DecisionsImages | None,
     safety_identifier: str | None,
+    audio: DecisionsAudioClips | None,
+    videos: DecisionsVideoClips | None,
     api_key: str | None,
     api_base: str | None,
     timeout: float | httpx.Timeout | None,
@@ -34,7 +38,7 @@ def _prepare_systemone_call(
     reject_other_format(model=model, kwargs=kwargs, field_name="input", other_function="decisions")
     return prepare_call(
         model=model,
-        fields=SystemOneRequestFields(state=state, questions=questions, images=images),
+        fields=SystemOneRequestFields(state=state, questions=questions, images=images, audio=audio, videos=videos),
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
@@ -55,13 +59,15 @@ async def asystemone(
     model: str,
     state: DecisionsJSON | None = None,
     questions: SystemOneQuestions | None = None,
-    images: DecisionsImages | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
     safety_identifier: str | None = None,
+    images: DecisionsImages | None = None,
+    audio: DecisionsAudioClips | None = None,
+    videos: DecisionsVideoClips | None = None,
     **kwargs: object,  # kwargs-ok: litellm_params forwarded by @client
 ) -> DecisionsResponse:
     call: Final = _prepare_systemone_call(
@@ -70,6 +76,8 @@ async def asystemone(
         questions=questions,
         images=images,
         safety_identifier=safety_identifier,
+        audio=audio,
+        videos=videos,
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,
@@ -85,13 +93,15 @@ def systemone(
     model: str,
     state: DecisionsJSON | None = None,
     questions: SystemOneQuestions | None = None,
-    images: DecisionsImages | None = None,
     api_key: str | None = None,
     api_base: str | None = None,
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
     safety_identifier: str | None = None,
+    images: DecisionsImages | None = None,
+    audio: DecisionsAudioClips | None = None,
+    videos: DecisionsVideoClips | None = None,
     **kwargs: object,  # kwargs-ok: litellm_params forwarded by @client
 ) -> DecisionsResponse:
     call: Final = _prepare_systemone_call(
@@ -100,6 +110,8 @@ def systemone(
         questions=questions,
         images=images,
         safety_identifier=safety_identifier,
+        audio=audio,
+        videos=videos,
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,

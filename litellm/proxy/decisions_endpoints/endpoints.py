@@ -28,7 +28,6 @@ _OPENAI_DECISION_REQUEST_BODY_ADAPTER: Final[TypeAdapter[OpenAIDecisionRequestBo
 _GENERAL_SETTINGS_ADAPTER: Final[TypeAdapter[dict[str, object]]] = TypeAdapter(dict[str, object])
 _OPTIONAL_STRING_ADAPTER: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
 _OPTIONAL_FLOAT_ADAPTER: Final[TypeAdapter[float | None]] = TypeAdapter(float | None)
-_FIELDS_A_DEPLOYMENT_MAY_DROP: Final = frozenset({"safety_identifier", "images"})
 _SYSTEMONE_REQUEST_BODY: Final = inline_request_body(
     DecisionsRequest,
     {
@@ -93,8 +92,11 @@ async def _invalid_request(
     )
 
 
+_FIELDS_CHECKED_AFTER_ROUTING: Final = frozenset({"safety_identifier", "images", "audio", "videos"})
+
+
 def _fields_checked_before_routing(data: Mapping[str, object]) -> Mapping[str, object]:
-    return MappingProxyType({key: value for key, value in data.items() if key not in _FIELDS_A_DEPLOYMENT_MAY_DROP})
+    return MappingProxyType({key: value for key, value in data.items() if key not in _FIELDS_CHECKED_AFTER_ROUTING})
 
 
 async def _request_data(request: Request, user_api_key_dict: UserAPIKeyAuth) -> dict[str, object]:

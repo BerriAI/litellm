@@ -3,7 +3,7 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Annotated, Final, Literal, TypeAlias
 
-from pydantic import ConfigDict, Field, PrivateAttr, model_validator, with_config
+from pydantic import ConfigDict, Field, PrivateAttr, field_validator, model_validator, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
@@ -77,7 +77,49 @@ class DecisionsBase64Image(LiteLLMPydanticObjectBase):
 DecisionsImage: TypeAlias = str | DecisionsBase64Image
 
 
-class DecisionsRequestBody(LiteLLMPydanticObjectBase):
+class DecisionsBase64Audio(LiteLLMPydanticObjectBase):
+    content_type: Annotated[str, Field(pattern=r"^audio/\S+$", description="An audio/* media type, such as audio/wav")]
+    base64: Annotated[str, Field(min_length=1, description="Base64-encoded audio bytes")]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class DecisionsBase64Video(LiteLLMPydanticObjectBase):
+    content_type: Annotated[str, Field(pattern=r"^video/\S+$", description="A video/* media type, such as video/mp4")]
+    base64: Annotated[str, Field(min_length=1, description="Base64-encoded video bytes")]
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+DecisionsAudio: TypeAlias = Annotated[str, Field(pattern=r"^data:audio/[^;,\s]+;base64,.+$")] | DecisionsBase64Audio
+DecisionsVideo: TypeAlias = Annotated[str, Field(pattern=r"^data:video/[^;,\s]+;base64,.+$")] | DecisionsBase64Video
+
+
+class DecisionsMediaBody(LiteLLMPydanticObjectBase):
+    audio: Annotated[
+        tuple[DecisionsAudio, ...],
+        Field(
+            max_length=4,
+            description="Clef-omni only. Up to 4 embedded audio clips, each a base64 data URL or {content_type, base64}",
+        ),
+    ] = ()
+    videos: Annotated[
+        tuple[DecisionsVideo, ...],
+        Field(
+            max_length=2,
+            description="Clef-omni only. Up to 2 embedded videos, each a base64 data URL or {content_type, base64}",
+        ),
+    ] = ()
+
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    @field_validator("audio", "videos", mode="before")
+    @classmethod
+    def _null_means_no_clips(cls, value: object) -> object:
+        return () if value is None else value
+
+
+class DecisionsRequestBody(DecisionsMediaBody):
     state: Annotated[
         DecisionsJSON,
         Field(description="The thing being judged, such as a support ticket, a document or a chat transcript"),
@@ -104,6 +146,8 @@ class DecisionsCallParams(TypedDict, total=False):
     state: Required[ReadOnly[DecisionsJSON]]
     questions: Required[ReadOnly[DecisionQuestionMap]]
     images: ReadOnly[Sequence[DecisionsImage] | None]
+    audio: ReadOnly[Sequence[DecisionsAudio]]
+    videos: ReadOnly[Sequence[DecisionsVideo]]
     api_key: ReadOnly[str | None]
     api_base: ReadOnly[str | None]
     timeout: ReadOnly[float | None]
@@ -270,7 +314,7 @@ OpenAIDecisionQuestion: TypeAlias = Annotated[
 ]
 
 
-class OpenAIDecisionRequestBody(LiteLLMPydanticObjectBase):
+class OpenAIDecisionRequestBody(DecisionsMediaBody):
     input: Annotated[
         OpenAIDecisionInput,
         Field(
@@ -442,6 +486,8 @@ class DecisionsIRRequest:
     input: DecisionsIRState | DecisionsIRMessages
     questions: tuple[DecisionsIRQuestion, ...]
     safety_identifier: str | None = None
+    audio: tuple[DecisionsAudio, ...] = ()
+    videos: tuple[DecisionsVideo, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)

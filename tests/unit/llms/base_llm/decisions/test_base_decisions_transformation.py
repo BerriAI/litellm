@@ -17,6 +17,7 @@ from litellm.types.decisions import (
     DecisionsIRRequest,
     DecisionsRequestBody,
     OpenAIDecisionRequestBody,
+    UnsupportedDecisionsRequest,
 )
 
 _SYSTEMONE_BODY: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
@@ -188,3 +189,23 @@ def test_missing_or_mismatched_systemone_answers_are_refusals_left_out_of_the_re
 
     assert parsed.answers[1:] == (DecisionsIRRefusal(), DecisionsIRRefusal(), DecisionsIRRefusal())
     assert tuple(ir_to_systemone_response(parsed, ir).answers) == ("damaged",)
+
+
+def test_each_media_kind_is_gated_by_its_own_support_flag() -> None:
+    audio: Final = ["data:audio/wav;base64,YQ=="]
+    videos: Final = ["data:video/mp4;base64,YQ=="]
+    audio_only: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "audio": audio}))
+    video_only: Final = systemone_request_to_ir(_SYSTEMONE_BODY.validate_python({**_SYSTEMONE_REQUEST, "videos": videos}))
+
+    assert ir_to_systemone_request("clef-omni", audio_only, supports_audio=True) == {
+        "model": "clef-omni",
+        **_SYSTEMONE_REQUEST,
+        "audio": audio,
+    }
+    assert ir_to_systemone_request("clef-omni", video_only, supports_video=True) == {
+        "model": "clef-omni",
+        **_SYSTEMONE_REQUEST,
+        "videos": videos,
+    }
+    assert isinstance(ir_to_systemone_request("clef-omni", audio_only, supports_video=True), UnsupportedDecisionsRequest)
+    assert isinstance(ir_to_systemone_request("clef-omni", video_only, supports_audio=True), UnsupportedDecisionsRequest)

@@ -6,7 +6,9 @@ import httpx
 from pydantic import TypeAdapter
 
 from litellm.decisions.call import (
+    DecisionsAudioClips,
     DecisionsCall,
+    DecisionsVideoClips,
     OpenAIDecisionQuestions,
     OpenAIDecisionRequestFields,
     RequestFields,
@@ -32,12 +34,17 @@ def _request_fields(
     model: str,
     decision_input: OpenAIDecisionInput | None,
     questions: OpenAIDecisionQuestions | SystemOneQuestions | None,
+    audio: DecisionsAudioClips | None,
+    videos: DecisionsVideoClips | None,
     kwargs: Mapping[str, object],
 ) -> RequestFields:
     if "state" not in kwargs:
         reject_images_next_to_input(model=model, kwargs=kwargs)
         return OpenAIDecisionRequestFields(
-            input=decision_input, questions=_OPENAI_QUESTIONS_ADAPTER.validate_python(questions)
+            input=decision_input,
+            questions=_OPENAI_QUESTIONS_ADAPTER.validate_python(questions),
+            audio=audio,
+            videos=videos,
         )
     warnings.warn(
         "litellm.decisions(state=...) is deprecated, call litellm.systemone for the System One request format",
@@ -48,6 +55,8 @@ def _request_fields(
         state=_STATE_ADAPTER.validate_python(kwargs["state"]),
         questions=_SYSTEMONE_QUESTIONS_ADAPTER.validate_python(questions),
         images=kwargs.get("images"),
+        audio=audio,
+        videos=videos,
     )
 
 
@@ -57,6 +66,8 @@ def _prepare_decisions_call(
     decision_input: OpenAIDecisionInput | None,
     questions: OpenAIDecisionQuestions | SystemOneQuestions | None,
     safety_identifier: str | None,
+    audio: DecisionsAudioClips | None,
+    videos: DecisionsVideoClips | None,
     api_key: str | None,
     api_base: str | None,
     timeout: float | httpx.Timeout | None,
@@ -66,7 +77,7 @@ def _prepare_decisions_call(
 ) -> DecisionsCall:
     return prepare_call(
         model=model,
-        fields=_request_fields(model, decision_input, questions, kwargs),
+        fields=_request_fields(model, decision_input, questions, audio, videos, kwargs),
         safety_identifier=safety_identifier,
         api_key=api_key,
         api_base=api_base,
@@ -88,6 +99,8 @@ async def adecisions(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
+    audio: DecisionsAudioClips | None = None,
+    videos: DecisionsVideoClips | None = None,
     **kwargs: object,
 ) -> OpenAIDecisionResponse | DecisionsResponse:
     call: Final = _prepare_decisions_call(
@@ -95,6 +108,8 @@ async def adecisions(
         decision_input=input,
         questions=questions,
         safety_identifier=safety_identifier,
+        audio=audio,
+        videos=videos,
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,
@@ -116,6 +131,8 @@ def decisions(
     timeout: float | httpx.Timeout | None = None,
     custom_llm_provider: str | None = None,
     extra_headers: Mapping[str, str] | None = None,
+    audio: DecisionsAudioClips | None = None,
+    videos: DecisionsVideoClips | None = None,
     **kwargs: object,
 ) -> OpenAIDecisionResponse | DecisionsResponse:
     call: Final = _prepare_decisions_call(
@@ -123,6 +140,8 @@ def decisions(
         decision_input=input,
         questions=questions,
         safety_identifier=safety_identifier,
+        audio=audio,
+        videos=videos,
         api_key=api_key,
         api_base=api_base,
         timeout=timeout,

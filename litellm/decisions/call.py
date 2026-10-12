@@ -28,6 +28,7 @@ from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai.decisions.transformation import ir_to_openai_response, openai_request_to_ir
 from litellm.types.decisions import (
     DecisionQuestion,
+    DecisionsAudio,
     DecisionsBase64Image,
     DecisionsImage,
     DecisionsIRMessages,
@@ -36,6 +37,7 @@ from litellm.types.decisions import (
     DecisionsJSON,
     DecisionsRequestBody,
     DecisionsResponse,
+    DecisionsVideo,
     OpenAIDecisionInput,
     OpenAIDecisionQuestion,
     OpenAIDecisionRequestBody,
@@ -48,6 +50,8 @@ from litellm.utils import ProviderConfigManager
 SystemOneQuestions: TypeAlias = Mapping[str, DecisionQuestion | Mapping[str, object]]
 OpenAIDecisionQuestions: TypeAlias = Sequence[OpenAIDecisionQuestion | Mapping[str, object]]
 DecisionsImages: TypeAlias = Sequence[str | DecisionsBase64Image | Mapping[str, object]]
+DecisionsAudioClips: TypeAlias = Sequence[DecisionsAudio | Mapping[str, object]]
+DecisionsVideoClips: TypeAlias = Sequence[DecisionsVideo | Mapping[str, object]]
 DecisionsRequestFormat: TypeAlias = DecisionsRequestBody | OpenAIDecisionRequestBody
 
 _SYSTEMONE_REQUEST_ADAPTER: Final[TypeAdapter[DecisionsRequestBody]] = TypeAdapter(DecisionsRequestBody)
@@ -90,6 +94,8 @@ class SystemOneRequestFields:
     state: DecisionsJSON | None
     questions: SystemOneQuestions | None
     images: object = None
+    audio: DecisionsAudioClips | None = None
+    videos: DecisionsVideoClips | None = None
 
     def validate(self, *, safety_identifier: str | None, drops_params: bool) -> DecisionsRequestBody:
         return _SYSTEMONE_REQUEST_ADAPTER.validate_python(
@@ -97,6 +103,8 @@ class SystemOneRequestFields:
                 "state": self.state,
                 "questions": self.questions,
                 "images": _request_images(self.images, drops_params) or None,
+                "audio": self.audio,
+                "videos": self.videos,
             }
         )
 
@@ -105,10 +113,18 @@ class SystemOneRequestFields:
 class OpenAIDecisionRequestFields:
     input: OpenAIDecisionInput | None
     questions: OpenAIDecisionQuestions | None
+    audio: DecisionsAudioClips | None = None
+    videos: DecisionsVideoClips | None = None
 
     def validate(self, *, safety_identifier: str | None, drops_params: bool) -> OpenAIDecisionRequestBody:
         return _OPENAI_REQUEST_ADAPTER.validate_python(
-            {"input": self.input, "questions": self.questions, "safety_identifier": safety_identifier}
+            {
+                "input": self.input,
+                "questions": self.questions,
+                "safety_identifier": safety_identifier,
+                "audio": self.audio,
+                "videos": self.videos,
+            }
         )
 
 
@@ -168,10 +184,30 @@ def _drops_params(kwargs: Mapping[str, object]) -> bool:
     return litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True
 
 
-def _request_safety_identifier(safety_identifier: object, kwargs: Mapping[str, object]) -> str | None:
-    if isinstance(safety_identifier, str) or not _drops_params(kwargs):
+def _request_safety_identifier(
+    safety_identifier: object, provider_config: BaseDecisionsConfig, kwargs: Mapping[str, object]
+) -> str | None:
+    if not _drops_params(kwargs):
         return _SAFETY_IDENTIFIER_ADAPTER.validate_python(safety_identifier)
+    if isinstance(safety_identifier, str) and provider_config.supports_safety_identifier:
+        return safety_identifier
     return None
+
+
+def _fields_without_unsupported_media(
+    fields: RequestFields,
+    provider_config: BaseDecisionsConfig,
+    model: str,
+    custom_llm_provider: str,
+    kwargs: Mapping[str, object],
+) -> RequestFields:
+    if not _drops_params(kwargs):
+        return fields
+    return replace(
+        fields,
+        audio=fields.audio if provider_config.supports_audio_input(model, custom_llm_provider) else None,
+        videos=fields.videos if provider_config.supports_video_input(model, custom_llm_provider) else None,
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,14 +220,24 @@ class _NoInputLeftAfterDrop:
     names: tuple[str, ...]
 
 
-def _unsupported_params(ir_request: DecisionsIRRequest, provider_config: BaseDecisionsConfig) -> tuple[str, ...]:
+def _unsupported_params(
+    ir_request: DecisionsIRRequest, provider_config: BaseDecisionsConfig, model: str, custom_llm_provider: str
+) -> tuple[str, ...]:
     refuses_safety_identifier: Final = (
         ir_request.safety_identifier is not None and not provider_config.supports_safety_identifier
     )
     refused_image_param: Final = None if provider_config.supports_images else image_param(ir_request.input)
+    refuses_audio: Final = bool(ir_request.audio) and not provider_config.supports_audio_input(
+        model, custom_llm_provider
+    )
+    refuses_videos: Final = bool(ir_request.videos) and not provider_config.supports_video_input(
+        model, custom_llm_provider
+    )
     return (
         *(("safety_identifier",) if refuses_safety_identifier else ()),
         *(() if refused_image_param is None else (refused_image_param,)),
+        *(("audio",) if refuses_audio else ()),
+        *(("videos",) if refuses_videos else ()),
     )
 
 
@@ -210,10 +256,12 @@ def _provider_ir_request(
     *,
     safety_identifier: str | None,
     provider_config: BaseDecisionsConfig,
+    model: str,
+    custom_llm_provider: str,
     kwargs: Mapping[str, object],
 ) -> DecisionsIRRequest | _UnsupportedParams | _NoInputLeftAfterDrop:
     ir_request: Final = _ir_request(request, safety_identifier)
-    unsupported: Final = _unsupported_params(ir_request, provider_config)
+    unsupported: Final = _unsupported_params(ir_request, provider_config, model, custom_llm_provider)
     if not unsupported:
         return ir_request
     if not _drops_params(kwargs):
@@ -254,10 +302,10 @@ def prepare_call(
     except ValueError as error:
         raise litellm.BadRequestError(message=str(error), model=model, llm_provider=provider) from error
     try:
-        request_safety_identifier: Final = _request_safety_identifier(safety_identifier, kwargs)
-        request: Final = fields.validate(
-            safety_identifier=request_safety_identifier, drops_params=_drops_params(kwargs)
-        )
+        request_safety_identifier: Final = _request_safety_identifier(safety_identifier, provider_config, kwargs)
+        request: Final = _fields_without_unsupported_media(
+            fields, provider_config, canonical_model, provider, kwargs
+        ).validate(safety_identifier=request_safety_identifier, drops_params=_drops_params(kwargs))
     except ValidationError as error:
         raise litellm.BadRequestError(
             message=f"Invalid Decisions request: {error}",
@@ -284,6 +332,8 @@ def prepare_call(
         request,
         safety_identifier=request_safety_identifier,
         provider_config=provider_config,
+        model=canonical_model,
+        custom_llm_provider=provider,
         kwargs=kwargs,
     )
     if isinstance(ir_request, _UnsupportedParams):
