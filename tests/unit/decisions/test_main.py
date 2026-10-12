@@ -5,7 +5,7 @@ import base64
 import json
 import re
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from concurrent.futures import wait
 from types import MappingProxyType
 from typing import Final
@@ -1462,8 +1462,18 @@ async def test_openai_format_calls_to_a_systemone_provider_get_openai_format_ans
             },
             "send images as input_image content parts",
         ),
+        (
+            "openai/gpt-6-luna",
+            {
+                "input": "review",
+                "images": ["data:image/png;base64,AA=="],
+                "questions": [{"type": "predicate", "instructions": "Is this a defect?"}],
+                "drop_params": True,
+            },
+            "send images as input_image content parts",
+        ),
     ),
-    ids=("images_and_input",),
+    ids=("images_and_input", "images_and_input_under_drop_params"),
 )
 async def test_requests_a_provider_cannot_serve_are_rejected_before_http(
     respx_mock: respx.MockRouter,
@@ -1915,11 +1925,8 @@ async def test_a_malformed_image_under_drop_params_keeps_the_well_formed_ones(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    ("images", "drop_params"), (([], False), ([_PNG_DATA_URL], True)), ids=("empty", "drop_params")
-)
-async def test_images_next_to_input_are_ignored_when_empty_or_when_params_are_dropped(
-    images: Sequence[str], drop_params: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+async def test_empty_images_next_to_input_are_ignored(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(litellm, "drop_params", False)
     monkeypatch.setattr(litellm, "api_base", None)
@@ -1932,8 +1939,7 @@ async def test_images_next_to_input_are_ignored_when_empty_or_when_params_are_dr
         api_key="caller-key",
         input="review",
         questions=_PREDICATE_QUESTIONS,
-        images=images,
-        drop_params=drop_params,
+        images=[],
     )
 
     assert json.loads(route.calls[0].request.content) == {

@@ -521,7 +521,7 @@ def reject_other_format(*, model: str, kwargs: Mapping[str, object], field_name:
 
 
 def reject_images_next_to_input(*, model: str, kwargs: Mapping[str, object]) -> None:
-    if not kwargs.get("images") or _drops_params(kwargs):
+    if not kwargs.get("images"):
         return
     raise litellm.BadRequestError(
         message=(
