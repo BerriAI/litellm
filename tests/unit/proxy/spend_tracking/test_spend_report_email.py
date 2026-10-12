@@ -726,19 +726,21 @@ def test_settings_from_config_and_memory(monkeypatch: pytest.MonkeyPatch) -> Non
 
     assert _settings_from_config(None) is None
     assert _settings_from_config({}) is None
-    config_settings: Final = _settings_from_config({
-        "litellm_settings": {
-            "spend_report_email_settings": {
-                "alerts": [
-                    {
-                        "id": "alert-cfg",
-                        "name": "Config Alert",
-                        "send_time": "07:00",
-                    }
-                ],
+    config_settings: Final = _settings_from_config(
+        {
+            "litellm_settings": {
+                "spend_report_email_settings": {
+                    "alerts": [
+                        {
+                            "id": "alert-cfg",
+                            "name": "Config Alert",
+                            "send_time": "07:00",
+                        }
+                    ],
+                }
             }
         }
-    })
+    )
     assert config_settings is not None
     assert len(config_settings.alerts) == 1
     assert config_settings.alerts[0].send_time == "07:00"
@@ -895,6 +897,105 @@ async def test_run_scheduled_email_spend_alert(monkeypatch: pytest.MonkeyPatch) 
     mock_send.assert_awaited_once_with(
         frequency="daily",
         recipient_emails=("test@example.com",),
+        group_by=("team",),
+        team_id=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_run_scheduled_email_spend_alert_skips_deleted_or_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.spend_tracking.spend_report_email import (
+        SpendReportEmailAlert,
+        SpendReportEmailSettings,
+        run_scheduled_email_spend_alert,
+    )
+    import litellm.proxy.proxy_server as ps
+
+    mock_send: Final = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.spend_tracking.spend_report_email.send_spend_report_email", mock_send)
+
+    mock_logging: Final = MagicMock()
+    mock_logging.db_spend_update_writer = None
+    monkeypatch.setattr(ps, "proxy_logging_obj", mock_logging)
+
+    persisted_alert: Final = SpendReportEmailAlert(
+        id="active-alert-1",
+        name="Active Alert",
+        frequency="daily",
+        enabled=False,
+        recipient_emails=["active@example.com"],
+    )
+    mock_proxy_config: Final = MagicMock()
+    mock_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {
+                "spend_report_email_settings": SpendReportEmailSettings(alerts=(persisted_alert,)).model_dump(
+                    mode="json"
+                )
+            }
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", mock_proxy_config)
+
+    deleted_alert: Final = SpendReportEmailAlert(
+        id="deleted-alert-99",
+        name="Deleted Alert",
+        frequency="daily",
+        recipient_emails=["old@example.com"],
+    )
+    await run_scheduled_email_spend_alert(deleted_alert)
+    mock_send.assert_not_awaited()
+
+    await run_scheduled_email_spend_alert(persisted_alert)
+    mock_send.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_run_scheduled_email_spend_alert_uses_persisted_recipients(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.spend_tracking.spend_report_email import (
+        SpendReportEmailAlert,
+        SpendReportEmailSettings,
+        run_scheduled_email_spend_alert,
+    )
+    import litellm.proxy.proxy_server as ps
+
+    mock_send: Final = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.spend_tracking.spend_report_email.send_spend_report_email", mock_send)
+
+    mock_logging: Final = MagicMock()
+    mock_logging.db_spend_update_writer = None
+    monkeypatch.setattr(ps, "proxy_logging_obj", mock_logging)
+
+    current_persisted_alert: Final = SpendReportEmailAlert(
+        id="alert-1",
+        name="Alert 1",
+        frequency="daily",
+        enabled=True,
+        recipient_emails=["current-receiver@example.com"],
+    )
+    mock_proxy_config: Final = MagicMock()
+    mock_proxy_config.get_config = AsyncMock(
+        return_value={
+            "litellm_settings": {
+                "spend_report_email_settings": SpendReportEmailSettings(alerts=(current_persisted_alert,)).model_dump(
+                    mode="json"
+                )
+            }
+        }
+    )
+    monkeypatch.setattr(ps, "proxy_config", mock_proxy_config)
+
+    stale_captured_alert: Final = SpendReportEmailAlert(
+        id="alert-1",
+        name="Alert 1",
+        frequency="daily",
+        enabled=True,
+        recipient_emails=["stale-receiver@example.com"],
+    )
+    await run_scheduled_email_spend_alert(stale_captured_alert)
+    mock_send.assert_awaited_once_with(
+        frequency="daily",
+        recipient_emails=("current-receiver@example.com",),
         group_by=("team",),
         team_id=None,
     )

@@ -873,12 +873,59 @@ def _safe_remove_job(remove_fn: Callable[[str], object] | None, job_id: str) -> 
         verbose_proxy_logger.debug("Spend report job %s could not be removed: %s", job_id, exc)
 
 
+async def _resolve_current_alert(alert_id: str) -> tuple[bool, SpendReportEmailAlert | None]:
+    from litellm.proxy.proxy_server import proxy_config
+
+    get_config_fn: Final[Callable[[], Awaitable[object]] | None] = getattr(proxy_config, "get_config", None)
+    if get_config_fn is not None:
+        try:
+            raw_config: Final[object] = await get_config_fn()
+            config_map: Final[Mapping[str, object] | None] = (
+                _OBJECT_MAP_ADAPTER.validate_python(raw_config) if isinstance(raw_config, (dict, Mapping)) else None
+            )
+            from_cfg: Final = _settings_from_config(config_map)
+            if from_cfg is not None:
+                matching: Final = next((a for a in from_cfg.alerts if a.id == alert_id), None)
+                return (True, matching)
+        except Exception as exc:  # noqa: BLE001  # fallback to memory if config query fails
+            verbose_proxy_logger.debug("Failed to query current config for alert resolution: %s", exc)
+
+    from_mem: Final = _settings_from_memory()
+    if from_mem is not None:
+        matching_mem: Final = next((a for a in from_mem.alerts if a.id == alert_id), None)
+        return (True, matching_mem)
+
+    return (False, None)
+
+
+def _select_target_alert(
+    captured_alert: SpendReportEmailAlert,
+    settings_found: bool,
+    current_alert: SpendReportEmailAlert | None,
+) -> SpendReportEmailAlert:
+    if settings_found and current_alert is not None:
+        return current_alert
+    return captured_alert
+
+
 async def run_scheduled_email_spend_alert(
     alert: SpendReportEmailAlert,
 ) -> None:
+    resolution_result: Final = await _resolve_current_alert(alert.id)
+    settings_found: Final = resolution_result[0]
+    current_alert: Final = resolution_result[1]
+    if settings_found and (current_alert is None or not current_alert.enabled or not current_alert.recipient_emails):
+        verbose_proxy_logger.info(
+            "Skipping scheduled spend report alert %s: deleted, disabled, or has no recipients",
+            alert.id,
+        )
+        return
+
+    target_alert: Final = _select_target_alert(alert, settings_found, current_alert)
+
     from litellm.proxy.proxy_server import proxy_logging_obj
 
-    job_id: Final = f"email_spend_report_{alert.id}"
+    job_id: Final = f"email_spend_report_{target_alert.id}"
     db_writer: Final[object] = getattr(proxy_logging_obj, "db_spend_update_writer", None)
     pod_lock_manager: Final[object] = getattr(db_writer, "pod_lock_manager", None) if db_writer is not None else None
     if pod_lock_manager is not None:
@@ -891,13 +938,13 @@ async def run_scheduled_email_spend_alert(
 
     try:
         await send_spend_report_email(
-            frequency=alert.frequency,
-            recipient_emails=alert.recipient_emails,
-            group_by=alert.group_by,
-            team_id=alert.team_id,
+            frequency=target_alert.frequency,
+            recipient_emails=target_alert.recipient_emails,
+            group_by=target_alert.group_by,
+            team_id=target_alert.team_id,
         )
     except Exception as e:  # noqa: BLE001  # scheduled job runner must catch top-level exceptions to prevent crash
-        verbose_proxy_logger.error("Failed to run scheduled email spend alert (%s): %s", alert.name, e)
+        verbose_proxy_logger.error("Failed to run scheduled email spend alert (%s): %s", target_alert.name, e)
 
 
 _registered_spend_report_job_ids: Final[set[str]] = set()  # mutable-ok: active background job registry
