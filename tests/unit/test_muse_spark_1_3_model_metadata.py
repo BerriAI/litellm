@@ -6,9 +6,11 @@ import pytest
 import litellm
 from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import StandardBuiltInToolCostTracking
+from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
 
 MUSE_SPARK_STANDARD = "meta/muse-spark-1.3"
 MUSE_SPARK_CONTRIBUTOR = "meta/muse-spark-1.3-contributor"
+MUSE_WONDER = "meta/muse-wonder-1.0"
 WEB_SEARCH_COST_PER_QUERY = 0.0025
 
 PRICING = (
@@ -22,7 +24,7 @@ def _load_cost_map(filename: str = "model_prices_and_context_window.json") -> di
         return json.load(f)
 
 
-@pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR))
+@pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR, MUSE_WONDER))
 def test_muse_spark_1_3_routes_to_meta_model_api(model: str):
     routed_model, provider, _, api_base = get_llm_provider(model=model, api_key="sk-test")
 
@@ -31,13 +33,25 @@ def test_muse_spark_1_3_routes_to_meta_model_api(model: str):
     assert api_base == "https://api.meta.ai/v1"
 
 
-@pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR))
+@pytest.mark.parametrize("model", (MUSE_SPARK_STANDARD, MUSE_SPARK_CONTRIBUTOR, MUSE_WONDER))
 def test_muse_spark_1_3_backup_matches_main(model: str):
     """Ensure the bundled model cost map stays in sync with the canonical file."""
     main_cost = _load_cost_map()
     backup_cost = _load_cost_map("litellm/model_prices_and_context_window_backup.json")
 
     assert backup_cost.get(model) == main_cost.get(model), f"{model} differs between main and backup model cost maps"
+
+
+def test_muse_wonder_advertises_max_and_xhigh_reasoning_efforts():
+    entry = dict(_load_cost_map()[MUSE_WONDER])
+    entry["key"] = MUSE_WONDER
+
+    resolved = resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True)
+
+    assert resolved is not None
+    assert "max" in resolved
+    assert "xhigh" in resolved
+    assert "none" in resolved
 
 
 def test_muse_spark_contributor_tier_is_cheaper_than_standard():
