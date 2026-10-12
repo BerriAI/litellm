@@ -23,6 +23,7 @@ from litellm.types.llms.anthropic import (
 )
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from litellm.types.llms.base import LiteLLMBaseModel
+from litellm.types.router import RouterErrors
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
@@ -436,8 +437,9 @@ def _unsupported_results() -> Sequence[SafeguardResult]:
     return ({"type": DANGEROUS_TOOL_USE, "status": unsupported},)
 
 
-class _ProviderError(LiteLLMBaseModel):
+class _RouterRefusal(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, from_attributes=True)
+    message: str = ""
     llm_provider: str | None = None
 
 
@@ -445,9 +447,10 @@ def _proxy_cannot_serve(error: Exception) -> bool:
     if not isinstance(error, litellm.BadRequestError):
         return False
     try:
-        return not _ProviderError.model_validate(error, from_attributes=True).llm_provider
+        refusal: Final = _RouterRefusal.model_validate(error, from_attributes=True)
     except ValidationError:
         return False
+    return not refusal.llm_provider and RouterErrors.no_healthy_deployments.value in refusal.message
 
 
 def _every_tool_use_unavailable(

@@ -29,6 +29,7 @@ from litellm.llms.anthropic.pass_through.safeguards import (
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
 from litellm.types.llms.anthropic import AnthropicResponseContentBlockToolUse
+from litellm.types.router import RouterErrors
 from litellm.types.utils import Choices, Message, ModelResponse
 
 DANGEROUS_TOOL_USE_REQUEST: Final = [{"type": "dangerous_tool_use", "classifier_context": {"permission_mode": "auto"}}]
@@ -240,6 +241,14 @@ async def test_evaluate_marks_only_the_ids_the_classifier_skipped_or_garbled_as_
         (litellm.ContentPolicyViolationError("refused", model="classifier", llm_provider="fireworks_ai"), "refused"),
         (litellm.RateLimitError("slow down", model="classifier", llm_provider="fireworks_ai"), "error"),
         (litellm.BadRequestError("bad request", model="classifier", llm_provider="fireworks_ai"), "error"),
+        (
+            litellm.BadRequestError(
+                "Deployment classifier is reserved for another team until 15:00 UTC",
+                model="classifier",
+                llm_provider="",
+            ),
+            "error",
+        ),
         (RuntimeError("boom"), "error"),
         ("I cannot help with that.", "error"),
         ('{"verdicts": "none"}', "error"),
@@ -256,7 +265,9 @@ async def test_evaluate_answers_unavailable_for_every_tool_use_when_the_classifi
 @pytest.mark.asyncio
 async def test_evaluate_answers_unsupported_when_the_proxy_serves_no_deployment_for_the_classifier():
     not_served: Final = litellm.BadRequestError(
-        "You passed in model=classifier. There are no healthy deployments", model="classifier", llm_provider=""
+        f"You passed in model=classifier. {RouterErrors.no_healthy_deployments.value}",
+        model="classifier",
+        llm_provider="",
     )
     classifier: Final = _RecordingClassifier([not_served])
     results: Final = await _evaluator(classifier).evaluate((LS, CURL_SH))
