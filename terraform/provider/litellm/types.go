@@ -25,21 +25,16 @@ type ModelResponse struct {
 	Additional    map[string]interface{} `json:"additional"`
 }
 
-// ModelInfoPatch is the body for PATCH /model/{id}/update; display_name is sent even when empty so it can be cleared.
+// ModelInfoPatch is the body for PATCH /model/{id}/update, which merges the given fields into the stored model_info.
 type ModelInfoPatch struct {
-	ModelInfo ModelInfoPatchFields `json:"model_info"`
-}
-
-type ModelInfoPatchFields struct {
-	ID          string `json:"id"`
-	DisplayName string `json:"display_name"`
+	ModelInfo map[string]interface{} `json:"model_info"`
 }
 
 // ModelRequest represents a request to create or update a model.
 type ModelRequest struct {
 	ModelName     string                 `json:"model_name"`
 	LiteLLMParams map[string]interface{} `json:"litellm_params"`
-	ModelInfo     ModelInfo              `json:"model_info"`
+	ModelInfo     map[string]interface{} `json:"model_info"`
 	Additional    map[string]interface{} `json:"additional"`
 }
 
