@@ -51,6 +51,7 @@ import websockets
 import websockets.exceptions
 from pydantic import BaseModel, ConfigDict, Json, JsonValue, TypeAdapter, ValidationError, with_config
 from pydantic.fields import FieldInfo, PydanticUndefined
+from redis.exceptions import RedisError
 from typing_extensions import NotRequired, ReadOnly, TypedDict, assert_never
 
 from litellm._uuid import uuid
@@ -3947,6 +3948,31 @@ async def invalidate_spend_counter(counter_key: str) -> None:
 
 
 _invalidate_spend_counter: Final = invalidate_spend_counter
+
+_IN_MEMORY_COUNTER_KEYS: Final = TypeAdapter(tuple[str, ...])
+
+
+_SPEND_COUNTER_STORE_FAILURES: Final = (RedisError, RedisCircuitBreakerOpenError, OSError, ValidationError)
+
+
+@with_service_target(SPEND_COUNTERS_TARGET)
+async def invalidate_spend_counters_with_prefix(prefix: str) -> None:
+    for counter_key in _IN_MEMORY_COUNTER_KEYS.validate_python(tuple(spend_counter_cache.in_memory_cache.cache_dict)):
+        if counter_key.startswith(prefix):
+            spend_counter_cache.in_memory_cache.delete_cache(key=counter_key)
+    redis_cache: Final = spend_counter_cache.redis_cache
+    if redis_cache is None:
+        return
+    try:
+        while scanned := await redis_cache.async_scan_iter(pattern=prefix, count=500):
+            await redis_cache.delete_cache_keys(scanned)
+    except _SPEND_COUNTER_STORE_FAILURES:
+        verbose_proxy_logger.warning(
+            "Unable to delete the spend counters %s* after the spend reset; budget checks use the stale counters until "
+            "they expire",
+            prefix,
+            exc_info=True,
+        )
 
 
 async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncrement]) -> None:

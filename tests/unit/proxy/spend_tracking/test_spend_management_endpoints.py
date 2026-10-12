@@ -8059,3 +8059,57 @@ async def test_global_spend_refresh_runs_the_refresh_on_the_writer_when_a_reader
     assert [statement for statement in journal.statements if statement[1].startswith("REFRESH")] == [
         ("writer", 'REFRESH MATERIALIZED VIEW "MonthlyGlobalSpend";')
     ]
+
+
+def _spend_counter_cache_for_reset(monkeypatch: pytest.MonkeyPatch, *, scan_results: object) -> MagicMock:
+    from litellm.caching.in_memory_cache import InMemoryCache
+
+    mock_prisma_client: Final = MagicMock()
+    mock_prisma_client.db.litellm_verificationtoken.update_many = AsyncMock()
+    mock_prisma_client.db.litellm_teamtable.update_many = AsyncMock()
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma_client)
+    spend_counter_cache: Final = MagicMock()
+    spend_counter_cache.in_memory_cache = InMemoryCache()
+    spend_counter_cache.in_memory_cache.set_cache(key="spend:key:aaa", value=0.5)
+    spend_counter_cache.in_memory_cache.set_cache(key="spend:team:t1", value=0.5)
+    spend_counter_cache.in_memory_cache.set_cache(key="spend:user:u1", value=0.5)
+    spend_counter_cache.redis_cache.async_scan_iter = AsyncMock(side_effect=scan_results)
+    spend_counter_cache.redis_cache.delete_cache_keys = AsyncMock()
+    monkeypatch.setattr(ps, "spend_counter_cache", spend_counter_cache)
+    return spend_counter_cache
+
+
+@pytest.mark.asyncio
+async def test_global_spend_reset_drops_the_key_and_team_spend_counters(monkeypatch: pytest.MonkeyPatch) -> None:
+    spend_counter_cache: Final = _spend_counter_cache_for_reset(
+        monkeypatch, scan_results=[["spend:key:aaa", "spend:key:bbb"], [], ["spend:team:t1"], []]
+    )
+
+    response: Final = await spend_management_endpoints.global_spend_reset()
+
+    assert response["status"] == "success"
+    assert [c.kwargs["pattern"] for c in spend_counter_cache.redis_cache.async_scan_iter.await_args_list] == [
+        "spend:key:",
+        "spend:key:",
+        "spend:team:",
+        "spend:team:",
+    ]
+    assert [c.args for c in spend_counter_cache.redis_cache.delete_cache_keys.await_args_list] == [
+        (["spend:key:aaa", "spend:key:bbb"],),
+        (["spend:team:t1"],),
+    ]
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:key:aaa") is None
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:team:t1") is None
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:user:u1") == 0.5
+
+
+@pytest.mark.asyncio
+async def test_global_spend_reset_still_resets_the_rows_when_redis_is_down(monkeypatch: pytest.MonkeyPatch) -> None:
+    spend_counter_cache: Final = _spend_counter_cache_for_reset(monkeypatch, scan_results=ConnectionError("redis down"))
+
+    response: Final = await spend_management_endpoints.global_spend_reset()
+
+    assert response["status"] == "success"
+    ps.prisma_client.db.litellm_teamtable.update_many.assert_awaited_once_with(data={"spend": 0.0}, where={})
+    spend_counter_cache.redis_cache.delete_cache_keys.assert_not_awaited()
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:key:aaa") is None

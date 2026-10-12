@@ -402,6 +402,25 @@ async def test_async_scan_iter_namespaces_pattern(namespace, expected_match, mon
     assert captured["match"] == expected_match
 
 
+@pytest.mark.asyncio
+async def test_async_scan_iter_decodes_bytes_keys_and_stops_at_count(monkeypatch, redis_no_ping):
+    monkeypatch.setenv("REDIS_HOST", "https://my-test-host")
+    redis_cache = RedisCache()
+
+    def scan_iter(match, count):
+        async def gen():
+            for key in (b"spend:key:a", "spend:key:b", b"spend:key:c", b"spend:key:d"):
+                yield key
+
+        return gen()
+
+    mock_redis_instance = MagicMock()
+    mock_redis_instance.scan_iter = scan_iter
+    with patch.object(redis_cache, "init_async_client", return_value=mock_redis_instance):
+        keys = await redis_cache.async_scan_iter(pattern="spend:key:", count=3)
+    assert keys == ["spend:key:a", "spend:key:b", "spend:key:c"]
+
+
 @pytest.mark.parametrize("namespace, expected", [(None, "k"), ("ns", "ns:k")])
 def test_increment_cache_namespaces_key(namespace, expected, monkeypatch, redis_no_ping):
     monkeypatch.setenv("REDIS_HOST", "https://my-test-host")

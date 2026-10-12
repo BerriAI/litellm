@@ -1573,3 +1573,39 @@ async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monke
     assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
     assert all(cache.get_cache(key=cache_key) == {"retained": True} for cache_key in kept_cache_keys)
     assert jwt_table.rows == (kept_row,)
+
+
+def _org_spend_counter_cache(monkeypatch: pytest.MonkeyPatch) -> MagicMock:
+    from litellm.caching.in_memory_cache import InMemoryCache
+
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.in_memory_cache = InMemoryCache()
+    spend_counter_cache.in_memory_cache.set_cache(key="spend:org:org-1", value=4.2)
+    spend_counter_cache.redis_cache.async_delete_cache = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.spend_counter_cache", spend_counter_cache)
+    return spend_counter_cache
+
+
+@pytest.mark.asyncio
+async def test_legacy_update_with_spend_drops_the_org_spend_counter(monkeypatch):
+    """A direct spend write must drop the cross-pod counter, or the org stays at the stale value until the counter expires."""
+    spend_counter_cache = _org_spend_counter_cache(monkeypatch)
+
+    await _run_legacy_update_organization(
+        monkeypatch, body={"organization_id": "org-1", "spend": 0.0}, existing_budget_id="budget-1"
+    )
+
+    spend_counter_cache.redis_cache.async_delete_cache.assert_awaited_once_with(key="spend:org:org-1")
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:org:org-1") is None
+
+
+@pytest.mark.asyncio
+async def test_legacy_update_without_spend_keeps_the_org_spend_counter(monkeypatch):
+    spend_counter_cache = _org_spend_counter_cache(monkeypatch)
+
+    await _run_legacy_update_organization(
+        monkeypatch, body={"organization_id": "org-1", "organization_alias": "renamed"}, existing_budget_id="budget-1"
+    )
+
+    spend_counter_cache.redis_cache.async_delete_cache.assert_not_awaited()
+    assert spend_counter_cache.in_memory_cache.get_cache(key="spend:org:org-1") == 4.2

@@ -18,7 +18,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Awaitable, Callable, Iterator, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterable, Iterator, Sequence
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import timedelta
@@ -496,6 +496,14 @@ def _record_swallowed_redis_failure(breaker: RedisCircuitBreaker, exc: BaseExcep
         return
     breaker.record_failure(is_timeout=is_redis_timeout_failure(exc))
     _swallowed_redis_failures.set(_swallowed_redis_failures.get() + 1)
+
+
+async def _first_keys(scan: AsyncIterator[object], count: int) -> AsyncIterator[str]:
+    taken: Final = itertools.count(1)
+    async for key in scan:
+        yield key.decode() if isinstance(key, bytes) else str(key)
+        if next(taken) >= count:
+            return
 
 
 class RedisCircuitBreakerOpenError(Exception):
@@ -1007,10 +1015,9 @@ class RedisCache(BaseCache):
         return _decoded_counts(await self._async_run_redis_mget_operation(keys=namespaced_keys))
 
     @_redis_circuit_breaker_guard
-    async def async_scan_iter(self, pattern: str, count: int = 100) -> list:
+    async def async_scan_iter(self, pattern: str, count: int = 100) -> list[str]:
         start_time: Final = time.time()
         try:
-            keys: Final = []
             _redis_client: Final = self.init_async_client()
             if not hasattr(_redis_client, "scan_iter"):
                 verbose_logger.debug(
@@ -1018,11 +1025,13 @@ class RedisCache(BaseCache):
                 )
                 return []
 
-            pattern = self.check_and_fix_namespace(key=pattern)
-            async for key in _redis_client.scan_iter(match=pattern + "*", count=count):
-                keys.append(key)
-                if len(keys) >= count:
-                    break
+            namespaced_pattern: Final = self.check_and_fix_namespace(key=pattern)
+            keys: Final = [
+                key
+                async for key in _first_keys(
+                    _redis_client.scan_iter(match=namespaced_pattern + "*", count=count), count
+                )
+            ]
 
             ## LOGGING ##
             end_time = time.time()
@@ -1904,11 +1913,10 @@ class RedisCache(BaseCache):
             raise e
 
     @_redis_circuit_breaker_guard
-    async def delete_cache_keys(self, keys):
+    async def delete_cache_keys(self, keys: Iterable[str]) -> None:
         _redis_client: Final = self._async_commands()
-        keys = [self.check_and_fix_namespace(key=key) for key in keys]
-        # keys is a list, unpack it so it gets passed as individual elements to delete
-        await _redis_client.delete(*keys)
+        namespaced_keys: Final = [self.check_and_fix_namespace(key=key) for key in keys]
+        await _redis_client.delete(*namespaced_keys)
 
     def client_list(self) -> list:
         client_list: Final[list] = self.redis_client.client_list()

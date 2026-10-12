@@ -816,6 +816,11 @@ async def update_organization(
         include={"members": True, "teams": True, "litellm_budget_table": True},
     )
 
+    if data.spend is not None:
+        from litellm.proxy.proxy_server import invalidate_spend_counter
+
+        await invalidate_spend_counter(counter_key=f"spend:org:{data.organization_id}")
+
     return response
 
 

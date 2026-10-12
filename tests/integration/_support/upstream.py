@@ -6,6 +6,7 @@ import base64
 import json
 import os
 import struct
+import time
 import uuid
 import zlib
 from collections import deque
@@ -58,6 +59,46 @@ INTERNAL_FIELDS: Final = frozenset(
         "stream_chunk_size",
     }
 )
+
+
+RESPONSES_USAGE: Final = {"input_tokens": 20, "output_tokens": 20, "total_tokens": 40}
+
+
+def responses_body(model: str) -> dict[str, JsonValue]:
+    return {
+        "id": f"resp_{uuid.uuid4().hex[:24]}",
+        "object": "response",
+        "created_at": int(time.time()),
+        "status": "completed",
+        "model": model,
+        "output": [
+            {
+                "id": f"msg_{uuid.uuid4().hex[:24]}",
+                "type": "message",
+                "role": "assistant",
+                "status": "completed",
+                "content": [{"type": "output_text", "text": "Hello.", "annotations": []}],
+            }
+        ],
+        "usage": dict(RESPONSES_USAGE),
+    }
+
+
+async def responses_stream(completed: Mapping[str, JsonValue]) -> AsyncIterator[str]:
+    item: Final = cast(dict[str, JsonValue], cast(list[JsonValue], completed["output"])[0])
+    events: Final = (
+        ("response.created", {"response": {**completed, "status": "in_progress", "output": [], "usage": None}}),
+        ("response.output_item.added", {"output_index": 0, "item": {**item, "status": "in_progress", "content": []}}),
+        (
+            "response.output_text.delta",
+            {"output_index": 0, "content_index": 0, "item_id": item["id"], "delta": "Hello."},
+        ),
+        ("response.output_item.done", {"output_index": 0, "item": item}),
+        ("response.completed", {"response": dict(completed)}),
+    )
+    for sequence_number, (event_type, payload) in enumerate(events):
+        data: Final = json.dumps({"type": event_type, "sequence_number": sequence_number, **payload})
+        yield f"event: {event_type}\ndata: {data}\n\n"
 
 
 def error_type(status: int) -> str:
@@ -183,23 +224,40 @@ class Provider:
             for message in messages
         ):
             return JSONResponse({"error": {"message": "Invalid selected message contract"}}, status_code=400)
-        script: Final = self.scripts.get(str(body["model"]))
-        if script is not None:
-            if not script:
-                return JSONResponse({"error": {"message": "Script exhausted", "type": "api_error"}}, status_code=500)
-            status: Final = script.popleft()
-            if status != 200:
-                return JSONResponse(
-                    {
-                        "error": {
-                            "message": "Controlled provider failure",
-                            "type": error_type(status),
-                            "code": str(status),
-                        }
-                    },
-                    status_code=status,
-                )
+        failure: Final = self._scripted_failure(str(body["model"]))
+        if failure is not None:
+            return failure
         return await chat_completions(request)
+
+    def _scripted_failure(self, model: str) -> Response | None:
+        script: Final = self.scripts.get(model)
+        if script is None:
+            return None
+        if not script:
+            return JSONResponse({"error": {"message": "Script exhausted", "type": "api_error"}}, status_code=500)
+        status: Final = script.popleft()
+        if status == 200:
+            return None
+        return JSONResponse(
+            {"error": {"message": "Controlled provider failure", "type": error_type(status), "code": str(status)}},
+            status_code=status,
+        )
+
+    async def responses(self, request: Request) -> Response:
+        body: Final = JSON_OBJECT.validate_json(await request.body())
+        self.observations.put(
+            Observation(request.url.path, request.headers.get("authorization", ""), body, request.method)
+        )
+        model: Final = body.get("model")
+        if not isinstance(model, str) or "input" not in body:
+            return JSONResponse({"error": {"message": "model and input are required"}}, status_code=400)
+        failure: Final = self._scripted_failure(model)
+        if failure is not None:
+            return failure
+        completed: Final = responses_body(model)
+        if body.get("stream") is True:
+            return StreamingResponse(responses_stream(completed), media_type="text/event-stream")
+        return JSONResponse(completed)
 
     async def vector_store_search(self, request: Request) -> Response:
         body: Final = JSON_OBJECT.validate_json(await request.body())
@@ -560,6 +618,7 @@ class Provider:
                 Route("/_cost_map", self.cost_map, methods=["GET"]),
                 Route("/_oauth/token", self.oauth_token, methods=["POST"]),
                 Route("/v1/chat/completions", self.chat, methods=["POST"]),
+                Route("/v1/responses", self.responses, methods=["POST"]),
                 Route("/v1/completions", completions, methods=["POST"]),
                 Route("/v1/embeddings", embeddings, methods=["POST"]),
                 Route("/v1/moderations", moderations, methods=["POST"]),

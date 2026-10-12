@@ -4704,3 +4704,35 @@ async def test_reset_budget_for_litellm_team_members_called():
     assert len(team_member_writes) == 1
     assert team_member_writes[0]["where"]["budget_id"]["in"] == ["budget1"]
     assert team_member_writes[0]["data"] == {"spend": 0}
+
+
+@pytest.mark.asyncio
+async def test_reset_expired_window_writes_the_redis_counter_with_the_spend_counter_ttl(monkeypatch):
+    """The window reset is a counter write like every other, so it must carry the spend counter TTL, not the 60s cache default."""
+    from datetime import datetime
+
+    from litellm.proxy.common_utils.reset_budget_job import BudgetResetSettings, Litellm_EntityType
+
+    fake_module = types.ModuleType("litellm.proxy.proxy_server")
+    fake_module.spend_counter_redis_ttl = lambda: 4321
+    monkeypatch.setitem(sys.modules, "litellm.proxy.proxy_server", fake_module)
+    spend_counter_cache = MagicMock()
+    spend_counter_cache.redis_cache.async_set_cache = AsyncMock()
+    window = {"budget_duration": "1d", "max_budget": 1.0, "reset_at": "2026-01-01T00:00:00Z"}
+
+    reset = await ResetBudgetJob._reset_expired_window(
+        window=window,
+        counter_key="spend:key:abc:window:1d",
+        spend_counter_cache=spend_counter_cache,
+        now=datetime(2026, 1, 2),
+        reset_settings=BudgetResetSettings(),
+        prisma_client=AsyncMock(),
+        entity_type=Litellm_EntityType.KEY,
+        entity_id="abc",
+    )
+
+    assert reset is True
+    spend_counter_cache.redis_cache.async_set_cache.assert_awaited_once_with(
+        key="spend:key:abc:window:1d", value=0.0, ttl=4321
+    )
+    spend_counter_cache.in_memory_cache.set_cache.assert_called_once_with(key="spend:key:abc:window:1d", value=0.0)
