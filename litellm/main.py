@@ -141,6 +141,7 @@ from litellm.types.utils import (
     ModelResponseStream,
     RawRequestTypedDict,
     StreamingChoices,
+    is_decisions_model_mode,
 )
 from litellm.types.workload_identity import ANTHROPIC_WIF_KWARGS_KEYS, OPENAI_WIF_KWARGS_KEYS
 from litellm.utils import (
@@ -1936,6 +1937,39 @@ def _complete_ragflow(ctx: CompletionDispatchContext) -> _CompletionDispatchResu
         raise e
 
     return response
+
+
+def _complete_scaledown(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
+    try:
+        return base_llm_http_handler.completion(
+            model=ctx.model,
+            messages=ctx.messages,
+            headers=ctx.headers,
+            model_response=ctx.model_response,
+            api_key=ctx.api_key,
+            api_base=ctx.api_base,
+            acompletion=ctx.acompletion,
+            logging_obj=ctx.logging,
+            optional_params=ctx.optional_params,
+            litellm_params=ctx.litellm_params,
+            shared_session=ctx.shared_session,
+            timeout=cast(  # cast-ok: CompletionTimeout.resolve normalizes this value
+                float | httpx.Timeout, ctx.timeout
+            ),
+            client=_dispatch_client_http(ctx),
+            custom_llm_provider=ctx.custom_llm_provider,
+            encoding=_get_encoding(),
+            stream=ctx.stream,
+            provider_config=ctx.provider_config,
+        )
+    except Exception as exc:
+        ctx.logging.post_call(
+            input=ctx.messages,
+            api_key=ctx.api_key,
+            original_response=str(exc),
+            additional_args={"headers": ctx.headers},
+        )
+        raise
 
 
 def _complete_xai(ctx: CompletionDispatchContext) -> _CompletionDispatchResult:
@@ -5859,6 +5893,8 @@ def completion(
         elif custom_llm_provider == "ragflow":
             ## COMPLETION CALL - RAGFlow uses HTTP handler to support custom URL paths
             response = _complete_ragflow(_dispatch_ctx)
+        elif custom_llm_provider == "scaledown":
+            response = _complete_scaledown(_dispatch_ctx)  # rebind-ok: shared provider return
         elif custom_llm_provider == "xai":
             ## COMPLETION CALL
             response = _complete_xai(_dispatch_ctx)
@@ -8786,8 +8822,9 @@ async def ahealth_check(
             input=input,
         )
 
-        if mode in mode_handlers:
-            _response: Final = await mode_handlers[mode]()
+        handler_mode: Final = "decisions" if is_decisions_model_mode(mode) else mode
+        if handler_mode in mode_handlers:
+            _response: Final = await mode_handlers[handler_mode]()
             _response_headers: Final = cast(  # cast-ok: provider headers are stored as a string-keyed mapping
                 Mapping[str, object], (get_hidden_params(_response) or {}).get("headers", {}) or {}
             )
