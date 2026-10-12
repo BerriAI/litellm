@@ -198,6 +198,56 @@ class TestProxyExceptionAnthropicEnvelope:
         assert fallback.status_code == 500
         assert json.loads(fallback.body)["error"]["type"] == "api_error"
 
+    def test_anthropic_response_answers_a_503_as_529_overloaded_error(self):
+        """LIT-9450: Anthropic's contract has no 503 and Claude Code takes its overload path only on a 529 or an
+        overloaded_error body, so a Bedrock capacity 503 leaves /v1/messages as 529 overloaded_error."""
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        from litellm.proxy._types import ProxyException
+
+        request = MagicMock()
+        request.headers = {}
+
+        response = ep._anthropic_error_json_response(
+            ProxyException(
+                message='litellm.ServiceUnavailableError: BedrockException - {"message": "Bedrock is unable to process your request."}',
+                type="service_unavailable_error",
+                param=None,
+                code=503,
+            ),
+            request,
+        )
+
+        assert response.status_code == 529
+        assert json.loads(response.body)["error"]["type"] == "overloaded_error"
+
+    @pytest.mark.asyncio
+    async def test_count_tokens_answers_a_503_as_529_overloaded_error(self):
+        from fastapi import HTTPException
+
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        import litellm.proxy.proxy_server as proxy_server
+        from litellm.proxy._types import ProxyException, UserAPIKeyAuth
+
+        request = MagicMock()
+        request.headers = {}
+        unavailable = ProxyException(
+            message="Bedrock is unable to process your request.", type="service_unavailable_error", param=None, code=503
+        )
+
+        with (
+            patch.object(  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+                ep,
+                "read_request_body",
+                new=AsyncMock(return_value={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}),
+            ),
+            patch.object(proxy_server, "token_counter", new=AsyncMock(side_effect=unavailable)),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
+            pytest.raises(HTTPException) as raised,
+        ):
+            await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+        assert raised.value.status_code == 529
+        assert raised.value.detail["error"]["type"] == "overloaded_error"
+
     @staticmethod
     def _call_id_error_response(general_settings, provider_specific_fields=None):
         import litellm.proxy.anthropic_endpoints.endpoints as ep

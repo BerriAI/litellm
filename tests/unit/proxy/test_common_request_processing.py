@@ -2608,7 +2608,8 @@ class TestCommonRequestProcessingHelpers:
 
     async def test_a_stream_that_fails_before_its_first_byte_answers_as_an_anthropic_json_error(self):
         """A /v1/messages stream whose first chunk is already the error frame has nothing
-        streamed yet, so the failure answers as JSON with the status the upstream gave,
+        streamed yet, so the failure answers as JSON with the status Anthropic answers that upstream failure with
+        (a 503 is its 529 overloaded_error, LIT-9450),
         the shape Anthropic clients raise their status-specific errors on"""
 
         async def stream():
@@ -2619,12 +2620,12 @@ class TestCommonRequestProcessingHelpers:
         response = await create_response(generator, "text/event-stream", {"x-litellm-call-id": "call-8609"})
 
         assert isinstance(response, JSONResponse)
-        assert response.status_code == 503
+        assert response.status_code == 529
         assert response.headers["content-type"] == "application/json"
         assert response.headers["x-litellm-call-id"] == "call-8609"
         assert json.loads(response.body) == {
             "type": "error",
-            "error": {"type": "api_error", "message": "upstream unavailable"},
+            "error": {"type": "overloaded_error", "message": "upstream unavailable"},
         }
         assert generator.ag_frame is None
 

@@ -71,7 +71,9 @@ def _anthropic_error_json_response(exc: ProxyException, request: Request) -> JSO
         general_settings_view,
     )
 
-    status_code: Final = int(exc.code) if exc.code is not None and exc.code.isdigit() else 500
+    status_code: Final = AnthropicExceptionMapping.get_status_code(
+        int(exc.code) if exc.code is not None and exc.code.isdigit() else 500
+    )
     _close_dangling_otel_server_span(request, status_code, exc=exc)
     envelope: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
         status_code=status_code,
@@ -362,7 +364,9 @@ async def count_tokens(
     except HTTPException:
         raise
     except ProxyException as e:
-        status_code: Final = int(e.code) if e.code and e.code.isdigit() else 500
+        status_code: Final = AnthropicExceptionMapping.get_status_code(
+            int(e.code) if e.code and e.code.isdigit() else 500
+        )
         detail: Final = AnthropicExceptionMapping.transform_to_anthropic_error(
             status_code=status_code,
             raw_message=e.message,

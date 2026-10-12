@@ -88,7 +88,7 @@ ANTHROPIC_ERROR_STATUS_CODE_MAP: Final = MappingProxyType(
 def anthropic_error_frame_exception(error_type: str, message: str, status_code: int, model: str) -> Exception:
     """The exception the pre-stream mapping raises for an HTTP answer carrying this frame's body and status, so a
     retry policy's per-class budget governs an `event: error` frame the way it governs the same error before the
-    stream opened: an overloaded frame is the InternalServerError a real 529 answer is, whatever status the frame
+    stream opened: an overloaded frame is the ServiceUnavailableError a real 529 answer is, whatever status the frame
     map gives it."""
     from litellm.litellm_core_utils.exception_mapping_utils import exception_type
 

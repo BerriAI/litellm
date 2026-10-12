@@ -4260,10 +4260,10 @@ def test_anthropic_error_frame_exception_matches_the_pre_stream_mapping_for_that
     assert "upstream said no" in str(error)
 
 
-def test_anthropic_error_frame_exception_classes_an_overloaded_frame_as_internal_server_error() -> None:
+def test_anthropic_error_frame_exception_classes_an_overloaded_frame_as_service_unavailable() -> None:
     import litellm
     from litellm.llms.anthropic.common_utils import anthropic_error_frame_exception
 
     error: Final = anthropic_error_frame_exception("overloaded_error", "Overloaded", 503, "claude-sonnet-4-5")
 
-    assert type(error) is litellm.InternalServerError
+    assert type(error) is litellm.ServiceUnavailableError

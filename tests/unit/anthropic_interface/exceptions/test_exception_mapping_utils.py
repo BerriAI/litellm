@@ -56,6 +56,17 @@ class TestCreateErrorResponse:
         )
         assert response["error"]["type"] == "api_error"
 
+    def test_503_answers_as_anthropics_529_overloaded_error(self):
+        """LIT-9450: Anthropic's contract has no 503, so an upstream that cannot take the request right now
+        (a Bedrock capacity 503) answers as 529 overloaded_error, the status Claude Code's overload path keys on."""
+        assert AnthropicExceptionMapping.get_status_code(503) == 529
+        response = AnthropicExceptionMapping.create_error_response(503, "Bedrock is unable to process your request.")
+        assert response["error"]["type"] == "overloaded_error"
+
+    @pytest.mark.parametrize("status_code", [400, 429, 500, 529])
+    def test_other_statuses_keep_their_code(self, status_code: int):
+        assert AnthropicExceptionMapping.get_status_code(status_code) == status_code
+
     def test_with_request_id(self):
         """Test request_id is included when provided."""
         response = AnthropicExceptionMapping.create_error_response(
@@ -218,7 +229,7 @@ class TestTransformToAnthropicError:
 class TestAnthropicErrorSseFrame:
     @pytest.mark.parametrize(
         ("status_code", "expected_error_type"),
-        [(429, "rate_limit_error"), (503, "api_error"), (400, "invalid_request_error")],
+        [(429, "rate_limit_error"), (503, "overloaded_error"), (400, "invalid_request_error")],
     )
     def test_the_frame_is_one_error_event_carrying_the_anthropic_envelope(
         self, status_code: int, expected_error_type: str
@@ -233,11 +244,11 @@ class TestAnthropicErrorSseFrame:
             "error": {"type": expected_error_type, "message": "upstream unavailable"},
         }
 
-    def test_the_frame_remembers_the_status_and_body_it_was_built_from(self) -> None:
+    def test_the_frame_remembers_the_status_anthropic_answers_with_and_the_body(self) -> None:
         frame: Final = anthropic_error_sse_frame(status_code=503, raw_message="upstream unavailable")
 
         assert isinstance(frame, AnthropicErrorSseFrame)
-        assert frame.status_code == 503
+        assert frame.status_code == 529
         data_line: Final = frame.split("\n")[1]
         assert data_line == f"data: {json.dumps(frame.json_body(call_id=None))}"
 
@@ -246,9 +257,9 @@ class TestAnthropicErrorSseFrame:
 
         assert frame.json_body(call_id="call-1") == {
             "type": "error",
-            "error": {"type": "api_error", "message": "upstream unavailable", "litellm_call_id": "call-1"},
+            "error": {"type": "overloaded_error", "message": "upstream unavailable", "litellm_call_id": "call-1"},
         }
         assert frame.json_body(call_id=None) == {
             "type": "error",
-            "error": {"type": "api_error", "message": "upstream unavailable"},
+            "error": {"type": "overloaded_error", "message": "upstream unavailable"},
         }

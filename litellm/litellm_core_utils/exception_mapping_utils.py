@@ -573,7 +573,7 @@ def _map_anthropic_exception(
             llm_provider="anthropic",
         )
     elif "overloaded_error" in error_str or "Overloaded" in error_str:
-        raise InternalServerError(
+        raise litellm.ServiceUnavailableError(
             message=f"AnthropicError - {error_str}",
             model=model,
             llm_provider="anthropic",
@@ -635,7 +635,7 @@ def _map_anthropic_exception(
                 llm_provider="anthropic",
                 model=model,
             )
-        elif original_exception.status_code == 500 or original_exception.status_code == 529:
+        elif original_exception.status_code == 500:
             raise litellm.InternalServerError(
                 message=f"AnthropicException - {error_str}. Handle with `litellm.InternalServerError`.",
                 llm_provider="anthropic",
@@ -649,7 +649,7 @@ def _map_anthropic_exception(
                 model=model,
                 response=getattr(original_exception, "response", None),
             )
-        elif original_exception.status_code == 503:
+        elif original_exception.status_code == 503 or original_exception.status_code == 529:
             raise litellm.ServiceUnavailableError(
                 message=f"AnthropicException - {error_str}. Handle with `litellm.ServiceUnavailableError`.",
                 llm_provider="anthropic",

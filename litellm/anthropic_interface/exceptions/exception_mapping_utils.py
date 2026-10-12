@@ -5,6 +5,7 @@ Similar to litellm/litellm_core_utils/exception_mapping_utils.py but for Anthrop
 """
 
 import json
+from types import MappingProxyType
 from typing import Final
 
 from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
@@ -24,6 +25,8 @@ ANTHROPIC_ERROR_TYPE_MAP: Final[dict[int, AnthropicErrorType]] = {
     529: "overloaded_error",
 }
 
+ANTHROPIC_STATUS_CODE_MAP: Final = MappingProxyType({503: 529})
+
 
 class AnthropicExceptionMapping:
     """
@@ -33,9 +36,15 @@ class AnthropicExceptionMapping:
     """
 
     @staticmethod
+    def get_status_code(status_code: int) -> int:
+        """Map an HTTP status code to the one Anthropic's contract answers with: it has no 503, so an upstream that
+        cannot take the request right now is its 529 overloaded_error."""
+        return ANTHROPIC_STATUS_CODE_MAP.get(status_code, status_code)
+
+    @staticmethod
     def get_error_type(status_code: int) -> AnthropicErrorType:
         """Map HTTP status code to Anthropic error type."""
-        return ANTHROPIC_ERROR_TYPE_MAP.get(status_code, "api_error")
+        return ANTHROPIC_ERROR_TYPE_MAP.get(AnthropicExceptionMapping.get_status_code(status_code), "api_error")
 
     @staticmethod
     def create_error_response(
@@ -197,6 +206,6 @@ class AnthropicErrorSseFrame(str):
 
 def anthropic_error_sse_frame(status_code: int, raw_message: str) -> AnthropicErrorSseFrame:
     return AnthropicErrorSseFrame(
-        status_code,
+        AnthropicExceptionMapping.get_status_code(status_code),
         AnthropicExceptionMapping.transform_to_anthropic_error(status_code=status_code, raw_message=raw_message),
     )
