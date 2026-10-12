@@ -222,9 +222,9 @@ def test_image_edit_multipart_n_that_is_not_a_number_is_left_alone(monkeypatch):
     assert captured["n"] == "two"
 
 
-def test_image_edit_multipart_fallbacks_reach_the_router_as_a_list(monkeypatch):
+def test_image_edit_multipart_fallbacks_reach_the_router_as_a_list(monkeypatch: pytest.MonkeyPatch):
     """A multipart `fallbacks` is JSON text and must not be walked one character at a time."""
-    captured: Dict[str, Any] = {}
+    captured: dict[str, object] = {}
 
     response = _image_edit_client(monkeypatch, captured).post(
         "/v1/images/edits",
