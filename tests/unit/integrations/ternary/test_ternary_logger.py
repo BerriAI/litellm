@@ -5,7 +5,7 @@ from __future__ import annotations
 import csv
 import io
 import json
-from datetime import timedelta
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, MagicMock
 
 import polars as pl
@@ -19,7 +19,7 @@ from litellm.integrations.ternary.export_engine import (
     TernaryExportEngine,
     _canonical_day,
     _day_window,
-    _drop_days_before,
+    _keep_window_days,
     _merge_token_tags,
     _partition_by_day,
 )
@@ -142,25 +142,36 @@ async def test_daily_export_resends_yesterday_whole_including_spend_flushed_afte
     assert sent.filter(pl.col("date") == "2026-10-07")["spend"].sum() == 3.0
 
 
-def test_drop_days_before_removes_older_days():
-    from datetime import datetime, timezone
+def _day_window_from(start: datetime, end: datetime) -> FocusTimeWindow:
+    return FocusTimeWindow(start_time=start, end_time=end, frequency="interval")
 
-    data = pl.DataFrame({"date": ["2026-09-02", "2026-09-03", "2026-09-04"], "spend": [1.0, 2.0, 3.0]})
-    floor = datetime(2026, 9, 3, 0, 0, tzinfo=timezone.utc)
-    out = _drop_days_before(data, floor)
+
+def test_keep_window_days_removes_days_outside_the_window():
+    data = pl.DataFrame(
+        {"date": ["2026-09-02", "2026-09-03", "2026-09-04", "2026-09-05"], "spend": [1.0, 2.0, 3.0, 4.0]}
+    )
+    window = _day_window_from(
+        datetime(2026, 9, 3, tzinfo=timezone.utc), datetime(2026, 9, 4, 13, 0, tzinfo=timezone.utc)
+    )
+    out = _keep_window_days(data, window)
     assert out["date"].to_list() == ["2026-09-03", "2026-09-04"]
 
 
-def test_drop_days_before_noop_without_date_column():
-    from datetime import datetime, timezone
+def test_keep_window_days_excludes_the_day_a_window_ends_at_midnight():
+    data = pl.DataFrame({"date": ["2026-09-01", "2026-09-02"], "spend": [1.0, 2.0]})
+    window = _day_window_from(datetime(2026, 9, 1, tzinfo=timezone.utc), datetime(2026, 9, 2, tzinfo=timezone.utc))
+    assert _keep_window_days(data, window)["date"].to_list() == ["2026-09-01"]
 
+
+def test_keep_window_days_noop_without_date_column():
     data = pl.DataFrame({"spend": [1.0]})
-    out = _drop_days_before(data, datetime(2026, 9, 3, tzinfo=timezone.utc))
+    window = _day_window_from(datetime(2026, 9, 3, tzinfo=timezone.utc), datetime(2026, 9, 4, tzinfo=timezone.utc))
+    out = _keep_window_days(data, window)
     assert out.equals(data)
 
 
 @pytest.mark.asyncio
-async def test_export_window_interposes_drop_days_before():
+async def test_export_window_keeps_only_the_window_days():
     from datetime import datetime, timezone
 
     multi_day = pl.DataFrame({"date": ["2026-09-01", "2026-09-03", "2026-09-04"], "spend": [1.0, 2.0, 3.0]})
@@ -270,12 +281,17 @@ def test_merge_token_tags_non_object_tags_degrades_to_empty():
     assert tags == {"prompt_tokens": "5"}
 
 
-def test_drop_days_before_warns_when_everything_dropped():
-    from datetime import datetime, timezone
+def test_keep_window_days_warns_when_everything_dropped(caplog):
+    import logging
+
+    from litellm._logging import verbose_logger
 
     data = pl.DataFrame({"date": ["2026-09-01", "2026-09-02"], "spend": [1.0, 2.0]})
-    out = _drop_days_before(data, datetime(2026, 9, 5, tzinfo=timezone.utc))
+    window = _day_window_from(datetime(2026, 9, 5, tzinfo=timezone.utc), datetime(2026, 9, 6, tzinfo=timezone.utc))
+    with caplog.at_level(logging.WARNING, logger=verbose_logger.name):
+        out = _keep_window_days(data, window)
     assert out.height == 0
+    assert "dropped all 2 rows" in caplog.text
 
 
 def test_merge_token_tags_graceful_on_malformed_tags():
@@ -630,3 +646,23 @@ def test_init_custom_logger_compatible_class_returns_cached_ternary_logger(monke
     assert isinstance(first, TernaryLogger)
     second = _init_custom_logger_compatible_class("ternary", internal_usage_cache=None, llm_router=None)
     assert second is first
+
+
+@pytest.mark.asyncio
+async def test_a_bounded_export_window_uploads_only_the_days_it_covers():
+    engine = MagicMock()
+
+    async def fake_get_usage_data(**_kwargs):
+        return pl.DataFrame({"date": ["2026-09-01", "2026-09-02", "2026-09-03"], "spend": [1.0, 2.0, 3.0]})
+
+    engine._database.get_usage_data = fake_get_usage_data
+    captured = {}
+
+    async def fake_deliver(data, _window):
+        captured["data"] = data
+
+    engine._deliver_enriched = fake_deliver
+    window = _day_window_from(datetime(2026, 9, 1, tzinfo=timezone.utc), datetime(2026, 9, 2, tzinfo=timezone.utc))
+    await TernaryExportEngine.export_window(engine, window=window, limit=None)
+
+    assert captured["data"]["date"].to_list() == ["2026-09-01"]

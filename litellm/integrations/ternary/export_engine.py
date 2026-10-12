@@ -125,18 +125,23 @@ def _canonical_day(raw: object) -> str | None:
     return parsed.date().isoformat()
 
 
-def _drop_days_before(data: _Frame, floor: datetime) -> _Frame:
-    """Drop source rows for days older than the window start, so whole-day replace-by-day never truncates a partial older day."""
+def _keep_window_days(data: _Frame, window: FocusTimeWindow) -> _Frame:
+    """Keep source rows whose UTC `date` falls on a day the window touches; each kept day is then uploaded whole."""
     if "date" not in data.columns:
         return data
-    floor_day: Final = floor.astimezone(timezone.utc).date().isoformat()
+    first_day: Final = window.start_time.astimezone(timezone.utc).date().isoformat()
+    last_day: Final = (window.end_time.astimezone(timezone.utc) - timedelta(microseconds=1)).date().isoformat()
     kept: Final = data.filter(
-        [day is not None and day >= floor_day for day in map(_canonical_day, data.get_column("date").to_list())]
+        [
+            day is not None and first_day <= day <= last_day
+            for day in map(_canonical_day, data.get_column("date").to_list())
+        ]
     )
     if data.height > 0 and kept.height == 0:
         verbose_logger.warning(
-            "Ternary export: day-window floor %s dropped all %d rows (unparseable or older `date`?)",
-            floor_day,
+            "Ternary export: day window %s..%s dropped all %d rows (unparseable or out-of-window `date`?)",
+            first_day,
+            last_day,
             data.height,
         )
     return kept
@@ -163,16 +168,18 @@ def _day_window(day: str, frequency: str) -> FocusTimeWindow:
     return FocusTimeWindow(start_time=start, end_time=start + timedelta(days=1), frequency=frequency)
 
 
-async def _read_usage(database: _UsageSource, *, limit: int | None, floor: datetime | None) -> _Frame:
-    """Read every row, or the rows dated on or after `floor`.
+async def _read_usage(database: _UsageSource, *, limit: int | None, window: FocusTimeWindow | None) -> _Frame:
+    """Read every row, or the rows dated on the days `window` touches.
 
     `updated_at` is naive UTC filtered as `timestamptz` in the database session timezone, so the read starts one
-    day before `floor` with no upper bound, and each row's own UTC `date` decides what is kept.
+    day before the window with no upper bound, and each row's own UTC `date` decides what is kept.
     """
-    if floor is None:
+    if window is None:
         return await database.get_usage_data(limit=limit)
-    data: Final = await database.get_usage_data(limit=limit, start_time_utc=floor - _SESSION_TIMEZONE_MARGIN)
-    return _drop_days_before(data, floor)
+    data: Final = await database.get_usage_data(
+        limit=limit, start_time_utc=window.start_time - _SESSION_TIMEZONE_MARGIN
+    )
+    return _keep_window_days(data, window)
 
 
 def _day_payload(data: _Frame, *, transformer: _Transformer, serializer: _Serializer) -> bytes:
@@ -189,11 +196,11 @@ class TernaryExportEngine(FocusExportEngine):
         super().__init__(provider="ternary", export_format="csv", prefix=prefix, destination=destination)
 
     async def export_window(self, *, window: FocusTimeWindow, limit: int | None) -> None:
-        data: Final = await _read_usage(self._database, limit=limit, floor=window.start_time)
+        data: Final = await _read_usage(self._database, limit=limit, window=window)
         await self._deliver_enriched(data, window)
 
     async def export_all(self, *, limit: int | None) -> None:
-        data: Final = await _read_usage(self._database, limit=limit, floor=None)
+        data: Final = await _read_usage(self._database, limit=limit, window=None)
         now: Final = datetime.now(timezone.utc)
         window: Final = FocusTimeWindow(
             start_time=now.replace(hour=0, minute=0, second=0, microsecond=0),
