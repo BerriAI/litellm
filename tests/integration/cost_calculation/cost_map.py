@@ -56,6 +56,13 @@ COST_MAP_ENTRIES: Final[dict[str, dict[str, JsonValue]]] = {
         "input_cost_per_token": 4.2e-08,
         "output_cost_per_token": 0.0,
     },
+    "fireworks_ai/accounts/fireworks/routers/rune": {
+        "litellm_provider": "fireworks_ai",
+        "mode": "evaluation",
+        "input_cost_per_token": 4.2e-08,
+        "cache_read_input_token_cost": 8.4e-09,
+        "output_cost_per_token": 0.0,
+    },
     "cloudflare/@cf/cloudflare/clef-flash": {
         "litellm_provider": "cloudflare",
         "mode": "evaluation",
