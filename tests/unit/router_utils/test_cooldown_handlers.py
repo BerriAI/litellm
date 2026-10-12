@@ -580,6 +580,7 @@ class TestCooldownDeploymentsModelFilter:
     def _make_router(self):
         router = MagicMock()
         router.get_model_ids.return_value = ["dep-1", "dep-2"]
+        router.get_candidate_model_ids_for_route.return_value = frozenset()
         router.cooldown_cache = MagicMock()
         from unittest.mock import AsyncMock
 

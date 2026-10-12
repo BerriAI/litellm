@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
+from pydantic import TypeAdapter
+
 from litellm._internal_context import service_target
 from litellm._logging import verbose_router_logger
 from litellm.caching.dual_cache import DualCache
@@ -34,6 +36,7 @@ if TYPE_CHECKING:
 ROUTER_COOLDOWNS_USAGE_TARGET: Final = "router_cooldowns_usage"
 ROUTER_USAGE_TARGET: Final = "router_usage"
 _PREFETCH_SLOT: Final = "routing_read"
+_COOLDOWN_DEPLOYMENTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 
 
 def _routing_read_target(cooldown_keys: Sequence[str], usage_keys: Sequence[str]) -> str:
@@ -105,7 +108,7 @@ class RoutingPrefetch:
             return
         model_ids: Final = resolve_cooldown_model_ids(
             litellm_router_instance=litellm_router_instance,
-            healthy_deployments=deployments,
+            healthy_deployments=_COOLDOWN_DEPLOYMENTS_ADAPTER.validate_python(deployments),
         )
         cooldown_keys: Final = tuple(CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids)
         usage_keys: Final = (
@@ -202,7 +205,7 @@ class RoutingReadBatch:
         model_ids: Final = resolve_cooldown_model_ids(
             litellm_router_instance=litellm_router_instance,
             model_name=model_name,
-            healthy_deployments=healthy_deployments,
+            healthy_deployments=_COOLDOWN_DEPLOYMENTS_ADAPTER.validate_python(healthy_deployments),
             team_id=team_id,
         )
 

@@ -111,6 +111,7 @@ async def test_async_raise_no_deployment_exception():
     # Create a mock LitellmRouter instance
     mock_router = MagicMock()
     mock_router.get_model_ids.return_value = ["deployment-1", "deployment-2"]
+    mock_router.get_candidate_model_ids_for_route.return_value = frozenset()
     mock_router.cooldown_cache.get_min_cooldown.return_value = 30.0
     mock_router.enable_pre_call_checks = True
 
@@ -169,6 +170,7 @@ async def test_async_raise_no_deployment_exception_empty_cooldown_list():
     # Create a mock LitellmRouter instance
     mock_router = MagicMock()
     mock_router.get_model_ids.return_value = ["deployment-1", "deployment-2"]
+    mock_router.get_candidate_model_ids_for_route.return_value = frozenset()
     mock_router.cooldown_cache.get_min_cooldown.return_value = 15.0
     mock_router.enable_pre_call_checks = False
 

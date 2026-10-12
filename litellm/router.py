@@ -503,6 +503,7 @@ _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_COOLDOWN_DEPLOYMENTS_ADAPTER: Final = TypeAdapter(tuple[Mapping[str, object], ...])
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 
 
@@ -7587,7 +7588,7 @@ class Router:
                 litellm_router_instance=self,
                 parent_otel_span=None,
                 model_name=original_model_group,
-                healthy_deployments=all_deployments,
+                healthy_deployments=_COOLDOWN_DEPLOYMENTS_ADAPTER.validate_python(all_deployments),
             )
         )
         remaining: Final = (all_ids - cooldown_ids) - excluded
@@ -8990,7 +8991,7 @@ class Router:
             litellm_router_instance=self,
             parent_otel_span=parent_otel_span,
             model_name=model,
-            healthy_deployments=_all_deployments,
+            healthy_deployments=_COOLDOWN_DEPLOYMENTS_ADAPTER.validate_python(_all_deployments),
         )
         unhealthy_set: Final = set(unhealthy_deployments)
         healthy_deployments: list = [d for d in _all_deployments if d["model_info"]["id"] not in unhealthy_set]
@@ -9021,7 +9022,7 @@ class Router:
             litellm_router_instance=self,
             parent_otel_span=parent_otel_span,
             model_name=model,
-            healthy_deployments=_all_deployments,
+            healthy_deployments=_COOLDOWN_DEPLOYMENTS_ADAPTER.validate_python(_all_deployments),
         )
         # Convert to set for O(1) lookup instead of O(n)
         unhealthy_deployments_set: Final = set(unhealthy_deployments)
@@ -13568,14 +13569,14 @@ class Router:
             health_check_probe=health_check_probe,
         )
 
-        request_team_id: Final = get_request_team_id(request_kwargs)
+        request_team_id: Final = get_request_team_id(_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs))
         routing_read_batch: Final = RoutingReadBatch.active()
         cooldown_deployments: Final = (
             await async_get_cooldown_deployments(
                 litellm_router_instance=self,
                 parent_otel_span=parent_otel_span,
                 model_name=model,
-                healthy_deployments=healthy_deployments,
+                healthy_deployments=_COOLDOWN_DEPLOYMENTS_ADAPTER.validate_python(healthy_deployments),
                 team_id=request_team_id,
             )
             if routing_read_batch is None
@@ -13678,7 +13679,7 @@ class Router:
                 litellm_router_instance=self,
                 model=model,
                 parent_otel_span=parent_otel_span,
-                team_id=get_request_team_id(request_kwargs),
+                team_id=get_request_team_id(_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs)),
             )
             raise exception
 
@@ -13937,7 +13938,7 @@ class Router:
                     litellm_router_instance=self,
                     model=model,
                     parent_otel_span=parent_otel_span,
-                    team_id=get_request_team_id(request_kwargs),
+                    team_id=get_request_team_id(_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs)),
                 )
                 raise exception
             await self._async_override_selector_pre_call_check(
@@ -14103,7 +14104,7 @@ class Router:
                     litellm_router_instance=self,
                     model=model,
                     parent_otel_span=parent_otel_span,
-                    team_id=get_request_team_id(request_kwargs),
+                    team_id=get_request_team_id(_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs)),
                 )
                 raise exception
             await self._async_override_selector_pre_call_check(
@@ -14805,12 +14806,12 @@ class Router:
             parent_otel_span=parent_otel_span,
         )
 
-        request_team_id: Final = get_request_team_id(request_kwargs)
+        request_team_id: Final = get_request_team_id(_ROUTING_KWARGS_ADAPTER.validate_python(request_kwargs))
         cooldown_deployments: Final = get_cooldown_deployments(
             litellm_router_instance=self,
             parent_otel_span=parent_otel_span,
             model_name=model,
-            healthy_deployments=healthy_deployments,
+            healthy_deployments=_COOLDOWN_DEPLOYMENTS_ADAPTER.validate_python(healthy_deployments),
             team_id=request_team_id,
         )
         _pre_cooldown_deployments: Final = healthy_deployments
@@ -15008,9 +15009,11 @@ class Router:
                 llm_provider="",
             )
         pass_through_model_ids: Final = tuple(
-            deployment["model_info"]["id"]
-            for deployment in pass_through_deployments
-            if "id" in deployment.get("model_info", {})
+            resolve_cooldown_model_ids(
+                litellm_router_instance=self,
+                model_name=model,
+                healthy_deployments=_COOLDOWN_DEPLOYMENTS_ADAPTER.validate_python(pass_through_deployments),
+            )
         )
 
         # 4. Apply health-check and cooldown filtering
@@ -15023,7 +15026,7 @@ class Router:
             litellm_router_instance=self,
             parent_otel_span=parent_otel_span,
             model_name=model,
-            healthy_deployments=pass_through_deployments,
+            healthy_deployments=_COOLDOWN_DEPLOYMENTS_ADAPTER.validate_python(pass_through_deployments),
         )
         pass_through_deployments = self._filter_cooldown_deployments(
             healthy_deployments=pass_through_deployments,
