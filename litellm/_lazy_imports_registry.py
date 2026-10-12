@@ -161,6 +161,7 @@ LLM_CONFIG_NAMES: Final = (
     "PerplexityDecisionsConfig",
     "TypeSafeDecisionsConfig",
     "OpenRouterDecisionsConfig",
+    "FireworksAIDecisionsConfig",
     "CloudflareDecisionsConfig",
     "StrandsDeciderDecisionsConfig",
     "DatabricksDecisionsConfig",
@@ -724,6 +725,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "PerplexityDecisionsConfig": (".llms.perplexity.decisions.transformation", "PerplexityDecisionsConfig"),
     "TypeSafeDecisionsConfig": (".llms.typesafe.decisions.transformation", "TypeSafeDecisionsConfig"),
     "OpenRouterDecisionsConfig": (".llms.openrouter.decisions.transformation", "OpenRouterDecisionsConfig"),
+    "FireworksAIDecisionsConfig": (".llms.fireworks_ai.decisions.transformation", "FireworksAIDecisionsConfig"),
     "CloudflareDecisionsConfig": (".llms.cloudflare.decisions.transformation", "CloudflareDecisionsConfig"),
     "StrandsDeciderDecisionsConfig": (
         ".llms.strands_decider.decisions.transformation",

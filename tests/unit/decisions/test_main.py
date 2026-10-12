@@ -2046,3 +2046,67 @@ def test_positional_arguments_keep_the_order_the_sdk_had_before_media(respx_mock
     assert systemone_route.calls[0].request.headers["authorization"] == "Bearer positional-key"
     for sent in (decisions_route.calls[0].request.content, systemone_route.calls[0].request.content):
         assert "audio" not in json.loads(sent)
+
+
+_FIREWORKS_URL: Final = "https://api.fireworks.ai/inference/v1/systemone"
+_FIREWORKS_MODEL: Final = "fireworks_ai/accounts/fireworks/routers/rune"
+_FIREWORKS_RESPONSE: Final[Mapping[str, object]] = {
+    "model": "accounts/fireworks/routers/rune",
+    "answers": {"is_defect": {"type": "noul", "noul": 0.9902915235185259}},
+    "usage": {"input_tokens": 300, "cached_input_tokens": 200, "output_tokens": 0},
+}
+
+
+@pytest.mark.asyncio
+async def test_fireworks_ai_posts_the_jev_body_to_systemone_with_the_account_model_name(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("FIREWORKS_API_BASE", raising=False)
+    monkeypatch.delenv("FIREWORKS_API_KEY", raising=False)
+    monkeypatch.setenv("FIREWORKS_AI_API_KEY", "fireworks-key")
+    route: Final = respx_mock.post(_FIREWORKS_URL).respond(json=_FIREWORKS_RESPONSE)
+
+    response: Final = await litellm.asystemone(
+        model=_FIREWORKS_MODEL,
+        state="The package arrived broken.",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    )
+
+    assert route.called
+    assert respx_mock.calls[0].request.headers["authorization"] == "Bearer fireworks-key"
+    assert json.loads(respx_mock.calls[0].request.content) == {
+        "model": "accounts/fireworks/routers/rune",
+        "state": "The package arrived broken.",
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert response.model == _FIREWORKS_RESPONSE["model"]
+    assert response.answers["is_defect"] == NoulAnswer(type="noul", noul=0.9902915235185259)
+
+
+@pytest.mark.asyncio
+async def test_fireworks_ai_bills_cached_input_tokens_at_the_cache_read_rate(
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("FIREWORKS_API_BASE", raising=False)
+    respx_mock.post(_FIREWORKS_URL).respond(json=_FIREWORKS_RESPONSE)
+    prices: Final = litellm.model_cost[_FIREWORKS_MODEL]
+    uncached: Final = 100 * float(prices["input_cost_per_token"])
+    cached: Final = 200 * float(prices["cache_read_input_token_cost"])
+    recording_logger: Final = _RecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recording_logger])
+
+    response: Final = await litellm.adecisions(
+        model=_FIREWORKS_MODEL,
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="caller-key",
+    )
+    await _drain_logging_worker()
+
+    assert cached > 0
+    assert response.usage.input_tokens_details.cached_tokens == 200
+    assert recording_logger.standard_logging_object is not None
+    assert recording_logger.standard_logging_object["response_cost"] == pytest.approx(uncached + cached)
+    assert recording_logger.standard_logging_object["response_cost"] < 300 * float(prices["input_cost_per_token"])
