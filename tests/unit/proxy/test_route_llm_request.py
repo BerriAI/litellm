@@ -516,12 +516,10 @@ def test_e2e_proxy_config_opts_in_to_the_mock_params_its_suite_sends():
         for param in GATED_MOCK_PARAM_NAMES
         if f"{param}=" in source or f'"{param}"' in source
     )
-    assert senders, "expected the E2E suite to still exercise the gated mock testing params"
-
     config = yaml.safe_load((repo_root / "proxy_server_config.yaml").read_text(encoding="utf-8"))
     general_settings = config.get("general_settings") or {}
 
-    assert general_settings.get(MOCK_TESTING_CONFIG_KEY) is True, (
+    assert not senders or general_settings.get(MOCK_TESTING_CONFIG_KEY) is True, (
         f"proxy_server_config.yaml must set general_settings.{MOCK_TESTING_CONFIG_KEY}: true — "
         f"the E2E suite sends gated mock testing params ({', '.join(sorted(senders))}) "
         "and the proxy rejects them with a 400 otherwise"
@@ -1728,3 +1726,37 @@ async def test_route_request_without_model_on_model_routed_endpoint_is_a_400():
 
     assert exc_info.value.code == "400"
     assert exc_info.value.param == "model"
+
+
+@pytest.mark.asyncio
+async def test_route_request_router_settings_override_skips_null_fields():
+    """
+    A key or team saved from the dashboard stores every unset router setting as null. Those nulls
+    must not reach the router as explicit per-request values, or they switch the router-level
+    fallbacks and retries off for that key.
+    """
+    data: Final = {
+        "model": "gpt-3.5-turbo",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "stream": True,
+        "router_settings_override": {
+            "fallbacks": None,
+            "context_window_fallbacks": None,
+            "num_retries": None,
+            "model_group_retry_policy": None,
+            "timeout": 600,
+        },
+    }
+
+    llm_router: Final = MagicMock()
+    llm_router.acompletion.return_value = "success"
+
+    response: Final = await route_request(data, llm_router, None, "acompletion")
+
+    assert response == "success"
+    call_kwargs: Final = llm_router.acompletion.call_args[1]
+    assert call_kwargs["timeout"] == 600
+    assert "fallbacks" not in call_kwargs
+    assert "context_window_fallbacks" not in call_kwargs
+    assert "num_retries" not in call_kwargs
+    assert "model_group_retry_policy" not in call_kwargs

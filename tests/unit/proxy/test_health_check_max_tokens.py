@@ -1,7 +1,10 @@
+import asyncio
 import json
 import logging
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 import respx
 
@@ -1131,3 +1134,166 @@ def test_transitive_probe_expansion_terminates_on_a_router_cycle():
     probes = hc_module._dependency_deployments_to_probe(a_only, router.model_list, router)
 
     assert {d["model_info"]["id"] for d in probes} == {"b-1"}
+
+
+@pytest.mark.asyncio
+async def test_background_audio_speech_health_check_uses_model_info_voice(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    upstream: Final = respx_mock.post("https://speech.example/v1/audio/speech").respond(
+        content=b"audio",
+        headers={"content-type": "audio/mpeg"},
+    )
+
+    healthy, unhealthy, _ = await hc_module.perform_health_check(
+        [
+            {
+                "litellm_params": {
+                    "model": "openai/tts-1",
+                    "api_key": "fake-key",
+                    "api_base": "https://speech.example/v1",
+                },
+                "model_info": {"id": "speech", "mode": "audio_speech", "health_check_voice": "nova"},
+            }
+        ],
+        max_concurrency=1,
+    )
+
+    assert len(healthy) == 1
+    assert unhealthy == []
+    assert upstream.called
+    assert json.loads(upstream.calls.last.request.content)["voice"] == "nova"
+
+
+@pytest.mark.asyncio
+async def test_background_health_check_observes_the_concurrency_limit_and_queue(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    request_started: Final = asyncio.Queue[None]()
+    release: Final = asyncio.Event()
+
+    async def complete_request(_: httpx.Request) -> httpx.Response:
+        request_started.put_nowait(None)
+        await release.wait()
+        return httpx.Response(
+            200,
+            content=b"audio",
+            headers={"content-type": "audio/mpeg"},
+        )
+
+    upstream: Final = respx_mock.post("https://health.example/v1/audio/speech").mock(side_effect=complete_request)
+    model_list: Final = [
+        {
+            "litellm_params": {
+                "model": "openai/tts-1",
+                "api_key": "fake-key",
+                "api_base": "https://health.example/v1",
+            },
+            "model_info": {"id": f"audio-{index}", "mode": "audio_speech"},
+        }
+        for index in range(10)
+    ]
+    tasks_before: Final = len(asyncio.all_tasks())
+    perform_task: Final = asyncio.create_task(hc_module.perform_health_check(model_list, max_concurrency=2))
+
+    try:
+        await asyncio.wait_for(request_started.get(), timeout=1)
+        await asyncio.wait_for(request_started.get(), timeout=1)
+        for _ in range(20):
+            await asyncio.sleep(0)
+        extra_requests_started: Final = request_started.qsize()
+        tasks_while_blocked: Final = len(asyncio.all_tasks()) - tasks_before
+    finally:
+        release.set()
+    healthy, unhealthy, _ = await perform_task
+
+    assert extra_requests_started == 0
+    assert tasks_while_blocked <= 5
+    assert upstream.call_count == 10
+    assert len(healthy) == 10
+    assert unhealthy == []
+
+
+@pytest.mark.asyncio
+async def test_background_health_check_timeout_marks_a_blocked_provider_unhealthy(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    never_release: Final = asyncio.Event()
+    request_started: Final = asyncio.Event()
+
+    async def blocked_response(_: httpx.Request) -> httpx.Response:
+        request_started.set()
+        await never_release.wait()
+        return httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
+
+    respx_mock.post("https://health.example/v1/audio/speech").mock(side_effect=blocked_response)
+    model_list: Final = [
+        {
+            "litellm_params": {
+                "model": "openai/tts-1",
+                "api_key": "fake-key",
+                "api_base": "https://health.example/v1",
+            },
+            "model_info": {"id": "blocked", "mode": "audio_speech", "health_check_timeout": 2},
+        }
+    ]
+
+    healthy, unhealthy, _ = await asyncio.wait_for(
+        hc_module.perform_health_check(model_list),
+        timeout=4,
+    )
+
+    assert request_started.is_set()
+    assert unhealthy[0]["error"] == "Timeout exceeded"
+    assert healthy == []
+    assert len(unhealthy) == 1
+    assert unhealthy[0]["model"] == "openai/tts-1"
+
+
+@pytest.mark.asyncio
+async def test_background_health_check_timeout_does_not_cancel_a_sibling(
+    httpx_transport: None, respx_mock: respx.MockRouter
+) -> None:
+    never_release: Final = asyncio.Event()
+    slow_request_started: Final = asyncio.Event()
+
+    async def blocked_response(_: httpx.Request) -> httpx.Response:
+        slow_request_started.set()
+        await never_release.wait()
+        return httpx.Response(200, content=b"audio", headers={"content-type": "audio/mpeg"})
+
+    respx_mock.post("https://slow.example/v1/audio/speech").mock(side_effect=blocked_response)
+    fast_upstream: Final = respx_mock.post("https://fast.example/v1/audio/speech").respond(
+        content=b"audio",
+        headers={"content-type": "audio/mpeg"},
+    )
+    model_list: Final = [
+        {
+            "litellm_params": {
+                "model": "openai/tts-1",
+                "api_key": "fake-key",
+                "api_base": "https://slow.example/v1",
+            },
+            "model_info": {"id": "slow", "mode": "audio_speech", "health_check_timeout": 1},
+        },
+        {
+            "litellm_params": {
+                "model": "openai/tts-1",
+                "api_key": "fake-key",
+                "api_base": "https://fast.example/v1",
+            },
+            "model_info": {"id": "fast", "mode": "audio_speech", "health_check_timeout": 2},
+        },
+    ]
+
+    healthy, unhealthy, _ = await asyncio.wait_for(
+        hc_module.perform_health_check(model_list, max_concurrency=1),
+        timeout=4,
+    )
+    healthy_model_ids: Final = {endpoint["model_id"] for endpoint in healthy}
+    unhealthy_model_ids: Final = {endpoint["model_id"] for endpoint in unhealthy}
+
+    assert slow_request_started.is_set()
+    assert fast_upstream.called
+    assert healthy_model_ids == {"fast"}
+    assert unhealthy_model_ids == {"slow"}

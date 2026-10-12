@@ -4,14 +4,14 @@ use strum::IntoStaticStr;
 use crate::formats::chat_completions::ReasoningEffort;
 use crate::recognized::Recognized;
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum SystemPrompt {
     Text(String),
     Blocks(Vec<ContentBlock>),
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(untagged)]
 pub enum MessageContent {
     Text(String),
@@ -30,16 +30,24 @@ pub enum MessageContent {
 )]
 #[cfg_attr(feature = "schema", derive(schemars::JsonSchema))]
 #[cfg_attr(feature = "schema", schemars(from = "String", into = "String"))]
-#[strum(serialize_all = "snake_case")]
 pub enum ContentBlockType {
+    #[strum(serialize = "text")]
     Text,
+    #[strum(serialize = "thinking")]
     Thinking,
+    #[strum(serialize = "redacted_thinking")]
     RedactedThinking,
+    #[strum(serialize = "tool_use")]
     ToolUse,
+    #[strum(serialize = "server_tool_use")]
     ServerToolUse,
+    #[strum(serialize = "tool_result")]
     ToolResult,
+    #[strum(serialize = "compaction")]
     Compaction,
+    #[strum(serialize = "advisor_tool_result")]
     AdvisorToolResult,
+    #[strum(serialize = "web_search_tool_result")]
     WebSearchToolResult,
     #[strum(default, transparent)]
     Other(String),
@@ -57,7 +65,7 @@ impl From<ContentBlockType> for String {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ContentBlock {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
@@ -102,7 +110,7 @@ impl ContentBlock {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct CacheControl {
     #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
@@ -115,7 +123,7 @@ pub struct CacheControl {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct Message {
     pub role: String,
     pub content: MessageContent,
@@ -123,22 +131,20 @@ pub struct Message {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
-#[derive(Copy, Hash, IntoStaticStr, Eq)]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[derive(Copy, Hash, IntoStaticStr, Eq, strum::VariantArray)]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
 pub enum EffortLevel {
+    #[strum(serialize = "low")]
     Low,
+    #[strum(serialize = "medium")]
     Medium,
+    #[strum(serialize = "high")]
     High,
+    #[strum(serialize = "xhigh")]
     Xhigh,
+    #[strum(serialize = "max")]
     Max,
-}
-
-impl EffortLevel {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 impl From<EffortLevel> for ReasoningEffort {
@@ -153,24 +159,19 @@ impl From<EffortLevel> for ReasoningEffort {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, IntoStaticStr, Eq)]
 #[serde(rename_all = "lowercase")]
-#[strum(serialize_all = "lowercase")]
 pub enum Speed {
+    #[strum(serialize = "fast")]
     Fast,
+    #[strum(serialize = "standard")]
     Standard,
-}
-
-impl Speed {
-    pub fn as_str(self) -> &'static str {
-        self.into()
-    }
 }
 
 /// The tools whose presence changes how the request is sent. Every other tool, custom or
 /// server, deserializes as `Recognized::Unrecognized` and passes through verbatim.
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type")]
 pub enum MessagesTool {
     #[serde(rename = "advisor_20260301")]
@@ -190,7 +191,22 @@ pub enum MessagesTool {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ContextTrigger {
+    InputTokens {
+        value: u64,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+    ToolUses {
+        value: u64,
+        #[serde(flatten)]
+        extra: Map<String, Value>,
+    },
+}
+
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type")]
 pub enum ContextEdit {
     #[serde(rename = "compact_20260112")]
@@ -210,7 +226,7 @@ pub enum ContextEdit {
     },
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct ContextManagement {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -219,7 +235,7 @@ pub struct ContextManagement {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct OutputConfig {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -236,7 +252,7 @@ impl OutputConfig {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Copy, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ThinkingDisplay {
@@ -245,7 +261,7 @@ pub enum ThinkingDisplay {
     Updates,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct EnabledThinking {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -256,7 +272,7 @@ pub struct EnabledThinking {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct AdaptiveThinking {
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -265,14 +281,14 @@ pub struct AdaptiveThinking {
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct DisabledThinking {
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ThinkingConfig {
     Enabled(EnabledThinking),
@@ -296,7 +312,7 @@ impl ThinkingConfig {
     }
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct MessagesRequest {
     pub model: String,
     pub messages: Vec<Message>,
@@ -304,7 +320,7 @@ pub struct MessagesRequest {
     pub params: MessagesOptionalParams,
 }
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 #[derive(Default)]
 pub struct MessagesOptionalParams {
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -371,10 +387,17 @@ impl Message {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rstest::rstest;
     use serde_json::json;
 
-    use super::*;
+    use crate::formats::messages::ContextTrigger;
+
+    use crate::formats::messages::{ContentBlock, ContentBlockType};
+
+    use crate::recognized::Recognized;
+
+    use serde_json::{Map, Value};
 
     fn round_trip<T: serde::de::DeserializeOwned + serde::Serialize>(value: &Value) -> Value {
         let parsed: T = serde_json::from_value(value.clone()).unwrap();
@@ -676,7 +699,10 @@ mod tests {
 
     #[rstest]
     fn speed_names_match_the_wire(#[values(Speed::Fast, Speed::Standard)] speed: Speed) {
-        assert_eq!(serde_json::to_value(speed).unwrap(), json!(speed.as_str()));
+        assert_eq!(
+            serde_json::to_value(speed).unwrap(),
+            json!(<&'static str>::from(speed))
+        );
     }
 
     #[rstest]
@@ -690,10 +716,135 @@ mod tests {
         )]
         level: EffortLevel,
     ) {
-        assert_eq!(serde_json::to_value(level).unwrap(), json!(level.as_str()));
+        assert_eq!(
+            serde_json::to_value(level).unwrap(),
+            json!(<&'static str>::from(level))
+        );
         assert_eq!(
             serde_json::to_value(ReasoningEffort::from(level)).unwrap(),
-            json!(level.as_str())
+            json!(<&'static str>::from(level))
         );
+    }
+
+    #[rstest]
+    #[case::null(json!(null))]
+    #[case::number(json!(1))]
+    #[case::boolean(json!(true))]
+    #[case::array(json!(["tool_use"]))]
+    #[case::object(json!({"type": "tool_use"}))]
+    fn content_block_type_rejects_non_string_json(#[case] value: Value) {
+        assert!(serde_json::from_value::<ContentBlockType>(value).is_err());
+    }
+
+    #[cfg(feature = "schema")]
+    #[rstest]
+    fn content_block_type_schema_remains_a_string() {
+        let schema = schemars::schema_for!(ContentBlockType).to_value();
+        assert_eq!(schema.get("type"), Some(&json!("string")));
+        assert_eq!(
+            schema.get("title"),
+            Some(&json!(stringify!(ContentBlockType)))
+        );
+    }
+
+    #[rstest]
+    #[case::text("text", ContentBlockType::Text)]
+    #[case::thinking("thinking", ContentBlockType::Thinking)]
+    #[case::redacted_thinking("redacted_thinking", ContentBlockType::RedactedThinking)]
+    #[case::tool_use("tool_use", ContentBlockType::ToolUse)]
+    #[case::server_tool_use("server_tool_use", ContentBlockType::ServerToolUse)]
+    #[case::tool_result("tool_result", ContentBlockType::ToolResult)]
+    #[case::compaction("compaction", ContentBlockType::Compaction)]
+    #[case::advisor_result("advisor_tool_result", ContentBlockType::AdvisorToolResult)]
+    #[case::web_search_result("web_search_tool_result", ContentBlockType::WebSearchToolResult)]
+    #[case::image("image", ContentBlockType::Other("image".into()))]
+    #[case::document("document", ContentBlockType::Other("document".into()))]
+    #[case::tool_addition("tool_addition", ContentBlockType::Other("tool_addition".into()))]
+    #[case::tool_removal("tool_removal", ContentBlockType::Other("tool_removal".into()))]
+    #[case::advisor("advisor_result", ContentBlockType::Other("advisor_result".into()))]
+    #[case::web_search_error(
+        "web_search_tool_result_error",
+        ContentBlockType::Other("web_search_tool_result_error".into())
+    )]
+    #[case::future_block("future_block", ContentBlockType::Other("future_block".into()))]
+    #[case::case_sensitive("Tool_Use", ContentBlockType::Other("Tool_Use".into()))]
+    #[case::empty("", ContentBlockType::Other(String::new()))]
+    fn block_type_is_typed_and_round_trips_with_extra_fields(
+        #[case] wire: &str,
+        #[case] expected: ContentBlockType,
+    ) {
+        let input = json!({"type": wire, "future_field": {"nested": [1, null]}});
+        let block: ContentBlock = serde_json::from_value(input.clone()).unwrap();
+        assert_eq!(block.block_type.as_ref(), Some(&expected));
+        assert_eq!(serde_json::to_value(block).unwrap(), input);
+    }
+
+    #[rstest]
+    #[case::number(json!(1))]
+    #[case::boolean(json!(true))]
+    #[case::array(json!(["text"]))]
+    #[case::enum_object(json!({"text": null}))]
+    fn block_type_rejects_non_string_values(#[case] value: Value) {
+        assert!(serde_json::from_value::<ContentBlock>(json!({"type": value})).is_err());
+    }
+
+    #[rstest]
+    #[case::same_type(json!({"type": "tool_use"}), ContentBlockType::ToolUse, true)]
+    #[case::other_type(json!({"type": "tool_result"}), ContentBlockType::ToolUse, false)]
+    #[case::unknown_type(json!({"type": "future_tool"}), ContentBlockType::ToolUse, false)]
+    #[case::no_type(json!({"text": "x"}), ContentBlockType::Text, false)]
+    fn is_type_matches_the_exact_block_type(
+        #[case] block: Value,
+        #[case] block_type: ContentBlockType,
+        #[case] expected: bool,
+    ) {
+        let block: ContentBlock = serde_json::from_value(block).unwrap();
+        assert_eq!(block.is_type(block_type), expected);
+    }
+
+    #[rstest]
+    #[case::input_tokens("input_tokens", false)]
+    #[case::tool_uses("tool_uses", true)]
+    fn context_trigger_exposes_typed_threshold(#[case] tag: &str, #[case] tool_uses: bool) {
+        let wire = json!({"type":tag,"value":1024,"extension":true});
+        let trigger: ContextTrigger = serde_json::from_value(wire.clone()).unwrap();
+        match &trigger {
+            ContextTrigger::InputTokens { value, extra } => {
+                assert!(!tool_uses);
+                assert_eq!(*value, 1024);
+                assert_eq!(extra.get("extension"), Some(&json!(true)));
+            }
+            ContextTrigger::ToolUses { value, extra } => {
+                assert!(tool_uses);
+                assert_eq!(*value, 1024);
+                assert_eq!(extra.get("extension"), Some(&json!(true)));
+            }
+        }
+        assert_eq!(serde_json::to_value(trigger).unwrap(), wire);
+    }
+
+    #[rstest]
+    #[case::negative(json!({"type":"input_tokens","value":-1}))]
+    #[case::wrong_shape(json!({"type":"input_tokens","value":"1024"}))]
+    #[case::missing_value(json!({"type":"input_tokens"}))]
+    #[case::null_value(json!({"type":"input_tokens","value":null}))]
+    #[case::tool_uses_negative(json!({"type":"tool_uses","value":-1}))]
+    #[case::tool_uses_fractional(json!({"type":"tool_uses","value":1.5}))]
+    #[case::tool_uses_missing_value(json!({"type":"tool_uses"}))]
+    #[case::missing_discriminator(json!({"value":1}))]
+    #[case::unknown_discriminator(json!({"type":"other","value":1}))]
+    fn token_threshold_requires_unsigned_integer(#[case] wire: Value) {
+        assert!(serde_json::from_value::<ContextTrigger>(wire).is_err());
+    }
+
+    #[rstest]
+    fn existing_content_blocks_preserve_opaque_nested_fields() {
+        let wire =
+            json!({"type":"tool_result","content":[{"type":"text","text":7}],"source":{"url":7}});
+        let block: crate::formats::messages::ContentBlock =
+            serde_json::from_value(wire.clone()).unwrap();
+        assert_eq!(block.content.as_ref(), wire.get("content"));
+        assert_eq!(block.extra.get("source"), wire.get("source"));
+        assert_eq!(serde_json::to_value(block).unwrap(), wire);
     }
 }

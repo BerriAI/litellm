@@ -34,6 +34,7 @@ from fastapi import Request as Request_http_parsing
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from starlette.types import Message
+from starlette.websockets import WebSocket
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
 
@@ -1351,49 +1352,6 @@ async def test_only_trace_ingest_skips_json_body(method: str, path: str, skip_pa
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "content_type, encoding",
-    [
-        ("application/json", ""),
-        ("application/x-protobuf", ""),
-        ("application/json", "gzip"),
-    ],
-)
-async def test_otlp_auth_does_not_consume_chunked_bodies_before_the_receiver_limit(content_type, encoding):
-    from litellm.constants import OTLP_MAX_BODY_BYTES
-    from litellm.tracing import Tenant, TraceReceiver, TracingPayloadTooLargeError
-
-    received = []
-    chunk = b"x" * (OTLP_MAX_BODY_BYTES // 2 + 1)
-
-    async def receive():
-        received.append(1)
-        assert len(received) <= 2, "receiver must reject without consuming subsequent chunks"
-        return {"type": "http.request", "body": chunk, "more_body": True}
-
-    request = Request(
-        {
-            "type": "http",
-            "method": "POST",
-            "path": "/v1/traces",
-            "headers": [
-                (b"content-type", content_type.encode()),
-                (b"content-encoding", encoding.encode()),
-            ],
-        },
-        receive,
-    )
-    assert await read_request_body(request) == {}
-    assert received == []
-    storage = MagicMock()
-    storage.ingest = AsyncMock()
-    with pytest.raises(TracingPayloadTooLargeError):
-        await TraceReceiver(storage).ingest(request.stream(), content_type, encoding, Tenant("team", "key"))
-    assert len(received) == 2
-    storage.ingest.assert_not_awaited()
-
-
-@pytest.mark.asyncio
 async def test_auth_and_retired_trace_handler_never_consume_upload_body() -> None:
     from litellm.constants import OTLP_MAX_BODY_BYTES
     from litellm.proxy import tracing_endpoints
@@ -1565,3 +1523,36 @@ async def test_read_request_body_unexpected_error():
 
     result = await read_request_body(_request(receive))
     assert result == {}
+
+
+async def _never_receive() -> Message:
+    raise AssertionError("the OTLP route check never reads the body")
+
+
+async def _never_send(message: Message) -> None:
+    raise AssertionError("the OTLP route check never sends")
+
+
+@pytest.mark.parametrize(
+    ("scope", "expected"),
+    [
+        ({"type": "http", "method": "POST", "path": "/v1/traces"}, True),
+        ({"type": "http", "method": "POST", "path": "/v1/logs"}, True),
+        ({"type": "http", "method": "GET", "path": "/v1/traces"}, False),
+        ({"type": "http", "method": "POST", "path": "/v1/responses"}, False),
+        ({"type": "http", "path": "/v1/traces"}, False),
+        ({"type": "websocket", "path": "/v1/traces"}, False),
+        ({"type": "websocket", "path": "/v1/responses"}, False),
+    ],
+)
+def test_is_otlp_trace_request_matches_only_http_posts_to_the_otlp_routes(
+    scope: dict[str, object], expected: bool
+) -> None:
+    full_scope: Final[dict[str, object]] = {**scope, "headers": [], "query_string": b""}
+    connection: Final = (
+        WebSocket(full_scope, _never_receive, _never_send)
+        if scope["type"] == "websocket"
+        else Request(full_scope, _never_receive)
+    )
+
+    assert http_parsing_utils.is_otlp_trace_request(connection) is expected

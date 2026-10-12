@@ -7,8 +7,8 @@ import httpx
 import pytest
 from pydantic import JsonValue
 
-from litellm.rust_bridge.trace.errors import TraceChanged
-from litellm.rust_bridge.trace.generated.types import AllQueryScope, TraceScope
+from litellm.tracing.errors import TraceChanged
+from litellm.tracing.generated.types import AllQueryScope, TraceScope
 from litellm.tracing.remote import LensConnection, RemoteTraceStore, bounded_response
 
 
@@ -93,8 +93,8 @@ async def _read_case(
             )
         case _:
             return (
-                json.loads(await store.query("lens_sample", {"source": "traces"})),
-                {"operation": operation, "name": "lens_sample", "parameters": {"source": "traces"}},
+                json.loads(await store.query("trace_agents", {"start_ms": 1})),
+                {"operation": operation, "name": "trace_agents", "parameters": {"start_ms": 1}},
             )
 
 
@@ -159,15 +159,12 @@ async def test_reads_reject_oversized_responses_and_invalid_json() -> None:
 
 
 @pytest.mark.asyncio
-async def test_gateway_cannot_relay_otlp_or_write_arbitrary_tables() -> None:
+async def test_gateway_cannot_write_arbitrary_tables() -> None:
     def fail(request: httpx.Request) -> httpx.Response:
-        raise AssertionError("No network access is allowed for schema setup or refused uploads")
+        raise AssertionError("No network access is allowed for refused writes")
 
     async with httpx.AsyncClient(base_url="http://lens", transport=httpx.MockTransport(fail)) as client:
         store: Final = RemoteTraceStore(client)
-        await store.ensure_schema()
-        with pytest.raises(RuntimeError, match="directly"):
-            await store.ingest(b"{}", "application/json", {})
         with pytest.raises(ValueError, match="request records and feedback"):
             await store.insert_rows("otel_traces", ())
 

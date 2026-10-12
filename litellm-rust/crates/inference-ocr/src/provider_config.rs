@@ -225,10 +225,7 @@ pub(crate) fn resolve_provider_config(
             OcrConfigKind::VertexDeepSeek
         }
         LlmProviders::VertexAi => OcrConfigKind::VertexAi,
-        LlmProviders::Anthropic
-        | LlmProviders::Bedrock
-        | LlmProviders::Openai
-        | LlmProviders::OpenaiLike => {
+        _ => {
             return Err(Error::InvalidProvider(
                 provider.custom_llm_provider.to_string(),
             ));

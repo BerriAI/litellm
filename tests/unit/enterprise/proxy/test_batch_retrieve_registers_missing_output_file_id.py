@@ -9,11 +9,11 @@ import pytest
 
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.openai_files_endpoints.common_utils import (
+    ManagedBatchOutputFileWriter,
     ensure_batch_response_managed_file_ids,
     get_batch_from_database,
 )
 from litellm.types.utils import LiteLLMBatch
-
 
 UNIFIED_BATCH_ID = "litellm_proxy;model_id:my-model;llm_batch_id:batch-raw-123"
 ENCODED_UNIFIED_BATCH_ID = (
@@ -40,9 +40,9 @@ def _build_batch_response(
 
 
 def _build_managed_files_mock(unified_id: str = "file-bWFuYWdlZF9vdXRwdXRfaWQ="):
-    mock = MagicMock()
+    mock = MagicMock(spec=ManagedBatchOutputFileWriter)
     mock.get_unified_output_file_id = MagicMock(return_value=unified_id)
-    mock.store_unified_file_id = AsyncMock()
+    mock.store_batch_output_file = AsyncMock()
     return mock
 
 
@@ -73,11 +73,12 @@ async def test_ensure_batch_response_derives_model_id_from_unified_batch_id():
     )
 
     assert response.output_file_id == unified_output_file_id
-    mock_managed_files.store_unified_file_id.assert_called_once()
-    store_kwargs = mock_managed_files.store_unified_file_id.call_args.kwargs
-    assert store_kwargs["model_mappings"] == {"my-model": raw_output_file_id}
-    assert store_kwargs["user_api_key_dict"].user_id == "batch-owner"
-    assert store_kwargs["user_api_key_dict"].team_id == "team-owner"
+    mock_managed_files.store_batch_output_file.assert_awaited_once()
+    store_kwargs = mock_managed_files.store_batch_output_file.await_args.kwargs
+    assert store_kwargs["model_id"] == "my-model"
+    assert store_kwargs["provider_file_id"] == raw_output_file_id
+    assert store_kwargs["owner"].user_id == "batch-owner"
+    assert store_kwargs["owner"].team_id == "team-owner"
 
 
 @pytest.mark.asyncio
@@ -100,13 +101,11 @@ async def test_ensure_batch_response_registers_output_and_error_file_ids():
 
     assert response.output_file_id == unified_id
     assert response.error_file_id == unified_id
-    assert mock_managed_files.store_unified_file_id.call_count == 2
-    mappings = [
-        call.kwargs["model_mappings"]
-        for call in mock_managed_files.store_unified_file_id.call_args_list
+    assert mock_managed_files.store_batch_output_file.await_count == 2
+    stored_provider_file_ids = [
+        call.kwargs["provider_file_id"] for call in mock_managed_files.store_batch_output_file.await_args_list
     ]
-    assert {"my-model": "file-raw-output"} in mappings
-    assert {"my-model": "file-raw-error"} in mappings
+    assert stored_provider_file_ids == ["file-raw-output", "file-raw-error"]
 
 
 @pytest.mark.asyncio
@@ -148,10 +147,11 @@ async def test_get_batch_from_database_registers_missing_output_file_id():
 
     assert response is not None
     assert response.output_file_id == unified_output_file_id
-    mock_managed_files.store_unified_file_id.assert_called_once()
-    store_kwargs = mock_managed_files.store_unified_file_id.call_args.kwargs
-    assert store_kwargs["model_mappings"] == {"my-model": raw_output_file_id}
-    assert store_kwargs["user_api_key_dict"].user_id == "batch-owner"
+    mock_managed_files.store_batch_output_file.assert_awaited_once()
+    store_kwargs = mock_managed_files.store_batch_output_file.await_args.kwargs
+    assert store_kwargs["model_id"] == "my-model"
+    assert store_kwargs["provider_file_id"] == raw_output_file_id
+    assert store_kwargs["owner"].user_id == "batch-owner"
 
 
 @pytest.mark.asyncio
@@ -172,9 +172,7 @@ async def test_ensure_batch_response_uses_batch_owner_when_db_batch_object_prese
     )
 
     # batch owner from db_batch_object wins over the caller auth context
-    forwarded_auth = mock_managed_files.store_unified_file_id.call_args.kwargs[
-        "user_api_key_dict"
-    ]
+    forwarded_auth = mock_managed_files.store_batch_output_file.await_args.kwargs["owner"]
     assert forwarded_auth.user_id == "batch-owner"
     assert forwarded_auth.team_id == "team-owner"
 
@@ -190,7 +188,10 @@ async def test_registered_output_file_row_denies_cross_user_access():
     prisma.db.litellm_managedfiletable.upsert = AsyncMock()
     prisma.db.litellm_managedfiletable.find_first = AsyncMock(return_value=None)
     managed_files = PROXY_LiteLLMManagedFiles(
-        internal_usage_cache=MagicMock(),
+        internal_usage_cache=MagicMock(
+            async_get_cache=AsyncMock(return_value=None),
+            async_set_cache=AsyncMock(),
+        ),
         prisma_client=prisma,
     )
     response = _build_batch_response(output_file_id=raw_output_file_id)

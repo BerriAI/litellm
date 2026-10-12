@@ -94,6 +94,7 @@ ROUTE_ENDPOINT_MAPPING: Final = {
     "aocr": "/ocr",
     "asearch": "/search",
     "adecisions": "/decisions",
+    "asystemone": "/systemone",
     "avideo_generation": "/videos",
     "avideo_list": "/videos",
     "avideo_status": "/videos/{video_id}",
@@ -519,6 +520,7 @@ RouteType = Literal[
     "aocr",
     "asearch",
     "adecisions",
+    "asystemone",
     "avideo_generation",
     "avideo_list",
     "avideo_status",
@@ -678,9 +680,8 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
             "enable_tag_filtering",
         ]
 
-        # Merge override settings into data (only if not already set in request)
         for key in per_request_settings:
-            if key in override_settings and key not in data:
+            if override_settings.get(key) is not None and key not in data:
                 data[key] = override_settings[key]
 
         # Use main router with overridden kwargs
