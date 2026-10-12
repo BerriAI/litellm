@@ -885,6 +885,13 @@ _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE: Final = (
 )
 
 
+def _bedrock_mantle_context_window_response(original_exception: _ProviderHTTPException) -> httpx.Response:
+    original_response: Final = getattr(original_exception, "response", None)
+    if isinstance(original_response, httpx.Response) and getattr(original_response, "_request", None) is not None:
+        return httpx.Response(status_code=400, headers=original_response.headers, request=original_response.request)
+    return httpx.Response(status_code=400, request=httpx.Request(method="POST", url="https://api.openai.com/v1/"))
+
+
 def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
     """
     Mantle reports context overflow as a validation_error carrying the token counts, or as
@@ -918,7 +925,7 @@ def _map_bedrock_exception(
                 message=mantle_context_window_message,
                 model=model,
                 llm_provider=custom_llm_provider,
-                response=getattr(original_exception, "response", None),
+                response=_bedrock_mantle_context_window_response(original_exception),
             )
     if (
         "too many tokens" in error_str

@@ -459,6 +459,25 @@ def test_messages_stream_overflow_in_response_failed_event_emits_invalid_request
         _only_call(wire)
 
 
+def test_messages_stream_overflow_with_a_retry_budget_returns_400_invalid_request_and_logs_failure(
+    gateway: Gateway,
+) -> None:
+    prompt: Final = f"held frames messages stream {uuid4().hex}"
+    reply: Final = _failed_stream(_OVERFLOW_STREAM_ERROR)
+    with wire_server(_mantle_peer(prompt, reply)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_MODEL, api_base=wire.url, api_key=_API_KEY)
+        response: Final = gateway.request(
+            "POST", "/v1/messages", _messages(model, prompt, stream=True), headers={"x-litellm-num-retries": "2"}
+        )
+        assert response.status_code == 400, response.text
+        assert response.headers["content-type"].startswith("application/json"), dict(response.headers)
+        error: Final = _error_object(response)
+        assert error["type"] == "invalid_request_error", response.text
+        assert _GENERIC in str(error["message"]), response.text
+        _only_call(wire)
+        assert _GENERIC in _failure_message(response.headers["x-litellm-call-id"])
+
+
 def test_responses_stream_overflow_in_response_failed_event_relays_failure_saying_prompt_too_long(
     gateway: Gateway,
 ) -> None:
@@ -498,15 +517,18 @@ def test_messages_stream_non_overflow_400_before_the_stream_returns_400_with_the
         _only_call(wire)
 
 
-def test_messages_stream_non_overflow_response_failed_event_still_returns_500_api_error(gateway: Gateway) -> None:
+def test_messages_stream_non_overflow_response_failed_event_emits_the_upstream_invalid_request_error_event(
+    gateway: Gateway,
+) -> None:
     prompt: Final = f"invalid prompt messages stream {uuid4().hex}"
     reply: Final = _failed_stream({"code": "invalid_prompt", "message": _INVALID_PROMPT_MESSAGE})
     with wire_server(_mantle_peer(prompt, reply)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_MODEL, api_base=wire.url, api_key=_API_KEY)
         response, text = _consumed(gateway, "/v1/messages", _messages(model, prompt, stream=True))
-        assert response.status_code == 500, text
-        error: Final = object_value(_JSON_OBJECT.validate_json(text)["error"])
-        assert error["type"] == "api_error", text
+        assert response.status_code == 200, text
+        assert response.headers["content-type"].startswith("text/event-stream"), dict(response.headers)
+        error: Final = _only_error(text)
+        assert error["type"] == "invalid_request_error", text
         assert _INVALID_PROMPT_MESSAGE in str(error["message"]), text
         assert _TOO_LONG not in text, text
         _only_call(wire)
@@ -672,11 +694,6 @@ _Outcome = tuple[str, bool, bool, int, str, str]
 _Builder = Callable[[str, str, bool], dict[str, JsonValue]]
 _Cell = tuple[tuple[str, _Builder], str, bool]
 _BUILDERS: Final = (("/v1/chat/completions", _chat), ("/v1/messages", _messages), ("/v1/responses", _responses))
-_STREAMED_MESSAGES_OVERFLOW: Final = ("/v1/messages", True, True)
-
-
-def _logs_a_spend_row(path: str, overflow: bool, stream: bool) -> bool:
-    return (path, overflow, stream) != _STREAMED_MESSAGES_OVERFLOW
 
 
 def _chaos_peer(request: Request) -> Reply:
@@ -722,7 +739,7 @@ def _fire(gateway: Gateway, bodies: tuple[_Call, ...]) -> tuple[_Outcome, ...]:
 
 
 def _assert_served(outcomes: tuple[_Outcome, ...]) -> None:
-    for path, overflow, stream, status, tag, text in outcomes:
+    for path, overflow, _, status, tag, text in outcomes:
         if not overflow:
             assert status == 200, (path, text)
             assert _HAPPY_TEXT in text, (path, text)
@@ -730,20 +747,18 @@ def _assert_served(outcomes: tuple[_Outcome, ...]) -> None:
             continue
         assert _GENERIC in text, (path, status, text)
         assert status in (200, 400), (path, status, text)
-        if _logs_a_spend_row(path, overflow, stream):
-            assert _single_tagged_status(tag) == "failure", (path, tag)
+        assert _single_tagged_status(tag) == "failure", (path, tag)
 
 
 def test_messages_stream_overflow_logs_one_failure_row(gateway: Gateway) -> None:
-    pytest.skip("BUG: a streamed /v1/messages context overflow writes no LiteLLM_SpendLogs row (LIT-9132)")
     with wire_server(_chaos_peer) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_MODEL, api_base=wire.url, api_key=_API_KEY)
         tag: Final = f"chaos-single-{uuid4().hex}"
         body: Final = _messages(model, f"{_OVERFLOW_MARKER} single {tag}", True)
         ((_, _, _, status, _, text),) = _fire(gateway, (("/v1/messages", body, True, tag),))
         assert status == 200, text
-        assert _GENERIC in text, text
         assert _single_tagged_status(tag) == "failure", tag
+        assert _GENERIC in text, text
 
 
 def test_chaos_mantle_peer_outage_mid_burst_logs_every_call_once_and_keeps_the_proxy_alive(gateway: Gateway) -> None:

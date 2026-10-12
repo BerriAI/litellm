@@ -1288,6 +1288,24 @@ def test_bedrock_mantle_streamed_context_overflow_event_maps_to_context_window_e
     assert "prompt is too long" in mapped_exception.message
 
 
+@pytest.mark.parametrize("original_status_code", [500, 503])
+def test_bedrock_mantle_in_stream_context_overflow_answers_400_whatever_the_event_status_was(original_status_code):
+    original_exception = OpenAIError(
+        status_code=original_status_code,
+        message="prompt tokens (229378) exceed model maximum (131072) for google.gemma-4-e2b",
+    )
+
+    with pytest.raises(litellm.ContextWindowExceededError) as excinfo:
+        exception_type(
+            model="google.gemma-4-e2b",
+            original_exception=original_exception,
+            custom_llm_provider="bedrock_mantle",
+        )
+
+    assert excinfo.value.status_code == 400
+    assert excinfo.value.response.status_code == 400
+
+
 def test_branchless_provider_transport_error_maps_to_api_connection_error():
     from litellm.llms.base_llm.chat.transformation import BaseLLMException
 

@@ -11,9 +11,11 @@ import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
-from integration._support.process import OwnedProxy, owned_proxy_process
+from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
+
+pytestmark = pytest.mark.timeout(int(2 * graceful_stop_seconds() + 120))
 
 _BACKEND: Final = "openai.gpt-5.6-luna"
 _MANTLE_MODEL: Final = f"bedrock_mantle/{_BACKEND}"
@@ -362,12 +364,6 @@ def _only_failed(text: str) -> dict[str, JsonValue]:
     return object_value(object_value(failed[0]["response"])["error"])
 
 
-def _streamed_text(text: str) -> str:
-    return "".join(
-        str(object_value(event["delta"])["text"]) for event in _events(text) if event["type"] == "content_block_delta"
-    )
-
-
 def _calls_with(wire: Wire, prompt: str) -> int:
     return sum(1 for request in wire.drain() if prompt in request.body.decode())
 
@@ -463,13 +459,13 @@ def test_plain_fallback_does_not_fire_on_streamed_chat_completions(fb_rig: Rig) 
     _assert_no_fallback(fb_rig, "overflow", prompt)
 
 
-def test_streamed_messages_overflow_on_a_plain_fallback_deployment_returns_the_error_event_without_falling_back(
+def test_streamed_messages_overflow_on_a_plain_fallback_deployment_returns_400_without_falling_back(
     fb_rig: Rig,
 ) -> None:
     prompt: Final = _prompt("fb messages stream")
     response, text = _consumed(fb_rig.gateway, "/v1/messages", _messages(fb_rig.models["fb"], prompt, True))
-    assert response.status_code == 200, text
-    error: Final = _only_error(text)
+    assert response.status_code == 400, text
+    error: Final = object_value(_JSON_OBJECT.validate_json(text)["error"])
     assert error["type"] == "invalid_request_error", text
     assert _GENERIC in str(error["message"]), text
     _assert_no_fallback(fb_rig, "overflow", prompt)
@@ -495,13 +491,15 @@ def test_streamed_messages_overflow_on_an_openai_fallback_deployment_returns_the
     _assert_no_fallback(fb_rig, "openai_overflow", prompt)
 
 
-def test_streamed_messages_non_overflow_failure_still_falls_back(fb_rig: Rig) -> None:
+def test_streamed_messages_non_overflow_failure_returns_400_without_falling_back(fb_rig: Rig) -> None:
     prompt: Final = _prompt("bad messages stream")
     response, text = _consumed(fb_rig.gateway, "/v1/messages", _messages(fb_rig.models["bad"], prompt, True))
-    assert response.status_code == 200, text
-    assert _streamed_text(text) == _FALLBACK_TEXT, text
-    assert not any(event["type"] == "error" for event in _events(text)), text
-    _assert_fell_back(fb_rig, "bad", prompt, _FALLBACK_TEXT)
+    assert response.status_code == 400, text
+    error: Final = object_value(_JSON_OBJECT.validate_json(text)["error"])
+    assert error["type"] == "invalid_request_error", text
+    assert _INVALID_PROMPT_MESSAGE in str(error["message"]), text
+    assert _GENERIC not in text, text
+    _assert_no_fallback(fb_rig, "bad", prompt)
 
 
 def test_pass_through_relays_the_overflow_envelope_verbatim(fb_rig: Rig) -> None:
