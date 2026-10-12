@@ -2300,6 +2300,189 @@ class TestToolSchemaRegexPatternWiring:
         assert result["tools"][0] is tool
 
 
+_OPENAI_API: Final = GenericLiteLLMParams(api_base="https://api.openai.com/v1")
+_OTHER_HOST: Final = GenericLiteLLMParams(api_base="https://gateway.example/v1")
+_EXPLICIT_OPT_IN: Final = {"prompt_cache_options": {"mode": "explicit"}}
+_EPHEMERAL: Final = {"type": "ephemeral"}
+_EXPLICIT_BREAKPOINT: Final = {"mode": "explicit"}
+
+
+def _marked_input(cache_control: dict[str, str] | None) -> list[dict[str, object]]:
+    mark: Final = {} if cache_control is None else {"cache_control": cache_control}
+    return [
+        {
+            "role": "developer",
+            "content": [
+                {"type": "input_text", "text": "Be concise."},
+                {"type": "input_text", "text": "Be helpful.", **mark},
+            ],
+        },
+        {"type": "message", "role": "user", "content": "look", **mark},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "looking", **mark}]},
+        {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_1", "output": "found", **mark},
+        {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{}"},
+        {
+            "type": "function_call_output",
+            "call_id": "call_2",
+            "output": [{"type": "input_text", "text": "first"}, {"type": "input_text", "text": "last"}],
+            **mark,
+        },
+    ]
+
+
+def _marked_tool(cache_control: dict[str, str] | None) -> dict[str, object]:
+    mark: Final = {} if cache_control is None else {"cache_control": cache_control}
+    return {"type": "function", "name": "lookup", "parameters": {"type": "object", "properties": {}}, **mark}
+
+
+class TestCacheControlBecomesPromptCacheBreakpoint:
+    """Clients that speak Anthropic's dialect mark blocks with `cache_control`. On a deployment that
+    reads OpenAI's `prompt_cache_breakpoint` the mark moves onto the same block instead of being
+    stripped, so explicit-mode prompt caching keeps working through the proxy."""
+
+    @pytest.fixture(autouse=True)
+    def _no_openai_api_base_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+        monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+        monkeypatch.setattr(litellm, "api_base", None)
+
+    def _transform(
+        self,
+        model: str,
+        litellm_params: GenericLiteLLMParams,
+        cache_control: dict[str, str] | None,
+        extra_params: dict[str, object] | None = None,
+        config: OpenAIResponsesAPIConfig | None = None,
+    ) -> dict[str, object]:
+        return (config or OpenAIResponsesAPIConfig()).transform_responses_api_request(
+            model=model,
+            input=_marked_input(cache_control),
+            response_api_optional_request_params={"tools": [_marked_tool(cache_control)], **(extra_params or {})},
+            litellm_params=litellm_params,
+            headers={},
+        )
+
+    @pytest.mark.parametrize(
+        ("litellm_params", "extra_params"),
+        [
+            pytest.param(_OPENAI_API, {}, id="api.openai.com"),
+            pytest.param(GenericLiteLLMParams(), {}, id="default-host"),
+            pytest.param(_OTHER_HOST, _EXPLICIT_OPT_IN, id="other-host-opted-in"),
+        ],
+    )
+    def test_marks_reach_gpt_5_6_as_explicit_breakpoints_on_the_same_blocks(
+        self, litellm_params: GenericLiteLLMParams, extra_params: dict[str, object]
+    ) -> None:
+        result = self._transform("gpt-5.6", litellm_params, {**_EPHEMERAL, "ttl": "1h"}, extra_params)
+
+        assert result["input"] == [
+            {
+                "role": "developer",
+                "content": [
+                    {"type": "input_text", "text": "Be concise."},
+                    {"type": "input_text", "text": "Be helpful.", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                ],
+            },
+            {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "look", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+            },
+            {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "looking"}]},
+            {"type": "function_call", "call_id": "call_1", "name": "lookup", "arguments": "{}"},
+            {
+                "type": "function_call_output",
+                "call_id": "call_1",
+                "output": [{"type": "input_text", "text": "found", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+            },
+            {"type": "function_call", "call_id": "call_2", "name": "lookup", "arguments": "{}"},
+            {
+                "type": "function_call_output",
+                "call_id": "call_2",
+                "output": [
+                    {"type": "input_text", "text": "first"},
+                    {"type": "input_text", "text": "last", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                ],
+            },
+        ]
+        assert result["tools"] == [_marked_tool(None)]
+        assert result.get("prompt_cache_options") == extra_params.get("prompt_cache_options")
+
+    def test_per_part_marks_win_over_the_item_mark_and_keep_their_own_block(self) -> None:
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "a", "cache_control": _EPHEMERAL},
+                        {"type": "input_image", "image_url": "https://img.example/x.png", "detail": "auto"},
+                        {"type": "input_text", "text": "b"},
+                    ],
+                    "cache_control": _EPHEMERAL,
+                }
+            ],
+            response_api_optional_request_params={},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "a", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                    {"type": "input_image", "image_url": "https://img.example/x.png", "detail": "auto"},
+                    {"type": "input_text", "text": "b", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                ],
+            }
+        ]
+
+    @pytest.mark.parametrize(
+        ("model", "litellm_params"),
+        [
+            pytest.param("gpt-4o", _OPENAI_API, id="model-older-than-gpt-5.6"),
+            pytest.param("gpt-5.6", _OTHER_HOST, id="other-host-not-opted-in"),
+        ],
+    )
+    def test_marks_are_still_stripped_where_the_deployment_does_not_read_breakpoints(
+        self, model: str, litellm_params: GenericLiteLLMParams
+    ) -> None:
+        marked = self._transform(model, litellm_params, _EPHEMERAL)
+        unmarked = self._transform(model, litellm_params, None)
+
+        assert marked == unmarked
+        assert "prompt_cache_breakpoint" not in json.dumps(marked)
+
+    def test_non_openai_subclass_still_strips_on_a_gpt_5_6_deployment(self) -> None:
+        from litellm.llms.hosted_vllm.responses.transformation import HostedVLLMResponsesAPIConfig
+
+        config = HostedVLLMResponsesAPIConfig()
+        marked = self._transform("gpt-5.6", _OPENAI_API, _EPHEMERAL, _EXPLICIT_OPT_IN, config=config)
+        unmarked = self._transform("gpt-5.6", _OPENAI_API, None, _EXPLICIT_OPT_IN, config=config)
+
+        assert marked == unmarked
+        assert "prompt_cache_breakpoint" not in json.dumps(marked["input"])
+
+    def test_compact_request_swaps_marks_the_same_way(self) -> None:
+        _, data = OpenAIResponsesAPIConfig().transform_compact_response_api_request(
+            model="gpt-5.6",
+            input=[{"role": "user", "content": "look", "cache_control": _EPHEMERAL}],
+            response_api_optional_request_params=dict(_EXPLICIT_OPT_IN),
+            litellm_params=_OTHER_HOST,
+            headers={},
+            api_base="https://gateway.example/v1/responses",
+        )
+
+        assert data["input"] == [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "look", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+            }
+        ]
+
+
 class TestReasoningFollowsModelSupport:
     """Responses API clients like Codex send `reasoning` on every request, and OpenAI 400s it
     on non-reasoning models like gpt-4o. drop_params must strip it there, the same way the
