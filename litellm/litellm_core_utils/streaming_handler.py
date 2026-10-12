@@ -221,7 +221,7 @@ class CustomStreamWrapper:
         model,
         logging_obj: LiteLLMLoggingObject,
         custom_llm_provider: str | None = None,
-        stream_options: Mapping[str, object] | None = None,
+        stream_options=None,
         make_call: Callable | None = None,
         _response_headers: dict | httpx.Headers | None = None,
         count_prompt_tokens: Callable[[], int] | None = None,
@@ -280,9 +280,7 @@ class CustomStreamWrapper:
         self.response_id: str | None = None
         self.logging_loop = None
         self.rules = Rules()
-        self.stream_options: Mapping[str, object] | None = stream_options or getattr(
-            logging_obj, "stream_options", None
-        )
+        self.stream_options = stream_options or getattr(logging_obj, "stream_options", None)
         self.messages = getattr(logging_obj, "messages", None)
         self.sent_stream_usage = False
         self.send_stream_usage = True if self.check_send_stream_usage(self.stream_options) else False
@@ -420,14 +418,15 @@ class CustomStreamWrapper:
                     )
         self._restore_consumer_correlation_context()
 
-    def check_send_stream_usage(self, stream_options: Mapping[str, object] | None) -> bool:
+    def check_send_stream_usage(self, stream_options: dict | None):
         return stream_options is not None and stream_options.get("include_usage", False) is True
 
     def _should_forward_continuous_usage(self) -> bool:
+        options: Final[Mapping[str, object] | None] = getattr(self, "stream_options", None)
         return (
             self.send_stream_usage is True
-            and self.stream_options is not None
-            and self.stream_options.get("continuous_usage_stats", False) is True
+            and options is not None
+            and options.get("continuous_usage_stats", False) is True
         )
 
     def check_is_function_call(self, logging_obj) -> bool:
