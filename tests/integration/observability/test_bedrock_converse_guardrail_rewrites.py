@@ -363,6 +363,16 @@ def test_promptguard_redaction_keeps_every_turn_in_place(rig: _Rig) -> None:
     ]
 
 
+def test_promptguard_redaction_keeps_request_field_text_in_its_field(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [_user({"text": f"Repeat exactly: card {_CARD} ok"})],
+        "additionalModelRequestFields": {"system": "Answer in one short sentence."},
+    }
+    sent: Final = _forwarded(rig, _converse(rig, "promptguard", body))
+    assert sent["messages"] == [_user({"text": f"Repeat exactly: card {_MASK} ok"})]
+    assert sent["additionalModelRequestFields"] == body["additionalModelRequestFields"]
+
+
 def test_moderation_blocks_a_flagged_latest_user_turn_before_bedrock(rig: _Rig) -> None:
     body: Final = {
         "system": [{"text": "You are a support bot."}],

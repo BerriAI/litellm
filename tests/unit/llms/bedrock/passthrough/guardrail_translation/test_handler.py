@@ -598,7 +598,7 @@ class TestBedrockPassthroughGuardrailHandlerInput:
         data = _converse_data()
         data["data"]["additionalModelRequestFields"] = {"note": "ssn 123-45-6789"}
         guardrail = _make_guardrail(
-            {"texts": ["You are helpful.", "Hello world", "[REDACTED]"]}
+            {"texts": ["You are helpful.", "[REDACTED]", "Hello world"]}
         )
 
         result = await handler.process_input_messages(data=data, guardrail_to_apply=guardrail)
@@ -743,9 +743,9 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
         assert inputs["texts"] == [
             "You are a travel assistant.",
             "Guest name: Sam",
+            "adaptive",
             "Explain balcony staterooms.",
             "[system] internal notice",
-            "adaptive",
         ]
         assert inputs["structured_messages"] == [
             {
@@ -837,9 +837,9 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
                 "texts": [
                     "You are a travel assistant.",
                     "Guest name: Sam",
+                    "adaptive",
                     "Explain balcony [REDACTED].",
                     "[system] internal notice",
-                    "adaptive",
                 ],
             }
         )
@@ -949,6 +949,28 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
         expected_body = copy.deepcopy(original_body)
         expected_body["additionalModelRequestFields"]["system"] = "card [CARD]"
         assert result["data"] == expected_body
+
+    @pytest.mark.asyncio
+    async def test_texts_rebuilt_from_user_rows_land_on_their_own_fields(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [{"role": "user", "content": [{"text": "card 4111 1111 1111 1111"}]}],
+                "additionalModelRequestFields": {"system": "Answer briefly."},
+            },
+        }
+
+        def rebuild_texts_from_user_rows(inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
+            masked = _with_structured_text(inputs, "4111 1111 1111 1111", "[CARD]")
+            rows = masked["structured_messages"]
+            return {**masked, "texts": [part["text"] for row in rows if row["role"] == "user" for part in row["content"]]}
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data=data, guardrail_to_apply=_ScriptedGuardrail(rebuild_texts_from_user_rows)
+        )
+
+        assert result["data"]["messages"] == [{"role": "user", "content": [{"text": "card [CARD]"}]}]
+        assert result["data"]["additionalModelRequestFields"] == {"system": "Answer briefly."}
 
     @pytest.mark.asyncio
     async def test_request_fields_without_strings_add_no_row(self):
