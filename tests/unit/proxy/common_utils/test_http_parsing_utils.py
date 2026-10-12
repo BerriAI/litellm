@@ -1325,36 +1325,24 @@ class TestCoerceNumericFormFields:
 class TestDecodeJsonListFormFields:
     list_fields = frozenset({"fallbacks", "context_window_fallbacks"})
 
-    def test_json_array_string_is_decoded_to_a_list(self):
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ('["backup", "other"]', ["backup", "other"]),
+            ('[{"primary": ["backup"]}]', [{"primary": ["backup"]}]),
+            ('{"primary": ["backup"]}', [{"primary": ["backup"]}]),
+            ("backup", ["backup"]),
+            ('"backup"', ["backup"]),
+            ('["backup"', ['["backup"']),
+            ("null", ["null"]),
+            ("5", ["5"]),
+        ],
+    )
+    def test_value_is_always_a_list_never_walked_one_character_at_a_time(self, raw, expected):
         assert decode_json_list_form_fields(
-            parsed_body={"fallbacks": '["backup", "other"]'},
+            parsed_body={"fallbacks": raw},
             list_fields=self.list_fields,
-        ) == {"fallbacks": ["backup", "other"]}
-
-    def test_array_of_mappings_keeps_its_shape(self):
-        assert decode_json_list_form_fields(
-            parsed_body={"fallbacks": '[{"primary": ["backup"]}]'},
-            list_fields=self.list_fields,
-        ) == {"fallbacks": [{"primary": ["backup"]}]}
-
-    def test_plain_string_is_a_single_entry(self):
-        assert decode_json_list_form_fields(
-            parsed_body={"fallbacks": "backup"},
-            list_fields=self.list_fields,
-        ) == {"fallbacks": ["backup"]}
-
-    def test_json_string_literal_is_a_single_entry(self):
-        assert decode_json_list_form_fields(
-            parsed_body={"fallbacks": '"backup"'},
-            list_fields=self.list_fields,
-        ) == {"fallbacks": ["backup"]}
-
-    def test_malformed_json_is_never_walked_one_character_at_a_time(self):
-        result = decode_json_list_form_fields(
-            parsed_body={"fallbacks": '["backup"'},
-            list_fields=self.list_fields,
-        )
-        assert result == {"fallbacks": ['["backup"']}
+        ) == {"fallbacks": expected}
 
     def test_empty_string_is_left_alone(self):
         assert decode_json_list_form_fields(

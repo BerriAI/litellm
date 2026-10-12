@@ -2,7 +2,7 @@ import json
 import re
 from collections.abc import Collection, Mapping
 from types import MappingProxyType, UnionType
-from typing import Annotated, Any, Final, Literal, TypeVar, Union, get_args, get_origin
+from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
@@ -164,30 +164,17 @@ def coerce_numeric_form_fields(
     }
 
 
-_FORM_LIST_ADAPTER: Final = TypeAdapter(list[object])
-_FORM_NAME_ADAPTER: Final = TypeAdapter(str)
-
-_Decoded: Final = TypeVar("_Decoded")
-
-
-def _decode_json(adapter: TypeAdapter[_Decoded], raw: str) -> _Decoded | None:
-    try:
-        return adapter.validate_json(raw)
-    except ValidationError:
-        return None
+_FORM_FALLBACK_ADAPTER: Final = TypeAdapter(list[object] | dict[str, object] | str)
 
 
 def _list_form_value(value: object) -> object:
     if not isinstance(value, str) or not value.strip():
         return value
-    stripped: Final = value.lstrip()
-    if stripped.startswith("["):
-        entries: Final = _decode_json(_FORM_LIST_ADAPTER, value)
-        return [value] if entries is None else entries
-    if stripped.startswith('"'):
-        name: Final = _decode_json(_FORM_NAME_ADAPTER, value)
-        return [value] if name is None else [name]
-    return [value]
+    try:
+        decoded: Final = _FORM_FALLBACK_ADAPTER.validate_json(value)
+    except ValidationError:
+        return [value]
+    return decoded if isinstance(decoded, list) else [decoded]
 
 
 def decode_json_list_form_fields(
