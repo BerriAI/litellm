@@ -22555,7 +22555,7 @@ def test_effective_key_for_generate_preserves_explicit_expires(duration: str | N
     assert effective_key.expires == expires
 
 
-@pytest.mark.parametrize("duration", (None, "1d"))
+@pytest.mark.parametrize("duration", (None, "1d", "30d"))
 @pytest.mark.asyncio
 async def test_generate_explicit_expires_overrides_default_duration(
     monkeypatch: pytest.MonkeyPatch, duration: str | None
@@ -22574,6 +22574,7 @@ async def test_generate_explicit_expires_overrides_default_duration(
 
     assert prisma.insert_data.await_args.kwargs["data"]["expires"] == expires
     assert response.expires == expires
+    assert response.duration is None
 
 
 @pytest.mark.parametrize("duration", (None, "1d"))
@@ -22630,17 +22631,22 @@ async def test_update_expiration_merge_patch(changes: Mapping[str, object], expe
 
 
 @pytest.mark.parametrize("request_type", (GenerateKeyRequest, UpdateKeyRequest))
-@pytest.mark.parametrize("offset", (timedelta(hours=12), timedelta(days=1), timedelta(days=1, microseconds=1)))
+@pytest.mark.parametrize(
+    "offset",
+    (timedelta(seconds=-1), timedelta(0), timedelta(hours=12), timedelta(days=1), timedelta(days=1, microseconds=1)),
+)
+@pytest.mark.parametrize("duration", (None, "30d"))
 def test_explicit_expires_respects_duration_limit(
     monkeypatch: pytest.MonkeyPatch,
     request_type: type[GenerateKeyRequest] | type[UpdateKeyRequest],
     offset: timedelta,
+    duration: str | None,
 ) -> None:
     from litellm.types.proxy.management_endpoints.ui_sso import LiteLLM_UpperboundKeyGenerateParams
 
     now: Final = datetime(2030, 1, 1, tzinfo=timezone.utc)
     expires: Final = (now + offset).astimezone(timezone(timedelta(hours=4)))
-    request: Final = request_type(key="sk-test", expires=expires)
+    request: Final = request_type(key="sk-test", expires=expires, duration=duration)
     monkeypatch.setattr(litellm, "upperbound_key_generate_params", LiteLLM_UpperboundKeyGenerateParams(duration="1d"))
 
     if offset > timedelta(days=1):
@@ -22652,6 +22658,7 @@ def test_explicit_expires_respects_duration_limit(
 
     _enforce_upperbound_key_params(request, fill_defaults=request_type is GenerateKeyRequest, now=now)
     assert request.expires == expires
+    assert request.duration == duration
 
 
 @pytest.mark.parametrize("request_type", (GenerateKeyRequest, UpdateKeyRequest))

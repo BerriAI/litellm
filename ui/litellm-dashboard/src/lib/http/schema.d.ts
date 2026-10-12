@@ -8341,6 +8341,8 @@ export interface paths {
          *
          *     Parameters:
          *     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+         *     - expires: Optional[datetime] - Absolute expiration with a timezone. Overrides duration within the configured limit.
+         *       Past timestamps are allowed and produce expired keys.
          *     - key_alias: Optional[str] - User defined key alias
          *     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
          *     - team_id: Optional[str] - The team id of the key
@@ -8839,6 +8841,8 @@ export interface paths {
          *     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
          *     - allowed_cache_controls: Optional[list] - List of allowed cache control values
          *     - duration: Optional[str] - Key validity duration ("30d", "1h", etc.), null to never expire, or "-1" to never expire (deprecated, use null)
+         *     - expires: Optional[datetime] - Absolute expiration with a timezone. Overrides duration within the configured limit.
+         *       Past timestamps expire the key immediately. Null clears expiration only when no maximum duration is configured.
          *     - permissions: Optional[dict] - Key-specific permissions
          *     - send_invite_email: Optional[bool] - Send invite email to user_id
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key

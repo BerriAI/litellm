@@ -1202,12 +1202,11 @@ def _enforce_upperbound_key_params(
     # budget enforcement for any key that carries it.
     for elem in data:
         key, value = elem
-        if key in _BUDGET_NUMERIC_KEYS and value is not None:
-            if not math.isfinite(value):
-                raise HTTPException(
-                    status_code=400,
-                    detail={"error": f"{key} must be a finite number. Received: {value}"},
-                )
+        if key in _BUDGET_NUMERIC_KEYS and value is not None and not math.isfinite(value):
+            raise HTTPException(
+                status_code=400,
+                detail={"error": f"{key} must be a finite number. Received: {value}"},
+            )
 
     expiration_error: Final = _key_expiration_error(data, now=now)
     if expiration_error is not None:
@@ -1218,6 +1217,8 @@ def _enforce_upperbound_key_params(
 
     for elem in data:
         key, value = elem
+        if key == "duration" and data.expires is not None:
+            continue
         upperbound_value = getattr(litellm.upperbound_key_generate_params, key, None)
         if upperbound_value is not None:
             if value is None:
@@ -1323,6 +1324,7 @@ async def _common_key_generation_helper(
             if (
                 value is None
                 and (key != "budget_duration" or key not in data.model_fields_set)
+                and (key != "duration" or data.expires is None)
                 and key
                 in [
                     "max_budget",
@@ -1641,7 +1643,11 @@ async def _common_key_generation_helper(
 
     try:
         response = await generate_key_helper_fn(
-            request_type="key", **data_json, table_name="key", llm_router=llm_router
+            request_type="key",
+            **{key: value for key, value in data_json.items() if key != "expires"},
+            expires=data.expires,
+            table_name="key",
+            llm_router=llm_router,
         )
     except KeyProjectBindingError:
         if prisma_client is not None:
@@ -2147,6 +2153,8 @@ async def generate_key_fn(
 
     Parameters:
     - duration: Optional[str] - Specify the length of time the token is valid for. You can set duration as seconds ("30s"), minutes ("30m"), hours ("30h"), days ("30d").
+    - expires: Optional[datetime] - Absolute expiration with a timezone. Overrides duration within the configured limit.
+      Past timestamps are allowed and produce expired keys.
     - key_alias: Optional[str] - User defined key alias
     - key: Optional[str] - User defined key value. Must start with 'sk-' and be at least 16 characters long. If not set, a 16-digit unique sk-key is created for you.
     - team_id: Optional[str] - The team id of the key
@@ -3656,6 +3664,8 @@ async def update_key_fn(
     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
     - allowed_cache_controls: Optional[list] - List of allowed cache control values
     - duration: Optional[str] - Key validity duration ("30d", "1h", etc.), null to never expire, or "-1" to never expire (deprecated, use null)
+    - expires: Optional[datetime] - Absolute expiration with a timezone. Overrides duration within the configured limit.
+      Past timestamps expire the key immediately. Null clears expiration only when no maximum duration is configured.
     - permissions: Optional[dict] - Key-specific permissions
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
