@@ -1,5 +1,6 @@
 import asyncio
 import contextvars
+from collections.abc import Iterator
 from functools import partial
 from typing import TYPE_CHECKING, Any, ClassVar, Final
 
@@ -246,7 +247,7 @@ async def agenerate_content(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> object:
+) -> Any:
     """
     Async: Generate content using Google GenAI
     """
@@ -314,7 +315,7 @@ def generate_content(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> object:
+) -> Any:
     """
     Generate content using Google GenAI
     """
@@ -404,7 +405,7 @@ async def agenerate_content_stream(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> object:
+) -> Any:
     """
     Async: Generate content using Google GenAI with streaming response
     """
@@ -499,7 +500,7 @@ def generate_content_stream(
     # LiteLLM specific params,
     custom_llm_provider: str | None = None,
     **kwargs,
-) -> object:
+) -> Iterator[Any]:
     """
     Generate content using Google GenAI with streaming response
     """
