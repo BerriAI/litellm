@@ -131,13 +131,13 @@ class A2AConfig(BaseConfig):
         return api_base, api_key, headers
 
     def get_supported_openai_params(self, model: str) -> list[str]:
-        """Return list of supported OpenAI parameters"""
-        return [
-            "stream",
-            "temperature",
-            "max_tokens",
-            "top_p",
-        ]
+        """Return list of supported OpenAI parameters.
+
+        Only ``stream`` is forwarded (map_openai_params maps nothing else onto the
+        A2A JSON-RPC payload). Declaring sampling params as supported used to drop
+        them silently; leaving them unsupported makes callers fail loudly instead.
+        """
+        return ["stream"]
 
     def map_openai_params(
         self,
