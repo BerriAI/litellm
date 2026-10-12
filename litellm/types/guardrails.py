@@ -2,11 +2,12 @@ from collections.abc import Mapping
 from datetime import datetime
 from enum import Enum
 from types import MappingProxyType
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 from pydantic import ConfigDict, Field, field_validator, model_validator
 from typing_extensions import ReadOnly, Required, TypedDict
 
+from litellm._logging import verbose_logger
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
@@ -23,6 +24,9 @@ from litellm.types.proxy.guardrails.guardrail_hooks.cisco_ai_defense import (
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.compresr import (
     CompresrGuardrailConfigModel,
+)
+from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
+    DecisionModelCheck,
 )
 from litellm.types.proxy.guardrails.guardrail_hooks.enkryptai import (
     EnkryptAIGuardrailConfigs,
@@ -148,6 +152,7 @@ class SupportedGuardrailIntegrations(Enum):
     AGENT_365 = "agent_365"
     LLM_SHIELD_PROXY = "llm_shield_proxy"
     CONDUCT = "conduct"
+    DECISION_MODEL = "decision_model"
 
 
 class Role(Enum):
@@ -901,7 +906,94 @@ class ContentFilterConfigModel(LiteLLMBaseModel):
 
 MCP_SECURITY_ON_VIOLATION: Final = frozenset({"block", "alert"})
 
-LoggingOnlyScope = Literal["input", "output", "both"]
+GuardrailStreamScope = Literal["streaming", "non_streaming", "both"]
+DEFAULT_GUARDRAIL_STREAM_SCOPE: Final[GuardrailStreamScope] = "both"
+
+
+class GuardrailEventHooks(str, Enum):
+    pre_call = "pre_call"
+    post_call = "post_call"
+    during_call = "during_call"
+    logging_only = "logging_only"
+    pre_mcp_call = "pre_mcp_call"
+    during_mcp_call = "during_mcp_call"
+    post_mcp_call = "post_mcp_call"
+    realtime_input_transcription = "realtime_input_transcription"
+
+
+GUARDRAIL_EVENT_HOOK_VALUES: Final = frozenset(member.value for member in GuardrailEventHooks)
+
+_GUARDRAIL_STREAM_SCOPES: Final[Mapping[str, GuardrailStreamScope]] = MappingProxyType(
+    {
+        "streaming": "streaming",
+        "non_streaming": "non_streaming",
+        "both": "both",
+    }
+)
+
+
+def _as_guardrail_stream_scope(value: object) -> GuardrailStreamScope:
+    if not isinstance(value, str):
+        raise ValueError(f"stream_scope values must be strings, got {type(value).__name__}")
+    scope: Final = _GUARDRAIL_STREAM_SCOPES.get(value.lower())
+    if scope is None:
+        raise ValueError(f"stream_scope must be one of both, streaming, non_streaming, got {value!r}")
+    return scope
+
+
+def _validated_stream_scope_hook(key: object) -> str:
+    if not isinstance(key, str):
+        raise ValueError(f"stream_scope keys must be strings, got {type(key).__name__}")
+    hook: Final = key.lower()
+    if hook not in GUARDRAIL_EVENT_HOOK_VALUES:
+        raise ValueError(
+            f"stream_scope keys must be guardrail modes ({sorted(GUARDRAIL_EVENT_HOOK_VALUES)}), got {key!r}"
+        )
+    return hook
+
+
+def coerce_stream_scope(value: object) -> GuardrailStreamScope | dict[str, GuardrailStreamScope] | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        return _as_guardrail_stream_scope(value)
+    if isinstance(value, Mapping):
+        scope_map: Final[Mapping[str, object]] = cast(Mapping[str, object], value)  # cast-ok: keys validated below
+        return {
+            _validated_stream_scope_hook(key): _as_guardrail_stream_scope(scope) for key, scope in scope_map.items()
+        }
+    raise ValueError(f"stream_scope must be a string or mapping, got {type(value).__name__}")
+
+
+def stored_stream_scope(value: object) -> GuardrailStreamScope | dict[str, GuardrailStreamScope] | None:
+    try:
+        return coerce_stream_scope(value)
+    except ValueError:
+        verbose_logger.warning("Ignoring invalid stored stream_scope value of type %s", type(value).__name__)
+        return None
+
+
+def with_tolerated_stream_scope(params: Mapping[str, object]) -> dict[str, object]:
+    if "stream_scope" not in params:
+        return dict(params)
+    return {
+        **params,
+        "stream_scope": stored_stream_scope(params["stream_scope"]),
+    }
+
+
+def runtime_stream_scope(
+    stream_scope: object,
+) -> tuple[GuardrailStreamScope, MappingProxyType[str, GuardrailStreamScope]]:
+    coerced: Final = coerce_stream_scope(stream_scope)
+    if coerced is None:
+        return DEFAULT_GUARDRAIL_STREAM_SCOPE, MappingProxyType({})
+    if isinstance(coerced, str):
+        return coerced, MappingProxyType({})
+    return DEFAULT_GUARDRAIL_STREAM_SCOPE, MappingProxyType(coerced)
+
+
+LoggingOnlyScope = Literal["input", "output"]
 
 
 class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch update guardrails
@@ -1045,9 +1137,11 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     skip_unscannable_attachments: bool | None = Field(
         default=False,
         description=(
-            "Implemented by guardrail='model_armor'. When True, attachment references that carry no "
-            "inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, "
-            "while fail_on_error still governs real Model Armor API errors. Default False blocks them."
+            "Implemented by guardrail='model_armor' and guardrail='bedrock'. When True, attachments the "
+            "guardrail cannot scan pass through unscanned instead of blocking. For Model Armor these are "
+            "references with no inline bytes (file_id, gs://, or http(s) URLs), and fail_on_error still "
+            "governs real Model Armor API errors. For Bedrock these are documents, files, audio, video, "
+            "and images that are not inline PNG or JPEG up to 4 MB. Default False blocks them."
         ),
     )
     sanitize_error_detail: bool | None = Field(
@@ -1068,8 +1162,21 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         description=(
             "Behavior when a guardrail endpoint is unreachable due to network errors. "
             "Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. "
-            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed."
+            "'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed. "
+            "Also implemented by guardrail='decision_model'."
         ),
+    )
+
+    max_input_chars: int | None = Field(
+        default=None,
+        gt=0,
+        description="Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.",
+    )
+
+    max_concurrent_decision_calls: int | None = Field(
+        default=None,
+        gt=0,
+        description="Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.",
     )
 
     extra_headers: list[str] | None = Field(
@@ -1144,11 +1251,36 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
         ),
     )
 
+    stream_scope: GuardrailStreamScope | dict[str, GuardrailStreamScope] | None = Field(
+        default=None,
+        description=(
+            "Whether this guardrail runs on streaming requests, non-streaming requests, or both. "
+            "A string applies to every configured mode. A map overrides named modes "
+            "(pre_call, during_call, post_call, ...); omitted keys default to both. "
+            "Unset means both, matching historical behavior."
+        ),
+    )
+
+    @field_validator("stream_scope", mode="before")
+    @classmethod
+    def normalize_stream_scope(cls, v: object) -> GuardrailStreamScope | dict[str, GuardrailStreamScope] | None:
+        return coerce_stream_scope(v)
+
     logging_only_scope: LoggingOnlyScope | None = Field(
         default=None,
         description=(
-            "which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' "
-            "(default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking."
+            "which direction a logging_only scan observes: 'input' (request) or 'output' (response); "
+            "unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the "
+            "same guardrail keep blocking."
+        ),
+    )
+
+    logging_only_continue_on_input_failure: bool | None = Field(
+        default=None,
+        description=(
+            "when True, a flagged or raising logging_only request scan is logged and the response is "
+            "still scanned, so both verdicts land. Only applies to mode logging_only and is ignored "
+            "when logging_only_scope is 'input' or 'output'."
         ),
     )
 
@@ -1217,6 +1349,17 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
     Agent365GuardrailConfigModel,
 ):
     guardrail: str = Field(description="The type of guardrail integration to use")
+    decision_model: str | None = Field(
+        default=None,
+        description="For guardrail='decision_model': the Decisions-API model that scores each check",
+    )
+    checks: BedrockChecksConfigModel | tuple[DecisionModelCheck, ...] | None = Field(  # pyright: ignore[reportIncompatibleVariableOverride]  # widened to also accept decision-model checks
+        default=None,
+        description=(
+            "Inline Bedrock InvokeGuardrailChecks config for guardrail='bedrock', or the predicate "
+            "checks a decision_model guardrail scores for guardrail='decision_model'"
+        ),
+    )
     mode: str | list[str] | Mode = Field(
         description="When to apply the guardrail (pre_call, post_call, during_call, logging_only)"
     )
@@ -1240,6 +1383,14 @@ class LitellmParams(  # pyright: ignore[reportIncompatibleVariableOverride]  # o
             and self.guardrail != SupportedGuardrailIntegrations.MCP_SECURITY.value
         ):
             raise ValueError(f"on_violation={self.on_violation!r} is only supported by guardrail='mcp_security'")
+        return self
+
+    @model_validator(mode="after")
+    def validate_checks_list_for_guardrail(self) -> "LitellmParams":
+        if isinstance(self.checks, tuple) and self.guardrail != SupportedGuardrailIntegrations.DECISION_MODEL.value:
+            raise ValueError(
+                f"checks as a list is only supported by guardrail='decision_model', got guardrail={self.guardrail!r}"
+            )
         return self
 
     def __init__(self, **kwargs) -> None:
@@ -1278,17 +1429,6 @@ class guardrailConfig(TypedDict):
     guardrails: list[Guardrail]
 
 
-class GuardrailEventHooks(str, Enum):
-    pre_call = "pre_call"
-    post_call = "post_call"
-    during_call = "during_call"
-    logging_only = "logging_only"
-    pre_mcp_call = "pre_mcp_call"
-    during_mcp_call = "during_mcp_call"
-    post_mcp_call = "post_mcp_call"
-    realtime_input_transcription = "realtime_input_transcription"
-
-
 class DynamicGuardrailParams(TypedDict):
     extra_body: ReadOnly[dict[str, object]]
 
@@ -1323,6 +1463,7 @@ class GuardrailUIAddGuardrailSettings(LiteLLMBaseModel):
     providers_without_directional_logging_only_scope: tuple[str, ...]
     pii_entity_categories: list[PiiEntityCategoryMap]
     content_filter_settings: dict[str, object] | None = None
+    decision_model_providers: tuple[str, ...] = Field(default_factory=tuple)
 
 
 class PresidioPerRequestConfig(LiteLLMBaseModel):

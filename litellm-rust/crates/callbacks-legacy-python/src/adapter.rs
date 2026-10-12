@@ -936,9 +936,6 @@ mod payload_tests {
     /// The payload phases of `Logging` on top of `StubLogger`, with `pre_call` handing the
     /// payload to the case's `on_pre_call`.
     const PAYLOAD_LOGGER: &CStr = c"
-class Request:
-    pass
-
 class PayloadLogger(StubLogger):
     def update_from_kwargs(self, **update):
         self.update = update
@@ -954,7 +951,7 @@ class PayloadLogger(StubLogger):
         self.record('post_call', None)
         self.post = (original_response, api_key, additional_args)
 
-request = Request()
+bound = {}
 kwargs = {}
 logger = PayloadLogger()
 on_pre_call = lambda additional_args: None
@@ -1225,10 +1222,10 @@ on_pre_call = lambda args: observed.append(
 def check():
     assert observed == [(True, True)], observed
 ")]
-    #[case::request_attribute_behind_an_omitted_keyword(c"
+    #[case::bound_value_behind_an_omitted_keyword(c"
 document = {'type': 'document_url', 'document_url': 'data:application/pdf;base64,YWJj'}
 pages = [0]
-request.document = document
+bound['document'] = document
 kwargs = {'pages': pages}
 observed = []
 on_pre_call = lambda args: observed.append(

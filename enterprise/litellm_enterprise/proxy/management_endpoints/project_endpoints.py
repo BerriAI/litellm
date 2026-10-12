@@ -12,7 +12,7 @@ Endpoints for /project operations
 
 import json
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import TypeAdapter
@@ -31,6 +31,7 @@ from litellm.proxy.management_helpers.utils import (
     management_endpoint_wrapper,
 )
 from litellm.proxy.utils import PrismaClient, handle_exception_on_proxy
+from litellm.repositories.base_repository import record_to_dict
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.object_permission_repository import ObjectPermissionRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -55,6 +56,15 @@ def _team_table(prisma_client: PrismaClient) -> TableActions["prisma_models.Lite
 
 def _project_table(prisma_client: PrismaClient) -> TableActions["prisma_models.LiteLLM_ProjectTable"]:
     return ProjectRepository(prisma_client).table
+
+
+def _writer_project_table(
+    prisma_client: PrismaClient,
+) -> TableActions["prisma_models.LiteLLM_ProjectTable"]:
+    return cast(  # cast-ok: writer_db exposes generated Prisma tables through a dynamic wrapper
+        "TableActions[prisma_models.LiteLLM_ProjectTable]",
+        prisma_client.writer_db.litellm_projecttable,
+    )
 
 
 def _verification_token_table(
@@ -824,6 +834,38 @@ async def update_project(
             **({"max_budget": None} if "max_budget" in data.model_fields_set and data.max_budget is None else {}),
         }
 
+        object_permission_data: Final = update_data.pop("object_permission", None)
+        object_permission_payload: Final = (
+            _OBJECT_PERMISSION_PAYLOAD.validate_python(object_permission_data) if object_permission_data else None
+        )
+
+        if data.team_id is not None:
+            current_project_record: Final = await _writer_project_table(prisma_client).find_unique(
+                where={"project_id": data.project_id}
+            )
+            current_project: Final = (
+                LiteLLM_ProjectTable.model_validate(record_to_dict(current_project_record))
+                if current_project_record is not None
+                else None
+            )
+            if current_project is not None and data.team_id != current_project.team_id:
+                mismatched_key_count: Final = await prisma_client.writer_db.litellm_verificationtoken.count(
+                    where={
+                        "project_id": data.project_id,
+                        "OR": [{"team_id": {"not": data.team_id}}, {"team_id": None}],
+                    }
+                )
+                if mismatched_key_count > 0:
+                    raise ProxyException(
+                        message=(
+                            f"Project {data.project_id} has {mismatched_key_count} key(s) that do not belong to "
+                            f"team {data.team_id}. Detach or delete them before moving the project."
+                        ),
+                        type="bad_request",
+                        code=400,
+                        param="team_id",
+                    )
+
         if budget_updates and existing_project.budget_id:
             # Update existing budget
             await _budget_table(prisma_client).update(
@@ -837,23 +879,17 @@ async def update_project(
             for field in budget_updates.keys():
                 update_data.pop(field, None)
 
-        # Handle object permissions
-        if "object_permission" in update_data:
-            object_permission_data = update_data.pop("object_permission")
-            if object_permission_data:
-                object_permission_payload: Final = _OBJECT_PERMISSION_PAYLOAD.validate_python(object_permission_data)
-                if existing_project.object_permission_id:
-                    # Update existing permission
-                    await _object_permission_table(prisma_client).update(
-                        where={"object_permission_id": existing_project.object_permission_id},
-                        data=object_permission_payload,
-                    )
-                else:
-                    # Create new permission
-                    created_permission: Final = await _object_permission_table(prisma_client).create(
-                        data=object_permission_payload,
-                    )
-                    update_data["object_permission_id"] = created_permission.object_permission_id
+        if object_permission_payload is not None:
+            if existing_project.object_permission_id:
+                await _object_permission_table(prisma_client).update(
+                    where={"object_permission_id": existing_project.object_permission_id},
+                    data=object_permission_payload,
+                )
+            else:
+                created_permission: Final = await _object_permission_table(prisma_client).create(
+                    data=object_permission_payload,
+                )
+                update_data["object_permission_id"] = created_permission.object_permission_id
 
         # Handle metadata fields
         for field in LiteLLM_ManagementEndpoint_MetadataFields:
