@@ -110,8 +110,8 @@ from ..common_utils import (
     get_anthropic_beta_from_headers,
     get_bedrock_tool_name,
     is_bedrock_application_inference_profile_arn,
-    is_claude_4_5_on_bedrock,
     normalize_bedrock_opus_output_config_effort,
+    supports_bedrock_prompt_cache_ttl,
 )
 
 if TYPE_CHECKING:
@@ -1385,7 +1385,7 @@ class AmazonConverseConfig(BaseConfig):
         cache_point: Final = CachePointBlock(type="default")
         if isinstance(control, dict) and "ttl" in control:
             ttl: Final = control["ttl"]
-            if ttl in ["5m", "1h"] and model is not None and is_claude_4_5_on_bedrock(model):
+            if ttl in ["5m", "1h"] and model is not None and supports_bedrock_prompt_cache_ttl(model):
                 cache_point["ttl"] = ttl
         return cache_point
 

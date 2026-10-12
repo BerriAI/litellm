@@ -473,7 +473,7 @@ def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_fi
     import litellm
     from litellm.llms.bedrock.common_utils import (
         bedrock_converse_supports_parallel_tool_use_config,
-        is_claude_4_5_on_bedrock,
+        supports_bedrock_prompt_cache_ttl,
     )
 
     base = "anthropic.claude-fallback-test"
@@ -488,8 +488,28 @@ def test_capability_lookups_fall_back_to_base_model_when_regional_entry_lacks_fi
         },
     )
 
-    assert is_claude_4_5_on_bedrock(regional) is True
+    assert supports_bedrock_prompt_cache_ttl(regional) is True
     assert bedrock_converse_supports_parallel_tool_use_config(regional) is True
+
+
+def test_deprecated_is_claude_4_5_on_bedrock_warns_and_matches_new_name(monkeypatch):
+    import litellm
+    from litellm.llms.bedrock.common_utils import (
+        is_claude_4_5_on_bedrock,
+        supports_bedrock_prompt_cache_ttl,
+    )
+
+    with_ttl = "anthropic.claude-ttl-supported"
+    without_ttl = "anthropic.claude-ttl-unsupported"
+    monkeypatch.setitem(litellm.model_cost, with_ttl, {"cache_creation_input_token_cost_above_1hr": 1e-05})
+    monkeypatch.setitem(litellm.model_cost, without_ttl, {"input_cost_per_token": 1e-06})
+
+    with pytest.warns(UserWarning, match="supports_bedrock_prompt_cache_ttl"):
+        assert is_claude_4_5_on_bedrock(with_ttl) is True
+    with pytest.warns(UserWarning, match="supports_bedrock_prompt_cache_ttl"):
+        assert is_claude_4_5_on_bedrock(without_ttl) is False
+    assert supports_bedrock_prompt_cache_ttl(with_ttl) is True
+    assert supports_bedrock_prompt_cache_ttl(without_ttl) is False
 
 
 @pytest.mark.parametrize(
