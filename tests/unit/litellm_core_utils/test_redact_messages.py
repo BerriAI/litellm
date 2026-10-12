@@ -99,6 +99,65 @@ def test_streaming_provider_reasoning_is_redacted_only_in_callback_copy(key: str
     assert details[key]._hidden_params["opaque"] is response._hidden_params["opaque"]
 
 
+def _request_with_hidden_reasoning(secret: str) -> tuple[dict, dict]:
+    hidden_params: Final = {
+        "additional_headers": {"x-ratelimit-remaining-requests": "99"},
+        "provider_specific_fields": {"thinking_blocks": [{"type": "thinking", "thinking": secret}]},
+    }
+    metadata: Final = {"session_id": "session", "hidden_params": hidden_params}
+    body: Final = {
+        "model": "redaction-model",
+        "system": secret,
+        "instructions": secret,
+        "messages": [{"role": "user", "content": secret}],
+        "metadata": metadata,
+        "litellm_metadata": metadata,
+    }
+    params: Final = {
+        "metadata": metadata,
+        "litellm_metadata": metadata,
+        "proxy_server_request": {"url": "http://localhost/v1/messages", "body": body},
+    }
+    return params, hidden_params
+
+
+def test_redaction_removes_reasoning_copied_into_hidden_params_and_request_body() -> None:
+    secret: Final = "private-hidden-reasoning"
+    params, hidden_params = _request_with_hidden_reasoning(secret)
+    snapshot: Final = copy.deepcopy(params)
+    details: Final = {"litellm_params": params}
+
+    perform_redaction(details, None)
+
+    redacted: Final = details["litellm_params"]
+    assert secret not in str(redacted)
+    body: Final = redacted["proxy_server_request"]["body"]
+    assert body["system"] == "redacted-by-litellm"
+    assert body["instructions"] == "redacted-by-litellm"
+    assert body["model"] == "redaction-model"
+    for metadata in (redacted["metadata"], redacted["litellm_metadata"], body["metadata"], body["litellm_metadata"]):
+        assert metadata["session_id"] == "session"
+        assert metadata["hidden_params"]["provider_specific_fields"] is None
+        assert metadata["hidden_params"]["additional_headers"] == hidden_params["additional_headers"]
+    assert params == snapshot
+
+
+def test_per_callback_redaction_keeps_shared_request_body_for_other_readers() -> None:
+    secret: Final = "private-shared-request"
+    params, _ = _request_with_hidden_reasoning(secret)
+    snapshot: Final = copy.deepcopy(params)
+    details: Final[dict[str, object]] = {"litellm_params": params, "messages": [{"role": "user", "content": secret}]}
+    opted_out_logger: Final = CustomLogger(message_logging=False)
+
+    perform_redaction(details, None, redact_streaming_responses=False)
+    callback_details: Final = redact_streaming_responses_for_custom_logger(details, opted_out_logger)
+
+    assert details["litellm_params"] == snapshot
+    assert details["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
+    assert secret not in str(callback_details["litellm_params"])
+    assert redact_streaming_responses_for_custom_logger(details, CustomLogger()) is details
+
+
 @pytest.fixture(autouse=True)
 def _reset_global_redaction():
     """Ensure the global setting is off for every test."""

@@ -44,26 +44,37 @@ else:
     LiteLLMLoggingObject = Any
 
 
+def _message_logging_disabled(custom_logger: CustomLogger) -> bool:
+    return hasattr(custom_logger, "message_logging") and custom_logger.message_logging is not True
+
+
 def redact_message_input_output_from_custom_logger(
     litellm_logging_obj: LiteLLMLoggingObject, result, custom_logger: CustomLogger
 ):
-    if hasattr(custom_logger, "message_logging") and custom_logger.message_logging is not True:
+    if _message_logging_disabled(custom_logger):
         return perform_redaction(litellm_logging_obj.model_call_details, result, redact_streaming_responses=False)
     return result
 
 
-def redact_streaming_responses_for_custom_logger(model_call_details: dict, custom_logger: CustomLogger) -> dict:
+def redact_streaming_responses_for_custom_logger(
+    model_call_details: dict[str, object], custom_logger: CustomLogger
+) -> dict[str, object]:
     """
     Returns a copy of model_call_details whose streaming response entries are redacted deepcopies
-    when the custom logger has opted out of message logging. The shared model_call_details is left
-    untouched so other callbacks still receive the unredacted response.
+    and whose litellm_params carry the redacted proxy request body when the custom logger has opted
+    out of message logging. The shared model_call_details is left untouched so other callbacks and
+    the spend log still receive the unredacted request and response.
     """
-    if not (hasattr(custom_logger, "message_logging") and custom_logger.message_logging is not True):
+    if not _message_logging_disabled(custom_logger):
         return model_call_details
+    params: Final = model_call_details.get("litellm_params")
     redacted_entries: Final = {
-        streaming_key: _redacted_streaming_response_copy(model_call_details[streaming_key])
-        for streaming_key in ("complete_streaming_response", "async_complete_streaming_response")
-        if model_call_details.get(streaming_key) is not None
+        **{
+            streaming_key: _redacted_streaming_response_copy(model_call_details[streaming_key])
+            for streaming_key in ("complete_streaming_response", "async_complete_streaming_response")
+            if model_call_details.get(streaming_key) is not None
+        },
+        **({"litellm_params": redacted_litellm_params(params)} if isinstance(params, Mapping) else {}),
     }
     if not redacted_entries:
         return model_call_details
@@ -268,39 +279,75 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
             _redact_choice_content(choice)
 
 
-def _redacted_baseline_metadata(metadata: Mapping[str, object]) -> Mapping[str, object]:
+def _hidden_params_without_provider_fields(hidden_params: object) -> Mapping[object, object] | None:
+    """Copy of ``hidden_params`` with ``provider_specific_fields`` cleared, or None when it carries none."""
+    if not (isinstance(hidden_params, Mapping) and "provider_specific_fields" in hidden_params):
+        return None
+    return {**_REQUEST_BODY.validate_python(hidden_params), "provider_specific_fields": None}
+
+
+def _redacted_metadata(metadata: Mapping[str, object], *, redact_content: bool) -> Mapping[str, object]:
     route: Final = metadata.get("_autorouter_baseline_route")
-    if not isinstance(route, BaselineRouteStamp):
-        return metadata
-    return {**metadata, "_autorouter_baseline_route": replace(route, request_parameters=None)}
+    hidden_params: Final = (
+        _hidden_params_without_provider_fields(metadata.get("hidden_params")) if redact_content else None
+    )
+    redacted_entries: Final[Mapping[str, object]] = {
+        **(
+            {"_autorouter_baseline_route": replace(route, request_parameters=None)}
+            if isinstance(route, BaselineRouteStamp)
+            else {}
+        ),
+        **({"hidden_params": hidden_params} if hidden_params is not None else {}),
+    }
+    return {**metadata, **redacted_entries} if redacted_entries else metadata
 
 
-def _redacted_proxy_request(request: Mapping[str, object]) -> Mapping[str, object]:
+def _without_hidden_provider_fields(metadata: Mapping[object, object]) -> Mapping[object, object]:
+    hidden_params: Final = _hidden_params_without_provider_fields(metadata.get("hidden_params"))
+    return metadata if hidden_params is None else {**metadata, "hidden_params": hidden_params}
+
+
+def _redacted_proxy_request(request: Mapping[str, object], *, redact_content: bool) -> Mapping[str, object]:
     raw_body: Final = request.get("body")
-    if not isinstance(raw_body, Mapping):
+    if not (redact_content and isinstance(raw_body, Mapping)):
         return without_classifier_audit(request)
     body: Final = _REQUEST_BODY.validate_python(raw_body)
     return {
         **without_classifier_audit(request),
         "body": {
             **body,
+            **{
+                key: _without_hidden_provider_fields(_REQUEST_BODY.validate_python(value))
+                for key, value in body.items()
+                if key in ("metadata", "litellm_metadata") and isinstance(value, Mapping)
+            },
             **({"messages": [{"role": "user", "content": REDACTED_BY_LITELLM}]} if "messages" in body else {}),
             **({"prompt": ""} if "prompt" in body else {}),
             **({"input": ""} if "input" in body else {}),
+            **{key: REDACTED_BY_LITELLM for key in ("system", "instructions") if body.get(key) is not None},
         },
     }
 
 
-def redacted_litellm_params(params: Mapping[str, object]) -> dict[str, object]:
+def redacted_litellm_params(params: Mapping[str, object], *, redact_content: bool = True) -> dict[str, object]:
+    """
+    Copy of litellm_params without classifier audit fields or baseline route request parameters.
+    redact_content also redacts the nested proxy request body and the provider-specific fields
+    copied into ``hidden_params``.
+    """
     request: Final = params.get("proxy_server_request")
     return {
         **params,
         **{
-            key: _redacted_baseline_metadata(value)
+            key: _redacted_metadata(value, redact_content=redact_content)
             for key, value in params.items()
             if key in ("metadata", "litellm_metadata") and isinstance(value, Mapping)
         },
-        **({"proxy_server_request": _redacted_proxy_request(request)} if isinstance(request, Mapping) else {}),
+        **(
+            {"proxy_server_request": _redacted_proxy_request(request, redact_content=redact_content)}
+            if isinstance(request, Mapping)
+            else {}
+        ),
     }
 
 
@@ -308,14 +355,16 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
     """
     Performs the actual redaction on the logging object and result.
 
-    redact_streaming_responses=False skips replacing the shared streaming
-    response entries; per-callback redaction hands each opted-out callback its own redacted
-    copy via redact_streaming_responses_for_custom_logger instead.
+    redact_streaming_responses=False is the per-callback path: it leaves the shared streaming
+    response entries, proxy request body and hidden provider fields in place, and each opted-out
+    callback gets its own redacted copy via redact_streaming_responses_for_custom_logger instead.
     """
     # Redact model_call_details
     params: Final = model_call_details.get("litellm_params")
     if isinstance(params, Mapping):
-        model_call_details["litellm_params"] = redacted_litellm_params(params)
+        model_call_details["litellm_params"] = redacted_litellm_params(
+            params, redact_content=redact_streaming_responses
+        )
     model_call_details["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
     model_call_details["prompt"] = ""
     model_call_details["input"] = ""
