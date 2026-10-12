@@ -346,7 +346,10 @@ class DeploymentAffinityCheck(CustomLogger):
         model_info: Final = deployment.get("model_info")
         if not isinstance(model_info, dict):
             return None
-        model_id: Final[object | None] = model_info.get("id")
+        typed_model_info: Final = cast(
+            dict[str, object], model_info
+        )  # cast-ok: router deployment payloads are str-keyed dicts
+        model_id: Final = typed_model_info.get("id")
         return str(model_id) if model_id is not None else None
 
     async def _deployment_has_capacity(self, model_id: str) -> bool:
@@ -357,8 +360,11 @@ class DeploymentAffinityCheck(CustomLogger):
         unreadable limit value counts as capacity, so this never blocks routing.
         """
         try:
-            limit: Final[object | None] = await self.cache.async_get_cache(
-                key=self._max_parallel_requests_cache_key(model_id)
+            cached_limit: Final = cast(  # cast-ok: DualCache returns untyped values; isinstance narrows below
+                object | None,
+                await self.cache.async_get_cache(  # pyright: ignore[reportUnknownMemberType]  # DualCache accessors are untyped legacy; this read is best-effort
+                    key=self._max_parallel_requests_cache_key(model_id)
+                ),
             )
         except Exception as e:  # noqa: BLE001  # affinity is best-effort; never break routing
             verbose_router_logger.debug(
@@ -366,9 +372,9 @@ class DeploymentAffinityCheck(CustomLogger):
                 e,
             )
             return True
-        if not isinstance(limit, MaxParallelRequestsLimit):
+        if not isinstance(cached_limit, MaxParallelRequestsLimit):
             return True
-        return limit.in_flight < limit.max_parallel_requests
+        return cached_limit.in_flight < cached_limit.max_parallel_requests
 
     async def _yield_session_pin_if_saturated(
         self,
@@ -508,8 +514,12 @@ class DeploymentAffinityCheck(CustomLogger):
                     )
                     if session_deployment is not None:
                         yielded_deployments: Final = await self._yield_session_pin_if_saturated(
-                            session_deployment=session_deployment,
-                            healthy_deployments=typed_healthy_deployments,
+                            session_deployment=cast(
+                                dict[str, object], session_deployment
+                            ),  # cast-ok: router deployment payloads are str-keyed dicts
+                            healthy_deployments=cast(
+                                Sequence[dict[str, object]], typed_healthy_deployments
+                            ),  # cast-ok: router deployment payloads are str-keyed dicts
                         )
                         if yielded_deployments is not None:
                             return yielded_deployments

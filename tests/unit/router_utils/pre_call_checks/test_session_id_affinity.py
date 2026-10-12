@@ -896,3 +896,67 @@ async def test_session_affinity_yield_keeps_todays_behavior_when_all_saturated_o
     assert [d["model_info"]["id"] for d in filtered_off] == ["dep-b"], (
         "with the setting off a saturated pin must keep narrowing to it, exactly like today"
     )
+
+
+@pytest.mark.asyncio
+async def test_session_affinity_yield_keeps_pin_when_pinned_deployment_has_capacity():
+    """No yield when the pinned deployment still has max_parallel_requests room.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/45868.
+    """
+    cache: Final = DualCache()
+    callback: Final = DeploymentAffinityCheck(
+        cache=cache,
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+        enable_session_affinity_yield_on_saturated_deployment=True,
+    )
+    deployments: Final = [
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-a"},
+            "model_info": {"id": "dep-a"},
+        },
+        {
+            "model_name": "group",
+            "litellm_params": {"model": "openai/model-b"},
+            "model_info": {"id": "dep-b"},
+        },
+    ]
+    session_kwargs: Final = {"metadata": {"session_id": "s1"}}
+    session_cache_key: Final = DeploymentAffinityCheck.get_session_affinity_cache_key("group", "s1", user_key=None)
+    await cache.async_set_cache(session_cache_key, {"model_id": "dep-b"})
+
+    filtered: Final = await callback.async_filter_deployments(
+        model="group",
+        healthy_deployments=deployments,
+        messages=[],
+        request_kwargs=session_kwargs,
+    )
+    assert [d["model_info"]["id"] for d in filtered] == ["dep-b"], (
+        "with room on the pinned deployment the session must stay pinned, no yield"
+    )
+
+
+@pytest.mark.asyncio
+async def test_session_affinity_yield_fails_open_when_capacity_probe_errors():
+    """A cache failure during the capacity probe must never break routing.
+
+    Regression test for https://github.com/BerriAI/litellm/issues/45868.
+    """
+
+    class _FailingCache(DualCache):
+        async def async_get_cache(self, key: str, **kwargs: object) -> object:
+            raise RuntimeError("cache is down")
+
+    callback: Final = DeploymentAffinityCheck(
+        cache=_FailingCache(),
+        ttl_seconds=600,
+        enable_user_key_affinity=False,
+        enable_responses_api_affinity=False,
+        enable_session_id_affinity=True,
+        enable_session_affinity_yield_on_saturated_deployment=True,
+    )
+    assert await callback._deployment_has_capacity("dep-a") is True
