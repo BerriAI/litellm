@@ -292,8 +292,15 @@ class TestMaybeSetupPrometheusMultiprocDir:
             assert os.path.exists(stale)
 
             os.environ.pop("PROMETHEUS_MULTIPROC_DIR", None)
+
+            # The exit hook removes the dir only from the creating process: a forked worker
+            # (different PID) sharing the dir must leave its siblings' samples alone.
+            ProxyInitializationHelpers._rmtree_auto_created_dir(first, 999999)
+            assert os.path.exists(first)
+            ProxyInitializationHelpers._rmtree_auto_created_dir(second, os.getpid())
+            assert not os.path.exists(second)
+
             shutil.rmtree(first, ignore_errors=True)
-            shutil.rmtree(second, ignore_errors=True)
 
     def test_configured_dir_is_still_wiped_on_boot(self, tmp_path):
         """A directory the operator set keeps its historical wipe-on-boot lifecycle."""
