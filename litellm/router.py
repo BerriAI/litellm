@@ -1947,7 +1947,7 @@ class Router:
                 vm_strategy: Final = self._normalize_strategy(vm_config.routing_strategy)
                 if vm_strategy != VIRTUAL_MODEL_ORDERED_STRATEGY:
                     vm_selector: Final = aggregate.selectors.get(model, {}).get(vm_strategy or "")
-                    verbose_router_logger.debug("routing_group=virtual_model model=%s strategy=%s", model, vm_strategy)
+                    verbose_router_logger.debug("routing_group=virtual_model strategy=%s", vm_strategy)
                     return vm_strategy, vm_selector
 
         resolved_model: Final = self.get_model_from_alias(model=model) or model
@@ -8079,9 +8079,7 @@ class Router:
             healthy_ids: Final = _extract_deployment_ids(healthy_deployments)
             remaining: Final = healthy_ids - frozenset(skipped)
             if not remaining:
-                verbose_router_logger.debug(
-                    "Skip set would empty virtual model candidates, resetting for single-member retry: %s", model_group
-                )
+                verbose_router_logger.debug("Skip set would empty virtual model candidates, resetting for single-member retry")
                 return ()
 
         verbose_router_logger.debug(
