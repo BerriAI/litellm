@@ -346,11 +346,7 @@ describe("blank context", () => {
     expect(validateSystemOnePayload(raw, "/v1/systemone")).toMatchObject({ isValid: true, issues: [] });
   });
 
-  it.each([
-    ["", "blank"],
-    ["  ", "whitespace"],
-    [[], "no messages"],
-  ] as const)("rejects /v1/decisions with %j input (%s)", (input) => {
+  it.each(["", "  ", []])("rejects /v1/decisions with %j input even when the schema passes", (input) => {
     const raw = JSON.stringify({ input, questions: [{ type: "predicate", name: "q", instructions: "Is it?" }] });
     const result = validateOpenAIDecisionsPayload(raw);
     expect(result.isValid).toBe(false);
