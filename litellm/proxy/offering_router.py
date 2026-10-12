@@ -323,7 +323,7 @@ class OfferingAccessGuard(CustomLogger):
             or any(kwargs.get(name) is not None for name in ("provider", "models", "route"))
             or not isinstance(extra_body, Mapping)
             or extra_body.get("provider") != policy.request_body()
-            or bool(_PARAMETER_CONTROLS.intersection(extra_body))
+            or any(name in extra_body for name in _PARAMETER_CONTROLS)
             or any(name in extra_body for name in ("model", "models", "route", "extra_body"))
         ):
             raise litellm.BadRequestError(

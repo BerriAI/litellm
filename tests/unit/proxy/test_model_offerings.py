@@ -772,19 +772,20 @@ async def test_provider_policy_reaches_upstream_body_on_every_chat_surface(
             {"extra_body": {"provider": policy, "temperature": 0.5, "additional_drop_params": ["provider"]}},
         ):
             with pytest.raises(litellm.BadRequestError, match="configured offering provider policy"):
-                if surface in ("responses", "responses_chat"):
-                    await manager.router.aresponses(input="fixture", client=handler, **{**shaped, **control})
-                elif surface == "messages":
-                    await manager.router.anthropic_messages(
+                await (
+                    manager.router.aresponses(input="fixture", client=handler, **{**shaped, **control})
+                    if surface in ("responses", "responses_chat")
+                    else manager.router.anthropic_messages(
                         messages=[{"role": "user", "content": "fixture"}],
                         max_tokens=10,
                         client=handler,
                         **{**shaped, **control},
                     )
-                else:
-                    await manager.router.acompletion(
+                    if surface == "messages"
+                    else manager.router.acompletion(
                         messages=[{"role": "user", "content": "fixture"}], client=handler, **{**shaped, **control}
                     )
+                )
         assert len(requests) == 1
 
 
