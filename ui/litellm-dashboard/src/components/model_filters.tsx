@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef } from "react";
 import { Card } from "@/components/ui/card";
+import { displayMode } from "@/lib/decisionModels";
 import { matchesSearchTerm } from "@/utils/searchUtils";
 
 interface ModelGroupInfo {
@@ -51,7 +52,8 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
   const getUniqueModes = (data: ModelGroupInfo[]) => {
     const modes = new Set<string>();
     data.forEach((model) => {
-      if (model.mode) modes.add(model.mode);
+      const mode = displayMode(model.mode);
+      if (mode) modes.add(mode);
     });
     return Array.from(modes);
   };
@@ -79,7 +81,7 @@ const ModelFilters: React.FC<ModelFiltersProps> = ({
       modelHubData?.filter((model) => {
         const matchesSearch = matchesSearchTerm(searchTerm, [model.model_group]);
         const matchesProvider = selectedProvider === "" || model.providers.includes(selectedProvider);
-        const matchesMode = selectedMode === "" || model.mode === selectedMode;
+        const matchesMode = selectedMode === "" || displayMode(model.mode) === selectedMode;
 
         // Check if model has the selected feature
         const matchesFeature =
