@@ -794,6 +794,10 @@ jobs:
               tests/unit/proxy/_experimental/mcp_server/test_discoverable_endpoints.py
               tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
               tests/unit/proxy/_experimental/mcp_server/test_db_credentials.py
+              tests/unit/proxy/_experimental/mcp_server/test_gateway_dcr_flow.py
+              tests/unit/proxy/_experimental/mcp_server/test_mcp_oauth_passthrough_tools.py
+              tests/unit/proxy/_experimental/mcp_server/test_mcp_max_concurrent_requests.py
+              tests/unit/proxy/_experimental/mcp_server/faults/test_list_outcomes.py
               tests/unit/proxy/_experimental/mcp_server/outbound_credentials
             python-version: "3.12"
             workers: 4

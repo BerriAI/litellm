@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import threading
-from concurrent.futures import wait
 from collections.abc import Mapping
+from concurrent.futures import wait
 from types import MappingProxyType
 from typing import Final
 
@@ -16,8 +17,8 @@ from botocore.awsrequest import AWSRequest
 from botocore.credentials import Credentials
 
 import litellm
-from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.constants import AWS_SIGNING_MAX_THREADS
+from litellm.cost_calculator import get_response_cost_from_hidden_params
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.bedrock.base_aws_llm import AWS_SIGNING_EXECUTOR
@@ -165,6 +166,25 @@ async def _drain_logging_worker() -> None:
 def _httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
+
+
+_GPT_6_LUNA_DECISIONS_INPUT_RATE: Final = 1e-07
+_MICROSOFT_DECISION_1_DECISIONS_INPUT_RATE: Final = 7e-08
+_DECISIONS_PRICING_FIELDS: Final[dict[str, dict[str, object]]] = {
+    "gpt-6-luna": {
+        "input_cost_per_token_decisions": _GPT_6_LUNA_DECISIONS_INPUT_RATE,
+        "cache_read_input_token_cost_decisions": _GPT_6_LUNA_DECISIONS_INPUT_RATE,
+        "cache_creation_input_token_cost_decisions": _GPT_6_LUNA_DECISIONS_INPUT_RATE,
+        "output_cost_per_token_decisions": 0.0,
+    },
+    "azure_ai/Microsoft-Decision-1": {"input_cost_per_token_decisions": _MICROSOFT_DECISION_1_DECISIONS_INPUT_RATE},
+}
+
+
+@pytest.fixture
+def decisions_pricing_fields(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key, fields in _DECISIONS_PRICING_FIELDS.items():
+        monkeypatch.setitem(litellm.model_cost, key, {**litellm.model_cost[key], **fields})
 
 
 @pytest.mark.asyncio
@@ -320,6 +340,79 @@ def test_decisions_cost_uses_litellm_token_pricing() -> None:
 
     assert expected_cost > 0
     assert cost == pytest.approx(expected_cost)
+
+
+@pytest.mark.asyncio
+async def test_openai_decisions_uses_evaluation_pricing_and_explicit_base_model(
+    respx_mock: respx.MockRouter,
+    decisions_pricing_fields: None,
+) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    response: Final = await litellm.adecisions(
+        model="openai/gpt-6-luna",
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="caller-key",
+        api_base="https://api.openai.com/v1",
+    )
+    chat_cost: Mapping[str, object] = litellm.model_cost["gpt-6-luna"]
+    expected_chat_cost: Final = (
+        (_INPUT_TOKENS - _CACHED_TOKENS - _CACHE_WRITE_TOKENS) * float(chat_cost["input_cost_per_token"])
+        + _CACHED_TOKENS * float(chat_cost["cache_read_input_token_cost"])
+        + _CACHE_WRITE_TOKENS * float(chat_cost["cache_creation_input_token_cost"])
+        + _OUTPUT_TOKENS * float(chat_cost["output_cost_per_token"])
+    )
+
+    assert route.called
+    assert response._hidden_params["model"] == "openai/gpt-6-luna"
+    assert response._hidden_params["provider_response_model"] == "openai/gpt-6-luna"
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        _INPUT_TOKENS * _GPT_6_LUNA_DECISIONS_INPUT_RATE
+    )
+    assert litellm.completion_cost(completion_response=response, call_type="acompletion") == pytest.approx(
+        expected_chat_cost
+    )
+
+
+@pytest.mark.asyncio
+async def test_systemone_uses_evaluation_pricing(respx_mock: respx.MockRouter, decisions_pricing_fields: None) -> None:
+    route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    response: Final = await litellm.asystemone(
+        model="openai/gpt-6-luna",
+        state="The package arrived broken.",
+        questions=_QUESTIONS,
+        api_key="caller-key",
+        api_base="https://api.openai.com/v1",
+    )
+
+    assert route.called
+    assert response._hidden_params["model"] == "openai/gpt-6-luna"
+    assert response._hidden_params["provider_response_model"] == "openai/gpt-6-luna"
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        _INPUT_TOKENS * _GPT_6_LUNA_DECISIONS_INPUT_RATE
+    )
+
+
+@pytest.mark.asyncio
+async def test_systemone_falls_back_to_plain_pricing_without_decisions_row(
+    respx_mock: respx.MockRouter,
+) -> None:
+    route: Final = respx_mock.post("https://decisions.example/v1/decisions").respond(json=_RESPONSE)
+    response: Final = await litellm.asystemone(
+        model="perplexity/sonar",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_key="caller-key",
+        api_base="https://decisions.example/v1",
+    )
+    plain_cost: Mapping[str, object] = litellm.model_cost["perplexity/sonar"]
+
+    assert route.called
+    assert response._hidden_params["provider_response_model"] == "perplexity/sonar"
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        _INPUT_TOKENS * float(plain_cost["input_cost_per_token"])
+        + _OUTPUT_TOKENS * float(plain_cost["output_cost_per_token"])
+    )
 
 
 @pytest.mark.parametrize(
@@ -1309,6 +1402,7 @@ async def test_openai_decisions_translate_systemone_to_the_openai_wire_contract_
     url: str,
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
+    decisions_pricing_fields: None,
 ) -> None:
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
@@ -1348,13 +1442,7 @@ async def test_openai_decisions_translate_systemone_to_the_openai_wire_contract_
     }
     assert response.answers == {"is_defect": NoulAnswer(type="noul", noul=0.9)}
     assert response.hidden_params["custom_llm_provider"] == "openai"
-    luna_cost: Final = litellm.model_cost["gpt-6-luna"]
-    expected_cost: Final = (
-        (_INPUT_TOKENS - _CACHED_TOKENS - _CACHE_WRITE_TOKENS) * float(luna_cost["input_cost_per_token"])
-        + _CACHED_TOKENS * float(luna_cost["cache_read_input_token_cost"])
-        + _CACHE_WRITE_TOKENS * float(luna_cost["cache_creation_input_token_cost"])
-        + _OUTPUT_TOKENS * float(luna_cost["output_cost_per_token"])
-    )
+    expected_cost: Final = _INPUT_TOKENS * _GPT_6_LUNA_DECISIONS_INPUT_RATE
     assert expected_cost > 0
     assert litellm.completion_cost(completion_response=response) == pytest.approx(expected_cost)
 
@@ -1694,6 +1782,28 @@ async def test_azure_ai_decision_posts_deployment_to_foundry_systemone_route(
 
 
 @pytest.mark.asyncio
+async def test_azure_ai_systemone_uses_its_decisions_pricing_fields(
+    respx_mock: respx.MockRouter, decisions_pricing_fields: None
+) -> None:
+    route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
+        json={**_RESPONSE, "model": "microsoft-decision-1"}
+    )
+    response: Final = await litellm.asystemone(
+        model="azure_ai/Microsoft-Decision-1",
+        state="review",
+        questions={"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        api_base="https://res.services.ai.azure.com",
+        api_key="foundry-key",
+    )
+
+    assert route.called
+    assert response._hidden_params["provider_response_model"] == "azure_ai/Microsoft-Decision-1"
+    assert litellm.completion_cost(completion_response=response) == pytest.approx(
+        _INPUT_TOKENS * _MICROSOFT_DECISION_1_DECISIONS_INPUT_RATE
+    )
+
+
+@pytest.mark.asyncio
 async def test_azure_ai_decision_reads_foundry_env_and_keeps_gateway_path_prefix(
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
@@ -1730,6 +1840,328 @@ async def test_azure_ai_decision_requires_api_base_before_http(
         )
 
     assert len(respx_mock.calls) == 0
+
+
+_CLEF_OMNI_UPSTREAM: Final = "https://example.com/ai/run/@cf/cloudflare/clef-omni"
+_CLEF_OMNI_RESPONSE: Final[Mapping[str, object]] = {
+    "success": True,
+    "result": {
+        "model": "clef-omni",
+        "answers": {"heard": {"type": "noul", "noul": 0.9}},
+        "usage": {"input_tokens": 100, "output_tokens": 0},
+    },
+}
+_MEDIA_REQUESTS: Final[tuple[tuple[str, Mapping[str, object]], ...]] = (
+    (
+        "decisions",
+        MappingProxyType(
+            {
+                "input": "Evaluate the clips",
+                "questions": [{"type": "predicate", "name": "heard", "instructions": "Is there speech?"}],
+            }
+        ),
+    ),
+    (
+        "systemone",
+        MappingProxyType(
+            {
+                "state": "Evaluate the clips",
+                "questions": {"heard": {"type": "noul", "instructions": "Is there speech?"}},
+            }
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize("async_mode", (False, True), ids=("sync", "async"))
+@pytest.mark.parametrize(("api", "request_kwargs"), _MEDIA_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+@pytest.mark.parametrize("model", ("cloudflare/clef-omni", "cloudflare/@cf/cloudflare/clef-omni"))
+@pytest.mark.asyncio
+async def test_clef_omni_media_reaches_upstream_in_both_formats(
+    respx_mock: respx.MockRouter, async_mode: bool, api: str, request_kwargs: Mapping[str, object], model: str
+) -> None:
+    audio: Final = [
+        "data:audio/wav;base64,YQ==",
+        {"content_type": "audio/mpeg", "base64": "Yg=="},
+        {"content_type": "audio/webm;codecs=opus", "base64": "ZQ=="},
+    ]
+    videos: Final = ["data:video/mp4;base64,Yw==", {"content_type": "video/webm;codecs=vp9", "base64": "ZA=="}]
+    route: Final = respx_mock.post(_CLEF_OMNI_UPSTREAM).respond(200, json=dict(_CLEF_OMNI_RESPONSE))
+    call: Final = getattr(litellm, f"a{api}" if async_mode else api)
+
+    response: Final = (
+        await call(
+            model=model, api_base="https://example.com", api_key="test", audio=audio, videos=videos, **request_kwargs
+        )
+        if async_mode
+        else call(
+            model=model, api_base="https://example.com", api_key="test", audio=audio, videos=videos, **request_kwargs
+        )
+    )
+
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "clef-omni",
+        "state": "Evaluate the clips",
+        "questions": {"heard": {"type": "noul", "instructions": "Is there speech?"}},
+        "audio": audio,
+        "videos": videos,
+    }
+    assert response.usage is not None
+    assert response.usage.input_tokens == 100
+    assert len(route.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "model",
+    (
+        "cloudflare/clef",
+        "cloudflare/clef-flash",
+        "typesafe/jev-latest",
+        "openai/decision",
+        "fireworks_ai/accounts/fireworks/routers/rune",
+    ),
+)
+@pytest.mark.parametrize(
+    "media",
+    (
+        {"audio": ["data:audio/wav;base64,YQ=="]},
+        {"videos": ["data:video/mp4;base64,YQ=="]},
+        {"audio": ["data:audio/wav;base64,YQ=="], "videos": ["data:video/mp4;base64,YQ=="]},
+    ),
+    ids=("audio", "videos", "both"),
+)
+@pytest.mark.asyncio
+async def test_clips_for_a_model_without_media_support_are_refused_before_http(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model: str, media: Mapping[str, object]
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    named_params: Final = str(list(media))
+
+    with pytest.raises(
+        litellm.UnsupportedParamsError, match=rf"does not support parameters: {re.escape(named_params)}, .*drop_params"
+    ):
+        await litellm.asystemone(
+            model=model,
+            state="test",
+            questions=_QUESTIONS,
+            api_base="https://example.com",
+            api_key="test",
+            **media,
+        )
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize(
+    "clips",
+    (
+        {"audio": ["data:audio/wav;base64,YQ=="], "videos": ["data:video/mp4;base64,YQ=="]},
+        {"audio": ["https://example.com/clip.wav"], "videos": [{"content_type": "video/mp4"}]},
+    ),
+    ids=("well_formed", "malformed"),
+)
+@pytest.mark.parametrize(("api", "request_kwargs"), _PREDICATE_REQUESTS, ids=_PREDICATE_REQUEST_IDS)
+@pytest.mark.asyncio
+async def test_clips_are_dropped_from_the_wire_for_a_model_without_media_support_under_drop_params(
+    api: str,
+    request_kwargs: Mapping[str, object],
+    clips: Mapping[str, object],
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    route: Final = respx_mock.post("https://api.perplexity.ai/v1/decisions").respond(json=_RESPONSE)
+    call: Final = getattr(litellm, f"a{api}")
+
+    await call(model="perplexity/pplx-decider-v1-27b", api_key="caller-key", **request_kwargs)
+    await call(model="perplexity/pplx-decider-v1-27b", api_key="caller-key", drop_params=True, **request_kwargs, **clips)
+
+    assert len(route.calls) == 2
+    text_only_body: Final = json.loads(route.calls[0].request.content)
+    assert "audio" not in text_only_body and "videos" not in text_only_body
+    assert json.loads(route.calls[1].request.content) == text_only_body
+
+
+@pytest.mark.parametrize(
+    "media",
+    (
+        {"audio": ["https://example.com/clip.wav"]},
+        {"videos": ["https://example.com/clip.mp4"]},
+        {"audio": [{"content_type": "audio/wav"}]},
+        {"videos": [{"content_type": "video/mp4"}]},
+        {"audio": [{"content_type": "video/mp4", "base64": "YQ=="}]},
+        {"videos": ["data:audio/wav;base64,YQ=="]},
+        {"audio": ["data:audio/webm;codecs=opus;base64,YQ=="]},
+        {"videos": ["data:video/webm;codecs=vp9;base64,YQ=="]},
+        {"audio": ["data:audio/wav;base64,YQ=="] * 5},
+        {"videos": ["data:video/mp4;base64,YQ=="] * 3},
+    ),
+)
+@pytest.mark.asyncio
+async def test_systemone_validates_media_before_http(respx_mock: respx.MockRouter, media: Mapping[str, object]) -> None:
+    with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request"):
+        await litellm.asystemone(
+            model="cloudflare/clef-omni",
+            state="test",
+            questions=_QUESTIONS,
+            api_base="https://example.com",
+            api_key="test",
+            **media,
+        )
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.parametrize(
+    "media", ({"audio": [], "videos": []}, {"audio": None, "videos": None}, {"audio": None, "videos": []}), ids=repr
+)
+@pytest.mark.asyncio
+async def test_empty_or_null_media_keeps_text_only_request_unchanged(
+    respx_mock: respx.MockRouter, media: Mapping[str, object]
+) -> None:
+    route: Final = respx_mock.post("https://example.com/v1/systemone").respond(200, json=dict(_RESPONSE))
+    await litellm.asystemone(
+        model="typesafe/jev-latest",
+        state="test",
+        questions=_QUESTIONS,
+        api_base="https://example.com",
+        api_key="test",
+        **media,
+    )
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "jev-latest",
+        "state": "test",
+        "questions": _QUESTIONS,
+    }
+
+
+@pytest.mark.asyncio
+async def test_a_malformed_clip_for_a_model_that_takes_media_is_refused_even_under_drop_params(
+    respx_mock: respx.MockRouter,
+) -> None:
+    with pytest.raises(litellm.BadRequestError, match="Invalid Decisions request"):
+        await litellm.asystemone(
+            model="cloudflare/clef-omni",
+            state="test",
+            questions=_QUESTIONS,
+            api_base="https://example.com",
+            api_key="test",
+            audio=["https://example.com/clip.wav"],
+            drop_params=True,
+        )
+    assert len(respx_mock.calls) == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ("evaluation", "decisions"))
+async def test_media_support_is_read_per_kind_from_the_cost_map(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, local_model_cost_map: None, mode: str
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "typesafe/jev-hears",
+        {"litellm_provider": "typesafe", "mode": mode, "supports_audio_input": True},
+    )
+    route: Final = respx_mock.post("https://example.com/v1/systemone").respond(200, json=dict(_RESPONSE))
+    audio: Final = ["data:audio/wav;base64,YQ=="]
+
+    await litellm.asystemone(
+        model="typesafe/jev-hears",
+        state="test",
+        questions=_QUESTIONS,
+        api_base="https://example.com",
+        api_key="test",
+        audio=audio,
+    )
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("does not support parameters: ['videos']")):
+        await litellm.asystemone(
+            model="typesafe/jev-hears",
+            state="test",
+            questions=_QUESTIONS,
+            api_base="https://example.com",
+            api_key="test",
+            audio=audio,
+            videos=["data:video/mp4;base64,YQ=="],
+        )
+
+    assert len(route.calls) == 1
+    assert json.loads(route.calls[0].request.content) == {
+        "model": "jev-hears",
+        "state": "test",
+        "questions": _QUESTIONS,
+        "audio": audio,
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model", "url", "cost_map_entry"),
+    (
+        (
+            "typesafe/jev-chatty",
+            "https://example.com/v1/systemone",
+            {"litellm_provider": "typesafe", "mode": "chat", "supports_audio_input": True, "supports_video_input": True},
+        ),
+        ("openai/gpt-audio", "https://example.com/v1/decisions", None),
+    ),
+)
+async def test_a_chat_models_media_flags_do_not_count_for_decisions(
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    local_model_cost_map: None,
+    model: str,
+    url: str,
+    cost_map_entry: Mapping[str, object] | None,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    if cost_map_entry is not None:
+        monkeypatch.setitem(litellm.model_cost, model, cost_map_entry)
+    assert litellm.supports_audio_input(model) is True
+    route: Final = respx_mock.post(url).respond(200, json=dict(_RESPONSE if "systemone" in url else _OPENAI_RESPONSE))
+    questions: Final = {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}
+    audio: Final = ["data:audio/wav;base64,YQ=="]
+    videos: Final = ["data:video/mp4;base64,YQ=="]
+
+    with pytest.raises(litellm.UnsupportedParamsError, match=re.escape("does not support parameters: ['audio', 'videos']")):
+        await litellm.asystemone(
+            model=model,
+            state="test",
+            questions=questions,
+            api_base="https://example.com",
+            api_key="test",
+            audio=audio,
+            videos=videos,
+        )
+    assert not route.calls
+
+    await litellm.asystemone(
+        model=model,
+        state="test",
+        questions=questions,
+        api_base="https://example.com",
+        api_key="test",
+        audio=audio,
+        videos=videos,
+        drop_params=True,
+    )
+    sent: Final = json.loads(route.calls[0].request.content)
+    assert "audio" not in sent
+    assert "videos" not in sent
+    assert sent["model"] == model.split("/", 1)[1]
+
+
+def test_positional_arguments_keep_the_order_the_sdk_had_before_media(respx_mock: respx.MockRouter) -> None:
+    decisions_route: Final = respx_mock.post("https://example.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
+    systemone_route: Final = respx_mock.post("https://example.com/v1/systemone").respond(json=_RESPONSE)
+    openai_questions: Final = [{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}]
+    systemone_questions: Final = {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}}
+
+    litellm.decisions("openai/gpt-6-luna", "review", openai_questions, None, "positional-key", "https://example.com")
+    litellm.systemone("typesafe/jev-1.13", "review", systemone_questions, "positional-key", "https://example.com")
+
+    assert decisions_route.calls[0].request.headers["authorization"] == "Bearer positional-key"
+    assert systemone_route.calls[0].request.headers["authorization"] == "Bearer positional-key"
+    for sent in (decisions_route.calls[0].request.content, systemone_route.calls[0].request.content):
+        assert "audio" not in json.loads(sent)
 
 
 _FIREWORKS_URL: Final = "https://api.fireworks.ai/inference/v1/systemone"
