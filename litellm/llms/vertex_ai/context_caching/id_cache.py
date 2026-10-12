@@ -19,9 +19,10 @@ Correctness invariants:
   "Invalid resource state for cache content <id>"), so the next request re-resolves.
 """
 
-import hashlib
+import hmac
 import json
 import re
+import secrets
 import threading
 import time
 from collections.abc import Mapping
@@ -50,6 +51,7 @@ def _new_cache_store() -> _CacheStore:
 
 _EXPLICIT_CACHE_ID_CACHE: Final[_CacheStore] = _new_cache_store()
 _CACHE_LOCK: Final = threading.Lock()
+_CACHE_KEY_SECRET: Final = secrets.token_bytes(32)
 
 _RFC3339_RE: Final = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})$")
 
@@ -113,7 +115,7 @@ def make_cache_id_key(
         },
         sort_keys=True,
     )
-    auth_id: Final = hashlib.sha256(credentials.encode()).hexdigest()
+    auth_id: Final = hmac.new(_CACHE_KEY_SECRET, credentials.encode(), digestmod="sha256").hexdigest()
     return "|".join(
         (
             custom_llm_provider,
