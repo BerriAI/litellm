@@ -37,7 +37,8 @@ export default function AddModelPanel() {
   const { data: credentialsResponse } = useCredentials();
   const { data: teams } = useTeams();
   const [selectedProvider, setSelectedProvider] = useState<string | null>(Providers.Anthropic);
-  const [{ provider: prefillProviderSlug, litellm_model: prefillModel }] = useQueryStates(PREFILL_URL_PARAMS);
+  const [{ provider: prefillProviderSlug, litellm_model: prefillModel }, setPrefillParams] =
+    useQueryStates(PREFILL_URL_PARAMS);
   const { data: providerMetadata } = useProviderFields();
   const prefillProvider = useMemo(
     () =>
@@ -82,7 +83,12 @@ export default function AddModelPanel() {
     await handleAddModelSubmit(
       mountedValues(),
       accessToken,
-      { resetFields: () => form.reset(INITIAL_VALUES) },
+      {
+        resetFields: () => {
+          form.reset(INITIAL_VALUES);
+          void setPrefillParams({ provider: null, litellm_model: null });
+        },
+      },
       refresh,
     );
     return true;

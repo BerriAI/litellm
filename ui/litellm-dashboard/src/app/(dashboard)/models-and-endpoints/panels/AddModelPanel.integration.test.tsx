@@ -1,5 +1,6 @@
 import { useSyncExternalStore } from "react";
 import { act, renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AddModelPanel from "./AddModelPanel";
@@ -140,9 +141,9 @@ const baseModelInfo = { access_groups: undefined, mode: undefined };
 
 const { api_base: _omitted, ...ALWAYS_MOUNTED_WITHOUT_API_BASE } = alwaysMounted;
 
-const setup = async (searchParams?: string) => {
+const setup = async (searchParams?: string, onUrlUpdate?: OnUrlUpdateFunction) => {
   const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
-  renderWithProviders(<AddModelPanel />, { searchParams });
+  renderWithProviders(<AddModelPanel />, { searchParams, onUrlUpdate });
   await screen.findByText("Provider");
 
   const openAdvanced = async () => {
@@ -623,6 +624,20 @@ describe("AddModelPanel prefill from the URL", () => {
       model_name: "typesafe/jev-latest",
       litellm_params: { api_key: undefined, custom_llm_provider: "typesafe", model: "typesafe/jev-latest" },
       model_info: { ...baseModelInfo },
+    });
+  });
+
+  it("drops the prefill params from the URL once the prefilled model is added", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const { submit } = await setup("?provider=typesafe&litellm_model=typesafe%2Fjev-latest", onUrlUpdate);
+    await waitFor(() => expect(screen.getByRole("combobox", { name: /provider/i })).toHaveValue("TypeSafe"));
+
+    await submit();
+
+    await waitFor(() => {
+      const params = onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+      expect(params?.has("provider")).toBe(false);
+      expect(params?.has("litellm_model")).toBe(false);
     });
   });
 

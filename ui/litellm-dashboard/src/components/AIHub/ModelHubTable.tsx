@@ -528,7 +528,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   </p>
                 </div>
 
-                {showDecisionGarden && <DecisionModelGarden canAddModels={canModify && canAddModels} />}
+                {showDecisionGarden && <DecisionModelGarden canAddModels={canAddModels} />}
               </TabsContent>
 
               {/* Agent Hub Tab */}
