@@ -18,7 +18,9 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.baseline_accounting import BaselineAccountingStore
 from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from tests.integration._support.timing import assert_cut_short
 
+_PROJECTION_WAIT_SECONDS: Final = 5
 _MIGRATION: Final = Path(__file__).parents[4] / (
     "litellm-proxy-extras/litellm_proxy_extras/migrations/20260915010000_add_autorouter_baseline_state/migration.sql"
 )
@@ -95,7 +97,7 @@ async def test_locked_projection_is_bounded_and_cancellation_propagates(
             connection.execute('LOCK TABLE "LiteLLM_AutoRouterBaselineComparison" IN ACCESS EXCLUSIVE MODE')
             started: Final = time.monotonic()
             assert await store.project("scope") == "unavailable"
-            assert time.monotonic() - started < 2
+            assert_cut_short(time.monotonic() - started, injected_delay=_PROJECTION_WAIT_SECONDS)
             pending: Final = asyncio.create_task(store.project("scope"))
             await asyncio.sleep(0.01)
             pending.cancel()

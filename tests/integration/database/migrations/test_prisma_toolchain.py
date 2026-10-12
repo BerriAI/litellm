@@ -17,7 +17,6 @@ the proxy gave up after four identical timeouts.
 import json
 import logging
 import os
-import signal
 import sys
 import time
 from pathlib import Path
@@ -33,8 +32,12 @@ from litellm_proxy_extras.prisma_toolchain import (
 from litellm_proxy_extras.utils import ProxyExtrasDBManager
 
 from tests._process_helpers import process_is_gone
+from tests.integration._support.process import kill_stray_process
+from tests.integration._support.timing import assert_cut_short
 
 
+HUNG_BOOTSTRAP_SECONDS = 30
+HUNG_DEPLOY_SECONDS = 60
 FAKE_PRISMA = """#!{python}
 import json
 import os
@@ -160,7 +163,7 @@ def test_bootstrap_stops_at_its_own_timeout(
     toolchain_env: tuple[Path, Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv(PRISMA_BOOTSTRAP_TIMEOUT_ENV_VAR, "1")
-    monkeypatch.setenv("FAKE_PRISMA_SLEEP", "30")
+    monkeypatch.setenv("FAKE_PRISMA_SLEEP", str(HUNG_BOOTSTRAP_SECONDS))
 
     started = time.monotonic()
     result = ensure_prisma_toolchain(
@@ -169,7 +172,7 @@ def test_bootstrap_stops_at_its_own_timeout(
     elapsed = time.monotonic() - started
 
     assert result.ready is False
-    assert elapsed < 15
+    assert_cut_short(elapsed, injected_delay=HUNG_BOOTSTRAP_SECONDS)
 
 
 def test_setup_database_prepares_the_toolchain_before_migrating(
@@ -211,7 +214,7 @@ def test_migrate_deploy_stops_at_its_own_timeout(
     _, log_path = toolchain_env
     monkeypatch.setenv("DATABASE_URL", "postgresql://u:p@localhost:9/x")
     monkeypatch.setenv(PRISMA_MIGRATE_DEPLOY_TIMEOUT_ENV_VAR, "1")
-    monkeypatch.setenv("FAKE_PRISMA_FIRST_DEPLOY_SLEEP", "60")
+    monkeypatch.setenv("FAKE_PRISMA_FIRST_DEPLOY_SLEEP", str(HUNG_DEPLOY_SECONDS))
     monkeypatch.setenv("FAKE_PRISMA_LATER_DEPLOY_STDERR", "Error: P3018 permission denied for schema public")
 
     started = time.monotonic()
@@ -220,7 +223,7 @@ def test_migrate_deploy_stops_at_its_own_timeout(
     elapsed = time.monotonic() - started
 
     assert len(_deploy_calls(log_path)) == 2
-    assert elapsed < 30
+    assert_cut_short(elapsed, injected_delay=HUNG_DEPLOY_SECONDS)
 
 
 def test_a_timed_out_migrate_deploy_takes_its_process_tree_with_it(
@@ -243,10 +246,7 @@ def test_a_timed_out_migrate_deploy_takes_its_process_tree_with_it(
         assert len(_deploy_calls(log_path)) == 2
         assert process_is_gone(grandchild_pid, within_seconds=5)
     finally:
-        try:
-            os.kill(grandchild_pid, signal.SIGKILL)
-        except ProcessLookupError:
-            pass
+        kill_stray_process(grandchild_pid)
 
 
 def test_db_push_timeout_hint_names_the_per_command_budget(

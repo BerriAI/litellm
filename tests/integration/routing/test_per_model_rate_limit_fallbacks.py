@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import signal
 import uuid
 from collections import Counter
 from collections.abc import Iterator, Mapping, Sequence
@@ -16,20 +15,18 @@ from typing import Final
 import anthropic
 import httpx
 import openai
-import psutil
 import pytest
 import yaml
 from integration._support.client import (
     JSON_OBJECT,
     Gateway,
     Scenario,
-    eventually,
     gateway_from_environment,
     object_value,
     string_value,
 )
 from integration._support.openai_wire import chat_reply, responses_reply
-from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from integration.routing.test_payment_required_mapping import OPENAI_MODEL, is_model_info_probe, model_list_reply
 from pydantic import JsonValue, TypeAdapter
@@ -39,10 +36,7 @@ pytestmark: Final = pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 SETTING: Final = "disable_fallbacks_on_per_model_rate_limits"
 FRESH_CONNECTION: Final = MappingProxyType({"Connection": "close"})
 MARKER: Final = re.compile(rb"pmrl-[0-9a-f]{32}")
-WORKER_STARTED: Final = re.compile(r"Started server process \[(\d+)\]")
-STARTUP_COMPLETE: Final = "Application startup complete."
 CONFIG_LIST: Final = TypeAdapter(list[dict[str, JsonValue]])
-WORKER_PIDS: Final = TypeAdapter(tuple[int, ...])
 BURST: Final = 8
 TOKEN_LIMIT: Final = 100
 INPUT_TOKEN_LIMIT: Final = 120
@@ -75,7 +69,7 @@ class Groups:
 @dataclass(frozen=True, slots=True)
 class Rig:
     gateway: Gateway
-    log: Path
+    owned: OwnedProxy
     groups: Groups
     wires: Mapping[str, Wire]
 
@@ -221,7 +215,7 @@ def enforcing(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
                 rig_gateway, directory, {}, config=enforcing_config(directory, groups, wires), workers=2
             )
         )
-        yield Rig(owned.gateway, owned.log, groups, wires)
+        yield Rig(owned.gateway, owned, groups, wires)
 
 
 def chat(gateway: Gateway, key: str, group: str, content: str, **extra: JsonValue) -> httpx.Response:
@@ -324,11 +318,6 @@ def served_once_in_a_burst(rig: Rig, markers: Sequence[str], responses: Sequence
         assert_refused(response, "model_per_key", rig.groups.primary)
     (served,) = (marker for marker, response in zip(markers, responses) if response.status_code == 200)
     return served
-
-
-def worker_startups(log: Path) -> tuple[tuple[int, ...], int]:
-    text: Final = log.read_text(errors="replace")
-    return WORKER_PIDS.validate_python(WORKER_STARTED.findall(text)), text.count(STARTUP_COMPLETE)
 
 
 def listed_setting(gateway: Gateway) -> tuple[dict[str, JsonValue], ...]:
@@ -604,16 +593,7 @@ def test_yaml_owned_setting_refuses_a_database_write_and_keeps_enforcing(enforci
 
 def test_worker_sigkill_and_replacement_keeps_refusing_per_model_overflow_without_fallback(enforcing: Rig) -> None:
     enforcing.traffic()
-    pids, ready = eventually(
-        lambda: worker_startups(enforcing.log), lambda found: len(found[0]) >= 2 and found[1] >= 2, seconds=60
-    )
-    victim: Final = next(pid for pid in pids if psutil.pid_exists(pid))
-    psutil.Process(victim).send_signal(signal.SIGKILL)
-    eventually(
-        lambda: worker_startups(enforcing.log),
-        lambda found: len(found[0]) > len(pids) and found[1] > ready,
-        seconds=graceful_stop_seconds(),
-    )
+    enforcing.owned.kill_worker(min(enforcing.owned.worker_pids()))
     primary: Final = enforcing.groups.primary
     markers: Final = tuple(new_marker() for _ in range(BURST))
     with enforcing.gateway.scenario() as scenario:

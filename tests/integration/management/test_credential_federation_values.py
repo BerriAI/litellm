@@ -862,9 +862,9 @@ def test_worker_kill_mid_credential_burst(gateway: Gateway, tmp_path: Path) -> N
                     return name, response.status_code
 
                 victim: Final = eventually(lambda: _workers(owned), lambda workers: len(workers) == 2)[0]
-                with ThreadPoolExecutor(max_workers=8) as pool:
+                with owned.replacing_worker(victim.pid) as kill, ThreadPoolExecutor(max_workers=8) as pool:
                     futures: Final = tuple(pool.submit(create, name) for name in names)
-                    victim.kill()
+                    kill()
                     outcomes: Final = tuple(future.result() for future in futures)
                 assert all(status == 200 or isinstance(status, str) for _, status in outcomes), outcomes
                 landed: Final = tuple(name for name, status in outcomes if status == 200)

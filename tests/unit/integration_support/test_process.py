@@ -5,8 +5,12 @@ import errno
 import importlib
 import os
 import socket
+import subprocess
+import sys
+import threading
 import time
 from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 from types import ModuleType
 from typing import Final
@@ -18,8 +22,18 @@ import pytest
 import yaml
 from pydantic import TypeAdapter
 
-from tests.integration._support.client import Gateway
-from tests.integration._support.process import worker_configuration
+from tests.integration._support.client import Gateway, eventually
+from tests.integration._support.process import (
+    OwnedProxy,
+    WorkerHealthcheck,
+    WorkerKill,
+    healthcheck_seconds,
+    kill_stray_process,
+    owned_proxy_process,
+    replacement_pid,
+    stop_process_group,
+    worker_configuration,
+)
 
 TESTS_DIR: Final = Path(__file__).resolve().parents[2]
 UNRELATED_CRASH: Final = "Traceback (most recent call last):\nModuleNotFoundError: No module named 'litellm'\n"
@@ -278,3 +292,130 @@ def test_owned_runtime_configuration_preserves_custom_worker_startup_hooks(
         )
         if hook
     )
+
+
+_SUPERVISOR: Final = """import multiprocessing
+import time
+
+if __name__ == "__main__":
+    worker = multiprocessing.get_context("spawn").Process(target=time.sleep, args=(60,))
+    worker.start()
+    print(worker.pid, flush=True)
+    time.sleep(60)
+"""
+
+
+@contextmanager
+def _supervised(tmp_path: Path, healthcheck: WorkerHealthcheck) -> Iterator[tuple[OwnedProxy, int]]:
+    script: Final = tmp_path / "supervisor.py"
+    script.write_text(_SUPERVISOR)
+    with subprocess.Popen(
+        (sys.executable, "-P", str(script)), stdout=subprocess.PIPE, start_new_session=True
+    ) as supervisor:
+        try:
+            assert supervisor.stdout is not None
+            worker: Final = int(supervisor.stdout.readline())
+            with httpx.Client(base_url="http://127.0.0.1:9") as client:
+                owned: Final = OwnedProxy(
+                    Gateway(client, "sk-unit", "http://127.0.0.1:9"), supervisor, tmp_path / "proxy.log", healthcheck
+                )
+                eventually(owned.worker_pids, lambda pids: pids == frozenset((worker,)), seconds=30)
+                yield owned, worker
+        finally:
+            stop_process_group(supervisor, 5)
+
+
+def test_worker_pids_are_the_supervisors_spawned_workers_and_not_the_supervisor(tmp_path: Path) -> None:
+    with _supervised(tmp_path, WorkerHealthcheck.STRICT) as (owned, worker):
+        assert owned.worker_pids() == frozenset((worker,))
+        assert owned.process.pid not in owned.worker_pids()
+
+
+def test_only_a_serving_worker_of_this_proxy_can_be_killed(tmp_path: Path) -> None:
+    with _supervised(tmp_path, WorkerHealthcheck.STRICT) as (owned, worker):
+        with pytest.raises(AssertionError, match="not a serving worker"):
+            owned.kill_worker(owned.process.pid)
+        assert owned.process.poll() is None
+        assert psutil.Process(worker).is_running()
+
+
+def _leave_without_killing(owned: OwnedProxy, worker: int) -> None:
+    with owned.replacing_worker(worker):
+        pass
+
+
+def test_a_replacing_block_that_never_kills_its_worker_fails_and_leaves_it_serving(tmp_path: Path) -> None:
+    with _supervised(tmp_path, WorkerHealthcheck.STRICT) as (owned, worker):
+        with pytest.raises(AssertionError, match="without killing the worker"):
+            _leave_without_killing(owned, worker)
+        assert owned.worker_pids() == frozenset((worker,))
+
+
+def test_a_worker_kill_reaps_the_victim_before_returning_and_cannot_fire_twice(tmp_path: Path) -> None:
+    with _supervised(tmp_path, WorkerHealthcheck.STRICT) as (owned, worker):
+        kill: Final = WorkerKill(psutil.Process(worker), threading.Event())
+        kill()
+        assert worker not in owned.worker_pids()
+        assert kill.fired.is_set()
+        with pytest.raises(AssertionError, match="already killed"):
+            kill()
+
+
+def test_a_frozen_victim_stays_stopped_until_the_kill(tmp_path: Path) -> None:
+    with _supervised(tmp_path, WorkerHealthcheck.STRICT) as (owned, worker):
+        kill: Final = WorkerKill(psutil.Process(worker), threading.Event())
+        assert kill.freeze().status() == psutil.STATUS_STOPPED
+        kill()
+        assert worker not in owned.worker_pids()
+
+
+def test_a_strict_healthcheck_proxy_refuses_suspension_before_stopping_anything(tmp_path: Path) -> None:
+    with _supervised(tmp_path, WorkerHealthcheck.STRICT) as (owned, worker):
+        with pytest.raises(AssertionError, match="LENIENT"):
+            with owned.suspended(worker):
+                pass
+        assert psutil.Process(worker).status() != psutil.STATUS_STOPPED
+
+
+def test_a_lenient_healthcheck_proxy_suspends_for_the_block_and_resumes_after(tmp_path: Path) -> None:
+    with _supervised(tmp_path, WorkerHealthcheck.LENIENT) as (owned, worker):
+        with owned.suspended(worker) as suspended:
+            assert suspended.status() == psutil.STATUS_STOPPED
+        assert psutil.Process(worker).status() != psutil.STATUS_STOPPED
+        assert owned.worker_pids() == frozenset((worker,))
+
+
+def test_a_worker_killed_while_suspended_fails_the_block(tmp_path: Path) -> None:
+    with _supervised(tmp_path, WorkerHealthcheck.LENIENT) as (owned, worker):
+        with pytest.raises(AssertionError, match="died while suspended"):
+            with owned.suspended(worker):
+                kill_stray_process(worker)
+
+
+def test_the_worker_healthcheck_cannot_be_overridden_through_extra_arguments(tmp_path: Path) -> None:
+    with pytest.raises(AssertionError, match="healthcheck"):
+        with owned_proxy_process(
+            MagicMock(spec=Gateway), tmp_path, {}, extra_arguments=("--timeout_worker_healthcheck", "60")
+        ):
+            pass
+    assert not tuple(tmp_path.glob("owned-proxy-*.log"))
+
+
+def test_a_lenient_healthcheck_outlasts_a_strict_one() -> None:
+    assert healthcheck_seconds(WorkerHealthcheck.LENIENT) > healthcheck_seconds(WorkerHealthcheck.STRICT)
+
+
+@pytest.mark.parametrize(
+    ("answered", "serving", "replacement"),
+    (
+        (30, frozenset((20, 30)), 30),
+        (20, frozenset((20, 30)), None),
+        (10, frozenset((20, 30)), None),
+        (40, frozenset((20, 30)), None),
+        (None, frozenset((20, 30)), None),
+    ),
+)
+def test_only_a_new_serving_worker_answering_readiness_counts_as_the_replacement(
+    answered: int | None, serving: frozenset[int], replacement: int | None
+) -> None:
+    assert replacement_pid(frozenset((10, 20)), answered, serving) == replacement

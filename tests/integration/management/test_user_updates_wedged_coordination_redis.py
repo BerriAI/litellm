@@ -1,5 +1,4 @@
 import os
-import signal
 import time
 import uuid
 from collections.abc import Callable, Mapping
@@ -8,7 +7,6 @@ from pathlib import Path
 from typing import Final
 from urllib.parse import urlsplit, urlunsplit
 
-import psutil
 import psycopg
 import pytest
 from psycopg import sql
@@ -17,7 +15,7 @@ from redis import Redis
 from redis.client import PubSub
 
 from tests.integration._support.client import JSON_OBJECT, Gateway, eventually, object_value, string_value
-from tests.integration._support.process import owned_proxy
+from tests.integration._support.process import owned_proxy_process
 from tests.integration._support.redis_process import owned_redis
 
 _USERS: Final = 60
@@ -50,26 +48,6 @@ def _received(pubsub: PubSub) -> tuple[dict[str, JsonValue], ...]:
         data = message.get("data")
         if isinstance(data, (bytes, str)):
             messages.append(JSON_OBJECT.validate_json(data))
-
-
-def _worker_pid(port: int) -> int:
-    for process in psutil.process_iter():
-        parent = process.parent()
-        if parent is None:
-            continue
-        try:
-            cmdline = parent.cmdline()
-            own_cmdline = process.cmdline()
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            continue
-        if (
-            "integration._support.proxy" in cmdline
-            and "--port" in cmdline
-            and str(port) in cmdline
-            and not any("prisma" in part for part in own_cmdline)
-        ):
-            return process.pid
-    raise AssertionError(f"no uvicorn worker found under the owned proxy on port {port}")
 
 
 def _burst_call(
@@ -112,7 +90,7 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
             prior_logs: Final = frozenset(results_dir.glob("owned-proxy-*.log"))
             with (
                 owned_redis(tmp_path) as coordination,
-                owned_proxy(
+                owned_proxy_process(
                     gateway,
                     tmp_path,
                     {
@@ -123,9 +101,10 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                     config=Path("tests/integration/coordination_redis_proxy_config.yaml"),
                     remove_environment=("DATABASE_URL_READ_REPLICA",),
                     workers=2,
-                ) as candidate,
+                ) as owned,
                 Redis(host=coordination.host, port=coordination.port, socket_timeout=1) as subscriber_client,
             ):
+                candidate: Final = owned.gateway
                 pubsub: Final = subscriber_client.pubsub()
                 pubsub.subscribe(_CHANNEL)
                 received: list[dict[str, JsonValue]] = []
@@ -168,8 +147,7 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                 assert timings["h2_healthy_control"] < _HANDLER_BUDGET_SECONDS, (
                     f"healthy control update took {timings['h2_healthy_control']:.3f}s"
                 )
-                coordination.signal(signal.SIGSTOP)
-                try:
+                with owned.replacing_worker(min(owned.worker_pids())) as kill, coordination.paused():
                     timings["s2_wedged_control"] = _timed_post(
                         candidate, "/user/update", {"user_id": users[0], "tpm_limit": 1000}
                     )
@@ -239,8 +217,6 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                         except Exception as error:  # noqa: BLE001  # the killed worker drops in-flight requests
                             return error, time.monotonic() - started
 
-                    port: Final = candidate.client.base_url.port
-                    assert port is not None, f"owned proxy client has no port: {candidate.client.base_url}"
                     with ThreadPoolExecutor(_BURST) as pool:
                         futures: Final = [
                             pool.submit(
@@ -249,7 +225,7 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                             )
                             for i in range(_BURST)
                         ]
-                        os.kill(_worker_pid(port), signal.SIGKILL)
+                        kill()
                         results: Final = [future.result() for future in futures]
                     responses: Final = [(status, elapsed) for status, elapsed in results if isinstance(status, int)]
                     failures: Final = [status for status, _elapsed in responses if status != 200]
@@ -276,8 +252,6 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                     assert timings["c1_survivor"] < _HANDLER_BUDGET_SECONDS, (
                         f"control update on the surviving worker took {timings['c1_survivor']:.3f}s"
                     )
-                finally:
-                    coordination.signal(signal.SIGCONT)
                 wedged_keys: Final = {users[i] for i in range(_BURST) if i % 5 == 0 and i != 0} | {f"team_id:{team_id}"}
 
                 def proxy_log() -> str:
@@ -307,8 +281,7 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                 assert recovered_keys.isdisjoint(wedged_keys), (
                     f"wedged publishes unexpectedly landed after recovery: {sorted(recovered_keys & wedged_keys)}"
                 )
-                coordination.signal(signal.SIGSTOP)
-                try:
+                with coordination.paused():
                     timings["r1b_short_wedge_a"] = _timed_post(
                         candidate, "/user/update", {"user_id": users[4], "max_budget": 15.0}
                     )
@@ -321,8 +294,6 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                     assert timings["r1b_short_wedge_b"] < _HANDLER_BUDGET_SECONDS, (
                         f"/user/update inside a short wedge took {timings['r1b_short_wedge_b']:.3f}s"
                     )
-                finally:
-                    coordination.signal(signal.SIGCONT)
                 eventually(
                     drained,
                     lambda messages: {str(message.get("cache_key")) for message in messages} >= {users[4], users[5]},

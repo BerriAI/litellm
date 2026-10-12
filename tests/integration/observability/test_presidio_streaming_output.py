@@ -1,6 +1,5 @@
 import json
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -10,10 +9,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-import psutil
 import yaml
 from integration._support.client import Gateway, eventually
-from integration._support.process import OwnedProxy, group_members, owned_proxy_process
+from integration._support.process import OwnedProxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import OpenAI
 from pydantic import BaseModel
@@ -567,18 +565,10 @@ def test_native_gemini_keeps_streaming_after_one_worker_is_killed(gateway: Gatew
     frames: Final = (gemini_frame("alive "), gemini_frame("still."))
     provider: Final = gemini_provider(Reply(content_type="text/event-stream", chunks=frames, pause_between_chunks=0.5))
     with presidio_rig(gateway, tmp_path, provider) as rig:
-        workers: Final = eventually(
-            lambda: tuple(
-                member for member in group_members(rig.proxy.process.pid) if member.pid != rig.proxy.process.pid
-            ),
-            lambda members: len(members) >= 2,
-            seconds=30,
-        )
-        victim: Final = workers[0]
-        with ThreadPoolExecutor(max_workers=8) as pool:
+        workers: Final = eventually(rig.proxy.worker_pids, lambda members: len(members) >= 2, seconds=30)
+        with rig.proxy.replacing_worker(min(workers)) as kill, ThreadPoolExecutor(max_workers=8) as pool:
             futures: Final = tuple(pool.submit(rig.stream, rig.gemini_path(), rig.gemini_body()) for _ in range(8))
-            victim.send_signal(signal.SIGKILL)
-            psutil.wait_procs((victim,), timeout=10)
+            kill()
             first_wave: Final = tuple(future.result() for future in futures)
         survivors: Final = tuple(received for received in first_wave if received.status == 200)
         assert survivors, [received.text[:200] for received in first_wave]

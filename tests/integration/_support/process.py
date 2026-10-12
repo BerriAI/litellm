@@ -1,5 +1,6 @@
 import errno
 import json
+import threading
 import os
 import re
 import signal
@@ -8,9 +9,10 @@ import subprocess
 import sys
 import time
 import uuid
-from collections.abc import Generator, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Generator, Iterable, Iterator, Mapping
+from contextlib import contextmanager, suppress
 from dataclasses import dataclass
+from enum import Enum
 from datetime import UTC, datetime, timedelta
 from ipaddress import IPv4Address
 from itertools import accumulate
@@ -28,6 +30,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from pydantic import TypeAdapter
 
+from tests.integration._support.budget import case_timeout_seconds, import_seconds, readiness_for, readiness_seconds
 from tests.integration._support.client import GATEWAY_LIMITS, Gateway
 
 DB_PUSH: Final = ("--use_prisma_db_push",)
@@ -67,7 +70,7 @@ def signal_group(group: int, action: int) -> None:
 
 
 def graceful_stop_seconds() -> float:
-    return max(30.0, float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS", "70")))
+    return readiness_for(import_seconds(), 1)
 
 
 def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
@@ -81,11 +84,206 @@ def stop_root_process(process: subprocess.Popen[bytes]) -> bool:
     return True
 
 
+class WorkerHealthcheck(Enum):
+    STRICT = "strict"
+    LENIENT = "lenient"
+
+
+STRICT_HEALTHCHECK_SECONDS: Final = 5
+WORKER_ENTRYPOINT: Final = "spawn_main"
+
+
+def healthcheck_seconds(healthcheck: WorkerHealthcheck) -> int:
+    match healthcheck:
+        case WorkerHealthcheck.STRICT:
+            return STRICT_HEALTHCHECK_SECONDS
+        case WorkerHealthcheck.LENIENT:
+            return int(case_timeout_seconds())
+
+
+def _is_serving_worker(process: psutil.Process) -> bool:
+    try:
+        return _ready_worker_pid(process) is not None and WORKER_ENTRYPOINT in " ".join(process.cmdline())
+    except psutil.Error:
+        return False
+
+
+def _is_gone(process: psutil.Process) -> bool:
+    try:
+        return process.status() == psutil.STATUS_ZOMBIE
+    except psutil.NoSuchProcess:
+        return True
+
+
+def _wait_until_gone(process: psutil.Process, seconds: float) -> None:
+    deadline: Final = time.monotonic() + seconds
+    while not _is_gone(process):
+        assert time.monotonic() < deadline, f"Process {process.pid} is still running after {seconds:.0f}s"
+        time.sleep(0.05)
+
+
+@dataclass(frozen=True, slots=True)
+class WorkerKill:
+    victim: psutil.Process
+    fired: threading.Event
+
+    def freeze(self) -> psutil.Process:
+        self.victim.suspend()
+        return self.victim
+
+    def __call__(self) -> None:
+        assert not self.fired.is_set(), f"Worker {self.victim.pid} was already killed"
+        with suppress(psutil.NoSuchProcess):
+            self.victim.kill()
+        _wait_until_gone(self.victim, STRICT_HEALTHCHECK_SECONDS)
+        self.fired.set()
+
+
+def replacement_pid(before: frozenset[int], answered: int | None, serving: frozenset[int]) -> int | None:
+    return answered if answered is not None and answered not in before and answered in serving else None
+
+
 @dataclass(frozen=True, slots=True)
 class OwnedProxy:
     gateway: Gateway
     process: subprocess.Popen[bytes]
     log: Path
+    healthcheck: WorkerHealthcheck = WorkerHealthcheck.STRICT
+
+    def worker_pids(self) -> frozenset[int]:
+        try:
+            children: Final = psutil.Process(self.process.pid).children()
+        except psutil.NoSuchProcess:
+            return frozenset()
+        return frozenset(child.pid for child in children if _is_serving_worker(child))
+
+    def _answering_pid(self) -> int | None:
+        try:
+            with httpx.Client(
+                base_url=str(self.gateway.client.base_url),
+                timeout=2,
+                trust_env=False,
+                limits=httpx.Limits(max_keepalive_connections=0),
+            ) as client:
+                response: Final = client.get("/health/integration-readiness")
+        except httpx.TransportError:
+            return None
+        identity: Final = response.headers.get("x-integration-worker-pid", "")
+        return int(identity) if response.status_code == 200 and identity.isdecimal() else None
+
+    def _await_replacement(self, before: frozenset[int]) -> int:
+        budget: Final = readiness_seconds(1)
+        deadline: Final = time.monotonic() + budget
+        while (replacement := replacement_pid(before, self._answering_pid(), self.worker_pids())) is None:
+            assert self.process.poll() is None, "Owned proxy exited while a worker was being replaced"
+            assert time.monotonic() < deadline, f"No replacement worker served within {budget:.0f}s"
+            time.sleep(0.05)
+        return replacement
+
+    def _victim(self, pid: int) -> tuple[psutil.Process, frozenset[int]]:
+        before: Final = self.worker_pids()
+        assert pid in before, f"{pid} is not a serving worker of this proxy: {sorted(before)}"
+        return psutil.Process(pid), before
+
+    @contextmanager
+    def replacing_worker(self, pid: int) -> Iterator[WorkerKill]:
+        victim, before = self._victim(pid)
+        kill: Final = WorkerKill(victim, threading.Event())
+        yield kill
+        assert kill.fired.is_set(), f"replacing_worker({pid}) exited without killing the worker"
+        self._await_replacement(before)
+
+    def kill_worker(self, pid: int) -> int:
+        victim, before = self._victim(pid)
+        WorkerKill(victim, threading.Event())()
+        return self._await_replacement(before)
+
+    @contextmanager
+    def suspended(self, pid: int) -> Iterator[psutil.Process]:
+        assert self.healthcheck is WorkerHealthcheck.LENIENT, (
+            "uvicorn kills a suspended worker after the strict worker healthcheck; "
+            "launch this proxy with healthcheck=WorkerHealthcheck.LENIENT"
+        )
+        assert pid == self.process.pid or pid in self.worker_pids(), f"{pid} is not part of this proxy"
+        target: Final = psutil.Process(pid)
+        target.suspend()
+        try:
+            yield target
+        finally:
+            with suppress(psutil.NoSuchProcess):
+                target.resume()
+        assert not _is_gone(target), (
+            f"Process {pid} died while suspended under a {healthcheck_seconds(self.healthcheck)}s worker healthcheck"
+        )
+
+    def stall_worker(self, pid: int) -> int:
+        assert self.healthcheck is WorkerHealthcheck.STRICT, "Only the strict worker healthcheck replaces a stall"
+        victim, before = self._victim(pid)
+        victim.suspend()
+        try:
+            replacement: Final = self._await_replacement(before)
+            _wait_until_gone(victim, readiness_seconds(1))
+            return replacement
+        finally:
+            with suppress(psutil.NoSuchProcess):
+                victim.kill()
+
+    def begin_shutdown(self) -> None:
+        self.process.terminate()
+
+    def kill_supervisor(self) -> int:
+        self.process.kill()
+        return self.process.wait(timeout=STRICT_HEALTHCHECK_SECONDS)
+
+
+def stop_child(process: subprocess.Popen[bytes] | subprocess.Popen[str], grace_seconds: float = 10) -> int:
+    if process.poll() is None:
+        process.terminate()
+    try:
+        return process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        process.kill()
+        return process.wait(timeout=grace_seconds)
+
+
+def stop_processes(processes: Iterable[psutil.Process], grace_seconds: float = 5) -> None:
+    members: Final = tuple(processes)
+    for member in members:
+        with suppress(psutil.NoSuchProcess):
+            member.terminate()
+    _stopped, alive = psutil.wait_procs(members, timeout=grace_seconds)
+    for member in alive:
+        with suppress(psutil.NoSuchProcess):
+            member.kill()
+    psutil.wait_procs(alive, timeout=grace_seconds)
+
+
+def stop_process_group(process: subprocess.Popen[bytes] | subprocess.Popen[str], grace_seconds: float) -> None:
+    if process.poll() is None:
+        signal_group(process.pid, signal.SIGTERM)
+    try:
+        process.wait(timeout=grace_seconds)
+    except subprocess.TimeoutExpired:
+        signal_group(process.pid, signal.SIGKILL)
+        process.wait(timeout=grace_seconds)
+
+
+def kill_stray_process(pid: int) -> None:
+    with suppress(psutil.NoSuchProcess):
+        stray: Final = psutil.Process(pid)
+        stray.kill()
+        _wait_until_gone(stray, STRICT_HEALTHCHECK_SECONDS)
+
+
+@contextmanager
+def paused(process: subprocess.Popen[bytes] | subprocess.Popen[str]) -> Iterator[None]:
+    target: Final = psutil.Process(process.pid)
+    target.suspend()
+    try:
+        yield
+    finally:
+        with suppress(psutil.NoSuchProcess):
+            target.resume()
 
 
 @contextmanager
@@ -212,14 +410,14 @@ def _owns_listener(launch: _Launch) -> bool:
     return False
 
 
-def _readiness_pids(launch: _Launch) -> Iterator[int]:
+def _readiness_pids(launch: _Launch, workers: int) -> Iterator[int]:
     with httpx.Client(
         base_url=f"http://127.0.0.1:{launch.port}",
         timeout=15,
         trust_env=False,
         limits=httpx.Limits(max_keepalive_connections=0),
     ) as client:
-        deadline: Final = time.monotonic() + float(os.environ.get("INTEGRATION_PROXY_READY_SECONDS", "70"))
+        deadline: Final = time.monotonic() + readiness_seconds(workers)
         while launch.process.poll() is None:
             try:
                 response: Final = client.get("/health/integration-readiness", timeout=2)
@@ -249,7 +447,7 @@ def _ready_worker_pid(member: psutil.Process) -> int | None:
 
 
 def _wait_until_ready(launch: _Launch, workers: int = 1) -> None:
-    for ready in accumulate(_readiness_pids(launch), _ready_workers, initial=frozenset[int]()):
+    for ready in accumulate(_readiness_pids(launch, workers), _ready_workers, initial=frozenset[int]()):
         members: Final = frozenset(
             pid for member in group_members(launch.process.pid) if (pid := _ready_worker_pid(member)) is not None
         )
@@ -400,7 +598,9 @@ def owned_proxy_process(
     database_setup: tuple[str, ...] = DB_PUSH,
     extra_arguments: tuple[str, ...] = (),
     coverage_file: Path | None = None,
+    healthcheck: WorkerHealthcheck = WorkerHealthcheck.STRICT,
 ) -> Iterator[OwnedProxy]:
+    assert "--timeout_worker_healthcheck" not in extra_arguments, "Choose the worker healthcheck with `healthcheck`"
     root: Final = _proxy_root()
     environment: Final = _proxy_environment(
         gateway, {**overrides, **({"COVERAGE_FILE": str(coverage_file)} if coverage_file else {})}, remove_environment
@@ -419,7 +619,7 @@ def owned_proxy_process(
         "--num_workers",
         str(workers),
         "--timeout_worker_healthcheck",
-        "5",
+        str(healthcheck_seconds(healthcheck)),
         *database_setup,
         *extra_arguments,
     )
@@ -429,7 +629,7 @@ def owned_proxy_process(
         with httpx.Client(
             base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False, limits=GATEWAY_LIMITS
         ) as client:
-            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log)
+            yield OwnedProxy(Gateway(client, gateway.key, gateway.upstream_url), process, launch.log, healthcheck)
     finally:
         _stop_launch(launch)
 
@@ -501,7 +701,7 @@ def refused_boot_log(
     launch: Final = _launch(command, root, environment, output)
     try:
         with httpx.Client(base_url=f"http://127.0.0.1:{launch.port}", timeout=15, trust_env=False) as client:
-            deadline: Final = time.monotonic() + 70
+            deadline: Final = time.monotonic() + readiness_seconds(1)
             while launch.process.poll() is None:
                 assert not _is_ready(client), (
                     f"Proxy became ready instead of refusing to boot:\n{launch.log.read_text()}"

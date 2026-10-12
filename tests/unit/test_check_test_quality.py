@@ -505,6 +505,7 @@ def test_a_named_iterable_that_is_not_a_module_constant_is_skipped_quietly(tmp_p
 
 def _written(tmp_path, source, name="conftest.py"):
     path = tmp_path / name
+    path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(source, encoding="utf-8")
     return path
 
@@ -637,6 +638,8 @@ _VIOLATING_SNIPPETS: Final = MappingProxyType(
             "test_snippet.py",
             'import subprocess, sys\nsubprocess.run([sys.executable, "-c", "pass"])\n',
         ),
+        "TQ010": ("tests/integration/chaos/test_snippet.py", "import os, signal\n\nos.kill(1, signal.SIGKILL)\n"),
+        "TQ011": ("tests/integration/chaos/test_snippet.py", "def test_fast():\n    elapsed = run()\n    assert elapsed < 2\n"),
     }
 )
 
@@ -675,3 +678,132 @@ def test_non_interpreter_subprocess_call_is_untouched(tmp_path):
 def test_popen_sys_executable_tuple_is_flagged(tmp_path):
     source = 'import subprocess, sys\nsubprocess.Popen((sys.executable, "script.py"))\n'
     assert _codes(tmp_path, source) == ["TQ009"]
+
+
+_CHAOS_TEST: Final = "tests/integration/observability/test_snippet.py"
+
+
+def _chaos_codes(tmp_path, source, name=_CHAOS_TEST):
+    return [v.code for v in checker.check_file(_written(tmp_path, source, name))]
+
+
+@pytest.mark.parametrize(
+    "call",
+    (
+        "os.kill(pid, signal.SIGKILL)",
+        "os.killpg(pid, signal.SIGTERM)",
+        "os.kill(pid, 0)",
+        "worker.send_signal(signal.SIGTERM)",
+        "signal_group(pid, signal.SIGKILL)",
+        "redis.signal(SIGSTOP)",
+        "redis.signal(signal.SIGCONT)",
+        "worker.kill()",
+        "worker.terminate()",
+        "worker.suspend()",
+        "worker.resume()",
+    ),
+)
+def test_an_integration_test_that_signals_a_process_itself_is_flagged_once_per_call(tmp_path, call):
+    assert _chaos_codes(tmp_path, f"import os, signal\nfrom signal import SIGSTOP\n\n{call}\n") == ["TQ010"]
+
+
+@pytest.mark.parametrize(
+    "source",
+    (
+        "assert record['exit_before_stop'] == -signal.SIGKILL\n",
+        "signal.signal(signal.SIGTERM, handler)\n",
+        "task.cancel()\n",
+        "slot.kill(reason)\n",
+        "owned.kill_worker(pid)\n",
+        "stop_child(process)\n",
+    ),
+)
+def test_reading_a_signal_number_or_calling_a_harness_helper_is_not_signalling(tmp_path, source):
+    assert _chaos_codes(tmp_path, f"import signal\n\n{source}") == []
+
+
+@pytest.mark.parametrize(
+    "name",
+    (
+        "tests/integration/_support/process.py",
+        "tests/unit/test_snippet.py",
+        "tests/e2e/integration_like/test_snippet.py",
+    ),
+)
+def test_the_signal_rule_only_applies_to_integration_tests_outside_the_harness(tmp_path, name):
+    assert _chaos_codes(tmp_path, "import os, signal\n\nos.kill(1, signal.SIGKILL)\nworker.suspend()\n", name) == []
+
+
+def test_the_signal_rule_is_suppressible_with_a_reason(tmp_path):
+    source = "import os, signal\n\nos.kill(1, signal.SIGKILL)  # test-quality-ok: reaps a leaked fake helper\n"
+    assert _chaos_codes(tmp_path, source) == []
+
+
+@pytest.mark.parametrize(
+    "assertion",
+    (
+        "assert elapsed < 2",
+        "assert 2 > elapsed",
+        "assert elapsed <= 2.5",
+        "assert time.monotonic() - started < 5",
+        "assert all(duration < 2 for _, duration in results)",
+        "assert max(latencies) < 1",
+        "assert response.elapsed.total_seconds() < 5",
+        "assert outcome.elapsed < BUDGET_SECONDS",
+        "assert elapsed < BUDGET_SECONDS - 1",
+        "assert 59 <= elapsed <= 75",
+        "assert taken < 3",
+    ),
+)
+def test_an_elapsed_time_capped_by_a_number_is_flagged(tmp_path, assertion):
+    source = (
+        "import time\n\nBUDGET_SECONDS = 10\n\n\n"
+        "def test_fast():\n"
+        "    started = time.monotonic()\n"
+        "    taken = time.perf_counter() - started\n"
+        f"    {assertion}\n"
+    )
+    assert _chaos_codes(tmp_path, source) == ["TQ011"]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    (
+        "assert elapsed >= 2",
+        "assert 2 <= elapsed",
+        "assert elapsed < 25 * control_elapsed",
+        "assert elapsed < control + injected_delay",
+        "assert after - baseline < BUDGET_SECONDS",
+        "assert len(durations) == 3",
+        "assert count < 2",
+        "while time.monotonic() - started < 30:\n        poll()",
+    ),
+)
+def test_lower_bounds_relative_bounds_counts_and_polling_deadlines_are_left_alone(tmp_path, statement):
+    source = (
+        "import time\n\nBUDGET_SECONDS = 10\n\n\n"
+        "def _relative():\n"
+        "    started = time.monotonic()\n"
+        "    baseline = settled_reads(read(), time.monotonic())\n"
+        f"    {statement}\n"
+    )
+    assert _chaos_codes(tmp_path, source) == []
+
+
+def test_a_clock_bound_name_is_only_an_elapsed_time_in_the_function_that_binds_it(tmp_path):
+    source = (
+        "import time\n\n\n"
+        "def _measure():\n"
+        "    taken = time.monotonic() - 1\n"
+        "    return taken\n\n\n"
+        "def test_counts():\n"
+        "    taken = len(rows())\n"
+        "    assert taken < 3\n"
+    )
+    assert _chaos_codes(tmp_path, source) == []
+
+
+def test_the_wall_clock_rule_only_applies_to_integration_tests_outside_the_harness(tmp_path):
+    source = "def test_fast():\n    elapsed = run()\n    assert elapsed < 2\n"
+    assert _chaos_codes(tmp_path, source, "tests/unit/test_snippet.py") == []
+    assert _chaos_codes(tmp_path, source, "tests/integration/_support/timing.py") == []

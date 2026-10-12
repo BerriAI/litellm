@@ -15,7 +15,7 @@ import yaml
 from _s3_v2_support import RecordingS3Sink, collect_payloads
 from _s3_v2_support import s3_config as _recording_s3_config
 from integration._support.client import Gateway, JsonValue, eventually
-from integration._support.process import group_members, owned_proxy, owned_proxy_process
+from integration._support.process import owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, Wire, wire_server
 
 BUCKET: Final = "integration-bucket"
@@ -832,19 +832,18 @@ def test_s3_v2_worker_kill_mid_burst_keeps_surviving_deliveries(gateway: Gateway
                     return identity, False
                 return identity, response.status_code == 200
 
-            with ThreadPoolExecutor(max_workers=32) as pool:
-                futures: Final = tuple(pool.submit(send, identity) for identity in sent)
-                time.sleep(0.5)
-                children: Final = tuple(
-                    process for process in group_members(owned.process.pid) if process.pid != owned.process.pid
-                )
-                assert children, "no worker children found to kill"
-                children[0].kill()
-                results: Final = tuple(future.result() for future in futures)
-            survivors: Final = frozenset(identity for identity, ok in results if ok)
-            assert survivors, "no request survived the worker kill"
-            readiness: Final = owned.gateway.client.get("/health/readiness")
-            assert readiness.status_code == 200, readiness.text
+            workers: Final = owned.worker_pids()
+            assert workers, "no worker children found to kill"
+            with owned.replacing_worker(min(workers)) as kill:
+                with ThreadPoolExecutor(max_workers=32) as pool:
+                    futures: Final = tuple(pool.submit(send, identity) for identity in sent)
+                    time.sleep(0.5)
+                    kill()
+                    results: Final = tuple(future.result() for future in futures)
+                survivors: Final = frozenset(identity for identity, ok in results if ok)
+                assert survivors, "no request survived the worker kill"
+                readiness: Final = owned.gateway.client.get("/health/readiness")
+                assert readiness.status_code == 200, readiness.text
             payloads: Final = collect_payloads(sink, len(survivors), seconds=90)
     landed: Final = frozenset(payload["id"] for payload in payloads)
     assert survivors <= landed, "an id whose response succeeded never landed"
@@ -895,7 +894,7 @@ def test_s3_v2_sigterm_mid_burst_loses_only_inflight_without_duplicates(gateway:
             with ThreadPoolExecutor(max_workers=32) as pool:
                 futures: Final = tuple(pool.submit(send, identity) for identity in sent)
                 time.sleep(0.5)
-                candidate_owned.process.terminate()
+                candidate_owned.begin_shutdown()
                 results: Final = tuple(future.result() for future in futures)
             candidate_owned.process.wait(timeout=30)
         finally:
