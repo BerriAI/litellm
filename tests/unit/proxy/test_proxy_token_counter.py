@@ -2,6 +2,7 @@
 # 1. Generate a Key, and use it to make a call
 
 
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -10,6 +11,35 @@ from dotenv import load_dotenv
 from pydantic import JsonValue
 
 load_dotenv()
+
+
+@pytest.mark.asyncio
+async def test_local_token_counter_includes_system_and_framing(monkeypatch: pytest.MonkeyPatch) -> None:
+    import tiktoken
+
+    import litellm
+    from litellm import Router
+    from litellm.litellm_core_utils.token_counter import count_cl100k_prompt_text
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import TokenCountRequest
+
+    system: Final = "sys text"
+    user: Final = "user text"
+    framing: Final = 100
+    model_entry: Final = {"token_count_framing": framing, "litellm_provider": "databricks", "mode": "chat"}
+    monkeypatch.setitem(litellm.model_cost, "framed-local", model_entry)
+    monkeypatch.setitem(litellm.model_cost, "databricks/framed-local", model_entry)
+    router: Final = Router(model_list=[{"model_name": "framed-local", "litellm_params": {"model": "databricks/framed-local"}}])
+    monkeypatch.setattr(proxy_server, "llm_router", router)
+    encoder: Final = tiktoken.get_encoding("cl100k_base")
+    expected: Final = len(encoder.encode(system)) + len(encoder.encode(user)) + framing
+    assert count_cl100k_prompt_text(system=system, messages=[{"role": "user", "content": user}], framing=framing) == expected
+    response: Final = await proxy_server.token_counter(
+        request=TokenCountRequest(model="framed-local", system=system, messages=[{"role": "user", "content": user}]),
+        call_endpoint=True,
+    )
+    assert response.total_tokens == expected
+    assert response.tokenizer_type == "cl100k_base"
 
 # this file is to test litellm/proxy
 

@@ -1155,6 +1155,8 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "bedrock_converse_supports_strict_tools": {"type": "boolean"},
                 "supports_regex_lookaround": {"type": "boolean"},
                 "tpm": {"type": "number"},
+                "token_count_framing": {"type": "number"},
+                "token_count_fallback_model": {"type": "string"},
                 "supported_endpoints": {
                     "type": "array",
                     "items": {

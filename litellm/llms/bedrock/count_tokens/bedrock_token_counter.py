@@ -9,6 +9,7 @@ from typing import Any, Final
 from pydantic import JsonValue
 from typing_extensions import assert_never
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError, get_bedrock_base_model
@@ -20,6 +21,7 @@ from litellm.types.utils import LiteLLMPydanticObjectBase, LlmProviders, TokenCo
 
 RUNTIME_TOKENIZER_TYPE: Final = "bedrock_api"
 MANTLE_TOKENIZER_TYPE: Final = "bedrock_mantle_api"
+MANTLE_FALLBACK_TOKENIZER_TYPE: Final = "bedrock_mantle_api_fallback"
 
 
 class _CountTokensReply(LiteLLMPydanticObjectBase):
@@ -60,10 +62,27 @@ class BedrockTokenCounter(BaseTokenCounter):
         runtime_handler: BedrockCountTokensHandler | None = None,
         mantle_handler: BedrockMantleCountTokensHandler | None = None,
         client: AsyncHTTPHandler | None = None,
+        model_catalog: Mapping[str, Mapping[str, object]] | None = None,
     ) -> None:
         self._runtime_handler: Final = runtime_handler or BedrockCountTokensHandler()
         self._mantle_handler: Final = mantle_handler or BedrockMantleCountTokensHandler()
         self._client: Final = client
+        self._model_catalog: Final = model_catalog if model_catalog is not None else litellm.model_cost
+
+    def _fallback_model(self, outcome: CountTokensOutcome, requested_model: str, resolved_model: str) -> str | None:
+        if not (
+            isinstance(outcome, CountTokensFailure)
+            and outcome.status_code == 404
+            and outcome.tokenizer_type == MANTLE_TOKENIZER_TYPE
+            and is_mantle_claude_model(resolved_model)
+        ):
+            return None
+        requested_entry: Final = self._model_catalog.get(requested_model, {})
+        base_entry: Final = self._model_catalog.get(resolved_model, {})
+        configured: Final = requested_entry.get(
+            "token_count_fallback_model", base_entry.get("token_count_fallback_model")
+        )
+        return configured if isinstance(configured, str) and configured and configured != resolved_model else None
 
     def should_use_token_counting_api(
         self,
@@ -110,6 +129,19 @@ class BedrockTokenCounter(BaseTokenCounter):
         if not messages:
             return None
 
+        from litellm.utils import get_token_count_framing
+
+        if get_token_count_framing(model_to_use) is not None:
+            return TokenCountResponse(
+                total_tokens=0,
+                request_model=request_model,
+                model_used=model_to_use,
+                tokenizer_type="bedrock_api",
+                error=True,
+                error_message="Use local framed token count",
+                status_code=501,
+            )
+
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
         request_data: Final[dict[str, object]] = {
             "model": model_to_use,
@@ -122,19 +154,32 @@ class BedrockTokenCounter(BaseTokenCounter):
         runtime: Final = await self._count_with(
             self._runtime_handler, RUNTIME_TOKENIZER_TYPE, request_data, litellm_params, resolved_model
         )
-        outcome: Final = (
+        primary: Final = (
             await self._count_with(
                 self._mantle_handler, MANTLE_TOKENIZER_TYPE, request_data, litellm_params, resolved_model
             )
             if _runtime_rejected_claude_model(runtime, resolved_model)
             else runtime
         )
+        fallback_model: Final = self._fallback_model(primary, model_to_use, resolved_model)
+        outcome: Final = (
+            await self._count_with(
+                self._mantle_handler,
+                MANTLE_FALLBACK_TOKENIZER_TYPE,
+                request_data,
+                litellm_params,
+                fallback_model,
+            )
+            if fallback_model is not None
+            else primary
+        )
+        counted_model: Final = fallback_model or model_to_use
         match outcome:
             case CountedTokens():
                 return TokenCountResponse(
                     total_tokens=outcome.input_tokens,
                     request_model=request_model,
-                    model_used=model_to_use,
+                    model_used=counted_model,
                     tokenizer_type=outcome.tokenizer_type,
                     original_response=dict(outcome.original_response),
                 )
@@ -148,7 +193,7 @@ class BedrockTokenCounter(BaseTokenCounter):
                 return TokenCountResponse(
                     total_tokens=0,
                     request_model=request_model,
-                    model_used=model_to_use,
+                    model_used=counted_model,
                     tokenizer_type=outcome.tokenizer_type,
                     error=True,
                     error_message=outcome.message,

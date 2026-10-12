@@ -1,4 +1,69 @@
 {
+    "system.ai.kimi-k3": {
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "token_count_framing": 100
+    },
+    "databricks/system.ai.kimi-k3": {
+        "input_cost_per_token": 3e-06,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 256000,
+        "max_output_tokens": 1048576,
+        "max_tokens": 1048576,
+        "mode": "chat",
+        "output_cost_per_token": 1.5e-05,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "token_count_framing": 100
+    },
+    "system.ai.deepseek-v4-flash-0731": {
+        "cache_read_input_token_cost": 2.8e-08,
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 2.8e-07,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "token_count_framing": 97
+    },
+    "databricks/system.ai.deepseek-v4-flash-0731": {
+        "cache_read_input_token_cost": 2.8e-08,
+        "input_cost_per_token": 1.4e-07,
+        "litellm_provider": "databricks",
+        "max_input_tokens": 128000,
+        "max_output_tokens": 384000,
+        "max_tokens": 384000,
+        "mode": "chat",
+        "output_cost_per_token": 2.8e-07,
+        "supports_function_calling": true,
+        "supports_system_messages": true,
+        "token_count_framing": 97
+    },
+    "zai-org/glm-5.2-maas": {
+        "cache_read_input_token_cost": 1.4e-07,
+        "input_cost_per_token": 1.4e-06,
+        "litellm_provider": "vertex_ai-zai_models",
+        "max_input_tokens": 1000000,
+        "max_output_tokens": 131072,
+        "max_tokens": 131072,
+        "mode": "chat",
+        "output_cost_per_token": 4.4e-06,
+        "source": "https://cloud.google.com/vertex-ai/generative-ai/pricing#partner-models",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_tool_choice": true,
+        "token_count_framing": 0
+    },
     "sample_spec": {
         "code_interpreter_cost_per_session": 0.0,
         "computer_use_input_cost_per_1k_tokens": 0.0,
@@ -68280,7 +68345,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "token_count_framing": 100
     },
     "global.moonshotai.kimi-k3": {
         "supports_regex_lookaround": false,
@@ -68310,7 +68376,8 @@
         "supports_response_schema": true,
         "supports_system_messages": true,
         "supports_tool_choice": true,
-        "supports_vision": true
+        "supports_vision": true,
+        "token_count_framing": 100
     },
     "us.moonshotai.kimi-k3": {
         "supports_regex_lookaround": false,
@@ -69202,7 +69269,8 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
-        "supports_tool_choice": true
+        "supports_tool_choice": true,
+        "token_count_framing": 0
     },
     "vertex_ai/meta/llama-3.3-70b-instruct-maas": {
         "deprecation_date": "2026-10-21",
@@ -69816,6 +69884,7 @@
         "source": "https://azure.microsoft.com/en-us/pricing/details/ai-foundry-models/mistral-ai/"
     },
     "anthropic.claude-sonnet-5-5": {
+        "token_count_fallback_model": "anthropic.claude-sonnet-5",
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,
@@ -70083,6 +70152,7 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrockFoundationModels/current/index.json"
     },
     "global.anthropic.claude-sonnet-5-5": {
+        "token_count_fallback_model": "anthropic.claude-sonnet-5",
         "bedrock_converse_supports_strict_tools": false,
         "cache_creation_input_token_cost": 2.5e-06,
         "cache_creation_input_token_cost_above_1hr": 4e-06,

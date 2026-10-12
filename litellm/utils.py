@@ -3110,6 +3110,26 @@ def supports_native_structured_output(model: str, custom_llm_provider: str | Non
     )
 
 
+def get_token_count_framing(model: str, custom_llm_provider: str | None = None) -> int | None:
+    try:
+        info: Final = get_model_info(model=model, custom_llm_provider=custom_llm_provider)
+        info_framing: Final = info.get("token_count_framing")
+        if not isinstance(info_framing, bool) and isinstance(info_framing, (int, float)):
+            return int(info_framing)
+    except Exception:
+        pass
+    names: Final = (model, model.split("/", 1)[1], model.rsplit("/", 1)[-1]) if "/" in model else (model,)
+    for name in names:
+        entry: Final = litellm.model_cost.get(name)
+        if not isinstance(entry, Mapping):
+            continue
+        entry_framing: Final = entry.get("token_count_framing")
+        if isinstance(entry_framing, bool) or not isinstance(entry_framing, (int, float)):
+            continue
+        return int(entry_framing)
+    return None
+
+
 def get_supported_regions(model: str, custom_llm_provider: str | None = None) -> list[str] | None:
     """
     Get a list of supported regions for a given model and provider.
@@ -6422,6 +6442,8 @@ def get_model_info_helper(
                 annotation_cost_per_page=_model_info.get("annotation_cost_per_page", None),
                 annotation_cost_per_page_batches=_model_info.get("annotation_cost_per_page_batches", None),
                 provider_specific_entry=_model_info.get("provider_specific_entry", None),
+                token_count_framing=_model_info.get("token_count_framing", None),
+                token_count_fallback_model=_model_info.get("token_count_fallback_model", None),
                 uses_embed_content=_model_info.get("uses_embed_content", None),
                 supports_image_size=_model_info.get("supports_image_size", None),
                 supported_audio_formats=_model_info.get("supported_audio_formats", None),

@@ -1,12 +1,14 @@
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
+from urllib.parse import urlsplit
 
 import httpx
-from pydantic import ConfigDict, RootModel, with_config
+from pydantic import ConfigDict, JsonValue, RootModel, TypeAdapter, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionSystemMessage
 from litellm.types.utils import LlmProviders
 
 if TYPE_CHECKING:
@@ -23,6 +25,73 @@ class _GeminiCountTokensResponse(TypedDict):
 
 class _GeminiCountTokensResponseRoot(RootModel[_GeminiCountTokensResponse]):
     model_config = ConfigDict(frozen=True, hide_input_in_errors=True)
+
+
+def _prepare_gemini_count_tool(tool: Mapping[str, object], model: str) -> dict[str, JsonValue]:
+    if "input_schema" not in tool:
+        return TypeAdapter(dict[str, JsonValue]).validate_python(tool)
+    from litellm.llms.anthropic.pass_through.adapters.transformation import LiteLLMAnthropicMessagesAdapter
+    from litellm.types.llms.anthropic import AllAnthropicToolsValues
+
+    parsed: Final = TypeAdapter(AllAnthropicToolsValues).validate_python(tool)
+    translated, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_tools_to_openai([parsed], model=model)
+    return TypeAdapter(dict[str, JsonValue]).validate_python(translated[0])
+
+
+def prepare_gemini_count_tokens(
+    model: str,
+    messages: Sequence[Mapping[str, object]] | None,
+    contents: Sequence[Mapping[str, object]] | None,
+    system: object | None,
+    tools: Sequence[Mapping[str, object]] | None,
+) -> dict[str, JsonValue]:
+    from litellm.llms.vertex_ai.gemini.transformation import (
+        gemini_convert_messages_with_history,
+        transform_system_message,
+    )
+    from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import VertexGeminiConfig
+
+    parsed_messages: Final = TypeAdapter(list[AllMessageValues]).validate_python(list(messages or ()))
+    leading_system: Final = (
+        [TypeAdapter(ChatCompletionSystemMessage).validate_python({"role": "system", "content": system})]
+        if system is not None
+        else []
+    )
+    system_instruction, conversation = transform_system_message(
+        supports_system_message=True, messages=[*leading_system, *parsed_messages]
+    )
+    resolved_contents: Final = (
+        contents if contents is not None else gemini_convert_messages_with_history(messages=conversation, model=model)
+    )
+    translated_tools: Final = [_prepare_gemini_count_tool(tool, model) for tool in tools or ()]
+    mapped_params: Final = VertexGeminiConfig().map_openai_params(
+        non_default_params={"tools": translated_tools}, optional_params={}, model=model, drop_params=False
+    )
+    return TypeAdapter(dict[str, JsonValue]).validate_python(
+        {
+            "contents": resolved_contents,
+            **({"system_instruction": system_instruction} if system_instruction is not None else {}),
+            **({"tools": mapped_params["tools"]} if "tools" in mapped_params else {}),
+        }
+    )
+
+
+def build_gemini_count_tokens_body(
+    url: str,
+    contents: object,
+    system_instruction: Mapping[str, object] | None,
+    tools: Sequence[Mapping[str, object]] | None,
+) -> dict[str, object]:
+    if system_instruction is None and tools is None:
+        return {"contents": contents}
+    resource: Final = urlsplit(url).path.split("/", 2)[-1].removesuffix(":countTokens")
+    generation_request: Final = {
+        "model": resource,
+        "contents": contents,
+        **({"systemInstruction": system_instruction} if system_instruction is not None else {}),
+        **({"tools": tools} if tools is not None else {}),
+    }
+    return generation_request if resource.startswith("projects/") else {"generateContentRequest": generation_request}
 
 
 class GoogleAIStudioTokenCounter:
@@ -97,6 +166,9 @@ class GoogleAIStudioTokenCounter:
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
+        system_instruction: Mapping[str, object] | None = None,
+        tools: Sequence[Mapping[str, object]] | None = None,
+        client: AsyncHTTPHandler | None = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         """
@@ -143,9 +215,11 @@ class GoogleAIStudioTokenCounter:
 
         # Prepare request body - clean up contents to remove unsupported fields
         cleaned_contents: Final = self._clean_contents_for_gemini_api(contents)
-        request_body: Final = {"contents": cleaned_contents}
+        request_body: Final = build_gemini_count_tokens_body(
+            url=url, contents=cleaned_contents, system_instruction=system_instruction, tools=tools
+        )
 
-        async_httpx_client: Final = get_async_httpx_client(
+        async_httpx_client: Final = client or get_async_httpx_client(
             llm_provider=LlmProviders.GEMINI,
         )
 

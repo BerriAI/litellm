@@ -14220,6 +14220,23 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
         )
 
     # Default LiteLLM token counting
+    from litellm.litellm_core_utils.token_counter import count_cl100k_prompt_text
+    from litellm.utils import get_token_count_framing
+
+    framing: Final = get_token_count_framing(model_to_use)
+    if framing is not None:
+        framed_tokens: Final = await offload_token_count(count_cl100k_prompt_text)(
+            system=system,
+            messages=messages,
+            framing=framing,
+        )
+        return TokenCountResponse(
+            total_tokens=framed_tokens,
+            request_model=request.model,
+            model_used=model_to_use,
+            tokenizer_type="cl100k_base",
+        )
+
     custom_tokenizer: CustomHuggingfaceTokenizer | None = None
     if model_info is not None:
         custom_tokenizer = cast(

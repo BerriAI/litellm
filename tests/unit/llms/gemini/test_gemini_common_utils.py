@@ -1,8 +1,133 @@
+import json
+from copy import deepcopy
+from typing import Final
 from unittest.mock import AsyncMock, patch
 
+import httpx
 import pytest
+from pydantic import JsonValue, TypeAdapter
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.common_utils import GeminiModelInfo, GoogleAIStudioTokenCounter
+from litellm.llms.gemini.count_tokens.handler import (
+    GoogleAIStudioTokenCounter as GeminiCountTokensHandler,
+)
+from litellm.llms.gemini.count_tokens.handler import (
+    build_gemini_count_tokens_body,
+    prepare_gemini_count_tokens,
+)
+
+
+@pytest.mark.parametrize("system", ["Follow the policy", [{"type": "text", "text": "Follow the policy"}]])
+def test_gemini_count_tokens_preserves_system_and_tools(system: str | list[dict[str, str]]) -> None:
+    messages: Final = [{"role": "user", "content": "Synthetic question"}]
+    tools: Final = [
+        {
+            "name": "lookup",
+            "description": "Find a synthetic value",
+            "input_schema": {
+                "type": "object",
+                "properties": {"value": {"type": "string"}},
+            },
+        }
+    ]
+    original: Final = deepcopy((messages, tools, system))
+    prepared: Final = prepare_gemini_count_tokens("gemini-2.5-flash", messages, None, system, tools)
+    assert prepared["contents"] == [{"role": "user", "parts": [{"text": "Synthetic question"}]}]
+    assert prepared["system_instruction"] == {"parts": [{"text": "Follow the policy"}]}
+    mapped_tools: Final = TypeAdapter(list[dict[str, JsonValue]]).validate_python(prepared["tools"])
+    declarations: Final = TypeAdapter(list[dict[str, JsonValue]]).validate_python(
+        mapped_tools[0]["function_declarations"]
+    )
+    assert declarations[0]["name"] == tools[0]["name"]
+    assert declarations[0]["description"] == tools[0]["description"]
+    assert (messages, tools, system) == original
+
+
+def test_gemini_count_tokens_accepts_openai_and_anthropic_function_tools() -> None:
+    function: Final = {
+        "name": "lookup",
+        "description": "Find a value",
+        "parameters": {
+            "type": "object",
+            "properties": {"value": {"type": "string"}},
+        },
+    }
+    openai: Final = prepare_gemini_count_tokens(
+        "gemini-2.5-flash",
+        [{"role": "user", "content": "Question"}],
+        None,
+        None,
+        [{"type": "function", "function": function}],
+    )
+    anthropic: Final = prepare_gemini_count_tokens(
+        "gemini-2.5-flash",
+        [{"role": "user", "content": "Question"}],
+        None,
+        None,
+        [{"name": function["name"], "description": function["description"], "input_schema": function["parameters"]}],
+    )
+    assert openai == anthropic
+
+
+def test_gemini_count_tokens_separates_message_system_and_preserves_native_contents() -> None:
+    contents: Final = [{"role": "user", "parts": [{"text": "Native question"}]}]
+    messages: Final = [{"role": "system", "content": "Follow the policy"}, {"role": "user", "content": "Question"}]
+    original: Final = deepcopy((contents, messages))
+    prepared: Final = prepare_gemini_count_tokens("gemini-2.5-flash", messages, contents, None, None)
+    assert prepared["contents"] == contents
+    assert prepared["system_instruction"] == {"parts": [{"text": "Follow the policy"}]}
+    assert "tools" not in prepared
+    assert (contents, messages) == original
+
+
+@pytest.mark.parametrize(
+    "resource,vertex",
+    [("models/test-model", False), ("projects/test/locations/test/publishers/google/models/test-model", True)],
+)
+def test_gemini_count_body_uses_the_endpoint_model_resource(resource: str, vertex: bool) -> None:
+    url: Final = f"https://provider.test/v1beta/{resource}:countTokens"
+    contents: Final = [{"parts": [{"text": "Question"}]}]
+    system: Final = {"parts": [{"text": "Policy"}]}
+    body: Final = build_gemini_count_tokens_body(url, contents, system, None)
+    generated: Final = {"model": resource, "contents": contents, "systemInstruction": system}
+    assert body == (generated if vertex else {"generateContentRequest": generated})
+    assert build_gemini_count_tokens_body(url, contents, None, None) == {"contents": contents}
+
+
+@pytest.mark.asyncio
+async def test_gemini_count_tokens_sends_system_and_tools_to_the_provider() -> None:
+    prepared: Final = prepare_gemini_count_tokens(
+        "gemini-2.5-flash",
+        [{"role": "user", "content": "Question"}],
+        None,
+        "Policy",
+        [{"name": "lookup", "input_schema": {"type": "object", "properties": {"value": {"type": "string"}}}}],
+    )
+
+    def provider(request: httpx.Request) -> httpx.Response:
+        body: Final = TypeAdapter(dict[str, JsonValue]).validate_json(request.content)
+        generated: Final = TypeAdapter(dict[str, JsonValue]).validate_python(body["generateContentRequest"])
+        assert generated["contents"] == prepared["contents"]
+        return httpx.Response(
+            200,
+            json={"totalTokens": len(json.dumps(generated["systemInstruction"])) + len(json.dumps(generated["tools"]))},
+        )
+
+    external_client: Final = AsyncHTTPHandler()
+    external_client.client = httpx.AsyncClient(transport=httpx.MockTransport(provider))
+    try:
+        response: Final = await GeminiCountTokensHandler().acount_tokens(
+            model="gemini-2.5-flash",
+            api_key="synthetic-test-key",
+            client=external_client,
+            **prepared,
+        )
+        assert response["totalTokens"] == len(json.dumps(prepared["system_instruction"])) + len(
+            json.dumps(prepared["tools"])
+        )
+    finally:
+        await external_client.client.aclose()
 
 
 class TestGeminiModelInfo:

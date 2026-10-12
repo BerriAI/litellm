@@ -1,8 +1,27 @@
 import time
 from collections.abc import Iterator
+from typing import Final
 from unittest.mock import patch
 
 import pytest
+
+
+@pytest.mark.asyncio
+async def test_vertex_ai_token_counter_skips_zai_partner_count() -> None:
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+
+    counter: Final = VertexAITokenCounter()
+    result: Final = await counter.count_tokens(
+        model_to_use="zai-org/glm-5.2-maas",
+        messages=[{"role": "user", "content": "Hello"}],
+        contents=None,
+        deployment={"litellm_params": {}},
+        request_model="vertex-glm-5.2",
+    )
+    assert result is not None
+    assert result.error is True
+    assert result.status_code == 501
+    assert result.error_message == "Z.ai has no Vertex count-tokens publisher"
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.llms.vertex_ai.common_utils import (

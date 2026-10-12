@@ -537,6 +537,20 @@ def _count_function_call_tokens(
     raise ValueError(f"Unexpected key {key!r}; expected 'tool_calls' or 'function_call'")
 
 
+def count_cl100k_prompt_text(
+    system: object | None = None,
+    messages: Sequence[Mapping[str, object]] | None = None,
+    framing: int = 0,
+) -> int:
+    encoder: Final = tiktoken.get_encoding("cl100k_base")
+    system_tokens: Final = len(encoder.encode(system, disallowed_special=())) if isinstance(system, str) and system else 0
+    contents: Final = tuple(message.get("content") for message in messages or () if isinstance(message, Mapping))
+    message_tokens: Final = sum(
+        len(encoder.encode(content, disallowed_special=())) for content in contents if isinstance(content, str) and content
+    )
+    return system_tokens + message_tokens + framing
+
+
 def _count_messages(
     params: _MessageCountParams,
     messages: list[AllMessageValues],

@@ -445,6 +445,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     tpm: int | None
     rpm: int | None
     provider_specific_entry: dict[str, float] | None
+    token_count_framing: ReadOnly[int | None]
+    token_count_fallback_model: ReadOnly[str | None]
     uses_embed_content: bool | None
 
 

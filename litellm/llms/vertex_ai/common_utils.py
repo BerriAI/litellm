@@ -1276,10 +1276,11 @@ class VertexAITokenCounter(BaseTokenCounter):
         import copy
 
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
-            VertexAIError as PartnerVertexAIError,
+            PartnerModelPrefixes,
+            VertexAIPartnerModels,
         )
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
-            VertexAIPartnerModels,
+            VertexAIError as PartnerVertexAIError,
         )
 
         deployment = deployment or {}
@@ -1287,6 +1288,16 @@ class VertexAITokenCounter(BaseTokenCounter):
 
         # Check if this is a partner model (Claude, Mistral, etc.)
         if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):
+            if PartnerModelPrefixes.ZAI_PREFIX in model_to_use:
+                return TokenCountResponse(
+                    total_tokens=0,
+                    request_model=request_model,
+                    model_used=model_to_use,
+                    tokenizer_type="vertex_ai_partner_models",
+                    error=True,
+                    error_message="Z.ai has no Vertex count-tokens publisher",
+                    status_code=501,
+                )
             # Use partner models token counter
             partner_models_handler: Final = VertexAIPartnerModels()
 
@@ -1343,18 +1354,14 @@ class VertexAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         else:
+            from litellm.llms.gemini.count_tokens.handler import prepare_gemini_count_tokens
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
-            from litellm.llms.vertex_ai.gemini.transformation import (
-                gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
-            )
-
-            resolved_contents: Final = (
-                contents if contents is not None else gemini_convert_messages_with_history(messages=messages or [])
-            )
 
             count_tokens_params: Final = {
                 "model": model_to_use,
-                "contents": resolved_contents,
+                **prepare_gemini_count_tokens(
+                    model=model_to_use, messages=messages, contents=contents, system=system, tools=tools
+                ),
             }
             count_tokens_params_request.update(count_tokens_params)
             result = await VertexAITokenCounter().acount_tokens(
