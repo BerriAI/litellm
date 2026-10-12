@@ -50,6 +50,14 @@ class CostMapEntry(BaseModel):
     output_cost_per_token_decisions: float | None = None
     cache_read_input_token_cost_decisions: float | None = None
     cache_creation_input_token_cost_decisions: float | None = None
+    input_cost_per_token_above_272k_tokens: float | None = None
+    input_cost_per_token_above_272k_tokens_decisions: float | None = None
+    output_cost_per_token_above_272k_tokens: float | None = None
+    output_cost_per_token_above_272k_tokens_decisions: float | None = None
+    cache_read_input_token_cost_above_272k_tokens: float | None = None
+    cache_read_input_token_cost_above_272k_tokens_decisions: float | None = None
+    cache_creation_input_token_cost_above_272k_tokens: float | None = None
+    cache_creation_input_token_cost_above_272k_tokens_decisions: float | None = None
     input_cost_per_token_batches: float | None = None
     output_cost_per_token_batches: float | None = None
     output_cost_per_image_token_batches: float | None = None
