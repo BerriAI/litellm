@@ -880,6 +880,9 @@ def _map_openai_like_exception(
 
 
 _BEDROCK_MANTLE_CONTEXT_WINDOW_PATTERN: Final = re.compile(r"prompt tokens \((\d+)\) exceed model maximum \((\d+)\)")
+_BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN: Final = re.compile(
+    r"""\\?["']code\\?["']\s*:\s*\\?["']context_length_exceeded\\?["']"""
+)
 _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE: Final = (
     "prompt is too long: your prompt exceeds the model's context window"
 )
@@ -887,9 +890,11 @@ _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE: Final = (
 
 def _bedrock_mantle_context_window_response(original_exception: _ProviderHTTPException) -> httpx.Response:
     original_response: Final = getattr(original_exception, "response", None)
-    if isinstance(original_response, httpx.Response) and getattr(original_response, "_request", None) is not None:
-        return httpx.Response(status_code=400, headers=original_response.headers, request=original_response.request)
-    return httpx.Response(status_code=400, request=httpx.Request(method="POST", url="https://api.openai.com/v1/"))
+    if not isinstance(original_response, httpx.Response) or getattr(original_response, "_request", None) is None:
+        return httpx.Response(status_code=400, request=httpx.Request(method="POST", url="https://api.openai.com/v1/"))
+    if original_response.status_code == 400:
+        return original_response
+    return httpx.Response(status_code=400, headers=original_response.headers, request=original_response.request)
 
 
 def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
@@ -903,7 +908,7 @@ def _get_bedrock_mantle_context_window_message(error_str: str) -> str | None:
     if match is not None:
         prompt_tokens, max_tokens = match.groups()
         return f"prompt is too long: {prompt_tokens} tokens > {max_tokens} maximum"
-    if "context_length_exceeded" in error_str:
+    if _BEDROCK_MANTLE_CONTEXT_LENGTH_EXCEEDED_CODE_PATTERN.search(error_str) is not None:
         return _BEDROCK_MANTLE_CONTEXT_WINDOW_GENERIC_MESSAGE
     return None
 

@@ -588,14 +588,28 @@ def test_chat_completions_code_only_overflow_envelope_returns_400_prompt_too_lon
         _only_call(wire)
 
 
-def test_chat_completions_text_plain_overflow_body_returns_400_prompt_too_long(gateway: Gateway) -> None:
+def test_chat_completions_text_plain_body_naming_the_overflow_code_returns_the_plain_400(gateway: Gateway) -> None:
     prompt: Final = f"text plain chat {uuid4().hex}"
     reply: Final = Reply(status=400, body=b"request rejected: context_length_exceeded", content_type="text/plain")
     with wire_server(_mantle_peer(prompt, reply)) as wire, gateway.scenario() as scenario:
         model: Final = scenario.model(model=_MODEL, api_base=wire.url, api_key=_API_KEY)
         response: Final = gateway.request("POST", "/v1/chat/completions", _chat(model, prompt))
         assert response.status_code == 400, response.text
-        assert _GENERIC in _error_message(response), response.text
+        assert _TOO_LONG not in _error_message(response), response.text
+        assert "request rejected: context_length_exceeded" in _error_message(response), response.text
+        _only_call(wire)
+
+
+def test_chat_completions_400_merely_quoting_the_overflow_code_keeps_the_upstream_message(gateway: Gateway) -> None:
+    prompt: Final = f"quoted code chat {uuid4().hex}"
+    upstream_message: Final = "Invalid input value context_length_exceeded"
+    reply: Final = Reply(status=400, body=_envelope("invalid_request_error", upstream_message))
+    with wire_server(_mantle_peer(prompt, reply)) as wire, gateway.scenario() as scenario:
+        model: Final = scenario.model(model=_MODEL, api_base=wire.url, api_key=_API_KEY)
+        response: Final = gateway.request("POST", "/v1/chat/completions", _chat(model, prompt))
+        assert response.status_code == 400, response.text
+        assert _TOO_LONG not in _error_message(response), response.text
+        assert upstream_message in _error_message(response), response.text
         _only_call(wire)
 
 

@@ -1,5 +1,4 @@
 import json
-import signal
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,7 +6,6 @@ from typing import Final
 from uuid import uuid4
 
 import httpx
-import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
@@ -519,27 +517,14 @@ def test_pass_through_relays_the_failed_stream_frames_verbatim(fb_rig: Rig) -> N
     assert _calls_with(fb_rig.peers["passthrough"], prompt) == 1
 
 
-def _worker_pids(rig: Rig) -> tuple[int, ...]:
-    children: Final = psutil.Process(rig.owned.process.pid).children(recursive=True)
-    spawned: Final = tuple(child.pid for child in children if "spawn_main" in " ".join(child.cmdline()))
-    return spawned or tuple(child.pid for child in children)
-
-
-def _fallback_status(rig: Rig, prompt: str) -> int:
-    try:
-        return rig.gateway.request("POST", "/v1/chat/completions", _chat(rig.models["fb"], prompt)).status_code
-    except httpx.TransportError:
-        return -1
-
-
 def test_killing_one_worker_leaves_the_sibling_serving_the_fallback(fb_rig: Rig) -> None:
-    workers: Final = eventually(lambda: _worker_pids(fb_rig), lambda pids: len(pids) >= 2, seconds=30)
-    psutil.Process(workers[0]).send_signal(signal.SIGKILL)
-    eventually(lambda: _fallback_status(fb_rig, _prompt("after kill")), lambda status: status == 200, seconds=30)
-    responses: Final = tuple(
-        fb_rig.gateway.request("POST", "/v1/chat/completions", _chat(fb_rig.models["fb"], _prompt("after kill")))
-        for _ in range(3)
-    )
+    workers: Final = eventually(fb_rig.owned.worker_pids, lambda pids: len(pids) >= 2, seconds=30)
+    with fb_rig.owned.replacing_worker(min(workers)) as kill:
+        kill()
+        responses: Final = tuple(
+            fb_rig.gateway.request("POST", "/v1/chat/completions", _chat(fb_rig.models["fb"], _prompt("after kill")))
+            for _ in range(3)
+        )
     for response in responses:
         assert response.status_code == 200, response.text
         assert _FALLBACK_TEXT in response.text, response.text
