@@ -76,6 +76,10 @@ fn prepare_provider_request(
         shaping,
         ..
     } = call;
+    let connection_params = litellm_router_types::LitellmParams {
+        api_base: api_base.clone().or(litellm_params.api_base.clone()),
+        ..litellm_params
+    };
     let config = provider.config();
     let env_lookup = |key: &str| secrets.get(key);
 
@@ -95,25 +99,22 @@ fn prepare_provider_request(
     let forwarded = string_headers(Some(
         extra_headers.into_iter().flatten().chain(scoped).collect(),
     ))?;
-    let validated = config.validate_environment(
+    let forwarded = config.request_headers(
+        with_default_headers(forwarded, config.default_headers()),
+        &transformed,
+    );
+    let environment = config.validate_environment(
         forwarded,
         api_key.as_deref(),
         &transformed.model,
-        &litellm_params,
+        &connection_params,
         &env_lookup,
     )?;
-    let environment = ValidatedEnvironment {
-        headers: config.request_headers(
-            with_default_headers(validated.headers, config.default_headers()),
-            &transformed,
-        ),
-        auth: validated.auth,
-    };
 
     let url = config.get_complete_url(
         api_base.as_deref(),
         &transformed.model,
-        &litellm_params,
+        &connection_params,
         transformed.params.stream == Some(true),
         &env_lookup,
     )?;
@@ -473,6 +474,46 @@ mod tests {
                     actual: json!(123),
                 }
             ))
+        );
+    }
+    #[rstest]
+    #[case::mantle(
+        "bedrock_mantle/claude-test",
+        "https://bedrock-mantle.us-west-2.api.aws",
+        "/anthropic/v1/messages",
+        "bedrock"
+    )]
+    #[case::platform(
+        "bedrock/claude_platform/claude-test",
+        "https://aws-external-anthropic.us-west-2.api.aws",
+        "/v1/messages",
+        "aws-external-anthropic"
+    )]
+    fn explicit_endpoint_region_is_used_by_the_signer(
+        shaping: MessagesShaping,
+        #[case] model: &str,
+        #[case] base: &str,
+        #[case] path: &str,
+        #[case] service: &str,
+    ) {
+        let prepared = prepare_with_secrets(MessagesCall {
+            body: body(json!({"model": model, "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]})),
+            api_key: None,
+            api_base: Some(base.into()),
+            custom_llm_provider: None,
+            litellm_params: Default::default(),
+            extra_headers: None,
+            provider_specific_header: None,
+            timeout: None,
+            shaping,
+        }, &|name: &str| match name {
+            "AWS_REGION_NAME" => Some("us-east-1".into()),
+            "ANTHROPIC_AWS_WORKSPACE_ID" => Some("workspace".into()),
+            _ => None,
+        }).unwrap();
+        assert_eq!(prepared.url, format!("{base}{path}"));
+        assert!(
+            matches!(prepared.environment.auth, litellm_llms::base_llm::auth::AuthScheme::AwsSigV4 { region, service: actual, .. } if region == "us-west-2" && actual == service)
         );
     }
 }
