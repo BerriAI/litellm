@@ -4752,6 +4752,34 @@ async def test_aresponses_streaming_iterator_fallback():
 
 
 @pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_releases_source_without_gc():
+    """The wrapper must not tie the source iterator into a reference cycle, otherwise every
+    streamed /v1/responses request (and its request/response bodies) stays in memory until a
+    full garbage collection runs."""
+    import weakref
+
+    router = _make_router_with_fallback()
+    src = _make_responses_iterator(chunks=[MagicMock(type="response.output_text.delta")])
+    src_ref = weakref.ref(src)
+    wrapped = await router._aresponses_streaming_iterator(
+        response=src, initial_kwargs={"model": "gpt-4", "stream": True}
+    )
+    other = await router._aresponses_streaming_iterator(
+        response=_make_responses_iterator(), initial_kwargs={"model": "gpt-4", "stream": True}
+    )
+    assert type(wrapped) is type(other)
+    await other.aclose()
+
+    gc.disable()
+    try:
+        assert len([chunk async for chunk in wrapped]) == 1
+        del src, wrapped
+        assert src_ref() is None
+    finally:
+        gc.enable()
+
+
+@pytest.mark.asyncio
 async def test_aresponses_mid_stream_order_fallback_hop_drops_the_encrypted_reasoning_the_next_provider_cannot_decrypt(
     respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):
