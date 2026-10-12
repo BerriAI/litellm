@@ -927,6 +927,8 @@ class ModelGroupInfo(LiteLLMBaseModel):
     supported_openai_params: list[str] | None = Field(default=[])
     configurable_clientside_auth_params: CONFIGURABLE_CLIENTSIDE_AUTH_PARAMS = None
     description: str | None = None
+    custom_tags: tuple[str, ...] | None = None
+    custom_metadata: Mapping[str, str | int | float | bool] | None = None
 
     def __init__(self, **data) -> None:
         for field_name, field_type in _resolved_annotations(self.__class__).items():

@@ -45,6 +45,7 @@ import { getCookie } from "@/utils/cookieUtils";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
 import { uiHref } from "@/utils/uiHref";
 import { DECISIONS_DOCS_URL, SYSTEM_ONE_PLAYGROUND_ROUTE, isDecisionMode } from "@/lib/decisionModels";
+import { ModelCustomMetadata } from "./ModelCustomMetadata";
 
 interface ModelHubTableProps {
   accessToken: string | null;
@@ -690,6 +691,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                       <p className="mt-1">{selectedModel.description}</p>
                     </div>
                   )}
+                  <ModelCustomMetadata
+                    customTags={selectedModel.custom_tags}
+                    customMetadata={selectedModel.custom_metadata}
+                  />
                 </div>
               </div>
 

@@ -2343,6 +2343,64 @@ def test_model_group_info_description_from_model_info():
     assert result.description == "State-of-the-art language model."
 
 
+def _custom_metadata_router(*model_infos: dict[str, object]) -> Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "gpt-4", "api_key": f"fake-{index}"},
+                "model_info": model_info,
+            }
+            for index, model_info in enumerate(model_infos)
+        ]
+    )
+
+
+@pytest.mark.parametrize(
+    ("model_infos", "expected_tags", "expected_metadata"),
+    [
+        ((), None, None),
+        (({},), None, None),
+        (
+            ({"custom_tags": ["deprecated", "ptu"], "custom_metadata": {"retirement_date": "2027-03-01"}},),
+            ("deprecated", "ptu"),
+            {"retirement_date": "2027-03-01"},
+        ),
+        (
+            ({}, {"custom_tags": ["ptu"], "custom_metadata": {"provisioned_ptu": 100, "gsu": False}}),
+            ("ptu",),
+            {"provisioned_ptu": 100, "gsu": False},
+        ),
+        (
+            (
+                {"custom_tags": ["ptu", "eu"], "custom_metadata": {"provisioned_ptu": 100, "region": "eu"}},
+                {"custom_tags": ["eu", "deprecated"], "custom_metadata": {"provisioned_ptu": 50, "max_tpm": 1.5}},
+            ),
+            ("ptu", "eu", "deprecated"),
+            {"provisioned_ptu": 100, "region": "eu", "max_tpm": 1.5},
+        ),
+        (
+            ({"custom_tags": ["ok", 7, None, {"x": 1}], "custom_metadata": {"owner": "ml", "nested": {"a": 1}}},),
+            ("ok",),
+            {"owner": "ml"},
+        ),
+        (({"custom_tags": "ptu", "custom_metadata": ["not", "a", "map"]},), None, None),
+    ],
+)
+def test_model_group_info_merges_custom_tags_and_metadata_across_deployments(
+    model_infos: tuple[dict[str, object], ...],
+    expected_tags: tuple[str, ...] | None,
+    expected_metadata: dict[str, object] | None,
+) -> None:
+    router: Final = _custom_metadata_router({"description": "first"}, *model_infos)
+
+    result: Final = router.get_model_group_info("gpt-4")
+
+    assert result is not None
+    assert result.custom_tags == expected_tags
+    assert result.custom_metadata == expected_metadata
+
+
 def _alias_cost_router() -> Router:
     return Router(
         model_list=[

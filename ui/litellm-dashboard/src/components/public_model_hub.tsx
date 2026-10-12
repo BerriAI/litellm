@@ -50,6 +50,7 @@ import { getEndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 import { MessageType } from "@/components/chat_ui/types";
 import { getProviderLogoAndName } from "./provider_info_helpers";
 import { filterBySearchTerm, rankBySearchRelevance } from "@/utils/searchUtils";
+import { ModelCustomMetadata } from "@/components/AIHub/ModelCustomMetadata";
 
 interface PublicModelHubProps {
   accessToken?: string | null;
@@ -720,6 +721,10 @@ const PublicModelHub: React.FC<PublicModelHubProps> = ({ accessToken, isEmbedded
                           <p className="mt-1">{selectedModel.description}</p>
                         </div>
                       )}
+                      <ModelCustomMetadata
+                        customTags={selectedModel.custom_tags}
+                        customMetadata={selectedModel.custom_metadata}
+                      />
                     </div>
 
                     {/* Wildcard Routing Note */}

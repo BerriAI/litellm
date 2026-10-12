@@ -55,6 +55,17 @@ describe("getModelHubTableColumns", () => {
     expect(screen.getByRole("cell", { name: "gpt-4o" })).not.toHaveClass("text-right");
   });
 
+  it("shows each custom tag as a badge and a dash when the model has none", () => {
+    renderTable([
+      { ...mockModel, custom_tags: ["deprecated", "ptu"] },
+      { ...mockModel, model_group: "untagged", custom_tags: null },
+    ]);
+    expect(screen.getByRole("columnheader", { name: "Tags" })).toBeInTheDocument();
+    const [taggedRow, untaggedRow] = screen.getAllByRole("row").slice(1);
+    expect(taggedRow).toHaveTextContent("deprecatedptu");
+    expect(untaggedRow).not.toHaveTextContent("deprecated");
+  });
+
   it("shows capability badges only for supported features", () => {
     renderTable([mockModel]);
     expect(screen.getByText("Vision")).toBeInTheDocument();
