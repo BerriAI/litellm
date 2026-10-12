@@ -2,9 +2,8 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Final, Literal
+from typing import Final, Literal
 
-from litellm.integrations.custom_guardrail import log_guardrail_information
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     GenericGuardrailAPI,
 )
@@ -12,10 +11,6 @@ from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.proxy.guardrails.guardrail_hooks.wingback import (
     WingbackGuardrailConfigModel,
 )
-from litellm.types.utils import GenericGuardrailAPIInputs
-
-if TYPE_CHECKING:
-    from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 GUARDRAIL_NAME: Final = "wingback"
 DEFAULT_WINGBACK_API_BASE: Final = "https://api.wingback.ai/connectors"
@@ -36,6 +31,7 @@ class WingbackGuardrail(GenericGuardrailAPI):
         guardrail_name: str | None = None,
         event_hook: GuardrailEventHooks | Sequence[GuardrailEventHooks] | Mode | None = None,
         default_on: bool = False,
+        timeout: float | None = None,
     ) -> None:
         resolved_api_base: Final = api_base or os.environ.get("WINGBACK_API_BASE") or DEFAULT_WINGBACK_API_BASE
         resolved_api_key: Final = api_key or os.environ.get("WINGBACK_INTEGRATION_API_KEY")
@@ -66,21 +62,7 @@ class WingbackGuardrail(GenericGuardrailAPI):
             guardrail_name=guardrail_name or GUARDRAIL_NAME,
             event_hook=event_hook,
             default_on=default_on,
-        )
-
-    @log_guardrail_information
-    async def apply_guardrail(
-        self,
-        inputs: GenericGuardrailAPIInputs,
-        request_data: Mapping[str, object],
-        input_type: Literal["request", "response"],
-        logging_obj: LiteLLMLoggingObj | None = None,
-    ) -> GenericGuardrailAPIInputs:
-        return await super().apply_guardrail(
-            inputs=inputs,
-            request_data=dict(request_data),
-            input_type=input_type,
-            logging_obj=logging_obj,
+            timeout=timeout,
         )
 
     @classmethod

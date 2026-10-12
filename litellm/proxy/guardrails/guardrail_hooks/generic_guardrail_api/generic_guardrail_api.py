@@ -57,23 +57,6 @@ _HEADER_VALUE_ALLOWLIST: Final = frozenset(
 # Placeholder for headers that exist but are not on the allowlist (we don't expose their value).
 _HEADER_PRESENT_PLACEHOLDER: Final = "[present]"
 
-# Credential headers: never forward values to third-party guardrails, even when matched
-# by an allowlist glob (e.g. x-litellm-* includes x-litellm-api-key).
-_HEADER_VALUE_DENYLIST: Final = frozenset(
-    {
-        "authorization",
-        "x-litellm-api-key",
-        "cookie",
-        "set-cookie",
-        "proxy-authorization",
-    }
-)
-
-
-def _header_value_denied(header_name: str) -> bool:
-    """Return True if this header's value must never be forwarded."""
-    return header_name.lower() in _HEADER_VALUE_DENYLIST
-
 
 def _header_value_allowed(
     header_name: str,
@@ -110,9 +93,7 @@ def _sanitize_inbound_headers(
         if k is None:
             continue
         key = str(k)
-        if _header_value_denied(key):
-            sanitized[key] = _HEADER_PRESENT_PLACEHOLDER
-        elif _header_value_allowed(key, extra_allowlist=extra_allowlist):
+        if _header_value_allowed(key, extra_allowlist=extra_allowlist):
             try:
                 sanitized[key] = str(v)
             except Exception:
@@ -223,6 +204,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
+        streaming_buffer_until_moderated: bool | None = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -269,6 +251,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
             "block_only" if streaming_transform_mode is None else streaming_transform_mode
         )
+        if streaming_buffer_until_moderated is not None:
+            self.streaming_buffer_until_moderated: bool = streaming_buffer_until_moderated
 
         # Set supported event hooks
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))

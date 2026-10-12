@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 import httpx
 import openai
 import pytest
+import respx
 from pydantic import TypeAdapter
 
 import litellm
@@ -279,6 +280,60 @@ async def test_dynamic_router_retry_policy(model_group: str, monkeypatch: pytest
         )
 
     assert tracker.previous_models == 2
+
+
+@pytest.mark.parametrize("use_model_group_policy", [False, True])
+@pytest.mark.asyncio
+async def test_authentication_errors_are_not_retried(
+    use_model_group_policy: bool,
+    respx_mock: respx.MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            401,
+            json={
+                "error": {
+                    "message": "invalid key",
+                    "type": "authentication_error",
+                    "param": None,
+                    "code": "invalid_api_key",
+                }
+            },
+        )
+    )
+    policy_kwargs: Final = (
+        {"model_group_retry_policy": {"retry-test-model": RetryPolicy(AuthenticationErrorRetries=0)}}
+        if use_model_group_policy
+        else {}
+    )
+    deployment_models: Final = (
+        (("first", "openai/retry-test-model"), ("second", "openai/retry-test-model"))
+        if use_model_group_policy
+        else (("first", "openai/retry-test-model"),)
+    )
+    model_list: Final = [
+        {
+            "model_name": "retry-test-model",
+            "litellm_params": {"model": model, "api_key": "test-key"},
+            "model_info": {"id": deployment_id},
+        }
+        for deployment_id, model in deployment_models
+    ]
+    router: Final = Router(
+        model_list=model_list,
+        num_retries=2,
+        **policy_kwargs,
+    )
+
+    with pytest.raises(litellm.AuthenticationError):
+        await router.acompletion(
+            model="retry-test-model",
+            messages=[{"role": "user", "content": "retry test"}],
+        )
+
+    assert len(route.calls) == 1
 
 
 def test_retry_rate_limit_error_with_healthy_deployments():
