@@ -779,9 +779,9 @@ describe("DataTable row activation", () => {
     );
 
     const clickableRow = screen.getByRole("row", { name: "Open person Clickable" });
-    expect(clickableRow).toHaveClass("hover:bg-info/20");
+    expect(clickableRow).toHaveClass("hover:bg-info/25");
     expect(clickableRow).not.toHaveClass("hover:bg-muted/50");
-    expect(screen.getByRole("row", { name: "Static" })).not.toHaveClass("hover:bg-info/20");
+    expect(screen.getByRole("row", { name: "Static" })).not.toHaveClass("hover:bg-info/25");
   });
 
   it("fires onRowClick exactly once from a plain cell but not from interactive elements", async () => {
