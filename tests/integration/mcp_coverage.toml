@@ -1,5 +1,6 @@
 [tool.coverage.run]
-branch = true
+branch = false
+core = "sysmon"
 parallel = true
 relative_files = true
 include = [

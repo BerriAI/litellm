@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -37,6 +38,10 @@ GITHUB_FILES: Final = frozenset(
 )
 
 
+PEER_GROUPS: Final = frozenset({"management", "mcp"})
+COST_MAP_GROUPS: Final = frozenset({"cost"})
+
+
 @dataclass(frozen=True, slots=True)
 class Selection:
     nodes: tuple[str, ...]
@@ -58,6 +63,18 @@ def select(requested: tuple[str, ...], group_files: tuple[str, ...]) -> Selectio
 def uncollected(nodes: tuple[str, ...], collected: frozenset[str]) -> tuple[str, ...]:
     collected_files: Final = frozenset(file_of(node) for node in collected)
     return tuple(node for node in nodes if file_of(node) not in collected_files)
+
+
+def worker_settings(group: str, workers: int) -> Mapping[str, str]:
+    if workers < 2:
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            "INTEGRATION_WORKER_ISOLATION": "1",
+            "INTEGRATION_WORKER_PEER": "1" if group in PEER_GROUPS else "",
+            "INTEGRATION_WORKER_COST_MAP": "1" if group in COST_MAP_GROUPS else "",
+        }
+    )
 
 
 def main() -> int:
@@ -97,11 +114,7 @@ def main() -> int:
         "LITELLM_LOCAL_MODEL_COST_MAP": "True",
         "LITELLM_MODE": "PRODUCTION",
         "PYTHON_DOTENV_DISABLED": "1",
-        **(
-            {"INTEGRATION_WORKER_ISOLATION": "1"}
-            if options.workers > 1 and options.group in {"management", "accounting", "providers", "extensions"}
-            else {}
-        ),
+        **worker_settings(options.group, options.workers),
     }
     result: Final = subprocess.call(
         [
