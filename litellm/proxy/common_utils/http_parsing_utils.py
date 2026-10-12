@@ -6,6 +6,7 @@ from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
+from pydantic import TypeAdapter, ValidationError
 from starlette._utils import get_route_path
 from starlette.requests import HTTPConnection
 from typing_extensions import NotRequired, ReadOnly, Required, assert_never
@@ -159,31 +160,25 @@ def coerce_numeric_form_fields(
     }
 
 
+_LIST_FORM_VALUE_ADAPTER: Final[TypeAdapter[list[object] | str]] = TypeAdapter(list[object] | str)
+
+
 def _list_form_value(value: object) -> object:
     if not isinstance(value, str) or not value.strip():
         return value
-    try:
-        decoded: Final = json.loads(value)
-    except ValueError:
+    if not value.lstrip().startswith(("[", '"')):
         return [value]
-    if isinstance(decoded, list):
-        return decoded
-    if isinstance(decoded, str):
-        return [decoded]
-    return [value]
+    try:
+        decoded: Final = _LIST_FORM_VALUE_ADAPTER.validate_json(value)
+    except ValidationError:
+        return [value]
+    return [decoded] if isinstance(decoded, str) else decoded
 
 
 def decode_json_list_form_fields(
     parsed_body: Mapping[str, object],
     list_fields: Collection[str],
 ) -> Mapping[str, object]:
-    """
-    Parse the list-valued fields of a form-encoded body back into lists.
-
-    ``request.form()`` yields every field as a string, so a JSON array such as
-    ``["backup"]`` arrives as text that a consumer iterating it would walk one
-    character at a time. A string that is not a JSON array is a single entry.
-    """
     return {name: _list_form_value(value) if name in list_fields else value for name, value in parsed_body.items()}
 
 

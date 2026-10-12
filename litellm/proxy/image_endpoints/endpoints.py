@@ -40,7 +40,6 @@ router: Final = APIRouter()
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
 IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
-# Router fallback lists arrive as JSON text in a multipart body and must be decoded back into lists.
 IMAGE_EDIT_LIST_FORM_FIELDS: Final = frozenset({"fallbacks", "context_window_fallbacks", "content_policy_fallbacks"})
 
 IMAGE_ARRAY_FIELD: Final = "image[]"
