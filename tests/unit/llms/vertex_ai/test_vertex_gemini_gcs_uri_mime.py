@@ -81,7 +81,7 @@ def test_process_gemini_media_rejects_gcs_metadata_mime_not_supported_by_gemini(
 
 def test_file_block_uses_mime_type_alias_for_extensionless_gcs():
     from litellm.llms.vertex_ai.gemini.transformation import (
-        _gemini_convert_messages_with_history,
+        gemini_convert_messages_with_history,
     )
     from litellm.types.llms.vertex_ai import FileDataType
 
@@ -99,9 +99,7 @@ def test_file_block_uses_mime_type_alias_for_extensionless_gcs():
             ],
         }
     ]
-    converted = _gemini_convert_messages_with_history(
-        messages=messages, model="gemini-2.5-flash"
-    )
+    converted = gemini_convert_messages_with_history(messages=messages, model="gemini-2.5-flash")
     assert converted[0]["parts"][0]["file_data"] == FileDataType(
         mime_type="application/pdf", file_uri="gs://bucket/no-extension-object"
     )

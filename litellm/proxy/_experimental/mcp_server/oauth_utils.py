@@ -3,7 +3,7 @@
 
 import os
 from ipaddress import ip_address
-from typing import TYPE_CHECKING, Any, Final, NoReturn
+from typing import TYPE_CHECKING, Final, NoReturn
 from urllib.parse import ParseResult, urlparse, urlsplit, urlunparse, urlunsplit
 
 from fastapi import HTTPException, Request
@@ -61,7 +61,7 @@ def _oauth_invalid_request(
     error_description: str,
     *,
     hint: str | None = None,
-    **extra: Any,
+    **extra: object,
 ) -> NoReturn:
     """Raise ``invalid_request`` (RFC 6749) with a debuggable description.
 
@@ -69,7 +69,7 @@ def _oauth_invalid_request(
     ``invalid_request``; ``error_description`` and ``hint`` explain what
     failed and how to fix it (e.g. reverse-proxy / PROXY_BASE_URL issues).
     """
-    detail: Final[dict[str, Any]] = {
+    detail: Final[dict[str, object]] = {
         "error": "invalid_request",
         "error_description": error_description,
     }
@@ -84,7 +84,7 @@ def _origin_label(scheme: str, netloc: str) -> str:
     return f"{scheme}://{netloc}" if netloc else f"{scheme}://"
 
 
-def _redact_mcp_resource_url(url: str | None) -> str | None:
+def redact_mcp_resource_url(url: str | None) -> str | None:
     """Reduce an MCP server URL to its origin (scheme + host + port) for logging.
 
     Everything else is dropped: userinfo (``user:pass@``), the query string, the
@@ -107,6 +107,9 @@ def _redact_mcp_resource_url(url: str | None) -> str | None:
     return urlunsplit((parts.scheme, netloc, "", "", "")) or None
 
 
+_redact_mcp_resource_url: Final = redact_mcp_resource_url
+
+
 def _resolve_proxy_base_url_env() -> str | None:
     global _warned_invalid_proxy_base_url
     configured: Final = os.environ.get("PROXY_BASE_URL", "").strip()
@@ -125,6 +128,57 @@ def _resolve_proxy_base_url_env() -> str | None:
         )
         _warned_invalid_proxy_base_url = configured
     return None
+
+
+CIMD_METADATA_PATH: Final = "/oauth/client-metadata.json"
+
+
+def get_cimd_document_url() -> str | None:
+    try:
+        configured: Final = _resolve_proxy_base_url_env()
+        parsed: Final = urlparse(configured or "")
+    except ValueError:
+        return None
+    if parsed.scheme != "https" or not parsed.hostname or parsed.username is not None or parsed.password is not None:
+        return None
+    return f"{configured}{CIMD_METADATA_PATH}"
+
+
+def _can_use_cimd(server: "MCPServer") -> bool:
+    return (
+        server.is_gateway_managed_oauth2
+        and server.needs_user_oauth_token
+        and not server.client_id
+        and not server.client_secret
+        and server.token_endpoint_auth_method != "client_secret_basic"
+    )
+
+
+def needs_cimd_discovery(server: "MCPServer") -> bool:
+    """Resolve unknown client metadata support even when OAuth endpoints are configured."""
+    return (
+        getattr(server, "client_id_metadata_document_supported", False) is None
+        and _can_use_cimd(server)
+        and get_cimd_document_url() is not None
+    )
+
+
+def _deployment_prefers_cimd() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get("mcp_prefer_client_id_metadata_document") is True
+
+
+def _dynamic_registration_takes_precedence(server: "MCPServer") -> bool:
+    return server.effective_registration_url is not None and not _deployment_prefers_cimd()
+
+
+def get_cimd_client_id(server: "MCPServer") -> str | None:
+    if getattr(server, "client_id_metadata_document_supported", False) is not True or not _can_use_cimd(server):
+        return None
+    if _dynamic_registration_takes_precedence(server):
+        return None
+    return get_cimd_document_url()
 
 
 BYOK_RESOURCE_METADATA_PATH: Final = "/v1/mcp/oauth/protected-resource"
@@ -745,6 +799,7 @@ def build_upstream_oauth2_token_request(
     auth_method: object,
     client_id: str | None,
     client_secret: str | None,
+    cimd_client_id: str | None = None,
 ) -> TokenEndpointClientAuth:
     """Client auth plus the RFC 8707 ``resource`` for one upstream plain-OAuth2 token request.
 
@@ -754,10 +809,11 @@ def build_upstream_oauth2_token_request(
     authenticate as the caller's own client rather than the server's; ``resource`` always comes from
     the server, so no leg can choose or forget it.
     """
+    selected_cimd_id: Final = cimd_client_id or get_cimd_client_id(mcp_server)
     client_auth: Final = build_token_endpoint_client_auth(
-        auth_method=normalize_token_endpoint_auth_method(auth_method),
-        client_id=client_id,
-        client_secret=client_secret,
+        auth_method=None if selected_cimd_id else normalize_token_endpoint_auth_method(auth_method),
+        client_id=selected_cimd_id or client_id,
+        client_secret=None if selected_cimd_id else client_secret,
     )
     resource: Final = resolve_upstream_resource(mcp_server)
     if not resource:

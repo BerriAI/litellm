@@ -16,7 +16,7 @@ client = TestClient(app)
 @pytest.fixture
 def authenticated_client(monkeypatch):
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-1234"
+        user_role=LitellmUserRoles.PROXY_ADMIN, api_key="sk-9876"
     )
     monkeypatch.setattr(
         litellm,
