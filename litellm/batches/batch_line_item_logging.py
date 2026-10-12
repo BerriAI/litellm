@@ -367,7 +367,10 @@ async def _emit_line_event(
     request_body: Final = _request_body_for_entry(entry, request_line)
     status_code: Final = _line_status_code(entry, custom_llm_provider)
     request_call_type: Final = _call_type_for_request(request_line)
-    response_body: Final = _get_response_from_batch_job_output_file(entry, custom_llm_provider)
+    # A failed line's body can be the provider's error as text (Mistral writes a JSON string), not an object
+    response_body: Final = (
+        _as_object_mapping(_get_response_from_batch_job_output_file(entry, custom_llm_provider)) or _EMPTY_BODY
+    )
     start_time: Final = parent.start_time
     model: Final = _line_model(response_body, request_body, parent)
 
@@ -394,6 +397,9 @@ async def _emit_line_event(
         litellm_params={
             **parent_params,
             "metadata": _metadata_copy(parent_params),
+            # Flags the line as the async call it stands for, so the logging dispatch runs the
+            # callbacks a direct async call of that type runs, legacy sync ones included
+            call_type: True,
         },
         optional_params={},
         model=child.model,
@@ -415,12 +421,7 @@ async def _emit_line_event(
     if result is None:
         exception: Final = _BatchLineFailure(_line_error_payload(entry, custom_llm_provider))
         exception._hidden_params = _line_hidden_params(batch, custom_id, status_code)  # pyright: ignore[reportPrivateUsage]  # _hidden_params is set on the exception instance itself
-        await child.async_failure_handler(
-            exception=exception,
-            traceback_exception="",
-            start_time=start_time,
-            end_time=now,
-        )
+        await child.dispatch_failure_handlers(exception, "", prefer_async_handlers=True)
         return True
 
     result._hidden_params = _line_hidden_params(  # pyright: ignore[reportPrivateUsage]  # same hidden_params channel the aggregate batch event uses
@@ -439,11 +440,12 @@ async def _emit_line_event(
                 total_tokens=stats.total_tokens,
             ),
         )
-    await child.async_success_handler(
+    await child.dispatch_success_handlers(
         result=result,
         start_time=start_time,
         end_time=now,
         cache_hit=False,
+        prefer_async_handlers=True,
     )
     return True
 

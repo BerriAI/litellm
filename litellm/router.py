@@ -8607,6 +8607,8 @@ class Router:
         - False if the deployment should not be put in cooldown
         """
         verbose_router_logger.debug("Router: Entering 'deployment_callback_on_failure'")
+        if is_batch_line_item_event(kwargs):
+            return False
         try:
             exception: Final = kwargs.get("exception", None)
 

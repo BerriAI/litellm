@@ -36,9 +36,11 @@ from litellm.batches.batch_utils import BatchResultFiles
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import RedisCache
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils import litellm_logging, thread_pool_executor
 from litellm.litellm_core_utils.get_litellm_params import add_trusted_model_credentials_to_litellm_params
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.llms.bedrock.files.transformation import get_configured_s3_bucket_names
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_failures_for_current_minute
 from litellm.types.utils import LiteLLMBatch, Usage
 
 INPUT_JSONL = b"\n".join(
@@ -240,6 +242,92 @@ async def test_line_items_emitted_alongside_aggregate(recorder):
     assert _hidden(failure)["batch_id"] == batch.id
     assert _hidden(failure)["batch_line_status_code"] == 400
     assert "bad request boom" in _payload(failure)["error_str"]
+
+
+class _InlineExecutor:
+    def submit(self, fn, /, *args, **kwargs):
+        fn(*args, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_line_events_reach_the_sync_callbacks_an_async_request_runs(recorder, monkeypatch):
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
+    s3_uploads: Final[list[dict]] = []
+    sync_failures: Final[list[dict]] = []
+
+    def record_sync_failure(kwargs, response_obj, start_time, end_time):
+        sync_failures.append(kwargs)
+
+    monkeypatch.setattr(litellm, "success_callback", ["s3"])  # test-quality-ok: legacy string callback under test
+    monkeypatch.setattr(litellm, "failure_callback", [record_sync_failure])  # test-quality-ok: same, failure side
+    monkeypatch.setattr(
+        litellm_logging, "s3Logger", SimpleNamespace(log_event=lambda **kwargs: s3_uploads.append(kwargs["kwargs"]))
+    )  # test-quality-ok: the S3 upload is the network boundary of the legacy s3 callback
+    monkeypatch.setattr(
+        thread_pool_executor, "executor", _InlineExecutor()
+    )  # test-quality-ok: runs sync handlers inline
+    monkeypatch.setattr(
+        litellm_logging, "executor", _InlineExecutor()
+    )  # test-quality-ok: same executor, module binding
+    with (
+        patch(
+            "litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=_file_content
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(_parent_logging(), _batch())
+
+    assert [_hidden(event)["batch_custom_id"] for event in s3_uploads] == ["a"]
+    assert [
+        _hidden(event)["batch_custom_id"] for event in recorder.success_events if _hidden(event).get("batch_custom_id")
+    ] == ["a"]
+    assert [
+        (_hidden(event)["batch_custom_id"], _hidden(event)["batch_line_status_code"]) for event in sync_failures
+    ] == [("b", 400)]
+    assert [_hidden(event)["batch_custom_id"] for event in recorder.failure_events] == ["b"]
+
+
+@pytest.mark.asyncio
+async def test_failed_lines_do_not_count_toward_the_deployments_cooldown(recorder, monkeypatch):
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
+    monkeypatch.setattr(litellm, "callbacks", [])  # test-quality-ok: the router registers into these globals
+    monkeypatch.setattr(litellm, "success_callback", [])  # test-quality-ok: same, restored at teardown
+    monkeypatch.setattr(litellm, "failure_callback", [])  # test-quality-ok: same, restored at teardown
+    monkeypatch.setattr(
+        thread_pool_executor, "executor", _InlineExecutor()
+    )  # test-quality-ok: runs sync handlers inline
+    monkeypatch.setattr(
+        litellm_logging, "executor", _InlineExecutor()
+    )  # test-quality-ok: same executor, module binding
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "api_key": "sk-line-cooldown"},
+                "model_info": {"id": "dep-line-cooldown"},
+            }
+        ]
+    )
+    with (
+        patch(
+            "litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=_file_content
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(
+            _parent_logging_with_params(
+                {"model_info": {"id": "dep-line-cooldown"}, "metadata": {"model_group": "gpt-4o"}}
+            ),
+            _batch(),
+        )
+
+    assert [_hidden(event)["batch_custom_id"] for event in recorder.failure_events] == ["b"]
+    assert router.deployment_callback_on_failure in litellm.failure_callback
+    assert get_deployment_failures_for_current_minute(router, "dep-line-cooldown") == 0
 
 
 @pytest.mark.asyncio
@@ -1094,6 +1182,61 @@ async def test_line_items_failure_without_error_or_response_body_still_reaches_c
     failure = recorder.failure_events[0]
     assert _hidden(failure)["batch_custom_id"] == "bare"
     assert _payload(failure)["error_str"] == "{}"
+
+
+MISTRAL_ERR_INPUT_JSONL = json.dumps(
+    {
+        "custom_id": "mis-err",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {"messages": [{"role": "user", "content": "hi"}], "tool_choice": "any"},
+    }
+).encode()
+
+MISTRAL_ERR_OUTPUT_JSONL = json.dumps(
+    {
+        "id": "batch-mist-err-1",
+        "custom_id": "mis-err",
+        "response": {
+            "status_code": 400,
+            "body": json.dumps(
+                {"object": "error", "message": "No tools provided for tool choice `any`", "type": "invalid_request"}
+            ),
+        },
+        "error": None,
+    }
+).encode()
+
+
+@pytest.mark.asyncio
+async def test_a_mistral_error_line_with_a_text_body_reaches_the_failure_callbacks(recorder):
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
+    file_mock: Final = AsyncMock(
+        side_effect=_scoped_file_content(
+            {
+                "input-mist-err": MISTRAL_ERR_INPUT_JSONL,
+                "output-mist-err": MISTRAL_ERR_OUTPUT_JSONL,
+            }
+        )
+    )
+    with (
+        patch(
+            "litellm.files.main.afile_content", file_mock
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", return_value=(0.01, 0.02)
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(
+            _parent_logging(custom_llm_provider="mistral"),
+            _provider_batch("batch_mist_err", "input-mist-err", "output-mist-err"),
+        )
+
+    assert [
+        (_hidden(event)["batch_custom_id"], _hidden(event)["batch_line_status_code"])
+        for event in recorder.failure_events
+    ] == [("mis-err", 400)]
+    assert "No tools provided for tool choice" in _payload(recorder.failure_events[0])["error_str"]
 
 
 @pytest.mark.asyncio

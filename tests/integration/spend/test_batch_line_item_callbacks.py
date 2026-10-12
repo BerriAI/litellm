@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -77,6 +79,22 @@ def _failed_line(custom_id: str) -> str:
     )
 
 
+def _failed_line_with_text_body(custom_id: str) -> str:
+    """An error file line whose response body is the provider's error as JSON text, as Mistral writes it."""
+    return json.dumps(
+        {
+            "id": f"batch_req_{custom_id}",
+            "custom_id": custom_id,
+            "response": {
+                "status_code": 400,
+                "body": json.dumps({"object": "error", "message": f"synthetic line failure {custom_id}"}),
+            },
+            "error": None,
+        },
+        separators=(",", ":"),
+    )
+
+
 def _batch(status: str, *, files_ready: bool) -> dict[str, JsonValue]:
     return {
         "id": "batch-$REQUEST_ID",
@@ -112,9 +130,11 @@ def _input_lines(model_name: str, marker: str) -> tuple[str, ...]:
     )
 
 
-def _provider_routes(input_lines: tuple[str, ...]) -> RoutedResponse:
+def _provider_routes(
+    input_lines: tuple[str, ...], *, error_line: Callable[[str], str] = _failed_line
+) -> RoutedResponse:
     output_lines: Final = (_successful_line("r1"), _failed_line("r2"), _successful_line("r3"))
-    error_lines: Final = tuple(_failed_line(custom_id) for custom_id in ERROR_FILE_IDS)
+    error_lines: Final = tuple(error_line(custom_id) for custom_id in ERROR_FILE_IDS)
     return RoutedResponse(
         content_type="application/x-routed",
         routes={
@@ -579,6 +599,107 @@ def test_a_line_body_system_prompt_leads_the_logged_messages(gateway: Gateway, t
             ], event["messages"]
             assert event["call_type"] == "acompletion", event["call_type"]
             assert "system" not in object_value(event["metadata"]), event["metadata"]
+
+
+def test_an_error_file_line_with_a_text_body_emits_a_failure_event(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "batch-line-text-error-" + uuid.uuid4().hex[:12]
+
+    with (
+        wire_server(lambda _request: Reply()) as endpoint,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {"GENERIC_LOGGER_ENDPOINT": endpoint.url},
+            config=_line_item_config(Path("tests/integration/proxy_config.yaml"), tmp_path / "line_items_text.yaml"),
+        ) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        routed_model: Final = scenario.model(
+            api_base=f"{gateway.upstream_url}/{marker}", api_key="synthetic-provider-key"
+        )
+        input_lines: Final = _input_lines(routed_model, marker)
+        handle: Final = register_scenario(marker, _provider_routes(input_lines, error_line=_failed_line_with_text_body))
+        scenario.cleanups.callback(delete_scenario, handle)
+        key: Final = scenario.key(models=[routed_model])
+        _completed_batch(candidate, routed_model, input_lines, key)
+        received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier batches
+
+        lines: Final = {
+            string_value(_hidden(event)["batch_custom_id"]): event
+            for event in _all_lines_delivered(endpoint, received, key)
+        }
+        for custom_id in ERROR_FILE_IDS:
+            assert lines[custom_id]["status"] == "failure", lines[custom_id]
+            assert _hidden(lines[custom_id])["batch_line_status_code"] == 400, lines[custom_id]
+            assert f"synthetic line failure {custom_id}" in json.dumps(lines[custom_id]["error_information"])
+
+
+@dataclass(frozen=True, slots=True)
+class _StoringBucket:
+    objects: dict[str, bytes]  # mutable-ok: the bucket keeps every uploaded object for the assertions
+
+    def __call__(self, request: Request) -> Reply:
+        if request.method == "PUT":
+            self.objects[request.target.split("?", 1)[0]] = request.body
+        return Reply(body=b"")
+
+
+def _legacy_s3_config(base: Path, destination: Path, endpoint_url: str) -> Path:
+    config: Final = yaml.safe_load(base.read_text())
+    config["litellm_settings"].update(
+        {
+            "success_callback": ["s3"],
+            "s3_callback_params": {
+                "s3_bucket_name": "batch-line-items",
+                "s3_region_name": "us-east-1",
+                "s3_endpoint_url": endpoint_url,
+                "s3_aws_access_key_id": "AKIAIOSFODNN7EXAMPLE",
+                "s3_aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            },
+        }
+    )
+    config["general_settings"].update({"store_batch_line_items_in_callbacks": True})
+    destination.write_text(yaml.safe_dump(config))
+    return destination
+
+
+def test_the_legacy_s3_callback_stores_one_object_per_successful_line(gateway: Gateway, tmp_path: Path) -> None:
+    marker: Final = "batch-line-s3-" + uuid.uuid4().hex[:12]
+    bucket: Final = _StoringBucket({})
+
+    with (
+        wire_server(bucket) as s3,
+        owned_proxy(
+            gateway,
+            tmp_path,
+            {"AWS_EC2_METADATA_DISABLED": "true"},
+            config=_legacy_s3_config(
+                Path("tests/integration/proxy_config.yaml"), tmp_path / "line_items_s3.yaml", s3.url
+            ),
+        ) as candidate,
+        candidate.scenario() as scenario,
+    ):
+        routed_model: Final = scenario.model(
+            api_base=f"{gateway.upstream_url}/{marker}", api_key="synthetic-provider-key"
+        )
+        input_lines: Final = _input_lines(routed_model, marker)
+        handle: Final = register_scenario(marker, _provider_routes(input_lines))
+        scenario.cleanups.callback(delete_scenario, handle)
+        key: Final = scenario.key(models=[routed_model])
+        _completed_batch(candidate, routed_model, input_lines, key)
+
+        def stored_lines() -> list[str]:
+            payloads = [json.loads(body) for body in tuple(bucket.objects.values())]
+            return sorted(
+                string_value(object_value(payload["hidden_params"])["batch_custom_id"])
+                for payload in payloads
+                if object_value(payload["hidden_params"]).get("batch_custom_id") is not None
+                and marker in json.dumps(payload["messages"])
+            )
+
+        assert eventually(stored_lines, lambda ids: ids == list(OUTPUT_SUCCESS_IDS), seconds=40) == list(
+            OUTPUT_SUCCESS_IDS
+        )
 
 
 def test_a_restarted_proxy_does_not_emit_a_completed_batchs_lines_again(gateway: Gateway, tmp_path: Path) -> None:
