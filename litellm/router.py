@@ -13792,7 +13792,7 @@ class Router:
         messages: list[dict[str, str]] | None = None,
         input: str | list | None = None,
         specific_deployment: bool | None = False,
-    ) -> dict[str, Any]:
+    ) -> dict[str, Any]:  # mutable-ok: returns pass-through deployment map
         """
         Async implementation of 'get_available_deployments'.
 
@@ -15206,7 +15206,7 @@ class Router:
         return pass_through_deployments
 
     def _track_deployment_metrics(
-        self, deployment: dict[str, Any], parent_otel_span: Span | None, response: object | None = None
+        self, deployment: Mapping[str, Any], parent_otel_span: Span | None, response: object | None = None
     ):
         """
         Tracks successful requests rpm usage.
