@@ -482,6 +482,53 @@ async def test_batch_rate_limiter_without_user_context(openai_files: respx.MockR
 
 
 @pytest.mark.asyncio
+async def test_batch_input_without_a_model_is_read_through_the_team_deployment(
+    openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm import Router
+    from litellm.proxy import proxy_server
+
+    monkeypatch.setattr(
+        proxy_server,
+        "llm_router",
+        Router(
+            model_list=[
+                {
+                    "model_name": "openai/*",
+                    "litellm_params": {
+                        "model": "openai/*",
+                        "api_key": "sk-team",
+                        "api_base": "https://team.example/v1",
+                    },
+                    "model_info": {"id": "team-openai", "team_id": "team-1"},
+                }
+            ]
+        ),
+    )
+    _, _, batch_limiter = _make_limiters()
+    rows: Final = _batch_rows(("Hello",))
+    environment_route: Final = _serve_file(openai_files, "file-abc123", rows)
+    team_route: Final = openai_files.get("https://team.example/v1/files/file-abc123/content").mock(
+        return_value=httpx.Response(200, content="\n".join(json.dumps(row) for row in rows).encode())
+    )
+    team_key: Final = UserAPIKeyAuth(api_key="sk", team_id="team-1", team_models=["openai/*"], models=[_BATCH_MODEL])
+    teamless_key: Final = UserAPIKeyAuth(api_key="sk")
+
+    team_usage: Final = await batch_limiter.count_input_file_usage(
+        file_id="file-abc123", custom_llm_provider="openai", user_api_key_dict=team_key, data={}
+    )
+    teamless_usage: Final = await batch_limiter.count_input_file_usage(
+        file_id="file-abc123", custom_llm_provider="openai", user_api_key_dict=teamless_key, data={}
+    )
+
+    assert team_route.call_count == 1
+    assert team_route.calls.last.request.headers["authorization"] == "Bearer sk-team"
+    assert environment_route.call_count == 1
+    assert environment_route.calls.last.request.headers["authorization"] == "Bearer sk-test"
+    assert team_usage.total_tokens == teamless_usage.total_tokens == _token_counter_total(rows)
+
+
+@pytest.mark.asyncio
 async def test_managed_file_is_read_through_the_managed_files_hook_with_user_context(
     openai_files: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
 ):

@@ -509,6 +509,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
         file_id: str,
         custom_llm_provider: str,
         data: dict,
+        user_api_key_dict: UserAPIKeyAuth | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """
         Map proxy-facing file IDs to provider file IDs and credentials.
@@ -521,6 +522,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             decode_model_from_file_id,
             get_credentials_for_model,
             get_original_file_id,
+            get_team_provider_credentials,
         )
         from litellm.proxy.proxy_server import llm_router
 
@@ -547,21 +549,32 @@ class _PROXY_BatchRateLimiter(CustomLogger):
             return get_original_file_id(file_id), fetch_kwargs
 
         request_model: Final = data.get("model")
-        if isinstance(request_model, str) and request_model and llm_router is not None:
-            try:
-                credentials = get_credentials_for_model(
-                    llm_router=llm_router,
-                    model_id=request_model,
-                    operation_context="batch input file read (rate limiting)",
-                )
-                fetch_kwargs.update(extract_file_access_credentials(credentials))
-                fetch_kwargs["model"] = request_model
-                provider = credentials.get("custom_llm_provider")
-                if provider:
-                    fetch_kwargs["custom_llm_provider"] = provider
-            except HTTPException:
-                pass
+        if isinstance(request_model, str) and request_model:
+            if llm_router is not None:
+                try:
+                    credentials = get_credentials_for_model(
+                        llm_router=llm_router,
+                        model_id=request_model,
+                        operation_context="batch input file read (rate limiting)",
+                    )
+                    fetch_kwargs.update(extract_file_access_credentials(credentials))
+                    fetch_kwargs["model"] = request_model
+                    provider = credentials.get("custom_llm_provider")
+                    if provider:
+                        fetch_kwargs["custom_llm_provider"] = provider
+                except HTTPException:
+                    pass
+            return file_id, fetch_kwargs
 
+        if user_api_key_dict is None:
+            return file_id, fetch_kwargs
+        team_credentials: Final = get_team_provider_credentials(
+            llm_router=llm_router,
+            user_api_key_dict=user_api_key_dict,
+            custom_llm_provider=custom_llm_provider,
+        )
+        if team_credentials is not None:
+            fetch_kwargs.update(extract_file_access_credentials(team_credentials))
         return file_id, fetch_kwargs
 
     async def _reserve_batch_enqueued_tokens(
@@ -912,6 +925,7 @@ class _PROXY_BatchRateLimiter(CustomLogger):
                     file_id=file_id,
                     custom_llm_provider=custom_llm_provider,
                     data=data or {},
+                    user_api_key_dict=user_api_key_dict,
                 )
                 # For non-managed files, use the standard litellm.afile_content
                 file_content = await litellm.afile_content(

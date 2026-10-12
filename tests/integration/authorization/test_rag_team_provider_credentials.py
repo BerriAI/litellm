@@ -46,13 +46,24 @@ GEMINI_API_KEY: Final = "integration-rag-gemini-key"
 AZURE_API_KEY: Final = "integration-rag-azure-key"
 JWT_KEY_ID: Final = "integration-rag-team-provider-jwt"
 WILDCARD_MODEL: Final = "openai/gpt-4o-mini"
+BARE_WILDCARD_MODEL: Final = "gpt-4o-mini"
 OPENAI: Final[Mapping[str, JsonValue]] = MappingProxyType({"custom_llm_provider": "openai"})
 DOCUMENT: Final = ("document.txt", b"team provider credentials", "text/plain")
+BATCH_INPUT_ROW: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "custom_id": "integration-rag-batch",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {"model": BARE_WILDCARD_MODEL, "messages": [{"role": "user", "content": "batch input"}]},
+    }
+)
+BATCH_INPUT: Final = ("batch.jsonl", (json.dumps(dict(BATCH_INPUT_ROW)) + "\n").encode(), "application/jsonl")
 FAILING_STORE_NAMES: Final = MappingProxyType({"rag-upstream-401": 401, "rag-upstream-429": 429})
 OWNED_PROXY_CELL_SECONDS: Final = 2 * graceful_stop_seconds() + 120
 STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 PREFIXED: Final = re.compile(r"^/(team|wildcard|shared|environment|credential|caller|gemini|azure)(/[^?]*)")
 STORE_FILES: Final = re.compile(r"^/v1/vector_stores/([^/]+)/files$")
+FILE_CONTENT: Final = re.compile(r"^/v1/files/([^/]+)/content$")
 STORE_SEARCH: Final = re.compile(r"^(?:/v1|/openai)/vector_stores/([^/]+)/search$")
 GEMINI_UPLOAD: Final = re.compile(r"^/upload/v1beta/fileSearchStores/([^:]+):uploadToFileSearchStore$")
 
@@ -78,13 +89,18 @@ class Call:
 @dataclass(frozen=True, slots=True)
 class Tenants:
     shared_model: str
+    global_model: str
     team_a: str
     team_a_model: str
     team_a_key: str
     restricted_key: str
     viewer_key: str
     jwt_member: str
+    team_w: str
     team_w_key: str
+    wildcard_bare_key: str
+    wildcard_prefixed_key: str
+    wildcard_global_key: str
     team_s_key: str
     teamless_key: str
     credential_name: str
@@ -176,6 +192,30 @@ def _file_reply() -> Reply:
             "filename": DOCUMENT[0],
             "purpose": "assistants",
             "status": "processed",
+        }
+    )
+
+
+def _batch_input_reply() -> Reply:
+    return Reply(status=200, body=BATCH_INPUT[1])
+
+
+def _batch_reply(request: Request) -> Reply:
+    body: Final = _json_body(request)
+    return _json_reply(
+        {
+            "id": f"batch_{uuid.uuid4().hex}",
+            "object": "batch",
+            "endpoint": str(body.get("endpoint")),
+            "input_file_id": str(body.get("input_file_id")),
+            "completion_window": str(body.get("completion_window")),
+            "status": "validating",
+            "created_at": int(time.time()),
+            "errors": None,
+            "output_file_id": None,
+            "error_file_id": None,
+            "request_counts": {"total": 0, "completed": 0, "failed": 0},
+            "metadata": None,
         }
     )
 
@@ -292,12 +332,16 @@ def _gemini_reply(request: Request, route: str) -> Reply:
 
 
 def _openai_reply(request: Request, route: str, outage: threading.Event) -> Reply:
+    if request.method == "GET":
+        return _batch_input_reply() if FILE_CONTENT.match(route) is not None else _error_reply(404)
     if request.method != "POST":
         return _error_reply(404)
     if route == "/v1/vector_stores":
         return _vector_store_reply(request, outage)
     if route == "/v1/files":
         return _file_reply()
+    if route == "/v1/batches":
+        return _batch_reply(request)
     if route == "/v1/chat/completions":
         return _chat_reply(request)
     if route == "/v1/responses":
@@ -398,6 +442,16 @@ def _tenants(gateway: Gateway, scenario: Scenario, upstream: str) -> Tenants:
         api_base=f"{upstream}/shared/v1",
         team_id=None,
     )
+    global_model: Final = f"openai/integration-rag-global-{uuid.uuid4().hex}"
+    _deployment(
+        gateway,
+        scenario,
+        name=global_model,
+        model="openai/gpt-4o-mini",
+        api_key=SHARED_API_KEY,
+        api_base=f"{upstream}/shared/v1",
+        team_id=None,
+    )
     team_a_model: Final = f"integration-rag-team-{uuid.uuid4().hex}"
     team_a: Final = scenario.team(models=[team_a_model, shared_model])
     _deployment(
@@ -424,13 +478,18 @@ def _tenants(gateway: Gateway, scenario: Scenario, upstream: str) -> Tenants:
     team_s: Final = scenario.team(models=[shared_model])
     return Tenants(
         shared_model=shared_model,
+        global_model=global_model,
         team_a=team_a,
         team_a_model=team_a_model,
         team_a_key=scenario.key(team_id=team_a),
         restricted_key=scenario.key(team_id=team_a, models=[shared_model]),
         viewer_key=scenario.key(user_id=viewer, team_id=team_a),
         jwt_member=scenario.member(team_a),
+        team_w=team_w,
         team_w_key=scenario.key(team_id=team_w),
+        wildcard_bare_key=scenario.key(team_id=team_w, models=[BARE_WILDCARD_MODEL]),
+        wildcard_prefixed_key=scenario.key(team_id=team_w, models=[WILDCARD_MODEL]),
+        wildcard_global_key=scenario.key(team_id=team_w, models=[global_model]),
         team_s_key=scenario.key(team_id=team_s),
         teamless_key=scenario.key(),
         credential_name=_credential(gateway, scenario, f"{upstream}/credential/v1"),
@@ -724,6 +783,90 @@ def test_files_upload_keeps_the_accessible_deployment_fallback(
 
     assert response.status_code == 200, response.text
     assert rag_rig.signatures() == ((prefix, "POST", "/v1/files", f"Bearer {api_key}"),)
+
+
+@pytest.mark.parametrize(
+    ("caller", "model"),
+    (("wildcard_bare_key", BARE_WILDCARD_MODEL), ("wildcard_prefixed_key", WILDCARD_MODEL)),
+    ids=("bare_model", "prefixed_model"),
+)
+def test_key_restricted_to_a_model_under_the_team_wildcard_uses_the_team_deployment(
+    rag_rig: RagRig, caller: Literal["wildcard_bare_key", "wildcard_prefixed_key"], model: str
+) -> None:
+    key: Final = getattr(rag_rig.tenants, caller)
+
+    store_id: Final = _completed_store(rag_rig, _ingest(rag_rig.gateway, key))
+    assert rag_rig.signatures() == _ingest_signatures("wildcard", WILDCARD_API_KEY, store_id)
+    rows: Final = _store_rows(store_id)
+    assert [row["team_id"] for row in rows] == [rag_rig.tenants.team_w], rows
+    assert WILDCARD_API_KEY not in json.dumps(rows), rows
+
+    response: Final = _query(rag_rig.gateway, key, model, {**OPENAI, "vector_store_id": store_id})
+
+    assert response.status_code == 200, response.text
+    assert rag_rig.signatures() == (
+        _search_signature("wildcard", WILDCARD_API_KEY, store_id),
+        _chat_signature("wildcard", WILDCARD_API_KEY),
+    )
+
+
+def test_key_restricted_to_a_global_model_under_the_team_wildcard_splits_rag_and_chat(rag_rig: RagRig) -> None:
+    tenants: Final = rag_rig.tenants
+
+    store_id: Final = _completed_store(rag_rig, _ingest(rag_rig.gateway, tenants.wildcard_global_key))
+    assert rag_rig.signatures() == _ingest_signatures("wildcard", WILDCARD_API_KEY, store_id)
+
+    response: Final = _query(
+        rag_rig.gateway, tenants.wildcard_global_key, tenants.global_model, {**OPENAI, "vector_store_id": store_id}
+    )
+
+    assert response.status_code == 200, response.text
+    assert rag_rig.signatures() == (
+        _search_signature("wildcard", WILDCARD_API_KEY, store_id),
+        _chat_signature("shared", SHARED_API_KEY),
+    )
+
+
+def test_files_upload_by_a_key_restricted_under_the_team_wildcard_uses_the_team_deployment(rag_rig: RagRig) -> None:
+    response: Final = rag_rig.gateway.request_multipart(
+        "/v1/files", {"purpose": "assistants"}, {"file": DOCUMENT}, key=rag_rig.tenants.wildcard_bare_key
+    )
+
+    assert response.status_code == 200, response.text
+    assert rag_rig.signatures() == (("wildcard", "POST", "/v1/files", f"Bearer {WILDCARD_API_KEY}"),)
+
+
+@pytest.mark.parametrize(
+    ("caller", "prefix", "api_key", "reads_input"),
+    (("team_a_key", "team", TEAM_API_KEY, False), ("wildcard_bare_key", "wildcard", WILDCARD_API_KEY, True)),
+    ids=("team_key", "restricted_wildcard_key"),
+)
+def test_batch_create_reads_the_input_and_creates_the_batch_through_the_team_deployment(
+    rag_rig: RagRig, caller: Literal["team_a_key", "wildcard_bare_key"], prefix: str, api_key: str, reads_input: bool
+) -> None:
+    key: Final = getattr(rag_rig.tenants, caller)
+    uploaded: Final = rag_rig.gateway.request_multipart(
+        "/v1/files", {"purpose": "batch"}, {"file": BATCH_INPUT}, key=key
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    file_id: Final = string_value(object_value(uploaded.json())["id"])
+
+    created: Final = rag_rig.gateway.request(
+        "POST",
+        "/v1/batches",
+        {"input_file_id": file_id, "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+        key=key,
+    )
+
+    assert created.status_code == 200, created.text
+    assert object_value(created.json())["input_file_id"] == file_id, created.text
+    bearer: Final = f"Bearer {api_key}"
+    input_read: Final = ((prefix, "GET", f"/v1/files/{file_id}/content", bearer),) if reads_input else ()
+    assert rag_rig.signatures() == (
+        (prefix, "POST", "/v1/files", bearer),
+        *input_read,
+        (prefix, "POST", "/v1/batches", bearer),
+    )
 
 
 def test_gemini_ingest_never_receives_the_team_openai_key(rag_rig: RagRig) -> None:
