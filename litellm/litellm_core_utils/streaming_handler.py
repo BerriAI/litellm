@@ -421,6 +421,13 @@ class CustomStreamWrapper:
     def check_send_stream_usage(self, stream_options: dict | None):
         return stream_options is not None and stream_options.get("include_usage", False) is True
 
+    def _should_forward_continuous_usage(self) -> bool:
+        return (
+            self.send_stream_usage is True
+            and self.stream_options is not None
+            and self.stream_options.get("continuous_usage_stats", False) is True
+        )
+
     def check_is_function_call(self, logging_obj) -> bool:
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             is_function_call,
@@ -1415,6 +1422,11 @@ class CustomStreamWrapper:
         return _ProviderChunkParsed(response_obj)
 
     def chunk_creator(self, chunk: Any):
+        finish_reason_seen: Final = (
+            self.sent_last_chunk is True
+            or self.received_finish_reason is not None
+            or self.intermittent_finish_reason is not None
+        )
         if hasattr(chunk, "id"):
             self.response_id = chunk.id
         provider_response_model: Final = _provider_response_model(chunk)
@@ -1508,7 +1520,9 @@ class CustomStreamWrapper:
                         except Exception:
                             model_response.choices[0].delta = Delta()
                 else:
-                    if self.send_stream_usage is True:
+                    if self.send_stream_usage is True and (
+                        not self._should_forward_continuous_usage() or not finish_reason_seen
+                    ):
                         model_response.choices = []
                         return model_response
                     self._record_usage_only_chunk(model_response=model_response)
@@ -1843,7 +1857,7 @@ class CustomStreamWrapper:
 
                         obj_dict = response.model_dump()
 
-                        if "usage" in obj_dict:
+                        if "usage" in obj_dict and not self._should_forward_continuous_usage():
                             del obj_dict["usage"]
 
                         response_hidden_params_for_model = cast(  # cast-ok: preserve dynamic mapping behavior
@@ -2053,10 +2067,8 @@ class CustomStreamWrapper:
                         # directly to avoid expensive model_copy() per chunk.
                         self.chunks.append(processed_chunk.model_copy())
 
-                        # Strip usage from the outgoing chunk so it's not sent twice
-                        # (once in the chunk, once in _hidden_params).
                         obj_dict = processed_chunk.model_dump()
-                        if "usage" in obj_dict:
+                        if "usage" in obj_dict and not self._should_forward_continuous_usage():
                             del obj_dict["usage"]
                         processed_chunk = self.model_response_creator(
                             chunk=obj_dict,

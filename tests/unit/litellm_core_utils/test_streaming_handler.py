@@ -422,6 +422,65 @@ def test_strip_sse_data_from_chunk():
     assert CustomStreamWrapper.strip_sse_data_from_chunk(None) is None
 
 
+def _continuous_usage_fixture_chunks() -> tuple[ModelResponseStream, ...]:
+    return (
+        ModelResponseStream(
+            id="chatcmpl-continuous-usage",
+            created=1,
+            model="stream-usage-test",
+            choices=[StreamingChoices(index=0, delta=Delta(role="assistant", content="a"))],
+            usage=Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
+        ),
+        ModelResponseStream(
+            id="chatcmpl-continuous-usage",
+            created=1,
+            model="stream-usage-test",
+            choices=[StreamingChoices(index=0, delta=Delta(content="b"), finish_reason="stop")],
+            usage=Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+        ),
+        ModelResponseStream(
+            id="chatcmpl-continuous-usage",
+            created=1,
+            model="stream-usage-test",
+            choices=[],
+            usage=Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+        ),
+    )
+
+
+@pytest.mark.parametrize("sync_mode", (True, False))
+@pytest.mark.asyncio
+async def test_continuous_usage_forwards_running_counts(logging_obj: Logging, sync_mode: bool) -> None:
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(model_responses=_continuous_usage_fixture_chunks()),
+        model="stream-usage-test",
+        logging_obj=logging_obj,
+        custom_llm_provider="hosted_vllm",
+        stream_options={"include_usage": True, "continuous_usage_stats": True},
+    )
+    collected: Final = tuple(wrapper) if sync_mode else tuple([chunk async for chunk in wrapper])
+    content_chunks: Final = tuple(chunk for chunk in collected if chunk.choices and chunk.choices[0].delta.content)
+
+    assert tuple(chunk.choices[0].delta.content for chunk in content_chunks) == ("a", "b")
+    assert tuple(getattr(chunk, "usage", None) for chunk in content_chunks) == (
+        Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
+        Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+    )
+    expected_final_usage: Final = Usage(
+        prompt_tokens=10,
+        completion_tokens=2,
+        total_tokens=12,
+        completion_tokens_details=CompletionTokensDetailsWrapper(reasoning_tokens=0, text_tokens=2),
+    )
+    assert collected[-1].usage == expected_final_usage
+    assert tuple(getattr(chunk, "usage", None) for chunk in collected) == (
+        Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11),
+        Usage(prompt_tokens=10, completion_tokens=2, total_tokens=12),
+        None,
+        expected_final_usage,
+    )
+
+
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
 async def test_streaming_handler_with_usage(
