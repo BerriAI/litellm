@@ -4057,7 +4057,7 @@ class TestBedrockMantleGptShipsTheOpenAIDialect:
         from litellm.responses.main import _stamp_injection_points_for_the_hook
 
         kwargs: dict = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
-        _stamp_injection_points_for_the_hook(kwargs, self.BARE_MODEL, "bedrock_mantle", None)
+        _stamp_injection_points_for_the_hook(kwargs, self.BARE_MODEL, "bedrock_mantle", None, None)
         _, messages, out = AnthropicCacheControlHook().get_chat_completion_prompt(
             model=self.BARE_MODEL,
             messages=copy.deepcopy(self.MESSAGES),
@@ -4102,7 +4102,14 @@ class TestResponsesLayerReservesMarksOutsideTheProvisionalMessages:
             {"role": "user", "content": "next"},
         ]
 
-    def _marks_on_the_last_message_after_the_responses_pass(self, marked_calls: int) -> int:
+    @classmethod
+    def _tools(cls, marked_tools: int) -> list[dict[str, object]]:
+        return [
+            {"type": "function", "name": f"tool_{index}", "parameters": {}, "cache_control": cls.MARK}
+            for index in range(marked_tools)
+        ]
+
+    def _marks_on_the_last_message_after_the_responses_pass(self, marked_calls: int, marked_tools: int = 0) -> int:
         from litellm.responses.main import _stamp_injection_points_for_the_hook
         from litellm.responses.utils import ResponsesAPIRequestUtils
 
@@ -4111,7 +4118,7 @@ class TestResponsesLayerReservesMarksOutsideTheProvisionalMessages:
             "cache_control_injection_points": [{"location": "message", "index": -1}],
             CARRY_UNMATCHED_MESSAGE_POINTS: True,
         }
-        _stamp_injection_points_for_the_hook(kwargs, self.MODEL, "anthropic", items)
+        _stamp_injection_points_for_the_hook(kwargs, self.MODEL, "anthropic", items, self._tools(marked_tools))
         _, messages, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
             model=self.MODEL,
             messages=ResponsesAPIRequestUtils.responses_input_to_chat_messages(items),
@@ -4127,6 +4134,29 @@ class TestResponsesLayerReservesMarksOutsideTheProvisionalMessages:
 
     def test_function_call_marks_under_the_cap_leave_the_ordinal_point_its_slot(self):
         assert self._marks_on_the_last_message_after_the_responses_pass(marked_calls=2) == 1
+
+    def test_function_tool_marks_filling_the_cap_leave_the_ordinal_point_unplaced(self):
+        assert self._marks_on_the_last_message_after_the_responses_pass(marked_calls=1, marked_tools=2) == 0
+
+    def test_function_tool_marks_under_the_cap_leave_the_ordinal_point_its_slot(self):
+        assert self._marks_on_the_last_message_after_the_responses_pass(marked_calls=1, marked_tools=1) == 1
+
+    def test_a_marked_tool_of_another_type_is_not_reserved(self):
+        from litellm.responses.main import _cache_control_marks_outside_the_provisional_messages
+
+        tools = [{"type": "web_search", "cache_control": self.MARK}, *self._tools(1)]
+        assert _cache_control_marks_outside_the_provisional_messages(self._items(1), tools) == 2
+
+    def test_sdk_typed_output_items_are_skipped_by_the_reserve(self):
+        from openai.types.responses import ResponseFunctionToolCall
+
+        from litellm.responses.main import _cache_control_marks_outside_the_provisional_messages
+
+        items = [
+            *self._items(1),
+            ResponseFunctionToolCall(type="function_call", call_id="call_typed", name="weather", arguments="{}"),
+        ]
+        assert _cache_control_marks_outside_the_provisional_messages(items, None) == 1
 
     def test_the_chat_pass_replaces_the_count_the_responses_layer_stamped(self):
         messages = [
@@ -4376,5 +4406,5 @@ class TestMalformedInjectionPointsAreIgnored:
         from litellm.responses.main import _stamp_injection_points_for_the_hook
 
         kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
-        _stamp_injection_points_for_the_hook(kwargs, "gpt-5.6", "openai", None)
+        _stamp_injection_points_for_the_hook(kwargs, "gpt-5.6", "openai", None, None)
         assert kwargs == {"cache_control_injection_points": value}

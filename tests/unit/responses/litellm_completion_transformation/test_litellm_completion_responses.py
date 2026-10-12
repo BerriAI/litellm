@@ -1,9 +1,11 @@
 import asyncio
 import json
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
-from typing import Final, Literal
+from typing import Final, Literal, cast
 
 import pytest
+from openai.types.responses.response_create_params import ResponseInputParam
 from openai.types.responses.response_function_web_search import (
     ActionFind,
     ActionOpenPage,
@@ -14,6 +16,7 @@ from openai.types.responses.response_function_web_search import (
 from pydantic import TypeAdapter
 
 import litellm
+from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS, AnthropicCacheControlHook
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR
 from litellm.litellm_core_utils.prompt_templates.factory import (
     _bedrock_converse_messages_pt,
@@ -5488,9 +5491,9 @@ def test_cache_control_preserved_in_full_input_transform():
 
 def test_cache_control_propagated_to_last_content_block_for_list_content():
     """
-    For Anthropic/Bedrock, cache_control must also be set on the last
-    content block (not just the message level) to actually activate
-    prompt caching when content is a list of blocks.
+    For Anthropic/Bedrock, an item-level cache_control over list content activates
+    prompt caching only as a mark on the last content block, so the bridge moves
+    it there instead of keeping a message-level copy the hook's census would also count.
     """
     input_item = {
         "role": "user",
@@ -5507,10 +5510,11 @@ def test_cache_control_propagated_to_last_content_block_for_list_content():
 
     assert len(result) == 1
     msg = result[0]
-    assert msg.get("cache_control") == {"type": "ephemeral"}
+    assert "cache_control" not in msg
     assert isinstance(msg["content"], list)
     assert "cache_control" not in msg["content"][0]
     assert msg["content"][-1]["cache_control"] == {"type": "ephemeral"}
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(result) == 1
 
 def test_cache_control_does_not_overwrite_existing_block_level_cache_control():
     """
@@ -5536,8 +5540,9 @@ def test_cache_control_does_not_overwrite_existing_block_level_cache_control():
 
     assert len(result) == 1
     msg = result[0]
-    assert msg.get("cache_control") == {"type": "ephemeral"}
+    assert "cache_control" not in msg
     assert msg["content"][-1]["cache_control"] == {"type": "ephemeral", "ttl": "1h"}
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(result) == 1
 
 
 def test_function_call_cache_control_reaches_the_provider_tool_use_block():
@@ -5619,9 +5624,80 @@ def test_assistant_text_merged_behind_earlier_text_puts_cache_control_on_the_las
     )
 
     merged_turn: Final = messages[1]
-    assert merged_turn["cache_control"] == cache_control
+    assert "cache_control" not in merged_turn
     assert "cache_control" not in merged_turn["content"][0]
     assert merged_turn["content"][-1]["cache_control"] == cache_control
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 1
+
+
+def test_marked_assistant_text_merged_ahead_of_later_text_keeps_its_cache_control_on_its_block():
+    cache_control: Final = {"type": "ephemeral"}
+    messages: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+        input=[
+            {"role": "user", "content": "Summarize the gateway latency report."},
+            {
+                "type": "function_call",
+                "call_id": "call_marked_first_text",
+                "name": "get_latency_report",
+                "arguments": '{"service": "gateway"}',
+            },
+            {"role": "assistant", "content": "Looking that up now.", "cache_control": cache_control},
+            {"role": "assistant", "content": "One moment."},
+            {"type": "function_call_output", "call_id": "call_marked_first_text", "output": "p50 120ms"},
+        ],
+        responses_api_request={},
+    )
+
+    merged_turn: Final = messages[1]
+    assert "cache_control" not in merged_turn
+    assert merged_turn["content"][0]["cache_control"] == cache_control
+    assert "cache_control" not in merged_turn["content"][-1]
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == 1
+
+    anthropic_turns: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+    blocks: Final = TypeAdapter(list[dict[str, object]]).validate_python(anthropic_turns[1]["content"])
+    marked_blocks: Final = [block for block in blocks if block.get("cache_control")]
+    assert len(marked_blocks) == 1
+    assert marked_blocks[0]["text"] == "Looking that up now."
+
+
+def _replayed_messages_from(
+    turns: Sequence[Mapping[str, object]], current: Mapping[str, object]
+) -> Sequence[Mapping[str, object]]:
+    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
+        assert previous_response_id == "resp_marked_history"
+        return ChatCompletionSession(messages=list(turns), litellm_session_id=None)
+
+    request: Final = asyncio.run(
+        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
+            previous_response_id="resp_marked_history",
+            litellm_completion_request={"messages": [current]},
+            instructions=None,
+            session_lookup=session_lookup,
+        )
+    )
+    return TypeAdapter(list[dict[str, object]]).validate_python(request["messages"])
+
+
+def test_a_replayed_turn_over_the_remaining_budget_yields_its_marks_while_older_turns_keep_theirs():
+    cache_control: Final = {"type": "ephemeral"}
+    three_marked_blocks: Final = [
+        {"type": "text", "text": f"block {index}", "cache_control": cache_control} for index in range(3)
+    ]
+    replayed_turns: Final = [
+        {"role": "user", "content": "turn 0", "cache_control": cache_control},
+        {"role": "user", "content": "turn 1", "cache_control": cache_control},
+        {"role": "user", "content": three_marked_blocks},
+        {"role": "user", "content": "turn 3", "cache_control": cache_control},
+    ]
+
+    messages: Final = _replayed_messages_from(
+        replayed_turns, {"role": "user", "content": "newest", "cache_control": cache_control}
+    )
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == MAX_CACHE_CONTROL_BLOCKS
+    assert [AnthropicCacheControlHook._count_cache_control_blocks(message) for message in messages] == [1, 1, 0, 1, 1]
+    assert messages[2] == {"role": "user", "content": [{"type": "text", "text": f"block {index}"} for index in range(3)]}
 
 
 def test_replayed_session_turns_yield_their_cache_control_to_the_newest_markers():
@@ -5630,22 +5706,45 @@ def test_replayed_session_turns_yield_their_cache_control_to_the_newest_markers(
         {"role": "user", "content": f"turn {index}", "cache_control": cache_control} for index in range(5)
     ]
 
-    async def session_lookup(previous_response_id: str) -> ChatCompletionSession:
-        assert previous_response_id == "resp_marked_history"
-        return ChatCompletionSession(messages=list(replayed_turns), litellm_session_id=None)
-
-    request: Final = asyncio.run(
-        LiteLLMCompletionResponsesConfig.async_responses_api_session_handler(
-            previous_response_id="resp_marked_history",
-            litellm_completion_request={
-                "messages": [{"role": "user", "content": "newest", "cache_control": cache_control}]
-            },
-            instructions=None,
-            session_lookup=session_lookup,
-        )
+    messages: Final = _replayed_messages_from(
+        replayed_turns, {"role": "user", "content": "newest", "cache_control": cache_control}
     )
-
-    messages: Final = TypeAdapter(list[dict[str, object]]).validate_python(request["messages"])
     assert ["cache_control" in message for message in messages] == [False, False, True, True, True, True]
     assert messages[0] == {"role": "user", "content": "turn 0"}
     assert messages[-1] == {"role": "user", "content": "newest", "cache_control": cache_control}
+
+
+def _bridged_messages(*items: Mapping[str, object], instructions: str | None = None) -> Sequence[Mapping[str, object]]:
+    request: Final = {} if instructions is None else {"instructions": instructions}
+    return cast(  # cast-ok: the assertions compare the bridged messages as plain mappings
+        Sequence[Mapping[str, object]],
+        LiteLLMCompletionResponsesConfig.transform_responses_api_input_to_messages(
+            input=cast(ResponseInputParam, list(items)),  # cast-ok: cache_control is not a key of the input TypedDicts
+            responses_api_request=request,
+        ),
+    )
+
+
+def test_a_request_marking_more_items_than_the_provider_allows_keeps_the_newest_marks():
+    cache_control: Final = {"type": "ephemeral"}
+    messages: Final = _bridged_messages(
+        *({"role": "user", "content": f"turn {index}", "cache_control": cache_control} for index in range(5)),
+        instructions="Be brief.",
+    )
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(messages) == MAX_CACHE_CONTROL_BLOCKS
+    assert ["cache_control" in message for message in messages] == [False, False, True, True, True, True]
+    assert messages[1] == {"role": "user", "content": "turn 0"}
+
+
+@pytest.mark.parametrize("value", [1, "ephemeral", ["ephemeral"], {"type": "forever"}, {}])
+def test_a_cache_control_value_the_provider_would_refuse_is_left_off_the_bridged_message(value: object):
+    assert _bridged_messages({"role": "user", "content": "hi", "cache_control": value}) == [
+        {"role": "user", "content": "hi"}
+    ]
+
+
+def test_a_cache_control_value_is_forwarded_with_its_ttl_and_without_unknown_keys():
+    marked: Final = {"role": "user", "content": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h", "extra": 1}}
+    assert _bridged_messages(marked) == [
+        {"role": "user", "content": "hi", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+    ]

@@ -7,7 +7,7 @@ import re
 import uuid
 from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from itertools import accumulate
+from itertools import accumulate, chain, islice
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -190,6 +190,7 @@ TOOL_CALLS_CACHE: Final = InMemoryCache()
 _ANY_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[object, object])
 _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
+_CACHED_CONTENT_ADAPTER: Final = TypeAdapter(ChatCompletionCachedContent)
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
 _RESPONSES_API_TOOL_CHOICE_ADAPTER: Final = TypeAdapter(ToolChoice)
@@ -235,16 +236,16 @@ def _input_item_role(input_item: Mapping[str, object]) -> str:
 
 
 def _input_item_cache_control(input_item: Mapping[str, object]) -> ChatCompletionCachedContent | None:
-    cache_control: Final = input_item.get("cache_control")
-    if not cache_control:
+    try:
+        return _CACHED_CONTENT_ADAPTER.validate_python(input_item.get("cache_control"))
+    except ValidationError:
         return None
-    return cast(  # cast-ok: Responses input uses the shared cache-control shape
-        ChatCompletionCachedContent, cache_control
-    )
 
 
-def _with_cache_control_on_last_block(blocks: Sequence[object], cache_control: object) -> Sequence[object]:
-    if not blocks or not isinstance(blocks[-1], dict):
+def _with_cache_control_on_last_block(
+    blocks: Sequence[object], cache_control: ChatCompletionCachedContent | None
+) -> Sequence[object]:
+    if cache_control is None or not blocks or not isinstance(blocks[-1], dict):
         return blocks
     last_block: Final = _STR_KEY_DICT_ADAPTER.validate_python(blocks[-1])
     if "cache_control" in last_block:
@@ -252,40 +253,86 @@ def _with_cache_control_on_last_block(blocks: Sequence[object], cache_control: o
     return [*blocks[:-1], {**last_block, "cache_control": cache_control}]
 
 
-def _cache_control_count(value: object) -> int:
-    if isinstance(value, list):
-        return sum(_cache_control_count(item) for item in _OBJECT_LIST_ADAPTER.validate_python(value))
-    if not isinstance(value, dict):
+def _content_blocks_carrying(content: object, cache_control: ChatCompletionCachedContent | None) -> Sequence[object]:
+    if isinstance(content, str):
+        return (
+            ChatCompletionTextObject(type="text", text=content)
+            if cache_control is None
+            else ChatCompletionTextObject(type="text", text=content, cache_control=cache_control),
+        )
+    return _with_cache_control_on_last_block(_OBJECT_LIST_ADAPTER.validate_python(content), cache_control)
+
+
+_MARK_CARRYING_MESSAGE_FIELDS: Final = ("content", "tool_calls")
+
+
+def _mark_carrying_blocks(fields: Mapping[str, object]) -> Sequence[object]:
+    lists: Final = tuple(fields.get(key) for key in _MARK_CARRYING_MESSAGE_FIELDS)
+    return tuple(
+        chain.from_iterable(_OBJECT_LIST_ADAPTER.validate_python(value) for value in lists if isinstance(value, list))
+    )
+
+
+def _block_carries_cache_control(block: object) -> bool:
+    return isinstance(block, dict) and "cache_control" in block
+
+
+def _cache_control_count(message: object) -> int:
+    if not isinstance(message, dict):
         return 0
-    fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(value)
-    return int("cache_control" in fields) + sum(_cache_control_count(item) for item in fields.values())
+    fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(message)
+    block_marks: Final = sum(1 for block in _mark_carrying_blocks(fields) if _block_carries_cache_control(block))
+    return int("cache_control" in fields) + block_marks
 
 
-def _without_cache_control(value: object) -> object:
-    if isinstance(value, list):
-        return [_without_cache_control(item) for item in _OBJECT_LIST_ADAPTER.validate_python(value)]
-    if not isinstance(value, dict):
-        return value
-    fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(value)
-    return {key: _without_cache_control(item) for key, item in fields.items() if key != "cache_control"}
+def _block_without_cache_control(block: object) -> object:
+    if not isinstance(block, dict):
+        return block
+    return {key: value for key, value in _STR_KEY_DICT_ADAPTER.validate_python(block).items() if key != "cache_control"}
+
+
+def _without_cache_control(message: object) -> object:
+    if not isinstance(message, dict):
+        return message
+    fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(message)
+    return {
+        key: (
+            [_block_without_cache_control(block) for block in _OBJECT_LIST_ADAPTER.validate_python(value)]
+            if key in _MARK_CARRYING_MESSAGE_FIELDS and isinstance(value, list)
+            else value
+        )
+        for key, value in fields.items()
+        if key != "cache_control"
+    }
 
 
 _ReplayedMessageT = TypeVar("_ReplayedMessageT")
 
 
-def _replayed_messages_within_cache_control_limit(
+def _kept_within_budget(state: tuple[int, bool], marks: int) -> tuple[int, bool]:
+    remaining, _ = state
+    if marks > remaining:
+        return remaining, False
+    return remaining - marks, True
+
+
+def _messages_within_cache_control_limit(
     replayed_messages: Sequence[_ReplayedMessageT], current_messages: Sequence[object]
 ) -> Sequence[_ReplayedMessageT]:
-    budget: Final = MAX_CACHE_CONTROL_BLOCKS - _cache_control_count(list(current_messages))
+    current_marks: Final = sum(_cache_control_count(message) for message in current_messages)
+    budget: Final = max(MAX_CACHE_CONTROL_BLOCKS - current_marks, 0)
     newest_first: Final = tuple(reversed(replayed_messages))
-    markers_up_to_each: Final = tuple(accumulate(_cache_control_count(message) for message in newest_first))
+    budget_after_each: Final = accumulate(
+        (_cache_control_count(message) for message in newest_first), _kept_within_budget, initial=(budget, True)
+    )
+    kept_flags: Final = tuple(kept for _, kept in islice(budget_after_each, 1, None))
     kept_newest_first: Final = tuple(
         message
-        if markers_so_far <= budget
+        if kept
         else cast(  # cast-ok: the same message shape minus its cache markers
             _ReplayedMessageT, _without_cache_control(message)
         )
-        for message, markers_so_far in zip(newest_first, markers_up_to_each)
+        for message, kept in zip(newest_first, kept_flags)
     )
     return tuple(reversed(kept_newest_first))
 
@@ -636,7 +683,7 @@ class LiteLLMCompletionResponsesConfig:
             )
         )
 
-        return messages
+        return list(_messages_within_cache_control_limit(messages, ()))
 
     @staticmethod
     async def async_responses_api_session_handler(
@@ -657,7 +704,7 @@ class LiteLLMCompletionResponsesConfig:
             else ChatCompletionSession(messages=[], litellm_session_id=None)
         )
         _messages: Final = litellm_completion_request.get("messages") or []
-        session_messages: Final = _replayed_messages_within_cache_control_limit(
+        session_messages: Final = _messages_within_cache_control_limit(
             chat_completion_session.get("messages") or (), _OBJECT_LIST_ADAPTER.validate_python(_messages)
         )
         instructions_end: Final = 1 if instructions else 0
@@ -1019,28 +1066,23 @@ class LiteLLMCompletionResponsesConfig:
         if new_content is None:
             return None
         previous_content: Final = last_message.get("content")
+        previous_cache_control: Final = _input_item_cache_control(last_message)
+        new_cache_control: Final = _input_item_cache_control(new_message)
         content: Final = (
             new_content
-            if not previous_content
+            if not previous_content and isinstance(new_content, str)
             else [
-                block
-                for value in (previous_content, new_content)
-                for block in (
-                    (ChatCompletionTextObject(type="text", text=value),)
-                    if isinstance(value, str)
-                    else _OBJECT_LIST_ADAPTER.validate_python(value)
-                )
+                *(_content_blocks_carrying(previous_content, previous_cache_control) if previous_content else ()),
+                *_content_blocks_carrying(new_content, new_cache_control),
             ]
         )
-        new_cache_control: Final = new_message.get("cache_control")
+        message_cache_control: Final = (
+            None if isinstance(content, list) else new_cache_control or previous_cache_control
+        )
         merged: Final = {
-            **last_message,
-            "content": (
-                _with_cache_control_on_last_block(_OBJECT_LIST_ADAPTER.validate_python(content), new_cache_control)
-                if new_cache_control is not None and isinstance(content, list)
-                else content
-            ),
-            **({} if new_cache_control is None else {"cache_control": new_cache_control}),
+            **{key: value for key, value in last_message.items() if key != "cache_control"},
+            "content": content,
+            **({} if message_cache_control is None else {"cache_control": message_cache_control}),
         }
         return cast(  # cast-ok: preserves the assistant fields and content blocks
             ChatCompletionAssistantMessage, merged
@@ -1551,13 +1593,10 @@ class LiteLLMCompletionResponsesConfig:
         cache_control: Final = _input_item_cache_control(input_item)
         if cache_control is None:
             return GenericChatCompletionMessage(role=role, content=content_value)
-        last_block: Final = content_value[-1] if isinstance(content_value, list) and content_value else None
-        if not isinstance(content_value, list) or not isinstance(last_block, dict) or "cache_control" in last_block:
+        if isinstance(content_value, str):
             return GenericChatCompletionMessage(role=role, content=content_value, cache_control=cache_control)
         return GenericChatCompletionMessage(
-            role=role,
-            content=[*content_value[:-1], {**last_block, "cache_control": cache_control}],
-            cache_control=cache_control,
+            role=role, content=list(_with_cache_control_on_last_block(content_value, cache_control))
         )
 
     @staticmethod

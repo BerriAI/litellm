@@ -1,6 +1,5 @@
 import asyncio
 import dataclasses
-import signal
 import threading
 from collections import Counter
 from collections.abc import Callable, Iterator, Mapping, Sequence
@@ -12,7 +11,6 @@ from typing import Final, TypeAlias
 from urllib.parse import urlsplit
 
 import httpx
-import psutil
 import pytest
 import yaml
 from integration._support import prompt_cache_breakpoint as pcb
@@ -293,11 +291,10 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_answering(
             held_by: Final = MappingProxyType({pid: pcb.open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
-            held.release.set()
-            served: Final = await burst
+            with owned.replacing_worker(victim_pid) as kill:
+                kill()
+                held.release.set()
+                served: Final = await burst
             assert held_by[survivor_pid] >= 10, held_by
             assert len(served) == held_by[survivor_pid], (held_by, len(served))
             for item in served:
@@ -318,7 +315,7 @@ async def test_proxy_restart_mid_burst_never_lands_a_served_call_twice(
         with owned_proxy_process(gateway, tmp_path, {}, config=config, workers=2) as first:
             _worker_pids(first)
             burst: Final = await _hold_burst(held, first.gateway, _OWNED, calls)
-            first.process.terminate()
+            first.begin_shutdown()
             held.release.set()
             served: Final = await burst
         for item in served:
