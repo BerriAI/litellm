@@ -1,5 +1,7 @@
 import asyncio
 import json
+import os
+import uuid
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -7,17 +9,24 @@ from typing import Final
 
 import pytest
 import yaml
-from integration._support.client import Gateway, eventually, gateway_from_environment
+from integration._support.client import Gateway, eventually, gateway_from_environment, held
+from integration._support.database import read_rows
 from integration._support.process import owned_proxy
 from integration._support.redaction_probe import RedactionProbe, SyncRedactionProbe
 from integration._support.wire import Reply, Request, Wire, wire_server
+from redis import Redis
 
 import litellm
+from litellm.constants import REDACTED_BY_LITELLM
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 
 INPUT: Final = "private-input-redaction-canary"
 REASONING: Final = "private-reasoning-redaction-canary"
 OUTPUT: Final = "private-output-redaction-canary"
+INSTRUCTIONS: Final = "Reply in French. redaction-instructions-canary"
+BRIDGED: Final = "bridged-redaction-canary"
+USAGE_DEPLOYMENT: Final = f"redaction-usage-{uuid.uuid4().hex}"
+REDACT: Final = {"x-litellm-enable-message-redaction": "true"}
 pytestmark = pytest.mark.timeout(240)
 
 
@@ -75,7 +84,8 @@ def _provider(request: Request) -> Reply:
             ).encode()
         )
     if request.target == "/v1/messages":
-        assert body["messages"] == [{"role": "user", "content": INPUT}], body
+        if BRIDGED not in request.body.decode():
+            assert body["messages"] == [{"role": "user", "content": INPUT}], body
         return Reply(
             body=json.dumps(
                 {
@@ -164,6 +174,19 @@ def redaction_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[
                             ("redaction-responses", "openai/gpt-5.6-sol"),
                             ("redaction-messages", "anthropic/claude-sonnet-5-5"),
                         )
+                    ]
+                    + [
+                        {
+                            "model_name": "redaction-usage",
+                            "litellm_params": {
+                                "model": "anthropic/claude-sonnet-5-5",
+                                "api_base": provider.url,
+                                "api_key": "synthetic-provider-key",
+                                "rpm": 100000,
+                                "tpm": 100000000,
+                            },
+                            "model_info": {"id": USAGE_DEPLOYMENT},
+                        }
                     ],
                     "litellm_settings": {
                         "callbacks": ["integration._support.redaction_probe.probe"],
@@ -179,7 +202,9 @@ def redaction_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[tuple[
                         "master_key": "os.environ/LITELLM_MASTER_KEY",
                         "database_url": "os.environ/DATABASE_URL",
                         "disable_model_info_refresh": True,
+                        "store_prompts_in_spend_logs": True,
                     },
+                    "router_settings": {"redis_host": "os.environ/REDIS_HOST", "redis_port": "os.environ/REDIS_PORT"},
                 }
             )
         )
@@ -329,6 +354,93 @@ def test_concurrent_redacted_and_unredacted_callbacks_remain_isolated(
         assert (REASONING in logged) is (index % 2 == 0), callback
         assert (OUTPUT in logged) is (index % 2 == 0), callback
     assert len(tuple(request for request in provider.drain() if request.method == "POST")) == 4
+
+
+def _drained(wire: Wire, count: int) -> tuple[Request, ...]:
+    batches: Final[list[Request]] = []  # mutable-ok: drain consumes the queue, so polls retain previous events
+
+    def observed() -> tuple[Request, ...]:
+        batches.extend(wire.drain())
+        return tuple(batches)
+
+    return eventually(observed, lambda values: len(values) >= count, seconds=30)
+
+
+def test_redacted_responses_follow_up_replays_original_instructions(
+    redaction_proxy: tuple[Gateway, Wire, Wire],
+) -> None:
+    proxy, provider, sink = redaction_proxy
+    end_user: Final = f"redaction-replay-{uuid.uuid4().hex}"
+    first: Final = proxy.request(
+        "POST",
+        "/v1/responses",
+        {
+            "model": "redaction-messages",
+            "instructions": INSTRUCTIONS,
+            "input": f"{BRIDGED} turn one",
+            "user": end_user,
+            "cache": {"no-cache": True},
+        },
+        headers=REDACT,
+    )
+    assert first.status_code == 200, first.text
+    eventually(
+        lambda: read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE end_user = %s', (end_user,)),
+        lambda rows: len(rows) == 1,
+        seconds=70,
+    )
+    assert len(_drained(provider, 1)) == 1
+    follow_up: Final = proxy.request(
+        "POST",
+        "/v1/responses",
+        {
+            "model": "redaction-messages",
+            "previous_response_id": first.json()["id"],
+            "input": f"{BRIDGED} turn two",
+            "user": end_user,
+            "cache": {"no-cache": True},
+        },
+        headers=REDACT,
+    )
+    assert follow_up.status_code == 200, follow_up.text
+    sent: Final = tuple(json.loads(request.body) for request in _drained(provider, 1))
+    assert len(_drained(sink, 2)) == 2
+    assert len(sent) == 1, sent
+    assert len(sent[0]["messages"]) == 3, sent[0]
+    system: Final = json.dumps(sent[0].get("system"))
+    assert INSTRUCTIONS in system and REDACTED_BY_LITELLM not in system, sent[0]
+
+
+def test_redacted_router_usage_is_counted_once(redaction_proxy: tuple[Gateway, Wire, Wire]) -> None:
+    proxy, provider, sink = redaction_proxy
+    requests: Final = 48
+
+    def send(index: int):
+        return proxy.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": "redaction-usage",
+                "messages": [{"role": "user", "content": f"{BRIDGED} usage {index}"}],
+                "cache": {"no-cache": True},
+            },
+            headers=REDACT,
+        )
+
+    with ThreadPoolExecutor(max_workers=16) as pool:
+        responses: Final = tuple(pool.map(send, range(requests)))
+    for response in responses:
+        assert response.status_code == 200, response.text
+        assert response.json()["usage"]["total_tokens"] == 15, response.json()
+
+    def counted_tokens() -> int:
+        with Redis(host=os.environ["REDIS_HOST"], port=int(os.environ["REDIS_PORT"])) as cache:
+            keys: Final = tuple(cache.scan_iter(f"global_router:{USAGE_DEPLOYMENT}:*:tpm:*"))
+            return sum(int(float(cache.get(key) or 0)) for key in keys)
+
+    _drained(sink, requests)
+    held(counted_tokens, lambda total: total == 15 * requests, holding=3, seconds=30)
+    assert len(_drained(provider, requests)) == requests
 
 
 @pytest.mark.asyncio

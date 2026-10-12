@@ -23,7 +23,7 @@ import pytest_asyncio
 from pydantic import JsonValue
 
 import litellm
-from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE
+from litellm.constants import LOGGING_WORKER_MAX_TIME_PER_COROUTINE, ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import (
@@ -34,6 +34,7 @@ from litellm.litellm_core_utils.redact_messages import (
     should_redact_message_logging,
 )
 from litellm.responses.main import mock_responses_api_response
+from litellm.router_utils.router_callbacks.track_deployment_metrics import get_counted_usage_tokens
 from litellm.types.router import BaselineRouteStamp
 from litellm.types.utils import (
     ModelResponse,
@@ -107,8 +108,8 @@ def _request_with_hidden_reasoning(secret: str) -> tuple[dict, dict]:
     metadata: Final = {"session_id": "session", "hidden_params": hidden_params}
     body: Final = {
         "model": "redaction-model",
-        "system": secret,
-        "instructions": secret,
+        "system": "kept-instructions",
+        "instructions": "kept-instructions",
         "messages": [{"role": "user", "content": secret}],
         "metadata": metadata,
         "litellm_metadata": metadata,
@@ -132,14 +133,26 @@ def test_redaction_removes_reasoning_copied_into_hidden_params_and_request_body(
     redacted: Final = details["litellm_params"]
     assert secret not in str(redacted)
     body: Final = redacted["proxy_server_request"]["body"]
-    assert body["system"] == "redacted-by-litellm"
-    assert body["instructions"] == "redacted-by-litellm"
+    assert body["system"] == body["instructions"] == "kept-instructions"
     assert body["model"] == "redaction-model"
     for metadata in (redacted["metadata"], redacted["litellm_metadata"], body["metadata"], body["litellm_metadata"]):
         assert metadata["session_id"] == "session"
         assert metadata["hidden_params"]["provider_specific_fields"] is None
         assert metadata["hidden_params"]["additional_headers"] == hidden_params["additional_headers"]
-    assert params == snapshot
+    assert redacted["metadata"] is params["metadata"]
+    assert hidden_params == snapshot["metadata"]["hidden_params"]
+
+
+@pytest.mark.parametrize("channel", ["metadata", "litellm_metadata"])
+def test_router_usage_marker_written_after_redaction_stays_visible(channel: str) -> None:
+    params, _ = _request_with_hidden_reasoning("private-hidden-reasoning")
+    params[channel] = copy.deepcopy(params[channel])
+    details: Final = {"litellm_params": params}
+
+    perform_redaction(details, None)
+    params[channel][ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] = 7
+
+    assert get_counted_usage_tokens(details["litellm_params"]) == 7
 
 
 def test_per_callback_redaction_keeps_shared_request_body_for_other_readers() -> None:
@@ -155,6 +168,8 @@ def test_per_callback_redaction_keeps_shared_request_body_for_other_readers() ->
     assert details["litellm_params"] == snapshot
     assert details["messages"] == [{"role": "user", "content": "redacted-by-litellm"}]
     assert secret not in str(callback_details["litellm_params"])
+    callback_body: Final = callback_details["litellm_params"]["proxy_server_request"]["body"]
+    assert callback_body["system"] == callback_body["instructions"] == "redacted-by-litellm"
     assert redact_streaming_responses_for_custom_logger(details, CustomLogger()) is details
 
 
