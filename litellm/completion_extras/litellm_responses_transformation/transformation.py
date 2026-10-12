@@ -313,16 +313,17 @@ def _as_chat_reasoning_items(
 
 
 def _shift_annotation(annotation: ChatCompletionAnnotation, offset: int) -> ChatCompletionAnnotation:
-    fields: Final = cast(Mapping[str, object], annotation)
     shifted: Final = {
         key: value + offset if key in ("start_index", "end_index") and isinstance(value, int) else value
-        for key, value in fields.items()
+        for key, value in annotation.items()
     }
-    return cast(ChatCompletionAnnotation, shifted)
+    return cast(
+        ChatCompletionAnnotation, shifted
+    )  # cast-ok: the TypedDict omits the flat url_citation fields passed through
 
 
 def _message_annotations(message: "Message") -> Sequence[ChatCompletionAnnotation]:
-    annotations: list[ChatCompletionAnnotation] | None = getattr(message, "annotations", None)
+    annotations: Sequence[ChatCompletionAnnotation] | None = getattr(message, "annotations", None)
     return annotations or ()
 
 
@@ -332,7 +333,7 @@ def _message_reasoning_content(message: "Message") -> str | None:
 
 
 def _message_reasoning_items(message: "Message") -> Sequence[ChatCompletionReasoningItem]:
-    reasoning_items: list[ChatCompletionReasoningItem] | None = getattr(message, "reasoning_items", None)
+    reasoning_items: Sequence[ChatCompletionReasoningItem] | None = getattr(message, "reasoning_items", None)
     return reasoning_items or ()
 
 
@@ -348,8 +349,7 @@ def _fold_choices_into_one(
     trailing_reasoning_content: str | None,
     trailing_reasoning_item: _BuiltReasoningItem | None,
 ) -> "Choices":
-    """Chat Completions has one assistant turn per reply, so every Responses output item
-    folds into choices[0]: clients that only read choices[0] must still see the tool calls."""
+    """Clients that only read choices[0] must still see every text and tool call."""
     from litellm.types.utils import Choices, Message
 
     messages: Final = tuple(choice.message for choice in choices)
