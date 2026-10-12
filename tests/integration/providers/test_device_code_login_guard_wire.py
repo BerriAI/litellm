@@ -715,6 +715,7 @@ def test_a_token_mounted_after_a_refusal_serves_without_a_restart_and_removing_i
 
 
 _COOLDOWN_SECONDS_LEFT: Final = 45
+_REFUSAL_MARGIN_SECONDS: Final = 15
 
 
 def test_a_recent_device_code_request_does_not_hold_the_worker_for_the_rest_of_the_cooldown(scene: _Scene) -> None:
@@ -725,7 +726,7 @@ def test_a_recent_device_code_request_does_not_hold_the_worker_for_the_rest_of_t
     served: Final = refusal.value
     assert served.status == 400, served.text
     assert dl.CHATGPT_REFUSAL in _error_message(served.text), served.text
-    assert_cut_short(refusal.seconds, injected_delay=remaining)
+    assert_cut_short(refusal.seconds, injected_delay=remaining - _REFUSAL_MARGIN_SECONDS)
     assert scene.rig.peers.auth_connections() == ()
 
 

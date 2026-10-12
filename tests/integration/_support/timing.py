@@ -30,5 +30,11 @@ def assert_cut_short(elapsed: float, *, injected_delay: float) -> None:
     )
 
 
+def assert_enforced_within(elapsed: float, *, configured: float, slack: float, not_before: float = 0.0) -> None:
+    assert not_before <= elapsed <= configured + slack, (
+        f"took {elapsed:.2f}s, expected between {not_before}s and the configured {configured}s plus {slack}s of slack"
+    )
+
+
 def assert_within_factor_of_control(observed: float, *, control: float, factor: float) -> None:
     assert observed <= factor * control, f"took {observed:.2f}s, over {factor}x the {control:.2f}s control"

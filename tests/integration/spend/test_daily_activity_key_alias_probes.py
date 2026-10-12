@@ -35,11 +35,12 @@ from integration._support.daily_activity import (
 )
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import OwnedProxy, owned_proxy_process
-from integration._support.timing import assert_not_delayed_by, timed
+from integration._support.timing import assert_enforced_within, timed
+from litellm.constants import SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS
 from pydantic import JsonValue
 
 DAY_OUTSIDE_THE_WINDOW: Final = "2026-02-10"
-GIVES_UP_WITHIN_SECONDS: Final = 10
+LOCKED_LOOKUP_SLACK_SECONDS: Final = 5
 CONCURRENT_READS: Final = 20
 CACHED_MISS_CLEARS_WITHIN_SECONDS: Final = 45
 ALIAS_OF_ONE_SPEND_LOG: Final = (
@@ -456,8 +457,11 @@ def test_alias_lookup_gives_up_while_spend_logs_are_locked_and_answers_once_they
                 _names_the_key(api_key, alias),
                 seconds=CACHED_MISS_CLEARS_WITHIN_SECONDS,
             )
-            control: Final = timed(lambda: activity_of_key(owned.gateway, AGGREGATED_USER_ACTIVITY, api_key))
-    assert_not_delayed_by((locked.seconds,), control=(control.seconds,), injected_delay=GIVES_UP_WITHIN_SECONDS)
+    assert_enforced_within(
+        locked.seconds,
+        configured=SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS / 1000,
+        slack=LOCKED_LOOKUP_SLACK_SECONDS,
+    )
     assert_key_reported(locked.value, api_key, DAY, key_metadata(user=owner, email=email), seeded_metrics(1))
     assert_key_reported(unlocked, api_key, DAY, key_metadata(alias=alias, user=owner, email=email), seeded_metrics(1))
 

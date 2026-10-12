@@ -29,13 +29,14 @@ from integration._support.daily_activity import (
 )
 from integration._support.database import scratch_database
 from integration._support.process import OwnedProxy, group_members, owned_proxy_process
-from integration._support.timing import assert_not_delayed_by, timed
+from integration._support.timing import assert_enforced_within, timed
+from litellm.constants import SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS
 
 USER_ACTIVITY: Final = "/user/daily/activity"
 TEAM_ACTIVITY: Final = "/team/daily/activity"
 AGGREGATED_TEAM_ACTIVITY: Final = "/team/daily/activity/aggregated"
 KEYS_OF_ONE_TEAM: Final = 300
-GIVES_UP_WITHIN_SECONDS: Final = 10
+LOCKED_LOOKUP_SLACK_SECONDS: Final = 5
 READS_AFTER_THE_WORKER_IS_REPLACED: Final = 6
 
 
@@ -213,10 +214,14 @@ def test_owner_lookup_gives_up_while_daily_user_spend_is_locked_and_answers_once
         with daily_rows(rows, database_url=database_url):
             with locked_table(USER_SPEND, database_url=database_url):
                 locked: Final = timed(lambda: activity_of_key(owned.gateway, TEAM_ACTIVITY, api_key, team_ids=team))
-            unlocked: Final = timed(lambda: activity_of_key(owned.gateway, TEAM_ACTIVITY, api_key, team_ids=team))
-    assert_not_delayed_by((locked.seconds,), control=(unlocked.seconds,), injected_delay=GIVES_UP_WITHIN_SECONDS)
+            unlocked: Final = activity_of_key(owned.gateway, TEAM_ACTIVITY, api_key, team_ids=team)
+    assert_enforced_within(
+        locked.seconds,
+        configured=SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS / 1000,
+        slack=LOCKED_LOOKUP_SLACK_SECONDS,
+    )
     assert_key_reported(locked.value, api_key, DAY, key_metadata(), seeded_metrics(1))
-    assert_key_reported(unlocked.value, api_key, DAY, key_metadata(user=owner, email=email), seeded_metrics(1))
+    assert_key_reported(unlocked, api_key, DAY, key_metadata(user=owner, email=email), seeded_metrics(1))
 
 
 @pytest.mark.timeout(300)

@@ -34,11 +34,13 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, gateway_from_environment
 from integration._support.process import owned_proxy_process
-from integration._support.timing import assert_cut_short
+from integration._support.timing import assert_enforced_within
 from integration._support.wire import Reply, Request, wire_server
 
 SLOW_SECONDS: Final = 20
 FAST_SECONDS: Final = 3
+GUARDRAIL_TIMEOUT_SECONDS: Final = 1
+TIMEOUT_SLACK_SECONDS: Final = 7
 PROBE_CONCURRENCY: Final = 8
 TOKEN_PATH: Final = "/token"
 TOKEN_REPLY: Final = json.dumps(
@@ -331,7 +333,7 @@ def _rig_config(sink_url: str, root: Path) -> Path:
     config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["litellm_settings"]["cache"] = False
     config["guardrails"] = [
-        _guardrail(name, provider, sink_url, 1, dict(extra), mode)
+        _guardrail(name, provider, sink_url, GUARDRAIL_TIMEOUT_SECONDS, dict(extra), mode)
         for name, provider, extra, mode, _ in _provider_values()
     ] + [
         _guardrail("control-generic", "generic_guardrail_api", sink_url, None, {}, "pre_call"),
@@ -439,7 +441,7 @@ def test_litellm_params_timeout_bounds_outbound_call(
     outcome: Final = outcomes[name]
     calls: Final = rig.sink.calls_for(name)
     assert calls, f"{name}: sink saw no request for {provider}"
-    assert_cut_short(outcome.elapsed, injected_delay=SLOW_SECONDS)
+    assert_enforced_within(outcome.elapsed, configured=GUARDRAIL_TIMEOUT_SECONDS, slack=TIMEOUT_SLACK_SECONDS)
     assert isinstance(outcome.response, httpx.Response), f"{name}: client gave up: {outcome.response!r}"
     assert outcome.response.status_code != 504, outcome.response.text
 

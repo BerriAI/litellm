@@ -773,6 +773,8 @@ def test_an_elapsed_time_capped_by_a_number_is_flagged(tmp_path, assertion):
         "assert 2 <= elapsed",
         "assert elapsed < 25 * control_elapsed",
         "assert elapsed < control + injected_delay",
+        "assert_enforced_within(elapsed, configured=CAP_SECONDS, slack=15, not_before=CAP_SECONDS - 1)",
+        "assert_cut_short(time.monotonic() - started, injected_delay=30)",
         "assert after - baseline < BUDGET_SECONDS",
         "assert len(durations) == 3",
         "assert count < 2",

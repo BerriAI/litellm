@@ -26,7 +26,7 @@ from integration._support.client import (
 )
 from integration._support.database import read_rows, scratch_database
 from integration._support.process import owned_proxy, owned_proxy_process
-from integration._support.timing import assert_cut_short, timed
+from integration._support.timing import assert_cut_short, assert_within_factor_of_control, timed
 from integration._support.wire import Reply, Request, Wire, wire_server
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.common.v1.common_pb2 import KeyValue
@@ -334,8 +334,10 @@ def test_prompt_fetch_encodes_the_name_retries_a_5xx_once_and_keeps_langfuse_hea
     flaky_prompt: Final = f"{marker}/what?"
     encoded_flaky_prompt: Final = f"{marker}%2Fwhat%3F"
     missing_prompt: Final = marker + "-missing"
+    steady_prompt: Final = marker + "-steady"
 
     retry_after: Final = 30
+    retried_within_control_factor: Final = 3
     seen_prompt_gets: Final[list[str]] = []  # mutable-ok: the double counts attempts across requests
 
     def upstream(request: Request) -> Reply:
@@ -354,6 +356,8 @@ def test_prompt_fetch_encodes_the_name_retries_a_5xx_once_and_keeps_langfuse_hea
             if prior == 0:
                 return Reply(status=503, body=b'{"message":"try later"}', headers={"retry-after": str(retry_after)})
             return _text_prompt(flaky_prompt)
+        if request.target.startswith(PROMPTS_PATH + steady_prompt):
+            return _text_prompt(steady_prompt)
         seen_prompt_gets.append(request.target)
         return Reply(
             status=404,
@@ -375,20 +379,24 @@ def test_prompt_fetch_encodes_the_name_retries_a_5xx_once_and_keeps_langfuse_hea
         missing: Final = scenario.model(
             model="langfuse/gpt-4o-mini", prompt_id=missing_prompt, api_base=provider.url + "/v1", api_key="synthetic"
         )
-        call: Final = timed(
-            lambda: candidate.request(
+        steady: Final = scenario.model(
+            model="langfuse/gpt-4o-mini", prompt_id=steady_prompt, api_base=provider.url + "/v1", api_key="synthetic"
+        )
+
+        def cold_prompt_chat(model: str) -> httpx.Response:
+            return candidate.request(
                 "POST",
                 "/v1/chat/completions",
-                {
-                    "model": flaky,
-                    "messages": [{"role": "user", "content": marker}],
-                    "prompt_variables": {"word": marker},
-                },
+                {"model": model, "messages": [{"role": "user", "content": marker}], "prompt_variables": {"word": marker}},
             )
-        )
+
+        control: Final = timed(lambda: cold_prompt_chat(steady))
+        assert control.value.status_code == 200, control.value.text
+        call: Final = timed(lambda: cold_prompt_chat(flaky))
         response: Final = call.value
         assert response.status_code == 200, response.text
         assert_cut_short(call.seconds, injected_delay=retry_after)
+        assert_within_factor_of_control(call.seconds, control=control.seconds, factor=retried_within_control_factor)
         attempts: Final = tuple(
             target for target in seen_prompt_gets if target.startswith(PROMPTS_PATH + encoded_flaky_prompt)
         )

@@ -78,8 +78,10 @@ TQ011   An integration-test assertion that compares an elapsed time against a nu
         literal (`assert elapsed < 2`, `assert time.monotonic() - started <= 5`,
         `assert all(duration < 2 for ...)`). A fixed wall-clock bound measures the
         machine as much as the code, so it fails whenever sibling workers load the box.
-        Assert relative to a measured control or to the injected delay instead
-        (tests/integration/_support/timing.py). An operand is an elapsed time when it
+        Assert relative to a measured control or to the injected delay instead, or,
+        when the time is the behaviour under test (a cap, timeout or cooldown the
+        product enforces), against that configured value plus explicit slack with
+        `assert_enforced_within` (tests/integration/_support/timing.py). An operand is an elapsed time when it
         reads a clock (`time.monotonic()`, `time.perf_counter()`, `time.time()` and
         their `_ns` forms), names something called elapsed / duration / latency, or
         names a local the enclosing function bound to a clock reading. The other operand
@@ -867,7 +869,8 @@ def iter_wall_clock_bound_violations(path: Path, tree: ast.Module) -> Iterator[V
                 compare.lineno,
                 "TQ011",
                 "an elapsed time is capped by a fixed number, which fails whenever sibling workers load the "
-                "machine; bound it by a measured control or by the injected delay "
+                "machine; bound it by a measured control or by the injected delay, or a product-enforced limit by "
+                "its configured value plus slack with assert_enforced_within "
                 f"(tests/integration/_support/timing.py) (suppress: `# {SUPPRESSION_TOKEN}: <reason>`)",
             )
             for compare in capped
