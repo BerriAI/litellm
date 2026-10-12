@@ -152,7 +152,7 @@ class AWSEventStreamDecoder:
             )
 
         return GChunk(
-            text=_text,
+            text=_text or "",
             index=_index,
             is_finished=is_finished,
             finish_reason=finish_reason,

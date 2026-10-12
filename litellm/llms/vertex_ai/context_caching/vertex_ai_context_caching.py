@@ -1,4 +1,4 @@
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import (
     Final,
     Literal,
@@ -381,7 +381,7 @@ class ContextCachingEndpoints(VertexBase):
             "Content-Type": "application/json",
         }
         if isinstance(token, dict):
-            headers.update(token)
+            headers.update(cast(Mapping[str, str], token))
         elif token is not None:
             headers["Authorization"] = f"Bearer {token}"
         if extra_headers is not None:
@@ -435,7 +435,7 @@ class ContextCachingEndpoints(VertexBase):
         cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
             model=model,
             messages=cached_messages,
-            cache_key=generated_cache_key,
+            cache_key=generated_cache_key or "",
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
@@ -460,7 +460,7 @@ class ContextCachingEndpoints(VertexBase):
             response: Final = client.post(
                 url=url,
                 headers=headers,
-                json=cached_content_request_body,
+                json=cast(dict[str, object], cached_content_request_body),
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:
@@ -553,7 +553,7 @@ class ContextCachingEndpoints(VertexBase):
             "Content-Type": "application/json",
         }
         if isinstance(token, dict):
-            headers.update(token)
+            headers.update(cast(Mapping[str, str], token))
         elif token is not None:
             headers["Authorization"] = f"Bearer {token}"
         if extra_headers is not None:
@@ -603,7 +603,7 @@ class ContextCachingEndpoints(VertexBase):
         cached_content_request_body: Final = transform_openai_messages_to_gemini_context_caching(
             model=model,
             messages=cached_messages,
-            cache_key=generated_cache_key,
+            cache_key=generated_cache_key or "",
             custom_llm_provider=custom_llm_provider,
             vertex_project=vertex_project,
             vertex_location=vertex_location,
@@ -628,7 +628,7 @@ class ContextCachingEndpoints(VertexBase):
             response: Final = await client.post(
                 url=url,
                 headers=headers,
-                json=cached_content_request_body,
+                json=cast(dict[str, object], cached_content_request_body),
             )
             response.raise_for_status()
         except httpx.HTTPStatusError as err:

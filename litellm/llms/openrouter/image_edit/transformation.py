@@ -211,7 +211,7 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                 if img is None:
                     continue
                 mime_type = ImageEditRequestUtils.get_image_content_type(img)
-                image_bytes = self._read_image_bytes(img)
+                image_bytes = self._read_image_bytes(cast(FileTypes, img))
                 b64_data = base64.b64encode(image_bytes).decode("utf-8")
                 content_parts.append(
                     {
@@ -372,13 +372,13 @@ class OpenRouterImageEditConfig(BaseImageEditConfig):
                 input_image_tokens = prompt_tokens_details.get("image_tokens", 0)
 
             model_response.usage = ImageUsage(
-                input_tokens=prompt_tokens,
+                input_tokens=int(prompt_tokens),
                 input_tokens_details=ImageUsageInputTokensDetails(
-                    image_tokens=input_image_tokens,
-                    text_tokens=prompt_tokens - input_image_tokens,
+                    image_tokens=int(input_image_tokens),
+                    text_tokens=int(prompt_tokens - input_image_tokens),
                 ),
-                output_tokens=image_tokens,
-                total_tokens=total_tokens,
+                output_tokens=int(image_tokens),
+                total_tokens=int(total_tokens),
             )
 
             cost: Final = usage_data.get("cost")
