@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import signal
 import socket
 import subprocess
 import uuid
@@ -18,7 +17,6 @@ from types import MappingProxyType
 from typing import Final, Literal, TypeAlias, cast
 
 import httpx
-import psutil
 import pytest
 import yaml
 from integration._support.client import Gateway, JsonValue, eventually
@@ -596,19 +594,6 @@ def test_h2_stream_sink_gate_does_not_block_out_of_scope_calls(rig: ChaosRig, tm
             )
 
 
-def _worker_processes(owned: OwnedProxy) -> tuple[psutil.Process, ...]:
-    return tuple(
-        child for child in psutil.Process(owned.process.pid).children() if "spawn_main" in _process_command(child)
-    )
-
-
-def _process_command(process: psutil.Process) -> str:
-    try:
-        return " ".join(process.cmdline())
-    except psutil.Error:
-        return ""
-
-
 def _safe_response(future: Future[httpx.Response]) -> httpx.Response | None:
     try:
         return future.result(timeout=70)
@@ -636,14 +621,14 @@ def test_h3_worker_kill_mid_burst_keeps_remaining_worker_serving(rig: ChaosRig, 
             _rail(name_b, sink_b.url, "non_streaming", default_on=True),
         )
         with _owned_proxy(rig, tmp_path, rails, workers=2) as owned, ThreadPoolExecutor(max_workers=30) as pool:
-            workers: Final = _worker_processes(owned)
-            assert len(workers) == 2, tuple(worker.pid for worker in workers)
+            workers: Final = owned.worker_pids()
+            assert len(workers) == 2, workers
             futures: Final[tuple[Future[httpx.Response], ...]] = tuple(
                 pool.submit(_request, owned.gateway, plan, ()) for plan in plans
             )
             assert started.wait(timeout=30), "stream requests did not reach the owned sink"
-            victim: Final = workers[0]
-            survivor: Final = workers[1]
+            victim: Final = min(workers)
+            survivor: Final = max(workers)
             survivor_plan: Final = CallPlan(
                 f"audit-h3-survivor-{uuid.uuid4().hex}",
                 f"h3-survivor-{uuid.uuid4().hex}",
@@ -651,13 +636,14 @@ def test_h3_worker_kill_mid_burst_keeps_remaining_worker_serving(rig: ChaosRig, 
                 False,
             )
             try:
-                victim.send_signal(signal.SIGKILL)
-                survivor_response: Final = _request(owned.gateway, survivor_plan, ())
-                assert survivor_response.status_code == 200 and survivor_plan.marker in survivor_response.text, (
-                    survivor_response.status_code,
-                    survivor_response.text,
-                )
-                assert survivor.is_running(), survivor.pid
+                with owned.replacing_worker(victim) as kill:
+                    kill()
+                    survivor_response: Final = _request(owned.gateway, survivor_plan, ())
+                    assert survivor_response.status_code == 200 and survivor_plan.marker in survivor_response.text, (
+                        survivor_response.status_code,
+                        survivor_response.text,
+                    )
+                    assert survivor in owned.worker_pids(), survivor
             finally:
                 release.set()
             responses: Final = tuple(_safe_response(future) for future in futures)

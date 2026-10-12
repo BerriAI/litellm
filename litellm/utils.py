@@ -9018,6 +9018,8 @@ class ProviderConfigManager:
             return litellm.TypeSafeDecisionsConfig()
         if provider == LlmProviders.OPENROUTER:
             return litellm.OpenRouterDecisionsConfig()
+        if provider == LlmProviders.FIREWORKS_AI:
+            return litellm.FireworksAIDecisionsConfig()
         if provider == LlmProviders.CLOUDFLARE:
             return litellm.CloudflareDecisionsConfig()
         if provider == LlmProviders.STRANDS_DECIDER:

@@ -1,7 +1,6 @@
-use crate::Error;
+use litellm_llms_types::providers::vertex_ai::{GLOBAL_API_BASE, GLOBAL_LOCATION};
 
-const GLOBAL_LOCATION: &str = "global";
-pub const DEFAULT_VERTEX_LOCATION: &str = "us-central1";
+use crate::Error;
 
 fn is_location_token(location: &str) -> bool {
     !location.is_empty()
@@ -37,7 +36,7 @@ pub fn validate_vertex_location(location: &str) -> Result<&str, Error> {
 pub fn get_vertex_base_url(location: &str) -> Result<String, Error> {
     let location = validate_vertex_location(location)?;
     if location == GLOBAL_LOCATION {
-        return Ok("https://aiplatform.googleapis.com".to_string());
+        return Ok(GLOBAL_API_BASE.to_string());
     }
     if !location.contains('-') {
         return Ok(format!("https://aiplatform.{location}.rep.googleapis.com"));
