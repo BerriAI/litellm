@@ -707,7 +707,7 @@ class RedisCache(BaseCache):
             self.redis_flush_size: int = 100
         else:
             self.redis_flush_size = redis_flush_size
-        self.redis_version = "Unknown"
+        self.redis_version: str = "Unknown"
         try:
             if not coroutine_checker.is_async_callable(self.redis_client):
                 self.redis_version = self.redis_client.info()["redis_version"]
@@ -799,6 +799,8 @@ class RedisCache(BaseCache):
     def init_async_client(
         self,
     ) -> async_redis_client | async_redis_cluster_client:
+        from redis.asyncio import RedisCluster
+
         from litellm import in_memory_llm_clients_cache
 
         from .._redis import get_redis_async_client, get_redis_connection_pool
@@ -811,7 +813,11 @@ class RedisCache(BaseCache):
             # Create new connection pool and client for current event loop
             self.async_redis_conn_pool = get_redis_connection_pool(**self.redis_kwargs)
             redis_async_client = get_redis_async_client(connection_pool=self.async_redis_conn_pool, **self.redis_kwargs)
-            in_memory_llm_clients_cache.set_cache(key=cache_key, value=redis_async_client)
+            in_memory_llm_clients_cache.set_cache(
+                key=cache_key,
+                value=redis_async_client,
+                litellm_owned_client=isinstance(redis_async_client, RedisCluster),
+            )
 
         self.redis_async_client = redis_async_client
         return redis_async_client
@@ -881,9 +887,15 @@ class RedisCache(BaseCache):
             # Fallback for unparseable versions (e.g., "v7.0.0", "latest")
             return DEFAULT_REDIS_MAJOR_VERSION
 
-    def set_cache(self, key, value, **kwargs):
+    def set_cache(self, key: str, value: object, **kwargs):
         ttl: Final = self.get_ttl(**kwargs)
-        print_verbose(f"Set Redis Cache: key: {key}\nValue {value}\nttl={ttl}, redis_version={self.redis_version}")
+        print_verbose(
+            "Set Redis Cache: key: %s\nValue %s\nttl=%s, redis_version=%s",
+            key,
+            value,
+            ttl,
+            self.redis_version,
+        )
         key = self.check_and_fix_namespace(key=key)
         try:
             start_time: Final = time.time()
@@ -1136,7 +1148,7 @@ class RedisCache(BaseCache):
         raise ValueError("Redis client does not support Lua script registration")
 
     @_redis_circuit_breaker_guard
-    async def async_set_cache(self, key, value, **kwargs):
+    async def async_set_cache(self, key: str | None, value: object, **kwargs):
         from redis.asyncio import Redis
 
         if key is None:
@@ -1172,7 +1184,7 @@ class RedisCache(BaseCache):
         key = self.check_and_fix_namespace(key=key)
         ttl: Final = self.get_ttl(**kwargs)
         nx: Final = kwargs.get("nx", False)
-        print_verbose(f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
+        print_verbose("Set ASYNC Redis Cache: key: %s\nValue %s\nttl=%s", key, value, ttl)
 
         try:
             if not hasattr(_redis_client, "set"):
@@ -1183,7 +1195,7 @@ class RedisCache(BaseCache):
                 nx=nx,
                 ex=ttl,
             )
-            print_verbose(f"Successfully Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
+            print_verbose("Successfully Set ASYNC Redis Cache: key: %s\nValue %s\nttl=%s", key, value, ttl)
             end_time = time.time()
             _duration = end_time - start_time
             asyncio.create_task(
@@ -1231,7 +1243,7 @@ class RedisCache(BaseCache):
         # Iterate through each key-value pair in the cache_list and set them in the pipeline.
         for cache_key, cache_value in cache_list:
             cache_key = self.check_and_fix_namespace(key=cache_key)
-            print_verbose(f"Set ASYNC Redis Cache PIPELINE: key: {cache_key}\nValue {cache_value}\nttl={ttl}")
+            print_verbose("Set ASYNC Redis Cache PIPELINE: key: %s\nValue %s\nttl=%s", cache_key, cache_value, ttl)
             json_cache_value = json.dumps(cache_value)
             # Set the value with a TTL if it's provided.
             _td: timedelta | None = None
@@ -1260,7 +1272,12 @@ class RedisCache(BaseCache):
         _redis_client: Final = self.init_async_client()
         start_time: Final = time.time()
 
-        print_verbose(f"Set Async Redis Cache: key list: {cache_list}\nttl={ttl}, redis_version={self.redis_version}")
+        print_verbose(
+            "Set Async Redis Cache: key list: %s\nttl=%s, redis_version=%s",
+            cache_list,
+            ttl,
+            self.redis_version,
+        )
         try:
             async with _redis_client.pipeline(transaction=False) as pipe:
                 results: Final = await self._pipeline_helper(pipe, cache_list, ttl)
@@ -1398,10 +1415,10 @@ class RedisCache(BaseCache):
             raise e
 
         key = self.check_and_fix_namespace(key=key)
-        print_verbose(f"Set ASYNC Redis Cache: key: {key}\nValue {value}\nttl={ttl}")
+        print_verbose("Set ASYNC Redis Cache: key: %s\nValue %s\nttl=%s", key, value, ttl)
         try:
             await self._set_cache_sadd_helper(redis_client=_redis_client, key=key, value=value, ttl=ttl)
-            print_verbose(f"Successfully Set ASYNC Redis Cache SADD: key: {key}\nValue {value}\nttl={ttl}")
+            print_verbose("Successfully Set ASYNC Redis Cache SADD: key: %s\nValue %s\nttl=%s", key, value, ttl)
             end_time = time.time()
             _duration = end_time - start_time
             asyncio.create_task(
@@ -1607,7 +1624,7 @@ class RedisCache(BaseCache):
                 end_time=end_time,
                 parent_otel_span=parent_otel_span,
             )
-            print_verbose(f"Got Redis Cache: key: {key}, cached_response {cached_response}")
+            print_verbose("Got Redis Cache: key: %s, cached_response %s", key, cached_response)
             return self._get_cache_logic(cached_response=cached_response)
         except Exception as e:
             log_redis_failure(
@@ -1716,7 +1733,7 @@ class RedisCache(BaseCache):
         try:
             print_verbose(f"Get Async Redis Cache: key: {namespaced_key}")
             cached_response: Final = await commands.get(namespaced_key)
-            print_verbose(f"Got Async Redis Cache: key: {namespaced_key}, cached_response {cached_response}")
+            print_verbose("Got Async Redis Cache: key: %s, cached_response %s", namespaced_key, cached_response)
             decoded: Final = self._get_cache_logic(cached_response=cached_response)
         except Exception as e:
             failed_at: Final = time.time()
@@ -2026,7 +2043,7 @@ class RedisCache(BaseCache):
         _redis_client: Final[Redis] = self.init_async_client()
         start_time: Final = time.time()
 
-        print_verbose(f"Increment Async Redis Cache Pipeline: increment list: {increment_list}")
+        print_verbose("Increment Async Redis Cache Pipeline: increment list: %s", increment_list)
 
         try:
             async with _redis_client.pipeline(transaction=False) as pipe:

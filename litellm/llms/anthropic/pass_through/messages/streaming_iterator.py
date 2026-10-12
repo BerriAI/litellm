@@ -421,7 +421,7 @@ class BaseAnthropicMessagesStreamingIterator:
         if self.completion_start_time is not None:
             self.litellm_logging_obj.completion_start_time = self.completion_start_time
             self.litellm_logging_obj.model_call_details["completion_start_time"] = self.completion_start_time
-        logging_coroutine: Final = PassThroughStreamingHandler._route_streaming_logging_to_handler(
+        logging_coroutine: Final = PassThroughStreamingHandler.route_streaming_logging_to_handler(
             litellm_logging_obj=self.litellm_logging_obj,
             passthrough_success_handler_obj=GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
             url_route="/v1/messages",

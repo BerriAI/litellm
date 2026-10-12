@@ -514,9 +514,9 @@ def test_call_with_user_over_budget(prisma_client):
 
         # update spend using track_cost callback, make 2nd request, it should fail
         from litellm import Choices, Message, ModelResponse, Usage
-        from litellm.proxy.proxy_server import _ProxyDBLogger
+        from litellm.proxy.proxy_server import ProxyDBLogger
 
-        proxy_db_logger = _ProxyDBLogger()
+        proxy_db_logger = ProxyDBLogger()
 
         resp = ModelResponse(
             id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -612,9 +612,9 @@ def test_call_with_end_user_over_budget(prisma_client):
 
         # update spend using track_cost callback, make 2nd request, it should fail
         from litellm import Choices, Message, ModelResponse, Usage
-        from litellm.proxy.proxy_server import _ProxyDBLogger
+        from litellm.proxy.proxy_server import ProxyDBLogger
 
-        proxy_db_logger = _ProxyDBLogger()
+        proxy_db_logger = ProxyDBLogger()
 
         resp = ModelResponse(
             id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -722,9 +722,9 @@ def test_call_with_proxy_over_budget(prisma_client):
 
         # update spend using track_cost callback, make 2nd request, it should fail
         from litellm import Choices, Message, ModelResponse, Usage
-        from litellm.proxy.proxy_server import _ProxyDBLogger
+        from litellm.proxy.proxy_server import ProxyDBLogger
 
-        proxy_db_logger = _ProxyDBLogger()
+        proxy_db_logger = ProxyDBLogger()
 
         resp = ModelResponse(
             id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -814,9 +814,9 @@ def test_call_with_user_over_budget_stream(prisma_client):
 
         # update spend using track_cost callback, make 2nd request, it should fail
         from litellm import Choices, Message, ModelResponse, Usage
-        from litellm.proxy.proxy_server import _ProxyDBLogger
+        from litellm.proxy.proxy_server import ProxyDBLogger
 
-        proxy_db_logger = _ProxyDBLogger()
+        proxy_db_logger = ProxyDBLogger()
 
         resp = ModelResponse(
             id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -921,9 +921,9 @@ def test_call_with_proxy_over_budget_stream(prisma_client):
 
         # update spend using track_cost callback, make 2nd request, it should fail
         from litellm import Choices, Message, ModelResponse, Usage
-        from litellm.proxy.proxy_server import _ProxyDBLogger
+        from litellm.proxy.proxy_server import ProxyDBLogger
 
-        proxy_db_logger = _ProxyDBLogger()
+        proxy_db_logger = ProxyDBLogger()
 
         resp = ModelResponse(
             id="chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac",
@@ -1573,9 +1573,9 @@ def test_call_with_key_over_budget(prisma_client):
         # update spend using track_cost callback, make 2nd request, it should fail
         from litellm import Choices, Message, ModelResponse, Usage
         from litellm.caching.caching import Cache
-        from litellm.proxy.proxy_server import _ProxyDBLogger
+        from litellm.proxy.proxy_server import ProxyDBLogger
 
-        proxy_db_logger = _ProxyDBLogger()
+        proxy_db_logger = ProxyDBLogger()
 
         litellm.cache = Cache()
         import time
@@ -1690,7 +1690,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
         print("result from user auth with new key", result)
 
         # update spend using track_cost callback, make 2nd request, it should fail
-        from litellm.proxy.proxy_server import _ProxyDBLogger
+        from litellm.proxy.proxy_server import ProxyDBLogger
         from litellm.proxy.proxy_server import user_api_key_cache
 
         user_api_key_cache.in_memory_cache.cache_dict = {}
@@ -1720,7 +1720,7 @@ def test_call_with_key_over_budget_no_cache(prisma_client):
             model="gpt-35-turbo",  # azure always has model written like this
             usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
         )
-        proxy_db_logger = _ProxyDBLogger()
+        proxy_db_logger = ProxyDBLogger()
         await proxy_db_logger._PROXY_track_cost_callback(
             kwargs={
                 "model": "chatgpt-v-3",
@@ -1943,9 +1943,9 @@ async def test_call_with_key_never_over_budget(prisma_client):
         from litellm._uuid import uuid
 
         from litellm import Choices, Message, ModelResponse, Usage
-        from litellm.proxy.proxy_server import _ProxyDBLogger
+        from litellm.proxy.proxy_server import ProxyDBLogger
 
-        proxy_db_logger = _ProxyDBLogger()
+        proxy_db_logger = ProxyDBLogger()
 
         request_id = f"chatcmpl-{uuid.uuid4()}"
 
@@ -2034,9 +2034,9 @@ async def test_call_with_key_over_budget_stream(prisma_client):
     from litellm._uuid import uuid
 
     from litellm import Choices, Message, ModelResponse, Usage
-    from litellm.proxy.proxy_server import _ProxyDBLogger
+    from litellm.proxy.proxy_server import ProxyDBLogger
 
-    proxy_db_logger = _ProxyDBLogger()
+    proxy_db_logger = ProxyDBLogger()
 
     request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
     resp = ModelResponse(
@@ -2346,31 +2346,31 @@ async def test_upperbound_key_param_none_duration(prisma_client):
 
 
 def test_get_bearer_token():
-    from litellm.proxy.auth.user_api_key_auth import _get_bearer_token
+    from litellm.proxy.auth.user_api_key_auth import get_bearer_token
 
     # Test valid Bearer token
     api_key = "Bearer valid_token"
-    result = _get_bearer_token(api_key)
+    result = get_bearer_token(api_key)
     assert result == "valid_token", f"Expected 'valid_token', got '{result}'"
 
     # Test empty API key
     api_key = ""
-    result = _get_bearer_token(api_key)
+    result = get_bearer_token(api_key)
     assert result == "", f"Expected '', got '{result}'"
 
     # Test API key without Bearer prefix
     api_key = "invalid_token"
-    result = _get_bearer_token(api_key)
+    result = get_bearer_token(api_key)
     assert result == "", f"Expected '', got '{result}'"
 
     # Test API key with Bearer prefix and extra spaces
     api_key = "  Bearer   valid_token  "
-    result = _get_bearer_token(api_key)
+    result = get_bearer_token(api_key)
     assert result == "", f"Expected '', got '{result}'"
 
     # Test API key with Bearer prefix and no token
     api_key = "Bearer sk-9876"
-    result = _get_bearer_token(api_key)
+    result = get_bearer_token(api_key)
     assert result == "sk-9876", f"Expected 'sk-9876', got '{result}'"
 
 
@@ -2507,7 +2507,7 @@ async def track_cost_callback_helper_fn(generated_key: str, user_id: str):
     from litellm._uuid import uuid
 
     from litellm import Choices, Message, ModelResponse, Usage
-    from litellm.proxy.proxy_server import _ProxyDBLogger
+    from litellm.proxy.proxy_server import ProxyDBLogger
 
     request_id = f"chatcmpl-e41836bb-bb8b-4df2-8e70-8f3e160155ac{uuid.uuid4()}"
     resp = ModelResponse(
@@ -2525,7 +2525,7 @@ async def track_cost_callback_helper_fn(generated_key: str, user_id: str):
         model="gpt-35-turbo",  # azure always has model written like this
         usage=Usage(prompt_tokens=210, completion_tokens=200, total_tokens=410),
     )
-    proxy_db_logger = _ProxyDBLogger()
+    proxy_db_logger = ProxyDBLogger()
     await proxy_db_logger._PROXY_track_cost_callback(
         kwargs={
             "call_type": "acompletion",

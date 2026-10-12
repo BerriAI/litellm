@@ -11,6 +11,7 @@ import pytest
 
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.anthropic.pass_through.stream_assembly import extract_sse_data
 from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
     AnthropicPassthroughLoggingHandler,
 )
@@ -165,7 +166,7 @@ class TestAnthropicLoggingHandlerModelFallback:
         return mock_handler
 
     @patch.object(
-        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
     )
     @patch.object(
         AnthropicPassthroughLoggingHandler, "_create_anthropic_response_logging_payload"
@@ -2288,9 +2289,7 @@ class TestAnthropicUsageOnlyFallback:
     def test_extract_sse_data_handles_malformed_and_sentinel_lines(
         self, event_str, expected
     ):
-        assert (
-            AnthropicPassthroughLoggingHandler._extract_sse_data(event_str) == expected
-        )
+        assert extract_sse_data(event_str) == expected
 
     def _real_logging_obj(self):
         from litellm.litellm_core_utils.litellm_logging import Logging as RealLoggingObj
@@ -2310,7 +2309,7 @@ class TestAnthropicUsageOnlyFallback:
 
     @patch("litellm.completion_cost")
     @patch.object(
-        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
     )
     def test_handler_falls_back_when_assembly_returns_none(
         self, mock_assemble, mock_cost
@@ -2336,7 +2335,7 @@ class TestAnthropicUsageOnlyFallback:
 
     @patch("litellm.completion_cost")
     @patch.object(
-        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
     )
     def test_handler_falls_back_when_assembly_raises(self, mock_assemble, mock_cost):
         import litellm
@@ -2368,7 +2367,7 @@ class TestAnthropicUsageOnlyFallback:
         assert result["kwargs"]["response_cost"] == 0.0021
 
     @patch.object(
-        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
     )
     def test_handler_returns_none_when_no_usage_recoverable(self, mock_assemble):
         # assembly fails AND the chunks carry no usage event, so there is nothing
@@ -2392,10 +2391,10 @@ class TestAnthropicUsageOnlyFallback:
         assert result["kwargs"] == {}
 
     @patch.object(
-        AnthropicPassthroughLoggingHandler, "_build_usage_only_response_from_chunks"
+        AnthropicPassthroughLoggingHandler, "build_usage_only_response_from_chunks"
     )
     @patch.object(
-        AnthropicPassthroughLoggingHandler, "_build_complete_streaming_response"
+        AnthropicPassthroughLoggingHandler, "build_complete_streaming_response"
     )
     def test_handler_does_not_crash_when_usage_only_fallback_raises(
         self, mock_assemble, mock_fallback
@@ -2839,11 +2838,7 @@ def test_handle_logging_anthropic_collected_chunks(all_chunks):
         "all_chunks": all_chunks,
     }
 
-    result = (
-        AnthropicPassthroughLoggingHandler._handle_logging_anthropic_collected_chunks(
-            **sent_args
-        )
-    )
+    result = AnthropicPassthroughLoggingHandler.handle_logging_anthropic_collected_chunks(**sent_args)
 
     assert isinstance(result["result"], ModelResponse)
     print("result=", json.dumps(result, indent=4, default=str))
@@ -2857,7 +2852,7 @@ def test_build_complete_streaming_response(all_chunks):
 
     litellm_logging_obj = Mock()
 
-    result = AnthropicPassthroughLoggingHandler._build_complete_streaming_response(
+    result = AnthropicPassthroughLoggingHandler.build_complete_streaming_response(
         all_chunks=all_chunks,
         model="claude-sonnet-4-5-20250929",
         litellm_logging_obj=litellm_logging_obj,
@@ -2867,3 +2862,46 @@ def test_build_complete_streaming_response(all_chunks):
     assert result.usage.prompt_tokens == 17
     assert result.usage.completion_tokens == 249
     assert result.usage.total_tokens == 266
+
+
+@pytest.mark.parametrize(
+    "end_user_id",
+    [{"litellm_metadata": {"user": "test"}}, {"metadata": {"user_id": "test"}}],
+)
+def test_get_user_from_metadata(end_user_id):
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+        AnthropicPassthroughLoggingHandler,
+        PassthroughStandardLoggingPayload,
+    )
+
+    passthrough_logging_payload: Final = PassthroughStandardLoggingPayload(
+        url="https://api.anthropic.com/v1/messages",
+        request_body={**end_user_id},
+        response_body={
+            "id": "msg_015uSaCZBvu9gUSkAmZtMfxC",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-sonnet-4-5-20250929",
+            "content": [
+                {
+                    "type": "text",
+                    "text": "Now I'll click on the Firefox icon to launch it.",
+                },
+                {
+                    "type": "tool_use",
+                    "id": "toolu_01TQsF5p7Pf4LGKyLUDDySVr",
+                    "name": "computer",
+                    "input": {"action": "mouse_move", "coordinate": [24, 36]},
+                },
+            ],
+            "stop_reason": "tool_use",
+            "stop_sequence": None,
+            "usage": {"input_tokens": 2202, "output_tokens": 89},
+        },
+    )
+
+    response: Final = AnthropicPassthroughLoggingHandler._get_user_from_metadata(
+        passthrough_logging_payload=passthrough_logging_payload
+    )
+
+    assert response == "test"

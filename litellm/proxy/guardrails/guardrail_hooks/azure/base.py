@@ -26,7 +26,9 @@ AZURE_CONTENT_SAFETY_TEXT_RECORD_LENGTH: Final = 1000
 AZURE_CONTENT_SAFETY_DEFAULT_API_VERSION: Final = "2024-09-01"
 JAVELIN_API_VERSION_STORED_BY_OLDER_RELEASES: Final = "v1"
 
-_RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
+RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
+
+_RESPONSES_API_CALL_TYPES: Final = RESPONSES_API_CALL_TYPES
 
 
 def resolve_content_safety_api_version(configured: str | None) -> str:
@@ -155,7 +157,7 @@ class AzureGuardrailBase:
         return get_last_user_message(messages)
 
     def get_user_prompt_from_request(self, data: Mapping[str, object], call_type: CallTypesLiteral) -> str | None:
-        if call_type in _RESPONSES_API_CALL_TYPES:
+        if call_type in RESPONSES_API_CALL_TYPES:
             responses_input: Final = data.get("input")
             if not isinstance(responses_input, (str, list)):
                 return None
