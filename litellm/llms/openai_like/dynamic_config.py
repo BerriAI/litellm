@@ -66,6 +66,13 @@ def create_config_class(provider: SimpleProviderConfig):
             if not resolved_base:
                 resolved_base = provider.base_url
 
+            if (
+                provider.special_handling.get("require_api_key_for_custom_base")
+                and resolved_base.rstrip("/") != provider.base_url.rstrip("/")
+                and not api_key
+            ):
+                raise ValueError(f"An explicit api_key is required for {provider.slug} when overriding api_base")
+
             # Resolve API key
             resolved_key: Final = api_key or get_secret_str(provider.api_key_env)
 
