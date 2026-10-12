@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import Final
 
 import httpx
-from pydantic import ConfigDict, RootModel, TypeAdapter, with_config
+from pydantic import BaseModel, ConfigDict, Field, RootModel, TypeAdapter, ValidationError, with_config
 from typing_extensions import ReadOnly, Required, TypedDict
 
 import litellm
@@ -13,7 +13,7 @@ from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.types.utils import GenericStreamingChunk as GChunk
 from litellm.types.utils import StreamingChatCompletionChunk
 
-_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
+STR_KEYED_MAPPING: Final = TypeAdapter(Mapping[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 @with_config(ConfigDict(extra="allow", strict=True, hide_input_in_errors=True))
@@ -54,7 +54,9 @@ def _load_sagemaker_response_stream_shape():
         from botocore.model import ServiceModel
 
         loader: Final = Loader()
-        service_dict: Final = _JSON_OBJECT.validate_python(loader.load_service_model("sagemaker-runtime", "service-2"))
+        service_dict: Final = STR_KEYED_MAPPING.validate_python(
+            loader.load_service_model("sagemaker-runtime", "service-2")
+        )
         return ServiceModel(service_dict).shape_for("InvokeEndpointWithResponseStreamOutput")
     except Exception as e:
         verbose_logger.warning(
@@ -74,6 +76,38 @@ def get_sagemaker_response_stream_shape():
     decoding is actually needed.
     """
     return _load_sagemaker_response_stream_shape()
+
+
+def with_inference_component_hint(error_message: str) -> str:
+    if "Inference Component Name header is required" in error_message:
+        return f"{error_message}\n pass in via `litellm.embedding(..., model_id={{InferenceComponentName}})`"
+    if "Inference Component Name header is not allowed" in error_message:
+        return f"{error_message}\n remove `model_id` from this deployment, the endpoint has no inference components"
+    return error_message
+
+
+class _ClientErrorBody(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    message: str | None = Field(default=None, alias="Message")
+
+
+class _ClientErrorMetadata(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    http_status_code: int = Field(default=500, alias="HTTPStatusCode")
+
+
+class _ClientErrorResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore", frozen=True)
+    error: _ClientErrorBody = Field(default_factory=_ClientErrorBody, alias="Error")
+    response_metadata: _ClientErrorMetadata = Field(default_factory=_ClientErrorMetadata, alias="ResponseMetadata")
+
+
+def client_error_details(error: Exception) -> tuple[int, str]:
+    try:
+        response: Final = _ClientErrorResponse.model_validate(getattr(error, "response", None))
+    except ValidationError:
+        return 500, str(error)
+    return response.response_metadata.http_status_code, response.error.message or str(error)
 
 
 class SagemakerError(BaseLLMException):

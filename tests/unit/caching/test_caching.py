@@ -1548,3 +1548,23 @@ async def test_redis_caching_ttl_sadd(
     )
 
     redis_client.expire.assert_awaited_once_with("cache-key", timedelta(seconds=120))
+
+
+def test_cache_key_separates_model_ids_unless_a_model_group_owns_the_key() -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    variants: Final[tuple[dict[str, object], ...]] = (
+        {"model_id": "component-a"},
+        {"model_id": "component-b"},
+        {},
+        {"model_id": "component-a"},
+        {"model_id": "component-a", "metadata": {"model_group": "embed"}},
+        {"model_id": "component-b", "metadata": {"model_group": "embed"}},
+    )
+    key_a, key_b, bare, key_a_again, grouped_a, grouped_b = (
+        cache.get_cache_key(model="sagemaker/openai/embed", input=["hello"], **extra) for extra in variants
+    )
+
+    assert key_a != key_b
+    assert key_a != bare
+    assert key_a == key_a_again
+    assert grouped_a == grouped_b
