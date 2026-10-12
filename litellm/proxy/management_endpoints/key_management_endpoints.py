@@ -122,6 +122,7 @@ from litellm.proxy.management_helpers.access_group_key_sync import (
     sync_key_update_access_group_membership,
 )
 from litellm.proxy.management_helpers.key_settings_audit import with_settings_updated_at
+from litellm.proxy.management_helpers.managed_resource_owner_sync import repoint_key_owned_managed_resources
 from litellm.proxy.management_helpers.object_permission_utils import (  # noqa: F401  # legacy module exports
     ObjectPermissionUpsert,
     _set_object_permission,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
@@ -5956,6 +5957,13 @@ async def _execute_virtual_key_regeneration(
         )
 
     await evict_and_broadcast(cache_keys=jwt_mapping_cache_keys, user_api_key_cache=user_api_key_cache)
+
+    await repoint_key_owned_managed_resources(
+        prisma_client=prisma_client,
+        existing_key_row=key_in_db,
+        previous_key_token=hashed_api_key,
+        new_key_token=new_token_hash,
+    )
 
     # After credential invalidation, so a failure here can never keep the old key alive.
     await sync_key_regeneration_access_group_membership(

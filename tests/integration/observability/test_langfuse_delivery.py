@@ -1,20 +1,18 @@
 import asyncio
 import base64
 import json
-import signal
 import threading
-import time
 import uuid
 from collections.abc import Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
+from queue import SimpleQueue
 from typing import Final
 
 import anthropic
 import httpx
 import openai
-import psutil
 import pytest
 import yaml
 from _s3_v2_support import _chat_stream_frames, _responses_stream_frames
@@ -27,7 +25,8 @@ from integration._support.client import (
     string_value,
 )
 from integration._support.database import read_rows, scratch_database
-from integration._support.process import group_members, owned_proxy, owned_proxy_process
+from integration._support.process import owned_proxy, owned_proxy_process
+from integration._support.timing import assert_cut_short, assert_within_factor_of_control, timed
 from integration._support.wire import Reply, Request, Wire, wire_server
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.common.v1.common_pb2 import KeyValue
@@ -335,7 +334,10 @@ def test_prompt_fetch_encodes_the_name_retries_a_5xx_once_and_keeps_langfuse_hea
     flaky_prompt: Final = f"{marker}/what?"
     encoded_flaky_prompt: Final = f"{marker}%2Fwhat%3F"
     missing_prompt: Final = marker + "-missing"
+    steady_prompt: Final = marker + "-steady"
 
+    retry_after: Final = 30
+    retried_within_control_factor: Final = 3
     seen_prompt_gets: Final[list[str]] = []  # mutable-ok: the double counts attempts across requests
 
     def upstream(request: Request) -> Reply:
@@ -352,8 +354,10 @@ def test_prompt_fetch_encodes_the_name_retries_a_5xx_once_and_keeps_langfuse_hea
             prior: Final = sum(1 for seen in seen_prompt_gets if seen.startswith(PROMPTS_PATH + encoded_flaky_prompt))
             seen_prompt_gets.append(request.target)
             if prior == 0:
-                return Reply(status=503, body=b'{"message":"try later"}', headers={"retry-after": "30"})
+                return Reply(status=503, body=b'{"message":"try later"}', headers={"retry-after": str(retry_after)})
             return _text_prompt(flaky_prompt)
+        if request.target.startswith(PROMPTS_PATH + steady_prompt):
+            return _text_prompt(steady_prompt)
         seen_prompt_gets.append(request.target)
         return Reply(
             status=404,
@@ -375,15 +379,24 @@ def test_prompt_fetch_encodes_the_name_retries_a_5xx_once_and_keeps_langfuse_hea
         missing: Final = scenario.model(
             model="langfuse/gpt-4o-mini", prompt_id=missing_prompt, api_base=provider.url + "/v1", api_key="synthetic"
         )
-        started: Final = time.monotonic()
-        response: Final = candidate.request(
-            "POST",
-            "/v1/chat/completions",
-            {"model": flaky, "messages": [{"role": "user", "content": marker}], "prompt_variables": {"word": marker}},
+        steady: Final = scenario.model(
+            model="langfuse/gpt-4o-mini", prompt_id=steady_prompt, api_base=provider.url + "/v1", api_key="synthetic"
         )
-        elapsed: Final = time.monotonic() - started
+
+        def cold_prompt_chat(model: str) -> httpx.Response:
+            return candidate.request(
+                "POST",
+                "/v1/chat/completions",
+                {"model": model, "messages": [{"role": "user", "content": marker}], "prompt_variables": {"word": marker}},
+            )
+
+        control: Final = timed(lambda: cold_prompt_chat(steady))
+        assert control.value.status_code == 200, control.value.text
+        call: Final = timed(lambda: cold_prompt_chat(flaky))
+        response: Final = call.value
         assert response.status_code == 200, response.text
-        assert elapsed < 5, f"a retried cold prompt miss took {elapsed:.1f}s"
+        assert_cut_short(call.seconds, injected_delay=retry_after)
+        assert_within_factor_of_control(call.seconds, control=control.seconds, factor=retried_within_control_factor)
         attempts: Final = tuple(
             target for target in seen_prompt_gets if target.startswith(PROMPTS_PATH + encoded_flaky_prompt)
         )
@@ -1723,12 +1736,17 @@ def test_audit_sink_outage_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_p
     baggage_session: Final = "baggage-" + marker
     targets: Final[list[str]] = []  # mutable-ok: the upstream records every hit
     outage: Final = threading.Event()
+    rejected_export: Final = threading.Event()
+    accepted: Final[SimpleQueue[Request]] = SimpleQueue()
 
     def langfuse(request: Request) -> Reply:
         if outage.is_set():
+            if request.method == "POST" and request.target == TRACES_PATH:
+                rejected_export.set()
             return Reply(status=503)
         if request.method == "GET" and request.target.startswith(PROJECTS_PATH):
             return _projects()
+        accepted.put(request)
         return Reply(body=b"", content_type="application/x-protobuf")
 
     with (
@@ -1767,6 +1785,7 @@ def test_audit_sink_outage_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_p
         outage.set()
         with ThreadPoolExecutor(max_workers=30) as pool:
             first_wave: Final = tuple(pool.map(fire, jobs[:10]))
+        assert rejected_export.wait(timeout=10), "the exporter did not reach the scripted outage"
         unhealthy: Final = candidate.request("GET", "/health/services?service=langfuse")
         assert unhealthy.status_code != 200 or "unhealthy" in unhealthy.text, (
             f"langfuse must report unhealthy while the sink 503s: {unhealthy.status_code} {unhealthy.text}"
@@ -1786,7 +1805,7 @@ def test_audit_sink_outage_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_p
         received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
         delivered: Final = eventually(
             lambda: (
-                received.extend(destination.drain()) or tuple(
+                received.extend(accepted.get_nowait() for _ in range(accepted.qsize())) or tuple(
                     span
                     for span in _spans(received)
                     if _attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id")
@@ -1848,12 +1867,8 @@ def test_audit_surviving_worker_keeps_serving_after_kill(gateway: Gateway, tmp_p
     ):
         candidate: Final = owned.gateway
         model: Final = scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
-        workers: Final = tuple(
-            member for member in group_members(owned.process.pid) if member.pid != owned.process.pid
-        )
+        workers: Final = owned.worker_pids()
         assert workers, "expected worker processes under the owned proxy"
-        workers[0].send_signal(signal.SIGKILL)
-        psutil.wait_procs([workers[0]], timeout=5)
 
         def fire(index: int) -> tuple[str, httpx.Response]:
             caller_trace: Final = uuid.uuid4().hex
@@ -1871,7 +1886,8 @@ def test_audit_surviving_worker_keeps_serving_after_kill(gateway: Gateway, tmp_p
             )
             return caller_session, response
 
-        with ThreadPoolExecutor(max_workers=10) as pool:
+        with owned.replacing_worker(min(workers)) as kill, ThreadPoolExecutor(max_workers=10) as pool:
+            kill()
             answered: Final = tuple(pool.map(fire, range(10)))
         received: Final[list[Request]] = []  # mutable-ok: drain() consumes the queue, later polls keep earlier ones
         for caller_session, response in answered:
