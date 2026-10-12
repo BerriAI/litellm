@@ -108,6 +108,18 @@ _PROVIDERS: Final = (
         True,
         "cloudflare/@cf/cloudflare/clef",
     ),
+    _Provider(
+        "azure_ai", "azure_ai/decision-1", "/providers/microsoft/v1/systemone", "decision-1", _API_KEY, False, None
+    ),
+    _Provider(
+        "databricks",
+        "databricks/databricks-openjev-qwen35-4b",
+        "/databricks-openjev-qwen35-4b/invocations",
+        "databricks-openjev-qwen35-4b",
+        _API_KEY,
+        False,
+        None,
+    ),
 )
 _PERPLEXITY: Final = _PROVIDERS[0]
 _OPENROUTER: Final = _PROVIDERS[2]
@@ -266,7 +278,7 @@ def test_each_provider_gets_its_own_path_key_and_body_and_is_billed(gateway: Gat
             row["api_base"],
             row["prompt_tokens"],
             row["completion_tokens"],
-        ) == ("success", "adecisions", provider.name, model, f"{handle.api_base()}{provider.path}", 367, 3)
+        ) == ("success", "asystemone", provider.name, model, f"{handle.api_base()}{provider.path}", 367, 3)
         assert math.isclose(_number(row["spend"]), expected_spend, rel_tol=1e-9), row
 
 
@@ -327,7 +339,7 @@ async def test_sdk_sync_and_async_clients_send_the_same_request(gateway: Gateway
         synchronous: Final = litellm.decisions(
             model=provider.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=handle.api_base(), api_key=_API_KEY
         )
-        asynchronous: Final = await litellm.adecisions(
+        asynchronous: Final = await litellm.asystemone(
             model=provider.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=handle.api_base(), api_key=_API_KEY
         )
         for response in (synchronous, asynchronous):
@@ -495,7 +507,7 @@ def test_upstream_errors_keep_their_status_and_log_an_unbilled_failure(gateway: 
         row: Final = _spend_row(response.headers["x-litellm-call-id"])
         assert (row["status"], row["call_type"], row["model_group"], _number(row["spend"])) == (
             "failure",
-            "adecisions",
+            "asystemone",
             model,
             0.0,
         )
@@ -567,7 +579,7 @@ async def test_sdk_openrouter_connection_failures_raise_a_connection_error(gatew
             model=_OPENROUTER.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
         )
     with pytest.raises(litellm.APIConnectionError):
-        await litellm.adecisions(
+        await litellm.asystemone(
             model=_OPENROUTER.model, state=_STATE, questions=_SDK_QUESTIONS, api_base=dead_api_base, api_key=_API_KEY
         )
 

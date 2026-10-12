@@ -2528,7 +2528,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.callback_duration_ms += (time.time() - _start) * 1000
         return payload
 
-    def _transform_usage_objects(self, result):
+    def _transform_usage_objects(self, result: object) -> object:
         if isinstance(result, ResponsesAPIResponse):
             result = result.model_copy()
             transformed_usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(result.usage)
@@ -2566,13 +2566,13 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _success_handler_helper_fn(
         self,
-        result=None,
-        start_time=None,
-        end_time=None,
-        cache_hit=None,
+        result: object = None,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+        cache_hit: bool | None = None,
         standard_logging_object: StandardLoggingPayload | None = None,
         build_logging_payload: bool = True,
-    ):
+    ) -> tuple[datetime.datetime, datetime.datetime, object]:
         try:
             if start_time is None:
                 start_time = self.start_time

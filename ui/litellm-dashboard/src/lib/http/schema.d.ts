@@ -4703,7 +4703,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Decisions */
+        /**
+         * Ask questions about an input (OpenAI Decisions format)
+         * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+         *
+         *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
+         *     `probabilities`) and `score` (an index into `levels`, with `probabilities`). Requests that break these
+         *     rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy
+         *     model list. System One decision models accept this format too, LiteLLM translates the request and the
+         *     answers. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["decisions_decisions_post"];
         delete?: never;
         options?: never;
@@ -9041,222 +9052,18 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** List Lenses */
-        get: operations["list_lenses_lens_get"];
-        put?: never;
-        /** Create Lens */
-        post: operations["create_lens_lens_post"];
-        delete?: never;
+        /** Lens Request */
+        get: operations["lens_request_lens_get"];
+        /** Lens Request */
+        put: operations["lens_request_lens_put"];
+        /** Lens Request */
+        post: operations["lens_request_lens_post"];
+        /** Lens Request */
+        delete: operations["lens_request_lens_delete"];
         options?: never;
         head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/activity/available": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Activity Available */
-        get: operations["activity_available_lens_activity_available_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/agents": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Agents */
-        get: operations["list_agents_lens_agents_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/datasets": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Datasets */
-        get: operations["list_datasets_lens_datasets_get"];
-        put?: never;
-        /** Create Dataset */
-        post: operations["create_dataset_lens_datasets_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/datasets/build": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Build Dataset Cases */
-        post: operations["build_dataset_cases_lens_datasets_build_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/datasets/{dataset_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Dataset */
-        get: operations["read_dataset_lens_datasets__dataset_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/datasets/{dataset_id}/export": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Export Dataset */
-        get: operations["export_dataset_lens_datasets__dataset_id__export_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/datasets/{dataset_id}/revisions": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Save Revision */
-        post: operations["save_revision_lens_datasets__dataset_id__revisions_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/datasets/{dataset_id}/revisions/{revision}/cases": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Eval Cases */
-        get: operations["eval_cases_lens_datasets__dataset_id__revisions__revision__cases_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/feedback": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Feedback */
-        get: operations["read_feedback_lens_feedback_get"];
-        /** Submit Feedback */
-        put: operations["submit_feedback_lens_feedback_put"];
-        post?: never;
-        /** Delete Feedback */
-        delete: operations["delete_feedback_lens_feedback_delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/feedback/summary": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Feedback Summary */
-        post: operations["feedback_summary_lens_feedback_summary_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/internal/ingestion-credentials": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Ingestion Credentials */
-        get: operations["ingestion_credentials_lens_internal_ingestion_credentials_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/preview/sample": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Preview Sample */
-        post: operations["preview_sample_lens_preview_sample_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
+        /** Lens Request */
+        patch: operations["lens_request_lens_patch"];
         trace?: never;
     };
     "/lens/service": {
@@ -9276,416 +9083,25 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/lens/signals": {
+    "/lens/{path}": {
         parameters: {
             query?: never;
             header?: never;
             path?: never;
             cookie?: never;
         };
-        /** Get Signals */
-        get: operations["get_signals_lens_signals_get"];
-        /** Put Signals */
-        put: operations["put_signals_lens_signals_put"];
-        post?: never;
-        delete?: never;
+        /** Lens Request */
+        get: operations["lens_request_lens__path__get"];
+        /** Lens Request */
+        put: operations["lens_request_lens__path__put"];
+        /** Lens Request */
+        post: operations["lens_request_lens__path__post"];
+        /** Lens Request */
+        delete: operations["lens_request_lens__path__delete"];
         options?: never;
         head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/traces/findings": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Trace Findings */
-        post: operations["trace_findings_lens_traces_findings_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/traces/signals": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Trace Signal Statuses */
-        post: operations["trace_signal_statuses_lens_traces_signals_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/tracing/keys": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Ingestion Keys */
-        get: operations["list_ingestion_keys_lens_tracing_keys_get"];
-        put?: never;
-        /** Create Ingestion Key */
-        post: operations["create_ingestion_key_lens_tracing_keys_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/tracing/keys/{key_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Revoke Ingestion Key */
-        delete: operations["revoke_ingestion_key_lens_tracing_keys__key_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/watch-all": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Watch All */
-        post: operations["watch_all_lens_watch_all_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/worker/claim": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Claim */
-        post: operations["claim_lens_worker_claim_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/worker/{lens_id}/{job_id}/content": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Content */
-        get: operations["content_lens_worker__lens_id___job_id__content_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/worker/{lens_id}/{job_id}/heartbeat": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Heartbeat */
-        post: operations["heartbeat_lens_worker__lens_id___job_id__heartbeat_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/worker/{lens_id}/{job_id}/model": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Model */
-        post: operations["model_lens_worker__lens_id___job_id__model_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/worker/{lens_id}/{job_id}/progress": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Progress */
-        post: operations["progress_lens_worker__lens_id___job_id__progress_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/worker/{lens_id}/{job_id}/result": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Result */
-        post: operations["result_lens_worker__lens_id___job_id__result_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/worker/{lens_id}/{job_id}/reviews": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Cached Reviews */
-        get: operations["cached_reviews_lens_worker__lens_id___job_id__reviews_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/worker/{lens_id}/{job_id}/sample": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Sample */
-        get: operations["sample_lens_worker__lens_id___job_id__sample_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/workers/register": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Register Worker */
-        post: operations["register_worker_lens_workers_register_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/workers/{worker_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        /** Revoke Worker */
-        delete: operations["revoke_worker_lens_workers__worker_id__delete"];
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/workers/{worker_id}/billing-key": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        /** Set Worker Billing */
-        put: operations["set_worker_billing_lens_workers__worker_id__billing_key_put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/{lens_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Lens */
-        get: operations["read_lens_lens__lens_id__get"];
-        /** Update Lens */
-        put: operations["update_lens_lens__lens_id__put"];
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/{lens_id}/cancel": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        /** Cancel Lens */
-        post: operations["cancel_lens_lens__lens_id__cancel_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/{lens_id}/executions/{execution_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Evidence Content */
-        get: operations["evidence_content_lens__lens_id__executions__execution_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/{lens_id}/findings/{finding_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        get?: never;
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        /** Update Finding */
-        patch: operations["update_finding_lens__lens_id__findings__finding_id__patch"];
-        trace?: never;
-    };
-    "/lens/{lens_id}/runs": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** List Runs */
-        get: operations["list_runs_lens__lens_id__runs_get"];
-        put?: never;
-        /** Run Lens */
-        post: operations["run_lens_lens__lens_id__runs_post"];
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/{lens_id}/runs/{job_id}": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Run */
-        get: operations["read_run_lens__lens_id__runs__job_id__get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/lens/{lens_id}/runs/{job_id}/reviews": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /** Read Reviews */
-        get: operations["read_reviews_lens__lens_id__runs__job_id__reviews_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
+        /** Lens Request */
+        patch: operations["lens_request_lens__path__patch"];
         trace?: never;
     };
     "/liteadmin/slack/connect/{token}": {
@@ -14242,6 +13658,31 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/public/whats_new": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Public Whats New
+         * @description Return the launches the dashboard Home page shows under What's new.
+         *
+         *     Serves the list bundled with this release. Set ``LITELLM_WHATS_NEW_URL`` to fetch a remote list instead,
+         *     resolved once per process on the first request and falling back to the bundled list on any failure, so an
+         *     airgapped proxy serves the bundled list without retrying. ``LITELLM_LOCAL_WHATS_NEW=True`` forces the
+         *     bundled list even when a URL is set. A restart picks up a newly published list.
+         */
+        get: operations["get_public_whats_new_public_whats_new_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/queue/chat/completions": {
         parameters: {
             query?: never;
@@ -16432,7 +15873,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Systemone */
+        /**
+         * Ask named questions about a state (System One format)
+         * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+         *
+         *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
+         *     `confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,
+         *     `legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider
+         *     is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
+         *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["systemone_systemone_post"];
         delete?: never;
         options?: never;
@@ -17473,9 +16925,11 @@ export interface paths {
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
+         *     - require_trace_id: Optional[bool] - Reject LLM, MCP and agent requests from this team that carry no trace ID.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
          *     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+         *     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
          *     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
          *     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
@@ -17701,9 +17155,11 @@ export interface paths {
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
          *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
+         *     - require_trace_id: Optional[bool] - Reject LLM, MCP and agent requests from this team that carry no trace ID.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
          *     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
+         *     - team_member_model_max_budget: Optional[dict] - Per-model budgets shared by team members without an override.
          *     - team_member_rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for individual team members.
          *     - team_member_tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for individual team members.
          *     - team_member_key_duration: Optional[str] - The duration for a team member's key. e.g. "1d", "1w", "1mo"
@@ -17837,6 +17293,9 @@ export interface paths {
          *         - langfuse_host: The host for the Langfuse callback
          *         - langfuse_environment: The tracing environment for the Langfuse callback (lowercase; falls back to LANGFUSE_TRACING_ENVIRONMENT)
          *         - langfuse_span_scope: For langfuse_otel, "full" (default) sends the whole request trace, "llm_only" sends only the model-call spans
+         *         - capture_message_content: For OTel v2 callbacks, "no_content" or "span_only".
+         *           An explicit value overrides the global setting for this destination; omitted follows the proxy's own callback for that backend, else the global setting.
+         *           "span_only" puts prompt and response content on the destination's spans, "no_content" leaves it out
          *         - gcs_bucket_name: The name of the GCS bucket
          *         - gcs_path_service_account: The path to the GCS service account
          *         - langsmith_api_key: The API key for the Langsmith callback
@@ -18859,6 +18318,23 @@ export interface paths {
         };
         /** Get User Daily Activity Aggregated Search */
         get: operations["get_user_daily_activity_aggregated_search_user_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/user/daily/activity/aggregated/users": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get User Daily Activity Aggregated Users */
+        get: operations["get_user_daily_activity_aggregated_users_user_daily_activity_aggregated_users_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -20217,7 +19693,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Decisions */
+        /**
+         * Ask questions about an input (OpenAI Decisions format)
+         * @description Judge an `input` against 1 to 128 `questions` and get the answers back in the same order.
+         *
+         *     Question types are `predicate` (yes/no with `probability`), `choice` (one of the `choices`, with
+         *     `probabilities`) and `score` (an index into `levels`, with `probabilities`). Requests that break these
+         *     rules are rejected with a 400 before any provider is called. `model` is any decision model in the proxy
+         *     model list. System One decision models accept this format too, LiteLLM translates the request and the
+         *     answers. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["decisions_v1_decisions_post"];
         delete?: never;
         options?: never;
@@ -22562,7 +22049,18 @@ export interface paths {
         };
         get?: never;
         put?: never;
-        /** Systemone */
+        /**
+         * Ask named questions about a state (System One format)
+         * @description Judge a `state` against 1 to 128 named `questions` and get one calibrated answer per question name.
+         *
+         *     Question types are `noul` (probability the answer is yes), `choice` (one label out of `criteria`, with
+         *     `confidence` and `probabilities`) and `score` (an index into the `criteria` levels, with `confidence`,
+         *     `legend` and `probabilities`). Requests that break these rules are rejected with a 400 before any provider
+         *     is called. `model` is any decision model in the proxy model list. OpenAI decision models accept this format
+         *     too, LiteLLM translates it and keeps the answers keyed by question name. Streaming is not supported.
+         *
+         *     [Docs](https://docs.litellm.ai/docs/decisions)
+         */
         post: operations["systemone_v1_systemone_post"];
         delete?: never;
         options?: never;
@@ -25795,97 +25293,6 @@ export interface components {
             /** Results */
             results: components["schemas"]["TagActiveUsersResponse"][];
         };
-        /** Activity */
-        Activity: {
-            /**
-             * Execution Ids
-             * @default []
-             */
-            execution_ids: string[];
-            /**
-             * Finished
-             * @default false
-             */
-            finished: boolean;
-            /** Id */
-            id: string;
-            /** Label */
-            label: string;
-            /**
-             * Operations
-             * @default []
-             */
-            operations: ("model" | "read" | "search" | "python" | "catalog" | "review_catalog" | "read_reviews" | "search_reviews" | "history" | "checkpoint")[];
-            /**
-             * Phase
-             * @enum {string}
-             */
-            phase: "load" | "review" | "group" | "reconcile" | "investigate";
-            /**
-             * Started At
-             * Format: date-time
-             */
-            started_at: string;
-            /**
-             * Tool Calls
-             * @default []
-             */
-            tool_calls: components["schemas"]["ToolCount"][];
-        };
-        /** ActivityAvailability */
-        ActivityAvailability: {
-            /**
-             * Requests
-             * @default false
-             */
-            requests: boolean;
-            /**
-             * Traces
-             * @default false
-             */
-            traces: boolean;
-        };
-        /** ActivitySelection */
-        ActivitySelection: {
-            /**
-             * Agent Name
-             * @default
-             */
-            agent_name: string;
-            /**
-             * Execution Ids
-             * @default []
-             */
-            execution_ids: string[];
-            /**
-             * Filters
-             * @default []
-             */
-            filters: components["schemas"]["MetadataFilter"][];
-            /**
-             * Sample Percent
-             * @default 100
-             */
-            sample_percent: number;
-            /** Sample Size */
-            sample_size?: number | null;
-            /**
-             * Service
-             * @default
-             */
-            service: string;
-            /**
-             * Source
-             * @default traces
-             * @enum {string}
-             */
-            source: "traces" | "requests" | "both";
-            /**
-             * Team Id
-             * @default
-             */
-            team_id: string;
-        };
         /** AdaptiveRouterWeights */
         AdaptiveRouterWeights: {
             /**
@@ -26408,13 +25815,6 @@ export interface components {
             type: "archive";
             /** Url */
             url: string;
-        };
-        /** AgentTestCase */
-        AgentTestCase: {
-            /** Expected */
-            expected: string;
-            /** Input */
-            input: string;
         };
         /**
          * AlertType
@@ -27381,10 +26781,15 @@ export interface components {
              */
             location?: string | null;
             /**
-             * Logging Only Scope
-             * @description which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             * Logging Only Continue On Input Failure
+             * @description when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.
              */
-            logging_only_scope?: ("input" | "output" | "both") | null;
+            logging_only_continue_on_input_failure?: boolean | null;
+            /**
+             * Logging Only Scope
+             * @description which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             */
+            logging_only_scope?: ("input" | "output") | null;
             /**
              * Mask Request Content
              * @description Will mask request content if guardrail makes any changes
@@ -27395,6 +26800,16 @@ export interface components {
              * @description Will mask response content if guardrail makes any changes
              */
             mask_response_content?: boolean | null;
+            /**
+             * Max Concurrent Decision Calls
+             * @description Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.
+             */
+            max_concurrent_decision_calls?: number | null;
+            /**
+             * Max Input Chars
+             * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.
+             */
+            max_input_chars?: number | null;
             /**
              * Model
              * @description Optional field if guardrail requires a 'model' parameter
@@ -27484,7 +26899,7 @@ export interface components {
             skip_tool_message_in_guardrail?: boolean | null;
             /**
              * Skip Unscannable Attachments
-             * @description Implemented by guardrail='model_armor'. When True, attachment references that carry no inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, while fail_on_error still governs real Model Armor API errors. Default False blocks them.
+             * @description Implemented by guardrail='model_armor' and guardrail='bedrock'. When True, attachments the guardrail cannot scan pass through unscanned instead of blocking. For Model Armor these are references with no inline bytes (file_id, gs://, or http(s) URLs), and fail_on_error still governs real Model Armor API errors. For Bedrock these are documents, files, audio, video, and images that are not inline PNG or JPEG up to 4 MB. Default False blocks them.
              * @default false
              */
             skip_unscannable_attachments: boolean | null;
@@ -27513,7 +26928,7 @@ export interface components {
             timeout?: number | null;
             /**
              * Unreachable Fallback
-             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
+             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed. Also implemented by guardrail='decision_model'.
              * @default fail_closed
              * @enum {string}
              */
@@ -27818,7 +27233,7 @@ export interface components {
              * Mode
              * @description The mode to test the model with. If not provided, resolved the way /health does: the deployment's model_info.mode (only while the request tests the deployment's own model), then the mode the provider requires for that model, then the model cost map.
              */
-            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr" | "evaluation") | null;
+            mode?: ("chat" | "completion" | "embedding" | "audio_speech" | "audio_transcription" | "image_generation" | "image_edit" | "video_generation" | "batch" | "rerank" | "realtime" | "responses" | "anthropic_messages" | "ocr" | "evaluation" | "decisions") | null;
             /**
              * Model Info
              * @description Model info for the health check
@@ -28067,36 +27482,6 @@ export interface components {
         BudgetRequest: {
             /** Budgets */
             budgets: string[];
-        };
-        /** BudgetReservation */
-        BudgetReservation: {
-            /** Amount */
-            amount: number;
-            /** Expires At */
-            expires_at?: string | null;
-            /** Id */
-            id: string;
-            /** Job Id */
-            job_id: string;
-            /** Month */
-            month: string;
-        };
-        /** BuildRequest */
-        BuildRequest: {
-            /**
-             * Dataset Id
-             * @default
-             */
-            dataset_id: string;
-            /** Sources */
-            sources: (components["schemas"]["TraceSource"] | components["schemas"]["FindingSource"] | components["schemas"]["TextSource"])[];
-        };
-        /** BuildResult */
-        BuildResult: {
-            /** Cases */
-            cases: components["schemas"]["DatasetCase"][];
-            /** Skipped */
-            skipped: components["schemas"]["SkippedCase"][];
         };
         /**
          * BulkDeleteUserRequest
@@ -28715,7 +28100,7 @@ export interface components {
          * CallTypes
          * @enum {string}
          */
-        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
+        CallTypes: "embedding" | "aembedding" | "completion" | "acompletion" | "atext_completion" | "text_completion" | "image_generation" | "aimage_generation" | "image_edit" | "aimage_edit" | "moderation" | "amoderation" | "atranscription" | "transcription" | "aspeech" | "speech" | "rerank" | "arerank" | "search" | "asearch" | "decisions" | "adecisions" | "systemone" | "asystemone" | "_arealtime" | "_aresponses_websocket" | "create_batch" | "acreate_batch" | "aretrieve_batch" | "retrieve_batch" | "acancel_batch" | "cancel_batch" | "pass_through_endpoint" | "anthropic_messages" | "aanthropic_messages" | "get_assistants" | "aget_assistants" | "create_assistants" | "acreate_assistants" | "delete_assistant" | "adelete_assistant" | "acreate_thread" | "create_thread" | "aget_thread" | "get_thread" | "a_add_message" | "add_message" | "aget_messages" | "get_messages" | "arun_thread" | "run_thread" | "arun_thread_stream" | "run_thread_stream" | "afile_retrieve" | "file_retrieve" | "afile_delete" | "file_delete" | "afile_list" | "file_list" | "acreate_file" | "create_file" | "afile_content" | "file_content" | "create_fine_tuning_job" | "acreate_fine_tuning_job" | "create_video" | "acreate_video" | "video_generation" | "avideo_generation" | "avideo_retrieve" | "video_retrieve" | "avideo_content" | "video_content" | "video_remix" | "avideo_remix" | "video_list" | "avideo_list" | "video_retrieve_job" | "avideo_retrieve_job" | "video_delete" | "avideo_delete" | "video_create_character" | "avideo_create_character" | "video_get_character" | "avideo_get_character" | "video_edit" | "avideo_edit" | "video_extension" | "avideo_extension" | "vector_store_file_create" | "avector_store_file_create" | "vector_store_file_list" | "avector_store_file_list" | "vector_store_file_retrieve" | "avector_store_file_retrieve" | "vector_store_file_content" | "avector_store_file_content" | "vector_store_file_update" | "avector_store_file_update" | "vector_store_file_delete" | "avector_store_file_delete" | "vector_store_create" | "avector_store_create" | "vector_store_search" | "avector_store_search" | "ingest" | "aingest" | "query" | "aquery" | "create_interaction" | "acreate_interaction" | "create_container" | "acreate_container" | "list_containers" | "alist_containers" | "retrieve_container" | "aretrieve_container" | "delete_container" | "adelete_container" | "list_container_files" | "alist_container_files" | "upload_container_file" | "aupload_container_file" | "create_sandbox" | "acreate_sandbox" | "delete_sandbox" | "adelete_sandbox" | "run_code" | "arun_code" | "code_interpreter_tool" | "acode_interpreter_tool" | "acancel_fine_tuning_job" | "cancel_fine_tuning_job" | "alist_fine_tuning_jobs" | "list_fine_tuning_jobs" | "aretrieve_fine_tuning_job" | "retrieve_fine_tuning_job" | "responses" | "aresponses" | "alist_input_items" | "llm_passthrough_route" | "allm_passthrough_route" | "generate_content" | "agenerate_content" | "generate_content_stream" | "agenerate_content_stream" | "ocr" | "aocr" | "call_mcp_tool" | "list_mcp_tools" | "asend_message" | "send_message" | "acreate_skill";
         /** CallbackDelete */
         CallbackDelete: {
             /** Callback Name */
@@ -28899,34 +28284,6 @@ export interface components {
             start_date: string;
             /** Threshold */
             threshold: number;
-        };
-        /** CaseSource */
-        CaseSource: {
-            /**
-             * Finding Id
-             * @default
-             */
-            finding_id: string;
-            /**
-             * Lens Id
-             * @default
-             */
-            lens_id: string;
-            /**
-             * Span Id
-             * @default
-             */
-            span_id: string;
-            /**
-             * Trace Id
-             * @default
-             */
-            trace_id: string;
-            /**
-             * Trace Ref
-             * @default
-             */
-            trace_ref: string;
         };
         /** ChangePasswordRequest */
         ChangePasswordRequest: {
@@ -29364,17 +28721,23 @@ export interface components {
              */
             role: "user" | "assistant";
         };
-        /** Check */
-        Check: {
+        /** ChoiceAnswer */
+        ChoiceAnswer: {
+            /** Choice */
+            choice: string;
+            /** Confidence */
+            confidence: number;
+            /** Probabilities */
+            probabilities: {
+                [key: string]: number;
+            };
             /**
-             * Enabled
-             * @default true
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
              */
-            enabled: boolean;
-            /** Id */
-            id: string;
-            /** Instruction */
-            instruction: string;
+            type: "choice";
+        } & {
+            [key: string]: unknown;
         };
         /** ChoiceLogprobs */
         ChoiceLogprobs: {
@@ -29486,16 +28849,6 @@ export interface components {
         CitationsObject: {
             /** Enabled */
             enabled: boolean;
-        };
-        /** Claim */
-        Claim: {
-            /** Findings */
-            findings: components["schemas"]["Finding"][];
-            job: components["schemas"]["Job"];
-            /** Lens Id */
-            lens_id: string;
-            /** Reviews */
-            reviews?: components["schemas"]["Review"][] | null;
         };
         /**
          * ClassificationRubric
@@ -30211,6 +29564,11 @@ export interface components {
              * @description If True, disables signing in to the Admin UI with the environment credentials: UI_USERNAME/UI_PASSWORD, or the master key when UI_PASSWORD is unset (that fallback means env-credential login is always live by default). Database users with passwords are unaffected. LOCKOUT RISK: create at least one proxy admin user with a password before enabling, or nobody can sign in to the UI. A locked-out admin can still administer the proxy over the API with the master key, and can unset this setting and restart the proxy to restore env-credential login. Default is False.
              */
             disable_env_credential_login?: boolean | null;
+            /**
+             * Disable Fallbacks On Per Model Rate Limits
+             * @description If true, a request rejected by a key/team/org/project per-model rate limit (model_rpm_limit / model_tpm_limit) returns 429 instead of retrying on the configured fallbacks
+             */
+            disable_fallbacks_on_per_model_rate_limits?: boolean | null;
             /**
              * Disable Password Login When Sso Enabled
              * @description If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password login on /login, /v2/login, and /v3/login so SSO is the only way to reach the Admin UI. An admin locked out of the UI can still administer the proxy over the API with the master key; unset this setting and restart the proxy to restore UI username/password login. Default is False.
@@ -31346,74 +30704,6 @@ export interface components {
              */
             reasoning_tokens: number;
         };
-        /** Coverage */
-        Coverage: {
-            /**
-             * Candidates
-             * @default 0
-             */
-            candidates: number;
-            /**
-             * Eligible
-             * @default 0
-             */
-            eligible: number;
-            /**
-             * Failed Tasks
-             * @default 0
-             */
-            failed_tasks: number;
-            /**
-             * Grouped Batches
-             * @default 0
-             */
-            grouped_batches: number;
-            /**
-             * Grouping Batches
-             * @default 0
-             */
-            grouping_batches: number;
-            /**
-             * Inconclusive
-             * @default 0
-             */
-            inconclusive: number;
-            /**
-             * Investigated
-             * @default 0
-             */
-            investigated: number;
-            /**
-             * Partial
-             * @default 0
-             */
-            partial: number;
-            /**
-             * Reusable
-             * @default 0
-             */
-            reusable: number;
-            /**
-             * Reused
-             * @default 0
-             */
-            reused: number;
-            /**
-             * Screened
-             * @default 0
-             */
-            screened: number;
-            /**
-             * Selected
-             * @default 0
-             */
-            selected: number;
-            /**
-             * Unassessable
-             * @default 0
-             */
-            unassessable: number;
-        };
         /** CreateCredentialItem */
         CreateCredentialItem: {
             /** Credential Info */
@@ -31679,6 +30969,17 @@ export interface components {
             /** Api Keys */
             api_keys: components["schemas"]["KeyActivityRow"][];
         };
+        /** DailyActivityUserPageResponse */
+        DailyActivityUserPageResponse: {
+            /** Limit */
+            limit: number;
+            /** Offset */
+            offset: number;
+            /** Total Users */
+            total_users: number;
+            /** Users */
+            users: components["schemas"]["UserActivityRow"][];
+        };
         /** DailySpendData */
         DailySpendData: {
             breakdown?: components["schemas"]["BreakdownMetrics"];
@@ -31809,115 +31110,53 @@ export interface components {
              */
             total_tokens: number;
         };
-        /** Dataset */
-        Dataset: {
-            /** Agent Name */
-            agent_name: string;
-            /** Cases */
-            cases: components["schemas"]["DatasetCase"][];
+        /**
+         * DecisionModelCheck
+         * @description One predicate the decision model scores the request or response against.
+         */
+        DecisionModelCheck: {
             /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Created By */
-            created_by: string;
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Revision */
-            revision: number;
-            /** Team Id */
-            team_id: string;
-        };
-        /** DatasetCase */
-        DatasetCase: {
-            /**
-             * Agent Version
-             * @default
-             */
-            agent_version: string;
-            /**
-             * Expected
-             * @default
-             */
-            expected: string;
-            /** Id */
-            id: string;
-            /**
-             * Included
-             * @default true
-             */
-            included: boolean;
-            /** Messages */
-            messages: components["schemas"]["DatasetMessage"][];
-            /**
-             * Reply
-             * @default
-             */
-            reply: string;
-            source: components["schemas"]["CaseSource"];
-            /**
-             * Tool Calls
-             * @default []
-             */
-            tool_calls: components["schemas"]["DatasetToolCall"][];
-        };
-        /** DatasetCreate */
-        DatasetCreate: {
-            /**
-             * Agent Name
-             * @default
-             */
-            agent_name: string;
-            /** Name */
-            name: string;
-        };
-        /** DatasetMessage */
-        DatasetMessage: {
-            /** Content */
-            content: string;
-            /**
-             * Name
-             * @default
-             */
-            name: string;
-            /**
-             * Role
+             * Action
+             * @default block
              * @enum {string}
              */
-            role: "system" | "user" | "assistant" | "tool";
-            /**
-             * Tool Calls
-             * @default []
-             */
-            tool_calls: components["schemas"]["DatasetToolCall"][];
-        };
-        /** DatasetSummary */
-        DatasetSummary: {
-            /** Agent Name */
-            agent_name: string;
-            /** Case Count */
-            case_count: number;
-            /** Id */
-            id: string;
+            action: "block" | "log";
+            /** Instructions */
+            instructions: string;
             /** Name */
             name: string;
-            /** Revision */
-            revision: number;
             /**
-             * Updated At
-             * Format: date-time
+             * Threshold
+             * @default 0.7
              */
-            updated_at: string;
+            threshold: number;
         };
-        /** DatasetToolCall */
-        DatasetToolCall: {
-            /** Arguments */
-            arguments: string;
-            /** Name */
-            name: string;
+        /** DecisionsResponse */
+        DecisionsResponse: {
+            /** Answers */
+            answers: {
+                [key: string]: components["schemas"]["NoulAnswer"] | components["schemas"]["ChoiceAnswer"] | components["schemas"]["ScoreAnswer"];
+            };
+            /** Model */
+            model?: string | null;
+            usage?: components["schemas"]["DecisionsUsage"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** DecisionsUsage */
+        DecisionsUsage: {
+            /**
+             * Input Tokens
+             * @default 0
+             */
+            input_tokens: number;
+            /**
+             * Output Tokens
+             * @default 0
+             */
+            output_tokens: number;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * DefaultInternalUserParams
@@ -32530,106 +31769,11 @@ export interface components {
             /** Updated At */
             updated_at?: number | null;
         };
-        /** EvalCases */
-        EvalCases: {
-            /** Cases */
-            cases: components["schemas"]["DatasetCase"][];
-            /** Dataset Id */
-            dataset_id: string;
-            /** Revision */
-            revision: number;
-        };
-        /** Evidence */
-        Evidence: {
-            /** Execution Id */
-            execution_id: string;
-            /** Quote */
-            quote: string;
-            /**
-             * Role
-             * @default support
-             * @enum {string}
-             */
-            role: "support" | "counterexample";
-            /** Span Id */
-            span_id: string;
-        };
-        /** Execution */
-        Execution: {
-            /** Id */
-            id: string;
-            /**
-             * Metadata
-             * @default []
-             */
-            metadata: components["schemas"]["MetadataFilter"][];
-            /** Name */
-            name: string;
-            /**
-             * Root Seen
-             * @default false
-             */
-            root_seen: boolean;
-            /**
-             * Service
-             * @default
-             */
-            service: string;
-            /**
-             * Source
-             * @enum {string}
-             */
-            source: "traces" | "requests";
-            /** Span Count */
-            span_count: number;
-            /** Start Time */
-            start_time: string;
-            /** Team Id */
-            team_id: string;
-            /** Trace Id */
-            trace_id: string;
-            /**
-             * Trace Ref
-             * @default
-             */
-            trace_ref: string;
-        };
-        /** ExecutionContent */
-        ExecutionContent: {
-            execution: components["schemas"]["Execution"];
-            /** Next Cursor */
-            next_cursor?: string | null;
-            /**
-             * Partial
-             * @default false
-             */
-            partial: boolean;
-            /** Parts */
-            parts: components["schemas"]["TracePart"][];
-        };
         /**
          * ExportType
          * @enum {string}
          */
         ExportType: "daily" | "daily_with_keys" | "daily_with_models" | "daily_with_users";
-        /** Extraction */
-        Extraction: {
-            /**
-             * Cannot Assess
-             * @default false
-             */
-            cannot_assess: boolean;
-            /**
-             * Observations
-             * @default []
-             */
-            observations: components["schemas"]["Observation"][];
-            /**
-             * Reasoning
-             * @default
-             */
-            reasoning: string;
-        };
         /**
          * FacetListResponse
          * @description The distinct values one column takes over a filtered query. `data` holds bare values, not entity rows.
@@ -32745,56 +31889,6 @@ export interface components {
              */
             model: string;
         };
-        /** Feedback */
-        Feedback: {
-            /** Author */
-            author: string;
-            /** Comment */
-            comment: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Score */
-            score: number;
-            /** Trace Id */
-            trace_id: string;
-            /**
-             * Trace Ref
-             * @default
-             */
-            trace_ref: string;
-            /**
-             * Updated At
-             * Format: date-time
-             */
-            updated_at: string;
-        };
-        /** FeedbackSubmission */
-        FeedbackSubmission: {
-            /**
-             * Comment
-             * @default
-             */
-            comment: string;
-            /** Score */
-            score: number;
-            /** Session Id */
-            session_id?: string | null;
-            /** Trace Id */
-            trace_id?: string | null;
-            /**
-             * Trace Ref
-             * @default
-             */
-            trace_ref: string;
-            /**
-             * User
-             * @default
-             */
-            user: string;
-        };
         /** FieldDetail */
         FieldDetail: {
             /** Field Default Value */
@@ -32859,158 +31953,6 @@ export interface components {
             allowed_domains?: string[] | null;
         } & {
             [key: string]: unknown;
-        };
-        /** Finding */
-        Finding: {
-            brief?: components["schemas"]["IssueBrief"] | null;
-            /** Check Id */
-            check_id: string;
-            /**
-             * Check Ids
-             * @default []
-             */
-            check_ids: string[];
-            /** Description */
-            description: string;
-            /** Evidence */
-            evidence: components["schemas"]["Evidence"][];
-            /** Existing Finding Id */
-            existing_finding_id?: string | null;
-            /**
-             * First Seen
-             * Format: date-time
-             */
-            first_seen: string;
-            /** Id */
-            id: string;
-            /**
-             * Investigation Runs
-             * @default []
-             */
-            investigation_runs: string[];
-            /**
-             * Kind
-             * @default issue
-             * @enum {string}
-             */
-            kind: "issue" | "pattern";
-            /**
-             * Last Seen
-             * Format: date-time
-             */
-            last_seen: string;
-            /**
-             * Limitation
-             * @default
-             */
-            limitation: string;
-            /**
-             * Merged Finding Ids
-             * @default []
-             */
-            merged_finding_ids: string[];
-            /**
-             * Occurrences
-             * @default []
-             */
-            occurrences: string[];
-            /**
-             * Priority
-             * @default medium
-             * @enum {string}
-             */
-            priority: "high" | "medium" | "low";
-            /**
-             * Reason
-             * @default
-             */
-            reason: string;
-            /** Revision */
-            revision: number;
-            /**
-             * Status
-             * @default open
-             * @enum {string}
-             */
-            status: "open" | "resolved" | "dismissed";
-            /**
-             * Suggestion
-             * @default
-             */
-            suggestion: string;
-            /** Title */
-            title: string;
-        };
-        /** FindingDraft */
-        FindingDraft: {
-            brief?: components["schemas"]["IssueBrief"] | null;
-            /** Check Id */
-            check_id: string;
-            /**
-             * Check Ids
-             * @default []
-             */
-            check_ids: string[];
-            /** Description */
-            description: string;
-            /** Evidence */
-            evidence: components["schemas"]["Evidence"][];
-            /** Existing Finding Id */
-            existing_finding_id?: string | null;
-            /**
-             * Kind
-             * @default issue
-             * @enum {string}
-             */
-            kind: "issue" | "pattern";
-            /**
-             * Limitation
-             * @default
-             */
-            limitation: string;
-            /**
-             * Merged Finding Ids
-             * @default []
-             */
-            merged_finding_ids: string[];
-            /**
-             * Priority
-             * @default medium
-             * @enum {string}
-             */
-            priority: "high" | "medium" | "low";
-            /**
-             * Suggestion
-             * @default
-             */
-            suggestion: string;
-            /** Title */
-            title: string;
-        };
-        /** FindingSource */
-        FindingSource: {
-            /** Finding Ids */
-            finding_ids: string[];
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "finding";
-            /** Lens Id */
-            lens_id: string;
-        };
-        /** FindingUpdate */
-        FindingUpdate: {
-            /**
-             * Reason
-             * @default
-             */
-            reason: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "open" | "resolved" | "dismissed";
         };
         /** FunctionCall */
         FunctionCall: {
@@ -33770,6 +32712,8 @@ export interface components {
             content_filter_settings?: {
                 [key: string]: unknown;
             } | null;
+            /** Decision Model Providers */
+            decision_model_providers?: string[];
             /** Pii Entity Categories */
             pii_entity_categories: components["schemas"]["PiiEntityCategoryMap"][];
             /** Providers Without Directional Logging Only Scope */
@@ -33987,20 +32931,6 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** InFlight */
-        InFlight: {
-            /** Agent */
-            agent: string;
-            /** Execution Id */
-            execution_id: string;
-            /**
-             * Started At
-             * Format: date-time
-             */
-            started_at: string;
-            /** Trace Id */
-            trace_id: string;
-        };
         /**
          * IncompleteDetails
          * @description Details about why the response is incomplete.
@@ -34038,79 +32968,6 @@ export interface components {
              * @constant
              */
             object: "list";
-        };
-        /** IngestionCredential */
-        IngestionCredential: {
-            /** Expires At */
-            expires_at: number | null;
-            tenant: components["schemas"]["IngestionTenant"];
-            /** Token Hash */
-            token_hash: string;
-        };
-        /** IngestionKey */
-        IngestionKey: {
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Expires At */
-            expires_at: number | null;
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            tenant: components["schemas"]["IngestionTenant"];
-        };
-        /** IngestionKeyCreated */
-        IngestionKeyCreated: {
-            /**
-             * Active
-             * @default false
-             */
-            active: boolean;
-            /** Key */
-            key: string;
-            record: components["schemas"]["IngestionKey"];
-        };
-        /** IngestionKeyRequest */
-        IngestionKeyRequest: {
-            /** Expires At */
-            expires_at?: string | null;
-            /**
-             * Name
-             * @default Agent tracing
-             */
-            name: string;
-            /**
-             * Team Id
-             * @default
-             */
-            team_id: string;
-        };
-        /** IngestionSnapshot */
-        IngestionSnapshot: {
-            /** Issued At */
-            issued_at: number;
-            /** Keys */
-            keys: components["schemas"]["IngestionCredential"][];
-        };
-        /** IngestionTenant */
-        IngestionTenant: {
-            /** Api Key Hash */
-            api_key_hash: string;
-            /**
-             * Org Id
-             * @default
-             */
-            org_id: string;
-            /**
-             * Team Id
-             * @default
-             */
-            team_id: string;
-            /** User Id */
-            user_id: string;
         };
         /** InlineSkill */
         InlineSkill: {
@@ -34277,17 +33134,6 @@ export interface components {
             /** Is Accepted */
             is_accepted: boolean;
         };
-        /** IssueBrief */
-        IssueBrief: {
-            /** Problem */
-            problem: string;
-            /** Test Cases */
-            test_cases: components["schemas"]["AgentTestCase"][];
-            /** User Goal */
-            user_goal: string;
-            /** What Happened */
-            what_happened: string;
-        };
         /**
          * ItemReference
          * @description An internal identifier for an item to reference.
@@ -34326,123 +33172,6 @@ export interface components {
             updated_at: string;
             /** Updated By */
             updated_by?: string | null;
-        };
-        /** Job */
-        Job: {
-            /**
-             * Activities
-             * @default []
-             */
-            activities: components["schemas"]["Activity"][];
-            /**
-             * Assessments
-             * @default []
-             */
-            assessments: components["schemas"]["RunAssessment"][];
-            /**
-             * Attempts
-             * @default 0
-             */
-            attempts: number;
-            /**
-             * Cost
-             * @default 0
-             */
-            cost: number;
-            /**
-             * @default {
-             *       "candidates": 0,
-             *       "eligible": 0,
-             *       "failed_tasks": 0,
-             *       "grouped_batches": 0,
-             *       "grouping_batches": 0,
-             *       "inconclusive": 0,
-             *       "investigated": 0,
-             *       "partial": 0,
-             *       "reusable": 0,
-             *       "reused": 0,
-             *       "screened": 0,
-             *       "selected": 0,
-             *       "unassessable": 0
-             *     }
-             */
-            coverage: components["schemas"]["Coverage"];
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /**
-             * End
-             * Format: date-time
-             */
-            end: string;
-            /**
-             * Error
-             * @default
-             */
-            error: string;
-            /** Findings */
-            findings?: components["schemas"]["Finding"][] | null;
-            /** Finished At */
-            finished_at?: string | null;
-            /** Id */
-            id: string;
-            /** Lease Until */
-            lease_until?: string | null;
-            /**
-             * Reading
-             * @default []
-             */
-            reading: components["schemas"]["InFlight"][];
-            /**
-             * Review Versions
-             * @default []
-             */
-            review_versions: components["schemas"]["ReviewVersion"][];
-            /**
-             * Reviewed
-             * @default 0
-             */
-            reviewed: number;
-            /**
-             * Reviews
-             * @default []
-             */
-            reviews: components["schemas"]["Review"][];
-            /** Revision */
-            revision: number;
-            sample?: components["schemas"]["Sample"] | null;
-            settings: components["schemas"]["LensSettings"];
-            /**
-             * Stage
-             * @default Queued
-             */
-            stage: string;
-            /**
-             * Start
-             * Format: date-time
-             */
-            start: string;
-            /**
-             * Status
-             * @default queued
-             * @enum {string}
-             */
-            status: "queued" | "running" | "completed" | "failed" | "cancelled";
-            /**
-             * Steps
-             * @default []
-             */
-            steps: components["schemas"]["Step"][];
-            /**
-             * Trigger
-             * @default schedule
-             * @enum {string}
-             */
-            trigger: "schedule" | "manual";
-            /** Worker Id */
-            worker_id?: string | null;
         };
         JsonValue: unknown;
         /** KeyActivityRow */
@@ -34730,148 +33459,6 @@ export interface components {
             release_url: string;
             /** Version */
             version: string;
-        };
-        /** Lens */
-        Lens: {
-            /** Budget Month */
-            budget_month: string;
-            /**
-             * Created At
-             * Format: date-time
-             */
-            created_at: string;
-            /** Criteria Updated At */
-            criteria_updated_at?: string | null;
-            /**
-             * Findings
-             * @default []
-             */
-            findings: components["schemas"]["Finding"][];
-            /** Id */
-            id: string;
-            /**
-             * Jobs
-             * @default []
-             */
-            jobs: components["schemas"]["Job"][];
-            /** Last Scan At */
-            last_scan_at?: string | null;
-            /**
-             * Next Run At
-             * Format: date-time
-             */
-            next_run_at: string;
-            /**
-             * Reservations
-             * @default []
-             */
-            reservations: components["schemas"]["BudgetReservation"][];
-            /**
-             * Revision
-             * @default 1
-             */
-            revision: number;
-            scope: components["schemas"]["Scope"];
-            settings: components["schemas"]["LensSettings"];
-            /**
-             * Spent
-             * @default 0
-             */
-            spent: number;
-            /**
-             * Version
-             * @default 0
-             */
-            version: number;
-        };
-        /** LensList */
-        LensList: {
-            /** Lenses */
-            lenses: components["schemas"]["Lens"][];
-            /** Tracing Enabled */
-            tracing_enabled: boolean;
-            /** Workers */
-            workers: components["schemas"]["Worker"][];
-        };
-        /** LensSettings */
-        LensSettings: {
-            /**
-             * Agent Name
-             * @default
-             */
-            agent_name: string;
-            /**
-             * Checks
-             * @default []
-             */
-            checks: components["schemas"]["Check"][];
-            /**
-             * Concurrency
-             * @default 8
-             */
-            concurrency: number;
-            /**
-             * Context
-             * @default
-             */
-            context: string;
-            /**
-             * Enabled
-             * @default true
-             */
-            enabled: boolean;
-            /**
-             * Execution Ids
-             * @default []
-             */
-            execution_ids: string[];
-            /**
-             * Filters
-             * @default []
-             */
-            filters: components["schemas"]["MetadataFilter"][];
-            /**
-             * Interval Minutes
-             * @default 15
-             */
-            interval_minutes: number;
-            /**
-             * Lookback Hours
-             * @default 24
-             */
-            lookback_hours: number;
-            /** Model */
-            model: string;
-            /**
-             * Monthly Budget
-             * @default 100
-             */
-            monthly_budget: number;
-            /** Name */
-            name: string;
-            /**
-             * Sample Percent
-             * @default 100
-             */
-            sample_percent: number;
-            /** Sample Size */
-            sample_size?: number | null;
-            /**
-             * Service
-             * @default
-             */
-            service: string;
-            /**
-             * Source
-             * @default traces
-             * @enum {string}
-             */
-            source: "traces" | "requests" | "both";
-            /**
-             * Team Id
-             * @default
-             */
-            team_id: string;
         };
         /** ListAccessGroupsResponse */
         ListAccessGroupsResponse: {
@@ -37375,8 +35962,11 @@ export interface components {
              * @default true
              */
             ccr_retrieval: boolean;
-            /** @description Inline safeguards for the resource-less InvokeGuardrailChecks API (contentFilter / promptAttack / sensitiveInformation). When set, the guardrail calls InvokeGuardrailChecks instead of ApplyGuardrail and no guardrailIdentifier is required. Mutually exclusive with guardrailIdentifier. */
-            checks?: components["schemas"]["BedrockChecksConfigModel"] | null;
+            /**
+             * Checks
+             * @description Inline Bedrock InvokeGuardrailChecks config for guardrail='bedrock', or the predicate checks a decision_model guardrail scores for guardrail='decision_model'
+             */
+            checks?: components["schemas"]["BedrockChecksConfigModel"] | components["schemas"]["DecisionModelCheck"][] | null;
             /**
              * Chunk Budget Chars
              * @description ApplyGuardrail: batch size, in characters, used to re-send content after AWS has rejected a request as too large. Requests AWS accepts are always sent in a single call, so this has no effect until a rejection happens. Defaults to 25,000; a batch AWS still rejects is bisected automatically, so this value only trades round trips against batch size and cannot fail a request on its own.
@@ -37438,6 +36028,11 @@ export interface components {
              * @description Python-like code containing the apply_guardrail function for custom guardrail logic
              */
             custom_code?: string | null;
+            /**
+             * Decision Model
+             * @description For guardrail='decision_model': the Decisions-API model that scores each check
+             */
+            decision_model?: string | null;
             /**
              * Deepkeep Firewall Id
              * @description The DeepKeep Firewall ID to use for guardrail evaluation. If not provided, the `DEEPKEEP_FIREWALL_ID` environment variable is checked.
@@ -37618,10 +36213,15 @@ export interface components {
              */
             location?: string | null;
             /**
-             * Logging Only Scope
-             * @description which direction a logging_only scan observes: 'input' (request), 'output' (response), or 'both' (default). Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             * Logging Only Continue On Input Failure
+             * @description when True, a flagged or raising logging_only request scan is logged and the response is still scanned, so both verdicts land. Only applies to mode logging_only and is ignored when logging_only_scope is 'input' or 'output'.
              */
-            logging_only_scope?: ("input" | "output" | "both") | null;
+            logging_only_continue_on_input_failure?: boolean | null;
+            /**
+             * Logging Only Scope
+             * @description which direction a logging_only scan observes: 'input' (request) or 'output' (response); unset scans both directions. Only applies to mode logging_only; pre_call/post_call on the same guardrail keep blocking.
+             */
+            logging_only_scope?: ("input" | "output") | null;
             /**
              * Mask
              * @description Enable content masking using Lasso classifix API
@@ -37638,6 +36238,16 @@ export interface components {
              * @description Will mask response content if guardrail makes any changes
              */
             mask_response_content?: boolean | null;
+            /**
+             * Max Concurrent Decision Calls
+             * @description Maximum decisions calls in flight at once on the guardrail in each proxy worker. Implemented by guardrail='decision_model'.
+             */
+            max_concurrent_decision_calls?: number | null;
+            /**
+             * Max Input Chars
+             * @description Character budget for each text sent to the guardrail's model. Implemented by guardrail='decision_model'.
+             */
+            max_input_chars?: number | null;
             /**
              * Metadata
              * @description Additional metadata to include in the request
@@ -37938,7 +36548,7 @@ export interface components {
             skip_tool_message_in_guardrail?: boolean | null;
             /**
              * Skip Unscannable Attachments
-             * @description Implemented by guardrail='model_armor'. When True, attachment references that carry no inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, while fail_on_error still governs real Model Armor API errors. Default False blocks them.
+             * @description Implemented by guardrail='model_armor' and guardrail='bedrock'. When True, attachments the guardrail cannot scan pass through unscanned instead of blocking. For Model Armor these are references with no inline bytes (file_id, gs://, or http(s) URLs), and fail_on_error still governs real Model Armor API errors. For Bedrock these are documents, files, audio, video, and images that are not inline PNG or JPEG up to 4 MB. Default False blocks them.
              * @default false
              */
             skip_unscannable_attachments: boolean | null;
@@ -39034,13 +37644,6 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** MetadataFilter */
-        MetadataFilter: {
-            /** Key */
-            key: string;
-            /** Value */
-            value: string;
-        };
         /** MetricWithMetadata */
         MetricWithMetadata: {
             /** Api Key Breakdown */
@@ -39153,6 +37756,8 @@ export interface components {
         ModelGroupInfoProxy: {
             /** Configurable Clientside Auth Params */
             configurable_clientside_auth_params?: (string | components["schemas"]["ConfigurableClientsideParamsCustomAuth-Output"])[] | null;
+            /** Description */
+            description?: string | null;
             /** Health Checked At */
             health_checked_at?: string | null;
             /** Health Response Time */
@@ -39335,16 +37940,6 @@ export interface components {
             /** Top Models */
             top_models: components["schemas"]["ModelInsightMetric"][];
         };
-        /** ModelMessage */
-        ModelMessage: {
-            /** Content */
-            content: string;
-            /**
-             * Role
-             * @enum {string}
-             */
-            role: "system" | "user" | "assistant";
-        };
         /** ModelParams */
         ModelParams: {
             /** Litellm Params */
@@ -39354,21 +37949,6 @@ export interface components {
             model_info: components["schemas"]["litellm__proxy___types__ModelInfo"];
             /** Model Name */
             model_name: string;
-        };
-        /** ModelRequest */
-        ModelRequest: {
-            /**
-             * Messages
-             * @default []
-             */
-            messages: components["schemas"]["ModelMessage"][];
-            /** Prompt */
-            prompt: string;
-            /**
-             * Purpose
-             * @enum {string}
-             */
-            purpose: "extract" | "cluster" | "investigate";
         };
         /** ModelResponse */
         ModelResponse: {
@@ -39386,18 +37966,6 @@ export interface components {
             system_fingerprint?: string | null;
         } & {
             [key: string]: unknown;
-        };
-        /** ModelResult */
-        ModelResult: {
-            /** Content */
-            content: string;
-            /**
-             * Context Exceeded
-             * @default false
-             */
-            context_exceeded: boolean;
-            /** Cost */
-            cost: number;
         };
         /** ModelTopKeysResponse */
         ModelTopKeysResponse: {
@@ -40082,6 +38650,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Require Trace Id */
+            require_trace_id?: boolean | null;
             /** Router Settings */
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
@@ -40106,6 +38676,10 @@ export interface components {
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
+            /** Team Member Model Max Budget */
+            team_member_model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Team Member Permissions */
             team_member_permissions?: string[] | null;
             /** Team Member Rpm Limit */
@@ -40432,6 +39006,18 @@ export interface components {
             /** User Role */
             user_role?: ("proxy_admin" | "proxy_admin_viewer" | "internal_user" | "internal_user_viewer") | null;
         };
+        /** NoulAnswer */
+        NoulAnswer: {
+            /** Noul */
+            noul: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "noul";
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * OAuth2SecurityScheme
          * @description Defines a security scheme using OAuth 2.0.
@@ -40470,23 +39056,128 @@ export interface components {
                 [key: string]: unknown;
             } | null;
         };
-        /** Observation */
-        Observation: {
-            /** Check Id */
-            check_id: string;
+        /** OpenAIChoiceAnswer */
+        OpenAIChoiceAnswer: {
+            /** Choice */
+            choice: string | boolean;
+            /** Confidence */
+            confidence: number;
+            /** Name */
+            name: string | null;
+            /** Probabilities */
+            probabilities: components["schemas"]["OpenAIChoiceProbability"][];
             /**
-             * Evidence
-             * @default []
-             */
-            evidence: components["schemas"]["Evidence"][];
-            /**
-             * Kind
-             * @default issue
+             * @description discriminator enum property added by openapi-typescript
              * @enum {string}
              */
-            kind: "issue" | "pattern";
-            /** Summary */
-            summary: string;
+            type: "choice";
+        };
+        /** OpenAIChoiceProbability */
+        OpenAIChoiceProbability: {
+            /** Probability */
+            probability: number;
+            /** Value */
+            value: string | boolean;
+        };
+        /** OpenAIDecisionInputTokensDetails */
+        OpenAIDecisionInputTokensDetails: {
+            /**
+             * Cache Write Tokens
+             * @default 0
+             */
+            cache_write_tokens: number;
+            /**
+             * Cached Tokens
+             * @default 0
+             */
+            cached_tokens: number;
+        };
+        /** OpenAIDecisionOutputTokensDetails */
+        OpenAIDecisionOutputTokensDetails: {
+            /**
+             * Reasoning Tokens
+             * @default 0
+             */
+            reasoning_tokens: number;
+        };
+        /** OpenAIDecisionResponse */
+        OpenAIDecisionResponse: {
+            /** Answers */
+            answers: (components["schemas"]["OpenAIPredicateAnswer"] | components["schemas"]["OpenAIChoiceAnswer"] | components["schemas"]["OpenAIScoreAnswer"] | components["schemas"]["OpenAIRefusalAnswer"])[];
+            /** Model */
+            model: string;
+            usage: components["schemas"]["OpenAIDecisionUsage"];
+        } & {
+            [key: string]: unknown;
+        };
+        /** OpenAIDecisionUsage */
+        OpenAIDecisionUsage: {
+            /** Input Tokens */
+            input_tokens: number;
+            /**
+             * @default {
+             *       "cache_write_tokens": 0,
+             *       "cached_tokens": 0
+             *     }
+             */
+            input_tokens_details: components["schemas"]["OpenAIDecisionInputTokensDetails"];
+            /** Output Tokens */
+            output_tokens: number;
+            /**
+             * @default {
+             *       "reasoning_tokens": 0
+             *     }
+             */
+            output_tokens_details: components["schemas"]["OpenAIDecisionOutputTokensDetails"];
+            /** Total Tokens */
+            total_tokens: number;
+        };
+        /** OpenAIPredicateAnswer */
+        OpenAIPredicateAnswer: {
+            /** Name */
+            name: string | null;
+            /** Probability */
+            probability: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "predicate";
+        };
+        /** OpenAIRefusalAnswer */
+        OpenAIRefusalAnswer: {
+            /** Name */
+            name: string | null;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "refusal";
+        };
+        /** OpenAIScoreAnswer */
+        OpenAIScoreAnswer: {
+            /** Confidence */
+            confidence: number;
+            /** Name */
+            name: string | null;
+            /** Probabilities */
+            probabilities: components["schemas"]["OpenAIScoreProbability"][];
+            /** Score */
+            score: number;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "score";
+        };
+        /** OpenAIScoreProbability */
+        OpenAIScoreProbability: {
+            /** Label */
+            label: string;
+            /** Probability */
+            probability: number;
+            /** Value */
+            value: number;
         };
         /**
          * OpenIdConnectSecurityScheme
@@ -40525,6 +39216,8 @@ export interface components {
              * @default true
              */
             circuit_breaker_enabled: boolean;
+            /** Deployment Name */
+            deployment_name?: string | null;
             /**
              * Instructions
              * @description Replaces the built-in classification instructions
@@ -40540,7 +39233,7 @@ export interface components {
              * @default jev
              * @enum {string}
              */
-            provider: "jev" | "laya" | "bespoke";
+            provider: "jev" | "laya" | "bespoke" | "databricks";
             /**
              * Timeout Ms
              * @default 3000
@@ -41185,6 +39878,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Require Trace Id */
+            require_trace_id?: boolean | null;
             /** Router Settings */
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
@@ -41207,6 +39902,10 @@ export interface components {
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
+            /** Team Member Model Max Budget */
+            team_member_model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -42126,32 +40825,6 @@ export interface components {
              * @description New status: 'published' or 'production'.
              */
             version_status: string;
-        };
-        /** Preview */
-        Preview: {
-            /** As Of */
-            as_of?: string | null;
-            /**
-             * Lookback Hours
-             * @default 24
-             */
-            lookback_hours: number;
-            /**
-             * Offset
-             * @default 0
-             */
-            offset: number;
-            selection: components["schemas"]["ActivitySelection"];
-        };
-        /** Progress */
-        Progress: {
-            activity?: components["schemas"]["Activity"] | null;
-            coverage?: components["schemas"]["Coverage"] | null;
-            /** Reading */
-            reading?: components["schemas"]["InFlight"][] | null;
-            review?: components["schemas"]["Review"] | null;
-            /** Stage */
-            stage?: string | null;
         };
         /** Prompt */
         Prompt: {
@@ -43875,7 +42548,7 @@ export interface components {
             /** Queries */
             queries: string[];
             /** Results */
-            results?: components["schemas"]["Result-Output"][] | null;
+            results?: components["schemas"]["Result"][] | null;
             /**
              * Status
              * @enum {string}
@@ -44936,45 +43609,6 @@ export interface components {
                 [key: string]: string | number | boolean;
             } | null;
             /** File Id */
-            file_id?: string;
-            /** Filename */
-            filename?: string;
-            /** Score */
-            score?: number;
-            /** Text */
-            text?: string;
-        };
-        /** Result */
-        "Result-Input": {
-            /**
-             * Assessments
-             * @default []
-             */
-            assessments: components["schemas"]["RunAssessment"][];
-            coverage: components["schemas"]["Coverage"];
-            /**
-             * Error
-             * @default
-             */
-            error: string;
-            /**
-             * Findings
-             * @default []
-             */
-            findings: components["schemas"]["FindingDraft"][];
-            /**
-             * Review Versions
-             * @default []
-             */
-            review_versions: components["schemas"]["ReviewVersion"][];
-        };
-        /** Result */
-        "Result-Output": {
-            /** Attributes */
-            attributes?: {
-                [key: string]: string | number | boolean;
-            } | null;
-            /** File Id */
             file_id?: string | null;
             /** Filename */
             filename?: string | null;
@@ -45034,121 +43668,6 @@ export interface components {
             ServiceUnavailableErrorRetries?: number | null;
             /** Timeouterrorretries */
             TimeoutErrorRetries?: number | null;
-        };
-        /** Review */
-        Review: {
-            /** Agent */
-            agent: string;
-            /**
-             * At
-             * Format: date-time
-             */
-            at: string;
-            /**
-             * Cannot Assess
-             * @default false
-             */
-            cannot_assess: boolean;
-            /**
-             * Consolidated
-             * @default false
-             */
-            consolidated: boolean;
-            /**
-             * Content Version
-             * @default
-             */
-            content_version: string;
-            /** Duration Ms */
-            duration_ms: number;
-            /** Execution Id */
-            execution_id: string;
-            extraction?: components["schemas"]["Extraction"] | null;
-            /** Model */
-            model: string;
-            /** Name */
-            name: string;
-            /**
-             * Partial
-             * @default false
-             */
-            partial: boolean;
-            /**
-             * Reasoning
-             * @default
-             */
-            reasoning: string;
-            /**
-             * Reused
-             * @default false
-             */
-            reused: boolean;
-            /**
-             * Spans
-             * @default []
-             */
-            spans: components["schemas"]["ReviewSpan"][];
-            /**
-             * Tool Calls
-             * @default []
-             */
-            tool_calls: components["schemas"]["ToolCount"][];
-            /** Trace Id */
-            trace_id: string;
-            /**
-             * Verdicts
-             * @default []
-             */
-            verdicts: components["schemas"]["ReviewVerdict"][];
-        };
-        /** ReviewPage */
-        ReviewPage: {
-            /** Reviewed */
-            reviewed: number;
-            /** Reviews */
-            reviews: components["schemas"]["Review"][];
-        };
-        /** ReviewSpan */
-        ReviewSpan: {
-            /**
-             * Cited
-             * @default false
-             */
-            cited: boolean;
-            /** Kind */
-            kind: string;
-            /** Name */
-            name: string;
-            /** Preview */
-            preview: string;
-            /** Span Id */
-            span_id: string;
-        };
-        /** ReviewVerdict */
-        ReviewVerdict: {
-            /** Check Id */
-            check_id: string;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "issue" | "pattern";
-            /** Summary */
-            summary: string;
-        };
-        /** ReviewVersion */
-        ReviewVersion: {
-            /** Content Version */
-            content_version: string;
-            /** Execution Id */
-            execution_id: string;
-        };
-        /** RevisionSave */
-        RevisionSave: {
-            /** Base Revision */
-            base_revision: number;
-            /** Cases */
-            cases: components["schemas"]["DatasetCase"][];
         };
         /**
          * RoleMappings
@@ -45328,26 +43847,6 @@ export interface components {
              */
             status: "queued" | "running" | "completed" | "failed" | "cancelled";
         };
-        /** RunAssessment */
-        RunAssessment: {
-            /**
-             * Cannot Assess
-             * @default false
-             */
-            cannot_assess: boolean;
-            /** Execution Id */
-            execution_id: string;
-            /**
-             * Issue Checks
-             * @default []
-             */
-            issue_checks: string[];
-            /**
-             * Pattern Checks
-             * @default []
-             */
-            pattern_checks: string[];
-        };
         /**
          * RunDeleteResponse
          * @description Response from deleting a run
@@ -45365,18 +43864,6 @@ export interface components {
             object: string | null;
             /** Run Id */
             run_id: string;
-        };
-        /** RunRequest */
-        RunRequest: {
-            /** Agent Name */
-            agent_name?: string | null;
-            /** End */
-            end?: string | null;
-            /** Lookback Hours */
-            lookback_hours?: number | null;
-            settings?: components["schemas"]["LensSettings"] | null;
-            /** Start */
-            start?: string | null;
         };
         /** RunSource */
         RunSource: {
@@ -45777,22 +44264,6 @@ export interface components {
                 [key: string]: unknown;
             };
         };
-        /** Sample */
-        Sample: {
-            /** Eligible */
-            eligible: number;
-            /** Executions */
-            executions: components["schemas"]["Execution"][];
-            /** Next Cursor */
-            next_cursor?: string | null;
-            /** Next Offset */
-            next_offset?: number | null;
-            /**
-             * Selected
-             * @default 0
-             */
-            selected: number;
-        };
         /**
          * ScheduledJobStaggerSettings
          * @description Spreads the proxy's scheduled background jobs across a window instead of firing them
@@ -45824,23 +44295,29 @@ export interface components {
              */
             window_seconds: number;
         };
-        /** Scope */
-        Scope: {
+        /** ScoreAnswer */
+        ScoreAnswer: {
+            /** Confidence */
+            confidence: number;
+            /** Legend */
+            legend: {
+                [key: string]: string | {
+                    [key: string]: unknown;
+                } | unknown[];
+            };
+            /** Probabilities */
+            probabilities: {
+                [key: string]: number;
+            };
+            /** Score */
+            score: number;
             /**
-             * All Teams
-             * @default false
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
              */
-            all_teams: boolean;
-            /**
-             * Api Key Hash
-             * @default
-             */
-            api_key_hash: string;
-            /**
-             * Team Id
-             * @default
-             */
-            team_id: string;
+            type: "score";
+        } & {
+            [key: string]: unknown;
         };
         /**
          * Screenshot
@@ -45980,6 +44457,11 @@ export interface components {
              * @default 0
              */
             protocol_version: number;
+            /**
+             * Public Contract
+             * @default 0
+             */
+            public_contract: number;
             /**
              * Release
              * @default
@@ -46307,58 +44789,6 @@ export interface components {
             /** Type */
             type: "shell" | string;
         };
-        /** Signal */
-        Signal: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Question */
-            question: string;
-        };
-        /** SignalConfig */
-        SignalConfig: {
-            /**
-             * Model
-             * @default
-             */
-            model: string;
-            /**
-             * Signals
-             * @default [
-             *       {
-             *         "id": "user_frustration",
-             *         "name": "User frustration",
-             *         "question": "Does the user show frustration, annoyance or dissatisfaction with the agent in this run, for example complaints, irritated corrections, all caps, profanity, or giving up on the task?"
-             *       },
-             *       {
-             *         "id": "missing_capability",
-             *         "name": "Missing capability",
-             *         "question": "Does the user ask for something the agent cannot do in this run, so that the agent refuses, says it lacks a tool, permission, integration or data source, or fails because the capability does not exist?"
-             *       },
-             *       {
-             *         "id": "repeated_request",
-             *         "name": "Repeated request",
-             *         "question": "Does the user ask for the same thing more than once in this run, usually because the agent did not deliver it the first time?"
-             *       }
-             *     ]
-             */
-            signals: components["schemas"]["Signal"][];
-            /**
-             * Threshold
-             * @default 0.5
-             */
-            threshold: number;
-        };
-        /** SignalFlag */
-        SignalFlag: {
-            /** Name */
-            name: string;
-            /** Score */
-            score: number;
-            /** Signal Id */
-            signal_id: string;
-        };
         /**
          * Skill
          * @description Represents a skill from the Anthropic Skills API
@@ -46411,15 +44841,6 @@ export interface components {
             type: "skill_reference";
             /** Version */
             version?: string;
-        };
-        /** SkippedCase */
-        SkippedCase: {
-            /**
-             * Reason
-             * @enum {string}
-             */
-            reason: "duplicate" | "no_content" | "too_large" | "over_limit" | "invalid";
-            source: components["schemas"]["CaseSource"];
         };
         /** Span */
         Span: {
@@ -46846,46 +45267,6 @@ export interface components {
              * @default []
              */
             user_ids: string[];
-        };
-        /** Step */
-        Step: {
-            /**
-             * At
-             * Format: date-time
-             */
-            at: string;
-            /**
-             * Completion Tokens
-             * @default 0
-             */
-            completion_tokens: number;
-            /**
-             * Cost
-             * @default 0
-             */
-            cost: number;
-            /**
-             * Kind
-             * @enum {string}
-             */
-            kind: "stage" | "model" | "error";
-            /** Label */
-            label: string;
-            /**
-             * Model
-             * @default
-             */
-            model: string;
-            /**
-             * Prompt Tokens
-             * @default 0
-             */
-            prompt_tokens: number;
-            /**
-             * Purpose
-             * @default
-             */
-            purpose: string;
         };
         /**
          * SuccessfulKeyUpdate
@@ -47545,6 +45926,13 @@ export interface components {
             budget_duration?: string | null;
             /** Max Budget In Team */
             max_budget_in_team?: number | null;
+            /**
+             * Model Max Budget
+             * @description Per-model spend caps for this team member, each with its own budget_duration. Overrides the team's default per-model member budget. Pass an empty dict to fall back to the team default.
+             */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Role */
             role?: ("admin" | "user") | null;
             /**
@@ -47582,6 +45970,10 @@ export interface components {
             budget_duration?: string | null;
             /** Max Budget In Team */
             max_budget_in_team?: number | null;
+            /** Model Max Budget */
+            model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Rpm Limit */
             rpm_limit?: number | null;
             /** Team Id */
@@ -47828,16 +46220,6 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** TextSource */
-        TextSource: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "text";
-            /** Text */
-            text: string;
-        };
         /** TierCohortStatistic */
         TierCohortStatistic: {
             /** Cohort */
@@ -48066,16 +46448,6 @@ export interface components {
             type: "file_search" | "web_search_preview" | "computer" | "computer_use_preview" | "computer_use" | "web_search_preview_2025_03_11" | "image_generation" | "code_interpreter";
         } & {
             [key: string]: unknown;
-        };
-        /** ToolCount */
-        ToolCount: {
-            /** Calls */
-            calls: number;
-            /**
-             * Name
-             * @enum {string}
-             */
-            name: "model" | "read" | "search" | "python" | "catalog" | "review_catalog" | "read_reviews" | "search_reviews" | "history" | "checkpoint";
         };
         /** ToolDetailResponse */
         ToolDetailResponse: {
@@ -48414,105 +46786,12 @@ export interface components {
             /** Agents */
             agents: components["schemas"]["TraceAgent"][];
         };
-        /** TraceFeedback */
-        TraceFeedback: {
-            /** Feedback */
-            feedback: components["schemas"]["Feedback"][];
-            /** Trace Id */
-            trace_id: string;
-            /**
-             * Trace Ref
-             * @default
-             */
-            trace_ref: string;
-        };
-        /** TraceFeedbackRequest */
-        TraceFeedbackRequest: {
-            /** Traces */
-            traces: components["schemas"]["TraceIdentity"][];
-        };
-        /** TraceFeedbackSummary */
-        TraceFeedbackSummary: {
-            /** Average */
-            average: number | null;
-            /** Count */
-            count: number;
-            /** Lowest */
-            lowest: number | null;
-            /** Trace Id */
-            trace_id: string;
-            /**
-             * Trace Ref
-             * @default
-             */
-            trace_ref: string;
-        };
-        /** TraceFindingCount */
-        TraceFindingCount: {
-            /** Finding Count */
-            finding_count: number | null;
-            /** Trace Id */
-            trace_id: string;
-            /**
-             * Trace Ref
-             * @default
-             */
-            trace_ref: string;
-        };
-        /** TraceFindingsRequest */
-        TraceFindingsRequest: {
-            /** Traces */
-            traces: components["schemas"]["TraceIdentity"][];
-        };
-        /** TraceIdentity */
-        TraceIdentity: {
-            /** Trace Id */
-            trace_id: string;
-            /**
-             * Trace Ref
-             * @default
-             */
-            trace_ref: string;
-        };
         /** TracePage */
         TracePage: {
             /** Data */
             data: components["schemas"]["TraceSummary"][];
             /** Next Cursor */
             next_cursor: string | null;
-        };
-        /** TracePart */
-        TracePart: {
-            /** Content */
-            content: string;
-            /**
-             * End Time
-             * @default
-             */
-            end_time: string;
-            /** Execution Id */
-            execution_id: string;
-            /** Kind */
-            kind: string;
-            /** Name */
-            name: string;
-            /**
-             * Parent Span Id
-             * @default
-             */
-            parent_span_id: string;
-            /** Span Id */
-            span_id: string;
-            /**
-             * Start Time
-             * @default
-             */
-            start_time: string;
-            /**
-             * Truncated
-             * @default false
-             */
-            truncated: boolean;
         };
         /** TraceQueryAttributeField */
         TraceQueryAttributeField: {
@@ -48667,53 +46946,6 @@ export interface components {
             data: {
                 [key: string]: components["schemas"]["JsonValue"];
             }[];
-        };
-        /** TraceSignals */
-        TraceSignals: {
-            /** Classified At */
-            classified_at?: string | null;
-            /**
-             * Flags
-             * @default []
-             */
-            flags: components["schemas"]["SignalFlag"][];
-            /**
-             * Model
-             * @default
-             */
-            model: string;
-            /**
-             * Status
-             * @enum {string}
-             */
-            status: "unclassified" | "pending" | "classified" | "failed";
-            /** Trace Id */
-            trace_id: string;
-            /**
-             * Trace Ref
-             * @default
-             */
-            trace_ref: string;
-        };
-        /** TraceSource */
-        TraceSource: {
-            /**
-             * @description discriminator enum property added by openapi-typescript
-             * @enum {string}
-             */
-            kind: "trace";
-            /**
-             * Span Id
-             * @default
-             */
-            span_id: string;
-            /** Trace Id */
-            trace_id: string;
-            /**
-             * Trace Ref
-             * @default
-             */
-            trace_ref: string;
         };
         /** TraceSummary */
         TraceSummary: {
@@ -49660,6 +47892,8 @@ export interface components {
             policies?: string[] | null;
             /** Prompts */
             prompts?: string[] | null;
+            /** Require Trace Id */
+            require_trace_id?: boolean | null;
             /** Router Settings */
             router_settings?: components["schemas"]["UpdateRouterConfig"] | null;
             /** Rpm Limit */
@@ -49682,6 +47916,10 @@ export interface components {
             team_member_budget_duration?: string | null;
             /** Team Member Key Duration */
             team_member_key_duration?: string | null;
+            /** Team Member Model Max Budget */
+            team_member_model_max_budget?: {
+                [key: string]: components["schemas"]["BudgetConfig"];
+            } | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;
             /** Team Member Tpm Limit */
@@ -50415,6 +48653,50 @@ export interface components {
             /** User Tpm Limit */
             user_tpm_limit?: number | null;
         };
+        /** UserActivityRow */
+        UserActivityRow: {
+            /**
+             * Api Requests
+             * @default 0
+             */
+            api_requests: number;
+            /**
+             * Completion Tokens
+             * @default 0
+             */
+            completion_tokens: number;
+            /**
+             * Failed Requests
+             * @default 0
+             */
+            failed_requests: number;
+            /**
+             * Prompt Tokens
+             * @default 0
+             */
+            prompt_tokens: number;
+            /**
+             * Spend
+             * @default 0
+             */
+            spend: number;
+            /**
+             * Successful Requests
+             * @default 0
+             */
+            successful_requests: number;
+            /**
+             * Total Tokens
+             * @default 0
+             */
+            total_tokens: number;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
+        };
         /** UserBanner */
         UserBanner: {
             /**
@@ -50866,25 +49148,6 @@ export interface components {
         } & {
             [key: string]: unknown;
         };
-        /** WatchAllResult */
-        WatchAllResult: {
-            /**
-             * Skipped
-             * @default []
-             */
-            skipped: components["schemas"]["WatchSkipped"][];
-            /** Watching */
-            watching: string[];
-        };
-        /** WatchSkipped */
-        WatchSkipped: {
-            /** Id */
-            id: string;
-            /** Name */
-            name: string;
-            /** Reason */
-            reason: string;
-        };
         /**
          * WebSearchInterceptionSettings
          * @description Configuration for server-side web search interception
@@ -51014,58 +49277,29 @@ export interface components {
             type: "web_search" | "web_search_2025_08_26";
             user_location?: components["schemas"]["openai__types__responses__web_search_tool_param__UserLocation"] | null;
         };
-        /** Worker */
-        Worker: {
-            /** Analysis Key Id */
-            analysis_key_id?: string | null;
-            /** Id */
-            id: string;
+        /**
+         * WhatsNewLaunch
+         * @description One launch card in the dashboard Home page's What's new section.
+         */
+        WhatsNewLaunch: {
+            /** Description */
+            description: string;
+            /** Href */
+            href: string;
+            /** Icon */
+            icon: string;
             /**
-             * Last Seen
-             * Format: date-time
+             * Published On
+             * Format: date
              */
-            last_seen: string;
-            /** Name */
-            name: string;
-            /**
-             * Revoked
-             * @default false
-             */
-            revoked: boolean;
-            scope: components["schemas"]["Scope"];
+            published_on: string;
+            /** Title */
+            title: string;
         };
-        /** WorkerBilling */
-        WorkerBilling: {
-            /** Analysis Key Id */
-            analysis_key_id: string;
-        };
-        /** WorkerCreated */
-        WorkerCreated: {
-            /** Image */
-            image: string;
-            /**
-             * Managed
-             * @default false
-             */
-            managed: boolean;
-            /** Token */
-            token: string;
-            worker: components["schemas"]["Worker"];
-        };
-        /** WorkerName */
-        WorkerName: {
-            /** Analysis Key Id */
-            analysis_key_id: string;
-            /**
-             * Managed
-             * @default false
-             */
-            managed: boolean;
-            /**
-             * Name
-             * @default Lens worker
-             */
-            name: string;
+        /** WhatsNewResponse */
+        WhatsNewResponse: {
+            /** Launches */
+            launches: components["schemas"]["WhatsNewLaunch"][];
         };
         /** WorkerRegistryEntry */
         WorkerRegistryEntry: {
@@ -58679,7 +56913,179 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "input": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today.",
+                 *       "model": "luna",
+                 *       "questions": [
+                 *         {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "name": "is_refund_request",
+                 *           "type": "predicate"
+                 *         },
+                 *         {
+                 *           "choices": [
+                 *             {
+                 *               "description": "can wait a week",
+                 *               "value": "low"
+                 *             },
+                 *             {
+                 *               "description": "needs action today",
+                 *               "value": "high"
+                 *             }
+                 *           ],
+                 *           "instructions": "How urgent is this?",
+                 *           "name": "urgency",
+                 *           "type": "choice"
+                 *         },
+                 *         {
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "levels": [
+                 *             {
+                 *               "label": "calm"
+                 *             },
+                 *             {
+                 *               "label": "mildly annoyed"
+                 *             },
+                 *             {
+                 *               "label": "angry"
+                 *             }
+                 *           ],
+                 *           "name": "frustration",
+                 *           "type": "score"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Input
+                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     */
+                    input: string | {
+                        /** Content */
+                        content: string | ({
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        })[];
+                        /**
+                         * Role
+                         * @default user
+                         * @constant
+                         */
+                        role?: "user";
+                        /**
+                         * Type
+                         * @default message
+                         * @constant
+                         */
+                        type?: "message";
+                    }[];
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Predicate, choice and score questions. Answers come back in the same order
+                     */
+                    questions: ({
+                        /**
+                         * Instructions
+                         * @description The yes/no question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "predicate";
+                    } | {
+                        /**
+                         * Choices
+                         * @description The options the model picks from. Values must be unique
+                         */
+                        choices: {
+                            /** Description */
+                            description?: string | null;
+                            /** Value */
+                            value: string | boolean;
+                        }[];
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "choice";
+                    } | {
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Levels
+                         * @description Scale levels from lowest to highest. The score is a level index
+                         */
+                        levels: {
+                            /** Description */
+                            description?: string | null;
+                            /** Label */
+                            label: string;
+                        }[];
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "score";
+                    })[];
+                    /**
+                     * Safety Identifier
+                     * @description A stable id for your end user. Sent to OpenAI and dropped for other providers
+                     */
+                    safety_identifier?: string | null;
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -58687,7 +57093,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OpenAIDecisionResponse"];
                 };
             };
         };
@@ -63973,194 +62379,13 @@ export interface operations {
             };
         };
     };
-    list_lenses_lens_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["LensList"];
-                };
-            };
-        };
-    };
-    create_lens_lens_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LensSettings"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Lens"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    activity_available_lens_activity_available_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ActivityAvailability"];
-                };
-            };
-        };
-    };
-    list_agents_lens_agents_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": string[];
-                };
-            };
-        };
-    };
-    list_datasets_lens_datasets_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["DatasetSummary"][];
-                };
-            };
-        };
-    };
-    create_dataset_lens_datasets_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["DatasetCreate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Dataset"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    build_dataset_cases_lens_datasets_build_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["BuildRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["BuildResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_dataset_lens_datasets__dataset_id__get: {
+    lens_request_lens_get: {
         parameters: {
             query?: {
-                revision?: number | null;
+                path?: string;
             };
             header?: never;
-            path: {
-                dataset_id: string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -64171,7 +62396,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Dataset"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -64185,15 +62410,13 @@ export interface operations {
             };
         };
     };
-    export_dataset_lens_datasets__dataset_id__export_get: {
+    lens_request_lens_put: {
         parameters: {
             query?: {
-                revision?: number | null;
+                path?: string;
             };
             header?: never;
-            path: {
-                dataset_id: string;
-            };
+            path?: never;
             cookie?: never;
         };
         requestBody?: never;
@@ -64204,7 +62427,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/x-ndjson": unknown;
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -64218,79 +62441,10 @@ export interface operations {
             };
         };
     };
-    save_revision_lens_datasets__dataset_id__revisions_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                dataset_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RevisionSave"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Dataset"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    eval_cases_lens_datasets__dataset_id__revisions__revision__cases_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                dataset_id: string;
-                revision: number;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["EvalCases"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_feedback_lens_feedback_get: {
+    lens_request_lens_post: {
         parameters: {
             query?: {
-                trace_id?: string | null;
-                session_id?: string | null;
-                trace_ref?: string;
+                path?: string;
             };
             header?: never;
             path?: never;
@@ -64304,7 +62458,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TraceFeedback"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -64318,46 +62472,10 @@ export interface operations {
             };
         };
     };
-    submit_feedback_lens_feedback_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["FeedbackSubmission"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Feedback"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    delete_feedback_lens_feedback_delete: {
+    lens_request_lens_delete: {
         parameters: {
             query?: {
-                trace_id?: string | null;
-                session_id?: string | null;
-                trace_ref?: string;
-                user?: string;
+                path?: string;
             };
             header?: never;
             path?: never;
@@ -64366,43 +62484,12 @@ export interface operations {
         requestBody?: never;
         responses: {
             /** @description Successful Response */
-            204: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content?: never;
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    feedback_summary_lens_feedback_summary_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TraceFeedbackRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
             200: {
                 headers: {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["TraceFeedbackSummary"][];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -64416,9 +62503,11 @@ export interface operations {
             };
         };
     };
-    ingestion_credentials_lens_internal_ingestion_credentials_get: {
+    lens_request_lens_patch: {
         parameters: {
-            query?: never;
+            query?: {
+                path?: string;
+            };
             header?: never;
             path?: never;
             cookie?: never;
@@ -64431,31 +62520,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["IngestionSnapshot"];
-                };
-            };
-        };
-    };
-    preview_sample_lens_preview_sample_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Preview"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Sample"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -64489,184 +62554,12 @@ export interface operations {
             };
         };
     };
-    get_signals_lens_signals_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SignalConfig"];
-                };
-            };
-        };
-    };
-    put_signals_lens_signals_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["SignalConfig"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SignalConfig"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    trace_findings_lens_traces_findings_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TraceFindingsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TraceFindingCount"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    trace_signal_statuses_lens_traces_signals_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["TraceFindingsRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TraceSignals"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_ingestion_keys_lens_tracing_keys_get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IngestionKey"][];
-                };
-            };
-        };
-    };
-    create_ingestion_key_lens_tracing_keys_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["IngestionKeyRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["IngestionKeyCreated"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    revoke_ingestion_key_lens_tracing_keys__key_id__delete: {
+    lens_request_lens__path__get: {
         parameters: {
             query?: never;
             header?: never;
             path: {
-                key_id: string;
+                path: string;
             };
             cookie?: never;
         };
@@ -64678,7 +62571,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": boolean;
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -64692,71 +62585,12 @@ export interface operations {
             };
         };
     };
-    watch_all_lens_watch_all_post: {
+    lens_request_lens__path__put: {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WatchAllResult"];
-                };
-            };
-        };
-    };
-    claim_lens_worker_claim_post: {
-        parameters: {
-            query?: {
-                protocol_version?: number;
-                worker_release?: string;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Claim"] | null;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    content_lens_worker__lens_id___job_id__content_get: {
-        parameters: {
-            query: {
-                execution_id: string;
-                cursor?: string;
-                offset?: number;
-            };
-            header?: {
-                "X-LiteLLM-Lens-Attempt"?: number;
-            };
             path: {
-                lens_id: string;
-                job_id: string;
+                path: string;
             };
             cookie?: never;
         };
@@ -64768,7 +62602,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["ExecutionContent"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -64782,15 +62616,12 @@ export interface operations {
             };
         };
     };
-    heartbeat_lens_worker__lens_id___job_id__heartbeat_post: {
+    lens_request_lens__path__post: {
         parameters: {
             query?: never;
-            header?: {
-                "X-LiteLLM-Lens-Attempt"?: number;
-            };
+            header?: never;
             path: {
-                lens_id: string;
-                job_id: string;
+                path: string;
             };
             cookie?: never;
         };
@@ -64802,7 +62633,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": boolean;
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -64816,129 +62647,12 @@ export interface operations {
             };
         };
     };
-    model_lens_worker__lens_id___job_id__model_post: {
+    lens_request_lens__path__delete: {
         parameters: {
             query?: never;
-            header?: {
-                "X-LiteLLM-Lens-Attempt"?: number;
-            };
+            header?: never;
             path: {
-                lens_id: string;
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["ModelRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ModelResult"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    progress_lens_worker__lens_id___job_id__progress_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-LiteLLM-Lens-Attempt"?: number;
-            };
-            path: {
-                lens_id: string;
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Progress"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": boolean;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    result_lens_worker__lens_id___job_id__result_post: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-LiteLLM-Lens-Attempt"?: number;
-            };
-            path: {
-                lens_id: string;
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["Result-Input"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Lens"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cached_reviews_lens_worker__lens_id___job_id__reviews_get: {
-        parameters: {
-            query?: never;
-            header?: {
-                "X-LiteLLM-Lens-Attempt"?: number;
-            };
-            path: {
-                lens_id: string;
-                job_id: string;
+                path: string;
             };
             cookie?: never;
         };
@@ -64950,7 +62664,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Review"][];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -64964,15 +62678,12 @@ export interface operations {
             };
         };
     };
-    sample_lens_worker__lens_id___job_id__sample_get: {
+    lens_request_lens__path__patch: {
         parameters: {
             query?: never;
-            header?: {
-                "X-LiteLLM-Lens-Attempt"?: number;
-            };
+            header?: never;
             path: {
-                lens_id: string;
-                job_id: string;
+                path: string;
             };
             cookie?: never;
         };
@@ -64984,408 +62695,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": components["schemas"]["Sample"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    register_worker_lens_workers_register_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkerName"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["WorkerCreated"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    revoke_worker_lens_workers__worker_id__delete: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                worker_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": boolean;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    set_worker_billing_lens_workers__worker_id__billing_key_put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                worker_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["WorkerBilling"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Worker"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_lens_lens__lens_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lens_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Lens"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_lens_lens__lens_id__put: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lens_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["LensSettings"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Lens"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    cancel_lens_lens__lens_id__cancel_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lens_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Lens"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    evidence_content_lens__lens_id__executions__execution_id__get: {
-        parameters: {
-            query?: {
-                cursor?: string;
-                offset?: number;
-            };
-            header?: never;
-            path: {
-                lens_id: string;
-                execution_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ExecutionContent"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    update_finding_lens__lens_id__findings__finding_id__patch: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lens_id: string;
-                finding_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["FindingUpdate"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Lens"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    list_runs_lens__lens_id__runs_get: {
-        parameters: {
-            query?: {
-                offset?: number;
-            };
-            header?: never;
-            path: {
-                lens_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Job"][];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    run_lens_lens__lens_id__runs_post: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lens_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody: {
-            content: {
-                "application/json": components["schemas"]["RunRequest"];
-            };
-        };
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Lens"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_run_lens__lens_id__runs__job_id__get: {
-        parameters: {
-            query?: never;
-            header?: never;
-            path: {
-                lens_id: string;
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["Job"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    read_reviews_lens__lens_id__runs__job_id__reviews_get: {
-        parameters: {
-            query?: {
-                after?: number;
-            };
-            header?: never;
-            path: {
-                lens_id: string;
-                job_id: string;
-            };
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["ReviewPage"];
+                    "application/json": unknown;
                 };
             };
             /** @description Validation Error */
@@ -71376,6 +68686,26 @@ export interface operations {
             };
         };
     };
+    get_public_whats_new_public_whats_new_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["WhatsNewResponse"];
+                };
+            };
+        };
+    };
     async_queue_request_queue_chat_completions_post: {
         parameters: {
             query?: {
@@ -73892,7 +71222,132 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "jev",
+                 *       "questions": {
+                 *         "frustration": {
+                 *           "criteria": [
+                 *             "calm",
+                 *             "mildly annoyed",
+                 *             "angry"
+                 *           ],
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "type": "score"
+                 *         },
+                 *         "is_refund_request": {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "type": "noul"
+                 *         },
+                 *         "urgency": {
+                 *           "criteria": {
+                 *             "high": "needs action today",
+                 *             "low": "can wait a week"
+                 *           },
+                 *           "instructions": "How urgent is this?",
+                 *           "type": "choice"
+                 *         }
+                 *       },
+                 *       "state": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today."
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Named noul, choice and score questions. Each key becomes a key in the answers
+                     */
+                    questions: {
+                        [key: string]: ({
+                            /**
+                             * Criteria
+                             * @description Optional descriptions of what makes the answer true and what makes it false
+                             */
+                            criteria?: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            } | null;
+                            /**
+                             * Instructions
+                             * @description The yes/no question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "noul";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Candidate labels mapped to an optional description of each
+                             */
+                            criteria: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            };
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "choice";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Scale levels from lowest to highest. The score is a level index
+                             */
+                            criteria: (string | {
+                                [key: string]: unknown;
+                            } | unknown[])[];
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "score";
+                        } & {
+                            [key: string]: unknown;
+                        });
+                    };
+                    /**
+                     * State
+                     * @description The thing being judged, such as a support ticket, a document or a chat transcript
+                     */
+                    state: string | {
+                        [key: string]: unknown;
+                    } | unknown[];
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -73900,7 +71355,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DecisionsResponse"];
                 };
             };
         };
@@ -77143,6 +74598,52 @@ export interface operations {
             };
         };
     };
+    get_user_daily_activity_aggregated_users_user_daily_activity_aggregated_users_get: {
+        parameters: {
+            query?: {
+                offset?: number;
+                limit?: number;
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+                /** @description Filter by specific model */
+                model?: string | null;
+                /** @description Filter by specific API key */
+                api_key?: string | null;
+                /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
+                user_id?: string | null;
+                /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
+                timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityUserPageResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     get_user_daily_activity_export_user_daily_activity_export_get: {
         parameters: {
             query?: {
@@ -79013,7 +76514,179 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "input": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today.",
+                 *       "model": "luna",
+                 *       "questions": [
+                 *         {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "name": "is_refund_request",
+                 *           "type": "predicate"
+                 *         },
+                 *         {
+                 *           "choices": [
+                 *             {
+                 *               "description": "can wait a week",
+                 *               "value": "low"
+                 *             },
+                 *             {
+                 *               "description": "needs action today",
+                 *               "value": "high"
+                 *             }
+                 *           ],
+                 *           "instructions": "How urgent is this?",
+                 *           "name": "urgency",
+                 *           "type": "choice"
+                 *         },
+                 *         {
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "levels": [
+                 *             {
+                 *               "label": "calm"
+                 *             },
+                 *             {
+                 *               "label": "mildly annoyed"
+                 *             },
+                 *             {
+                 *               "label": "angry"
+                 *             }
+                 *           ],
+                 *           "name": "frustration",
+                 *           "type": "score"
+                 *         }
+                 *       ]
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Input
+                     * @description The text being judged, or user messages whose content mixes input_text and input_image parts
+                     */
+                    input: string | {
+                        /** Content */
+                        content: string | ({
+                            /** Text */
+                            text: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_text";
+                        } | {
+                            /** Detail */
+                            detail?: string | null;
+                            /** Image Url */
+                            image_url: string;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "input_image";
+                        })[];
+                        /**
+                         * Role
+                         * @default user
+                         * @constant
+                         */
+                        role?: "user";
+                        /**
+                         * Type
+                         * @default message
+                         * @constant
+                         */
+                        type?: "message";
+                    }[];
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Predicate, choice and score questions. Answers come back in the same order
+                     */
+                    questions: ({
+                        /**
+                         * Instructions
+                         * @description The yes/no question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "predicate";
+                    } | {
+                        /**
+                         * Choices
+                         * @description The options the model picks from. Values must be unique
+                         */
+                        choices: {
+                            /** Description */
+                            description?: string | null;
+                            /** Value */
+                            value: string | boolean;
+                        }[];
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "choice";
+                    } | {
+                        /**
+                         * Instructions
+                         * @description The question to ask about the input
+                         */
+                        instructions: string;
+                        /**
+                         * Levels
+                         * @description Scale levels from lowest to highest. The score is a level index
+                         */
+                        levels: {
+                            /** Description */
+                            description?: string | null;
+                            /** Label */
+                            label: string;
+                        }[];
+                        /**
+                         * Name
+                         * @description Echoed in the matching answer
+                         */
+                        name?: string | null;
+                        /**
+                         * Type
+                         * @constant
+                         */
+                        type: "score";
+                    })[];
+                    /**
+                     * Safety Identifier
+                     * @description A stable id for your end user. Sent to OpenAI and dropped for other providers
+                     */
+                    safety_identifier?: string | null;
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -79021,7 +76694,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["OpenAIDecisionResponse"];
                 };
             };
         };
@@ -82186,7 +79859,132 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                /**
+                 * @example {
+                 *       "model": "jev",
+                 *       "questions": {
+                 *         "frustration": {
+                 *           "criteria": [
+                 *             "calm",
+                 *             "mildly annoyed",
+                 *             "angry"
+                 *           ],
+                 *           "instructions": "How frustrated is the customer?",
+                 *           "type": "score"
+                 *         },
+                 *         "is_refund_request": {
+                 *           "instructions": "Is the customer asking for a refund?",
+                 *           "type": "noul"
+                 *         },
+                 *         "urgency": {
+                 *           "criteria": {
+                 *             "high": "needs action today",
+                 *             "low": "can wait a week"
+                 *           },
+                 *           "instructions": "How urgent is this?",
+                 *           "type": "choice"
+                 *         }
+                 *       },
+                 *       "state": "Customer wrote: I was charged twice for order #4411 and want one charge refunded today."
+                 *     }
+                 */
+                "application/json": {
+                    /**
+                     * Model
+                     * @description A decision model from the proxy model_list
+                     */
+                    model: string;
+                    /**
+                     * Questions
+                     * @description Named noul, choice and score questions. Each key becomes a key in the answers
+                     */
+                    questions: {
+                        [key: string]: ({
+                            /**
+                             * Criteria
+                             * @description Optional descriptions of what makes the answer true and what makes it false
+                             */
+                            criteria?: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            } | null;
+                            /**
+                             * Instructions
+                             * @description The yes/no question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "noul";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Candidate labels mapped to an optional description of each
+                             */
+                            criteria: {
+                                [key: string]: string | {
+                                    [key: string]: unknown;
+                                } | unknown[] | null;
+                            };
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "choice";
+                        } & {
+                            [key: string]: unknown;
+                        }) | ({
+                            /**
+                             * Criteria
+                             * @description Scale levels from lowest to highest. The score is a level index
+                             */
+                            criteria: (string | {
+                                [key: string]: unknown;
+                            } | unknown[])[];
+                            /**
+                             * Instructions
+                             * @description The question to ask about the state
+                             */
+                            instructions?: string | {
+                                [key: string]: unknown;
+                            } | unknown[] | null;
+                            /**
+                             * Type
+                             * @constant
+                             */
+                            type: "score";
+                        } & {
+                            [key: string]: unknown;
+                        });
+                    };
+                    /**
+                     * State
+                     * @description The thing being judged, such as a support ticket, a document or a chat transcript
+                     */
+                    state: string | {
+                        [key: string]: unknown;
+                    } | unknown[];
+                } & {
+                    [key: string]: unknown;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -82194,7 +79992,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DecisionsResponse"];
                 };
             };
         };
@@ -82600,11 +80398,11 @@ export interface operations {
     list_agent_traces_v1_traces_get: {
         parameters: {
             query?: {
-                /** @description Window start, unix ms. Default: 24h ago */
-                start_ms?: number | null;
+                cursor?: string | null;
                 /** @description Window end, unix ms. Default: now */
                 end_ms?: number | null;
-                cursor?: string | null;
+                /** @description Window start, unix ms. Default: 24h ago */
+                start_ms?: number | null;
             };
             header?: never;
             path?: never;
@@ -82740,9 +80538,9 @@ export interface operations {
     get_agent_trace_v1_traces__trace_id__get: {
         parameters: {
             query?: {
-                trace_ref?: string;
                 cursor?: string | null;
                 page_size?: number | null;
+                trace_ref?: string;
             };
             header?: never;
             path: {
@@ -82809,8 +80607,8 @@ export interface operations {
     get_agent_trace_span_error_v1_traces__trace_id__spans__span_id__error_get: {
         parameters: {
             query?: {
-                trace_ref?: string;
                 cursor?: string | null;
+                trace_ref?: string;
             };
             header?: never;
             path: {

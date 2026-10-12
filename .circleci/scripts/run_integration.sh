@@ -128,11 +128,25 @@ fi
 sudo iptables -L integration_only -n -v -x > "$results/egress-guard.txt"
 awk '$3 == "REJECT" && $1 > 0 { rejected=1 } END { exit !rejected }' "$results/egress-guard.txt"
 
-setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
-  .venv/bin/python -m integration._support.upstream > "$results/upstream.log" 2>&1 &
-upstream_pid=$!
+isolated_workers=false
+if [ "$mode" = parity ]; then
+  export INTEGRATION_WORKERS=1
+else
+  case "$suite" in
+    management|accounting) export INTEGRATION_WORKERS=2; isolated_workers=true ;;
+    providers|extensions) export INTEGRATION_WORKERS=4; isolated_workers=true ;;
+  esac
+fi
+if [ "$isolated_workers" = false ]; then
+  setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
+    .venv/bin/python -m integration._support.upstream > "$results/upstream.log" 2>&1 &
+  upstream_pid=$!
+fi
 if [ "$suite" = cost ]; then
   export INTEGRATION_WORKERS=8
+fi
+if [ "$suite" = security ]; then
+  export INTEGRATION_WORKERS=4
 fi
 if [ "$suite" = mcp ]; then
   export INTEGRATION_WORKERS=4 INTEGRATION_COVERAGE=1
@@ -177,17 +191,22 @@ start_proxy() {
     > "$results/$log_name" 2>&1 &
   launched_pid=$!
 }
-start_proxy 4000 proxy.log
-proxy_pid="$launched_pid"
-.venv/bin/python .circleci/scripts/wait_integration_services.py
-curl --noproxy '*' -sSf -X POST "$INTEGRATION_PROXY_URL/config/update" \
-  -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
-  -d '{"router_settings": {"num_retries": 0}}' > "$results/seed-router-settings.json"
-if [ "$suite" = management ] || [ "$suite" = mcp ]; then
+if { [ "$suite" = management ] || [ "$suite" = mcp ]; } && [ "$isolated_workers" = true ]; then
   export INTEGRATION_PEER_URL=http://127.0.0.1:4001
-  start_proxy 4001 peer.log
-  peer_pid="$launched_pid"
+fi
+if [ "$isolated_workers" = false ]; then
+  start_proxy 4000 proxy.log
+  proxy_pid="$launched_pid"
   .venv/bin/python .circleci/scripts/wait_integration_services.py
+  curl --noproxy '*' -sSf -X POST "$INTEGRATION_PROXY_URL/config/update" \
+    -H "Authorization: Bearer $LITELLM_MASTER_KEY" -H 'Content-Type: application/json' \
+    -d '{"router_settings": {"num_retries": 0}}' > "$results/seed-router-settings.json"
+  if [ "$suite" = management ] || [ "$suite" = mcp ]; then
+    export INTEGRATION_PEER_URL=http://127.0.0.1:4001
+    start_proxy 4001 peer.log
+    peer_pid="$launched_pid"
+    .venv/bin/python .circleci/scripts/wait_integration_services.py
+  fi
 fi
 
 if [ "$suite" = providers ]; then
@@ -213,13 +232,11 @@ if [ "$suite" = browser ]; then
   exit 0
 fi
 
-node_files=()
+shard_arguments=()
 if [ "${CIRCLE_NODE_TOTAL:-1}" -gt 1 ]; then
-  split="$(.venv/bin/python tests/integration/run.py "$suite" --list \
-    | circleci tests split --split-by=timings --timings-type=filename)"
-  read -r -a node_files <<< "$(printf '%s' "$split" | tr '\n' ' ')"
-  test "${#node_files[@]}" -gt 0
-  printf '%s\n' "${node_files[@]}" > "$results/node-files.txt"
+  .venv/bin/python tests/integration/run.py "$suite" --list \
+    | circleci tests split --split-by=timings --timings-type=filename > "$results/node-files.txt"
+  shard_arguments=(--shard-files "$results/node-files.txt")
 fi
 
 env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
@@ -232,11 +249,14 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   LITELLM_LICENSE="${LITELLM_LICENSE:-}" \
   INTEGRATION_SEED="$INTEGRATION_SEED" \
   INTEGRATION_ORDER_SEED="$INTEGRATION_ORDER_SEED" \
+  INTEGRATION_CASE_SHARDS="${CIRCLE_NODE_TOTAL:-1}" INTEGRATION_CASE_SHARD_INDEX="${CIRCLE_NODE_INDEX:-0}" \
   LITELLM_LOCAL_MODEL_COST_MAP=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
   INTEGRATION_PROXY_DATABASE_URL="$INTEGRATION_PROXY_DATABASE_URL" \
   INTEGRATION_PROXY_READ_REPLICA_URL="$INTEGRATION_PROXY_READ_REPLICA_URL" \
   INTEGRATION_ROUTING="$INTEGRATION_ROUTING" \
-  .venv/bin/python tests/integration/run.py "$suite" --results "$results" "${node_files[@]}"
+  MCP_TEST_PEER_PYTHON="${MCP_TEST_PEER_PYTHON:-}" \
+  .venv/bin/python tests/integration/run.py "$suite" --results "$results" \
+  "${shard_arguments[@]}"
 
 if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
   for covered_pid in "$proxy_pid" "$peer_pid"; do
