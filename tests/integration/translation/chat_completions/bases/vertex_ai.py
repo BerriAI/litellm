@@ -498,7 +498,7 @@ GEMINI_3_5_FLASH_TEST_CASE: Final = TranslationTestCase(
     expected_provider_request={
         "contents": [{"role": "user", "parts": [{"text": "Say hello."}]}],
         "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
-        "generationConfig": {"max_output_tokens": 1024, "temperature": 1.0},
+        "generationConfig": {"max_output_tokens": 1024},
     },
     mock_provider_response={
         "candidates": [
@@ -574,7 +574,7 @@ GEMINI_3_8_FLASH_TEST_CASE: Final = TranslationTestCase(
     expected_provider_request={
         "contents": [{"role": "user", "parts": [{"text": "Say hello."}]}],
         "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
-        "generationConfig": {"max_output_tokens": 1024, "temperature": 1.0},
+        "generationConfig": {"max_output_tokens": 1024},
     },
     mock_provider_response={
         "candidates": [
@@ -650,7 +650,7 @@ GEMINI_3_1_PRO_PREVIEW_TEST_CASE: Final = TranslationTestCase(
     expected_provider_request={
         "contents": [{"role": "user", "parts": [{"text": "Say hello."}]}],
         "system_instruction": {"parts": [{"text": "You are a terse assistant."}]},
-        "generationConfig": {"max_output_tokens": 1024, "temperature": 1.0},
+        "generationConfig": {"max_output_tokens": 1024},
     },
     mock_provider_response={
         "candidates": [
