@@ -381,14 +381,22 @@ def test_initialize_applies_streaming_scan_settings(mock_mgr):
 
     default_params: Final = _litellm_params()
     default_instance: Final = initialize_guardrail(default_params, _guardrail(default_params))
-    configured_params: Final = _litellm_params(streaming_end_of_stream_only=True, streaming_sampling_rate=3)
+    configured_params: Final = _litellm_params(
+        streaming_end_of_stream_only=True, streaming_sampling_rate=3, streaming_buffer_until_moderated=True
+    )
     configured_instance: Final = initialize_guardrail(configured_params, _guardrail(configured_params))
+    disabled_params: Final = _litellm_params(streaming_buffer_until_moderated=False)
+    disabled_instance: Final = initialize_guardrail(disabled_params, _guardrail(disabled_params))
     unified: Final = UnifiedLLMGuardrails()
 
     assert unified.resolve_streaming_flag(default_instance, "streaming_end_of_stream_only", False) is False
     assert unified.resolve_streaming_flag(default_instance, "streaming_sampling_rate", 5) == 5
     assert unified.resolve_streaming_flag(configured_instance, "streaming_end_of_stream_only", False) is True
     assert unified.resolve_streaming_flag(configured_instance, "streaming_sampling_rate", 5) == 3
+    assert unified.resolve_streaming_flag(default_instance, "streaming_buffer_until_moderated", False) is False
+    assert unified.resolve_streaming_flag(default_instance, "streaming_buffer_until_moderated", True) is True
+    assert unified.resolve_streaming_flag(configured_instance, "streaming_buffer_until_moderated", False) is True
+    assert unified.resolve_streaming_flag(disabled_instance, "streaming_buffer_until_moderated", True) is False
 
 
 @pytest.mark.parametrize(
@@ -397,6 +405,7 @@ def test_initialize_applies_streaming_scan_settings(mock_mgr):
         ({"streaming_end_of_stream_only": "yes"}, TypeError, "streaming_end_of_stream_only"),
         ({"streaming_sampling_rate": 0}, ValueError, "streaming_sampling_rate"),
         ({"streaming_sampling_rate": True}, TypeError, "streaming_sampling_rate"),
+        ({"streaming_buffer_until_moderated": "yes"}, TypeError, "streaming_buffer_until_moderated"),
     ],
 )
 @patch("litellm.logging_callback_manager")

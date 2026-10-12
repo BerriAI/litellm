@@ -60,6 +60,15 @@ def _streaming_sampling_rate(litellm_params: LitellmParams) -> int:
     return value
 
 
+def _streaming_buffer_until_moderated(litellm_params: LitellmParams) -> bool | None:
+    value: Final[object] = getattr(litellm_params, "streaming_buffer_until_moderated", None)
+    if value is None:
+        return None
+    if not isinstance(value, bool):
+        raise TypeError(f"decision_model guardrail streaming_buffer_until_moderated must be a boolean, got {value!r}")
+    return value
+
+
 def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) -> DecisionModelGuardrail:
     import litellm
 
@@ -85,6 +94,7 @@ def initialize_guardrail(litellm_params: LitellmParams, guardrail: Guardrail) ->
         max_concurrent_decision_calls=litellm_params.max_concurrent_decision_calls or 8,
         streaming_end_of_stream_only=_streaming_end_of_stream_only(litellm_params),
         streaming_sampling_rate=_streaming_sampling_rate(litellm_params),
+        streaming_buffer_until_moderated=_streaming_buffer_until_moderated(litellm_params),
     )
     litellm.logging_callback_manager.add_litellm_callback(  # pyright: ignore[reportUnknownMemberType]  # callback manager is untyped
         _callback

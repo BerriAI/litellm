@@ -113,6 +113,7 @@ class DecisionModelGuardrail(CustomGuardrail):
         max_concurrent_decision_calls: int = 8,
         streaming_end_of_stream_only: bool = False,
         streaming_sampling_rate: int = 5,
+        streaming_buffer_until_moderated: bool | None = None,
     ) -> None:
         super().__init__(  # pyright: ignore[reportUnknownMemberType]  # base init takes untyped **kwargs
             guardrail_name=guardrail_name,
@@ -131,6 +132,8 @@ class DecisionModelGuardrail(CustomGuardrail):
         self._max_concurrent_decision_calls = max_concurrent_decision_calls
         self.streaming_end_of_stream_only = streaming_end_of_stream_only
         self.streaming_sampling_rate = streaming_sampling_rate
+        if streaming_buffer_until_moderated is not None:
+            self.streaming_buffer_until_moderated = streaming_buffer_until_moderated
         self._semaphores_by_loop: dict[AbstractEventLoop, Semaphore] = {}  # mutable-ok: per-loop semaphore registry
 
     @classmethod
