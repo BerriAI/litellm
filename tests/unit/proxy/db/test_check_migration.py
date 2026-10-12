@@ -82,15 +82,10 @@ _PARTITIONED_SPEND_LOGS_PK_DIFF: Final = (
     'ADD CONSTRAINT "LiteLLM_SpendLogs_pkey" PRIMARY KEY ("request_id");\n'
 )
 
-_BUDGET_TABLE_DIFF: Final = (
-    "-- AlterTable\n"
-    'ALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN "updated_at" TIMESTAMP(3);\n'
-)
+_BUDGET_TABLE_DIFF: Final = '-- AlterTable\nALTER TABLE "LiteLLM_BudgetTable" ADD COLUMN "updated_at" TIMESTAMP(3);\n'
 
 
-def _schema_diff_result(
-    mocker: MockerFixture, diff_sql: str, *, partitioned: bool | None
-) -> tuple[bool, list[str]]:
+def _schema_diff_result(mocker: MockerFixture, diff_sql: str, *, partitioned: bool | None) -> tuple[bool, list[str]]:
     mocker.patch(
         "litellm_proxy_extras.prisma_toolchain.run_prisma",
         return_value=subprocess.CompletedProcess(args=[], returncode=0, stdout=diff_sql),
