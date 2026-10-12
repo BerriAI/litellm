@@ -121,3 +121,36 @@ def test_resolve_agent_config_from_registry_returns_the_explicit_headers_object_
     assert resolved[2] is headers
     assert resolved[:2] == ("http://explicit.example", "explicit-key")
     assert optional_params == {"stream": True}
+
+
+def test_get_supported_openai_params_declares_only_stream():
+    """Sampling params are not mapped onto the A2A JSON-RPC payload, so the config
+    must not declare them as supported - declaring them used to drop them silently."""
+    assert A2AConfig().get_supported_openai_params(model="test-agent") == ["stream"]
+
+
+def test_sampling_params_fail_loudly_instead_of_dropping_silently():
+    """temperature/max_tokens/top_p are not forwarded to the agent; callers must get
+    a named error rather than a call that silently ignores their settings."""
+    from litellm.exceptions import UnsupportedParamsError
+    from litellm.utils import get_optional_params
+
+    for param in ("temperature", "max_tokens", "top_p"):
+        with pytest.raises(UnsupportedParamsError):
+            get_optional_params(model="test-agent", custom_llm_provider="a2a", **{param: 0.7})
+
+
+def test_drop_params_still_drops_unsupported_sampling_params():
+    """With drop_params set, unsupported sampling params are stripped and only the
+    supported stream flag survives."""
+    from litellm.utils import get_optional_params
+
+    result = get_optional_params(
+        model="test-agent",
+        custom_llm_provider="a2a",
+        temperature=0.7,
+        stream=True,
+        drop_params=True,
+    )
+    assert "temperature" not in result
+    assert result.get("stream") is True
