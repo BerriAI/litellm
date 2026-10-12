@@ -28,6 +28,11 @@ def string_value(value: JsonValue) -> str:
     return value
 
 
+def list_value(value: JsonValue) -> Sequence[JsonValue]:
+    assert isinstance(value, list), f"Expected a list, received {type(value).__name__}"
+    return value
+
+
 def delete_key_if_present(candidate: Gateway, key: str) -> None:
     digest: Final = sha256(key.encode()).hexdigest()
     if read_rows('SELECT token FROM "LiteLLM_VerificationToken" WHERE token=%s', (digest,)):
