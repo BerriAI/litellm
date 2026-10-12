@@ -10714,6 +10714,37 @@ class TestEndUserToolCeiling:
             allowed_servers: Final = await MCPRequestHandler.get_allowed_mcp_servers(auth)
         assert allowed_servers == []
 
+    async def test_end_user_access_group_writer_fault_does_not_drop_toolset_ceiling(self) -> None:
+        permission: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-eu", mcp_toolsets=["toolset-a"], mcp_access_groups=["group-x"]
+        )
+        cache: Final = await _cache_with_end_user("eu-1", object_permission_override=permission)
+        prisma: Final = MagicMock()
+        prisma.configure_mock(
+            **{
+                "writer_db.litellm_mcptoolsettable.find_many": AsyncMock(
+                    return_value=[
+                        MCPToolset(
+                            toolset_id="toolset-a",
+                            toolset_name="Read only",
+                            tools=[{"server_id": "server-a", "tool_name": "read"}],
+                        ),
+                    ]
+                ),
+                "writer_db.litellm_mcpservertable.find_many": AsyncMock(side_effect=RuntimeError("writer unavailable")),
+            }
+        )
+        auth: Final = UserAPIKeyAuth(
+            api_key="test-key",
+            end_user_id="eu-1",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-key", mcp_servers=["server-a", "server-b"]
+            ),
+        ).model_copy(update={"requires_fresh_policy": True})
+        with _entitlement_fault_globals(prisma_client=prisma, user_api_key_cache=cache):
+            allowed_servers: Final = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert "server-b" not in allowed_servers
+
     async def test_end_user_mcp_opt_out_overrides_toolset_servers(self) -> None:
         permission: Final = LiteLLM_ObjectPermissionTable(
             object_permission_id="op-eu",
