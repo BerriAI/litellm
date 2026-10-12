@@ -6669,14 +6669,36 @@ def test_stored_request_masks_ip_addresses_in_error_text_before_long_text_is_tru
 
 
 @pytest.mark.parametrize("requester_metadata", [False, True], ids=["headers", "requester-metadata-headers"])
-def test_stored_request_masks_ip_addresses_in_request_headers_before_long_values_are_truncated(
-    monkeypatch: pytest.MonkeyPatch, requester_metadata: bool
+@pytest.mark.parametrize(
+    "value, stored_head, stored_tail",
+    [
+        (
+            "a" * 345 + " 203.0.113.9 " + "b" * 2000 + " 2001:db8:0:0:1:0:0:9 " + "c" * 642,
+            "a" * 345 + " REDACTED_BY_LITELM",
+            "REDACTED_BY_LITELM " + "c" * 642,
+        ),
+        (
+            "a" * 343 + " ip:203.0.113.9 " + "b" * 2000 + " 192.0.2.1. " + "c" * 647,
+            "a" * 343 + " ip:REDACTED_BY_LITELM",
+            "REDACTED_BY_LITELM. " + "c" * 647,
+        ),
+        ("a" * 346 + " cafe:beef " + "b" * 2000 + " deadbeef " + "c" * 646, "a" * 346 + " caf", "eef " + "c" * 646),
+        ("0123456789abcdef" * 200, ("0123456789abcdef" * 22)[:350], ("0123456789abcdef" * 41)[-650:]),
+    ],
+    ids=[
+        "ipv4-and-ipv6-split",
+        "ipv4-after-a-label-and-before-a-dot",
+        "hex-words-without-digits",
+        "hex-run-longer-than-an-ip",
+    ],
+)
+def test_stored_request_masks_the_piece_of_an_ip_address_a_header_truncation_cut_leaves(
+    monkeypatch: pytest.MonkeyPatch, requester_metadata: bool, value: str, stored_head: str, stored_tail: str
 ) -> None:
-    from litellm.proxy.proxy_server import general_settings
+    from litellm.proxy import proxy_server
 
-    monkeypatch.setitem(general_settings, "store_prompts_in_spend_logs", True)
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
     monkeypatch.setenv("MAX_STRING_LENGTH_PROMPT_IN_DB", "1000")
-    value: Final = "a" * 345 + " 203.0.113.9 " + "b" * 2000 + " 2001:db8::9 " + "c" * 644
     headers: Final = {"x-edge-trace": value}
     metadata: Final = {"requester_metadata": {"headers": headers}} if requester_metadata else {"headers": headers}
 
@@ -6690,11 +6712,11 @@ def test_stored_request_masks_ip_addresses_in_request_headers_before_long_values
 
     stored_metadata: Final = stored["metadata"]["requester_metadata"] if requester_metadata else stored["metadata"]
     stored_value: Final = stored_metadata["headers"]["x-edge-trace"]
-    kept_head_and_tail: Final = stored_value[:350] + stored_value[-650:]
     assert LITELLM_TRUNCATED_PAYLOAD_FIELD in stored_value
-    assert kept_head_and_tail.startswith("a" * 345 + " REDA")
-    assert not any(char.isdigit() for char in kept_head_and_tail)
+    assert stored_value.startswith(stored_head + "... (")
+    assert stored_value.endswith(") ..." + stored_tail)
     assert headers["x-edge-trace"] == value
+
 
 def test_stored_request_with_ip_logging_disabled_matches_setting_off_for_bodies_without_ip_fields(
     monkeypatch: pytest.MonkeyPatch,
