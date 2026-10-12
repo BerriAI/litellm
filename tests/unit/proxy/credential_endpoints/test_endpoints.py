@@ -1845,7 +1845,7 @@ def test_user_connection_routes_roles():
 
     for route, method in routes:
         assert outcome(LitellmUserRoles.INTERNAL_USER, route, method) == "allowed"
-        assert outcome(LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, route, method) == "denied"
+        assert outcome(LitellmUserRoles.INTERNAL_USER_VIEW_ONLY, route, method) == "denied:401"
     assert outcome(LitellmUserRoles.INTERNAL_USER, "/credentials", method="POST") != "allowed"
 
 

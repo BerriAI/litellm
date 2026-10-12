@@ -126,8 +126,7 @@ def test_non_admin_config_update_route_rejected():
     request = MagicMock(spec=Request)
     request.query_params = {}
 
-    # Test that calling /config/update route raises HTTPException with 403 status
-    with pytest.raises(Exception, match="Only proxy admin can be used to generate, delete, update") as exc_info:
+    with pytest.raises(HTTPException, match="Only proxy admin can be used to generate, delete, update") as exc_info:
         RouteChecks.non_proxy_admin_allowed_routes_check(
             user_obj=user_obj,
             _user_role=LitellmUserRoles.INTERNAL_USER.value,
@@ -137,7 +136,7 @@ def test_non_admin_config_update_route_rejected():
             request_data={},
         )
 
-    # Verify the exception is raised with the correct message
+    assert exc_info.value.status_code == 401
     assert "Only proxy admin can be used to generate, delete, update info for new keys/users/teams" in str(
         exc_info.value
     )
@@ -3682,8 +3681,8 @@ def test_team_spend_by_user_reachable_by_non_admin(user_role):
                 valid_token=valid_token,
                 request_data={},
             )
-        except Exception as exc:
-            return f"denied: {exc}"
+        except HTTPException as exc:
+            return f"denied: {exc.detail}"
         return "allowed"
 
     assert outcome("/team/spend/by_user") == "allowed"
