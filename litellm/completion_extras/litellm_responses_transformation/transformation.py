@@ -587,20 +587,15 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 else:
                     # Fallback: convert unexpected types to input_text
                     tool_output = [{"type": "input_text", "text": str(content)}]
-                norm_tool_call_id: Final[str | None] = (
-                    self._normalize_tool_call_id(tool_call_id)
-                    if isinstance(tool_call_id, str)
-                    else (
-                        self._normalize_tool_call_id(f"{tool_call_id}")
-                        if tool_call_id is not None
-                        else None
-                    )
-                )
                 if tool_call_id in custom_tool_call_ids:
                     input_items.append(
                         ResponseCustomToolCallOutputParam(
                             type="custom_tool_call_output",
-                            call_id=norm_tool_call_id or "",
+                            call_id=(
+                                self._normalize_tool_call_id(f"{tool_call_id}") or ""
+                                if tool_call_id is not None
+                                else ""
+                            ),
                             output=content if isinstance(content, str) else tool_output,
                         )
                     )
@@ -608,7 +603,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     input_items.append(
                         FunctionCallOutput(
                             type="function_call_output",
-                            call_id=norm_tool_call_id,
+                            call_id=(
+                                self._normalize_tool_call_id(f"{tool_call_id}") if tool_call_id is not None else None
+                            ),
                             output=tool_output,
                         )
                     )
@@ -627,20 +624,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 for tool_call in tool_calls:
                     function = tool_call.get("function")
                     custom = tool_call.get("custom")
-                    raw_call_id = tool_call["id"]
-                    normalized_call_id: Final[str | None] = (
-                        self._normalize_tool_call_id(raw_call_id)
-                        if isinstance(raw_call_id, str)
-                        else (
-                            self._normalize_tool_call_id(f"{raw_call_id}")
-                            if raw_call_id is not None
-                            else None
-                        )
-                    )
                     if function:
                         input_tool_call: dict[str, object] = {
                             "type": "function_call",
-                            "call_id": normalized_call_id,
+                            "call_id": (
+                                self._normalize_tool_call_id(f"{tool_call['id']}")
+                                if "id" in tool_call and tool_call["id"] is not None
+                                else None
+                            ),
                         }
                         if "name" in function:
                             input_tool_call["name"] = function["name"]
@@ -651,7 +642,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         input_items.append(
                             ResponseCustomToolCallParam(
                                 type="custom_tool_call",
-                                call_id=normalized_call_id or "",
+                                call_id=(
+                                    self._normalize_tool_call_id(f"{tool_call['id']}") or ""
+                                    if "id" in tool_call and tool_call["id"] is not None
+                                    else ""
+                                ),
                                 name=custom.get("name", ""),
                                 input=custom.get("input", ""),
                             )
