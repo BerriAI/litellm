@@ -564,6 +564,16 @@ def test_openai_format_decisions_reach_an_openai_deployment_unchanged_including_
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
 ) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        decisions_pricing_key("openai", "gpt-6-luna"),
+        {
+            "litellm_provider": "openai",
+            "mode": "decisions",
+            "input_cost_per_token": 1e-07,
+            "output_cost_per_token": 0.0,
+        },
+    )
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
     monkeypatch.delenv("OPENAI_API_BASE", raising=False)
@@ -616,9 +626,8 @@ def test_openai_format_decisions_reach_an_openai_deployment_unchanged_including_
     assert body["answers"] == _OPENAI_FORMAT_ANSWERS
     assert body["usage"] == upstream_usage
     luna_decisions_cost: Final = litellm.model_cost[decisions_pricing_key("openai", "gpt-6-luna")]
-    expected_cost: Final = (
-        _INPUT_TOKENS * float(luna_decisions_cost["input_cost_per_token"])
-        + _OUTPUT_TOKENS * float(luna_decisions_cost["output_cost_per_token"])
+    expected_cost: Final = _INPUT_TOKENS * float(luna_decisions_cost["input_cost_per_token"]) + _OUTPUT_TOKENS * float(
+        luna_decisions_cost["output_cost_per_token"]
     )
     assert expected_cost > 0
     assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)

@@ -168,6 +168,28 @@ def _httpx_transport(monkeypatch: pytest.MonkeyPatch) -> None:
     litellm.in_memory_llm_clients_cache.flush_cache()
 
 
+_DECISIONS_PRICING_ROWS: Final[dict[str, dict[str, object]]] = {
+    decisions_pricing_key("openai", "gpt-6-luna"): {
+        "litellm_provider": "openai",
+        "mode": "decisions",
+        "input_cost_per_token": 1e-07,
+        "output_cost_per_token": 0.0,
+    },
+    decisions_pricing_key("azure_ai", "Microsoft-Decision-1"): {
+        "litellm_provider": "azure_ai",
+        "mode": "decisions",
+        "input_cost_per_token": 7e-08,
+        "output_cost_per_token": 0.0,
+    },
+}
+
+
+@pytest.fixture
+def decisions_pricing_rows(monkeypatch: pytest.MonkeyPatch) -> None:
+    for key, row in _DECISIONS_PRICING_ROWS.items():
+        monkeypatch.setitem(litellm.model_cost, key, row)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(("provider", "model", "url", "upstream_model"), _PROVIDERS)
 async def test_adecisions_sends_the_provider_wire_contract(
@@ -326,6 +348,7 @@ def test_decisions_cost_uses_litellm_token_pricing() -> None:
 @pytest.mark.asyncio
 async def test_openai_decisions_uses_evaluation_pricing_and_explicit_base_model(
     respx_mock: respx.MockRouter,
+    decisions_pricing_rows: None,
 ) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
     response: Final = await litellm.adecisions(
@@ -357,7 +380,7 @@ async def test_openai_decisions_uses_evaluation_pricing_and_explicit_base_model(
 
 
 @pytest.mark.asyncio
-async def test_systemone_uses_evaluation_pricing(respx_mock: respx.MockRouter) -> None:
+async def test_systemone_uses_evaluation_pricing(respx_mock: respx.MockRouter, decisions_pricing_rows: None) -> None:
     route: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(json=_OPENAI_RESPONSE)
     response: Final = await litellm.asystemone(
         model="openai/gpt-6-luna",
@@ -1386,6 +1409,7 @@ async def test_openai_decisions_translate_systemone_to_the_openai_wire_contract_
     url: str,
     monkeypatch: pytest.MonkeyPatch,
     respx_mock: respx.MockRouter,
+    decisions_pricing_rows: None,
 ) -> None:
     monkeypatch.setattr(litellm, "api_base", None)
     monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
@@ -1766,7 +1790,9 @@ async def test_azure_ai_decision_posts_deployment_to_foundry_systemone_route(
 
 
 @pytest.mark.asyncio
-async def test_azure_ai_systemone_uses_its_decisions_pricing_row(respx_mock: respx.MockRouter) -> None:
+async def test_azure_ai_systemone_uses_its_decisions_pricing_row(
+    respx_mock: respx.MockRouter, decisions_pricing_rows: None
+) -> None:
     route: Final = respx_mock.post("https://res.services.ai.azure.com/providers/microsoft/v1/systemone").respond(
         json={**_RESPONSE, "model": "microsoft-decision-1"}
     )

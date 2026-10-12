@@ -426,6 +426,19 @@ describe("provider_info_helpers", () => {
       expect(result).toEqual([]);
     });
 
+    it("hides <provider>/decisions/<model> pricing rows but keeps decisions-only models", () => {
+      const modelMap = {
+        "gpt-6-luna": { litellm_provider: "openai", mode: "chat" },
+        "openai/decisions/gpt-6-luna": { litellm_provider: "openai", mode: "decisions" },
+        "azure_ai/Microsoft-Decision-1": { litellm_provider: "azure_ai", mode: "evaluation" },
+        "azure_ai/decisions/Microsoft-Decision-1": { litellm_provider: "azure_ai", mode: "decisions" },
+        "typesafe/jev-latest": { litellm_provider: "typesafe", mode: "decisions" },
+      };
+      expect(getProviderModels("OpenAI" as Providers, modelMap)).toEqual(["gpt-6-luna"]);
+      expect(getProviderModels("Azure_AI_Studio" as Providers, modelMap)).toEqual(["azure_ai/Microsoft-Decision-1"]);
+      expect(getProviderModels("TypeSafe" as Providers, modelMap)).toEqual(["typesafe/jev-latest"]);
+    });
+
     it("should return empty array when modelMap is empty", () => {
       const modelMap = {};
       const result = getProviderModels(Providers.OpenAI, modelMap);

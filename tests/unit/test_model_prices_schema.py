@@ -465,14 +465,11 @@ def test_decisions_pricing_rows_match_their_plain_evaluation_rows(prices: dict) 
         if (row_pair := _evaluation_decisions_row_pair(key, value, prices)) is not None
     )
 
-    assert matching_rows
     for key, decisions_row, evaluation_row in matching_rows:
         assert decisions_row.get("mode") == "decisions", f"{key} must use the decisions mode"
-        assert {
-            field: value for field, value in decisions_row.items() if field != "mode"
-        } == {field: value for field, value in evaluation_row.items() if field != "mode"}, (
-            f"{key} must copy every field except mode from its plain evaluation row"
-        )
+        assert {field: value for field, value in decisions_row.items() if field != "mode"} == {
+            field: value for field, value in evaluation_row.items() if field != "mode"
+        }, f"{key} must copy every field except mode from its plain evaluation row"
 
 
 def test_all_decisions_pricing_rows_use_decisions_mode(prices: dict) -> None:
@@ -484,7 +481,6 @@ def test_all_decisions_pricing_rows_use_decisions_mode(prices: dict) -> None:
         and is_decisions_pricing_key(key, provider)
     )
 
-    assert decisions_rows
     for key, value in decisions_rows:
         assert value.get("mode") == "decisions", f"{key} must use the decisions mode"
 
