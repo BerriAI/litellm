@@ -123,6 +123,52 @@ class TestSensitiveDataRoutingGuardrailDetection:
         assert exc.session_ttl_seconds == 14400
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "arguments",
+        [
+            '{"ssn": "123-45-6789"}',
+            '{"ssn": "123\\u002d45\\u002d6789"}',
+            '{"record": {"ids": ["123-45-6789"]}}',
+            "not json 123-45-6789",
+        ],
+    )
+    async def test_tool_call_arguments_are_scanned(self, arguments):
+        guardrail = make_guardrail(prebuilt_patterns=["us_ssn"], regex_patterns=None, keywords=None)
+        inputs = {
+            "texts": ["look this person up"],
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": arguments}}
+            ],
+        }
+
+        with pytest.raises(SensitiveDataRouteException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs=inputs,
+                request_data={"metadata": {"session_id": "abc-123"}},
+                input_type="request",
+            )
+
+        assert exc_info.value.detection_info == {"detection_type": "prebuilt_pattern", "rule": "us_ssn"}
+
+    @pytest.mark.asyncio
+    async def test_clean_tool_call_arguments_are_untouched(self):
+        guardrail = make_guardrail()
+        inputs = {
+            "texts": ["weather please"],
+            "tool_calls": [
+                {"id": "call_1", "type": "function", "function": {"name": "weather", "arguments": '{"city": "Paris"}'}}
+            ],
+        }
+
+        result = await guardrail.apply_guardrail(
+            inputs=inputs,
+            request_data={"metadata": {"session_id": "abc-123"}},
+            input_type="request",
+        )
+
+        assert result is inputs
+
+    @pytest.mark.asyncio
     async def test_detection_never_leaks_the_matched_value(self):
         guardrail = make_guardrail()
 

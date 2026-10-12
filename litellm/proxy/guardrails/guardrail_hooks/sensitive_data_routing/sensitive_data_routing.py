@@ -5,11 +5,12 @@ Detects sensitive data with prebuilt regex patterns, custom regex and keyword ma
 then reroutes the request to an on-premise model instead of blocking or redacting it.
 """
 
+import json
 import re
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from re import Pattern
-from typing import TYPE_CHECKING, Final, Literal, Optional
+from typing import TYPE_CHECKING, Final, Literal, Optional, TypeAlias
 
 from litellm.exceptions import SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import (
@@ -31,7 +32,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
-SensitiveDataDetectorKind = Literal["prebuilt_pattern", "regex_pattern", "keyword"]
+SensitiveDataDetectorKind: TypeAlias = Literal["prebuilt_pattern", "regex_pattern", "keyword"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -60,6 +61,33 @@ def build_detectors(
             for keyword in keywords or ()
         ),
     )
+
+
+def _string_leaves(value: object) -> Iterator[str]:
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for key, item in value.items():
+            yield from _string_leaves(key)
+            yield from _string_leaves(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _string_leaves(item)
+
+
+def tool_call_argument_texts(tool_calls: Sequence[object] | None) -> Iterator[str]:
+    """Yield tool-call argument strings, plus their decoded JSON string values so escapes cannot hide a match."""
+    for tool_call in tool_calls or ():
+        function = tool_call.get("function") if isinstance(tool_call, dict) else getattr(tool_call, "function", None)
+        arguments = function.get("arguments") if isinstance(function, dict) else getattr(function, "arguments", None)
+        if not isinstance(arguments, str) or not arguments:
+            continue
+        yield arguments
+        try:
+            parsed = json.loads(arguments)
+        except (json.JSONDecodeError, TypeError, ValueError):
+            continue
+        yield from _string_leaves(parsed)
 
 
 class SensitiveDataRoutingGuardrail(CustomGuardrail):
@@ -113,10 +141,10 @@ class SensitiveDataRoutingGuardrail(CustomGuardrail):
         return SensitiveDataRoutingGuardrailConfigModel
 
     def detect(self, texts: Sequence[str]) -> SensitiveDataDetector | None:
-        return next(
-            (detector for detector in self.detectors for text in texts if text and detector.matcher.search(text)),
-            None,
-        )
+        for detector in self.detectors:
+            if any(text and detector.matcher.search(text) for text in texts):
+                return detector
+        return None
 
     @log_guardrail_information
     async def apply_guardrail(
@@ -129,7 +157,9 @@ class SensitiveDataRoutingGuardrail(CustomGuardrail):
         if input_type != "request":
             return inputs
 
-        detected: Final = self.detect(inputs.get("texts") or ())
+        detected: Final = self.detect(
+            [*(inputs.get("texts") or ()), *tool_call_argument_texts(inputs.get("tool_calls"))]
+        )
         if detected is None:
             return inputs
 
