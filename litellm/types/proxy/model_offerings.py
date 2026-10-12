@@ -52,6 +52,34 @@ class SupplierConnection(BaseModel):
         return self
 
 
+class OpenRouterProviderPolicy(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    provider: Literal["openrouter"]
+    only: Annotated[tuple[Annotated[str, Field(min_length=1, strict=True)], ...], Field(min_length=1)]
+    allow_fallbacks: Literal[False] = False
+
+    @field_validator("only")
+    @classmethod
+    def exact_endpoints(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if len(frozenset(value)) != len(value) or any(
+            endpoint != endpoint.strip() or not endpoint.strip() or "*" in endpoint or "://" in endpoint
+            for endpoint in value
+        ):
+            raise ValueError("Provider endpoints must be unique exact slugs, not URLs or wildcards")
+        return value
+
+    @field_validator("allow_fallbacks", mode="before")
+    @classmethod
+    def no_fallbacks(cls, value: object) -> Literal[False]:
+        if value is not False:
+            raise ValueError("Offering provider policies require allow_fallbacks=false")
+        return False
+
+    def request_body(self) -> Mapping[str, object]:
+        return MappingProxyType({"only": list(self.only), "allow_fallbacks": self.allow_fallbacks})
+
+
 class ModelOffering(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -61,6 +89,7 @@ class ModelOffering(BaseModel):
     upstream_model: Annotated[str, Field(min_length=1, strict=True)]
     enabled: bool = Field(default=True, strict=True)
     model_info: OfferingModelInfo = Field(default_factory=OfferingModelInfo)
+    provider_policy: OpenRouterProviderPolicy | None = None
 
     @field_validator("model_name", "provider", "upstream_model")
     @classmethod
@@ -100,4 +129,13 @@ class ModelOfferingsConfig(BaseModel):
             raise ValueError("Each offering must have a unique model_name")
         if any(offering.provider not in self.providers for offering in self.offerings):
             raise ValueError("Each offering must reference a configured connection")
+        if any(
+            offering.provider_policy is not None
+            and (
+                offering.provider_policy.provider != self.providers[offering.provider].provider
+                or offering.model_info.mode != "chat"
+            )
+            for offering in self.offerings
+        ):
+            raise ValueError("Provider policies require a matching supplier and explicit chat mode")
         return self

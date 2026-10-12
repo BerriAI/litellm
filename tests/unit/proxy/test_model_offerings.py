@@ -7,9 +7,17 @@ import pytest
 import yaml
 from openai import AsyncOpenAI
 
+import litellm
+from litellm.caching.caching import Cache, DualCache
+from litellm.caching.llm_caching_handler import LLMClientCache
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.model_offerings import ModelOfferingsManager
+from litellm.proxy.offering_router import OfferingAccessGuard
+from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.types.utils import CallTypesLiteral
 
 
 async def test_authoritative_inventory_failure_recovery_and_atomic_config_reload(tmp_path: Path) -> None:
@@ -586,3 +594,353 @@ async def test_shared_inventory_client_is_reacquired_after_cache_eviction(
         assert not second.client.is_closed
     finally:
         await second.close()
+
+
+@pytest.mark.parametrize("surface", ("chat", "responses", "responses_chat", "messages"))
+@pytest.mark.parametrize("stream", (False, True))
+async def test_provider_policy_reaches_upstream_body_on_every_chat_surface(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, surface: str, stream: bool
+) -> None:
+    path: Final = tmp_path / "offerings.yaml"
+    policy: Final = {"only": ["synthetic/fp8"], "allow_fallbacks": False}
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "providers": {
+                    "supplier": {
+                        "provider": "openrouter",
+                        "api_base": "https://supplier.test/v1",
+                        "api_key": "fixture-key",
+                    }
+                },
+                "offerings": [
+                    {
+                        "model_name": "selected",
+                        "source": "manual",
+                        "provider": "supplier",
+                        "upstream_model": "org/backend",
+                        "model_info": {"mode": "chat"},
+                        "provider_policy": {"provider": "openrouter", **policy},
+                    }
+                ],
+            }
+        )
+    )
+    requests: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": []})
+        requests.append(request)
+        body: Final = json.loads(request.content)
+        assert body["model"] == "org/backend"
+        assert body["provider"] == policy
+        assert body["temperature"] == 0.5
+        if request.url.path.endswith("/responses"):
+            response: Final = {
+                "id": "resp_fixture",
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": "org/backend",
+                "output": [
+                    {
+                        "id": "msg_fixture",
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "completed",
+                        "content": [{"type": "output_text", "text": "accepted", "annotations": []}],
+                    }
+                ],
+                "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+            }
+            if stream:
+                return httpx.Response(
+                    200,
+                    headers={"content-type": "text/event-stream"},
+                    content=(
+                        "event: response.completed\ndata: "
+                        + json.dumps(
+                            {
+                                "type": "response.completed",
+                                "sequence_number": 1,
+                                "response": response,
+                            }
+                        )
+                        + "\n\n"
+                    ),
+                )
+            return httpx.Response(200, json=response)
+        if stream:
+            return httpx.Response(
+                200,
+                headers={"content-type": "text/event-stream"},
+                content=(
+                    "data: "
+                    + json.dumps(
+                        {
+                            "id": "fixture",
+                            "object": "chat.completion.chunk",
+                            "created": 1,
+                            "model": "org/backend",
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {"role": "assistant", "content": "accepted"},
+                                    "finish_reason": "stop",
+                                }
+                            ],
+                        }
+                    )
+                    + "\n\ndata: [DONE]\n\n"
+                ),
+            )
+        return httpx.Response(
+            200,
+            json={
+                "id": "fixture",
+                "object": "chat.completion",
+                "created": 1,
+                "model": "org/backend",
+                "choices": [
+                    {"index": 0, "message": {"role": "assistant", "content": "accepted"}, "finish_reason": "stop"}
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as http_client:
+        handler.client = http_client
+        cache: Final = LLMClientCache()
+        cache.set_cache("async_httpx_clientssl_verify_Noneopenrouter", handler)
+        monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", cache)
+        manager: Final = ModelOfferingsManager(
+            path=path, template=Router(model_list=[], num_retries=0), client=handler, clock=lambda: 0.0
+        )
+        assert await manager.reload(initial=True)
+        guard: Final = OfferingAccessGuard(manager.router)
+        monkeypatch.setattr(litellm, "callbacks", [guard])
+        call_type: Final[CallTypesLiteral] = (
+            "acompletion" if surface == "chat" else "anthropic_messages" if surface == "messages" else "aresponses"
+        )
+        response_cache: Final = Cache(
+            type="local", supported_call_types=["acompletion", "aresponses", "anthropic_messages"]
+        )
+        monkeypatch.setattr(litellm, "cache", response_cache)
+        response_cache.cache.set_cache("shared-fixture-key", {"response": "unrelated endpoint output"})
+        shaped: Final = await ProxyLogging(UserApiKeyCache()).pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(),
+            data={
+                "model": "selected",
+                "stream": stream,
+                "extra_body": {"temperature": 0.5},
+                "caching": True,
+                "preset_cache_key": "shared-fixture-key",
+                "cache": {"no-cache": False, "no-store": False},
+                **({"use_chat_completions_api": True} if surface == "responses_chat" else {}),
+            },
+            call_type=call_type,
+        )
+        assert isinstance(shaped, dict)
+        result: Final = (
+            await manager.router.aresponses(input="fixture", client=handler, **shaped)
+            if surface in ("responses", "responses_chat")
+            else await manager.router.anthropic_messages(
+                messages=[{"role": "user", "content": "fixture"}], max_tokens=10, client=handler, **shaped
+            )
+            if surface == "messages"
+            else await manager.router.acompletion(
+                messages=[{"role": "user", "content": "fixture"}], client=handler, **shaped
+            )
+        )
+        if stream:
+            chunks: Final = tuple([chunk async for chunk in result])
+            assert chunks
+        assert len(requests) == 1
+        assert requests[0].url.path.endswith("/responses" if surface == "responses" else "/chat/completions")
+        assert response_cache.cache.get_cache("shared-fixture-key") == {"response": "unrelated endpoint output"}
+
+
+async def test_endpoint_policy_reload_isolates_aliases_identity_and_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.utils import create_model_info_response
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "fixture-identity-key")
+    path: Final = tmp_path / "offerings.yaml"
+    selected: Final = {
+        "model_name": "selected",
+        "source": "auto",
+        "provider": "supplier",
+        "upstream_model": "org/backend",
+        "model_info": {"mode": "chat", "context_window": 4000},
+        "provider_policy": {"provider": "openrouter", "only": ["synthetic/fp8"]},
+    }
+    config: Final = {
+        "version": 1,
+        "providers": {"supplier": {"provider": "openrouter", "api_base": "https://supplier.test/v1"}},
+        "offerings": [
+            selected,
+            {
+                "model_name": "ordinary",
+                "source": "auto",
+                "provider": "supplier",
+                "upstream_model": "org/backend",
+            },
+        ],
+    }
+    path.write_text(yaml.safe_dump(config))
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "data": [
+                        {
+                            "id": "org/backend",
+                            "context_length": 16000,
+                            "top_provider": {"max_completion_tokens": 8000},
+                        }
+                    ]
+                },
+            )
+        )
+    ) as client:
+        handler.client = client
+        manager: Final = ModelOfferingsManager(
+            path=path, template=Router(model_list=[]), client=handler, clock=lambda: 0.0
+        )
+        assert await manager.reload(initial=True)
+        before: Final = manager.router.latest_snapshot()
+        selected_id: Final = manager.router.get_model_ids("selected")
+        ordinary_id: Final = manager.router.get_model_ids("ordinary")
+        pinned_metadata: Final = create_model_info_response("selected", "openrouter", llm_router=manager.router)
+        ordinary_metadata: Final = create_model_info_response("ordinary", "openrouter", llm_router=manager.router)
+        assert pinned_metadata["context_window"] == 4000
+        assert "max_output_tokens" not in pinned_metadata
+        assert ordinary_metadata["context_window"] == 16000
+        assert ordinary_metadata["max_output_tokens"] == 8000
+        assert await manager.reload(force_inventory=True)
+        assert manager.router.get_model_ids("selected") == selected_id
+        with manager.router.pin_snapshot():
+            path.write_text(
+                yaml.safe_dump(
+                    {
+                        **config,
+                        "offerings": [
+                            {
+                                **selected,
+                                "provider_policy": {"provider": "openrouter", "only": ["synthetic/bf16"]},
+                            },
+                            config["offerings"][1],
+                        ],
+                    }
+                )
+            )
+            assert await manager.reload()
+            assert manager.router.serving_snapshot().provider_policies == before.provider_policies
+            assert manager.router.get_model_ids("selected") == selected_id
+        assert manager.router.get_model_ids("selected") != selected_id
+        assert manager.router.get_model_ids("ordinary") == ordinary_id
+        assert manager.router.latest_snapshot().provider_policies["selected"].only == ("synthetic/bf16",)
+        assert "ordinary" not in manager.router.latest_snapshot().provider_policies
+        valid: Final = manager.router.latest_snapshot()
+        path.write_text(
+            yaml.safe_dump(
+                {
+                    **config,
+                    "providers": {
+                        "supplier": {
+                            "provider": "openai",
+                            "api_base": "https://supplier.test/v1",
+                        }
+                    },
+                }
+            )
+        )
+        assert not await manager.reload()
+        assert manager.router.latest_snapshot() is valid
+
+
+async def test_endpoint_failure_never_uses_gateway_fallback_and_tampering_never_forwards(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path: Final = tmp_path / "offerings.yaml"
+    path.write_text(
+        yaml.safe_dump(
+            {
+                "version": 1,
+                "providers": {
+                    "supplier": {
+                        "provider": "openrouter",
+                        "api_base": "https://supplier.test/v1",
+                        "api_key": "fixture-key",
+                    }
+                },
+                "offerings": [
+                    {
+                        "model_name": "selected",
+                        "source": "manual",
+                        "provider": "supplier",
+                        "upstream_model": "org/pinned",
+                        "model_info": {"mode": "chat"},
+                        "provider_policy": {"provider": "openrouter", "only": ["synthetic/fp8"]},
+                    },
+                    {
+                        "model_name": "ordinary",
+                        "source": "manual",
+                        "provider": "supplier",
+                        "upstream_model": "org/other",
+                    },
+                ],
+            }
+        )
+    )
+    forwarded: Final[list[dict[str, object]]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": []})
+        forwarded.append(json.loads(request.content))
+        return httpx.Response(503, json={"error": {"message": "synthetic endpoint unavailable", "code": 503}})
+
+    handler: Final = AsyncHTTPHandler()
+    await handler.client.aclose()
+    async with httpx.AsyncClient(transport=httpx.MockTransport(respond)) as client:
+        handler.client = client
+        manager: Final = ModelOfferingsManager(
+            path=path,
+            client=handler,
+            template=Router(
+                model_list=[],
+                num_retries=0,
+                fallbacks=[{"selected": ["ordinary"]}],
+            ),
+        )
+        assert await manager.reload(initial=True)
+        guard: Final = OfferingAccessGuard(manager.router)
+        monkeypatch.setattr(litellm, "callbacks", [guard])
+        shaped: Final = await guard.async_pre_call_hook(
+            UserAPIKeyAuth(), DualCache(), {"model": "selected"}, "acompletion"
+        )
+        assert isinstance(shaped, dict)
+        with pytest.raises(litellm.ServiceUnavailableError, match="synthetic endpoint unavailable"):
+            await manager.router.acompletion(
+                messages=[{"role": "user", "content": "fixture"}], client=handler, **shaped
+            )
+        assert tuple(body["model"] for body in forwarded) == ("org/pinned",)
+        for extra_body in ({"provider": {"only": ["other"]}}, {"model": "org/other"}, {"models": ["org/other"]}):
+            with pytest.raises(litellm.BadRequestError, match="configured offering provider policy"):
+                await manager.router.acompletion(
+                    model="selected",
+                    messages=[{"role": "user", "content": "fixture"}],
+                    client=handler,
+                    extra_body=extra_body,
+                    disable_fallbacks=True,
+                )
+        assert len(forwarded) == 1

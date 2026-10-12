@@ -68,6 +68,37 @@ Connection identities use HMAC with the existing private server salt/master key.
 
 Caller `extra_body.model` overrides are rejected before supplier forwarding; harmless extra body fields remain supported. Structured `reasoning_effort` objects such as `{effort: high, summary: auto}` select the same configured output budget as the corresponding effort string.
 
+## Provider endpoint policy
+
+An offering can own a typed `provider_policy`. Currently OpenRouter chat offerings support an exact endpoint allowlist with fallbacks disabled. The policy belongs to the offering, not the connection, and never accepts credentials or arbitrary request-body options. The supplier must match the policy provider and `model_info.mode` must explicitly be `chat`
+
+```yaml
+offerings:
+  - model_name: selected-endpoint
+    source: auto
+    provider: openrouter
+    upstream_model: organization/model
+    enabled: false
+    provider_policy:
+      provider: openrouter
+      only: [supplier/exact-endpoint]
+      allow_fallbacks: false
+    model_info:
+      mode: chat
+      context_window: 32000
+      max_output_tokens: 4000
+```
+
+Append this entry to the external file's existing `offerings`, using its configured OpenRouter connection name. The example limits are synthetic. Verify endpoint-specific values before enabling it. `only` contains provider slugs, not URLs, and a single full slug pins one endpoint. Multiple explicit slugs intentionally allow any endpoint in that list; `allow_fallbacks` must remain false
+
+The gateway merges its policy into harmless caller `extra_body` fields and verifies it again at deployment dispatch. Caller `provider`, `models`, `route`, fallback controls, nested body overrides and mock responses are rejected for policy-controlled offerings, even through aliases. Caller deployment selectors are rejected throughout external mode. Policy-controlled requests disable LiteLLM model-group fallbacks as well as OpenRouter provider fallback. Unavailable endpoints fail instead of serving a different offering. Retries may still contact the same pinned endpoint
+
+Policy-controlled requests disable response-cache reads and writes, overriding caller cache settings. Existing response-cache keys do not reliably separate provider endpoints; cached output from another endpoint must not satisfy a pinned request
+
+Chat Completions, native Responses and translated Anthropic Messages preserve the policy, including streaming. Other APIs are rejected for policy-controlled offerings. Batch execution remains unavailable throughout external mode. Offerings without policy retain existing provider-routing behavior, apart from the deployment-selector restriction
+
+AUTO still checks model membership, but a pinned endpoint does not inherit aggregate supplier or bundled model metadata. Only explicit `model_info` is advertised, with unknown limits omitted. Endpoint inventory polling is not added: verify and maintain those overrides separately. Policy edits change that offering's private deployment ID and publish atomically; requests already streaming retain their previous snapshot
+
 Native provider batch creation and uploads with purpose `batch` are rejected in external offering mode. Native batch records can select their own supplier models, which would bypass the configured offering catalog. Existing proxy configurations without external offerings retain native batch support.
 
 The optional bundled cost-map JSON-schema extension is deferred: its trusted-base guard validates PR artifacts with the base generator. The runtime metadata/configuration contract validates separate total/input/output limits and defaults independently, and unknown optional bundled catalog properties remain forward compatible.

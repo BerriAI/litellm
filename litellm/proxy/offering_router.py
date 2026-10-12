@@ -1,7 +1,7 @@
 from collections.abc import Callable, Generator, Mapping, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import Final, cast  # noqa: TID251  # native Router dynamic attribute dispatch
 
@@ -16,6 +16,7 @@ from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.common_utils.model_listing_utils import TeamModelNameTranslator, alias_target, caller_alias_maps
 from litellm.router import Router
 from litellm.router_utils.common_utils import resolve_model_group_alias
+from litellm.types.proxy.model_offerings import OpenRouterProviderPolicy
 from litellm.types.utils import CallTypes, CallTypesLiteral
 
 
@@ -26,6 +27,8 @@ class OfferingServingSnapshot:
     unavailable_models: Mapping[str, str]
     allowed_deployments: frozenset[str]
     allowed_deployment_ids: frozenset[str] = frozenset()
+    provider_policies: Mapping[str, OpenRouterProviderPolicy] = field(default_factory=lambda: MappingProxyType({}))
+    deployment_policies: Mapping[str, OpenRouterProviderPolicy] = field(default_factory=lambda: MappingProxyType({}))
 
 
 _PINNED_SNAPSHOT: Final[ContextVar[tuple[int, OfferingServingSnapshot] | None]] = ContextVar(
@@ -34,6 +37,35 @@ _PINNED_SNAPSHOT: Final[ContextVar[tuple[int, OfferingServingSnapshot] | None]] 
 _MODEL_MUTATIONS: Final = frozenset(("set_model_list", "add_deployment", "upsert_deployment", "delete_deployment"))
 _VIEW_MEMBERS: Final = frozenset(("publish_snapshot", "pin_snapshot", "serving_snapshot", "latest_snapshot"))
 _METADATA_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_POLICY_CALLS: Final = frozenset(("acompletion", "completion", "aresponses", "responses", "anthropic_messages"))
+_ROUTING_OVERRIDES: Final = frozenset(
+    (
+        "provider",
+        "models",
+        "route",
+        "fallbacks",
+        "default_fallbacks",
+        "context_window_fallbacks",
+        "content_policy_fallbacks",
+        "model_list",
+        "deployment_id",
+        "specific_deployment",
+        "model_id",
+        "disable_fallbacks",
+        "mock_response",
+        "mock_tool_calls",
+        "mock_timeout",
+        "mock_provider_error",
+    )
+)
+
+
+def _policy_override(data: Mapping[str, object]) -> bool:
+    extra_body: Final = data.get("extra_body")
+    return bool(_ROUTING_OVERRIDES.intersection(data)) or (
+        isinstance(extra_body, Mapping)
+        and bool((_ROUTING_OVERRIDES | frozenset(("model", "extra_body"))).intersection(extra_body))
+    )
 
 
 class OfferingRouterView(Router):
@@ -169,7 +201,7 @@ class OfferingAccessGuard(CustomLogger):
         cache: DualCache,
         data: Mapping[str, object],
         call_type: CallTypesLiteral,
-    ) -> Exception | None:
+    ) -> dict[str, object] | Exception | None:  # mutable-ok: CustomLogger requires a fresh dict for request replacement
         if call_type in ("acreate_batch", "create_batch") or (
             call_type in ("acreate_file", "create_file") and data.get("purpose") == "batch"
         ):
@@ -196,10 +228,17 @@ class OfferingAccessGuard(CustomLogger):
                 "extra_headers",
                 "headers",
                 "provider_specific_header",
+                "client",
             )
         ):
             return litellm.BadRequestError(
                 message="External offering mode does not accept caller-defined supplier connections",
+                model="",
+                llm_provider="",
+            )
+        if any(name in data for name in ("specific_deployment", "deployment_id", "model_id", "model_list")):
+            return litellm.BadRequestError(
+                message="External offering mode does not accept caller-defined deployment selection",
                 model="",
                 llm_provider="",
             )
@@ -209,7 +248,23 @@ class OfferingAccessGuard(CustomLogger):
         snapshot: Final = self.router.serving_snapshot()
         offering: Final = self._offering_name(model, user_api_key_dict)
         if offering in snapshot.available_models:
-            return None
+            policy: Final = snapshot.provider_policies.get(offering)
+            if policy is None:
+                return None
+            if call_type not in _POLICY_CALLS or _policy_override(data):
+                return litellm.BadRequestError(
+                    message="The offering provider policy does not accept caller routing overrides or this API",
+                    model=model,
+                    llm_provider="",
+                )
+            caller_body: Final = _METADATA_ADAPTER.validate_python(extra_body) if extra_body is not None else {}
+            return {
+                **data,
+                "extra_body": {**caller_body, "provider": dict(policy.request_body())},
+                "disable_fallbacks": True,
+                "caching": False,
+                "cache": {"no-cache": True, "no-store": True},
+            }
         reason: Final = snapshot.unavailable_models.get(offering)
         if reason is not None:
             return litellm.ServiceUnavailableError(
@@ -219,17 +274,11 @@ class OfferingAccessGuard(CustomLogger):
             message=f"Model '{model}' is not an enabled gateway offering", model=model, llm_provider=""
         )
 
-    async def async_pre_call_deployment_hook(self, kwargs: Mapping[str, object], call_type: CallTypes | None) -> None:
+    async def async_pre_call_deployment_hook(
+        self, kwargs: Mapping[str, object], call_type: CallTypes | None
+    ) -> dict[str, object] | None:  # mutable-ok: CustomLogger requires a fresh dict for request replacement
         model: Final = kwargs.get("model")
-        if not isinstance(model, str) or call_type not in (
-            CallTypes.acompletion,
-            CallTypes.completion,
-            CallTypes.aresponses,
-            CallTypes.responses,
-            CallTypes.anthropic_messages,
-            CallTypes.aembedding,
-            CallTypes.embedding,
-        ):
+        if not isinstance(model, str):
             return
         metadata: Final = _METADATA_ADAPTER.validate_python(
             kwargs.get("litellm_metadata") or kwargs.get("metadata") or {}
@@ -242,7 +291,38 @@ class OfferingAccessGuard(CustomLogger):
         )
         deployment_id: Final = model_info.get("id")
         snapshot: Final = self.router.serving_snapshot()
-        if model not in snapshot.allowed_deployments or deployment_id not in snapshot.allowed_deployment_ids:
+        policy: Final = snapshot.deployment_policies.get(deployment_id) if isinstance(deployment_id, str) else None
+        if policy is None and call_type not in (
+            CallTypes.acompletion,
+            CallTypes.completion,
+            CallTypes.aresponses,
+            CallTypes.responses,
+            CallTypes.anthropic_messages,
+            CallTypes.aembedding,
+            CallTypes.embedding,
+        ):
+            return
+        effective_model: Final = (
+            model if model in snapshot.allowed_deployments else f"{kwargs.get('custom_llm_provider')}/{model}"
+        )
+        if effective_model not in snapshot.allowed_deployments or deployment_id not in snapshot.allowed_deployment_ids:
             raise litellm.NotFoundError(
                 message="The requested deployment is not an enabled gateway offering", model=model, llm_provider=""
             )
+        if policy is None:
+            return
+        extra_body: Final = kwargs.get("extra_body")
+        if (
+            call_type is None
+            or call_type.value not in _POLICY_CALLS
+            or any(kwargs.get(name) is not None for name in ("provider", "models", "route"))
+            or not isinstance(extra_body, Mapping)
+            or extra_body.get("provider") != policy.request_body()
+            or any(name in extra_body for name in ("model", "models", "route", "extra_body"))
+        ):
+            raise litellm.BadRequestError(
+                message="The request does not preserve the configured offering provider policy",
+                model=model,
+                llm_provider="",
+            )
+        return {**kwargs, "caching": False, "cache": {"no-cache": True, "no-store": True}}

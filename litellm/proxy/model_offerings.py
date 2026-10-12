@@ -140,19 +140,38 @@ def _unavailable_reason(offering: ModelOffering, state: _ProviderState) -> str |
     return None
 
 
+def _deployment_id(offering: ModelOffering, connection: _ResolvedConnection) -> str:
+    identity: Final = (
+        offering.model_name,
+        connection.fingerprint,
+        offering.upstream_model,
+        connection.supplier_identity,
+    )
+    return (
+        "offering-"
+        + hashlib.sha256(
+            json.dumps(
+                identity + (offering.provider_policy.model_dump(mode="json"),)
+                if offering.provider_policy is not None
+                else identity
+            ).encode()
+        ).hexdigest()
+    )
+
+
 def _deployment(offering: ModelOffering, state: _ProviderState) -> Mapping[str, object]:
     connection: Final = state.connection
     reason: Final = _unavailable_reason(offering, state)
     supplier_info: Final[Mapping[str, object]] = (
         state.inventory.models.get(offering.upstream_model, {})
-        if offering.source == "auto" and state.inventory is not None
+        if offering.source == "auto" and state.inventory is not None and offering.provider_policy is None
         else {}
     )
     catalog: Final = GetModelCostMap.loaded_model_cost_map()
     bundled_info: Final = (
         catalog.get(f"{connection.provider}/{offering.upstream_model}")
         or (catalog.get(offering.upstream_model, {}) if connection.provider == "openai" else {})
-        if offering.source == "auto"
+        if offering.source == "auto" and offering.provider_policy is None
         else {}
     )
     bundled_metadata: Final = GatewayModelMetadata.model_validate(bundled_info).model_dump(
@@ -165,19 +184,17 @@ def _deployment(offering: ModelOffering, state: _ProviderState) -> Mapping[str, 
         **supplier_info,
         **offering.model_info.model_dump(mode="json", exclude_none=True),
     }
-    deployment_id: Final = (
-        "offering-"
-        + hashlib.sha256(
-            json.dumps(
-                (offering.model_name, connection.fingerprint, offering.upstream_model, connection.supplier_identity)
-            ).encode()
-        ).hexdigest()
-    )
+    deployment_id: Final = _deployment_id(offering, connection)
     return MappingProxyType(
         {
             "model_name": offering.model_name,
             "litellm_params": {
                 "model": f"{connection.provider}/{offering.upstream_model}",
+                **(
+                    {"extra_body": {"provider": dict(offering.provider_policy.request_body())}}
+                    if offering.provider_policy is not None
+                    else {}
+                ),
                 **({"api_base": connection.api_base} if connection.api_base is not None else {}),
                 **({"api_key": connection.api_key} if connection.api_key is not None else {}),
                 **(
@@ -293,7 +310,25 @@ class ModelOfferingsManager:
             if offering.model_name in available
         )
         snapshot: Final = OfferingServingSnapshot(
-            candidate, available, unavailable, allowed_deployments, frozenset(candidate.get_model_ids())
+            candidate,
+            available,
+            unavailable,
+            allowed_deployments,
+            frozenset(candidate.get_model_ids()),
+            MappingProxyType(
+                {
+                    offering.model_name: offering.provider_policy
+                    for offering in loaded.config.offerings
+                    if offering.model_name in available and offering.provider_policy is not None
+                }
+            ),
+            MappingProxyType(
+                {
+                    _deployment_id(offering, providers[offering.provider].connection): offering.provider_policy
+                    for offering in loaded.config.offerings
+                    if offering.model_name in available and offering.provider_policy is not None
+                }
+            ),
         )
         self.config = loaded.config
         self.config_fingerprint = loaded.fingerprint
