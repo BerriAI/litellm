@@ -8079,7 +8079,9 @@ class Router:
             healthy_ids: Final = _extract_deployment_ids(healthy_deployments)
             remaining: Final = healthy_ids - frozenset(skipped)
             if not remaining:
-                verbose_router_logger.debug("Skip set would empty virtual model candidates, resetting for single-member retry")
+                verbose_router_logger.debug(
+                    "Skip set would empty virtual model candidates, resetting for single-member retry"
+                )
                 return ()
 
         verbose_router_logger.debug(
