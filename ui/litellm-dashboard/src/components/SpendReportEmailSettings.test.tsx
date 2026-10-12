@@ -460,6 +460,238 @@ describe("SpendReportEmailSettings", () => {
     });
   });
 
+  it("allows editing alert fields and toggling enabled", async () => {
+    vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
+      values: {
+        alerts: [
+          {
+            id: "edit-alert",
+            name: "Original Name",
+            enabled: true,
+            frequency: "daily",
+            send_time: "09:00",
+            recipient_emails: ["original@example.com"],
+            group_by: ["team"],
+            team_id: null,
+          },
+        ],
+      },
+      field_schema: {},
+    });
+    vi.mocked(networking.updateSpendReportEmailSettings).mockResolvedValue({});
+
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Original Name")).toBeInTheDocument();
+    });
+
+    const nameInput = screen.getByDisplayValue("Original Name");
+    fireEvent.change(nameInput, { target: { value: "Updated Name" } });
+
+    const timeInput = screen.getByDisplayValue("09:00");
+    fireEvent.change(timeInput, { target: { value: "10:30" } });
+
+    const recipientsInput = screen.getByDisplayValue("original@example.com");
+    fireEvent.change(recipientsInput, { target: { value: "updated@example.com, second@example.com" } });
+
+    const switchEl = screen.getByRole("switch");
+    fireEvent.click(switchEl);
+
+    const saveButton = screen.getByRole("button", { name: "Save Spend Report Settings" });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(networking.updateSpendReportEmailSettings).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          alerts: expect.arrayContaining([
+            expect.objectContaining({
+              name: "Updated Name",
+              send_time: "10:30",
+              recipient_emails: ["updated@example.com", "second@example.com"],
+              enabled: false,
+            }),
+          ]),
+        }),
+      );
+    });
+  });
+
+  it("allows toggling group by checkboxes", async () => {
+    vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
+      values: {
+        alerts: [
+          {
+            id: "group-alert",
+            name: "Group Alert",
+            enabled: true,
+            frequency: "daily",
+            send_time: "09:00",
+            recipient_emails: ["group@example.com"],
+            group_by: ["team"],
+            team_id: null,
+          },
+        ],
+      },
+      field_schema: {},
+    });
+    vi.mocked(networking.updateSpendReportEmailSettings).mockResolvedValue({});
+
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Group Alert")).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText("Team + Keys"));
+
+    const saveButton = screen.getByRole("button", { name: "Save Spend Report Settings" });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(networking.updateSpendReportEmailSettings).toHaveBeenCalledWith(
+        "test-token",
+        expect.objectContaining({
+          alerts: expect.arrayContaining([
+            expect.objectContaining({
+              group_by: expect.arrayContaining(["team", "team_key"]),
+            }),
+          ]),
+        }),
+      );
+    });
+  });
+
+  it("prevents sending test report when recipient email is empty", async () => {
+    vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
+      values: {
+        alerts: [
+          {
+            id: "empty-recipients-alert",
+            name: "Empty Recipients Alert",
+            enabled: true,
+            frequency: "daily",
+            send_time: "09:00",
+            recipient_emails: [],
+            group_by: ["team"],
+            team_id: null,
+          },
+        ],
+      },
+      field_schema: {},
+    });
+
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Empty Recipients Alert")).toBeInTheDocument();
+    });
+
+    const testButton = screen.getByRole("button", { name: "Send Test Report Now" });
+    fireEvent.click(testButton);
+
+    expect(networking.sendSpendReportEmailTest).not.toHaveBeenCalled();
+  });
+
+  it("handles error when saving settings fails", async () => {
+    vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
+      values: {
+        alerts: [
+          {
+            id: "fail-save-alert",
+            name: "Fail Save Alert",
+            enabled: true,
+            frequency: "daily",
+            send_time: "09:00",
+            recipient_emails: ["test@example.com"],
+            group_by: ["team"],
+            team_id: null,
+          },
+        ],
+      },
+      field_schema: {},
+    });
+    vi.mocked(networking.updateSpendReportEmailSettings).mockRejectedValue(new Error("Network error"));
+
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Fail Save Alert")).toBeInTheDocument();
+    });
+
+    const saveButton = screen.getByRole("button", { name: "Save Spend Report Settings" });
+    fireEvent.click(saveButton);
+
+    await waitFor(() => {
+      expect(networking.updateSpendReportEmailSettings).toHaveBeenCalled();
+    });
+  });
+
+  it("handles error when sending test report fails", async () => {
+    vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
+      values: {
+        alerts: [
+          {
+            id: "fail-send-alert",
+            name: "Fail Send Alert",
+            enabled: true,
+            frequency: "daily",
+            send_time: "09:00",
+            recipient_emails: ["test@example.com"],
+            group_by: ["team"],
+            team_id: null,
+          },
+        ],
+      },
+      field_schema: {},
+    });
+    vi.mocked(networking.sendSpendReportEmailTest).mockRejectedValue(new Error("SMTP failure"));
+
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Fail Send Alert")).toBeInTheDocument();
+    });
+
+    const testButton = screen.getByRole("button", { name: "Send Test Report Now" });
+    fireEvent.click(testButton);
+
+    await waitFor(() => {
+      expect(networking.sendSpendReportEmailTest).toHaveBeenCalled();
+    });
+  });
+
+  it("loads available teams from API with object format", async () => {
+    vi.mocked(networking.teamListCall).mockResolvedValue({
+      teams: [{ team_id: "team-remote", team_alias: "Remote Team" } as any],
+    });
+    vi.mocked(networking.getSpendReportEmailSettings).mockResolvedValue({
+      values: {
+        alerts: [
+          {
+            id: "team-alert",
+            name: "Team Alert",
+            enabled: true,
+            frequency: "daily",
+            send_time: "09:00",
+            recipient_emails: ["team@example.com"],
+            group_by: ["team"],
+            team_id: "team-remote",
+          },
+        ],
+      },
+      field_schema: {},
+    });
+
+    renderWithProviders(<SpendReportEmailSettings accessToken="test-token" defaultExpanded />);
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue("Team Alert")).toBeInTheDocument();
+      expect(screen.getByText("Team: Remote Team")).toBeInTheDocument();
+    });
+  });
+
   it("renders null for non-proxy-admin users", () => {
     const { container } = renderWithProviders(
       <SpendReportEmailSettings accessToken="test-token" userRole="regular_user" defaultExpanded />,
