@@ -3013,7 +3013,7 @@ def test_is_gemini_3_or_newer():
     ],
 )
 def test_gemini_3_reasoning_effort_maps_to_thinking_level(model: str):
-    """Test that reasoning_effort maps to thinkingLevel and default temperature=1.0"""
+    """Test that reasoning_effort maps to thinkingLevel and no temperature is injected"""
     from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         VertexGeminiConfig,
