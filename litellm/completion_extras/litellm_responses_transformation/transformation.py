@@ -2,6 +2,7 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
+import hashlib
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
@@ -492,6 +493,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Unknown or unsupported type
         return None, index
 
+    @staticmethod
+    def _normalize_tool_call_id(tool_call_id: str | None) -> str | None:
+        if tool_call_id is None:
+            return None
+        if len(tool_call_id) <= 64:
+            return tool_call_id
+        prefix: Final = tool_call_id[:31]
+        digest: Final = hashlib.sha256(tool_call_id.encode("utf-8")).hexdigest()[:32]
+        return f"{prefix}_{digest}"
+
     def convert_chat_completion_messages_to_responses_api(
         self,
         messages: list["AllMessageValues"],
@@ -522,6 +533,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             if isinstance(tool_call, dict)
             and not tool_call.get("function")
             and isinstance(tool_call.get("custom"), dict)
+            and "id" in tool_call
         )
 
         leading_system_count: Final = next(
@@ -579,7 +591,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     input_items.append(
                         ResponseCustomToolCallOutputParam(
                             type="custom_tool_call_output",
-                            call_id=tool_call_id,
+                            call_id=(
+                                self._normalize_tool_call_id(f"{tool_call_id}") or ""
+                                if tool_call_id is not None
+                                else ""
+                            ),
                             output=content if isinstance(content, str) else tool_output,
                         )
                     )
@@ -587,7 +603,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     input_items.append(
                         FunctionCallOutput(
                             type="function_call_output",
-                            call_id=tool_call_id,
+                            call_id=(
+                                self._normalize_tool_call_id(f"{tool_call_id}") if tool_call_id is not None else None
+                            ),
                             output=tool_output,
                         )
                     )
@@ -609,7 +627,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                     if function:
                         input_tool_call: dict[str, object] = {
                             "type": "function_call",
-                            "call_id": tool_call["id"],
+                            "call_id": (
+                                self._normalize_tool_call_id(f"{tool_call['id']}")
+                                if "id" in tool_call and tool_call["id"] is not None
+                                else None
+                            ),
                         }
                         if "name" in function:
                             input_tool_call["name"] = function["name"]
@@ -620,7 +642,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         input_items.append(
                             ResponseCustomToolCallParam(
                                 type="custom_tool_call",
-                                call_id=tool_call["id"],
+                                call_id=(
+                                    self._normalize_tool_call_id(f"{tool_call['id']}") or ""
+                                    if "id" in tool_call and tool_call["id"] is not None
+                                    else ""
+                                ),
                                 name=custom.get("name", ""),
                                 input=custom.get("input", ""),
                             )
