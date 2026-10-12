@@ -52,6 +52,7 @@ def _new_cache_store() -> _CacheStore:
 _EXPLICIT_CACHE_ID_CACHE: Final[_CacheStore] = _new_cache_store()
 _CACHE_LOCK: Final = threading.Lock()
 _CACHE_KEY_SECRET: Final = secrets.token_bytes(32)
+_CREDENTIAL_KDF_ITERATIONS: Final = 10_000
 
 _RFC3339_RE: Final = re.compile(r"^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})(?:\.(\d+))?(Z|[+-]\d{2}:?\d{2})$")
 
@@ -115,7 +116,9 @@ def make_cache_id_key(
         },
         sort_keys=True,
     )
-    auth_id: Final = hashlib.blake2b(credentials.encode(), key=_CACHE_KEY_SECRET, digest_size=32).hexdigest()
+    auth_id: Final = hashlib.pbkdf2_hmac(
+        "sha256", credentials.encode(), _CACHE_KEY_SECRET, _CREDENTIAL_KDF_ITERATIONS, dklen=32
+    ).hex()
     return "|".join(
         (
             custom_llm_provider,
