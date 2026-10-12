@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import {
   Combobox,
   ComboboxChip,
@@ -20,6 +20,7 @@ export interface MultiSelectOption {
   value: string;
   description?: string;
   disabled?: boolean;
+  icon?: ReactNode;
 }
 
 interface MultiSelectProps {
@@ -114,6 +115,7 @@ export function MultiSelect({
             <>
               {selected.map((option) => (
                 <ComboboxChip key={option.value} aria-label={option.label}>
+                  {option.icon}
                   {option.label}
                 </ComboboxChip>
               ))}
@@ -133,6 +135,7 @@ export function MultiSelect({
         <ComboboxList>
           {(option: MultiSelectOption) => (
             <ComboboxItem key={option.value} value={option} disabled={option.disabled}>
+              {option.icon}
               <span className="min-w-0">
                 <span className="block truncate">{option.label}</span>
                 {option.description && (

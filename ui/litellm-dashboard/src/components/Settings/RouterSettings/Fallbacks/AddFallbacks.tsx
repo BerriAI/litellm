@@ -12,6 +12,7 @@ import { fetchAvailableModels, ModelGroup } from "@/components/llm_calls/fetch_m
 import { AddFallbacksModal } from "./AddFallbacksModal";
 import { FallbackGroup } from "./FallbackGroupConfig";
 import { FallbackSelectionForm } from "./FallbackSelectionForm";
+import { buildFallbackEntries } from "./fallbackModels";
 
 export type FallbackEntry = { [modelName: string]: string[] };
 export type Fallbacks = FallbackEntry[];
@@ -27,6 +28,8 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
   const [modelInfo, setModelInfo] = useState<ModelGroup[]>([]);
   const [modalKey, setModalKey] = useState(0); // Key to force remount of form when modal opens
   const [isSaving, setIsSaving] = useState(false);
+  const [isLoadingModels, setIsLoadingModels] = useState(false);
+  const [modelError, setModelError] = useState(false);
   const [groups, setGroups] = useState<FallbackGroup[]>([
     {
       id: "1",
@@ -51,11 +54,16 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
 
   useEffect(() => {
     const loadModels = async () => {
+      setIsLoadingModels(true);
+      setModelError(false);
       try {
         const uniqueModels = await fetchAvailableModels(accessToken);
         setModelInfo(uniqueModels);
       } catch (error) {
+        setModelError(true);
         console.error("Error fetching model info for fallbacks:", error);
+      } finally {
+        setIsLoadingModels(false);
       }
     };
     if (isModalVisible) {
@@ -64,6 +72,8 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
   }, [accessToken, isModalVisible]);
 
   const availableModels = Array.from(new Set(modelInfo.map((option) => option.model_group))).sort();
+  const modelsUnavailable = isLoadingModels || modelError;
+  const cannotSave = groups.length === 0 || isSaving || modelsUnavailable;
 
   const handleCancel = () => {
     setIsModalVisible(false);
@@ -78,30 +88,20 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
   };
 
   const handleSaveAll = async () => {
-    // Validation
-    const invalidGroups = groups.filter((g) => !g.primaryModel || g.fallbackModels.length === 0);
-    if (invalidGroups.length > 0) {
-      toast.error(`Please complete configuration for all groups. ${invalidGroups.length} group(s) incomplete.`);
+    const result = buildFallbackEntries(groups, modelInfo, value || []);
+    if (result.error !== undefined) {
+      toast.error(result.error);
       return;
     }
 
-    // Create fallback objects in the format expected by the API
-    const newFallbacks = groups.map((g) => ({
-      [g.primaryModel!]: g.fallbackModels,
-    }));
-
-    // Get current fallbacks from form value, or an empty array if it's null/undefined
-    const currentFallbacks = value || [];
-
-    // Add new fallbacks to the current fallbacks
-    const updatedFallbacks = [...currentFallbacks, ...newFallbacks];
+    const updatedFallbacks = [...(value || []), ...result.entries];
 
     // Call onChange to update the form value and wait for it to complete
     if (onChange) {
       setIsSaving(true);
       try {
         await onChange(updatedFallbacks);
-        toast.success(`${groups.length} fallback configuration(s) added successfully!`);
+        toast.success(`${result.entries.length} fallback configuration(s) added successfully!`);
         handleCancel();
       } catch (error) {
         // Error handling is done in handleFallbacksChange, so we don't need to show another notification here
@@ -121,11 +121,14 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
         Add Fallbacks
       </Button>
       <AddFallbacksModal open={isModalVisible} onCancel={handleCancel}>
+        {isLoadingModels && <p role="status">Loading models...</p>}
+        {modelError && <p role="alert">Could not load models. Close and reopen this dialog to retry.</p>}
         <FallbackSelectionForm
           key={modalKey}
           groups={groups}
           onGroupsChange={setGroups}
           availableModels={availableModels}
+          modelInfo={modelInfo}
           maxFallbacks={10}
           maxGroups={5}
         />
@@ -135,7 +138,7 @@ export default function AddFallbacks({ accessToken, value = [], onChange }: AddF
             <Button variant="outline" onClick={handleCancel} disabled={isSaving}>
               Cancel
             </Button>
-            <Button variant="outline" onClick={handleSaveAll} disabled={groups.length === 0 || isSaving}>
+            <Button variant="outline" onClick={handleSaveAll} disabled={cannotSave}>
               {isSaving && <UiLoadingSpinner className="size-4" />}
               {isSaving ? "Saving Configuration..." : "Save All Configurations"}
             </Button>

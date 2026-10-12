@@ -7,10 +7,16 @@ import { MultiSelect } from "@/components/shared/MultiSelect";
 import { SearchSelect } from "@/components/shared/SearchSelect";
 import { AlertCircle, ArrowDown, X } from "lucide-react";
 import React, { useId } from "react";
+import type { ModelGroup } from "@/components/llm_calls/fetch_models";
+import { ProviderLogo } from "@/components/molecules/models/ProviderLogo";
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
+import { toast } from "@/lib/toast";
+import { primaryModels, providerModels } from "./fallbackModels";
 
 export interface FallbackGroup {
   id: string;
   primaryModel: string | null;
+  primaryProvider?: string;
   fallbackModels: string[];
 }
 
@@ -18,6 +24,7 @@ interface FallbackGroupConfigProps {
   group: FallbackGroup;
   onChange: (updatedGroup: FallbackGroup) => void;
   availableModels: string[];
+  modelInfo?: ModelGroup[];
   maxFallbacks: number;
   disablePrimaryModel?: boolean;
 }
@@ -26,28 +33,77 @@ export function FallbackGroupConfig({
   group,
   onChange,
   availableModels,
+  modelInfo = [],
   maxFallbacks,
   disablePrimaryModel = false,
 }: FallbackGroupConfigProps) {
-  // Filter available options for fallbacks (exclude primary only, allow already selected to be shown for deselection)
-  const availableFallbackOptions = availableModels.filter((m) => m !== group.primaryModel);
+  const primaries = primaryModels(group, modelInfo);
+  const hasPrimary = primaries.length > 0;
+  const providers = [...new Set(modelInfo.flatMap((model) => model.providers ?? []))].sort();
+  const modelIcon = (model: string) => (
+    <span className="inline-flex shrink-0 gap-1">
+      {(modelInfo.find((info) => info.model_group === model)?.providers ?? []).map((provider) => (
+        <ProviderLogo key={provider} provider={provider} />
+      ))}
+    </span>
+  );
+  const modelNames = [
+    ...new Set([...availableModels, ...group.fallbackModels, ...(group.primaryModel ? [group.primaryModel] : [])]),
+  ];
+  const modelOptions = modelNames.map((model) => ({
+    value: JSON.stringify(["model", model]),
+    label: model,
+    models: [model],
+    provider: undefined as string | undefined,
+    icon: modelIcon(model),
+  }));
+  const providerOptions = providers
+    .map((provider) => ({
+      value: JSON.stringify(["provider", provider]),
+      label: `All ${getProviderLogoAndName(provider).displayName} Models`,
+      models: providerModels(modelInfo, provider),
+      provider,
+      icon: <ProviderLogo provider={provider} />,
+    }))
+    .filter((option) => option.models.length > 0);
+  const primaryOptions = [...providerOptions, ...modelOptions];
+  const fallbackOptions = primaryOptions
+    .map((option) => ({
+      ...option,
+      models: option.models.filter((model) => !primaries.includes(model)),
+    }))
+    .filter((option) => option.models.length > 0);
 
   const handlePrimaryChange = (value: string | null) => {
-    const newFallbacks = group.fallbackModels.filter((model) => model !== value);
-    onChange({
+    const selected = primaryOptions.find((option) => option.value === value);
+    const newFallbacks = group.fallbackModels.filter((model) => !selected?.models.includes(model));
+    const updatedGroup = {
       ...group,
-      primaryModel: value,
+      primaryModel: selected?.provider ? null : selected?.models[0] ?? null,
+      primaryProvider: selected?.provider,
       fallbackModels: newFallbacks,
-    });
+    };
+    onChange(updatedGroup);
   };
 
   const handleFallbackSelect = (values: string[]) => {
-    // Limit to maxFallbacks
-    const limitedValues = values.slice(0, maxFallbacks);
+    const selected = [
+      ...new Set(
+        values.flatMap(
+          (value) =>
+            fallbackOptions.find((option) => option.value === value)?.models ??
+            group.fallbackModels.filter((model) => JSON.stringify(["model", model]) === value),
+        ),
+      ),
+    ];
+    if (selected.length > maxFallbacks) {
+      toast.error(`This selection contains ${selected.length} models. Choose at most ${maxFallbacks}.`);
+      return;
+    }
 
     onChange({
       ...group,
-      fallbackModels: limitedValues,
+      fallbackModels: selected,
     });
   };
 
@@ -61,6 +117,22 @@ export function FallbackGroupConfig({
 
   const canAddMoreFallbacks = group.fallbackModels.length < maxFallbacks;
   const primaryModelInputId = useId();
+  const fallbackInputId = useId();
+
+  const moveFallback = (index: number, direction: number) => {
+    const target = index + direction;
+    onChange({
+      ...group,
+      fallbackModels: group.fallbackModels.map((model, position) => {
+        if (position === target) return group.fallbackModels[index];
+        return position === index ? group.fallbackModels[target] : model;
+      }),
+    });
+  };
+  const selectedModelValue = group.primaryModel ? JSON.stringify(["model", group.primaryModel]) : null;
+  const selectedPrimaryValue = group.primaryProvider
+    ? JSON.stringify(["provider", group.primaryProvider])
+    : selectedModelValue;
 
   return (
     <div className="flex flex-col gap-8 py-4">
@@ -71,15 +143,38 @@ export function FallbackGroupConfig({
         </label>
         <SearchSelect
           inputId={primaryModelInputId}
-          options={availableModels.map((m) => ({ label: m, value: m }))}
-          value={group.primaryModel}
+          options={
+            disablePrimaryModel
+              ? modelOptions
+              : primaryOptions.map((option) => ({
+                  ...option,
+                  sublabel: option.provider ? `${option.models.length} currently configured models` : undefined,
+                }))
+          }
+          value={selectedPrimaryValue}
           onValueChange={handlePrimaryChange}
           placeholder="Select primary model"
           emptyText="No models found"
           disabled={disablePrimaryModel}
           className="h-12"
         />
-        {!disablePrimaryModel && !group.primaryModel && (
+        {group.primaryProvider && (
+          <div className="mt-3 space-y-2 text-sm">
+            <p>
+              Applies to {primaries.length} currently configured models. Newly added models and wildcard routes are not
+              included.
+            </p>
+            <ul aria-label="Primary models" className="flex flex-wrap gap-2">
+              {primaries.map((model) => (
+                <li key={model} className="inline-flex items-center gap-2 rounded border px-2 py-1">
+                  {modelIcon(model)}
+                  {model}
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
+        {!disablePrimaryModel && !hasPrimary && (
           <div className="mt-2 flex items-center gap-2 text-warning text-xs bg-warning/10 p-2 rounded-sm">
             <AlertCircle className="w-4 h-4" />
             <span>Select a model to begin configuring fallbacks</span>
@@ -96,10 +191,8 @@ export function FallbackGroupConfig({
       </div>
 
       {/* Fallback Models Section */}
-      <div
-        className={`transition-opacity duration-300 ${!group.primaryModel ? "opacity-50 pointer-events-none" : "opacity-100"}`}
-      >
-        <label className="block text-sm font-semibold text-foreground mb-2">
+      <div className={`transition-opacity duration-300 ${!hasPrimary ? "opacity-50" : "opacity-100"}`}>
+        <label htmlFor={fallbackInputId} className="block text-sm font-semibold text-foreground mb-2">
           Fallback Chain <span className="text-destructive">*</span>
           <span className="text-xs text-muted-foreground font-normal ml-2">
             (Max {maxFallbacks} fallbacks at a time)
@@ -110,19 +203,25 @@ export function FallbackGroupConfig({
           {/* Add Fallback Input */}
           <div className="mb-4">
             <MultiSelect
-              options={availableFallbackOptions.map((m) => ({ label: m, value: m }))}
-              value={group.fallbackModels}
+              id={fallbackInputId}
+              options={fallbackOptions.map((option) => ({
+                ...option,
+                description: option.provider
+                  ? `${option.models.length} configured models, added alphabetically`
+                  : undefined,
+              }))}
+              value={group.fallbackModels.map((model) => JSON.stringify(["model", model]))}
               onValueChange={handleFallbackSelect}
               placeholder={
                 canAddMoreFallbacks ? "Select fallback models to add..." : `Maximum ${maxFallbacks} fallbacks reached`
               }
               emptyText="No models found"
-              disabled={!group.primaryModel}
+              disabled={!hasPrimary}
               className="w-full"
             />
             <p className="text-xs text-muted-foreground mt-1 ml-1">
               {canAddMoreFallbacks
-                ? `Search and select multiple models. Selected models will appear below in order. (${group.fallbackModels.length}/${maxFallbacks} used)`
+                ? `Select models or a provider. Review and reorder the chain below. (${group.fallbackModels.length}/${maxFallbacks} used)`
                 : `Maximum ${maxFallbacks} fallbacks reached. Remove some to add more.`}
             </p>
           </div>
@@ -146,18 +245,41 @@ export function FallbackGroupConfig({
                         <span className="text-xs font-bold">{index + 1}</span>
                       </div>
                       <div>
-                        <span className="font-medium text-foreground">{modelValue}</span>
+                        <span className="inline-flex items-center gap-2 font-medium text-foreground">
+                          {modelIcon(modelValue)}
+                          {modelValue}
+                        </span>
                       </div>
                     </div>
 
-                    <button
-                      type="button"
-                      aria-label={`Remove ${modelValue}`}
-                      onClick={() => removeFallback(index)}
-                      className="opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive p-1"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        disabled={index === 0}
+                        aria-label={`Move ${modelValue} earlier`}
+                        onClick={() => moveFallback(index, -1)}
+                        className="p-1 disabled:opacity-30"
+                      >
+                        <ArrowDown className="h-4 w-4 rotate-180" />
+                      </button>
+                      <button
+                        type="button"
+                        disabled={index === group.fallbackModels.length - 1}
+                        aria-label={`Move ${modelValue} later`}
+                        onClick={() => moveFallback(index, 1)}
+                        className="p-1 disabled:opacity-30"
+                      >
+                        <ArrowDown className="h-4 w-4" />
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Remove ${modelValue}`}
+                        onClick={() => removeFallback(index)}
+                        className="text-muted-foreground hover:text-destructive p-1"
+                      >
+                        <X className="w-4 h-4" />
+                      </button>
+                    </div>
                   </li>
                 ))}
               </ol>

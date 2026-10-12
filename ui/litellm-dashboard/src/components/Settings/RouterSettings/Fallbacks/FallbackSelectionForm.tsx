@@ -10,11 +10,14 @@ import { Plus, X } from "lucide-react";
 import React, { useEffect, useState } from "react";
 import { toast } from "@/lib/toast";
 import { FallbackGroup, FallbackGroupConfig } from "./FallbackGroupConfig";
+import type { ModelGroup } from "@/components/llm_calls/fetch_models";
+import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 
 interface FallbackSelectionFormProps {
   groups: FallbackGroup[];
   onGroupsChange: (groups: FallbackGroup[]) => void;
   availableModels: string[];
+  modelInfo?: ModelGroup[];
   maxFallbacks?: number;
   maxGroups?: number;
 }
@@ -23,6 +26,7 @@ export function FallbackSelectionForm({
   groups,
   onGroupsChange,
   availableModels,
+  modelInfo,
   maxFallbacks = 10,
   maxGroups = 5,
 }: FallbackSelectionFormProps) {
@@ -76,8 +80,10 @@ export function FallbackSelectionForm({
     onGroupsChange(newGroups);
   };
 
-  const groupLabel = (group: FallbackGroup, index: number) =>
-    group.primaryModel ? group.primaryModel : `Group ${index + 1}`;
+  const groupLabel = (group: FallbackGroup, index: number) => {
+    if (group.primaryProvider) return `All ${getProviderLogoAndName(group.primaryProvider).displayName} Models`;
+    return group.primaryModel || `Group ${index + 1}`;
+  };
 
   if (groups.length === 0) {
     return (
@@ -129,6 +135,7 @@ export function FallbackSelectionForm({
             group={group}
             onChange={handleGroupUpdate}
             availableModels={availableModels}
+            modelInfo={modelInfo}
             maxFallbacks={maxFallbacks}
           />
         </TabsContent>
