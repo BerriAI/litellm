@@ -1082,6 +1082,8 @@ class CustomStreamWrapper:
             return self._handle_special_delta_content(model_response)
         else:
             if hasattr(model_response, "usage"):
+                if self._should_forward_continuous_usage() and model_response.usage is not None:
+                    return model_response
                 self.chunks.append(model_response)
             return
 
