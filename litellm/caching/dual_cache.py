@@ -304,7 +304,7 @@ class DualCache(BaseCache):
             return await self.in_memory_cache.async_get_cache(key)
         try:
             redis_result: Final = await self.redis_cache.async_get_cache_or_raise(key)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # any Redis fault falls back to the local pin instead of failing the request
             log_redis_failure(
                 verbose_logger,
                 logging.ERROR,
@@ -767,7 +767,7 @@ class DualCache(BaseCache):
             return "refreshed" if memory_refreshed else "absent"
         try:
             redis_refreshed: Final = await self.redis_cache.async_refresh_ttl(key, ttl)
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001  # any Redis fault reports unavailable instead of failing the request
             log_redis_failure(
                 verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async_refresh_ttl", e, with_traceback=True
             )
