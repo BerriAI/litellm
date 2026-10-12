@@ -341,7 +341,7 @@ async def add_team_callbacks(
         # authenticated key holder could overwrite another team's logging
         # config (and read back the credentials they wrote).
         if not await get_team_access().allows(
-            user_api_key_dict, LiteLLM_TeamTable(**_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
+            user_api_key_dict, LiteLLM_TeamTable.model_validate(_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
         ):
             team_access_denied()
 
@@ -516,7 +516,7 @@ async def delete_team_callback(
         # deregister its callbacks, otherwise any authenticated key holder could
         # silence another team's observability integration.
         if not await get_team_access().allows(
-            user_api_key_dict, LiteLLM_TeamTable(**_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
+            user_api_key_dict, LiteLLM_TeamTable.model_validate(_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
         ):
             team_access_denied()
 
@@ -649,7 +649,7 @@ async def disable_team_logging(
         # team may disable its logging — otherwise any authenticated key
         # holder can silence audit logging for any team.
         if not await get_team_access().allows(
-            user_api_key_dict, LiteLLM_TeamTable(**_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
+            user_api_key_dict, LiteLLM_TeamTable.model_validate(_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
         ):
             team_access_denied()
 
@@ -790,7 +790,7 @@ async def get_team_callbacks(
         # (Langfuse / Langsmith / GCS). Only proxy admins / org admins /
         # team admins of THIS team may read them.
         if not await get_team_access().allows(
-            user_api_key_dict, LiteLLM_TeamTable(**_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
+            user_api_key_dict, LiteLLM_TeamTable.model_validate(_existing_team.model_dump()), TEAM_OR_ORG_ADMIN
         ):
             team_access_denied()
 

@@ -1769,9 +1769,8 @@ async def new_team(
             )
 
         ## ADD TO TEAM TABLE
-        complete_team_data: Final = LiteLLM_TeamTable(
-            **data_json,
-            model_id=_model_id,
+        complete_team_data: Final = LiteLLM_TeamTable.model_validate(
+            {**data_json, "model_id": _model_id},
         )
 
         # Set Management Endpoint Metadata Fields
