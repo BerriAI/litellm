@@ -223,7 +223,7 @@ export default function ResponseView({
   if (!response) {
     return (
       <Card className="gap-0 py-0">
-        <CardHeader className="h-12 justify-center border-b">
+        <CardHeader className="flex min-h-12 flex-row items-center border-b px-4 py-2">
           <CardTitle className="text-sm font-medium">Response</CardTitle>
         </CardHeader>
         <CardContent className="flex min-h-[360px] flex-col items-center justify-center gap-3 p-4 text-center">
