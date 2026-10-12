@@ -1779,19 +1779,15 @@ async def test_fireworks_ai_bills_cached_input_tokens_at_the_cache_read_rate(
     uncached: Final = 100 * float(prices["input_cost_per_token"])
     cached: Final = 200 * float(prices["cache_read_input_token_cost"])
     recording_logger: Final = _RecordingLogger()
-    original_callbacks: Final = litellm.callbacks
-    litellm.callbacks = [recording_logger]
+    monkeypatch.setattr(litellm, "callbacks", [recording_logger])
 
-    try:
-        response: Final = await litellm.adecisions(
-            model=_FIREWORKS_MODEL,
-            input="The package arrived broken.",
-            questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
-            api_key="caller-key",
-        )
-        await _drain_logging_worker()
-    finally:
-        litellm.callbacks = original_callbacks
+    response: Final = await litellm.adecisions(
+        model=_FIREWORKS_MODEL,
+        input="The package arrived broken.",
+        questions=[{"type": "predicate", "name": "is_defect", "instructions": "Is this a defect?"}],
+        api_key="caller-key",
+    )
+    await _drain_logging_worker()
 
     assert cached > 0
     assert response.usage.input_tokens_details.cached_tokens == 200
