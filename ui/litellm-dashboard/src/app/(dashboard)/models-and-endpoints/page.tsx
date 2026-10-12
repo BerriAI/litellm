@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
-import { parseAsString, useQueryStates } from "nuqs";
+import { parseAsString, parseAsStringLiteral, useQueryStates } from "nuqs";
 import { useQueryClient } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
@@ -28,20 +28,27 @@ import PriceDataPanel from "@/app/(dashboard)/models-and-endpoints/panels/PriceD
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-type ModelTabSlug =
-  | "add"
-  | "auto-routers"
-  | "llm-credentials"
-  | "pass-through"
-  | "health"
-  | "retry-settings"
-  | "model-group-alias"
-  | "access-group-budgets"
-  | "price-data";
+const MODEL_TAB_SLUGS = [
+  "add",
+  "auto-routers",
+  "llm-credentials",
+  "pass-through",
+  "health",
+  "retry-settings",
+  "model-group-alias",
+  "access-group-budgets",
+  "price-data",
+] as const;
+
+type ModelTabSlug = (typeof MODEL_TAB_SLUGS)[number];
 
 const BASE_TAB_KEY = "all-models";
 
-const TAB_URL_PARAMS = { tab: parseAsString, provider: parseAsString, litellm_model: parseAsString };
+const TAB_URL_PARAMS = {
+  tab: parseAsStringLiteral(MODEL_TAB_SLUGS),
+  provider: parseAsString,
+  litellm_model: parseAsString,
+};
 
 const TAB_LABELS: Record<ModelTabSlug, string> = {
   add: "Add Model",
@@ -131,7 +138,11 @@ export default function ModelsAndEndpointsPage() {
   const activeKey = requestedTab !== null && visibleKeys.includes(requestedTab) ? requestedTab : BASE_TAB_KEY;
 
   const handleTabChange = (key: string) => {
-    void setTabParams({ tab: key === BASE_TAB_KEY ? null : key, provider: null, litellm_model: null });
+    void setTabParams({
+      tab: MODEL_TAB_SLUGS.find((slug) => slug === key) ?? null,
+      provider: null,
+      litellm_model: null,
+    });
   };
 
   const allModelsLabel = isAdmin ? "Deployed Models" : "Your Models";

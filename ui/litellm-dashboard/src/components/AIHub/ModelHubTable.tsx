@@ -59,6 +59,7 @@ interface ModelHubTableProps {
   premiumUser: boolean;
   userRole: string | null;
   canOpenPlayground: boolean;
+  canAddModels: boolean;
 }
 
 function isMCPHubVisibilityDisabled(isLoading: boolean, servers: readonly MCPServerData[] | null): boolean {
@@ -83,6 +84,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
   premiumUser,
   userRole,
   canOpenPlayground,
+  canAddModels,
 }) => {
   const syntaxTheme = useSyntaxTheme(prism);
   // Admin Viewer follows the read-parity rule: see the AI Hub catalog, but
@@ -526,7 +528,7 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({
                   </p>
                 </div>
 
-                {showDecisionGarden && <DecisionModelGarden canAddModels={canModify} />}
+                {showDecisionGarden && <DecisionModelGarden canAddModels={canModify && canAddModels} />}
               </TabsContent>
 
               {/* Agent Hub Tab */}

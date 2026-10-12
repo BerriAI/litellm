@@ -17,6 +17,7 @@ export default function ModelHubTablePage() {
       premiumUser={premiumUser}
       userRole={userRole}
       canOpenPlayground={!isViewOnly}
+      canAddModels={!isViewOnly}
     />
   );
 }

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { BookOpen, Plus, Sparkles } from "lucide-react";
 
 import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
+import { useProviderFields } from "@/app/(dashboard)/hooks/providers/useProviderFields";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { getProviderLogoAndName } from "@/components/provider_info_helpers";
 import { Button } from "@/components/ui/button";
@@ -61,7 +62,12 @@ interface DecisionModelGardenProps {
 
 const DecisionModelGarden: React.FC<DecisionModelGardenProps> = ({ canAddModels }) => {
   const { data: costMap } = useModelCostMap(true, true);
+  const { data: providerFields } = useProviderFields();
   const rows = useMemo(() => buildDecisionGarden(costMap), [costMap]);
+  const addableProviders = useMemo(
+    () => new Set((providerFields ?? []).map((info) => info.litellm_provider)),
+    [providerFields],
+  );
   const [showAll, setShowAll] = useState(false);
 
   if (rows.length === 0) {
@@ -97,7 +103,11 @@ const DecisionModelGarden: React.FC<DecisionModelGardenProps> = ({ canAddModels 
       </div>
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {visibleRows.map((row) => (
-          <DecisionModelCard key={row.model} row={row} canAddModels={canAddModels} />
+          <DecisionModelCard
+            key={row.model}
+            row={row}
+            canAddModels={canAddModels && addableProviders.has(row.provider)}
+          />
         ))}
       </div>
       {rows.length > PREVIEW_COUNT && (

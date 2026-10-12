@@ -25,6 +25,7 @@ vi.mock("@/components/networking", () => ({
   getUiSettings: vi.fn(),
   getClaudeCodePluginsList: vi.fn(() => Promise.resolve({ plugins: [] })),
   modelCostMap: vi.fn(() => Promise.resolve({})),
+  getProviderCreateMetadata: vi.fn(() => Promise.resolve([])),
 }));
 
 const GARDEN_COST_MAP = {
@@ -33,6 +34,10 @@ const GARDEN_COST_MAP = {
   "cloudflare/clef": { litellm_provider: "cloudflare", mode: "evaluation" },
   "claude-opus-4-8": { litellm_provider: "anthropic", mode: "chat" },
 };
+
+const ADDABLE_PROVIDER_FIELDS = [
+  { provider: "TypeSafe", provider_display_name: "TypeSafe", litellm_provider: "typesafe", credential_fields: [] },
+];
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({
@@ -132,6 +137,7 @@ describe("ModelHubTable", () => {
           premiumUser={false}
           userRole={null}
           canOpenPlayground={false}
+          canAddModels={false}
         />,
       );
 
@@ -172,6 +178,7 @@ describe("ModelHubTable", () => {
         premiumUser={false}
         userRole={null}
         canOpenPlayground
+        canAddModels
       />,
     );
 
@@ -190,7 +197,14 @@ describe("ModelHubTable", () => {
     });
 
     renderWithProviders(
-      <ModelHubTable accessToken={null} publicPage={false} premiumUser={false} userRole={null} canOpenPlayground />,
+      <ModelHubTable
+        accessToken={null}
+        publicPage={false}
+        premiumUser={false}
+        userRole={null}
+        canOpenPlayground
+        canAddModels
+      />,
     );
 
     expect(await screen.findByText("No models yet")).toBeInTheDocument();
@@ -224,6 +238,7 @@ describe("ModelHubTable", () => {
         premiumUser={false}
         userRole={null}
         canOpenPlayground={false}
+        canAddModels={false}
       />,
     );
 
@@ -257,6 +272,7 @@ describe("ModelHubTable", () => {
           premiumUser={false}
           userRole="Admin"
           canOpenPlayground={canOpenPlayground}
+          canAddModels
         />,
       );
       await user.click(await screen.findByRole("button", { name: model.model_group }));
@@ -301,10 +317,11 @@ describe("ModelHubTable", () => {
   describe("decision model garden", () => {
     const renderHub = async (
       models: { model_group: string; providers: string[]; mode: string }[],
-      userRole = "Admin",
+      { userRole = "Admin", canAddModels = true }: { userRole?: string; canAddModels?: boolean } = {},
     ) => {
       vi.mocked(networking.modelHubCall).mockResolvedValue({ data: models });
       vi.mocked(networking.modelCostMap).mockResolvedValue(GARDEN_COST_MAP);
+      vi.mocked(networking.getProviderCreateMetadata).mockResolvedValue(ADDABLE_PROVIDER_FIELDS);
       vi.mocked(networking.getConfigFieldSetting).mockResolvedValue({ field_value: false });
       vi.mocked(networking.getAgentsList).mockResolvedValue({ agents: [] });
       vi.mocked(networking.fetchMCPServers).mockResolvedValue([]);
@@ -318,6 +335,7 @@ describe("ModelHubTable", () => {
           premiumUser={false}
           userRole={userRole}
           canOpenPlayground
+          canAddModels={canAddModels}
         />,
       );
       await screen.findByText(/Showing \d+ of \d+ models/);
@@ -347,7 +365,7 @@ describe("ModelHubTable", () => {
         "href",
         "https://docs.litellm.ai/docs/decisions",
       );
-      expect(within(card).getByRole("link", { name: "Add model" })).toHaveAttribute(
+      expect(await within(card).findByRole("link", { name: "Add model" })).toHaveAttribute(
         "href",
         expect.stringMatching(/\/models-and-endpoints\?tab=add&provider=typesafe&litellm_model=typesafe%2Fjev-latest$/),
       );
@@ -391,12 +409,38 @@ describe("ModelHubTable", () => {
       expect(screen.getByRole("button", { name: "jev-latest" })).toBeInTheDocument();
     });
 
-    it("drops the Add Model link for a session that cannot add models", async () => {
-      await renderHub(chatOnly, "Admin Viewer");
+    it("drops the Add Model link for an admin session that cannot add models", async () => {
+      await renderHub(chatOnly, { canAddModels: false });
 
       const garden = await screen.findByTestId("decision-model-garden");
       expect(within(garden).queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
       expect(within(garden).getAllByRole("link", { name: "/v1/decisions docs" })).toHaveLength(2);
+    });
+
+    it("drops the Add Model link on a card whose provider the Add Model form cannot create", async () => {
+      await renderHub(chatOnly);
+
+      const garden = await screen.findByTestId("decision-model-garden");
+      const typesafeCard = within(garden).getByTestId("decision-model-card-typesafe/jev-latest");
+      const cloudflareCard = within(garden).getByTestId("decision-model-card-cloudflare/clef");
+      expect(await within(typesafeCard).findByRole("link", { name: "Add model" })).toBeInTheDocument();
+      expect(within(cloudflareCard).queryByRole("link", { name: "Add model" })).not.toBeInTheDocument();
+      expect(within(cloudflareCard).getByRole("link", { name: "/v1/decisions docs" })).toBeInTheDocument();
+    });
+
+    it("sorts the Mode column by the label it shows, placing decisions between chat and embedding", async () => {
+      const { user } = await renderHub([
+        { model_group: "text-embedding-4", providers: ["openai"], mode: "embedding" },
+        { model_group: "jev-latest", providers: ["typesafe"], mode: "evaluation" },
+        ...chatOnly,
+      ]);
+
+      await user.click(screen.getByTestId("sort-header-mode"));
+
+      const order = screen
+        .getAllByRole("button", { name: /^(claude-opus-4-8|jev-latest|text-embedding-4)$/ })
+        .map((button) => button.textContent);
+      expect(order).toEqual(["claude-opus-4-8", "jev-latest", "text-embedding-4"]);
     });
   });
 
@@ -419,6 +463,7 @@ describe("ModelHubTable", () => {
           premiumUser={false}
           userRole="Admin"
           canOpenPlayground
+          canAddModels
         />,
       );
       return { user, search: await screen.findByPlaceholderText("Search model names...") };
