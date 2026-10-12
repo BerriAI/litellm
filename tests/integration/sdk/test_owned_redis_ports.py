@@ -25,7 +25,20 @@ def test_owned_redis_moves_off_a_port_another_owned_redis_already_serves(tmp_pat
             assert second.server_pid != first.server_pid
             assert _redis_pid(second.host, second.port) == second.server_pid
             assert _redis_pid(first.host, first.port) == first.server_pid
+        assert not second.serves()
         assert first.serves()
+
+
+def test_owned_redis_restart_refuses_a_port_another_redis_took_while_it_was_down(tmp_path: Path) -> None:
+    with owned_redis(tmp_path / "first") as first:
+        first.stop()
+        with owned_redis(tmp_path / "squatter", lambda: first.port) as squatter:
+            with pytest.raises(
+                AssertionError, match=f"Another Redis already serves {re.escape(first.host)}:{first.port}"
+            ):
+                first.start()
+            assert first.process is None
+            assert _redis_pid(squatter.host, squatter.port) == squatter.server_pid
 
 
 def test_owned_redis_gives_up_with_the_last_cause_after_a_bounded_number_of_ports(tmp_path: Path) -> None:

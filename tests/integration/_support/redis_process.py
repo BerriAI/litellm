@@ -59,7 +59,11 @@ class OwnedRedis:
             return None
         return int(result.stdout)
 
-    def start(self) -> PortUnavailable | None:
+    def start(self) -> None:
+        unavailable: Final = self.try_start()
+        assert unavailable is None, unavailable.reason
+
+    def try_start(self) -> PortUnavailable | None:
         assert self.process is None
         if self.serves():
             return PortUnavailable(f"Another Redis already serves {self.host}:{self.port} before the owned one starts")
@@ -145,7 +149,7 @@ def _started(
 ) -> Iterator[OwnedRedis]:
     server: Final = build(choose_port())
     try:
-        unavailable: Final = server.start()
+        unavailable: Final = server.try_start()
         if unavailable is None:
             yield server
             return
