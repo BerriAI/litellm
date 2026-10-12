@@ -5443,6 +5443,28 @@ async def test_aresponses_streaming_iterator_falls_back_when_partial_usage_extra
     assert (usage.input_tokens, usage.output_tokens, usage.total_tokens) == (20, 15, 35)
 
 
+def test_extract_partial_responses_usage_best_effort_returns_none_on_error():
+    """The best-effort wrapper swallows extraction errors and reports unknown usage."""
+    src: Final = _make_responses_iterator()
+    with patch.object(
+        Router,
+        "_extract_partial_responses_usage",
+        side_effect=AttributeError("unexpected stream shape"),
+    ) as mock_extract:
+        assert Router._extract_partial_responses_usage_best_effort(src) is None
+    mock_extract.assert_called_once_with(src)
+
+
+def test_extract_partial_responses_usage_best_effort_passes_usage_through():
+    """When extraction succeeds, the wrapper returns the extracted usage unchanged."""
+    from litellm.types.llms.openai import ResponseAPIUsage
+
+    src: Final = _make_responses_iterator()
+    usage: Final = ResponseAPIUsage(input_tokens=3, output_tokens=4, total_tokens=7)
+    with patch.object(Router, "_extract_partial_responses_usage", return_value=usage):
+        assert Router._extract_partial_responses_usage_best_effort(src) is usage
+
+
 def _midstream_rate_limit_error():
     rate_limit_error = litellm.RateLimitError(
         message="vertex_ai_betaException - Resource exhausted.",
