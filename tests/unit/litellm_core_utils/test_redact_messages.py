@@ -30,6 +30,7 @@ from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
     perform_redaction,
     redact_streaming_responses_for_custom_logger,
+    redacted_litellm_params,
     redacted_standard_logging_payload,
     should_redact_message_logging,
 )
@@ -125,6 +126,7 @@ def _request_with_hidden_reasoning(secret: str) -> tuple[dict, dict]:
 def test_redaction_removes_reasoning_copied_into_hidden_params_and_request_body() -> None:
     secret: Final = "private-hidden-reasoning"
     params, hidden_params = _request_with_hidden_reasoning(secret)
+    params["litellm_metadata"] = copy.deepcopy(params["litellm_metadata"])
     snapshot: Final = copy.deepcopy(params)
     details: Final = {"litellm_params": params}
 
@@ -145,14 +147,26 @@ def test_redaction_removes_reasoning_copied_into_hidden_params_and_request_body(
 
 @pytest.mark.parametrize("channel", ["metadata", "litellm_metadata"])
 def test_router_usage_marker_written_after_redaction_stays_visible(channel: str) -> None:
-    params, _ = _request_with_hidden_reasoning("private-hidden-reasoning")
+    params, hidden_params = _request_with_hidden_reasoning("private-hidden-reasoning")
     params[channel] = copy.deepcopy(params[channel])
     details: Final = {"litellm_params": params}
 
     perform_redaction(details, None)
+    params[channel]["hidden_params"] = hidden_params
+    perform_redaction(details, None)
     params[channel][ROUTER_USAGE_COUNTED_TOKENS_METADATA_KEY] = 7
 
     assert get_counted_usage_tokens(details["litellm_params"]) == 7
+
+
+def test_shared_redacted_params_keep_metadata_dicts() -> None:
+    params, _ = _request_with_hidden_reasoning("private-hidden-reasoning")
+
+    redacted: Final = redacted_litellm_params(params, shared=True)
+
+    assert redacted["metadata"] is params["metadata"]
+    assert redacted["litellm_metadata"] is params["litellm_metadata"]
+    assert redacted["proxy_server_request"]["body"]["system"] == "kept-instructions"
 
 
 def test_per_callback_redaction_keeps_shared_request_body_for_other_readers() -> None:

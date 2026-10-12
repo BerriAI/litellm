@@ -281,7 +281,7 @@ def _redact_model_response_dict_choices(choices, redacted_str: str):
 
 def _hidden_params_without_provider_fields(hidden_params: object) -> Mapping[object, object] | None:
     """Copy of ``hidden_params`` with ``provider_specific_fields`` cleared, or None when it carries none."""
-    if not (isinstance(hidden_params, Mapping) and hidden_params.get("provider_specific_fields") is not None):
+    if not (isinstance(hidden_params, Mapping) and "provider_specific_fields" in hidden_params):
         return None
     return {**_REQUEST_BODY.validate_python(hidden_params), "provider_specific_fields": None}
 
@@ -351,26 +351,27 @@ def _redacted_proxy_request(
 
 
 def redacted_litellm_params(
-    params: Mapping[str, object], *, redact_content: bool = True, redact_instructions: bool = True
+    params: Mapping[str, object], *, redact_content: bool = True, shared: bool = False
 ) -> dict[str, object]:
     """
     Copy of litellm_params without classifier audit fields or baseline route request parameters.
-    redact_content also redacts the nested proxy request body and the provider-specific fields
-    copied into ``hidden_params``; redact_instructions also redacts the body's ``system`` and
-    ``instructions``.
+    redact_content also redacts the nested proxy request body and, unless shared, the body's
+    ``system`` and ``instructions`` and the provider-specific fields copied into metadata
+    ``hidden_params``. shared is the copy every logger reads: perform_redaction clears its metadata
+    ``hidden_params`` in place.
     """
     request: Final = params.get("proxy_server_request")
     return {
         **params,
         **{
-            key: _redacted_metadata(value, redact_content=redact_content)
+            key: _redacted_metadata(value, redact_content=redact_content and not shared)
             for key, value in params.items()
             if key in ("metadata", "litellm_metadata") and isinstance(value, Mapping)
         },
         **(
             {
                 "proxy_server_request": _redacted_proxy_request(
-                    request, redact_content=redact_content, redact_instructions=redact_instructions
+                    request, redact_content=redact_content, redact_instructions=not shared
                 )
             }
             if isinstance(request, Mapping)
@@ -395,7 +396,7 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
         if redact_streaming_responses:
             _clear_hidden_provider_fields(params)
         model_call_details["litellm_params"] = redacted_litellm_params(
-            params, redact_content=redact_streaming_responses, redact_instructions=False
+            params, redact_content=redact_streaming_responses, shared=True
         )
     model_call_details["messages"] = [{"role": "user", "content": REDACTED_BY_LITELLM}]
     model_call_details["prompt"] = ""
