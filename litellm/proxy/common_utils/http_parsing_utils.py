@@ -164,17 +164,26 @@ def coerce_numeric_form_fields(
     }
 
 
-_FORM_FALLBACK_ADAPTER: Final = TypeAdapter(list[object] | dict[str, object] | str)
+_FORM_LIST_ADAPTER: Final = TypeAdapter(list[object])
+_FORM_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object])
+_FORM_STRING_ADAPTER: Final = TypeAdapter(str)
 
 
 def _list_form_value(value: object) -> object:
     if not isinstance(value, str) or not value.strip():
         return value
     try:
-        decoded: Final = _FORM_FALLBACK_ADAPTER.validate_json(value)
+        return _FORM_LIST_ADAPTER.validate_json(value)
+    except ValidationError:
+        pass
+    try:
+        return [_FORM_OBJECT_ADAPTER.validate_json(value)]
+    except ValidationError:
+        pass
+    try:
+        return [_FORM_STRING_ADAPTER.validate_json(value)]
     except ValidationError:
         return [value]
-    return decoded if isinstance(decoded, list) else [decoded]
 
 
 def decode_json_list_form_fields(
