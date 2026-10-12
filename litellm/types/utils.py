@@ -160,6 +160,10 @@ class LiteLLMCommonStrings(Enum):
     llm_provider_not_provided = "Unmapped LLM provider for this endpoint. You passed model={model}, custom_llm_provider={custom_llm_provider}. Check supported provider and route: https://docs.litellm.ai/docs/providers"
 
 
+def is_decisions_model_mode(mode: str | None) -> bool:
+    return mode in ("decisions", "evaluation")
+
+
 SupportedCacheControls: Final = ["ttl", "s-maxage", "no-cache", "no-store"]
 
 
@@ -430,6 +434,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "audio_transcription",
             "audio_speech",
             "responses",
+            "decisions",
             "evaluation",
             "ocr",
             "realtime",
@@ -489,6 +494,8 @@ class CallTypes(str, Enum):
     asearch = "asearch"
     decisions = "decisions"
     adecisions = "adecisions"
+    systemone = "systemone"
+    asystemone = "asystemone"
     arealtime = "_arealtime"
     aresponses_websocket = "_aresponses_websocket"
     create_batch = "create_batch"
@@ -677,6 +684,8 @@ CallTypesLiteral = Literal[
     "asearch",
     "decisions",
     "adecisions",
+    "systemone",
+    "asystemone",
     "_arealtime",
     "_aresponses_websocket",
     "create_batch",
@@ -788,8 +797,8 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/v1/search": [CallTypes.asearch, CallTypes.search],
     "/decisions": [CallTypes.adecisions, CallTypes.decisions],
     "/v1/decisions": [CallTypes.adecisions, CallTypes.decisions],
-    "/systemone": [CallTypes.adecisions, CallTypes.decisions],
-    "/v1/systemone": [CallTypes.adecisions, CallTypes.decisions],
+    "/systemone": [CallTypes.asystemone, CallTypes.systemone],
+    "/v1/systemone": [CallTypes.asystemone, CallTypes.systemone],
     # Batches
     "/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
     "/v1/batches": [CallTypes.acreate_batch, CallTypes.create_batch],
@@ -3726,6 +3735,28 @@ ArizeOtlpProtocol = Literal["grpc", "http/protobuf"]
 ARIZE_OTLP_PROTOCOLS: Final[frozenset[str]] = frozenset(get_args(ArizeOtlpProtocol))
 
 
+CAPTURE_MESSAGE_CONTENT_VAR: Final = "capture_message_content"
+
+
+class CaptureMessageContent(str):
+    NO_CONTENT = "no_content"
+    SPAN_ONLY = "span_only"
+    EVENT_ONLY = "event_only"
+    SPAN_AND_EVENT = "span_and_event"
+
+
+# The values a team or key destination may set. OTel v2 writes content only to span attributes,
+# so the event modes stay global-only settings
+CAPTURE_MESSAGE_CONTENT_VALUES: Final[frozenset[str]] = frozenset(
+    {CaptureMessageContent.NO_CONTENT, CaptureMessageContent.SPAN_ONLY}
+)
+
+
+def captures_span_content(mode: str | None) -> bool:
+    """Whether a capture mode puts prompt and response content on spans"""
+    return mode in (CaptureMessageContent.SPAN_ONLY, CaptureMessageContent.SPAN_AND_EVENT)
+
+
 class StandardCallbackDynamicParams(TypedDict, total=False):
     # Langfuse dynamic params
     langfuse_public_key: str | None
@@ -4054,7 +4085,19 @@ ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
 
 anthropic_wif_litellm_params: Final = tuple(sorted(ANTHROPIC_WIF_KWARGS_KEYS))
 openai_wif_litellm_params: Final = tuple(sorted(OPENAI_WIF_KWARGS_KEYS))
-server_owned_wif_litellm_params: Final = anthropic_wif_litellm_params + openai_wif_litellm_params
+oauth_token_exchange_litellm_params: Final = (
+    "token_exchange_audience",
+    "token_exchange_endpoint",
+    "token_exchange_profile",
+    "token_exchange_scope",
+)
+github_copilot_oauth_litellm_params: Final = ("github_copilot_auth_type",)
+server_owned_wif_litellm_params: Final = (
+    anthropic_wif_litellm_params
+    + openai_wif_litellm_params
+    + oauth_token_exchange_litellm_params
+    + github_copilot_oauth_litellm_params
+)
 secret_bearing_wif_litellm_params: Final = tuple(sorted(WIF_SECRET_BEARING_KEYS))
 
 all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it
@@ -4190,6 +4233,7 @@ class LlmProviders(str, Enum):
     FRIENDLIAI = "friendliai"
     FEATHERLESS_AI = "featherless_ai"
     WATSONX = "watsonx"
+    SCALEDOWN = "scaledown"
     WATSONX_TEXT = "watsonx_text"
     TRITON = "triton"
     PREDIBASE = "predibase"
@@ -4250,6 +4294,7 @@ class LlmProviders(str, Enum):
     A2A_AGENT = "a2a_agent"
     LANGGRAPH = "langgraph"
     LANGFLOW = "langflow"
+    MICROSOFT_365_COPILOT = "microsoft_365_copilot"
     MINIMAX = "minimax"
     SYNTHETIC = "synthetic"
     APERTIS = "apertis"

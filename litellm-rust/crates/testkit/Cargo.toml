@@ -13,6 +13,7 @@ serde.workspace = true
 semver.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
+strum.workspace = true
 tar.workspace = true
 target-lexicon.workspace = true
 thiserror.workspace = true
