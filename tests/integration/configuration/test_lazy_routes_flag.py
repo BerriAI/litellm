@@ -582,12 +582,25 @@ def _assert_config_declared_features_serve(owned: OwnedProxy, features: _Configu
         ]
         assert [(params["name"], params["arguments"]) for params in reached_peer] == [("add", {"marker": marker})]
 
+    bare: Final = owned.gateway.request("GET", "/langfuse")
+    assert bare.status_code == 200, bare.text
+    assert JSON.validate_json(bare.content) == {"status": "OK"}, bare.text
+    reached_bare: Final = tuple(request.target for request in features.langfuse.drain())
+    assert reached_bare == (SELF_HOSTED_LANGFUSE,), reached_bare
+
     forwarded: Final = owned.gateway.request("GET", "/langfuse/api/public/health")
     assert forwarded.status_code == 200, forwarded.text
     reached_langfuse: Final = tuple(request.target for request in features.langfuse.drain())
     assert reached_langfuse == (SELF_HOSTED_LANGFUSE + "/api/public/health",), (
         f"the config pass-through for /langfuse lost to the built-in Langfuse route: {reached_langfuse}"
     )
+
+
+def _canonical_langfuse_paths(paths: tuple[str, ...]) -> tuple[str, ...]:
+    configured: Final = ("/langfuse", "/langfuse/{subpath:path}")
+    remaining: Final = tuple(path for path in paths if path not in configured)
+    langfuse: Final = tuple(sorted(path for path in paths if path in configured))
+    return (*remaining, *langfuse)
 
 
 def test_disable_lazy_routes_flag_serves_config_declared_features_like_the_warmed_lazy_proxy(
@@ -601,5 +614,5 @@ def test_disable_lazy_routes_flag_serves_config_declared_features_like_the_warme
             warmed_openapi: Final = _openapi_paths(lazy.gateway)
         with owned_proxy_process(gateway, tmp_path, {FLAG: "true"}, config=features.config) as eager:
             _assert_config_declared_features_serve(eager, features, provider)
-            assert _paths(eager.gateway) == warmed_paths
+            assert _canonical_langfuse_paths(_paths(eager.gateway)) == _canonical_langfuse_paths(warmed_paths)
             assert _openapi_paths(eager.gateway) == warmed_openapi

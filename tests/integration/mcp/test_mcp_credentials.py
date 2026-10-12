@@ -17,6 +17,7 @@ from integration._support.mcp import (
     Outcome,
     ScriptedTool,
     call_tool,
+    forget_mcp,
     mcp_peer,
     openapi_peer,
     register_mcp,
@@ -75,6 +76,28 @@ def test_static_credential_reaches_the_peer_in_its_mode_shape_and_is_encrypted_a
         assert response.status_code == 200, response.text
         assert _header(_one_call(peer), header) == shape.format(secret=secret, basic=basic).encode()
         assert _plaintext_rows(identity, secret) == [], "credential stored in plaintext"
+
+
+def test_create_response_does_not_echo_the_stored_credential(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        secret: Final = "create-secret-" + uuid.uuid4().hex
+        alias: Final = "cred" + uuid.uuid4().hex[:8]
+        response: Final = gateway.request(
+            "POST",
+            "/v1/mcp/server",
+            {
+                "server_name": alias,
+                "alias": alias,
+                **peer.registration(),
+                "auth_type": "bearer_token",
+                "credentials": {"auth_value": secret},
+            },
+        )
+        scenario.cleanups.callback(forget_mcp, gateway, response.json()["server_id"])
+        assert response.status_code == 201, response.text
+        assert response.json()["alias"] == alias
+        assert response.json().get("credentials") is None
+        assert secret not in response.text
 
 
 def test_editing_the_credential_rotates_what_the_peer_receives(gateway: Gateway) -> None:
@@ -636,7 +659,10 @@ def test_oauth_passthrough_probe_uses_server_token_without_admission_key(
         assert probes, "expected an upstream initialize authentication probe"
         assert all(_header(probe, b"authorization") == f"Bearer {upstream_token}".encode() for probe in probes)
         assert len(tool_calls(observed)) == 1
-        assert all(_header(request, b"authorization") == f"Bearer {upstream_token}".encode() for request in observed)
+        foreign: Final = tuple(
+            request for request in observed if _header(request, b"authorization") != f"Bearer {upstream_token}".encode()
+        )
+        assert foreign == (), foreign
         header_sets: Final = tuple(
             TypeAdapter(dict[bytes, bytes]).validate_python(request["headers"]) for request in observed
         )
