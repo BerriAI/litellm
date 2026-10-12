@@ -247,6 +247,7 @@ from litellm.router_utils.handle_error import (
     send_llm_exception_alert,
 )
 from litellm.router_utils.health_state_cache import DeploymentHealthCache
+from litellm.router_utils.model_group_custom_fields import merged_custom_metadata, merged_custom_tags
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import (
     DeploymentAffinityCheck,
     warn_on_unknown_model_group_affinity_flags,
@@ -498,7 +499,6 @@ def _stream_chunks_have_generated_content(chunks: Sequence[ModelResponseStream])
 _NO_SESSION_KWARGS: Final[Mapping[str, Mapping[str, object]]] = MappingProxyType({})
 _SESSION_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _MODEL_INFO_ADAPTER: Final = TypeAdapter(Mapping[str, object])
-_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _SILENT_MODEL_ADAPTER: Final = TypeAdapter(str | list[str])
 _RESOLVED_RETRY_POLICY_ADAPTER: Final = TypeAdapter(RetryPolicy | None)
 _ROUTING_KWARGS_ADAPTER: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
@@ -540,47 +540,6 @@ def _deployment_pick_attributes(model: str, request_kwargs: Mapping[str, object]
 
 def _configured_model_info(deployment: Mapping[str, object]) -> Mapping[str, object]:
     return _MODEL_INFO_ADAPTER.validate_python(deployment.get("model_info") or {})
-
-
-CustomMetadataValue: TypeAlias = str | int | float | bool
-
-
-def _string_tags(tags: object) -> Iterator[str]:
-    if isinstance(tags, list):
-        yield from (tag for tag in _OBJECT_LIST_ADAPTER.validate_python(tags) if isinstance(tag, str))
-
-
-def _scalar_metadata(metadata: object) -> Iterator[tuple[str, CustomMetadataValue]]:
-    if isinstance(metadata, dict):
-        yield from (
-            (key, value)
-            for key, value in _MODEL_INFO_ADAPTER.validate_python(metadata).items()
-            if isinstance(value, (str, int, float, bool))
-        )
-
-
-def _custom_tag_values(model_infos: Sequence[Mapping[str, object]]) -> Iterator[str]:
-    for model_info in model_infos:
-        yield from _string_tags(model_info.get("custom_tags"))
-
-
-def _custom_metadata_entries(
-    model_infos: Sequence[Mapping[str, object]],
-) -> Iterator[tuple[str, CustomMetadataValue]]:
-    for model_info in model_infos:
-        yield from _scalar_metadata(model_info.get("custom_metadata"))
-
-
-def _model_group_custom_tags(model_infos: Sequence[Mapping[str, object]]) -> tuple[str, ...] | None:
-    return tuple(dict.fromkeys(_custom_tag_values(model_infos))) or None
-
-
-def _model_group_custom_metadata(
-    model_infos: Sequence[Mapping[str, object]],
-) -> Mapping[str, CustomMetadataValue] | None:
-    entries: Final = tuple(_custom_metadata_entries(model_infos))
-    first_seen: Final = MappingProxyType(dict(reversed(entries)))
-    return MappingProxyType({key: first_seen[key] for key in dict.fromkeys(key for key, _ in entries)}) or None
 
 
 def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
@@ -11443,8 +11402,8 @@ class Router:
             (d for d in (info.get("description") for info in configured_model_infos) if isinstance(d, str)),
             None,
         )
-        model_group_custom_tags: Final = _model_group_custom_tags(configured_model_infos)
-        model_group_custom_metadata: Final = _model_group_custom_metadata(configured_model_infos)
+        model_group_custom_tags: Final = merged_custom_tags(configured_model_infos)
+        model_group_custom_metadata: Final = merged_custom_metadata(configured_model_infos)
         for model in model_list:
             is_match = False
             if (
