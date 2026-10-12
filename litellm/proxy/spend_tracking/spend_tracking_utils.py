@@ -274,7 +274,7 @@ def _get_spend_logs_metadata(
     clean_metadata["batch_failed_requests"] = batch_failed_requests
     clean_metadata["mcp_tool_call_metadata"] = mcp_tool_call_metadata
     clean_metadata["vector_store_request_metadata"] = _get_vector_store_request_for_spend_logs_payload(
-        vector_store_request_metadata
+        vector_store_request_metadata, request_litellm_params
     )
     clean_metadata["guardrail_information"] = _sanitize_guardrail_information_for_spend_logs(
         guardrail_information, request_litellm_params
@@ -1654,11 +1654,12 @@ def _get_proxy_server_request_for_spend_logs_payload(
 
 def _get_vector_store_request_for_spend_logs_payload(
     vector_store_request_metadata: list[StandardLoggingVectorStoreRequest] | None,
+    request_litellm_params: Mapping[str, object] | None = None,
 ) -> list[StandardLoggingVectorStoreRequest] | None:
     """
     If user does not want to store prompts and responses, then remove the content from the vector store request metadata
     """
-    if should_store_prompts_and_responses_in_spend_logs():
+    if should_store_prompts_and_responses_in_spend_logs(request_litellm_params):
         return vector_store_request_metadata
 
     # if user does not want to store prompts and responses, then remove the content from the vector store request metadata
@@ -1737,7 +1738,12 @@ def _request_is_no_log(request_litellm_params: Mapping[str, object] | None) -> b
     The proxy still bills such a request -- that is why the spend writer is let through the
     no-log filter in `should_run_callback` -- so this suppresses the content-bearing fields
     only, never the cost fields.
+
+    An administrator who set `litellm.global_disable_no_log_param` has turned the parameter off,
+    so it is ignored here exactly as `should_run_callback` ignores it.
     """
+    if litellm.global_disable_no_log_param:
+        return False
     return isinstance(request_litellm_params, Mapping) and request_litellm_params.get("no-log") is True
 
 
