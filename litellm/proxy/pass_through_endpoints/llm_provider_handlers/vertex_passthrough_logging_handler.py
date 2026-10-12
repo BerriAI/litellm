@@ -742,7 +742,10 @@ class VertexPassthroughLoggingHandler:
     @staticmethod
     def _get_custom_llm_provider_from_url(url: str) -> str:
         parsed_url: Final = urlparse(url)
-        if parsed_url.hostname and parsed_url.hostname.endswith("generativelanguage.googleapis.com"):
+        if parsed_url.hostname and (
+            parsed_url.hostname == "generativelanguage.googleapis.com"
+            or parsed_url.hostname.endswith(".generativelanguage.googleapis.com")
+        ):
             return litellm.LlmProviders.GEMINI.value
         return litellm.LlmProviders.VERTEX_AI.value
 
@@ -804,9 +807,6 @@ class VertexPassthroughLoggingHandler:
 
         kwargs["response_cost"] = response_cost
         kwargs["model"] = model
-
-        # pretty print standard logging object
-        verbose_proxy_logger.debug("kwargs= %s", kwargs)
 
         # set litellm_call_id to logging response object
         litellm_model_response.id = logging_obj.litellm_call_id
