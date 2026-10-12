@@ -68,7 +68,7 @@ After: the same request comes back with real token counts, so the dashboard show
 - [ ] The handful of test files covering my change pass locally, e.g. `uv run pytest tests/unit/<your_test_file>.py -v`. Leave the suites (`make test-unit-*`, `make test-unit`) to CI: it finishes in ~15 minutes where a laptop takes an hour or more
 - [ ] My PR passes all required CI/CD checks (e.g., lint, schema.d.ts sync check, etc.)
 - [ ] My PR's scope is as isolated as possible; it only solves 1 specific problem
-- [ ] I have addressed or replied to every automated review finding on my PR's latest commit before requesting a maintainer review
+- [ ] Every automated review on my PR's latest commit has finished, and I have addressed or replied to each of its findings before requesting a maintainer review
 
 ## Delays in PR merge?
 
