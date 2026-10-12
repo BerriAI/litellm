@@ -3,7 +3,171 @@ from typing import Final
 
 import pytest
 
-from litellm.router_utils.prompt_caching_cache import PromptCachingCache
+from litellm.caching.dual_cache import DualCache
+from litellm.caching.in_memory_cache import InMemoryCache
+from litellm.router_utils.prompt_caching_cache import (
+    PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,
+    PROMPT_CACHE_PIN_TTL_SECONDS,
+    PromptCachingCache,
+)
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
+
+
+class _ManualClock:
+    def __init__(self) -> None:
+        self.now = 1_700_000_000.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now = self.now + seconds
+
+
+def _pin_cache(clock: _ManualClock) -> PromptCachingCache:
+    return PromptCachingCache(cache=DualCache(in_memory_cache=InMemoryCache(clock=clock)))
+
+
+def _system_block_messages(
+    cache_control: dict[str, str], document: str = "a complex legal agreement"
+) -> list[AllMessageValues]:
+    return [
+        {
+            "role": "system",
+            "content": [
+                {
+                    "type": "text",
+                    "text": f"Here is the full text of {document}" * 200,
+                    "cache_control": cache_control,
+                }
+            ],
+        },
+        {"role": "user", "content": "Reply with the single word ok."},
+    ]
+
+
+def _message_level_messages(cache_control: dict[str, str]) -> list[AllMessageValues]:
+    return [
+        {
+            "role": "system",
+            "content": "Here is the full text of a complex legal agreement" * 200,
+            "cache_control": cache_control,
+        },
+        {"role": "user", "content": "Reply with the single word ok."},
+    ]
+
+
+def _tool(cache_control: dict[str, str] | None) -> ChatCompletionToolParam:
+    tool: ChatCompletionToolParam = {
+        "type": "function",
+        "function": {"name": "lookup_clause", "parameters": {"type": "object", "properties": {}}},
+    }
+    return {**tool, "cache_control": cache_control} if cache_control else tool
+
+
+@pytest.mark.parametrize(
+    ("messages", "tools", "expected_ttl"),
+    [
+        pytest.param(
+            _system_block_messages({"type": "ephemeral", "ttl": "1h"}),
+            None,
+            PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,
+            id="content-block-1h",
+        ),
+        pytest.param(
+            _message_level_messages({"type": "ephemeral", "ttl": "1h"}),
+            None,
+            PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,
+            id="message-level-1h",
+        ),
+        pytest.param(
+            _system_block_messages({"type": "ephemeral", "ttl": "5m"}),
+            None,
+            PROMPT_CACHE_PIN_TTL_SECONDS,
+            id="explicit-5m",
+        ),
+        pytest.param(
+            _system_block_messages({"type": "ephemeral"}),
+            None,
+            PROMPT_CACHE_PIN_TTL_SECONDS,
+            id="default-ttl",
+        ),
+        pytest.param(
+            [
+                *_system_block_messages({"type": "ephemeral", "ttl": "1h"}),
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": "Again.", "cache_control": {"type": "ephemeral", "ttl": "5m"}},
+            ],
+            None,
+            PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,
+            id="1h-system-then-5m-turn",
+        ),
+        pytest.param(
+            _system_block_messages({"type": "ephemeral"}),
+            [_tool({"type": "ephemeral", "ttl": "1h"})],
+            PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS,
+            id="1h-on-tools-only",
+        ),
+        pytest.param(
+            _system_block_messages({"type": "ephemeral"}),
+            [_tool(None)],
+            PROMPT_CACHE_PIN_TTL_SECONDS,
+            id="unmarked-tools",
+        ),
+        pytest.param(
+            [
+                *_system_block_messages({"type": "ephemeral", "ttl": "5m"}),
+                {"role": "assistant", "content": "ok"},
+                {"role": "user", "content": "Again.", "cache_control": {"type": "something_else", "ttl": "1h"}},
+            ],
+            None,
+            PROMPT_CACHE_PIN_TTL_SECONDS,
+            id="non-ephemeral-1h-ignored",
+        ),
+    ],
+)
+def test_pin_ttl_follows_the_longest_breakpoint_ttl(
+    messages: list[AllMessageValues],
+    tools: list[ChatCompletionToolParam] | None,
+    expected_ttl: int,
+) -> None:
+    assert PromptCachingCache.pin_ttl_seconds(messages, tools) == expected_ttl
+
+
+@pytest.mark.asyncio
+async def test_one_hour_prefix_pin_outlives_the_five_minute_window() -> None:
+    clock: Final = _ManualClock()
+    cache: Final = _pin_cache(clock)
+    one_hour: Final = _system_block_messages({"type": "ephemeral", "ttl": "1h"}, document="a lease")
+    five_minutes: Final = _system_block_messages({"type": "ephemeral"}, document="a will")
+
+    await cache.async_add_model_id(model_id="deployment-1h", messages=one_hour, tools=None)
+    await cache.async_add_model_id(model_id="deployment-5m", messages=five_minutes, tools=None)
+
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+    assert await cache.async_get_model_id(messages=five_minutes, tools=None) is None
+    pinned_after_five_minutes: Final = await cache.async_get_model_id(messages=one_hour, tools=None)
+    assert pinned_after_five_minutes is not None
+    assert pinned_after_five_minutes["model_id"] == "deployment-1h"
+
+    clock.advance(PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS - PROMPT_CACHE_PIN_TTL_SECONDS)
+    assert await cache.async_get_model_id(messages=one_hour, tools=None) is None
+
+
+def test_sync_one_hour_message_level_pin_outlives_the_five_minute_window() -> None:
+    clock: Final = _ManualClock()
+    cache: Final = _pin_cache(clock)
+    one_hour: Final = _message_level_messages({"type": "ephemeral", "ttl": "1h"})
+
+    cache.add_model_id(model_id="deployment-1h", messages=one_hour, tools=None)
+
+    clock.advance(PROMPT_CACHE_PIN_TTL_SECONDS + 1)
+    pinned: Final = cache.get_model_id(messages=one_hour, tools=None)
+    assert pinned is not None
+    assert pinned["model_id"] == "deployment-1h"
+
+    clock.advance(PROMPT_CACHE_ONE_HOUR_PIN_TTL_SECONDS - PROMPT_CACHE_PIN_TTL_SECONDS)
+    assert cache.get_model_id(messages=one_hour, tools=None) is None
 
 
 async def _first_non_none(read):
