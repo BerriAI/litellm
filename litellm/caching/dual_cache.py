@@ -314,8 +314,9 @@ class DualCache(BaseCache):
             )
             return await self.in_memory_cache.async_get_cache(key)
         if redis_result is not None:
-            local_ttl: Final[dict[str, object]] = {} if ttl is None else {"ttl": ttl}
-            await self.in_memory_cache.async_set_cache(key, redis_result, **self._backfill_kwargs(local_ttl))
+            await self.in_memory_cache.async_set_cache(
+                key, redis_result, **self._backfill_kwargs({} if ttl is None else {"ttl": ttl})
+            )
         return redis_result
 
     def _reserve_redis_batch_keys(
