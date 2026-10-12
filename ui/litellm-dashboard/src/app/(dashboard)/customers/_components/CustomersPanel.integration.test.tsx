@@ -97,6 +97,75 @@ describe("Customers management", () => {
     expect(refetch).toHaveBeenCalledOnce();
   });
 
+  it("blocks selected customers in one batch and clears selection after success", async () => {
+    authorization.premiumUser = true;
+    const user = userEvent.setup();
+    renderWithProviders(<CustomersPanel />);
+    expect(screen.queryByRole("button", { name: "Block selected" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("checkbox", { name: "Select all rows" }));
+    expect(screen.getByText("2 selected")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Block selected" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledExactlyOnceWith("/customer/block", {
+        accessToken: "sk-test",
+        body: { user_ids: customers.map((customer) => customer.user_id) },
+      }),
+    );
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Block selected" })).not.toBeInTheDocument());
+    expect(screen.getByRole("checkbox", { name: `Select customer ${activeCustomer.user_id}` })).not.toBeChecked();
+  });
+
+  it.each(["Block", "Unblock"])("gates bulk %s with the Enterprise explanation", async (action) => {
+    const user = userEvent.setup();
+    renderWithProviders(<CustomersPanel />);
+    await user.click(screen.getByRole("checkbox", { name: "Select all rows" }));
+    expect(screen.getByRole("button", { name: "Block selected" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Unblock selected" })).toBeDisabled();
+    await user.hover(screen.getByLabelText(`Bulk ${action} requires Enterprise`));
+    expect(await screen.findByRole("tooltip")).toHaveTextContent(
+      "This is a LiteLLM Enterprise feature, and requires a valid key to use.",
+    );
+    await user.click(screen.getByLabelText(`Bulk ${action} requires Enterprise`));
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("unblocks only selected IDs in one batch with Enterprise", async () => {
+    authorization.premiumUser = true;
+    const user = userEvent.setup();
+    renderWithProviders(<CustomersPanel />);
+    await user.click(screen.getByRole("checkbox", { name: `Select customer ${blockedCustomer.user_id}` }));
+    await user.click(screen.getByRole("button", { name: "Unblock selected" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledExactlyOnceWith("/customer/unblock", {
+        accessToken: "sk-test",
+        body: { user_ids: [blockedCustomer.user_id] },
+      }),
+    );
+  });
+
+  it("keeps selection and blocked state when bulk Unblock has no configured callback", async () => {
+    authorization.premiumUser = true;
+    const user = userEvent.setup();
+    const message = "Blocked user check was never set";
+    post.mockRejectedValue(new ApiError(message, 400, { detail: { error: message } }));
+    renderWithProviders(
+      <>
+        <CustomersPanel />
+        <Toaster />
+      </>,
+    );
+    await user.click(screen.getByRole("checkbox", { name: `Select customer ${blockedCustomer.user_id}` }));
+    await user.click(screen.getByRole("button", { name: "Unblock selected" }));
+    expect(await screen.findByText(message)).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: `Select customer ${blockedCustomer.user_id}` })).toBeChecked();
+    expect(within(screen.getByRole("row", { name: /bob@example.test/ })).getByText("Blocked")).toBeInTheDocument();
+    expect(screen.queryByText("1 customer unblocked")).not.toBeInTheDocument();
+    expect(post).toHaveBeenCalledExactlyOnceWith("/customer/unblock", {
+      accessToken: "sk-test",
+      body: { user_ids: [blockedCustomer.user_id] },
+    });
+  });
+
   it("uses the shared money display for zero and small spend", () => {
     useQuery.mockReturnValue({
       data: [{ ...activeCustomer, spend: 0.001 }, blockedCustomer],
@@ -162,65 +231,56 @@ describe("Customers management", () => {
     expect(within(bob).getByText("No restriction")).toBeInTheDocument();
   });
 
-  it.each(["row", "detail"])("disables Block without Enterprise in the %s menu", async (surface) => {
+  it.each([
+    { surface: "row", action: "Block", customer: activeCustomer },
+    { surface: "detail", action: "Block", customer: activeCustomer },
+    { surface: "row", action: "Unblock", customer: blockedCustomer },
+    { surface: "detail", action: "Unblock", customer: blockedCustomer },
+  ])("disables $action without Enterprise in the $surface menu", async ({ surface, action, customer }) => {
     const user = userEvent.setup();
     renderWithProviders(
       <CustomersPanel />,
-      surface === "detail" ? { searchParams: "customer=alice%40example.test" } : undefined,
+      surface === "detail" ? { searchParams: `customer=${encodeURIComponent(customer.user_id)}` } : undefined,
     );
     await user.click(
       screen.getByRole("button", {
-        name: surface === "detail" ? "More customer actions" : "Actions for alice@example.test",
+        name: surface === "detail" ? "More customer actions" : `Actions for ${customer.user_id}`,
       }),
     );
-    const block = await screen.findByRole("menuitem", { name: "Block" });
-    expect(block).toHaveAttribute("aria-disabled", "true");
-    await user.hover(screen.getByLabelText("Block requires Enterprise"));
+    expect(await screen.findByRole("menuitem", { name: action })).toHaveAttribute("aria-disabled", "true");
+    await user.hover(screen.getByLabelText(`${action} requires Enterprise`));
     expect(await screen.findByRole("tooltip")).toHaveTextContent(
       "This is a LiteLLM Enterprise feature, and requires a valid key to use.",
     );
-    await user.click(screen.getByLabelText("Block requires Enterprise"));
+    await user.click(screen.getByLabelText(`${action} requires Enterprise`));
     expect(post).not.toHaveBeenCalled();
   });
 
-  it.each(["row", "detail"])("blocks through customer update with Enterprise in the %s menu", async (surface) => {
+  it.each([
+    { surface: "row", action: "Block", endpoint: "/customer/block", customer: activeCustomer },
+    { surface: "detail", action: "Block", endpoint: "/customer/block", customer: activeCustomer },
+    { surface: "row", action: "Unblock", endpoint: "/customer/unblock", customer: blockedCustomer },
+    { surface: "detail", action: "Unblock", endpoint: "/customer/unblock", customer: blockedCustomer },
+  ])("uses $endpoint with Enterprise in the $surface menu", async ({ surface, action, endpoint, customer }) => {
     authorization.premiumUser = true;
     const user = userEvent.setup();
     renderWithProviders(
       <CustomersPanel />,
-      surface === "detail" ? { searchParams: "customer=alice%40example.test" } : undefined,
+      surface === "detail" ? { searchParams: `customer=${encodeURIComponent(customer.user_id)}` } : undefined,
     );
+    expect(screen.queryByRole("button", { name: action })).not.toBeInTheDocument();
     await user.click(
       screen.getByRole("button", {
-        name: surface === "detail" ? "More customer actions" : "Actions for alice@example.test",
+        name: surface === "detail" ? "More customer actions" : `Actions for ${customer.user_id}`,
       }),
     );
-    const block = await screen.findByRole("menuitem", { name: "Block" });
-    expect(block).not.toHaveAttribute("aria-disabled", "true");
-    await user.click(block);
+    const menuAction = await screen.findByRole("menuitem", { name: action });
+    expect(menuAction).not.toHaveAttribute("aria-disabled", "true");
+    await user.click(menuAction);
     await waitFor(() =>
-      expect(post).toHaveBeenCalledExactlyOnceWith("/customer/update", {
+      expect(post).toHaveBeenCalledExactlyOnceWith(endpoint, {
         accessToken: "sk-test",
-        body: { user_id: activeCustomer.user_id, blocked: true },
-      }),
-    );
-  });
-
-  it.each([false, true])("unblocks from the header with premiumUser=%s", async (premiumUser) => {
-    authorization.premiumUser = premiumUser;
-    const user = userEvent.setup();
-    renderWithProviders(<CustomersPanel />, { searchParams: "customer=bob%40example.test" });
-    expect(screen.queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Unblock" })).not.toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "More customer actions" }));
-    const unblock = await screen.findByRole("menuitem", { name: "Unblock" });
-    expect(unblock).not.toHaveAttribute("aria-disabled", "true");
-    expect(screen.getByRole("menuitem", { name: "Delete Customer" })).toBeInTheDocument();
-    await user.click(unblock);
-    await waitFor(() =>
-      expect(post).toHaveBeenCalledExactlyOnceWith("/customer/update", {
-        accessToken: "sk-test",
-        body: { user_id: blockedCustomer.user_id, blocked: false },
+        body: { user_ids: [customer.user_id] },
       }),
     );
   });
@@ -296,20 +356,6 @@ describe("Customers management", () => {
       ),
     );
     expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("edit")).toBeNull();
-  });
-
-  it("unblocks a customer from the row menu", async () => {
-    const user = userEvent.setup();
-    renderWithProviders(<CustomersPanel />);
-    await user.click(screen.getByRole("button", { name: "Actions for bob@example.test" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Unblock" }));
-
-    await waitFor(() =>
-      expect(post).toHaveBeenCalledExactlyOnceWith("/customer/update", {
-        accessToken: "sk-test",
-        body: { user_id: blockedCustomer.user_id, blocked: false },
-      }),
-    );
   });
 
   it("preserves an unrestricted server when editing only the alias after tools load", async () => {
@@ -433,6 +479,7 @@ describe("Customers management", () => {
     authorization.isViewOnly = true;
     const user = userEvent.setup();
     const list = renderWithProviders(<CustomersPanel />);
+    expect(screen.queryByRole("checkbox", { name: "Select all rows" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Create Customer" })).not.toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Actions for alice@example.test" }));
     expect(await screen.findByRole("menuitem", { name: "Copy ID" })).toBeInTheDocument();
@@ -552,27 +599,35 @@ describe("Customers management", () => {
     );
   });
 
-  it("shows a failed customer update as an error toast", async () => {
-    const user = userEvent.setup();
-    const message = "Customer update failed";
-    post.mockRejectedValue(new ApiError(message, 400, { detail: { error: message } }));
-    renderWithProviders(
-      <>
-        <CustomersPanel />
-        <Toaster />
-      </>,
-      { searchParams: "customer=bob%40example.test" },
-    );
-    await user.click(screen.getByRole("button", { name: "More customer actions" }));
-    await user.click(await screen.findByRole("menuitem", { name: "Unblock" }));
+  it.each(["row", "detail"])(
+    "shows an Unblock callback error and keeps the customer blocked in the %s menu",
+    async (surface) => {
+      authorization.premiumUser = true;
+      const user = userEvent.setup();
+      const message = "Blocked user check was never set";
+      post.mockRejectedValue(new ApiError(message, 400, { detail: { error: message } }));
+      renderWithProviders(
+        <>
+          <CustomersPanel />
+          <Toaster />
+        </>,
+        surface === "detail" ? { searchParams: "customer=bob%40example.test" } : undefined,
+      );
+      await user.click(
+        screen.getByRole("button", {
+          name: surface === "detail" ? "More customer actions" : `Actions for ${blockedCustomer.user_id}`,
+        }),
+      );
+      await user.click(await screen.findByRole("menuitem", { name: "Unblock" }));
 
-    expect(await screen.findByText(message)).toBeInTheDocument();
-    expect(screen.getByText("Request Error")).toBeInTheDocument();
-    expect(screen.queryByText("Customer unblocked")).not.toBeInTheDocument();
-    expect(screen.getByText("Blocked")).toBeInTheDocument();
-    expect(post).toHaveBeenCalledExactlyOnceWith("/customer/update", {
-      accessToken: "sk-test",
-      body: { user_id: blockedCustomer.user_id, blocked: false },
-    });
-  });
+      expect(await screen.findByText(message)).toBeInTheDocument();
+      expect(screen.getByText("Request Error")).toBeInTheDocument();
+      expect(screen.queryByText("Customer unblocked")).not.toBeInTheDocument();
+      expect(screen.getByText("Blocked")).toBeInTheDocument();
+      expect(post).toHaveBeenCalledExactlyOnceWith("/customer/unblock", {
+        accessToken: "sk-test",
+        body: { user_ids: [blockedCustomer.user_id] },
+      });
+    },
+  );
 });

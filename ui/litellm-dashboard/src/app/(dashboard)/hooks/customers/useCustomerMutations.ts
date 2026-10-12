@@ -2,7 +2,13 @@ import { useMutation, useQueryClient } from "@tanstack/react-query";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { $api } from "@/lib/http/api";
 import { all_admin_roles } from "@/utils/roles";
-import { createCustomer, deleteCustomers, setCustomerBlockedState, updateCustomer } from "./customerApi";
+import {
+  createCustomer,
+  deleteCustomers,
+  setCustomerBlockedState,
+  setCustomersBlockedState,
+  updateCustomer,
+} from "./customerApi";
 
 export const useCustomer = (id: string | null) => {
   const { accessToken, userRole } = useAuthorized();
@@ -34,3 +40,4 @@ export const useCreateCustomer = () => useCustomerMutation(createCustomer);
 export const useUpdateCustomer = () => useCustomerMutation(updateCustomer);
 export const useDeleteCustomers = () => useCustomerMutation(deleteCustomers);
 export const useSetCustomerBlockedState = () => useCustomerMutation(setCustomerBlockedState);
+export const useSetCustomersBlockedState = () => useCustomerMutation(setCustomersBlockedState);

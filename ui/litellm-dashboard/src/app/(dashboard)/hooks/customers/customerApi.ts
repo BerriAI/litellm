@@ -4,9 +4,15 @@ import type { EndUser } from "./useCustomers";
 
 type Schemas = components["schemas"];
 
-export type CreateCustomerRequest = Partial<Schemas["NewCustomerRequest"]> & { user_id: string };
+export type CreateCustomerRequest = Partial<Schemas["NewCustomerRequest"]> & {
+  user_id: string;
+};
 export type UpdateCustomerRequest = Partial<Schemas["UpdateCustomerRequest"]> & { user_id: string };
 export type CustomerBlockedStateInput = { userId: string; blocked: boolean };
+export type CustomersBlockedStateInput = {
+  userIds: string[];
+  blocked: boolean;
+};
 
 export const createCustomer = (accessToken: string, body: CreateCustomerRequest): Promise<EndUser> =>
   apiClient.post<EndUser>("/customer/new", { accessToken, body });
@@ -20,7 +26,20 @@ export const deleteCustomers = (accessToken: string, userIds: string[]): Promise
     body: { user_ids: userIds },
   });
 
+export const setCustomersBlockedState = (
+  accessToken: string,
+  { userIds, blocked }: CustomersBlockedStateInput,
+): Promise<Schemas["BlockUsersResponse"] | Schemas["UnblockUsersResponse"]> =>
+  apiClient.post<Schemas["BlockUsersResponse"] | Schemas["UnblockUsersResponse"]>(
+    blocked ? "/customer/block" : "/customer/unblock",
+    {
+      accessToken,
+      body: { user_ids: userIds },
+    },
+  );
+
 export const setCustomerBlockedState = (
   accessToken: string,
   { userId, blocked }: CustomerBlockedStateInput,
-): Promise<EndUser> => updateCustomer(accessToken, { user_id: userId, blocked });
+): Promise<Schemas["BlockUsersResponse"] | Schemas["UnblockUsersResponse"]> =>
+  setCustomersBlockedState(accessToken, { userIds: [userId], blocked });

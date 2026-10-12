@@ -1,7 +1,7 @@
 "use client";
 
 import type { ColumnDef } from "@tanstack/react-table";
-import { Ban, Copy, MoreHorizontal, Pencil, ShieldCheck, Trash2 } from "lucide-react";
+import { Ban, Copy, Layers, MoreHorizontal, Pencil, Server, ShieldCheck, Trash2, Users, Wrench } from "lucide-react";
 
 import type { EndUser } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
@@ -20,9 +20,12 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/cva.config";
 import { copyToClipboard } from "@/utils/dataUtils";
 
+import { getCustomerResourceCounts } from "./customerResources";
+
 export type CustomerTableActions = {
   canModify: boolean;
   premiumUser: boolean;
+  isBlocking: boolean;
   onView: (customerId: string) => void;
   onEdit: (customerId: string) => void;
   onDelete: (customer: EndUser) => void;
@@ -60,7 +63,7 @@ export function CustomerBlockAction({
 }) {
   const action = (
     <DropdownMenuItem
-      disabled={isBlocking || (!customer.blocked && !premiumUser)}
+      disabled={isBlocking || !premiumUser}
       variant={customer.blocked ? "default" : "destructive"}
       onClick={() => onSetBlocked(customer)}
     >
@@ -68,11 +71,15 @@ export function CustomerBlockAction({
       {customer.blocked ? "Unblock" : "Block"}
     </DropdownMenuItem>
   );
-  if (customer.blocked || premiumUser) return action;
+  if (premiumUser) return action;
   return (
     <TooltipProvider delay={300}>
       <Tooltip>
-        <TooltipTrigger render={<span className="block" aria-label="Block requires Enterprise" />}>
+        <TooltipTrigger
+          render={
+            <span className="block" aria-label={`${customer.blocked ? "Unblock" : "Block"} requires Enterprise`} />
+          }
+        >
           {action}
         </TooltipTrigger>
         <TooltipContent role="tooltip">
@@ -100,6 +107,46 @@ export function describeMcpGrant(permission: EndUser["object_permission"]): stri
   return parts.join(", ") || "No restriction";
 }
 
+const RESOURCE_ITEMS = [
+  { key: "models", label: "models", icon: Layers, className: "bg-info/10 text-info ring-sky-600/20" },
+  { key: "servers", label: "MCP servers", icon: Server, className: "bg-success/10 text-success ring-emerald-600/20" },
+  {
+    key: "accessGroups",
+    label: "MCP access groups",
+    icon: Users,
+    className:
+      "bg-violet-50 text-violet-700 ring-violet-600/20 dark:bg-violet-950 dark:text-violet-300 dark:ring-violet-400/30",
+  },
+  { key: "toolsets", label: "MCP toolsets", icon: Wrench, className: "bg-warning/10 text-warning ring-amber-600/20" },
+] as const;
+
+export function CustomerResourcesCell({ customer }: { customer: EndUser }) {
+  const counts = getCustomerResourceCounts(customer);
+  return (
+    <div className="flex items-center gap-1.5">
+      {RESOURCE_ITEMS.map(({ key, label, icon: Icon, className }) => {
+        const count = counts[key];
+        const countLabel = count === 1 ? label.slice(0, -1) : label;
+        const title = count === "all" ? `All ${label}` : `${count} ${countLabel}`;
+        return (
+          <span
+            key={key}
+            title={title}
+            aria-label={title}
+            className={cn(
+              "inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium ring-1 ring-inset [&_svg]:size-3.5",
+              className,
+            )}
+          >
+            <Icon aria-hidden="true" />
+            <span className="tabular-nums">{count === "all" ? "All" : count}</span>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
 function CustomerRowActions({
   customer,
   canModify,
@@ -107,6 +154,7 @@ function CustomerRowActions({
   onEdit,
   onDelete,
   onSetBlocked,
+  isBlocking,
 }: CustomerTableActions & { customer: EndUser }) {
   return (
     <DropdownMenu>
@@ -123,7 +171,12 @@ function CustomerRowActions({
               <Pencil />
               Edit
             </DropdownMenuItem>
-            <CustomerBlockAction customer={customer} premiumUser={premiumUser} onSetBlocked={onSetBlocked} />
+            <CustomerBlockAction
+              customer={customer}
+              premiumUser={premiumUser}
+              isBlocking={isBlocking}
+              onSetBlocked={onSetBlocked}
+            />
           </>
         )}
         <DropdownMenuItem onClick={() => void copyToClipboard(customer.user_id, "Customer ID copied")}>
@@ -164,6 +217,14 @@ export function getCustomerTableColumns(actions: CustomerTableActions): ColumnDe
           onClick={() => actions.onView(row.original.user_id)}
         />
       ),
+    },
+    {
+      id: "resources",
+      meta: { title: "Resources", skeleton: "chips" },
+      header: "Resources",
+      size: 250,
+      enableSorting: false,
+      cell: ({ row }) => <CustomerResourcesCell customer={row.original} />,
     },
     {
       id: "spend",
