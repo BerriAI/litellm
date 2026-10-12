@@ -69142,7 +69142,7 @@
         "max_input_tokens": 262144,
         "mode": "evaluation",
         "output_cost_per_token": 0.0,
-        "source": "https://docs.fireworks.ai/private-preview/decisions-api-k7q3"
+        "source": "https://docs.fireworks.ai"
     },
     "fireworks_ai/accounts/fireworks/models/ember-1": {
         "cache_read_input_token_cost": 3e-07,
