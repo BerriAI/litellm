@@ -741,7 +741,9 @@ def _extract_total_tokens(sl_object: StandardLoggingPayload | None) -> int:
     """
     if sl_object is None:
         return 0
-    return sl_object["total_tokens"]
+    return sl_object.get(  # pyright: ignore[reportUnknownMemberType]  # StandardLoggingPayload.get overload is partially unknown; total_tokens is a required int
+        "total_tokens", 0
+    )
 
 
 async def _update_database_and_spend_counters(
