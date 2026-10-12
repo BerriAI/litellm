@@ -366,7 +366,8 @@ jobs:
       size: xlarge
     working_directory: ~/project
     environment:
-      UV_PYTHON: "3.11"
+      UV_PYTHON: "3.11.15"
+      UV_PYTHON_PREFERENCE: only-managed
       CARGO_HTTP_MULTIPLEXING: "false"
       CARGO_NET_RETRY: "5"
     steps:
@@ -375,15 +376,20 @@ jobs:
           name: Skip job when no windows-release-relevant files changed
           shell: bash.exe
           command: bash .circleci/scripts/path_filter.sh windows-release
+      - install_windows_toolchain
       - run:
           name: Install Python
           command: |
-            choco install python --version=3.11.0 -y --no-progress --force
-            refreshenv
-            python --version
-          environment:
-            CHOCOLATEY_CONFIRM_ALL: "true"
-      - install_windows_toolchain
+            $env:Path = "$HOME\.local\bin;$env:Path"
+            uv python install $env:UV_PYTHON
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+            $python = uv python find $env:UV_PYTHON
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+            & $python --version
       - run:
           name: Record the Rust build environment for the release cargo cache key
           command: |
@@ -410,7 +416,12 @@ jobs:
             if ($LASTEXITCODE -ne 0) {
               exit $LASTEXITCODE
             }
-            python tests/windows_tests/check_windows_wheel_install.py
+            $python = uv python find $env:UV_PYTHON
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+            & $python tests/windows_tests/check_windows_wheel_install.py
+            exit $LASTEXITCODE
       - when:
           condition:
             equal: [main, << pipeline.git.branch >>]
