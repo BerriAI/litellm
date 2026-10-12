@@ -861,6 +861,110 @@ class RerankResponse(BaseModel):
     results: list[RerankItem] = []
 
 
+# ---------- rag ----------
+
+
+class RagVectorStoreBase(BaseModel, frozen=True):
+    vector_store_id: str | None = None
+
+
+class OpenAIRagVectorStore(RagVectorStoreBase, frozen=True):
+    custom_llm_provider: Literal["openai"] = "openai"
+    ttl_days: int | None = None
+
+
+class VertexRagVectorStore(RagVectorStoreBase, frozen=True):
+    custom_llm_provider: Literal["vertex_ai"] = "vertex_ai"
+
+
+RagVectorStore = OpenAIRagVectorStore | VertexRagVectorStore
+
+
+class RagIngestOptions(BaseModel, frozen=True):
+    name: str
+    vector_store: RagVectorStore
+
+
+class RagInlineFile(BaseModel, frozen=True):
+    filename: str
+    content: str = Field(repr=False)
+    content_type: str
+
+
+class RagIngestBody(BaseModel, frozen=True):
+    file: RagInlineFile
+    ingest_options: RagIngestOptions
+
+
+class RagIngestResponse(BaseModel, frozen=True):
+    status: Literal["completed", "in_progress", "failed"]
+    vector_store_id: str
+    file_id: str | None = None
+    error: str | None = None
+
+
+class RagRetrievalConfig(BaseModel, frozen=True):
+    vector_store_id: str
+    custom_llm_provider: Literal["openai"] = "openai"
+    top_k: int
+
+
+class RagRerankConfig(BaseModel, frozen=True):
+    enabled: Literal[True] = True
+    model: str
+    top_n: int
+
+
+class RagQueryBody(BaseModel, frozen=True):
+    model: str
+    messages: tuple[ChatMessage, ...]
+    retrieval_config: RagRetrievalConfig
+    rerank: RagRerankConfig | None = None
+
+
+class RagSearchContent(BaseModel, frozen=True):
+    text: str = ""
+
+
+class RagSearchHit(BaseModel, frozen=True):
+    content: tuple[RagSearchContent, ...] = ()
+
+
+class RagSearchResults(BaseModel, frozen=True):
+    data: tuple[RagSearchHit, ...] = ()
+
+
+class RagRerankResults(BaseModel, frozen=True):
+    results: tuple[RerankItem, ...] = ()
+
+
+class RagProviderFields(BaseModel, frozen=True):
+    search_results: RagSearchResults
+    rerank_results: RagRerankResults | None = None
+
+
+class RagMessage(BaseModel, frozen=True):
+    content: str | None = None
+    provider_specific_fields: RagProviderFields
+
+
+class RagChoice(BaseModel, frozen=True):
+    message: RagMessage
+    finish_reason: str | None = None
+
+
+class RagQueryResponse(BaseModel, frozen=True):
+    choices: tuple[RagChoice, ...]
+
+
+class VectorStoreFileStatus(BaseModel, frozen=True):
+    status: Literal["in_progress", "completed", "failed", "cancelled"]
+
+
+class VectorStoreDeleteBody(BaseModel, frozen=True):
+    vector_store_id: str
+
+
 # ---------- ocr ----------
 
 

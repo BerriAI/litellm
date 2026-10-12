@@ -39,6 +39,7 @@ from e2e_config import (
     REDIS_CHAOS_OPT_IN_ENV,
     SAGEMAKER_NOVA2_LITE_OPT_IN_ENV,
     SAGEMAKER_NOVA_OPT_IN_ENV,
+    VERTEX_AGENT_ENGINE_OPT_IN_ENV,
     SECRET_MANAGER_OPT_IN_ENV,
     WEEKLY_ANOMALY_OPT_IN_ENV,
     unique_marker,
@@ -79,6 +80,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "secret_manager": SECRET_MANAGER_OPT_IN_ENV,
         "sagemaker_nova": SAGEMAKER_NOVA_OPT_IN_ENV,
         "sagemaker_nova2_lite": SAGEMAKER_NOVA2_LITE_OPT_IN_ENV,
+        "vertex_agent_engine": VERTEX_AGENT_ENGINE_OPT_IN_ENV,
     }
 )
 
@@ -205,6 +207,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "sagemaker_nova2_lite: needs a deployed SageMaker Nova 2 Lite endpoint the proxy's AWS credentials can invoke; "
         "deselected unless SAGEMAKER_NOVA2_LITE_ENDPOINT names it",
+    )
+    config.addinivalue_line(
+        "markers",
+        "vertex_agent_engine: needs a deployed Vertex AI Agent Engine the proxy's Vertex credentials can query; "
+        "deselected unless VERTEX_AGENT_ENGINE_RESOURCE names its projects/.../reasoningEngines/... resource",
     )
 
 
