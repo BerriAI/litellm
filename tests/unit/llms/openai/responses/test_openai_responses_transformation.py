@@ -2501,6 +2501,63 @@ class TestCacheControlBecomesPromptCacheBreakpoint:
         assert marked == unmarked
         assert "prompt_cache_breakpoint" not in json.dumps(marked["input"])
 
+    def test_marks_on_parts_openai_does_not_cache_are_dropped_and_the_item_mark_skips_them(self) -> None:
+        audio = {"type": "input_audio", "input_audio": {"data": "UklGRg==", "format": "wav"}}
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input=[
+                {"role": "user", "content": [{**audio, "cache_control": _EPHEMERAL}], "cache_control": _EPHEMERAL},
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "a"}, {**audio, "cache_control": _EPHEMERAL}],
+                    "cache_control": _EPHEMERAL,
+                },
+            ],
+            response_api_optional_request_params={},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [
+            {"role": "user", "content": [audio]},
+            {
+                "role": "user",
+                "content": [
+                    {"type": "input_text", "text": "a", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT},
+                    audio,
+                ],
+            },
+        ]
+
+    def test_items_and_content_of_a_shape_openai_will_reject_pass_through_to_the_strip(self) -> None:
+        """Validating the body is upstream's job. The swap leaves what it cannot read alone, so the
+        caller gets OpenAI's 400 for it instead of a failure inside the proxy."""
+        result = OpenAIResponsesAPIConfig().transform_responses_api_request(
+            model="gpt-5.6",
+            input=[
+                "a bare string where an item belongs",
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": {"result": 1},
+                    "cache_control": _EPHEMERAL,
+                },
+                {"role": "user", "content": "look", "cache_control": _EPHEMERAL},
+            ],
+            response_api_optional_request_params={},
+            litellm_params=_OPENAI_API,
+            headers={},
+        )
+
+        assert result["input"] == [
+            "a bare string where an item belongs",
+            {"type": "function_call_output", "call_id": "call_1", "output": {"result": 1}},
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "look", "prompt_cache_breakpoint": _EXPLICIT_BREAKPOINT}],
+            },
+        ]
+
     def test_compact_request_swaps_marks_the_same_way(self) -> None:
         _, data = OpenAIResponsesAPIConfig().transform_compact_response_api_request(
             model="gpt-5.6",
