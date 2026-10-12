@@ -141,8 +141,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
-  const [topModelsLimit, setTopModelsLimit] = useState<number>(5);
-  const [showTokenBreakdown, setShowTokenBreakdown] = useState(false);
   // For non-admins or "my-usage" view, always pass their own user_id
   const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : urlParams.user;
 
