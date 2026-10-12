@@ -1557,7 +1557,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {_resolve_effective_timeout(timeout, self.timeout)} seconds.",
+                message=f"Connection timed out after {_resolve_effective_timeout(timeout, self.timeout if self.timeout is not None else self.client.timeout)} seconds.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
@@ -1609,7 +1609,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {_resolve_effective_timeout(timeout, self.timeout)} seconds.",
+                message=f"Connection timed out after {_resolve_effective_timeout(timeout, self.timeout if self.timeout is not None else self.client.timeout)} seconds.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
@@ -1660,7 +1660,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {_resolve_effective_timeout(timeout, self.timeout)} seconds.",
+                message=f"Connection timed out after {_resolve_effective_timeout(timeout, self.timeout if self.timeout is not None else self.client.timeout)} seconds.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )
@@ -1712,7 +1712,7 @@ class HTTPHandler:
             return response
         except httpx.TimeoutException:
             raise litellm.Timeout(
-                message=f"Connection timed out after {_resolve_effective_timeout(timeout, self.timeout)} seconds.",
+                message=f"Connection timed out after {_resolve_effective_timeout(timeout, self.timeout if self.timeout is not None else self.client.timeout)} seconds.",
                 model="default-model-name",
                 llm_provider="litellm-httpx-handler",
             )

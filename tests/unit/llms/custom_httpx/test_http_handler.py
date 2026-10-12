@@ -2178,6 +2178,16 @@ def test_sync_post_timeout_message_reports_client_default_when_timeout_unset():
     assert f"{COMPLETION_HTTP_FALLBACK_SECONDS}" in str(exc_info.value)
 
 
+def test_sync_post_timeout_message_reports_custom_client_timeout():
+    client = _RecordingSyncClient(timeout=7.25)
+    handler = HTTPHandler(client=client)
+
+    with pytest.raises(litellm.Timeout) as exc_info:
+        handler.post("https://example.test/v1/chat", json={"ping": True})
+
+    assert "7.25" in str(exc_info.value)
+
+
 def test_sync_post_timeout_message_reports_handler_timeout_when_request_timeout_unset():
     handler = HTTPHandler(timeout=7.25)
     handler.client = _RecordingSyncClient()
