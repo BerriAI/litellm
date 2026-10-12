@@ -3,11 +3,26 @@ from typing import Final, Literal, TypeAlias
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 
+from litellm.litellm_core_utils.prompt_templates.factory import is_anthropic_tool_search_use
 from litellm.types.llms.anthropic import AnthropicToolSearchToolRegex
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.responses.main import ResponseToolSearchCall
+from litellm.types.utils import LlmProviders
 
 from .custom_tools import openai_shaped_tool_call_item_id
+
+__all__ = [
+    "ANTHROPIC_TOOL_SEARCH_TOOL_NAME",
+    "ANTHROPIC_TOOL_SEARCH_TOOL_TYPE",
+    "ToolSearchCallStatus",
+    "anthropic_tool_search_chat_tool",
+    "build_tool_search_call",
+    "has_server_tool_search",
+    "is_anthropic_tool_search_chat_tool",
+    "is_anthropic_tool_search_use",
+    "is_server_tool_search_tool",
+    "provider_builds_anthropic_request",
+]
 
 ANTHROPIC_TOOL_SEARCH_TOOL_TYPE: Final = "tool_search_tool_regex_20251119"
 ANTHROPIC_TOOL_SEARCH_TOOL_NAME: Final = "tool_search_tool_regex"
@@ -43,8 +58,18 @@ def is_anthropic_tool_search_chat_tool(tool: Mapping[str, object]) -> bool:
     return tool.get("type") == ANTHROPIC_TOOL_SEARCH_TOOL_TYPE
 
 
-def is_tool_search_call_name(tool_name: str) -> bool:
-    return tool_name == ANTHROPIC_TOOL_SEARCH_TOOL_NAME
+def provider_builds_anthropic_request(model: str, custom_llm_provider: str | None) -> bool:
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+    from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+    from litellm.utils import ProviderConfigManager
+
+    _, provider, _, _ = get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    try:
+        llm_provider: Final = LlmProviders(provider)
+    except ValueError:
+        return False
+    chat_config: Final = ProviderConfigManager.get_provider_chat_config(model=model, provider=llm_provider)
+    return isinstance(chat_config, AnthropicConfig)
 
 
 def _parsed_arguments(arguments_json: str) -> Mapping[str, object] | None:

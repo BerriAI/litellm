@@ -1815,7 +1815,8 @@ def convert_function_to_anthropic_tool_invoke(
         raise e
 
 
-ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX: Final = "srvtoolu_"
+def is_anthropic_tool_search_use(tool_id: str, tool_name: str) -> bool:
+    return tool_id.startswith(ANTHROPIC_SERVER_TOOL_USE_ID_PREFIX) and tool_name in ANTHROPIC_TOOL_SEARCH_TOOL_NAMES
 
 
 def find_anthropic_server_tool_result(
@@ -1910,6 +1911,8 @@ def convert_to_anthropic_tool_invoke(
                 }
             )
             anthropic_tool_invoke.append(server_tool_result)
+        elif is_anthropic_tool_search_use(tool_id, tool_name):
+            continue
         else:
             sanitized_tool_id = _sanitize_anthropic_tool_use_id(tool_id)
             _anthropic_tool_use_param = AnthropicMessagesToolUseParam(

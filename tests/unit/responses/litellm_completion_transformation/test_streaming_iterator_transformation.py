@@ -1418,3 +1418,52 @@ async def test_anthropic_tool_search_call_streams_as_tool_search_call_item(sync_
     assert {event["output_index"] for event in search_events}.isdisjoint(
         {event["output_index"] for event in function_events}
     )
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_caller_function_named_like_the_search_tool_streams_as_function_call(sync_mode: bool):
+    chunk: Final = ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-sonnet-5-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                finish_reason="tool_calls",
+                delta=Delta(
+                    content=None,
+                    tool_calls=[
+                        {
+                            "index": 0,
+                            "id": "call_01Mine",
+                            "type": "function",
+                            "function": {"name": "tool_search_tool_regex", "arguments": '{"pattern": "weather"}'},
+                        }
+                    ],
+                ),
+            )
+        ],
+    )
+    iterator: Final = LiteLLMCompletionStreamingIterator(
+        model="claude-sonnet-5-5",
+        litellm_custom_stream_wrapper=_FakeStreamWrapper((chunk,)),
+        request_input="What is the weather in Paris right now?",
+        responses_api_request={
+            "tools": [
+                {"type": "tool_search", "execution": "server"},
+                {"type": "function", "name": "tool_search_tool_regex", "parameters": {"type": "object"}},
+            ]
+        },
+        custom_llm_provider="anthropic",
+    )
+    events: Final = (
+        [event.model_dump(exclude_none=True) for event in iterator]
+        if sync_mode
+        else [event.model_dump(exclude_none=True) async for event in iterator]
+    )
+    output: Final = events[-1]["response"]["output"]
+
+    assert [(item["type"], item["name"]) for item in output] == [("function_call", "tool_search_tool_regex")]
+    assert "response.function_call_arguments.done" in [event["type"] for event in events]

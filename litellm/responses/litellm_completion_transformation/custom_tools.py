@@ -22,6 +22,7 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
+from litellm.exceptions import BadRequestError
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import (
     ChatCompletionToolParam,
@@ -159,14 +160,24 @@ class _CustomToolFormat(LiteLLMBaseModel):
     definition: str = ""
 
 
-_ALLOWED_CALLERS_ADAPTER: Final = TypeAdapter(list[str] | None)
+_ALLOWED_CALLERS_ADAPTER: Final = TypeAdapter[list[str] | None](list[str] | None)
 
 
 def validated_allowed_callers(value: object) -> list[str] | None:
     try:
         return _ALLOWED_CALLERS_ADAPTER.validate_python(value, strict=True)
     except ValidationError as exc:
-        raise ValueError("allowed_callers must be a list of strings") from exc
+        raise BadRequestError(message="allowed_callers must be a list of strings", model="", llm_provider="") from exc
+
+
+_DEFER_LOADING_ADAPTER: Final = TypeAdapter[bool | None](bool | None)
+
+
+def validated_defer_loading(value: object) -> bool:
+    try:
+        return bool(_DEFER_LOADING_ADAPTER.validate_python(value, strict=True))
+    except ValidationError as exc:
+        raise BadRequestError(message="defer_loading must be a boolean", model="", llm_provider="") from exc
 
 
 def custom_tool_grammar_suffix(fmt: object) -> str:

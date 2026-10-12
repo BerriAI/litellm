@@ -111,6 +111,7 @@ from .custom_tools import (
     serialize_tool_call_arguments,
     unwrap_custom_tool_arguments,
     validated_allowed_callers,
+    validated_defer_loading,
 )
 from .reasoning_items import decode_thinking_blocks, encode_thinking_blocks, mint_reasoning_item_id
 from .tool_search import (
@@ -118,8 +119,9 @@ from .tool_search import (
     build_tool_search_call,
     has_server_tool_search,
     is_anthropic_tool_search_chat_tool,
+    is_anthropic_tool_search_use,
     is_server_tool_search_tool,
-    is_tool_search_call_name,
+    provider_builds_anthropic_request,
 )
 
 NamespaceNameMap: TypeAlias = Mapping[str, tuple[str, str]]
@@ -388,11 +390,13 @@ class LiteLLMCompletionResponsesConfig:
 
         if not any(is_anthropic_tool_search_chat_tool(tool) for tool in tools):
             return tools
-        if supports_tool_search(model=model, custom_llm_provider=custom_llm_provider):
+        if supports_tool_search(
+            model=model, custom_llm_provider=custom_llm_provider
+        ) and provider_builds_anthropic_request(model, custom_llm_provider):
             return tools
         verbose_logger.warning(
-            "Dropping Responses API tool of type 'tool_search': model '%s' (provider '%s') does not support "
-            "tool search, so the target provider would reject the request.",
+            "Dropping Responses API tool of type 'tool_search': model '%s' (provider '%s') cannot run tool search "
+            "on this route, so the target provider would reject or ignore it.",
             model,
             custom_llm_provider,
         )
@@ -1984,7 +1988,7 @@ class LiteLLMCompletionResponsesConfig:
             strict=bool(namespace_tool.get("strict", False)),
         )
         allowed_callers: Final = validated_allowed_callers(namespace_tool.get("allowed_callers"))
-        deferred: Final = bool(namespace_tool.get("defer_loading"))
+        deferred: Final = validated_defer_loading(namespace_tool.get("defer_loading"))
         if allowed_callers is None and not deferred:
             return ChatCompletionToolParam(type="function", function=function)
         if allowed_callers is None:
@@ -2076,8 +2080,8 @@ class LiteLLMCompletionResponsesConfig:
             }
             if tool.get("cache_control"):
                 chat_completion_tool["cache_control"] = tool.get("cache_control")
-            if tool.get("defer_loading"):
-                chat_completion_tool["defer_loading"] = tool.get("defer_loading")
+            if validated_defer_loading(tool.get("defer_loading")):
+                chat_completion_tool["defer_loading"] = True
             if tool.get("allowed_callers"):
                 chat_completion_tool["allowed_callers"] = tool.get("allowed_callers")
             if tool.get("input_examples"):
@@ -2325,7 +2329,7 @@ class LiteLLMCompletionResponsesConfig:
         web_search_call: Final = web_search_calls.get(tool_id)
         if web_search_call is not None:
             return web_search_call
-        if tool_search_requested and is_tool_search_call_name(tool_name):
+        if tool_search_requested and is_anthropic_tool_search_use(tool_id, tool_name):
             return build_tool_search_call(tool_id, tool_arguments, "completed")
         return None
 

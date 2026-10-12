@@ -17,7 +17,7 @@ from litellm.responses.litellm_completion_transformation.reasoning_items import 
 from litellm.responses.litellm_completion_transformation.tool_search import (
     build_tool_search_call,
     has_server_tool_search,
-    is_tool_search_call_name,
+    is_anthropic_tool_search_use,
 )
 from litellm.responses.litellm_completion_transformation.transformation import (
     LiteLLMCompletionResponsesConfig,
@@ -170,14 +170,14 @@ class LiteLLMCompletionStreamingIterator(ResponsesAPIStreamingIterator):
         self._web_search_calls: dict[str, object] = {}  # mutable-ok: latest call by provider id
         self._queued_web_search_call_ids: set[str] = set()  # mutable-ok: emitted call ids
         self._tool_search_requested: bool = has_server_tool_search(request_tools)
-        self._tool_search_call_ids: set[str] = set()  # mutable-ok: provider call ids seen as tool search calls
+        self._tool_search_call_ids: frozenset[str] = frozenset()
 
     def _is_tool_search_call(self, call_id: str, fn_name: str) -> bool:
         if call_id in self._tool_search_call_ids:
             return True
-        if not self._tool_search_requested or not is_tool_search_call_name(fn_name):
+        if not self._tool_search_requested or not is_anthropic_tool_search_use(call_id, fn_name):
             return False
-        self._tool_search_call_ids.add(call_id)
+        self._tool_search_call_ids = self._tool_search_call_ids | {call_id}
         return True
 
     def _queue_output_item_added(self, output_index: int, item: BaseLiteLLMOpenAIResponseObject) -> None:

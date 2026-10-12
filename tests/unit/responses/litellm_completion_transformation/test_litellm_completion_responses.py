@@ -1694,7 +1694,9 @@ def _deferred_tools_with_server_tool_search() -> list[dict[str, object]]:
     ]
 
 
-def _chat_response_with_tool_search_call(search_arguments: str) -> ModelResponse:
+def _chat_response_with_tool_search_call(
+    search_arguments: str, search_call_id: str = "srvtoolu_01Search"
+) -> ModelResponse:
     return ModelResponse(
         id="chatcmpl-tool-search",
         created=1748575031,
@@ -1709,7 +1711,7 @@ def _chat_response_with_tool_search_call(search_arguments: str) -> ModelResponse
                     "content": None,
                     "tool_calls": [
                         {
-                            "id": "srvtoolu_01Search",
+                            "id": search_call_id,
                             "type": "function",
                             "function": {"name": "tool_search_tool_regex", "arguments": search_arguments},
                         },
@@ -1883,17 +1885,74 @@ class TestToolTransformation:
         assert [tool["defer_loading"] for tool in chat_tools[1:]] == [True, True]
 
     def test_server_tool_search_dropped_for_models_without_tool_search(self) -> None:
-        model: Final = "gemini/gemini-2.5-flash"
+        model: Final = "openai/model-with-no-cost-map-entry"
         assert litellm.supports_tool_search(model) is False
 
         result: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request(
             model=model,
             input="What is the weather in Paris right now?",
             responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
-            custom_llm_provider="gemini",
+            custom_llm_provider="openai",
         )
 
         assert [tool["type"] for tool in result["tools"]] == ["function", "function"]
+
+    def test_server_tool_search_follows_the_bedrock_route(self) -> None:
+        transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_request_to_chat_completion_request
+        converse: Final = transform(
+            model="bedrock/anthropic.claude-sonnet-5-5",
+            input="What is the weather in Paris right now?",
+            responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
+            custom_llm_provider="bedrock",
+        )
+        invoke: Final = transform(
+            model="bedrock/invoke/anthropic.claude-sonnet-5-5",
+            input="What is the weather in Paris right now?",
+            responses_api_request={"tools": _deferred_tools_with_server_tool_search()},
+            custom_llm_provider="bedrock",
+        )
+
+        assert [tool["type"] for tool in converse["tools"]] == ["function", "function"]
+        assert invoke["tools"][0] == {"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}
+
+    def test_caller_function_named_like_the_search_tool_stays_a_function_call(self) -> None:
+        items: Final = LiteLLMCompletionResponsesConfig.transform_chat_completion_tools_to_responses_tools(
+            chat_completion_response=_chat_response_with_tool_search_call(
+                '{"pattern": "weather"}', search_call_id="call_01Mine"
+            ),
+            responses_api_request={
+                "tools": [
+                    *_deferred_tools_with_server_tool_search(),
+                    {"type": "function", "name": "tool_search_tool_regex", "parameters": {"type": "object"}},
+                ]
+            },
+        )
+
+        assert [(item.type, item.name) for item in items] == [
+            ("function_call", "tool_search_tool_regex"),
+            ("function_call", "get_weather"),
+        ]
+
+    def test_defer_loading_must_be_a_boolean(self) -> None:
+        transform: Final = LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools
+        namespace_tool: Final = {
+            "type": "namespace",
+            "name": "finance",
+            "tools": [{"type": "function", "name": "get_stock_price", "parameters": {"type": "object"}}],
+        }
+
+        with pytest.raises(litellm.BadRequestError, match="defer_loading must be a boolean"):
+            transform(tools=[{**namespace_tool, "tools": [{**namespace_tool["tools"][0], "defer_loading": "false"}]}])
+        with pytest.raises(litellm.BadRequestError, match="defer_loading must be a boolean"):
+            transform(tools=[{"type": "function", "name": "get_weather", "parameters": {}, "defer_loading": "false"}])
+        not_deferred, _ = transform(
+            tools=[
+                {**namespace_tool, "tools": [{**namespace_tool["tools"][0], "defer_loading": False}]},
+                {"type": "function", "name": "get_weather", "parameters": {}, "defer_loading": False},
+            ]
+        )
+        assert [tool["function"]["name"] for tool in not_deferred] == ["finance__get_stock_price", "get_weather"]
+        assert all("defer_loading" not in tool for tool in not_deferred)
 
     def test_anthropic_tool_search_call_becomes_tool_search_call_item(self) -> None:
         response: Final = _chat_response_with_tool_search_call('{"pattern": "weather|forecast"}')
@@ -2103,7 +2162,7 @@ class TestToolTransformation:
 
         tools = [custom_tool]
 
-        with pytest.raises(ValueError, match="allowed_callers must be a list of strings"):
+        with pytest.raises(litellm.BadRequestError, match="allowed_callers must be a list of strings"):
             LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
                 tools=tools
             )
@@ -2696,7 +2755,7 @@ class TestToolTransformation:
             else {**function_tool, "type": "namespace"}
         )
 
-        with pytest.raises(ValueError, match="allowed_callers must be a list of strings"):
+        with pytest.raises(litellm.BadRequestError, match="allowed_callers must be a list of strings"):
             LiteLLMCompletionResponsesConfig.transform_responses_api_tools_to_chat_completion_tools(
                 tools=[namespace_tool]
             )
