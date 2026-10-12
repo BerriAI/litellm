@@ -800,7 +800,7 @@ def _credential_read_on_worker(owned: OwnedProxy, name: str, _: int) -> int | No
             )
             after: Final = client.get("/health/integration-readiness")
             addresses: Final = tuple(_client_address(response) for response in (before, credential, after))
-    except httpx.TransportError:
+    except (httpx.TransportError, OSError):
         return None
     before_pid: Final = cast(str | None, before.headers.get("x-integration-worker-pid")) or ""
     after_pid: Final = cast(str | None, after.headers.get("x-integration-worker-pid")) or ""
@@ -825,7 +825,7 @@ def _every_worker_holds(owned: OwnedProxy, name: str) -> bool:
         samples: Final = tuple(pool.map(partial(_credential_read_on_worker, owned, name), range(16)))
     holders: Final = frozenset(pid for pid in samples if pid is not None)
     workers: Final = _worker_pids(owned)
-    return bool(workers) and workers <= holders
+    return len(workers) == 2 and workers <= holders
 
 
 def _loaded_on_every_worker(owned: OwnedProxy, name: str) -> None:
