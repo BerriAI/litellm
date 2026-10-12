@@ -31,7 +31,7 @@ export const isDecisionMode = (mode: string | null | undefined): boolean =>
 export const DECISIONS_MODE = "decisions";
 
 export const displayMode = (mode: string | null | undefined): string | undefined =>
-  isDecisionMode(mode) ? DECISIONS_MODE : (mode ?? undefined);
+  isDecisionMode(mode) ? DECISIONS_MODE : mode ?? undefined;
 
 const isDecisionEntry = (entry: CostMapEntry): boolean =>
   isDecisionMode(entry.mode) || (entry.supported_endpoints ?? []).some((endpoint) => DECISION_ENDPOINTS.has(endpoint));
