@@ -54,7 +54,10 @@ describe("decision presets", () => {
 
   it("omits the model from payloads when none is known", () => {
     expect(JSON.parse(presetPayload(DECISION_PRESETS[1], "/v1/systemone"))).not.toHaveProperty("model");
-    expect(JSON.parse(emptyPayload("/v1/decisions"))).toEqual({ input: "", questions: [] });
+    expect(JSON.parse(emptyPayload("/v1/decisions"))).toEqual({
+      input: "",
+      questions: [{ type: "predicate", name: "question", instructions: "" }],
+    });
     expect(validateSystemOnePayload(emptyPayload("/v1/systemone"), "/v1/systemone").isValid).toBe(false);
   });
 });

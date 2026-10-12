@@ -211,7 +211,6 @@ export default function OpenAIDecisionsForm({ value, onChange, validation, onRes
   }
 
   const questions = form.questions ?? [];
-  const shownQuestions = questions.length === 0 ? [blankDecisionsQuestion([])] : questions;
   const write = (next: DecisionsFormPayload) => onChange(JSON.stringify(next, null, 2));
   const writeQuestions = (next: DecisionsFormQuestion[]) => write({ ...form, questions: next });
 
@@ -235,16 +234,16 @@ export default function OpenAIDecisionsForm({ value, onChange, validation, onRes
           </>
         )}
       </div>
-      {shownQuestions.map((question, index) => (
+      {questions.map((question, index) => (
         <QuestionCard
           key={index}
           index={index}
           question={question}
-          onChange={(next) => writeQuestions(replaceAt(shownQuestions, index, next))}
-          onRemove={() => writeQuestions(removeAt(shownQuestions, index))}
+          onChange={(next) => writeQuestions(replaceAt(questions, index, next))}
+          onRemove={() => writeQuestions(removeAt(questions, index))}
         />
       ))}
-      <AddButton onClick={() => writeQuestions([...shownQuestions, blankDecisionsQuestion(shownQuestions)])}>
+      <AddButton onClick={() => writeQuestions([...questions, blankDecisionsQuestion(questions)])}>
         Add question
       </AddButton>
       <div className="grid gap-1.5">

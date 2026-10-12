@@ -160,7 +160,11 @@ describe("SystemOneUI integration", () => {
     expect(await readCurlPayload()).toMatchObject({ model: "pplx-decider" });
 
     await user.click(screen.getByRole("button", { name: "Clear form" }));
-    expect(await readCurlPayload()).toEqual({ model: "pplx-decider", state: "", questions: {} });
+    expect(await readCurlPayload()).toEqual({
+      model: "pplx-decider",
+      state: "",
+      questions: { question: { type: "choice", instructions: "", criteria: { option_1: "", option_2: "" } } },
+    });
     await selectPreset("Score a sales lead");
     expect(await readCurlPayload()).toMatchObject({ model: "pplx-decider", questions: { fit: { type: "score" } } });
   });
@@ -177,7 +181,10 @@ describe("SystemOneUI integration", () => {
     ]);
 
     await user.click(screen.getByRole("button", { name: "Clear form" }));
-    expect(await readCurlPayload()).toEqual({ input: "", questions: [] });
+    expect(await readCurlPayload()).toEqual({
+      input: "",
+      questions: [{ type: "predicate", name: "question", instructions: "" }],
+    });
     expect(screen.getByRole("button", { name: "Send" })).toBeDisabled();
   });
 

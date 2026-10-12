@@ -1,6 +1,7 @@
 import type { DecisionRequest, SystemOneRequest } from "./schemas";
 import type { OpenAIDecisionsRequest } from "./openAIDecisions";
 import { parseJson } from "./validatePayload";
+import { blankQuestion } from "./formPayload";
 
 type PresetChoice = {
   type: "choice";
@@ -192,7 +193,9 @@ export const matchPreset = (endpoint: PresetEndpoint, raw: string): DecisionPres
 
 export const emptyPayload = (endpoint: PresetEndpoint, model?: string): string =>
   JSON.stringify(
-    endpoint === "/v1/decisions" ? { model, input: "", questions: [] } : { model, state: "", questions: {} },
+    endpoint === "/v1/decisions"
+      ? { model, input: "", questions: [{ type: "predicate", name: "question", instructions: "" }] }
+      : { model, state: "", questions: { question: blankQuestion() } },
     null,
     2,
   );

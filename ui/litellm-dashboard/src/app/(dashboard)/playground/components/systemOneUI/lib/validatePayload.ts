@@ -73,15 +73,35 @@ function validatePayload<T>(raw: string, schema: z.ZodType<T>): PayloadValidatio
   return { isValid: true, payload: result.data, issues: [] };
 }
 
+const isBlankContext = (context: unknown): boolean =>
+  (typeof context === "string" && context.trim() === "") || (Array.isArray(context) && context.length === 0);
+
+const requireContext = <T>(
+  result: PayloadValidation<T>,
+  path: "state" | "input",
+  context: unknown,
+  issues: SystemOnePayloadIssue[],
+): PayloadValidation<T> =>
+  isBlankContext(context)
+    ? {
+        ...result,
+        isValid: false,
+        issues: [{ path, message: "Add the text the model should decide about.", severity: "error" }, ...issues],
+      }
+    : { ...result, issues };
+
 export function validateSystemOnePayload(
   raw: string,
   endpoint: DecisionEndpoint = "/typesafe/v1/systemone",
 ): SystemOnePayloadValidation {
   const schema = endpoint === "/v1/systemone" ? decisionsRequestSchema : systemOneRequestSchema;
   const result = validatePayload<PlaygroundRequest>(raw, schema);
-  return result.payload ? { ...result, issues: scoreLevelWarnings(result.payload) } : result;
+  return result.payload
+    ? requireContext(result, "state", result.payload.state, scoreLevelWarnings(result.payload))
+    : result;
 }
 
 export function validateOpenAIDecisionsPayload(raw: string): PayloadValidation<OpenAIDecisionsRequest> {
-  return validatePayload(raw, openAIDecisionsRequestSchema);
+  const result = validatePayload<OpenAIDecisionsRequest>(raw, openAIDecisionsRequestSchema);
+  return result.payload ? requireContext(result, "input", result.payload.input, result.issues) : result;
 }
