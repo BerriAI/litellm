@@ -1,14 +1,8 @@
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
   store_model_in_db: true
-  store_prompts_in_spend_logs: false
   use_redis_transaction_buffer: true
   proxy_batch_write_at: 60
-  database_connection_pool_limit: 10
-  forward_client_headers_to_llm_api: true
-  token_rate_limit_type: total
-  allow_requests_on_db_unavailable: true
-  max_request_size_mb: 500
 
 litellm_settings:
   cache: true
@@ -16,24 +10,13 @@ litellm_settings:
     type: redis
     host: os.environ/REDIS_HOST
     port: os.environ/REDIS_PORT
-    ttl: 600
-    max_connections: 15
     supported_call_types: []
   callbacks:
     - prometheus
     - otel
-    - s3_v2
   service_callback:
     - prometheus_system
-  s3_callback_params:
-    s3_bucket_name: os.environ/E2E_PERF_S3_BUCKET
-    s3_region_name: us-east-1
-    s3_endpoint_url: os.environ/E2E_PERF_S3_ENDPOINT_URL
-    s3_path: input
-    s3_use_team_prefix: true
   require_auth_for_metrics_endpoint: false
-  prometheus_emit_stream_label: true
-  prometheus_initialize_budget_metrics: false
   drop_params: true
   json_logs: true
   request_timeout: 600
@@ -41,15 +24,3 @@ litellm_settings:
 
 router_settings:
   routing_strategy: simple-shuffle
-  enable_pre_call_checks: true
-  optional_pre_call_checks:
-    - responses_api_deployment_check
-  redis_host: os.environ/REDIS_HOST
-  redis_port: os.environ/REDIS_PORT
-  num_retries: 1
-  retry_policy:
-    AuthenticationErrorRetries: 0
-    TimeoutErrorRetries: 0
-    RateLimitErrorRetries: 0
-    ContentPolicyViolationErrorRetries: 0
-    InternalServerErrorRetries: 0
