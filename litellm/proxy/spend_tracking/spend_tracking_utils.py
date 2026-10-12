@@ -1459,15 +1459,7 @@ def sanitize_error_information_for_spend_logs(
         if isinstance(original_exception, ProxyModelNotFoundError)
         else error_information
     )
-    ip_masked: Final = (
-        cast(  # cast-ok: same keys, only the str values are masked
-            StandardLoggingPayloadErrorInformation,
-            _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(persisted)),
-        )
-        if requester_ip_address_logging_disabled()
-        else persisted
-    )
-    sanitized = cast(dict, {**ip_masked})
+    sanitized = cast(dict, {**persisted})
 
     if not should_store_prompts_and_responses_in_spend_logs():
         for field in ("error_message", "traceback"):
@@ -1476,7 +1468,12 @@ def sanitize_error_information_for_spend_logs(
                 sanitized[field] = _redact_prompt_leaks_in_error_string(value)
 
     sanitized = _sanitize_request_body_for_spend_logs_payload(sanitized)
-    return cast(StandardLoggingPayloadErrorInformation, sanitized)
+    return cast(
+        StandardLoggingPayloadErrorInformation,
+        _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(sanitized))
+        if requester_ip_address_logging_disabled()
+        else sanitized,
+    )
 
 
 _sanitize_error_information_for_spend_logs: Final = sanitize_error_information_for_spend_logs
@@ -1626,6 +1623,8 @@ _OBJECT_MAPPING: Final = TypeAdapter(Mapping[object, object])
 _OBJECT_LIST: Final = TypeAdapter(list[object])
 _IP_ADDRESS_CHARACTERS: Final = "0123456789abcdefABCDEF.:"
 _MAX_IP_ADDRESS_LENGTH: Final = len("ffff:ffff:ffff:ffff:ffff:ffff:255.255.255.255")
+_LONG_HEX_GROUP: Final = re.compile(r"[0-9A-Fa-f]{5,}")
+_TRUNCATION_MARKER_GROUP: Final = re.compile(f"({_TRUNCATION_MARKER.pattern})")
 _IPV4_ADDRESS: Final = re.compile(r"(?<![0-9A-Za-z])(?:\d{1,3}\.){3}\d{1,3}(?![0-9A-Za-z])")
 _IPV6_ADDRESS_CANDIDATE: Final = re.compile(
     r"(?:(?<![0-9A-Za-z:])|(?<=\w:))(?:[0-9A-Fa-f]{0,4}:){2,9}[0-9A-Fa-f]{0,4}(?![0-9A-Za-z:])"
@@ -1649,76 +1648,60 @@ def _without_ip_addresses(text: str) -> str:
     return _IPV6_ADDRESS_CANDIDATE.sub(_masked_ipv6_address, _IPV4_ADDRESS.sub(REDACTED_BY_LITELM_STRING, text))
 
 
+def _is_ip_address_piece(piece: str) -> bool:
+    return any(char.isdigit() or char == ":" for char in piece)
+
+
+def _without_ip_piece_before_cut(text: str) -> str:
+    run: Final = text[len(text.rstrip(_IP_ADDRESS_CHARACTERS)) :]
+    long_groups: Final = list(_LONG_HEX_GROUP.finditer(run))
+    piece: Final = run[long_groups[-1].end() if long_groups else 0 :][-_MAX_IP_ADDRESS_LENGTH:].lstrip(".:")
+    return text[: len(text) - len(piece)] + REDACTED_BY_LITELM_STRING if _is_ip_address_piece(piece) else text
+
+
+def _without_ip_piece_after_cut(text: str) -> str:
+    run: Final = text[: len(text) - len(text.lstrip(_IP_ADDRESS_CHARACTERS))]
+    long_group: Final = _LONG_HEX_GROUP.search(run)
+    piece: Final = run[: long_group.start() if long_group else len(run)][:_MAX_IP_ADDRESS_LENGTH].rstrip(".:")
+    return REDACTED_BY_LITELM_STRING + text[len(piece) :] if _is_ip_address_piece(piece) else text
+
+
+def _without_ip_pieces_beside_cuts(text: str, *, after_cut: bool, before_cut: bool) -> str:
+    after: Final = _without_ip_piece_after_cut(text) if after_cut else text
+    return _without_ip_piece_before_cut(after) if before_cut else after
+
+
+def _masked_ip_text(text: str) -> str:
+    """The text with every IP address masked, plus the run of short hex, digit, dot and colon groups beside each
+    truncation marker when that run holds a digit or a colon."""
+    parts: Final = _TRUNCATION_MARKER_GROUP.split(_without_ip_addresses(text))
+    last: Final = len(parts) - 1
+    return "".join(
+        part if index % 2 else _without_ip_pieces_beside_cuts(part, after_cut=index > 0, before_cut=index < last)
+        for index, part in enumerate(parts)
+    )
+
+
 def _error_information_without_ip_addresses(error_information: Mapping[object, object]) -> Mapping[object, object]:
     """The error information with every IP address in its error message and traceback masked."""
     return {
-        key: _without_ip_addresses(value) if key in _SCRUBBED_ERROR_TEXT_FIELDS and isinstance(value, str) else value
+        key: _masked_ip_text(value) if key in _SCRUBBED_ERROR_TEXT_FIELDS and isinstance(value, str) else value
         for key, value in error_information.items()
     }
-
-
-def _error_information_in(metadata: object) -> object:
-    return _OBJECT_MAPPING.validate_python(metadata).get("error_information") if isinstance(metadata, Mapping) else None
-
-
-def _metadata_with_masked_error_text(metadata: object) -> object:
-    error_information: Final = _error_information_in(metadata)
-    if not isinstance(error_information, Mapping):
-        return metadata
-    return {
-        **_OBJECT_MAPPING.validate_python(metadata),
-        "error_information": _error_information_without_ip_addresses(
-            _OBJECT_MAPPING.validate_python(error_information)
-        ),
-    }
-
-
-def _stored_request_with_masked_error_text(request_body: Mapping[str, object]) -> Mapping[str, object]:
-    """The request body with every IP address in its metadata's error message and traceback masked."""
-    return {
-        key: _metadata_with_masked_error_text(value) if key in _REQUEST_METADATA_KEYS else value
-        for key, value in request_body.items()
-    }
-
-
-def _is_ip_address_piece(run: str) -> bool:
-    return len(run) <= _MAX_IP_ADDRESS_LENGTH and any(char.isdigit() for char in run)
-
-
-def _without_ip_fragment_at_end(text: str) -> str:
-    run: Final = text[len(text.rstrip(_IP_ADDRESS_CHARACTERS)) :].lstrip(".:")
-    return text[: len(text) - len(run)] + REDACTED_BY_LITELM_STRING if _is_ip_address_piece(run) else text
-
-
-def _without_ip_fragment_at_start(text: str) -> str:
-    run: Final = text[: len(text) - len(text.lstrip(_IP_ADDRESS_CHARACTERS))].rstrip(".:")
-    return REDACTED_BY_LITELM_STRING + text[len(run) :] if _is_ip_address_piece(run) else text
-
-
-def _without_ip_fragments_at_truncation(text: str) -> str:
-    """The text with the piece of an IP address a truncation cut left on either side of its marker masked."""
-    marker: Final = _TRUNCATION_MARKER.search(text)
-    if marker is None:
-        return text
-    return "".join(
-        (
-            _without_ip_fragment_at_end(text[: marker.start()]),
-            marker.group(0),
-            _without_ip_fragment_at_start(text[marker.end() :]),
-        )
-    )
 
 
 def _stored_value_without_requester_ip_address(key: object, value: object) -> object:
     if key == "requester_ip_address":
         return None
+    if key == "error_information" and isinstance(value, Mapping):
+        return _error_information_without_ip_addresses(_OBJECT_MAPPING.validate_python(value))
     return _without_requester_ip_address(value, headers=key == "headers")
 
 
 def _without_requester_ip_address(value: object, *, headers: bool = False) -> object:
     if isinstance(value, Mapping):
         return {
-            key: _without_ip_fragments_at_truncation(_without_ip_addresses(item))
+            key: _masked_ip_text(item)
             if headers and isinstance(item, str)
             else _stored_value_without_requester_ip_address(key, item)
             for key, item in _OBJECT_MAPPING.validate_python(value).items()
@@ -1731,7 +1714,7 @@ def _without_requester_ip_address(value: object, *, headers: bool = False) -> ob
 
 def _stored_request_without_requester_ip_address(request_body: Mapping[object, object]) -> Mapping[object, object]:
     """The request body with `requester_ip_address` set to null, client-IP forwarding headers dropped and every IP
-    address in the other header values, including a piece the truncation cut left, masked inside its metadata."""
+    address in the other header values and in the error text masked inside its metadata."""
     return {
         key: _without_requester_ip_address(value) if key in _REQUEST_METADATA_KEYS else value
         for key, value in request_body.items()
@@ -1782,9 +1765,7 @@ def _get_proxy_server_request_for_spend_logs_payload(
                     _request_body = _convert_mapping_to_json_serializable(without_classifier_audit(_request_body))
                     perform_redaction(model_call_details=_request_body, result=None)
 
-            _request_body = _sanitize_request_body_for_spend_logs_payload(
-                _stored_request_with_masked_error_text(_request_body) if drop_requester_ip_address else _request_body
-            )
+            _request_body = _sanitize_request_body_for_spend_logs_payload(_request_body)
             stored_request_body: Final = _OBJECT_MAPPING.validate_python(_request_body)
             _request_body_json_str: Final = safe_dumps(
                 _stored_request_without_requester_ip_address(stored_request_body)

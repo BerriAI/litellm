@@ -6636,13 +6636,13 @@ def test_stored_request_without_requester_ip_address_drops_or_masks_only_ip_fiel
             },
             "forwarded": "not a header",
             "spend_logs_metadata": [{"headers": {"x-client": "host:REDACTED_BY_LITELM"}}],
-            "error_information": {"error_message": "denied 203.0.113.9"},
+            "error_information": {"error_message": "denied REDACTED_BY_LITELM"},
         },
     }
 
 
 @pytest.mark.parametrize("error_field", ["error_message", "traceback"])
-def test_stored_request_masks_ip_addresses_in_error_text_before_long_text_is_truncated(
+def test_stored_request_masks_ip_addresses_in_long_error_text_and_at_its_truncation_cut(
     monkeypatch: pytest.MonkeyPatch, error_field: str
 ) -> None:
     from litellm.proxy.proxy_server import general_settings
@@ -6668,6 +6668,12 @@ def test_stored_request_masks_ip_addresses_in_error_text_before_long_text_is_tru
     assert metadata["error_information"][error_field] == text
 
 
+_TRACE_ID: Final = "da39a3ee5e6b4b0d3255bfef95601890afd80709"
+_PLANTED_MARKER: Final = (
+    f"x ... ({LITELLM_TRUNCATED_PAYLOAD_FIELD} skipped 5 chars. {LITELLM_TRUNCATION_DB_SAFEGUARD_NOTE}) ... "
+)
+
+
 @pytest.mark.parametrize("requester_metadata", [False, True], ids=["headers", "requester-metadata-headers"])
 @pytest.mark.parametrize(
     "value, stored_head, stored_tail",
@@ -6682,14 +6688,37 @@ def test_stored_request_masks_ip_addresses_in_error_text_before_long_text_is_tru
             "a" * 343 + " ip:REDACTED_BY_LITELM",
             "REDACTED_BY_LITELM. " + "c" * 647,
         ),
+        (
+            "x" * 296 + f" trace={_TRACE_ID}:203.0.113.9 " + "b" * 2000 + f" 203.0.113.9:{_TRACE_ID} " + "c" * 606,
+            "x" * 296 + f" trace={_TRACE_ID}:REDACTED_BY_LITELM",
+            f"REDACTED_BY_LITELM:{_TRACE_ID} " + "c" * 606,
+        ),
+        (
+            _PLANTED_MARKER
+            + "a" * (345 - len(_PLANTED_MARKER))
+            + " 203.0.113.9 "
+            + "b" * 2000
+            + " 2001:db8::dead:beef "
+            + "c" * 640,
+            _PLANTED_MARKER + "a" * (345 - len(_PLANTED_MARKER)) + " REDACTED_BY_LITELM",
+            "REDACTED_BY_LITELM " + "c" * 640,
+        ),
         ("a" * 346 + " cafe:beef " + "b" * 2000 + " deadbeef " + "c" * 646, "a" * 346 + " caf", "eef " + "c" * 646),
         ("0123456789abcdef" * 200, ("0123456789abcdef" * 22)[:350], ("0123456789abcdef" * 41)[-650:]),
+        (
+            "a" * 281 + " " + "ab1." * 17 + "b" * 2000 + " " + "1ba." * 17 + " " + "c" * 581,
+            "a" * 281 + " " + "ab1." * 6 + "REDACTED_BY_LITELM",
+            "REDACTED_BY_LITELMba." + "1ba." * 5 + " " + "c" * 581,
+        ),
     ],
     ids=[
         "ipv4-and-ipv6-split",
         "ipv4-after-a-label-and-before-a-dot",
-        "hex-words-without-digits",
+        "ipv4-beside-long-hex-tokens",
+        "after-a-planted-marker-and-ipv6-groups-without-digits",
+        "hex-words-without-digits-or-colons",
         "hex-run-longer-than-an-ip",
+        "short-groups-longer-than-an-ip",
     ],
 )
 def test_stored_request_masks_the_piece_of_an_ip_address_a_header_truncation_cut_leaves(
@@ -6742,7 +6771,7 @@ def test_stored_request_with_ip_logging_disabled_matches_setting_off_for_bodies_
 
 
 @pytest.mark.parametrize("disabled", [False, True], ids=["setting-off", "setting-on"])
-def test_failure_error_information_masks_ip_addresses_before_long_text_is_truncated(
+def test_failure_error_information_masks_ip_addresses_in_long_text_and_at_its_truncation_cut(
     monkeypatch: pytest.MonkeyPatch, disabled: bool
 ) -> None:
     from litellm.proxy.proxy_server import general_settings
