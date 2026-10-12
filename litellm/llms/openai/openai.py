@@ -351,6 +351,32 @@ _NO_EXTRA_HEADERS: Final[Mapping[str, str]] = types.MappingProxyType({})
 _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body"))
 
 
+def _first_non_ascii_extra_header(data: Mapping[str, object]) -> tuple[str, str] | None:
+    """Name the first non-ASCII ``extra_headers`` entry, or None if the offending
+    value came from elsewhere (e.g. the api_key or organization id)."""
+    extra_headers: Final = data.get("extra_headers")
+    if not isinstance(extra_headers, Mapping):
+        return None
+    return next(((k, v) for k, v in extra_headers.items() if isinstance(v, str) and not v.isascii()), None)
+
+
+def _non_ascii_header_error(data: Mapping[str, object], original_error: UnicodeEncodeError) -> OpenAIError:
+    """Re-raise a bare httpx ``UnicodeEncodeError`` (``'ascii' codec can't encode
+    character ...``) naming the offending header when it is one litellm set."""
+    offending: Final = _first_non_ascii_extra_header(data)
+    message: Final = (
+        f"extra_headers['{offending[0]}'] contains a non-ASCII character and cannot be sent "
+        f"as an HTTP header value: {offending[1]!r}"
+        if offending is not None
+        else (
+            "A request header contains a non-ASCII character and cannot be sent as an HTTP header value. "
+            "None of this request's extra_headers are at fault, so check api_key, api_base and organization "
+            f"for stray non-ASCII characters. Original error: {original_error}"
+        )
+    )
+    return OpenAIError(status_code=400, message=message)
+
+
 def _embedding_request_without_sdk_defaults(
     data: Mapping[str, object], timeout: float | httpx.Timeout
 ) -> tuple[Mapping[str, object], RequestOptions]:
@@ -537,6 +563,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             if not is_output_token_limit_error(e):
                 raise
             return build_output_token_limit_response(e=e, data=data, is_async=True)
+        except UnicodeEncodeError as e:
+            raise _non_ascii_header_error(data=data, original_error=e) from e
         except Exception as e:
             raise e
 
@@ -574,6 +602,8 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             if not is_output_token_limit_error(e):
                 raise
             return build_output_token_limit_response(e=e, data=data, is_async=False)
+        except UnicodeEncodeError as e:
+            raise _non_ascii_header_error(data=data, original_error=e) from e
         except Exception as e:
             if raw_response is not None:
                 raise Exception(

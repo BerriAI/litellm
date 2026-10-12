@@ -2,7 +2,7 @@
 Test for issue #17209: Clearer error when LLM endpoint returns empty response
 """
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -123,3 +123,80 @@ class TestEmptyResponseHandling:
 
         assert response == mock_stream
         assert headers == {"x-request-id": "123"}
+
+
+def _as_unicode_encode_error() -> UnicodeEncodeError:
+    """A genuine UnicodeEncodeError, matching the one httpx raises encoding a non-ASCII header value."""
+    try:
+        "café".encode("ascii")
+    except UnicodeEncodeError as e:
+        return e
+    raise AssertionError("expected 'café'.encode('ascii') to raise")
+
+
+class TestNonAsciiHeaderHandling:
+    """Test for issue #44830: a non-ASCII header value fails deep inside httpx with
+    only an ascii-codec error and a byte offset; litellm should name the header."""
+
+    def test_sync_non_ascii_extra_header_names_the_header(self):
+        openai_chat = OpenAIChatCompletion()
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.with_raw_response.create.side_effect = _as_unicode_encode_error()
+
+        with pytest.raises(OpenAIError) as exc_info:
+            openai_chat.make_sync_openai_chat_completion_request(
+                openai_client=mock_client,
+                data={
+                    "messages": [{"role": "user", "content": "test"}],
+                    "extra_headers": {"x-trace-locale": "café"},
+                },
+                timeout=30,
+                logging_obj=MagicMock(),
+            )
+
+        assert "extra_headers['x-trace-locale']" in str(exc_info.value)
+        assert "café" in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_async_non_ascii_extra_header_names_the_header(self):
+        openai_chat = OpenAIChatCompletion()
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.with_raw_response.create = AsyncMock(
+            side_effect=_as_unicode_encode_error()
+        )
+
+        with pytest.raises(OpenAIError) as exc_info:
+            await openai_chat.make_openai_chat_completion_request(
+                openai_aclient=mock_client,
+                data={
+                    "messages": [{"role": "user", "content": "test"}],
+                    "extra_headers": {"x-trace-locale": "café"},
+                },
+                timeout=30,
+                logging_obj=MagicMock(),
+            )
+
+        assert "extra_headers['x-trace-locale']" in str(exc_info.value)
+        assert "café" in str(exc_info.value)
+
+    def test_sync_non_ascii_header_outside_extra_headers_names_no_header(self):
+        """When none of this request's own extra_headers are at fault (e.g. the
+        API key or organization id carried the non-ASCII character instead),
+        the error says so rather than naming an innocent header."""
+        openai_chat = OpenAIChatCompletion()
+
+        mock_client = MagicMock()
+        mock_client.chat.completions.with_raw_response.create.side_effect = _as_unicode_encode_error()
+
+        with pytest.raises(OpenAIError) as exc_info:
+            openai_chat.make_sync_openai_chat_completion_request(
+                openai_client=mock_client,
+                data={"messages": [{"role": "user", "content": "test"}]},
+                timeout=30,
+                logging_obj=MagicMock(),
+            )
+
+        assert "None of this request's extra_headers are at fault" in str(exc_info.value)
+        assert "api_key" in str(exc_info.value)
