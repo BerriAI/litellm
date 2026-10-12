@@ -501,18 +501,17 @@ describe("SpendReportEmailSettings", () => {
     const saveButton = screen.getByRole("button", { name: "Save Spend Report Settings" });
     fireEvent.click(saveButton);
 
+    const expectedAlert = {
+      name: "Updated Name",
+      send_time: "10:30",
+      recipient_emails: ["updated@example.com", "second@example.com"],
+      enabled: false,
+    };
     await waitFor(() => {
       expect(networking.updateSpendReportEmailSettings).toHaveBeenCalledWith(
         "test-token",
         expect.objectContaining({
-          alerts: expect.arrayContaining([
-            expect.objectContaining({
-              name: "Updated Name",
-              send_time: "10:30",
-              recipient_emails: ["updated@example.com", "second@example.com"],
-              enabled: false,
-            }),
-          ]),
+          alerts: expect.arrayContaining([expect.objectContaining(expectedAlert)]),
         }),
       );
     });

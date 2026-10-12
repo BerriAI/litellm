@@ -45133,6 +45133,12 @@ export interface components {
         /** SpendReportEmailAlert */
         SpendReportEmailAlert: {
             /**
+             * Day Of Week
+             * @description Day of week for weekly alerts (e.g. 'monday', 'friday'). Defaults to 'monday'
+             * @default monday
+             */
+            day_of_week: string | null;
+            /**
              * Enabled
              * @description Whether this alert is enabled
              * @default true
@@ -45140,11 +45146,11 @@ export interface components {
             enabled: boolean;
             /**
              * Frequency
-             * @description Alert frequency: 'daily' or 'monthly'
+             * @description Alert frequency: 'daily', 'weekly', or 'monthly'
              * @default daily
              * @enum {string}
              */
-            frequency: "daily" | "monthly";
+            frequency: "daily" | "weekly" | "monthly";
             /**
              * Group By
              * @description Cumulative groupings to include: 'team', 'team_key', 'team_model', 'team_key_model'
@@ -45187,11 +45193,11 @@ export interface components {
             end_date?: string | null;
             /**
              * Frequency
-             * @description Report frequency to generate: 'daily' or 'monthly'
+             * @description Report frequency to generate: 'daily', 'weekly', or 'monthly'
              * @default daily
              * @enum {string}
              */
-            frequency: "daily" | "monthly";
+            frequency: "daily" | "weekly" | "monthly";
             /**
              * Group By
              * @description Optional list of groupings to include in the report
