@@ -1,3 +1,5 @@
+from typing import Final
+
 import pytest
 from fastapi import HTTPException
 
@@ -18,6 +20,7 @@ from litellm.proxy.management_endpoints.team_admin_field_permissions import (
     team_admin_key_request_or_raise,
     team_admin_may_edit_member_key_budgets,
     team_admin_may_manage_projects,
+    team_admin_may_raise_max_budget,
     team_admin_request_or_raise,
 )
 
@@ -43,6 +46,10 @@ class TestResolveTeamAdminEditableFields:
     def test_projects_permission_is_not_a_team_field(self):
         configured = {"team_admin_editable_team_fields": ["projects", "tpm_limit"]}
         assert resolve_team_admin_editable_fields(configured, _SUPPORTED) == frozenset({"tpm_limit"})
+
+    def test_raise_max_budget_permission_is_not_a_team_field(self):
+        configured = {"team_admin_editable_team_fields": ["raise_max_budget", "max_budget"]}
+        assert resolve_team_admin_editable_fields(configured, frozenset({"max_budget"})) == frozenset({"max_budget"})
 
 
 class TestTeamAdminMayManageProjects:
@@ -83,6 +90,30 @@ class TestChangedTeamFields:
     def test_folded_field_sent_inside_metadata_is_named_not_metadata(self):
         data = UpdateTeamRequest(team_id="team-1", metadata={"guardrails": ["b"]})
         assert changed_team_fields(data, _team(metadata={"guardrails": ["a"]})) == frozenset({"guardrails"})
+
+    def test_top_level_require_trace_id_change_is_attributed_to_the_folded_field(self):
+        existing: Final = _team(metadata={"require_trace_id": True})
+        data: Final = UpdateTeamRequest(team_id="team-1", require_trace_id=False)
+
+        assert changed_team_fields(data, existing) == frozenset({"require_trace_id"})
+        assert team_admin_edit_verdict(data, existing, frozenset({"tpm_limit"})) == TeamAdminFieldNotPermitted(
+            field="require_trace_id"
+        )
+        assert changed_team_fields(UpdateTeamRequest(team_id="team-1", require_trace_id=True), existing) == frozenset()
+
+    def test_metadata_replacement_cannot_drop_stored_require_trace_id(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", metadata={})
+        existing: Final = _team(metadata={"require_trace_id": True})
+
+        assert changed_team_fields(data, existing) == frozenset({"require_trace_id"})
+        assert team_admin_edit_verdict(data, existing, frozenset({"tpm_limit"})) == TeamAdminFieldNotPermitted(
+            field="require_trace_id"
+        )
+
+    def test_resending_stored_require_trace_id_is_not_a_change(self):
+        data: Final = UpdateTeamRequest(team_id="team-1", metadata={"require_trace_id": True})
+
+        assert changed_team_fields(data, _team(metadata={"require_trace_id": True})) == frozenset()
 
     def test_custom_metadata_key_change_is_attributed_to_metadata(self):
         data = UpdateTeamRequest(team_id="team-1", metadata={"guardrails": ["a"], "cost_center": "b"})
@@ -185,6 +216,28 @@ class TestTeamAdminMayEditMemberKeyBudgets:
     @pytest.mark.parametrize("raw", ["member_key_budgets", 7, [1, 2]])
     def test_malformed_setting_denies(self, raw):
         assert team_admin_may_edit_member_key_budgets({"team_admin_editable_team_fields": raw}) is False
+
+
+class TestTeamAdminMayRaiseMaxBudget:
+    def test_missing_setting_denies(self):
+        assert team_admin_may_raise_max_budget({}) is False
+
+    def test_max_budget_alone_denies(self):
+        configured = {"team_admin_editable_team_fields": ["tpm_limit", "max_budget", "projects"]}
+        assert team_admin_may_raise_max_budget(configured) is False
+
+    def test_raise_without_max_budget_denies(self):
+        """A config file can list the entry on its own; it is inert until max_budget is granted too."""
+        configured = {"team_admin_editable_team_fields": ["raise_max_budget", "tpm_limit"]}
+        assert team_admin_may_raise_max_budget(configured) is False
+
+    def test_max_budget_with_raise_grants(self):
+        configured = {"team_admin_editable_team_fields": ["raise_max_budget", "max_budget"]}
+        assert team_admin_may_raise_max_budget(configured) is True
+
+    @pytest.mark.parametrize("raw", ["raise_max_budget", 7, [1, 2], {"max_budget": True}])
+    def test_malformed_setting_denies(self, raw: object):
+        assert team_admin_may_raise_max_budget({"team_admin_editable_team_fields": raw}) is False
 
 
 class TestChangedKeyFields:

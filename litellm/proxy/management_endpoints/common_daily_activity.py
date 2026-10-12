@@ -907,6 +907,13 @@ async def get_daily_activity(
     date_range: Final = parse_canonical_date_range(start_date, end_date)
     if isinstance(date_range, InvalidDateRange):
         raise_public(date_range)
+
+    if page < 1 or page_size < 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"page and page_size must be >= 1, got page={page}, page_size={page_size}",
+        )
+
     try:
         scope: Final = daily_activity_scope(
             table_name,

@@ -42,6 +42,13 @@ class LiteLLMProxyChatConfig(OpenAIGPTConfig):
         dynamic_api_key: Final = api_key or get_secret_str("LITELLM_PROXY_API_KEY")
         return api_base, dynamic_api_key
 
+    def get_openai_compatible_provider_info(
+        self,
+        api_base: str | None,
+        api_key: str | None,
+    ) -> tuple[str | None, str | None]:
+        return self._get_openai_compatible_provider_info(api_base, api_key)
+
     def get_models(self, api_key: str | None = None, api_base: str | None = None) -> list[str]:
         api_base, api_key = self._get_openai_compatible_provider_info(api_base, api_key)
         if api_base is None:

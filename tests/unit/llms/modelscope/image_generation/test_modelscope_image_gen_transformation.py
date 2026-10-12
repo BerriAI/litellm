@@ -7,9 +7,12 @@ transformation between OpenAI-compatible format and ModelScope API format.
 
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
+from pydantic import ValidationError
 
 
+import litellm
 from litellm.llms.modelscope.image_generation.transformation import (
     ModelScopeImageGenerationConfig,
 )
@@ -449,3 +452,83 @@ class TestModelScopeImageGenerationTransformation:
         )
 
         assert isinstance(error, BadRequestError)
+
+
+def _transform_generation_response(payload: object, status_code: int = 200) -> ImageResponse:
+    return ModelScopeImageGenerationConfig().transform_image_generation_response(
+        model="Qwen/Qwen-Image",
+        raw_response=httpx.Response(status_code, json=payload),
+        model_response=ImageResponse(data=[]),
+        logging_obj=MagicMock(),
+        request_data={},
+        optional_params={},
+        litellm_params={},
+        encoding=None,
+    )
+
+
+@pytest.mark.parametrize(
+    ("item", "expected"),
+    [
+        ({"url": "https://a.example/i.png"}, ("https://a.example/i.png", None, None)),
+        ({"b64_json": "aGVsbG8="}, (None, "aGVsbG8=", None)),
+        (
+            {"url": "https://a.example/i.png", "revised_prompt": "a calmer cat", "seed": 7},
+            ("https://a.example/i.png", None, "a calmer cat"),
+        ),
+        ({}, (None, None, None)),
+    ],
+)
+def test_transform_image_generation_response_maps_one_image(
+    item: dict[str, object], expected: tuple[str | None, str | None, str | None]
+) -> None:
+    response = _transform_generation_response({"created": 1, "data": [item]})
+
+    assert [(image.url, image.b64_json, image.revised_prompt) for image in response.data] == [expected]
+
+
+@pytest.mark.parametrize("payload", [{}, {"data": []}, {"data": ""}, {"data": {}}, {"created": 1}])
+def test_transform_image_generation_response_without_images_is_empty(payload: dict[str, object]) -> None:
+    assert _transform_generation_response(payload).data == []
+
+
+@pytest.mark.parametrize(
+    ("error", "status_code", "expected_class", "expected_message"),
+    [
+        ({"message": "Invalid prompt"}, 400, litellm.BadRequestError, "ModelScope error: Invalid prompt"),
+        ({"message": "Bad key"}, 401, litellm.AuthenticationError, "ModelScope error: Bad key"),
+        ({"code": "overloaded"}, 503, litellm.InternalServerError, "ModelScope error: {'code': 'overloaded'}"),
+        ({}, 200, litellm.BadRequestError, "ModelScope error: {}"),
+    ],
+)
+def test_transform_image_generation_response_reports_api_error_bodies(
+    error: dict[str, object], status_code: int, expected_class: type[Exception], expected_message: str
+) -> None:
+    with pytest.raises(expected_class) as exc_info:
+        _transform_generation_response({"error": error, "data": [{"url": "ignored"}]}, status_code)
+
+    assert str(exc_info.value).endswith(expected_message)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        ["not", "an", "object"],
+        "error",
+        7,
+        {"error": "plain text error"},
+        {"error": None},
+        {"error": ["not", "an", "object"]},
+        {"data": 7},
+        {"data": None},
+        {"data": ["not an object"]},
+        {"data": [{"url": "https://a.example/i.png"}, None]},
+    ],
+)
+def test_transform_image_generation_response_rejects_malformed_payloads_without_echoing_them(
+    payload: object,
+) -> None:
+    with pytest.raises(ValidationError) as exc_info:
+        _transform_generation_response(payload)
+
+    assert "input_value" not in str(exc_info.value)

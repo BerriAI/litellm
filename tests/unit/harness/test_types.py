@@ -20,6 +20,7 @@ from litellm.harness.types import (
 
 def test_harness_is_plain_enum():
     assert Harness.CODEX.value == "codex"
+    assert Harness.TOOL_LOOP.value == "tool_loop"
     assert not isinstance(Harness.CODEX, str)
 
 
