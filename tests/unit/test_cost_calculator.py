@@ -1049,7 +1049,18 @@ def test_tiered_pricing_only_deployment_completion_cost_is_nonzero():
     assert cost > 0
 
 
-def test_huggingface_rerank_uses_registered_input_cost_per_query():
+@pytest.mark.parametrize(
+    ("registered_model", "model"),
+    [
+        ("hf-tei-rerank-deployment", "hf-tei-rerank-deployment"),
+        ("huggingface/hf-tei-rerank-deployment", "huggingface/hf-tei-rerank-deployment"),
+        ("hf-tei-rerank-deployment", "HF-TEI-RERANK-DEPLOYMENT"),
+    ],
+)
+@pytest.mark.usefixtures("local_model_cost_map")
+def test_huggingface_rerank_uses_registered_input_cost_per_query(
+    registered_model: str, model: str, request: pytest.FixtureRequest
+):
     """Registered per-query price must apply for huggingface/TEI rerank (#45975).
 
     ``_get_model_info_helper`` used to return a synthetic zero-cost huggingface
@@ -1060,11 +1071,12 @@ def test_huggingface_rerank_uses_registered_input_cost_per_query():
     from litellm.utils import cached_get_model_info_helper
 
     cached_get_model_info_helper.cache_clear()
-    litellm.model_cost.pop("hf-tei-rerank-deployment", None)
-    litellm.register_model({"hf-tei-rerank-deployment": {"input_cost_per_query": 0.001}})
+    request.addfinalizer(cached_get_model_info_helper.cache_clear)
+    litellm.model_cost.pop(registered_model, None)
+    litellm.register_model({registered_model: {"input_cost_per_query": 0.001}})
 
     cost = rerank_cost(
-        model="hf-tei-rerank-deployment",
+        model=model,
         custom_llm_provider="huggingface",
         billed_units={"search_units": 1},
     )
