@@ -28,7 +28,7 @@ import pytest
 
 sys.path.insert(0, os.path.abspath("../../../../.."))
 
-from litellm.exceptions import MidStreamFallbackError
+from litellm.exceptions import AuthenticationError, MidStreamFallbackError, RateLimitError
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
@@ -36,6 +36,9 @@ from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
     _mid_stream_error_sse_event,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.utils import Delta, StreamingChoices
 
 
@@ -288,3 +291,74 @@ async def test_mid_stream_error_emits_error_event_without_logging_obj():
     events = await _drain_sse(_failing_wrapper(None))
 
     assert _parse_sse(events[-1])[0] == "error"
+
+
+def _azure_rate_limit() -> RateLimitError:
+    return RateLimitError(
+        message="AzureException RateLimitError - Requests to the ChatCompletions_Create Operation have exceeded the rate limit",
+        llm_provider="azure",
+        model="azure/gpt-5.6",
+    )
+
+
+def _rate_limit_envelope() -> MidStreamFallbackError:
+    provider_error = _azure_rate_limit()
+    return MidStreamFallbackError(
+        message=provider_error.message,
+        model="azure/gpt-5.6",
+        llm_provider="azure",
+        original_exception=provider_error,
+        is_pre_first_chunk=False,
+    )
+
+
+_RATE_LIMITED = pytest.mark.parametrize(
+    "raised",
+    [_azure_rate_limit, _rate_limit_envelope],
+    ids=["bare_rate_limit", "rate_limit_envelope"],
+)
+
+
+@pytest.mark.parametrize(
+    "raised, expected_type",
+    [
+        (_azure_rate_limit, "rate_limit_error"),
+        (
+            lambda: AuthenticationError(message="API key not valid", llm_provider="gemini", model="gemini-2.5-flash"),
+            "authentication_error",
+        ),
+    ],
+    ids=["rate_limit", "authentication"],
+)
+def test_error_event_maps_a_bare_litellm_exception_through_its_status(raised, expected_type):
+    exc = raised()
+    name, payload = _parse_sse(_mid_stream_error_sse_event(exc))
+    assert name == "error"
+    assert payload["error"]["type"] == expected_type
+    assert payload["error"]["message"] == exc.message
+
+
+async def _proxy_frames(raised: Callable[[], Exception]) -> List[str]:
+    logging_obj = _make_logging_obj("proxy-frame", _AsyncFailureRecorder(), _SyncFailureRecorder())
+    logging_obj.on_detached_stream_failure = _proxy_boundary_hook
+    ProxyLogging._callback_capabilities_cache.clear()
+    generator = ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+        response=_failing_wrapper(logging_obj, raised).async_anthropic_sse_wrapper(),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        request_data={"model": "azure/gpt-5.6"},
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+    )
+    return [frame async for frame in generator]
+
+
+@_RATE_LIMITED
+@pytest.mark.asyncio
+async def test_standalone_stream_sends_the_error_frame_the_proxy_sends(raised):
+    standalone_events = await _drain_sse(_failing_wrapper(None, raised))
+    proxy_frames = await _proxy_frames(raised)
+
+    assert standalone_events[-1].decode() == proxy_frames[-1]
+    name, payload = _parse_sse(standalone_events[-1])
+    assert name == "error"
+    assert payload["error"]["type"] == "rate_limit_error"
+    assert payload["error"]["message"] == _azure_rate_limit().message
