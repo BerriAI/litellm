@@ -371,6 +371,7 @@ export interface ComplexityRouterConfigValue {
   /** An explicit pin. Unset means the default tracks the tiers - see resolveComplexityDefaultModel. */
   default_model?: string;
   classifier_type: ClassifierType;
+  previous_classifier_types?: readonly ClassifierType[];
   local_heuristic?: LocalHeuristic;
   heuristic_v2_success_threshold?: number;
   capability_classifier_config?: CapabilitySettings;

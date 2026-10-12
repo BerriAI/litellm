@@ -114,12 +114,7 @@ export const prepareForecastClassifier = (
   classifierType: ClassifierType = previous.classifier_type,
 ): ComplexityRouterConfigValue => {
   const value = { ...previous, classifier_type: classifierType };
-  if (!isForecastClassifier(classifierType))
-    return {
-      ...value,
-      capability_classifier_config: undefined,
-      llm_v2_config: undefined,
-    };
+  if (!isForecastClassifier(classifierType)) return value;
   // Capture routing identity before replacing the source classifier's settings.
   const [sourceEfficient, sourceCapable] = forecastTierNames(previous);
   const transferredPair =
@@ -131,11 +126,11 @@ export const prepareForecastClassifier = (
     capability_classifier_config:
       value.classifier_type === "capability"
         ? { ...(value.capability_classifier_config ?? newCapabilitySettings()), ...transferredPair }
-        : undefined,
+        : value.capability_classifier_config,
     llm_v2_config:
       value.classifier_type === "llm_v2"
         ? { ...(value.llm_v2_config ?? newFuseSettings()), ...transferredPair }
-        : undefined,
+        : value.llm_v2_config,
   };
   const [efficient, capable] = forecastTierNames(configured);
   const solverModels = (tier: string) => {
@@ -163,10 +158,6 @@ export const prepareForecastClassifier = (
         : undefined,
     custom_tier_set: undefined,
     enable_non_reasoning_tier: false,
-    classification_prompt: undefined,
-    classification_examples: undefined,
-    classifier_fallback: undefined,
-    classifier_llm_config: value.classifier_llm_config && withoutForecastPromptOverrides(value.classifier_llm_config),
     ...(value.classifier_type === "llm_v2" && { adaptive: false }),
   };
 };

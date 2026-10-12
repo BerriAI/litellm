@@ -192,6 +192,96 @@ describe("AddAutoRouterTab", () => {
     vi.mocked(modelCostMap).mockResolvedValue({});
   });
 
+  describe.each(["Decisions Model", "LLM", "Heuristics"])("preserves %s selections", (family) => {
+    it.each(BUNDLED_PRESETS)("when applying $label and saving", async (preset) => {
+      mockFetchAvailableModels.mockResolvedValue([
+        ...ALL_FAMILY_MODELS,
+        { model_group: "my-decision", mode: "evaluation" },
+        { model_group: "my-judge", mode: "chat" },
+      ]);
+      renderWithProviders(<Harness />);
+      await waitForAutomaticTiers();
+      await userEvent.click(screen.getByRole("radio", { name: family }));
+      if (family === "Decisions Model") {
+        await selectAutoRouterOption("Decision model", "my-decision");
+      }
+      if (family === "LLM") {
+        await selectAutoRouterOption("Judge model", "my-judge");
+      }
+      await selectAutoRouterOption("How often to classify", "Every new user message");
+      await waitForPresetEnabled(preset.label);
+      await selectTemplate(preset.label);
+      expect(screen.getByRole("radio", { name: family })).toBeChecked();
+      expect(screen.getByRole("combobox", { name: "How often to classify" })).toHaveTextContent(
+        "Every new user message",
+      );
+      fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "preserved-router" } });
+      await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
+      await userEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
+      await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
+      const saved = vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config;
+      expect(saved.classification_mode).toBe("user_turn");
+      expect(saved.tiers).toEqual(preset.complexity_router_config.tiers);
+      if (family === "Decisions Model") {
+        expect(saved.classifier_type).toBe("oss_classifier");
+        expect(saved.opensource_classifier_config).toMatchObject({ deployment_name: "my-decision" });
+        expect(saved.classifier_llm_config).toBeUndefined();
+      } else if (family === "LLM") {
+        expect(saved.classifier_type).toBe("llm");
+        expect(saved.classifier_llm_config).toMatchObject({ model: "my-judge" });
+        expect(saved.opensource_classifier_config).toBeUndefined();
+      } else {
+        expect(saved.classifier_type).toBe("heuristic");
+        expect(saved.classifier_llm_config).toBeUndefined();
+        expect(saved.opensource_classifier_config).toBeUndefined();
+      }
+    });
+  });
+
+  it("blocks templates from replacing custom tiers and allows an explicit reset", async () => {
+    mockFetchAvailableModels.mockResolvedValue(ALL_FAMILY_MODELS);
+    renderWithProviders(<Harness />);
+    await waitForAutomaticTiers();
+    await userEvent.click(screen.getByRole("button", { name: "Edit tiers" }));
+    await userEvent.click(screen.getByRole("button", { name: "Add tier" }));
+    fireEvent.change(screen.getByLabelText("Name for tier 5"), { target: { value: "SPECIAL" } });
+    openTemplateDropdown();
+    for (const preset of BUNDLED_PRESETS) {
+      expect(optionByLabel(preset.label)).toHaveAttribute("aria-disabled", "true");
+      expect(optionByLabel(preset.label)).toHaveTextContent("Restore built-in tiers to use a template");
+    }
+    await userEvent.click(optionByLabel("OpenAI Family")!);
+    expect(screen.getByLabelText("Name for tier 5")).toHaveValue("SPECIAL");
+    await selectTemplate("Start from scratch");
+    expect(screen.queryByLabelText("Name for tier 5")).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "Heuristics" })).toBeChecked();
+  });
+
+  it("restores decision and judge selections across classifier switches", async () => {
+    mockFetchAvailableModels.mockResolvedValue([
+      ...ALL_FAMILY_MODELS,
+      { model_group: "my-decision", mode: "evaluation" },
+      { model_group: "my-judge", mode: "chat" },
+    ]);
+    renderWithProviders(<Harness />);
+    await waitForAutomaticTiers();
+    await userEvent.click(screen.getByRole("radio", { name: "Decisions Model" }));
+    await selectAutoRouterOption("Decision model", "my-decision");
+    await userEvent.click(screen.getByRole("radio", { name: "LLM" }));
+    await selectAutoRouterOption("Judge model", "my-judge");
+    await userEvent.click(screen.getByRole("radio", { name: "Heuristics" }));
+    await userEvent.click(screen.getByRole("radio", { name: "Decisions Model" }));
+    expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("my-decision");
+    await userEvent.click(screen.getByRole("radio", { name: "LLM" }));
+    expect(screen.getByRole("combobox", { name: "Judge model" })).toHaveValue("my-judge");
+    openTemplateDropdown();
+    await selectTemplate("Start from scratch");
+    await userEvent.click(screen.getByRole("radio", { name: "Decisions Model" }));
+    expect(screen.getByRole("combobox", { name: "Decision model" })).toHaveValue("");
+    await userEvent.click(screen.getByRole("radio", { name: "LLM" }));
+    expect(screen.getByRole("combobox", { name: "Judge model" })).toHaveValue("");
+  });
+
   it("shows Jev essentials before tiers and saves tuning from its own disclosure", async () => {
     mockFetchAvailableModels.mockResolvedValue([
       ...ALL_FAMILY_MODELS,
@@ -578,6 +668,7 @@ describe("AddAutoRouterTab", () => {
     renderWithProviders(<Harness />);
     await waitForAutomaticTiers();
     await selectAutoRouterApproach("Capability");
+    await user.click(await screen.findByRole("button", { name: "Change method" }));
     expect(screen.queryByTestId("configure-automatically-button")).not.toBeInTheDocument();
     await selectAutoRouterApproach("Complexity");
     expect(screen.queryByTestId("configure-automatically-button")).not.toBeInTheDocument();
@@ -2055,7 +2146,7 @@ describe("getSubmitBlockedReason", () => {
 describe("preset catalog fetch states", () => {
   afterEach(() => vi.mocked(useAutoRouterPresets).mockReturnValue(LOADED_PRESETS_QUERY));
 
-  it("preserves a JEV preset's per-turn bound in the create request", async () => {
+  it("does not replace the chosen classifier with a catalog classifier", async () => {
     vi.clearAllMocks();
     testQueryClient.clear();
     vi.mocked(handleAddAutoRouterSubmit).mockReset();
@@ -2082,16 +2173,14 @@ describe("preset catalog fetch states", () => {
     renderWithProviders(<Harness />);
     await waitForPresetEnabled("Bounded JEV");
     await selectTemplate("Bounded JEV");
-    await userEvent.click(screen.getByRole("combobox", { name: "Decision model" }));
-    await userEvent.click(await screen.findByRole("option", { name: "my-decision" }));
+    expect(screen.getByRole("radio", { name: "Heuristics" })).toBeChecked();
     fireEvent.change(screen.getByLabelText("Auto Router Name"), { target: { value: "bounded-router" } });
     await waitFor(() => expect(screen.getByRole("button", { name: "Add Auto Router" })).toBeEnabled());
     fireEvent.click(screen.getByRole("button", { name: "Add Auto Router" }));
 
     await waitFor(() => expect(handleAddAutoRouterSubmit).toHaveBeenCalledOnce());
     expect(vi.mocked(handleAddAutoRouterSubmit).mock.calls[0][0].complexity_router_config).toMatchObject({
-      classifier_type: "oss_classifier",
-      classifier_context_per_turn_chars: 450,
+      classifier_type: "heuristic",
     });
   });
 

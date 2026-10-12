@@ -48,6 +48,7 @@ function Form({
     >
       <AutoRouterClassifierTabs value={value} onChange={setValue}>
         <output aria-label="Classifier type">{value.classifier_type}</output>
+        <output aria-label="Tier models">{Object.values(value.tiers).flat().join(", ")}</output>
       </AutoRouterClassifierTabs>
     </AutoRouterAvailabilityContext.Provider>
   );
@@ -295,4 +296,35 @@ describe("Gated routing contact action", () => {
     expect(screen.getByText(/Custom tiers: 0 of 1 available/)).toHaveTextContent("Talk to our team");
     expect(within(screen.getByRole("alert")).getByRole("link", { name: "Talk to our team" })).toBeVisible();
   });
+});
+
+it.each(["heuristic_v2", "hybrid"] as const)(
+  "restores the selected %s method after a family round trip",
+  (classifier_type) => {
+    renderWithProviders(<Form initialValue={{ ...initial, classifier_type }} />);
+    fireEvent.click(screen.getByRole("radio", { name: "Decisions Model" }));
+    fireEvent.click(screen.getByRole("radio", { name: classifier_type === "heuristic_v2" ? "Heuristics" : "LLM" }));
+    expect(screen.getByLabelText("Classifier type")).toHaveTextContent(classifier_type);
+  },
+);
+
+it.each(["Capability", "Fuse v2"])("requires confirmation before %s removes configured tier models", async (method) => {
+  renderWithProviders(<Form initialValue={{ ...initial, tiers: { ...initial.tiers, MEDIUM: ["middle"] } }} />);
+  await selectAutoRouterOption("Routing approach", method);
+  expect(await screen.findByRole("alertdialog")).toHaveTextContent("remove models from incompatible tiers");
+  fireEvent.click(screen.getByRole("button", { name: "Keep current settings" }));
+  expect(screen.getByLabelText("Classifier type")).toHaveTextContent("llm");
+  expect(screen.getByLabelText("Tier models")).toHaveTextContent("middle");
+  await selectAutoRouterOption("Routing approach", method);
+  fireEvent.click(screen.getByRole("button", { name: "Change method" }));
+  expect(screen.getByLabelText("Classifier type")).toHaveTextContent(method === "Capability" ? "capability" : "llm_v2");
+  expect(screen.getByLabelText("Tier models")).not.toHaveTextContent("middle");
+});
+
+it("asks before disabling adaptive routing even when solver models do not change", async () => {
+  renderWithProviders(<Form initialValue={{ ...initial, adaptive: true }} />);
+  await selectAutoRouterOption("Routing approach", "Fuse v2");
+  expect(await screen.findByRole("alertdialog")).toHaveTextContent("disable adaptive routing");
+  fireEvent.click(screen.getByRole("button", { name: "Keep current settings" }));
+  expect(screen.getByLabelText("Classifier type")).toHaveTextContent("llm");
 });

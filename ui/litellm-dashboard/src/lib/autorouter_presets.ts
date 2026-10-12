@@ -1,26 +1,11 @@
-import { hydrateOssClassifier } from "@/components/add_model/jev_classifier_config";
-import {
-  ComplexityRouterConfigPayload,
-  hydrateTierLabels,
-} from "@/components/add_model/build_complexity_router_config";
+import { ComplexityRouterConfigPayload } from "@/components/add_model/build_complexity_router_config";
 import {
   ComplexityRouterConfigValue,
   ClassifierType,
   ClassifierLLMConfig,
-  DEFAULT_CLASSIFICATION_MODE,
-  DEFAULT_SESSION_AFFINITY,
-  DEFAULT_DEPLOYMENT_AFFINITY,
   usesLlmClassifier,
 } from "@/components/add_model/ComplexityRouterConfig";
 import { KeywordTierRule } from "@/components/add_model/KeywordTierRules";
-import { hydrateKeywordTierRules } from "@/components/add_model/complexity_router_keywords";
-import { hydrateCustomDimensions } from "@/components/add_model/custom_dimensions";
-import {
-  hydrateDimensionWeights,
-  hydrateTierBoundaries,
-  hydrateTokenThresholds,
-  hydrateReasoningOverrideMinScore,
-} from "@/components/add_model/heuristic_scoring_knobs";
 import {
   TierModelParams,
   TierModelParamsByTier,
@@ -232,10 +217,10 @@ export const getMissingModels = (
   [...getRequiredModels(config)].filter((model) => resolveAvailableModel(model, availability) === undefined).sort();
 
 export const getRequiredModelsInPreset = (preset: AutoRouterPreset): Set<string> =>
-  getRequiredModels(preset.complexity_router_config);
+  getRequiredModels({ tiers: preset.complexity_router_config.tiers });
 
 export const getMissingModelsInPreset = (preset: AutoRouterPreset, availability: ModelAvailability): string[] =>
-  getMissingModels(preset.complexity_router_config, availability);
+  getMissingModels({ tiers: preset.complexity_router_config.tiers }, availability);
 
 // Checks the config actually being built (whether it arrived via a preset prefill or was typed by
 // hand - the two are indistinguishable once the caller has started editing), not a preset's
@@ -298,19 +283,12 @@ export const buildEmptyPrefill = (): PresetPrefill => ({
   escalationKeywords: DEFAULT_ESCALATION_KEYWORDS,
 });
 
-// `??`, never `||`: a preset's match_threshold: 0 or escalation_keywords: [] is a deliberate,
-// falsy value that must survive the prefill, not get silently replaced by the default.
-//
-// `availability` is required, not optional: every model reference gets rewritten to the
-// caller's actual registered spelling (resolveAvailableModel), which may differ from the preset's
-// literal string by version-separator punctuation alone. Called only after presetAvailability has
-// already confirmed every required model resolves, so falling back to the preset's own string
-// when a model somehow doesn't resolve is unreachable in practice, not a silent-failure path.
-export const buildPresetPrefill = (
+export const applyPresetTiers = (
+  current: ComplexityRouterConfigValue,
   config: ComplexityRouterConfigPayload,
   availability: ModelAvailability,
-): PresetPrefill => {
-  const classifier = hydrateOssClassifier(config);
+): ComplexityRouterConfigValue => {
+  if (current.custom_tier_set) return current;
   const resolve = (model: string): string => resolveAvailableModel(model, availability) ?? model;
   const resolveTier = (models: string | string[]): string[] => normalizeTierModels(models).map(resolve);
   // Params key on the model name the preset spells while every tier entry is rewritten to the
@@ -333,53 +311,19 @@ export const buildPresetPrefill = (
       ]),
     );
 
+  const params = resolveParamKeys(hydrateTierModelParams(config.tiers, config.tier_model_configs));
   return {
-    complexityRouterConfig: {
-      tiers: {
-        SIMPLE: resolveTier(config.tiers.SIMPLE),
-        MEDIUM: resolveTier(config.tiers.MEDIUM),
-        COMPLEX: resolveTier(config.tiers.COMPLEX),
-        REASONING: resolveTier(config.tiers.REASONING),
-      },
-      tier_model_params: resolveParamKeys(hydrateTierModelParams(config.tiers, config.tier_model_configs)),
-      tier_labels: hydrateTierLabels(config.tier_labels),
-      ...classifier,
-      heuristic_v2_success_threshold: config.heuristic_v2_success_threshold,
-      classifier_llm_config:
-        classifier.classifier_type !== "jev" && config.classifier_llm_config
-          ? { ...config.classifier_llm_config, model: resolve(config.classifier_llm_config.model) }
-          : undefined,
-      classifier_context_window_size: config.classifier_context_window_size,
-      classifier_context_budget_chars: config.classifier_context_budget_chars,
-      classifier_context_per_turn_chars: config.classifier_context_per_turn_chars,
-      classifier_context_include_assistant_turns: config.classifier_context_include_assistant_turns,
-      classification_mode: config.classification_mode ?? DEFAULT_CLASSIFICATION_MODE,
-      session_affinity: config.session_affinity ?? DEFAULT_SESSION_AFFINITY,
-      session_affinity_ttl_seconds: config.session_affinity_ttl_seconds,
-      deployment_affinity: config.deployment_affinity ?? DEFAULT_DEPLOYMENT_AFFINITY,
-      modality_routing: config.modality_routing ?? false,
-      modality_pin_override: config.modality_pin_override ?? false,
-      adaptive: config.adaptive,
-      adaptive_weights: config.adaptive_weights,
-      tier_distance_penalty: config.tier_distance_penalty,
-      adaptive_eligible: config.adaptive_eligible,
-      return_raw_model_name: config.return_raw_model_name,
-      dimension_weights: hydrateDimensionWeights(config.dimension_weights),
-      custom_dimensions: hydrateCustomDimensions(config.custom_dimensions),
-      tier_boundaries: hydrateTierBoundaries(config.tier_boundaries),
-      token_thresholds: hydrateTokenThresholds(config.token_thresholds),
-      reasoning_override_min_score: hydrateReasoningOverrideMinScore(config.reasoning_override_min_score),
-      enable_context_window_escalation: config.enable_context_window_escalation,
-      context_window_escalation_buffer: config.context_window_escalation_buffer,
-      cache_aware_routing: config.cache_aware_routing,
-      cache_aware_routing_output_tokens: config.cache_aware_routing_output_tokens,
-      cache_aware_routing_timeout_ms: config.cache_aware_routing_timeout_ms,
+    ...current,
+    tiers: {
+      ...current.tiers,
+      SIMPLE: resolveTier(config.tiers.SIMPLE),
+      MEDIUM: resolveTier(config.tiers.MEDIUM),
+      COMPLEX: resolveTier(config.tiers.COMPLEX),
+      REASONING: resolveTier(config.tiers.REASONING),
     },
-    customTechnicalKeywords: config.custom_technical_keywords ?? [],
-    keywordTierRules: hydrateKeywordTierRules(config.keyword_tier_rules ?? []),
-    semanticMatchingEnabled: config.semantic_keyword_matching ?? false,
-    embeddingModel: config.embedding_model && resolve(config.embedding_model),
-    matchThreshold: config.match_threshold ?? DEFAULT_MATCH_THRESHOLD,
-    escalationKeywords: config.escalation_keywords ?? DEFAULT_ESCALATION_KEYWORDS,
+    tier_model_params: {
+      ...(current.tier_model_params?.NON_REASONING && { NON_REASONING: current.tier_model_params.NON_REASONING }),
+      ...params,
+    },
   };
 };
