@@ -245,7 +245,7 @@ class _TransactionFactory(Protocol):
 
 
 class _ModelTransactionClient(LiteLLMBaseModel):
-    model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True)
+    model_config = ConfigDict(arbitrary_types_allowed=True, from_attributes=True, hide_input_in_errors=True)
 
     tx: _TransactionFactory
 
@@ -1856,8 +1856,8 @@ async def delete_team_models(
     Returns the model_ids that were deleted.
     """
     deleted_model_ids: Final[list[str]] = []
-    async with prisma_client.db.tx() as tx_ctx:
-        tx: Final[_TxModelTables] = tx_ctx
+    transaction_client: Final = _ModelTransactionClient.model_validate(prisma_client.db)
+    async with transaction_client.tx() as tx:
         for team_id in team_ids:
             rows = await _get_team_deployments(team_id, prisma_client, table=tx.litellm_proxymodeltable)
             model_ids = [row.model_id for row in rows]
@@ -2190,7 +2190,7 @@ class ModelManagementAuthChecks:
             raise ProxyException(
                 message=(
                     f"Only proxy admins can change the credentials of a deployment configured for "
-                    f"workload identity federation ({wif_fields[0]!r})."
+                    f"workload identity federation or OAuth token exchange ({wif_fields[0]!r})."
                 ),
                 type=ProxyErrorTypes.auth_error.value,
                 code=status.HTTP_403_FORBIDDEN,
