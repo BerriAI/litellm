@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from functools import partial, reduce
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias
 
+from pydantic import InstanceOf, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -60,6 +61,7 @@ def _generic_passthrough_handler() -> "PassThroughEndpointHandler":
 
 
 _StringHolder = tuple[Any, str | int]
+_BODY_BY_REFERENCE: Final = TypeAdapter(InstanceOf[dict[str, object]])
 
 
 def _collect_strings(node: object, holders: list[_StringHolder]) -> None:
@@ -521,14 +523,17 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
 
         if not isinstance(body, dict) or not isinstance(body.get("messages"), list):
             return data
+        request_body: Final = _BODY_BY_REFERENCE.validate_python(body)
 
         scope: Final = _Scope(
             skip_system=effective_skip_system_message_for_guardrail(guardrail_to_apply),
             skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
             scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(guardrail_to_apply),
         )
-        texts, holders = _extract_converse_texts(body, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results)
-        request: Final = parse_converse_request(body)
+        texts, holders = _extract_converse_texts(
+            request_body, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results
+        )
+        request: Final = parse_converse_request(request_body)
         rows: Final = converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
         scoped_indices: Final = scoped_structured_message_indices(
             tuple(row.message for row in rows),
@@ -572,13 +577,13 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             ()
             if rewritten_rows is None
             else structured_edits(
-                rows, scoped_indices, rewritten_rows, partial(_texts_applied_rows, body, applied_texts, scope)
+                rows, scoped_indices, rewritten_rows, partial(_texts_applied_rows, request_body, applied_texts, scope)
             )
         )
         holder_edits: Final = (
             None
             if row_edits is None
-            else _holder_edits(body, row_edits, _changed_leaves(holders, texts, applied_texts))
+            else _holder_edits(request_body, row_edits, _changed_leaves(holders, texts, applied_texts))
         )
         if holder_edits is None:
             raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
