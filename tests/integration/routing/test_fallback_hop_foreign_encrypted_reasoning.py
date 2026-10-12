@@ -19,8 +19,6 @@ serving the group with one deployment until the next resync.
 
 import asyncio
 import json
-import re
-import signal
 import time
 import uuid
 from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
@@ -34,7 +32,6 @@ from typing import Final
 import anthropic
 import httpx
 import openai
-import psutil
 import pytest
 from integration._support.client import (
     JSON_OBJECT,
@@ -1249,13 +1246,6 @@ def test_order_one_outage_mid_burst_hops_stripped_and_recovers_after_restart(gat
             assert [json.loads(request.body)["input"] for request in restarted.drain()] == [history(recovered)]
 
 
-WORKER_PID: Final = re.compile(r"Started server process \[(\d+)\]")
-
-
-def worker_pids(log: Path) -> tuple[int, ...]:
-    return tuple(int(match) for match in WORKER_PID.findall(log.read_text()))
-
-
 def assert_completed_shots_hopped_stripped(
     gateway: Gateway, groups: Mapping[str, OrderedGroup], fired: Sequence[Fired]
 ) -> None:
@@ -1283,17 +1273,18 @@ def test_worker_killed_mid_burst_leaves_the_survivor_hopping_stripped(tmp_path: 
             owned.gateway.post("/config/update", {"router_settings": {"num_retries": 0}})
             with owned.gateway.scenario() as scenario:
                 groups: Final = burst_groups(scenario)
-                workers: Final = eventually(lambda: worker_pids(owned.log), lambda pids: len(pids) == 2, seconds=60)
+                workers: Final = eventually(owned.worker_pids, lambda pids: len(pids) == 2, seconds=60)
                 shots: Final = tuple((BURST_KINDS[index % len(BURST_KINDS)], marker()) for index in range(30))
-                with lanes(owned.gateway, [group.target for group in groups.values()], 30) as pinned:
-                    with ThreadPoolExecutor(max_workers=30) as pool:
-                        futures: Final = [
-                            pool.submit(fire, lane, groups, kind, mark)
-                            for lane, (kind, mark) in zip(pinned, shots, strict=True)
-                        ]
-                        psutil.Process(workers[0]).send_signal(signal.SIGKILL)
-                        fired: Final = tuple(future.result() for future in futures)
-                assert_completed_shots_hopped_stripped(owned.gateway, groups, fired)
-                probes: Final = tuple(fire(owned.gateway, groups, kind, marker()) for kind in BURST_KINDS)
-                assert all(probe.status == 200 for probe in probes), probes
-                assert_burst_hopped_stripped(owned.gateway, groups, probes)
+                with owned.replacing_worker(min(workers)) as kill:
+                    with lanes(owned.gateway, [group.target for group in groups.values()], 30) as pinned:
+                        with ThreadPoolExecutor(max_workers=30) as pool:
+                            futures: Final = [
+                                pool.submit(fire, lane, groups, kind, mark)
+                                for lane, (kind, mark) in zip(pinned, shots, strict=True)
+                            ]
+                            kill()
+                            fired: Final = tuple(future.result() for future in futures)
+                    assert_completed_shots_hopped_stripped(owned.gateway, groups, fired)
+                    probes: Final = tuple(fire(owned.gateway, groups, kind, marker()) for kind in BURST_KINDS)
+                    assert all(probe.status == 200 for probe in probes), probes
+                    assert_burst_hopped_stripped(owned.gateway, groups, probes)

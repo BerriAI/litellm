@@ -139,6 +139,14 @@ class OwnedRedis:
         assert self.pid_file.encode() in command, "Redis process ownership changed"
         subprocess.run(["docker", "exec", "redis-cache", "kill", f"-{int(action)}", str(pid)], check=True, timeout=2)
 
+    @contextmanager
+    def paused(self) -> Iterator[None]:
+        self.signal(signal.SIGSTOP)
+        try:
+            yield
+        finally:
+            self.signal(signal.SIGCONT)
+
 
 @contextmanager
 def _started(
