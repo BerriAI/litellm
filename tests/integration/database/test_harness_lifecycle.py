@@ -62,6 +62,7 @@ def _nested_pytest_environment(environment: Mapping[str, str]) -> dict[str, str]
             "INTEGRATION_RESULTS_DIR",
             "INTEGRATION_ROUTING",
             "INTEGRATION_WORKER_ISOLATION",
+            "INTEGRATION_COVERAGE_FILE",
             "INTEGRATION_CASE_SHARDS",
             "INTEGRATION_CASE_SHARD_INDEX",
             "CIRCLE_NODE_TOTAL",
@@ -543,9 +544,14 @@ def test_direct_and_dependent_consumers_reuse_the_same_module_parameter(tmp_path
     for relative in (
         "pyproject.toml",
         "tests/__init__.py",
+        "tests/_fake_openai_endpoint_server.py",
         "tests/integration/__init__.py",
         "tests/integration/conftest.py",
         "tests/integration/run.py",
+        "tests/integration/proxy_config.yaml",
+        "tests/integration/mcp_coverage.toml",
+        "tests/integration/cost_calculation/cost_map.py",
+        "tests/integration/cost_calculation/cost_tracking_case.py",
     ):
         destination: Final = root / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
