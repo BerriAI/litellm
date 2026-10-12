@@ -1523,3 +1523,64 @@ async def test_relay_teardown_dispatches_deferred_billing_when_sentinel_never_co
     assert len(worker.enqueued) == 1, "teardown billing enqueued alongside the deferred dispatch"
     await worker.enqueued[0]
     assert deferred_fired.is_set()
+
+
+_CLAUDE_CODE_SAFEGUARD_RESULTS = [
+    {
+        "type": "dangerous_tool_use",
+        "status": {"type": "available", "tool_uses": {"toolu_01": {"verdict": "dangerous"}}},
+    }
+]
+
+
+def _sse_events_message_delta(response: dict) -> dict:
+    decoded = _decode_sse_events(anthropic_messages_response_as_sse_events(response))
+    deltas = [payload["delta"] for event_type, payload in decoded if event_type == "message_delta"]
+    assert len(deltas) == 1
+    return deltas[0]
+
+
+def test_anthropic_messages_response_as_sse_events_message_delta_carries_safeguard_results():
+    """A Claude Code auto-mode request's classifier verdict rides in
+    message_delta.delta on a real Anthropic stream; a synthesized stream that
+    drops it leaves the client without the verdict."""
+    response = {
+        "id": "msg_7",
+        "content": [{"type": "text", "text": "I won't run that."}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "stop_details": None,
+        "safeguard_results": _CLAUDE_CODE_SAFEGUARD_RESULTS,
+    }
+    assert _sse_events_message_delta(response) == {
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "safeguard_results": _CLAUDE_CODE_SAFEGUARD_RESULTS,
+    }
+
+
+def test_anthropic_messages_response_as_sse_events_message_delta_carries_refusal_stop_details():
+    stop_details = {"type": "refusal", "category": "cyber", "explanation": "declined"}
+    response = {
+        "id": "msg_8",
+        "content": [],
+        "stop_reason": "refusal",
+        "stop_sequence": None,
+        "stop_details": stop_details,
+    }
+    assert _sse_events_message_delta(response) == {
+        "stop_reason": "refusal",
+        "stop_sequence": None,
+        "stop_details": stop_details,
+    }
+
+
+def test_anthropic_messages_response_as_sse_events_message_delta_omits_absent_optional_fields():
+    response = {
+        "id": "msg_9",
+        "content": [{"type": "text", "text": "hello"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "stop_details": None,
+    }
+    assert _sse_events_message_delta(response) == {"stop_reason": "end_turn", "stop_sequence": None}

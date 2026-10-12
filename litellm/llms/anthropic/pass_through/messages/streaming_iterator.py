@@ -16,7 +16,10 @@ from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.anthropic.common_utils import ANTHROPIC_ERROR_STATUS_CODE_MAP
-from litellm.llms.anthropic.pass_through.messages.utils import INCOMPLETE_STREAM_ERROR_MESSAGE
+from litellm.llms.anthropic.pass_through.messages.utils import (
+    INCOMPLETE_STREAM_ERROR_MESSAGE,
+    anthropic_message_delta,
+)
 from litellm.proxy.pass_through_endpoints.success_handler import (
     PassThroughEndpointLogging,
 )
@@ -290,10 +293,7 @@ def anthropic_messages_response_as_sse_events(response: AnthropicMessagesRespons
     }
     message_delta_payload: Final = {
         "type": "message_delta",
-        "delta": {
-            "stop_reason": response.get("stop_reason"),
-            "stop_sequence": response.get("stop_sequence"),
-        },
+        "delta": anthropic_message_delta(response),
         "usage": response.get("usage") or {},
     }
     return (

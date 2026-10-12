@@ -12,6 +12,7 @@ import json
 from collections.abc import Mapping
 from typing import Any, Final, cast
 
+from litellm.llms.anthropic.pass_through.messages.utils import anthropic_message_delta
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -177,10 +178,7 @@ class FakeAnthropicMessagesStreamIterator:
                 delta_usage["cache_read_input_tokens"] = cache_read_input_tokens
         message_delta: Final = {
             "type": "message_delta",
-            "delta": {
-                "stop_reason": self.response.get("stop_reason"),
-                "stop_sequence": self.response.get("stop_sequence"),
-            },
+            "delta": anthropic_message_delta(response_dict),
             "usage": delta_usage,
         }
         chunks.append(f"event: message_delta\ndata: {json.dumps(message_delta)}\n\n".encode())
