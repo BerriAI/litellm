@@ -10,18 +10,18 @@ Tests covering:
 - resolve-and-execute-policy endpoint (policyId omission)
 """
 
+import asyncio
 import importlib
-import json
 import os
 from typing import Final, Literal
 from unittest.mock import AsyncMock, Mock, patch
 
-import httpx
 import pytest
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 from fastapi import HTTPException
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.guardrails.guardrail_hooks.zscaler_ai_guard import ZscalerAIGuard
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -585,22 +585,24 @@ async def test_apply_guardrail_sends_request_user_in_execute_policy_body(
     expected_body_user: str | None,
     input_type: Literal["request", "response"],
 ) -> None:
-    transport_handler: Final = Mock(return_value=httpx.Response(200, json={"statusCode": 200, "action": "ALLOW"}))
-    http_client: Final = AsyncHTTPHandler(transport=httpx.MockTransport(transport_handler))
-    guardrail: Final = ZscalerAIGuard(
-        api_key="test_key",
-        api_base="http://localhost/v1/detection/execute-policy",
-        policy_id=1,
-        http_client=http_client,
-    )
-    try:
-        await guardrail.apply_guardrail({"texts": ["hello"]}, request_data, input_type)
-    finally:
-        await http_client.client.aclose()
+    received: Final = asyncio.Queue[object]()
 
-    transport_handler.assert_called_once()
-    sent_request: Final[httpx.Request] = transport_handler.call_args.args[0]
-    body: Final = json.loads(sent_request.content)
+    async def execute_policy(request: web.Request) -> web.Response:
+        await received.put(await request.json())
+        return web.json_response({"statusCode": 200, "action": "ALLOW"})
+
+    app: Final = web.Application()
+    app.router.add_post("/v1/detection/execute-policy", execute_policy)
+    async with TestServer(app) as server:
+        guardrail: Final = ZscalerAIGuard(
+            api_key="test_key",
+            api_base=str(server.make_url("/v1/detection/execute-policy")),
+            policy_id=1,
+        )
+        await guardrail.apply_guardrail({"texts": ["hello"]}, request_data, input_type)
+
+    body: Final = received.get_nowait()
+    assert received.empty()
     assert body == {
         "direction": "OUT" if input_type == "response" else "IN",
         "content": "hello",
