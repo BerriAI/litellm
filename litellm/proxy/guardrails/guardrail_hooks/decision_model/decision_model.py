@@ -20,6 +20,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,  # pyright: ignore[reportUnknownVariableType]  # decorator is untyped upstream
 )
 from litellm.litellm_core_utils.llm_judge import default_router_provider, judge_target
+from litellm.router_utils.common_utils import get_request_team_id
 from litellm.types.decisions import MAX_DECISION_QUESTIONS, OpenAIDecisionResponse, OpenAIPredicateAnswer
 from litellm.types.guardrails import GuardrailEventHooks, Mode
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall, ChatCompletionToolCallChunk
@@ -144,9 +145,11 @@ class DecisionModelGuardrail(CustomGuardrail):
     def get_config_model() -> type[DecisionModelGuardrailConfigModel] | None:
         return DecisionModelGuardrailConfigModel
 
-    async def _call_decisions(self, text: str, questions: Sequence[Mapping[str, object]]) -> object:
+    async def _call_decisions(
+        self, text: str, questions: Sequence[Mapping[str, object]], team_id: str | None = None
+    ) -> object:
         router: Final = self._router_provider()
-        if judge_target(router, self.decision_model).via == "router" and router is not None:
+        if judge_target(router, self.decision_model, team_id).via == "router" and router is not None:
             return await router.adecisions(  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType,reportUnknownArgumentType]  # factory_function-generated member
                 model=self.decision_model,
                 input=text,
@@ -154,6 +157,7 @@ class DecisionModelGuardrail(CustomGuardrail):
                 num_retries=0,
                 fallbacks=[],
                 timeout=self.timeout,
+                metadata={"user_api_key_team_id": team_id},
             )
         return await litellm.adecisions(  # pyright: ignore[reportUnknownMemberType,reportUnknownVariableType,reportUnknownArgumentType]  # SDK dispatch returns a broad union
             model=self.decision_model,
@@ -174,19 +178,30 @@ class DecisionModelGuardrail(CustomGuardrail):
         return created
 
     async def _run_checks(
-        self, text: str, questions: Sequence[Mapping[str, object]], semaphore: asyncio.Semaphore
+        self,
+        text: str,
+        questions: Sequence[Mapping[str, object]],
+        semaphore: asyncio.Semaphore,
+        team_id: str | None = None,
     ) -> OpenAIDecisionResponse:
         async with semaphore:
-            raw_response: Final = await self._call_decisions(text, questions)
+            raw_response: Final = await self._call_decisions(text, questions, team_id)
         if not isinstance(raw_response, OpenAIDecisionResponse):
             raise TypeError(f"decisions call returned {type(raw_response).__name__}, expected OpenAI format")
         return raw_response
 
     async def _screen_text(
-        self, text: str, questions: Sequence[Mapping[str, object]], semaphore: asyncio.Semaphore
+        self,
+        text: str,
+        questions: Sequence[Mapping[str, object]],
+        semaphore: asyncio.Semaphore,
+        team_id: str | None = None,
     ) -> tuple[tuple[OpenAIDecisionResponse, ...], tuple[Exception, ...]]:
         results: Final = await asyncio.gather(
-            *(self._run_checks(segment, questions, semaphore) for segment in _chunk_text(text, self.max_input_chars)),
+            *(
+                self._run_checks(segment, questions, semaphore, team_id)
+                for segment in _chunk_text(text, self.max_input_chars)
+            ),
             return_exceptions=True,
         )
         for result in results:
@@ -296,10 +311,11 @@ class DecisionModelGuardrail(CustomGuardrail):
             {"type": "predicate", "name": check.name, "instructions": check.instructions or ""} for check in self.checks
         ]
         semaphore: Final = self._get_decision_semaphore()
+        team_id: Final = get_request_team_id(request_data)
         responses: Final[list[OpenAIDecisionResponse]] = []  # mutable-ok: sequential per-text accumulator
         errors: Final[list[Exception]] = []  # mutable-ok: sequential per-text accumulator
         for text in texts:
-            text_responses, text_errors = await self._screen_text(text, questions, semaphore)
+            text_responses, text_errors = await self._screen_text(text, questions, semaphore, team_id)
             responses.extend(text_responses)
             errors.extend(text_errors)
             if any(v["flagged"] and v["action"] == "block" for v in self._verdicts(responses)):

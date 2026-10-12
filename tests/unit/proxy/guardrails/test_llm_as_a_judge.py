@@ -4,7 +4,9 @@ import json
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 
 import litellm
@@ -592,6 +594,51 @@ async def test_apply_guardrail_judge_error_fails_open(mock_completion):
 # ---------------------------------------------------------------------------
 # judge_model credential/provider resolution — route through the proxy Router
 # ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+@pytest.mark.asyncio
+async def test_team_judge_blocks_with_authenticated_team_context(bucket: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "private-judge",
+                "litellm_params": {
+                    "model": "openai/gpt-4o-mini",
+                    "api_base": "https://judge.example/v1",
+                    "api_key": "synthetic-test-key",
+                },
+                "model_info": {"team_id": "owner", "team_public_model_name": "team-judge"},
+            }
+        ]
+    )
+    guardrail: Final = _make_guardrail(judge_model="team-judge", router_provider=lambda: router)
+    with respx.mock:
+        upstream: Final = respx.post("https://judge.example/v1/chat/completions").mock(
+            return_value=httpx.Response(
+                200,
+                json={
+                    "id": "chatcmpl-judge",
+                    "object": "chat.completion",
+                    "created": 1,
+                    "model": "gpt-4o-mini",
+                    "choices": [
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": '{"overall_score": 0}'},
+                            "finish_reason": "stop",
+                        }
+                    ],
+                },
+            )
+        )
+        with pytest.raises(HTTPException) as blocked:
+            await guardrail.apply_guardrail(
+                {"texts": ["unsafe"]}, {bucket: {"user_api_key_team_id": "owner"}}, "request"
+            )
+        assert blocked.value.status_code == 422
+        assert upstream.call_count == 1
 
 
 def _judge_response_mock() -> MagicMock:

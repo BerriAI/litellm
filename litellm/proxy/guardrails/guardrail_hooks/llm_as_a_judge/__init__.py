@@ -3,7 +3,7 @@
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Generic, Literal, Optional, TypeVar
+from typing import TYPE_CHECKING, Final, Generic, Literal, Optional, TypeVar, cast
 
 from fastapi import HTTPException
 from pydantic import ConfigDict, ValidationError
@@ -20,6 +20,7 @@ from litellm.litellm_core_utils.llm_judge import (
     parse_json_verdict,
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import get_last_user_message
+from litellm.router_utils.common_utils import get_request_team_id
 from litellm.types.guardrails import GuardrailEventHooks, Mode, SupportedGuardrailIntegrations
 from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.utils import LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN, GenericGuardrailAPIInputs, GuardrailStatus
@@ -237,6 +238,7 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
         messages: Sequence[JudgeMessage],
         text_under_review: str,
         input_type: JudgeInputType = "response",
+        team_id: str | None = None,
     ) -> dict[str, object]:
         judge_messages: Final[list[AllMessageValues]] = [
             {"role": "system", "content": JUDGE_SYSTEM_PROMPTS[input_type]},
@@ -249,9 +251,10 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             self._router_provider(),
             self.judge_model,
             judge_messages,
+            team_id=team_id,
             response_format={"type": "json_object"},
             temperature=0,
-            metadata=dict(_JUDGE_CALL_METADATA),
+            metadata={**_JUDGE_CALL_METADATA, "user_api_key_team_id": team_id},
         )
         raw: Final = response.choices[0].message.content or "{}"
         return _parse_judge_verdict(raw)
@@ -277,7 +280,12 @@ class LLMAsAJudgeGuardrail(CustomGuardrail):
             )
 
             try:
-                judge_result = await self._run_judge(messages, text_under_review, input_type)
+                judge_result = await self._run_judge(
+                    messages,
+                    text_under_review,
+                    input_type,
+                    get_request_team_id(cast(Mapping[str, object], request_data)),
+                )
             except Exception as judge_err:
                 verbose_logger.warning(
                     "llm_as_a_judge guardrail: judge call failed, failing open. Error: %s", judge_err

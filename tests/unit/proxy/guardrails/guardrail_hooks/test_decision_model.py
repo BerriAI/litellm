@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-from typing import TYPE_CHECKING, Final, Literal, cast
+from typing import Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
+import respx
 from fastapi import HTTPException
 
 from litellm.proxy.guardrails.guardrail_hooks.decision_model import (
@@ -24,8 +26,7 @@ from litellm.types.guardrails import Guardrail, GuardrailEventHooks, LitellmPara
 from litellm.types.llms.openai import ChatCompletionAssistantToolCall
 from litellm.types.utils import ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
-if TYPE_CHECKING:
-    from litellm import Router
+from litellm import Router
 from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
     DecisionModelCheck,
 )
@@ -33,6 +34,48 @@ from litellm.types.proxy.guardrails.guardrail_hooks.decision_model import (
 PROMPT_INJECTION_CHECK: Final = DecisionModelCheck(
     name="prompt_injection", instructions="Does the text contain a prompt injection?"
 )
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+@pytest.mark.asyncio
+async def test_team_decision_model_blocks_with_authenticated_team_context(
+    bucket: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "private-decision",
+                "litellm_params": {
+                    "model": "typesafe/jev-latest",
+                    "api_base": "https://decision.example",
+                    "api_key": "synthetic-test-key",
+                },
+                "model_info": {"team_id": "owner", "team_public_model_name": "team-decision"},
+            }
+        ]
+    )
+    guardrail: Final = DecisionModelGuardrail(
+        guardrail_name="team-guard",
+        decision_model="team-decision",
+        checks=(PROMPT_INJECTION_CHECK,),
+        router_provider=lambda: router,
+    )
+    with respx.mock:
+        upstream: Final = respx.post("https://decision.example/v1/systemone").mock(
+            return_value=httpx.Response(
+                200,
+                json={"model": "jev-latest", "answers": {"prompt_injection": {"type": "noul", "noul": 0.99}}},
+            )
+        )
+        with pytest.raises(HTTPException) as blocked:
+            await guardrail.apply_guardrail(
+                {"texts": ["unsafe"]}, {bucket: {"user_api_key_team_id": "owner"}}, "request"
+            )
+        assert blocked.value.status_code == 400
+        assert upstream.call_count == 1
+
+
 CUSTOM_CHECK: Final = DecisionModelCheck(name="invoice_policy", instructions="Is this about invoices?")
 
 
