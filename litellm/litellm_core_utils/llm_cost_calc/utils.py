@@ -981,6 +981,7 @@ def parse_prompt_tokens_details(usage: Usage) -> PromptTokensDetailsResult:
             cast(int | None, getattr(usage.prompt_tokens_details, "text_tokens", None))
             or 0  # default to prompt tokens, if this field is not set
         )
+        + (_get_token_detail_value(usage.prompt_tokens_details, "tool_use_tokens") or 0)
         - cached_text_tokens,
         0,
     )
