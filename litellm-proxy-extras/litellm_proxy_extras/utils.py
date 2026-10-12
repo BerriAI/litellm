@@ -164,14 +164,30 @@ def _without_sql_comments(statement: str) -> str:
     ).strip()
 
 
-def _without_spend_logs_pk_clauses(statement: str) -> Optional[str]:
+_TOP_LEVEL_COMMA_RE = re.compile(r"[^,()]+(?:\([^()]*\))?[^,()]*")
+
+
+def _split_top_level_commas(text: str) -> tuple[str, ...]:
+    """Comma-separated pieces of `text`, ignoring commas inside parentheses
+    (the column list of `PRIMARY KEY ("request_id", "startTime")`). A comma
+    that lands inside a SQL literal stays inside its piece, so the pieces
+    rejoin to the same SQL."""
+    return tuple(piece.strip() for piece in _TOP_LEVEL_COMMA_RE.findall(text) if piece.strip())
+
+
+def without_spend_logs_pk_clauses(statement: str) -> Optional[str]:
+    """One ALTER TABLE statement (no trailing semicolon) without the
+    LiteLLM_SpendLogs primary-key-rewrite clauses, or None when nothing
+    remains. Clause separators may be Prisma's raw `,\n` or the single-line
+    `, ` form `extract_sql_commands` produces, so both the raw drift script
+    and already-extracted statements can be filtered."""
     prefix_match = _SPEND_LOGS_ALTER_RE.match(statement)
     if not prefix_match:
         return statement
     kept = tuple(
-        clause.strip()
-        for clause in statement[prefix_match.end():].split(",\n")
-        if not _SPEND_LOGS_PK_CLAUSE_RE.match(clause.strip())
+        clause
+        for clause in _split_top_level_commas(statement[prefix_match.end():])
+        if not _SPEND_LOGS_PK_CLAUSE_RE.match(clause)
     )
     if not kept:
         return None
@@ -189,7 +205,7 @@ def filter_partitioned_spend_logs_diff(diff_sql: str) -> str:
         for statement in diff_sql.split(";")
         for bare in (_without_sql_comments(statement),)
         if bare and not _SPEND_LOGS_ARTIFACT_DROP_RE.match(bare)
-        for filtered in (_without_spend_logs_pk_clauses(bare),)
+        for filtered in (without_spend_logs_pk_clauses(bare),)
         if filtered is not None
     )
     return "".join(f"{statement};\n\n" for statement in kept)

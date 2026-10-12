@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+from collections.abc import Callable, Iterator, Sequence
 from typing import Final
 
 from litellm._logging import verbose_logger
@@ -44,17 +45,85 @@ def extract_sql_commands(diff_output: str) -> list[str]:
     return sql_commands
 
 
-def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
+def _spend_logs_is_partitioned() -> bool:
+    """The litellm-proxy-extras partition probe, degraded to False when it cannot run."""
+    try:
+        from litellm_proxy_extras.utils import (
+            ProxyExtrasDBManager,  # pyright: ignore[reportUnknownVariableType]  # optional untyped install
+        )
+    except ImportError as e:
+        verbose_logger.warning(
+            "Skipping the partitioned LiteLLM_SpendLogs check: litellm-proxy-extras is unavailable. Error: %s", e
+        )
+        return False
+    try:
+        import psycopg
+    except ImportError:
+        verbose_logger.warning(
+            "psycopg is not installed, so the partitioned LiteLLM_SpendLogs check was skipped and the SQL "
+            "below may include a primary-key rewrite Postgres rejects on a partitioned table"
+        )
+        return False
+    try:
+        return ProxyExtrasDBManager.spend_logs_is_partitioned()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # optional untyped install
+    except psycopg.Error as e:
+        verbose_logger.warning(
+            "The partitioned LiteLLM_SpendLogs check failed, so the SQL below may include a primary-key "
+            "rewrite Postgres rejects on a partitioned table. Error: %s",
+            e,
+        )
+        return False
+
+
+def _statements_without_spend_logs_pk_rewrite(
+    sql_commands: Sequence[str], strip_pk_clauses: Callable[[str], str | None]
+) -> Iterator[str]:
+    for statement in sql_commands:
+        without_pk = strip_pk_clauses(statement.strip().removesuffix(";"))
+        if without_pk is not None:
+            yield f"{without_pk};" if statement.endswith(";") else without_pk
+
+
+def _without_partitioned_spend_logs_pk_rewrite(
+    sql_commands: Sequence[str], *, partitioned: bool | None
+) -> tuple[str, ...]:
+    """The extracted statements of a diff script, minus the LiteLLM_SpendLogs
+    primary-key rewrite when the table is partitioned: Postgres rejects it there
+    (the key must include the partition key), so it is not executable advice.
+    Filtering the already-extracted statements keeps unrelated drift reportable."""
+    if not sql_commands:
+        return tuple(sql_commands)
+    is_partitioned: Final = partitioned if partitioned is not None else _spend_logs_is_partitioned()
+    if not is_partitioned:
+        return tuple(sql_commands)
+    try:
+        from litellm_proxy_extras.utils import (
+            without_spend_logs_pk_clauses,  # pyright: ignore[reportUnknownVariableType]  # optional untyped install
+        )
+    except ImportError as e:
+        verbose_logger.warning(
+            "Skipping the partitioned LiteLLM_SpendLogs primary-key filter: "
+            "litellm-proxy-extras is unavailable. Error: %s",
+            e,
+        )
+        return tuple(sql_commands)
+    return tuple(_statements_without_spend_logs_pk_rewrite(sql_commands, without_spend_logs_pk_clauses))  # pyright: ignore[reportUnknownArgumentType]  # optional untyped install
+
+
+def check_prisma_schema_diff_helper(db_url: str, *, partitioned: bool | None = None) -> tuple[bool, list[str]]:
     """Checks for differences between current database and Prisma schema.
 
     Never raises: a diff that cannot be produced, because the runner is missing,
     because the command failed, or because it outlived its budget, is reported as
     "no diff" so boot continues.
 
-    Returns:
-        A tuple containing:
-        - A boolean indicating if differences were found (True) or not (False).
-        - The SQL commands that would close the diff, empty when there is none.
+    Args:
+        db_url: The database URL to diff against the Prisma schema.
+        partitioned: Whether LiteLLM_SpendLogs is partitioned. None resolves it
+            from the database, but only once a diff was found, since the probe
+            opens a second connection. On True, the primary-key rewrite Postgres
+            rejects on a partitioned LiteLLM_SpendLogs is left out of the
+            reported SQL.
     """
     try:
         from litellm_proxy_extras.prisma_toolchain import (
@@ -86,7 +155,10 @@ def check_prisma_schema_diff_helper(db_url: str) -> tuple[bool, list[str]]:
             env=os.environ.copy(),
         )
 
-        sql_commands: Final = extract_sql_commands(result.stdout)
+        extracted_commands: Final = extract_sql_commands(result.stdout)
+        sql_commands: Final = list(
+            _without_partitioned_spend_logs_pk_rewrite(extracted_commands, partitioned=partitioned)
+        )
 
         if sql_commands:
             print("Changes to DB Schema detected")  # noqa: T201

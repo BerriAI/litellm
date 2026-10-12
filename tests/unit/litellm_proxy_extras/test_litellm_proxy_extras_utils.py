@@ -24,6 +24,7 @@ from litellm_proxy_extras.utils import (
     _redact_command_error,
     _redact_credentials,
     filter_partitioned_spend_logs_diff,
+    without_spend_logs_pk_clauses,
 )
 
 # Path to the migrations directory
@@ -537,6 +538,23 @@ class TestPartitionedSpendLogsDriftFilter:
         filtered = filter_partitioned_spend_logs_diff(sql)
         assert 'DROP CONSTRAINT "LiteLLM_TeamTable_pkey"' in filtered
         assert 'PRIMARY KEY ("team_id")' in filtered
+
+    def test_a_single_line_statement_loses_only_the_pk_clause_and_keeps_the_rest(self):
+        statement = (
+            'ALTER TABLE "LiteLLM_SpendLogs" DROP CONSTRAINT "LiteLLM_SpendLogs_pkey", '
+            'ADD COLUMN     "end_time" TIMESTAMP(3), '
+            'ADD CONSTRAINT "LiteLLM_SpendLogs_pkey" PRIMARY KEY ("request_id", "startTime")'
+        )
+        assert without_spend_logs_pk_clauses(statement) == (
+            'ALTER TABLE "LiteLLM_SpendLogs" ADD COLUMN     "end_time" TIMESTAMP(3)'
+        )
+
+    def test_a_single_line_statement_with_only_the_pk_rewrite_is_dropped_entirely(self):
+        statement = (
+            'ALTER TABLE "LiteLLM_SpendLogs" DROP CONSTRAINT "LiteLLM_SpendLogs_pkey", '
+            'ADD CONSTRAINT "LiteLLM_SpendLogs_pkey" PRIMARY KEY ("request_id")'
+        )
+        assert without_spend_logs_pk_clauses(statement) is None
 
 
 class _FakeCompleted:
