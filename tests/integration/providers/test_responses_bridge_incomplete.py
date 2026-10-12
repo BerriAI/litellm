@@ -852,7 +852,6 @@ def test_chat_over_responses_deployment_folds_reasoning_two_messages_and_functio
 def test_chat_over_responses_deployment_folds_message_and_two_function_calls_into_one_choice(
     gateway: Gateway,
 ) -> None:
-    pytest.skip("BUG: non-stream bridge gives every tool call index 0, native chat numbers them 0, 1")
     identity: Final = "responses-bridge-two-calls-" + uuid.uuid4().hex
 
     def respond(request: Request) -> Reply:
