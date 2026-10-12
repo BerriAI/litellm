@@ -1,10 +1,33 @@
 import os
 import sys
+from enum import Enum
 from types import MappingProxyType
 from typing import Final, Literal
 
 from litellm.litellm_core_utils.env_utils import get_env_int, get_env_int_in_range, get_env_int_or_none
 
+MICROSOFT_GRAPH_BETA_BASE: Final = "https://graph.microsoft.com/beta"
+OAUTH_TOKEN_EXCHANGE_CACHE_SAFETY_MARGIN_SECONDS: Final = 60
+MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_PROFILE: Final = "jwt_bearer_obo"
+MICROSOFT_365_COPILOT_DEFAULT_TOKEN_EXCHANGE_SCOPE: Final = "https://graph.microsoft.com/.default"
+# Replies depend on the caller's delegated identity, which response-cache keys do not include.
+RESPONSE_CACHE_EXCLUDED_PROVIDERS: Final = frozenset({"microsoft_365_copilot"})
+MICROSOFT_365_COPILOT_DEFAULT_TIME_ZONE: Final = "UTC"
+GITHUB_COPILOT_PER_USER_AUTH_TYPE: Final = "per_user_oauth"
+GITHUB_COPILOT_AUTH_TYPE_KEY: Final = "github_copilot_auth_type"
+GITHUB_COPILOT_USER_TOKEN_SAFETY_MARGIN_SECONDS: Final = 60
+GITHUB_COPILOT_USER_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
+GITHUB_COPILOT_DEVICE_FLOW_CACHE_PREFIX: Final = "github_copilot_device_flow"
+USER_PROVIDER_CREDENTIAL_CACHE_PREFIX: Final = "user_provider_credential"
+USER_PROVIDER_CREDENTIAL_NOT_CONNECTED: Final = "__not_connected__"
+SERVER_STREAMING_CLASSIFICATION_KEY: Final = "litellm_server_streaming_classification"
+
+
+class ServerStreamingClassification(str, Enum):
+    MARKER = "litellm-server-streaming"
+
+
+SERVER_STREAMING_CLASSIFICATION_MARKER: Final = ServerStreamingClassification.MARKER
 DEFER_PYDANTIC_BUILD: Final = os.getenv("DEFER_PYDANTIC_BUILD", "true") in ("true", "1", "on")
 DEFAULT_HEALTH_CHECK_PROMPT: Final = str(os.getenv("DEFAULT_HEALTH_CHECK_PROMPT", "test from litellm"))
 AZURE_DEFAULT_RESPONSES_API_VERSION: Final = str(os.getenv("AZURE_DEFAULT_RESPONSES_API_VERSION", "preview"))
@@ -60,9 +83,12 @@ TRACE_READ_RETRY_AFTER_SECONDS: Final = get_env_int("TRACE_READ_RETRY_AFTER_SECO
 OTLP_MAX_CONCURRENT_INGESTS: Final = get_env_int("OTLP_MAX_CONCURRENT_INGESTS", 2)
 AGENT_TRACING_INPUT_PREVIEW_CHARS: Final = get_env_int("AGENT_TRACING_INPUT_PREVIEW_CHARS", 240)
 AGENT_TRACING_LIST_PAGE_SIZE: Final = get_env_int("AGENT_TRACING_LIST_PAGE_SIZE", 50)
+AGENT_TRACING_AGENT_LIST_LIMIT: Final = get_env_int("AGENT_TRACING_AGENT_LIST_LIMIT", 500)
 LENS_DATASET_MAX_CASES: Final = get_env_int("LENS_DATASET_MAX_CASES", 200)
 LENS_DATASET_MAX_CASE_CHARS: Final = get_env_int("LENS_DATASET_MAX_CASE_CHARS", 20_000)
 LENS_DATASET_TRACE_PAGE_SIZE: Final = 500
+LENS_FEEDBACK_MAX_COMMENT_CHARS: Final = 10_000
+LENS_FEEDBACK_MAX_SCORE: Final = 10
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_S3_BATCH_SIZE: Final = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
 DEFAULT_S3_MAX_CONCURRENT_UPLOADS: Final = int(os.getenv("DEFAULT_S3_MAX_CONCURRENT_UPLOADS", "16"))
@@ -208,6 +234,7 @@ MCP_CLIENT_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_CLIENT_TIMEOUT", "60.0"
 MCP_TOOL_LISTING_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_TOOL_LISTING_TIMEOUT", "30.0"))
 MCP_METADATA_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_METADATA_TIMEOUT", "10.0"))
 MCP_HEALTH_CHECK_TIMEOUT: Final = float(os.getenv("LITELLM_MCP_HEALTH_CHECK_TIMEOUT", "10.0"))
+MCP_UPSTREAM_SESSION_SHUTDOWN_TIMEOUT_SECONDS: Final = 5.0
 MCP_TOOL_LISTING_MAX_PAGES: Final = 1000
 MCP_GATEWAY_SESSION_ID_PREFIX_LENGTH: Final = 8
 MCP_BYOK_CREDENTIAL_CACHE_TTL_SECONDS: Final = 60
@@ -272,6 +299,7 @@ DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET: Final = int(
 
 # Provider-specific API base URLs
 XAI_API_BASE: Final = "https://api.x.ai/v1"
+PLACEHOLDER_API_KEY: Final = "fake-api-key"
 OPEN_SANDBOX_API_BASE_ENV_VAR: Final = "OPEN_SANDBOX_API_BASE"
 OPEN_SANDBOX_API_KEY_ENV_VAR: Final = "OPEN_SANDBOX_API_KEY"
 OPEN_SANDBOX_DEFAULT_TEMPLATE: Final = "opensandbox/code-interpreter:v1.1.0"
@@ -360,6 +388,8 @@ BEDROCK_REALTIME_SDK_DISTRIBUTION: Final = "aws-sdk-bedrock-runtime"
 BEDROCK_REALTIME_SDK_SUPPORTED_RANGE: Final = ">=0.10.0,<0.12.0"
 CLIENT_REQUESTED_MODEL_SCOPE_KEY: Final = "litellm.client_requested_model"
 MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY: Final = "litellm.model_group_alias_resolved"
+MCP_PEEKED_BODY_SCOPE_KEY: Final = "litellm_mcp_peeked_body"
+MCP_ADMISSION_BODY_PEEK_TIMEOUT_SECONDS: Final = 5.0
 REALTIME_SESSION_SUCCESS_LOGGED_KEY: Final = "realtime_session_success_logged"
 REALTIME_SESSION_FAILURE_LOGGED_KEY: Final = "realtime_session_failure_logged"
 
@@ -390,6 +420,11 @@ DEFAULT_SSL_CIPHERS: Final = os.getenv(
 ########### v2 Architecture constants for managing writing updates to the database ###########
 REDIS_UPDATE_BUFFER_KEY: Final = "litellm_spend_update_buffer"
 REDIS_GATEWAY_REQUESTS_BUFFER_KEY: Final = "litellm_gateway_requests_buffer"
+REDIS_GATEWAY_REQUESTS_BUFFER_KEY_V2: Final = "litellm_gateway_requests_buffer_v2"
+REDIS_REQUEST_ERRORS_BUFFER_KEY: Final = "litellm_request_errors_buffer"
+REQUEST_ERRORS_UNKNOWN_STATUS_CODE: Final = 0
+REQUEST_ERRORS_MAX_ROWS_PER_UPSERT: Final = 1000
+GATEWAY_REQUESTS_MAX_ROWS_PER_UPSERT: Final = 1000
 REDIS_DAILY_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_spend_update_buffer"
 REDIS_DAILY_TEAM_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_team_spend_update_buffer"
 REDIS_DAILY_ORG_SPEND_UPDATE_BUFFER_KEY: Final = "litellm_daily_org_spend_update_buffer"
@@ -667,6 +702,10 @@ EMAIL_BUDGET_ALERT_MAX_SPEND_ALERT_PERCENTAGE: Final = float(
 ANTHROPIC_TOKEN_COUNTING_BETA_VERSION = os.getenv("ANTHROPIC_TOKEN_COUNTING_BETA_VERSION", "token-counting-2024-11-01")
 ANTHROPIC_SKILLS_API_BETA_VERSION: Final = "skills-2025-10-02"
 ANTHROPIC_BATCHES_ROUTE: Final = "/v1/messages/batches"
+ANTHROPIC_IMAGE_MAX_LONG_EDGE_PX: Final = 1568
+ANTHROPIC_IMAGE_MAX_PIXELS: Final = 1_150_000
+ANTHROPIC_IMAGE_PIXELS_PER_TOKEN: Final = 750
+PDF_DATA_URL_PREFIX: Final = "data:application/pdf;base64,"
 VERTEX_BATCH_PREDICTION_JOBS_ROUTE: Final = "batchPredictionJobs"
 ANTHROPIC_WEB_SEARCH_TOOL_MAX_USES: Final = {
     "low": 1,
@@ -787,6 +826,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "lemonade",
     "docker_model_runner",
     "amazon_nova",
+    "scaledown",
 ]
 
 # Resolving these providers runs an OAuth device flow (their provider info IS the login), so any
@@ -1832,6 +1872,8 @@ RESET_BUDGET_JOB_LOCK_TTL_SECONDS: Final[int] = 900
 PROXY_BATCH_POLLING_INTERVAL: Final = int(os.getenv("PROXY_BATCH_POLLING_INTERVAL", 3600))
 MAX_OBJECTS_PER_POLL_CYCLE: Final = max(1, int(os.getenv("MAX_OBJECTS_PER_POLL_CYCLE", 50)))
 MANAGED_OBJECT_STALENESS_CUTOFF_DAYS: Final = max(1, int(os.getenv("MANAGED_OBJECT_STALENESS_CUTOFF_DAYS", 7)))
+BATCH_OUTPUT_FILE_LOOKUP_TIMEOUT_SECONDS: Final = 10.0
+BATCH_OUTPUT_FILE_FALLBACK_RETRY_AFTER_SECONDS: Final = 60
 STALE_OBJECT_CLEANUP_BATCH_SIZE: Final = max(1, int(os.getenv("STALE_OBJECT_CLEANUP_BATCH_SIZE", 1000)))
 # Set PROXY_BATCH_POLLING_ENABLED=false to disable the CheckBatchCost and
 # CheckResponsesCost background polling jobs entirely (e.g. to avoid DB load on
@@ -1929,6 +1971,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
 ]
 SPECIAL_LITELLM_AUTH_TOKEN: Final = ["ui-token"]
 DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL = int(os.getenv("DEFAULT_MANAGEMENT_OBJECT_IN_MEMORY_CACHE_TTL", 60))
+AUTH_OBJECTS_TARGET: Final = "auth_objects"
 DEFAULT_ACCESS_GROUP_CACHE_TTL: Final = int(os.getenv("DEFAULT_ACCESS_GROUP_CACHE_TTL", 600))
 SPEND_LOG_KEY_METADATA_CACHE_TTL: Final = 600
 SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL: Final = 30
@@ -2177,6 +2220,8 @@ USAGE_TOP_API_KEYS_DEFAULT: Final[int] = 100
 USAGE_TOP_API_KEYS_MAX: Final[int] = 1000
 USAGE_KEY_PAGE_DEFAULT: Final[int] = 50
 USAGE_KEY_PAGE_MAX: Final[int] = 100
+USAGE_USER_PAGE_DEFAULT: Final[int] = 50
+USAGE_USER_PAGE_MAX: Final[int] = 100
 USAGE_KEY_SEARCH_DEFAULT: Final[int] = 100
 USAGE_KEY_SEARCH_MAX: Final[int] = 100
 USAGE_MODEL_TOP_KEYS_DEFAULT: Final[int] = 5

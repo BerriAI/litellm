@@ -340,7 +340,7 @@ async def ocr(
         return _native_response(response, fastapi_response) or response
     except Exception as e:
         processor = ProxyBaseLLMRequestProcessing(data=data)
-        raise await processor._handle_llm_api_exception(
+        raise await processor.handle_llm_api_exception(
             e=e,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

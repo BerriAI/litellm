@@ -1,6 +1,6 @@
 use serde_json::{Map, Value};
 
-#[macro_rules_attribute::apply(wire_type)]
+#[macro_rules_attribute::apply(crate::wire_type)]
 pub struct MessagesResponse {
     pub id: String,
     #[serde(rename = "type")]
@@ -20,10 +20,9 @@ pub struct MessagesResponse {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
     use rstest::rstest;
     use serde_json::json;
-
-    use super::*;
 
     fn response(
         stop_reason: Option<&str>,

@@ -29,7 +29,7 @@ from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from logging_client import INVALID_UPSTREAM_API_KEY, LoggingClient, first_ok, readiness_details_body
 from models import LiteLLMParamsBody
-from otel_client import CallTraces, JaegerSpan, JaegerTrace, OtelReader
+from otel_client import TTFT_TAG, CallTraces, JaegerSpan, JaegerTrace, OtelReader, one_served_genai_span
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 pytestmark = pytest.mark.e2e
@@ -138,44 +138,6 @@ def _poll(otel_reader: OtelReader, *, call_id: str, route: str, genai_span: str)
     )
 
 
-def _tag(span: JaegerSpan, key: str) -> str | int | float | bool | None:
-    for tag in span.tags:
-        if tag.key == key:
-            return tag.value
-    return None
-
-
-#: The v2 gen-AI span attribute recording time-to-first-token for streamed
-#: calls: seconds from the upstream request being issued to the first streamed
-#: chunk (stamped only for streaming; added in #32236).
-TTFT_TAG = "gen_ai.response.time_to_first_chunk"
-
-#: Jaeger's rendering of a span whose OTEL status is ERROR.
-ERROR_STATUS_TAG = "otel.status_code"
-
-
-def served_genai_spans(trace: JaegerTrace, genai_span: str) -> list[JaegerSpan]:
-    """The gen-AI spans for attempts that actually served the request.
-
-    The proxy opens one gen-AI span per upstream attempt, so a call the router
-    retried carries an error span for every failed attempt beside the one that
-    answered. Only the served attempt streams chunks, so only it records TTFT
-    or a streaming flag; asserting over the raw span list makes every one of
-    these tests fail whenever the upstream 429s, 529s, or hands back a stale
-    credential on the first try."""
-    return [
-        span for span in trace.spans if span.operation_name == genai_span and _tag(span, ERROR_STATUS_TAG) != "ERROR"
-    ]
-
-
-def one_served_genai_span(trace: JaegerTrace, genai_span: str) -> JaegerSpan:
-    served = served_genai_spans(trace, genai_span)
-    assert len(served) == 1, (
-        f"a streamed call must produce exactly ONE served gen-AI span, got {len(served)}; spans: {trace.span_names()}"
-    )
-    return served[0]
-
-
 def _assert_real_ttft(hits: tuple[JaegerTrace, ...], *, genai_span: str) -> None:
     """The enforced behavior: the gen-AI span for the attempt that served the
     stream records a TTFT that is a real measurement - present, numeric,
@@ -192,7 +154,7 @@ def _assert_real_ttft(hits: tuple[JaegerTrace, ...], *, genai_span: str) -> None
     trace = hits[0]
     span = one_served_genai_span(trace, genai_span)
 
-    value = _tag(span, TTFT_TAG)
+    value = span.tag(TTFT_TAG)
     assert value is not None, (
         f"the gen-AI span must record {TTFT_TAG} for a streamed call; "
         f"tags present: {sorted(tag.key for tag in span.tags)}"
@@ -249,10 +211,10 @@ def _assert_error_span_contract(span: JaegerSpan) -> None:
     error.message whose embedded provider error JSON still parses and whose
     text also rides the span status description."""
     for key, expected in EXPECTED_ERROR_SPAN_ATTRIBUTES.items():
-        actual = _tag(span, key)
+        actual = span.tag(key)
         assert str(actual) == expected, f"error span attribute {key!r} must be {expected!r}, got {actual!r}"
 
-    message = _tag(span, "error.message")
+    message = span.tag("error.message")
     assert isinstance(message, str) and message, "error span must carry a non-empty error.message"
     assert "AnthropicException" in message, (
         f"error.message must carry the upstream provider exception, got: {message[:200]}"
@@ -272,10 +234,10 @@ def _assert_error_span_contract(span: JaegerSpan) -> None:
     assert provider_error.error.message.strip(), (
         f"the embedded provider error must carry a non-empty message; parsed: {provider_error}"
     )
-    assert _tag(span, "otel.status_description") == message, (
+    assert span.tag("otel.status_description") == message, (
         "the span status description must carry the same untruncated message as error.message"
     )
-    stack = _tag(span, "litellm.provider.error.stack_trace")
+    stack = span.tag("litellm.provider.error.stack_trace")
     assert isinstance(stack, str) and stack, "the error span must carry a non-empty litellm.provider.error.stack_trace"
 
 
@@ -484,7 +446,7 @@ class TestOtelTraceCompleteness:
         _assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         served = one_served_genai_span(traces.hits[0], genai_span)
-        assert _tag(served, "litellm.request.streaming") is True, (
+        assert served.tag("litellm.request.streaming") is True, (
             "the gen-AI span must record litellm.request.streaming=true; its absence means "
             "the stream flag was dropped before the model call"
         )
@@ -541,7 +503,7 @@ class TestOtelTraceCompleteness:
         _assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         served = one_served_genai_span(traces.hits[0], genai_span)
-        assert _tag(served, "litellm.request.streaming") is True, (
+        assert served.tag("litellm.request.streaming") is True, (
             "the gen-AI span must record litellm.request.streaming=true; its absence means "
             "the stream flag was dropped before the model call"
         )
@@ -804,8 +766,8 @@ class TestOtelTraceCompleteness:
         _assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         root = next(span for span in traces.hits[0].spans if not span.references)
-        assert str(_tag(root, "http.status_code")) == "401", (
-            f"the SERVER span must record the 401 the client received, got {_tag(root, 'http.status_code')!r}"
+        assert str(root.tag("http.status_code")) == "401", (
+            f"the SERVER span must record the 401 the client received, got {root.tag('http.status_code')!r}"
         )
         genai = next(span for span in traces.hits[0].spans if span.operation_name == genai_span)
         _assert_error_span_contract(genai)
@@ -866,8 +828,8 @@ class TestOtelTraceCompleteness:
         _assert_complete_trace(traces, route=route, genai_span=genai_span)
 
         root = next(span for span in traces.hits[0].spans if not span.references)
-        assert str(_tag(root, "http.status_code")) == "401", (
-            f"the SERVER span must record the 401 the client received, got {_tag(root, 'http.status_code')!r}"
+        assert str(root.tag("http.status_code")) == "401", (
+            f"the SERVER span must record the 401 the client received, got {root.tag('http.status_code')!r}"
         )
         genai = next(span for span in traces.hits[0].spans if span.operation_name == genai_span)
         _assert_error_span_contract(genai)
