@@ -368,6 +368,33 @@ class ChunkProcessor:
         return ChunkProcessor._role_of_choice(next((c["choices"][0] for c in chunks if c.get("choices")), None))
 
     @staticmethod
+    def _read_delta(choice: StreamingChoices | Mapping[str, object]) -> object:
+        """Return a streaming choice's delta payload.
+
+        ``StreamingChoices`` (an ``openai`` ``BaseModel`` subclass) declares
+        ``delta``; raw dict chunks carry the same data under a ``delta`` key.
+        """
+        return choice.get("delta") if isinstance(choice, Mapping) else choice.delta
+
+    @staticmethod
+    def _read_message(choice: StreamingChoices | Mapping[str, object]) -> object:
+        """Return a streaming choice's message payload.
+
+        Only dict chunks carry ``message``: ``StreamingChoices.__init__`` pops
+        it (Perplexity compat), so non-dict choices always read as ``None``.
+        """
+        return choice.get("message") if isinstance(choice, Mapping) else None
+
+    @staticmethod
+    def _read_tool_calls(payload: object) -> object:
+        """Return a delta/message payload's ``tool_calls``, dict or object form."""
+        if isinstance(payload, dict):
+            return cast(dict[str, object], payload).get("tool_calls")
+        if isinstance(payload, Delta):
+            return payload.tool_calls
+        return None
+
+    @staticmethod
     def _role_of_choice(choice: object) -> str:
         match choice:
             case StreamingChoices(delta=Delta(role=str() as role)) | {"delta": {"role": str() as role}} if role:
@@ -416,25 +443,23 @@ class ChunkProcessor:
         for chunk in chunks:
             if "choices" in chunk and len(chunk["choices"]) > 0:
                 choice = chunk["choices"][0]
-                delta = choice.get("delta") if isinstance(choice, dict) else getattr(choice, "delta", None)
+                delta = ChunkProcessor._read_delta(choice)
                 if delta is not None:
-                    delta_tool_calls = (
-                        delta.get("tool_calls") if isinstance(delta, dict) else getattr(delta, "tool_calls", None)
-                    )
+                    delta_tool_calls = ChunkProcessor._read_tool_calls(delta)
                     if delta_tool_calls:
                         saw_tool_call = True
-                message = choice.get("message") if isinstance(choice, dict) else getattr(choice, "message", None)
+                message = ChunkProcessor._read_message(choice)
                 if message is not None:
-                    msg_tool_calls = (
-                        message.get("tool_calls") if isinstance(message, dict) else getattr(message, "tool_calls", None)
-                    )
+                    msg_tool_calls = ChunkProcessor._read_tool_calls(message)
                     if msg_tool_calls:
                         saw_tool_call = True
                 chunk_finish_reason = None
                 if hasattr(choice, "finish_reason"):
-                    chunk_finish_reason = choice.finish_reason
+                    # StreamingChoices is a dynamic OpenAIObject: the attribute may
+                    # or may not exist at runtime, so read via literal getattr.
+                    chunk_finish_reason = cast(str, getattr(choice, "finish_reason", None))
                 elif "finish_reason" in choice:
-                    chunk_finish_reason = choice["finish_reason"]
+                    chunk_finish_reason = cast(str, choice["finish_reason"])
                 if chunk_finish_reason is not None:
                     finish_reason = chunk_finish_reason
         if finish_reason == "stop" and saw_tool_call:

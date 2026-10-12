@@ -2767,7 +2767,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         primitive_value: Final = self._cast_as_primitive_value_type(value)
         span.set_attribute(key, primitive_value)
 
-    def _transform_messages_to_otel_semantic_conventions(self, messages: list[dict] | str) -> list[dict]:
+    def _transform_messages_to_otel_semantic_conventions(
+        self, messages: list[dict[str, object]] | str
+    ) -> list[dict[str, object]]:
         """
         Transforms LiteLLM/OpenAI style messages into OTEL GenAI 1.38 compliant format.
         OTEL expects a 'parts' array instead of a single 'content' string.
@@ -2781,26 +2783,25 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                 }
             ]
 
-        transformed: Final = []
+        transformed: Final[list[dict[str, object]]] = []
         for msg in messages:
             # Normalize pydantic / LiteLLM wrapper objects (e.g. a ModelResponse
             # Message) to something we can read with .get(); "tool_calls" in msg
             # is False for those objects, which silently dropped tool calls.
-            if not isinstance(msg, dict):
-                normalized = self._to_dict(msg)
-                if normalized is None:
-                    continue
-                msg = normalized
+            normalized = self._to_dict(msg)
+            if normalized is None:
+                continue
+            msg = cast(dict[str, object], normalized)
 
             role = msg.get("role", "user")
             content = msg.get("content", "")
-            parts = []
+            parts: list[dict[str, object]] = []
 
             if isinstance(content, str):
                 parts.append({"type": "text", "content": content})
             elif isinstance(content, list):
                 # Handle multi-modal content if necessary
-                for part in content:
+                for part in cast(list[object], content):
                     if isinstance(part, dict):
                         parts.append(part)
                     else:
@@ -2808,20 +2809,35 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
             # Record tool calls as GenAI tool_call parts (OpenLLMetry-compatible)
             # so id / name / arguments are not dropped from the trace.
-            for tc in msg.get("tool_calls") or []:
+            raw_tool_calls = msg.get("tool_calls")
+            tool_calls: list[object] = raw_tool_calls if isinstance(raw_tool_calls, list) else []
+            for tc in tool_calls:
                 if isinstance(tc, dict):
-                    tc_id = tc.get("id")
-                    fn = tc.get("function") or {}
-                    fn_name = fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", None)
-                    fn_arguments = fn.get("arguments") if isinstance(fn, dict) else getattr(fn, "arguments", None)
+                    tc_dict = cast(dict[str, object], tc)
+                    tc_id = tc_dict.get("id")
+                    fn = tc_dict.get("function")
+                    if isinstance(fn, dict):
+                        fn_dict = cast(dict[str, object], fn)
+                        fn_name = fn_dict.get("name")
+                        fn_arguments = fn_dict.get("arguments")
+                    else:
+                        fn_name = None
+                        fn_arguments = None
                 else:
-                    tc_id = getattr(tc, "id", None)
-                    fn = getattr(tc, "function", None) or {}
-                    fn_name = fn.get("name") if isinstance(fn, dict) else getattr(fn, "name", None)
-                    fn_arguments = fn.get("arguments") if isinstance(fn, dict) else getattr(fn, "arguments", None)
+                    # pydantic tool-call objects (e.g. ChatCompletionMessageToolCall):
+                    # read fields via literal getattr; arbitrary objects degrade to
+                    # None exactly like the old .get()/getattr pair.
+                    tc_id = cast(object, getattr(tc, "id", None))
+                    fn = cast(object, getattr(tc, "function", None))
+                    if fn is None:
+                        fn_name = None
+                        fn_arguments = None
+                    else:
+                        fn_name = cast(object, getattr(fn, "name", None))
+                        fn_arguments = cast(object, getattr(fn, "arguments", None))
                 parts.append({"type": "tool_call", "id": tc_id, "name": fn_name, "arguments": fn_arguments})
 
-            transformed_msg = {"role": role, "parts": parts}
+            transformed_msg: dict[str, object] = {"role": role, "parts": parts}
             if "id" in msg:
                 transformed_msg["id"] = msg["id"]
             if "tool_call_id" in msg:
@@ -2888,18 +2904,21 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         This method converts them to the same ``{"role": ..., "parts": [...]}``
         format used by ``_transform_choices_to_otel_semantic_conventions``.
         """
-        transformed: Final = []
+        transformed: Final[list[dict[str, object]]] = []
         for raw_item in output:
             item = self._to_dict(raw_item)
             if item is None:
                 continue
+            item = cast(dict[str, object], item)
             if item.get("type") == "message":
                 role = item.get("role", "assistant")
-                parts = []
-                for raw_content in item.get("content", []):
+                parts: list[dict[str, object]] = []
+                raw_content_list = item.get("content", [])
+                for raw_content in cast(list[object], raw_content_list) if isinstance(raw_content_list, list) else []:
                     content = self._to_dict(raw_content)
                     if content is None:
                         continue
+                    content = cast(dict[str, object], content)
                     if content.get("type") == "output_text":
                         text = content.get("text", "")
                         if text:
@@ -2908,7 +2927,7 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
                     transformed.append({"role": role, "parts": parts})
             elif item.get("type") == "function_call":
                 # Surface tool calls from Responses API output
-                part: dict = {
+                part: dict[str, object] = {
                     "type": "tool_call",
                     "name": item.get("name", ""),
                     "arguments": item.get("arguments", ""),
