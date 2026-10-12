@@ -1,14 +1,17 @@
 import asyncio
+import base64
 import functools
 import json
 import re
 import signal
 import threading
+import time
 import uuid
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass
+from hashlib import sha256
 from pathlib import Path
 from queue import SimpleQueue
 from typing import Final
@@ -21,7 +24,8 @@ import pytest
 import yaml
 from integration._support.client import Gateway, Scenario, eventually, list_value, object_value, string_value
 from integration._support.database import read_rows
-from integration._support.process import graceful_stop_seconds, owned_proxy_process
+from integration._support.process import OwnedProxy, graceful_stop_seconds, owned_proxy_process
+from integration._support.upstream import aws_event_stream_frame
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
@@ -42,6 +46,10 @@ _ANTHROPIC_KEY: Final = "synthetic-anthropic-key"
 _AZURE_KEY: Final = "synthetic-azure-ai-key"
 _BEDROCK_TOKEN: Final = "synthetic-bedrock-bearer"
 _PLATFORM_KEY: Final = "synthetic-platform-key"
+_MANTLE_KEY: Final = "synthetic-bedrock-mantle-key"
+_SCRIPTED_KEY: Final = "scripted"
+_NIM_GROUP: Final = "scripted-nim"
+_WATSONX_VERSION: Final = "2024-03-13"
 _OWNED_MODEL: Final = "partner-claude"
 _DEPRECATED_OUTPUT_FORMAT: Final = "output_format: this field is deprecated, use output_config.format"
 _BAD_OUTPUT_CONFIG: Final = "output_config: Input should be a valid dictionary"
@@ -60,6 +68,17 @@ _TEXT_FORMAT: Final[dict[str, JsonValue]] = {
     "format": {"type": "json_schema", "name": "risk", "schema": _SCHEMA},
 }
 _OUTPUT_FORMAT: Final[dict[str, JsonValue]] = {"type": "json_schema", "schema": _SCHEMA}
+_NAME_SCHEMA: Final[dict[str, JsonValue]] = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "tier": {"type": "integer"}},
+    "required": ["name", "tier"],
+    "additionalProperties": False,
+}
+_NAME_RESPONSE_FORMAT: Final[dict[str, JsonValue]] = {
+    "type": "json_schema",
+    "json_schema": {"name": "named", "schema": _NAME_SCHEMA},
+}
+_ANTHROPIC_JSON_TOOL: Final[dict[str, JsonValue]] = {"name": _JSON_TOOL, "input_schema": _SCHEMA}
 _USER_TOOL_SPEC: Final[dict[str, JsonValue]] = {
     "type": "function",
     "function": {
@@ -71,8 +90,61 @@ _MARKER: Final = re.compile(r"\b([a-z_]+) ([0-9a-f]{32})\b")
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
 _STARTED_WORKER: Final = re.compile(r"Started server process \[(\d+)\]")
 _OWNED_PROXY_CELL_SECONDS: Final = 2 * graceful_stop_seconds() + 120
-_UNWRAPPED_SHAPES: Final = frozenset({"plain", "wrapped", "named", "values"})
 _BURST_SHAPES: Final = ("wrapped", "plain", "named", "values")
+_STREAM_SHAPES: Final = (
+    "plain",
+    "wrapped",
+    "named",
+    "values",
+    "large",
+    "two_candidates",
+    "inner_incomplete",
+    "self_shaped",
+    "scalar",
+    "empty",
+    "list_input",
+    "deep",
+    "other_tool",
+    "named_partial",
+)
+_HELD_STREAM_SHAPES: Final = frozenset(
+    {"wrapped", "named", "values", "large", "two_candidates", "inner_incomplete", "deep", "other_tool", "named_partial"}
+)
+_FAMILY: Final = (
+    "anthropic_unmapped",
+    "azure_ai_unmapped",
+    "bedrock_invoke",
+    "bedrock_mantle",
+    "claude_platform_unmapped",
+    "vertex_haiku",
+)
+_FRAGMENT_SIZE: Final = 20
+_TIMING_BYTES: Final = 512 * 1024
+_TIMING_FRAGMENT: Final = 4096
+_TIMING_SMALL_BYTES: Final = 128 * 1024
+_TIMING_GROWTH_LIMIT: Final = 6.0
+_HEALTH_LATENCY_SECONDS: Final = 1.0
+_SSE: Final = "text/event-stream"
+_EVENT_STREAM: Final = "application/vnd.amazon.eventstream"
+_RELAY_CHUNKS: Final = (
+    b'data: {"choices":[{"delta":{"content":"relay one"}}]}\n\n',
+    b'data: {"choices":[{"delta":{"content":"relay two"}}]}\n\n',
+    b"data: [DONE]\n\n",
+)
+_PASS_THROUGH_ROUTES: Final = (
+    "gemini",
+    "cohere",
+    "vllm",
+    "mistral",
+    "typesafe",
+    "openrouter",
+    "azure",
+    "openai",
+    "gigachat",
+    "watsonx",
+    "tinyfish",
+    "nvidia_nim",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -117,16 +189,59 @@ def _tool_input(shape: str, marker_hex: str) -> JsonValue:
             return [payload]
         case "deep":
             return _nest(payload, 60)
+        case "other_tool":
+            return {"tool_name": "other_tool", "parameters": payload}
+        case "named_input":
+            return {"name": _JSON_TOOL, "input": payload}
+        case "named_two_objects":
+            return {"tool_name": _JSON_TOOL, "parameters": payload, "extra": {"note": marker_hex}}
+        case "named_string":
+            return {"tool_name": _JSON_TOOL, "parameters": marker_hex}
+        case "named_partial":
+            return {"tool_name": _JSON_TOOL, "parameters": {"tier": 2}}
+        case "name_property":
+            return {"name": _JSON_TOOL, "parameters": {"name": marker_hex, "tier": 1}}
+        case "name_value_plain":
+            return {"name": marker_hex, "tier": 1}
     raise AssertionError(shape)
+
+
+def _timing_digits(size: int) -> str:
+    return "".join(f"{index:08d}" for index in range(size // 8))
+
+
+def _timing_text(shape: str) -> str | None:
+    match shape:
+        case "unclosed_key":
+            return '{"' + _timing_digits(_TIMING_BYTES)
+        case "unclosed_key_small":
+            return '{"' + _timing_digits(_TIMING_SMALL_BYTES)
+        case "unclosed_name":
+            return '{"name": "' + _timing_digits(_TIMING_BYTES)
+        case "unclosed_name_small":
+            return '{"name": "' + _timing_digits(_TIMING_SMALL_BYTES)
+    return None
 
 
 def _expected(shape: str, marker_hex: str) -> JsonValue:
     match shape:
-        case "plain" | "wrapped" | "named" | "values":
+        case "plain" | "wrapped" | "named" | "values" | "other_tool" | "named_input" | "named_two_objects":
             return _payload(marker_hex)
         case "large":
             return {**_payload(marker_hex), "summary": marker_hex + "x" * 5000}
+        case "named_partial":
+            return {"tier": 2}
+        case "name_property":
+            return {"name": marker_hex, "tier": 1}
     return _tool_input(shape, marker_hex)
+
+
+def _fragments(text: str, size: int) -> tuple[str, ...]:
+    return tuple(text[start : start + size] for start in range(0, len(text), size))
+
+
+def _fragment_count(shape: str, marker_hex: str) -> int:
+    return len(_fragments(json.dumps(_tool_input(shape, marker_hex)), _FRAGMENT_SIZE))
 
 
 def _message(message_id: str, content: list[JsonValue], stop_reason: str) -> dict[str, JsonValue]:
@@ -142,8 +257,10 @@ def _message(message_id: str, content: list[JsonValue], stop_reason: str) -> dic
     }
 
 
-def _sse(message: dict[str, JsonValue], block: dict[str, JsonValue], delta: dict[str, JsonValue]) -> tuple[bytes, ...]:
-    events: Final[tuple[tuple[str, dict[str, JsonValue]], ...]] = (
+def _events(
+    message: dict[str, JsonValue], block: dict[str, JsonValue], deltas: tuple[dict[str, JsonValue], ...]
+) -> tuple[tuple[str, dict[str, JsonValue]], ...]:
+    return (
         (
             "message_start",
             {
@@ -157,7 +274,7 @@ def _sse(message: dict[str, JsonValue], block: dict[str, JsonValue], delta: dict
             },
         ),
         ("content_block_start", {"type": "content_block_start", "index": 0, "content_block": block}),
-        ("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": delta}),
+        *(("content_block_delta", {"type": "content_block_delta", "index": 0, "delta": delta}) for delta in deltas),
         ("content_block_stop", {"type": "content_block_stop", "index": 0}),
         (
             "message_delta",
@@ -169,7 +286,25 @@ def _sse(message: dict[str, JsonValue], block: dict[str, JsonValue], delta: dict
         ),
         ("message_stop", {"type": "message_stop"}),
     )
-    return tuple(f"event: {name}\ndata: {json.dumps(data)}\n\n".encode() for name, data in events)
+
+
+def _aws_chunk(data: Mapping[str, JsonValue]) -> bytes:
+    payload: Final = json.dumps({"bytes": base64.b64encode(json.dumps(data).encode()).decode()}).encode()
+    return aws_event_stream_frame(
+        {":event-type": "chunk", ":content-type": "application/json", ":message-type": "event"}, payload
+    )
+
+
+def _stream_reply(
+    message: dict[str, JsonValue], block: dict[str, JsonValue], deltas: tuple[dict[str, JsonValue], ...], framing: str
+) -> Reply:
+    events: Final = _events(message, block, deltas)
+    if framing == "aws":
+        return Reply(content_type=_EVENT_STREAM, chunks=tuple(_aws_chunk(data) for _, data in events))
+    return Reply(
+        content_type=_SSE,
+        chunks=tuple(f"event: {name}\ndata: {json.dumps(data)}\n\n".encode() for name, data in events),
+    )
 
 
 def _error(status: int, message: str) -> Reply:
@@ -210,31 +345,29 @@ def _tool_use(block_id: str, name: str, tool_input: JsonValue) -> dict[str, Json
     return {"type": "tool_use", "id": block_id, "name": name, "input": tool_input}
 
 
-def _tool_reply(message_id: str, shape: str, marker_hex: str, user_tool: bool, stream: bool) -> Reply:
-    tool_input: Final = _tool_input(shape, marker_hex)
+def _tool_reply(message_id: str, shape: str, marker_hex: str, user_tool: bool, framing: str | None) -> Reply:
+    timing: Final = _timing_text(shape)
+    tool_input: Final = {} if timing is not None else _tool_input(shape, marker_hex)
     json_block: Final = _tool_use(f"toolu_{marker_hex}", _JSON_TOOL, tool_input)
     user_blocks: Final[list[JsonValue]] = (
         [_tool_use(f"toolu_user_{marker_hex}", _USER_TOOL, {"q": marker_hex})] if user_tool else []
     )
     message: Final = _message(message_id, [*user_blocks, json_block], "tool_use")
-    if not stream:
+    if framing is None:
         return Reply(body=json.dumps(message).encode())
-    return Reply(
-        content_type="text/event-stream",
-        chunks=_sse(
-            message, {**json_block, "input": {}}, {"type": "input_json_delta", "partial_json": json.dumps(tool_input)}
-        ),
+    partial: Final = json.dumps(tool_input) if timing is None else timing
+    deltas: Final = tuple(
+        {"type": "input_json_delta", "partial_json": piece}
+        for piece in _fragments(partial, _FRAGMENT_SIZE if timing is None else _TIMING_FRAGMENT)
     )
+    return _stream_reply(message, {**json_block, "input": {}}, deltas, framing)
 
 
-def _text_reply(message_id: str, text: str, stream: bool) -> Reply:
+def _text_reply(message_id: str, text: str, framing: str | None) -> Reply:
     message: Final = _message(message_id, [{"type": "text", "text": text}], "end_turn")
-    if not stream:
+    if framing is None:
         return Reply(body=json.dumps(message).encode())
-    return Reply(
-        content_type="text/event-stream",
-        chunks=_sse(message, {"type": "text", "text": ""}, {"type": "text_delta", "text": text}),
-    )
+    return _stream_reply(message, {"type": "text", "text": ""}, ({"type": "text_delta", "text": text},), framing)
 
 
 def _scripted_target(request: Request) -> bool:
@@ -242,7 +375,16 @@ def _scripted_target(request: Request) -> bool:
         request.target.startswith(_VERTEX_MODELS)
         or request.target.endswith("/v1/messages")
         or request.target.endswith("/invoke")
+        or request.target.endswith("/invoke-with-response-stream")
     )
+
+
+def _framing(request: Request, body: Mapping[str, JsonValue]) -> str | None:
+    if request.target.endswith("/invoke-with-response-stream"):
+        return "aws"
+    if request.target.endswith(_VERTEX_STREAM_SUFFIX) or body.get("stream") is True:
+        return "sse"
+    return None
 
 
 def _structured(body: Mapping[str, JsonValue]) -> bool:
@@ -261,14 +403,19 @@ def _peer(request: Request) -> Reply:
     if fault is not None:
         return _error(400, fault)
     shape, marker_hex = _marker_of(body)
-    stream: Final = request.target.endswith(_VERTEX_STREAM_SUFFIX) or body.get("stream") is True
+    framing: Final = _framing(request, body)
     tools: Final = _tool_names(body)
     message_id: Final = f"msg_{marker_hex}"
     if _JSON_TOOL in tools:
-        return _tool_reply(message_id, shape, marker_hex, _USER_TOOL in tools, stream)
+        return _tool_reply(message_id, shape, marker_hex, _USER_TOOL in tools, framing)
     if _structured(body):
-        return _text_reply(message_id, json.dumps(_payload(marker_hex)), stream)
-    return _text_reply(message_id, f"plain text {marker_hex}", stream)
+        return _text_reply(message_id, json.dumps(_payload(marker_hex)), framing)
+    return _text_reply(message_id, f"plain text {marker_hex}", framing)
+
+
+def _relay_peer(request: Request) -> Reply:
+    assert request.body, request.target
+    return Reply(content_type=_SSE, chunks=_RELAY_CHUNKS)
 
 
 def _failing(status: int) -> Callable[[Request], Reply]:
@@ -304,6 +451,7 @@ def _one_delivery(wire: Wire, marker_hex: str) -> _Delivery:
 def _json_tool_schema(delivery: _Delivery) -> dict[str, JsonValue]:
     tools: Final = tuple(object_value(tool) for tool in list_value(delivery.body["tools"]))
     (json_tool,) = tuple(tool for tool in tools if tool["name"] == _JSON_TOOL)
+    assert json_tool.keys() == {"name", "input_schema"}, json_tool
     return object_value(json_tool["input_schema"])
 
 
@@ -371,13 +519,68 @@ def _delta_content(frame: str) -> str:
     return "" if content is None else string_value(content)
 
 
-def _stream_content(response: httpx.Response) -> JsonValue:
+def _content_frames(response: httpx.Response) -> tuple[str, ...]:
     assert response.status_code == 200, response.text
     assert response.text.rstrip().endswith("data: [DONE]"), response.text
+    contents: Final = tuple(
+        _delta_content(line.removeprefix("data: ")) for line in response.text.splitlines() if line.startswith("data: {")
+    )
+    return tuple(content for content in contents if content)
+
+
+def _timing_frames(response: httpx.Response) -> tuple[str, int]:
+    assert response.status_code == 200, response.text
     frames: Final = tuple(
         line.removeprefix("data: ") for line in response.text.splitlines() if line.startswith("data: {")
     )
-    return json.loads("".join(_delta_content(frame) for frame in frames))
+    error_frames: Final = sum(1 for frame in frames if "error" in _JSON_OBJECT.validate_json(frame))
+    return "".join(_delta_content(frame) for frame in frames), error_frames
+
+
+def _timed_stream(
+    client: httpx.Client,
+    key: str,
+    wire: Wire,
+    model: str,
+    shape: str,
+    response_format: dict[str, JsonValue],
+    record_property: Callable[[str, object], None],
+) -> float:
+    marker, marker_hex = _marker(shape)
+    raw: Final = _timing_text(shape)
+    assert raw is not None
+    started: Final = time.perf_counter()
+    response: Final = _post(
+        client, key, "/v1/chat/completions", _chat_body(model, marker, stream=True, response_format=response_format)
+    )
+    wall: Final = time.perf_counter() - started
+    text, error_frames = _timing_frames(response)
+    record_property(f"{shape}_seconds", round(wall, 3))
+    record_property(f"{shape}_error_frames", error_frames)
+    assert text == raw, (shape, len(text), len(raw), text[:80])
+    _one_delivery(wire, marker_hex)
+    return wall
+
+
+def _stream_text(response: httpx.Response) -> str:
+    return "".join(_content_frames(response))
+
+
+def _stream_content(response: httpx.Response) -> JsonValue:
+    return json.loads(_stream_text(response))
+
+
+def _responses_stream_text(response: httpx.Response) -> JsonValue:
+    assert response.status_code == 200, response.text
+    frames: Final = tuple(
+        _JSON_OBJECT.validate_json(line.removeprefix("data: "))
+        for line in response.text.splitlines()
+        if line.startswith("data: {")
+    )
+    assert any(frame["type"] == "response.completed" for frame in frames), response.text
+    return json.loads(
+        "".join(string_value(frame["delta"]) for frame in frames if frame["type"] == "response.output_text.delta")
+    )
 
 
 def _responses_text(response: httpx.Response) -> JsonValue:
@@ -435,6 +638,13 @@ def _family_deployment(gateway: Gateway, scenario: Scenario, api_base: str, memb
                 api_key=_BEDROCK_TOKEN,
                 aws_region_name="us-east-1",
             )
+        case "bedrock_mantle":
+            return scenario.model(
+                model=f"bedrock_mantle/{_BEDROCK_INVOKE_MODEL}",
+                api_base=api_base,
+                api_key=_MANTLE_KEY,
+                aws_region_name="us-east-1",
+            )
         case "claude_platform_unmapped":
             return scenario.model(
                 model=f"bedrock/claude_platform/{_UNMAPPED_MODEL}",
@@ -464,12 +674,115 @@ def _owned_config(path: Path, gateway: Gateway, api_base: str) -> Path:
                             "vertex_location": _LOCATION,
                             "vertex_credentials": service_account_json(_PROJECT, gateway.upstream_url.rstrip("/")),
                         },
-                    }
+                    },
+                    {
+                        "model_name": _NIM_GROUP,
+                        "litellm_params": {
+                            "model": f"nvidia_nim/{_NIM_GROUP}",
+                            "api_base": api_base,
+                            "api_key": _SCRIPTED_KEY,
+                        },
+                    },
                 ],
             }
         )
     )
     return path
+
+
+def _pass_through_environment(api_base: str) -> dict[str, str]:
+    bases: Final = (
+        "GEMINI_API_BASE",
+        "COHERE_API_BASE",
+        "VLLM_API_BASE",
+        "MISTRAL_API_BASE",
+        "TYPESAFE_API_BASE",
+        "OPENROUTER_API_BASE",
+        "AZURE_API_BASE",
+        "OPENAI_API_BASE",
+        "GIGACHAT_API_BASE",
+        "WATSONX_API_BASE",
+        "TINYFISH_AGENT_API_BASE",
+    )
+    keys: Final = (
+        "GEMINI_API_KEY",
+        "COHERE_API_KEY",
+        "VLLM_API_KEY",
+        "MISTRAL_API_KEY",
+        "TYPESAFE_API_KEY",
+        "OPENROUTER_API_KEY",
+        "AZURE_API_KEY",
+        "OPENAI_API_KEY",
+        "GIGACHAT_ACCESS_TOKEN",
+        "WATSONX_TOKEN",
+        "TINYFISH_API_KEY",
+    )
+    return {**{name: api_base for name in bases}, **{name: _SCRIPTED_KEY for name in keys}}
+
+
+@dataclass(frozen=True, slots=True)
+class _PassThroughCall:
+    path: str
+    body: dict[str, JsonValue]
+    upstream_target: str
+    headers: dict[str, str]
+
+
+def _pass_through_call(route: str, marker: str, key: str) -> _PassThroughCall:
+    chat: Final[dict[str, JsonValue]] = {
+        "model": "scripted-chat",
+        "messages": [{"role": "user", "content": marker}],
+        "stream": True,
+    }
+    bearer: Final = {"Authorization": f"Bearer {key}"}
+    match route:
+        case "gemini":
+            return _PassThroughCall(
+                "/gemini/v1beta/models/scripted-model:streamGenerateContent?alt=sse",
+                {"contents": [{"parts": [{"text": marker}]}]},
+                "/v1beta/models/scripted-model:streamGenerateContent?alt=sse&key=scripted",
+                {"x-goog-api-key": key},
+            )
+        case "cohere":
+            return _PassThroughCall("/cohere/v2/chat", chat, "/v2/chat", bearer)
+        case "vllm":
+            return _PassThroughCall("/vllm/v1/chat/completions", chat, "/v1/chat/completions", bearer)
+        case "mistral":
+            return _PassThroughCall("/mistral/v1/chat/completions", chat, "/v1/chat/completions", bearer)
+        case "typesafe":
+            return _PassThroughCall("/typesafe/v1/chat/completions", chat, "/v1/chat/completions", bearer)
+        case "openrouter":
+            return _PassThroughCall("/openrouter/v1/chat/completions", chat, "/v1/chat/completions", bearer)
+        case "azure":
+            return _PassThroughCall(
+                "/azure/openai/deployments/scripted-deployment/chat/completions?api-version=2024-10-21",
+                chat,
+                "/openai/deployments/scripted-deployment/chat/completions?api-version=2024-10-21",
+                bearer,
+            )
+        case "openai":
+            return _PassThroughCall("/openai/v1/chat/completions", chat, "/v1/chat/completions", bearer)
+        case "gigachat":
+            return _PassThroughCall("/gigachat/chat/completions", chat, "/chat/completions", bearer)
+        case "watsonx":
+            return _PassThroughCall(
+                "/watsonx/ml/v1/text/chat_stream",
+                {**chat, "model_id": "scripted-chat", "project_id": "scripted-project"},
+                f"/ml/v1/text/chat_stream?version={_WATSONX_VERSION}",
+                bearer,
+            )
+        case "tinyfish":
+            return _PassThroughCall(
+                "/tinyfish/v1/automation/run-sse",
+                {"url": "https://example.com", "goal": marker},
+                "/v1/automation/run-sse",
+                bearer,
+            )
+        case "nvidia_nim":
+            return _PassThroughCall(
+                f"/nvidia_nim/{_NIM_GROUP}/v1/chat/completions", chat, "/v1/chat/completions", bearer
+            )
+    raise AssertionError(route)
 
 
 def _clients(stack: ExitStack, base_url: str, count: int) -> tuple[httpx.Client, ...]:
@@ -511,6 +824,17 @@ def _seen_once(delivered: tuple[_Delivery, ...], marker_hexes: tuple[str, ...]) 
     assert seen == (1,) * len(marker_hexes), seen
 
 
+def _pass_through_spend_rows(key: str) -> list[dict[str, JsonValue]]:
+    return eventually(
+        lambda: read_rows(
+            'SELECT request_id, model, call_type FROM "LiteLLM_SpendLogs" WHERE api_key = %s AND call_type = %s',
+            (sha256(key.encode()).hexdigest(), "pass_through_endpoint"),
+        ),
+        lambda rows: len(rows) == 1,
+        seconds=90,
+    )
+
+
 def _spend_rows(request_id: str) -> list[dict[str, JsonValue]]:
     return eventually(
         lambda: read_rows('SELECT request_id, model FROM "LiteLLM_SpendLogs" WHERE request_id = %s', (request_id,)),
@@ -526,6 +850,19 @@ def _openai_client(gateway: Gateway) -> openai.OpenAI:
         max_retries=0,
         http_client=httpx.Client(trust_env=False, timeout=60),
     )
+
+
+@pytest.fixture(scope="module")
+def pass_through_proxy(
+    session_gateway: Gateway, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[tuple[OwnedProxy, Wire]]:
+    directory: Final = tmp_path_factory.mktemp("structured-output-pass-through")
+    with wire_server(_relay_peer) as wire:
+        config: Final = _owned_config(directory / "pass-through.yaml", session_gateway, wire.url)
+        with owned_proxy_process(
+            session_gateway, directory, _pass_through_environment(wire.url), config=config
+        ) as owned:
+            yield owned, wire
 
 
 def _anthropic_client(gateway: Gateway) -> anthropic.Anthropic:
@@ -615,14 +952,77 @@ def test_vertex_responses_json_schema_output_text_is_the_schema_object(gateway: 
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
 
 
-def test_vertex_chat_stream_json_schema_unwraps_the_envelope_when_the_block_ends(gateway: Gateway) -> None:
-    marker, marker_hex = _marker("wrapped")
+@pytest.mark.parametrize("shape", _STREAM_SHAPES)
+def test_vertex_chat_stream_json_schema_content_is_the_schema_object(gateway: Gateway, shape: str) -> None:
+    marker, marker_hex = _marker(shape)
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
         model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
         response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker, stream=True))
-        assert _stream_content(response) == _payload(marker_hex), response.text
+        frames: Final = _content_frames(response)
+        assert json.loads("".join(frames)) == _expected(shape, marker_hex), response.text
+        expected_frames: Final = 1 if shape in _HELD_STREAM_SHAPES else _fragment_count(shape, marker_hex)
+        assert len(frames) == expected_frames, (len(frames), expected_frames, frames)
         sent: Final = _one_delivery(wire, marker_hex)
         assert sent.target == f"{_VERTEX_MODELS}{_TOOL_MODEL}{_VERTEX_STREAM_SUFFIX}", sent.target
+        assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
+
+
+def test_vertex_responses_stream_json_schema_output_text_is_the_schema_object(gateway: Gateway) -> None:
+    marker, marker_hex = _marker("wrapped")
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
+        response: Final = gateway.request("POST", "/v1/responses", {**_responses_body(model, marker), "stream": True})
+        assert _responses_stream_text(response) == _payload(marker_hex), response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert sent.target == f"{_VERTEX_MODELS}{_TOOL_MODEL}{_VERTEX_STREAM_SUFFIX}", sent.target
+
+
+@pytest.mark.parametrize("shape", ["other_tool", "named_input", "named_two_objects", "named_string", "named_partial"])
+def test_vertex_chat_json_schema_tool_name_wrapper_unwraps_to_the_inner_object(gateway: Gateway, shape: str) -> None:
+    marker, marker_hex = _marker(shape)
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
+        response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker))
+        assert _chat_content(response) == _expected(shape, marker_hex), response.text
+        _one_delivery(wire, marker_hex)
+
+
+@pytest.mark.parametrize("stream", [False, True], ids=["non_stream", "stream"])
+@pytest.mark.parametrize("shape", ["name_property", "name_value_plain"])
+def test_vertex_chat_json_schema_with_a_name_property_unwraps_only_the_tool_named_wrapper(
+    gateway: Gateway, shape: str, stream: bool
+) -> None:
+    marker, marker_hex = _marker(shape)
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            _chat_body(model, marker, stream=stream, response_format=_NAME_RESPONSE_FORMAT),
+        )
+        content: Final = _stream_content(response) if stream else _chat_content(response)
+        assert content == _expected(shape, marker_hex), response.text
+        if stream and shape == "name_property":
+            assert len(_content_frames(response)) == 1, response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert _json_tool_schema(sent)["properties"] == _NAME_SCHEMA["properties"], sent.body
+
+
+@pytest.mark.parametrize("shape", ["wrapped", "inner_incomplete"])
+def test_vertex_chat_json_schema_validation_runs_on_the_unwrapped_object(gateway: Gateway, shape: str) -> None:
+    marker, marker_hex = _marker(shape)
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
+        response: Final = gateway.request(
+            "POST", "/v1/chat/completions", {**_chat_body(model, marker), "enable_json_schema_validation": True}
+        )
+        if shape == "wrapped":
+            assert _chat_content(response) == _payload(marker_hex), response.text
+        else:
+            assert response.status_code >= 400, response.text
+            assert "JSONSchemaValidationError" in response.text, response.text
+        _one_delivery(wire, marker_hex)
+        assert gateway.request("GET", "/health/liveliness").status_code == 200
 
 
 def test_vertex_chat_json_schema_next_to_a_user_tool_unwraps_the_envelope_and_keeps_the_tool_call(
@@ -647,16 +1047,27 @@ def test_vertex_chat_json_schema_next_to_a_user_tool_unwraps_the_envelope_and_ke
         assert _tool_names(sent.body) == frozenset({_USER_TOOL, _JSON_TOOL}), sent.body
 
 
-@pytest.mark.parametrize(
-    "member",
-    ["anthropic_unmapped", "azure_ai_unmapped", "bedrock_invoke", "claude_platform_unmapped", "vertex_haiku"],
-)
+@pytest.mark.parametrize("member", _FAMILY)
 def test_tool_path_family_unwraps_the_envelope(gateway: Gateway, member: str) -> None:
     marker, marker_hex = _marker("wrapped")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
         model: Final = _family_deployment(gateway, scenario, wire.url, member)
         response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker))
         assert _chat_content(response) == _payload(marker_hex), response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
+
+
+@pytest.mark.parametrize("member", _FAMILY)
+def test_tool_path_family_stream_unwraps_the_envelope(gateway: Gateway, member: str) -> None:
+    marker, marker_hex = _marker("wrapped")
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _family_deployment(gateway, scenario, wire.url, member)
+        response: Final = gateway.request("POST", "/v1/chat/completions", _chat_body(model, marker, stream=True))
+        frames: Final = _content_frames(response)
+        assert frames, response.text
+        assert json.loads("".join(frames)) == _payload(marker_hex), response.text
+        assert len(frames) == 1, frames
         sent: Final = _one_delivery(wire, marker_hex)
         assert _json_tool_schema(sent)["properties"] == _SCHEMA["properties"], sent.body
 
@@ -817,6 +1228,50 @@ def test_vertex_messages_forwards_an_explicit_output_config_format_unchanged(gat
         assert sent.body["output_config"] == {"format": _OUTPUT_FORMAT}, sent.body
 
 
+@pytest.mark.parametrize(
+    ("extra", "expected_output_config"),
+    [
+        ({"output_format": _OUTPUT_FORMAT, "output_config": None}, {"format": _OUTPUT_FORMAT}),
+        ({"output_format": _OUTPUT_FORMAT, "output_config": {"format": None}}, {"format": _OUTPUT_FORMAT}),
+        ({"output_format": _OUTPUT_FORMAT, "output_config": {}}, {"format": _OUTPUT_FORMAT}),
+        (
+            {"output_format": _OUTPUT_FORMAT, "output_config": {"effort": "high"}},
+            {"effort": "high", "format": _OUTPUT_FORMAT},
+        ),
+        ({"output_format": None, "output_config": {"format": _OUTPUT_FORMAT}}, {"format": _OUTPUT_FORMAT}),
+        ({"output_format": None}, None),
+        ({"output_config": None}, None),
+    ],
+    ids=[
+        "null_config",
+        "null_format_key",
+        "empty_config",
+        "effort_config",
+        "null_output_format_beside_callers",
+        "null_output_format_alone",
+        "null_config_alone",
+    ],
+)
+def test_vertex_messages_output_format_beside_an_explicit_output_config(
+    gateway: Gateway, extra: dict[str, JsonValue], expected_output_config: JsonValue
+) -> None:
+    marker, marker_hex = _marker("native")
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, _NATIVE_MODEL)
+        response: Final = gateway.request("POST", "/v1/messages", _messages_body(model, marker, **extra))
+        if expected_output_config is None:
+            assert response.status_code == 200, response.text
+            assert f"plain text {marker_hex}" in response.text, response.text
+        else:
+            assert _messages_text(response) == _payload(marker_hex), response.text
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert "output_format" not in sent.body, sent.body
+        if expected_output_config is None:
+            assert "output_config" not in sent.body, sent.body
+        else:
+            assert sent.body["output_config"] == expected_output_config, sent.body
+
+
 def test_anthropic_messages_forwards_top_level_output_format_verbatim(gateway: Gateway) -> None:
     marker, marker_hex = _marker("native")
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
@@ -895,8 +1350,11 @@ def test_vertex_messages_duplicate_output_format_keys_fold_the_last_value(gatewa
     ],
     ids=["required_string", "properties_list", "empty_schema"],
 )
-def test_vertex_chat_malformed_response_format_schema_keeps_the_tool_input(gateway: Gateway, schema: JsonValue) -> None:
-    marker, marker_hex = _marker("wrapped")
+@pytest.mark.parametrize("shape", ["wrapped", "other_tool"])
+def test_vertex_chat_malformed_response_format_schema_keeps_the_tool_input(
+    gateway: Gateway, schema: JsonValue, shape: str
+) -> None:
+    marker, marker_hex = _marker(shape)
     with wire_server(_peer) as wire, gateway.scenario() as scenario:
         model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
         response: Final = gateway.request(
@@ -908,7 +1366,7 @@ def test_vertex_chat_malformed_response_format_schema_keeps_the_tool_input(gatew
                 response_format={"type": "json_schema", "json_schema": {"name": "risk", "schema": schema}},
             ),
         )
-        assert _chat_content(response) == _tool_input("wrapped", marker_hex), response.text
+        assert _chat_content(response) == _tool_input(shape, marker_hex), response.text
         _one_delivery(wire, marker_hex)
         assert gateway.request("GET", "/health/liveliness").status_code == 200
 
@@ -969,7 +1427,7 @@ def test_concurrent_burst_across_both_workers_unwraps_every_envelope(gateway: Ga
         model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
         shapes: Final = tuple(_BURST_SHAPES[index % len(_BURST_SHAPES)] for index in range(12))
         markers: Final = tuple(_marker(shape) for shape in shapes)
-        streams: Final = tuple(index % 6 == 5 for index in range(len(markers)))
+        streams: Final = tuple(index % 3 == 2 for index in range(len(markers)))
         bodies: Final = tuple(
             _chat_body(model, marker, stream=stream) for (marker, _), stream in zip(markers, streams, strict=True)
         )
@@ -994,30 +1452,33 @@ def test_upstream_outage_mid_run_recovers_with_envelopes_still_unwrapped(gateway
         pool: Final = stack.enter_context(ThreadPoolExecutor(max_workers=len(clients)))
         scenario: Final = stack.enter_context(gateway.scenario())
 
-        def wave() -> tuple[tuple[httpx.Response | None, str], ...]:
+        streams: Final = tuple(index % 2 == 1 for index in range(len(clients)))
+
+        def wave() -> tuple[tuple[httpx.Response | None, str, bool], ...]:
             markers: Final = tuple(_marker("wrapped") for _ in clients)
             responses: Final = tuple(
                 pool.map(
-                    lambda pair: _post_or_dropped(
-                        pair[0], gateway.key, "/v1/chat/completions", _chat_body(model, pair[1][0])
+                    lambda item: _post_or_dropped(
+                        item[0], gateway.key, "/v1/chat/completions", _chat_body(model, item[1][0], stream=item[2])
                     ),
-                    zip(clients, markers, strict=True),
+                    zip(clients, markers, streams, strict=True),
                 )
             )
-            return tuple(zip(responses, tuple(marker_hex for _, marker_hex in markers), strict=True))
+            return tuple(zip(responses, tuple(marker_hex for _, marker_hex in markers), streams, strict=True))
 
-        def unwrapped(wire: Wire, results: tuple[tuple[httpx.Response | None, str], ...]) -> None:
-            for response, marker_hex in results:
+        def unwrapped(wire: Wire, results: tuple[tuple[httpx.Response | None, str, bool], ...]) -> None:
+            for response, marker_hex, stream in results:
                 assert response is not None, results
-                assert _chat_content(response) == _payload(marker_hex), response.text
-            _seen_once(_delivered(wire), tuple(marker_hex for _, marker_hex in results))
+                observed: Final = _stream_content(response) if stream else _chat_content(response)
+                assert observed == _payload(marker_hex), response.text
+            _seen_once(_delivered(wire), tuple(marker_hex for _, marker_hex, _ in results))
 
         with wire_server(_peer) as wire:
             port: Final = int(wire.url.rsplit(":", 1)[1])
             model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
             unwrapped(wire, wave())
         outage: Final = wave()
-        assert all(response is not None and response.status_code >= 500 for response, _ in outage), outage
+        assert all(response is not None and response.status_code >= 500 for response, _, _ in outage), outage
         assert gateway.request("GET", "/health/liveliness").status_code == 200
         with wire_server(_peer, port=port) as revived:
             unwrapped(revived, wave())
@@ -1067,3 +1528,116 @@ def test_worker_sigkill_mid_burst_leaves_the_replacement_unwrapping_envelopes(ga
             assert _chat_content(after) == _payload(marker_hex), after.text
         _seen_once(_delivered(wire), tuple(marker_hex for _, marker_hex in markers + second_wave))
         assert owned.process.poll() is None
+
+
+@pytest.mark.parametrize(
+    ("shape", "response_format"),
+    [("unclosed_key", _RESPONSE_FORMAT), ("unclosed_name", _NAME_RESPONSE_FORMAT)],
+    ids=["unclosed_key", "unclosed_name"],
+)
+def test_vertex_chat_stream_never_closing_tool_input_stays_linear_and_keeps_health_responsive(
+    gateway: Gateway, shape: str, response_format: dict[str, JsonValue], record_property: Callable[[str, object], None]
+) -> None:
+    latencies: Final[SimpleQueue[float]] = SimpleQueue()
+    done: Final = threading.Event()
+    with ExitStack() as stack:
+        wire: Final = stack.enter_context(wire_server(_peer))
+        scenario: Final = stack.enter_context(gateway.scenario())
+        model: Final = _vertex_deployment(gateway, scenario, wire.url, _TOOL_MODEL)
+        streaming, probing = _clients(stack, str(gateway.client.base_url), 2)
+        _local_port(probing)
+
+        def probe() -> None:
+            while not done.wait(0.05):
+                started: Final = time.perf_counter()
+                assert probing.get("/health/liveliness").status_code == 200
+                latencies.put(time.perf_counter() - started)
+
+        prober: Final = threading.Thread(target=probe)
+        prober.start()
+        stack.callback(prober.join, 30)
+        stack.callback(done.set)
+        small, large = (
+            _timed_stream(streaming, gateway.key, wire, model, size_shape, response_format, record_property)
+            for size_shape in (f"{shape}_small", shape)
+        )
+        done.set()
+        prober.join(timeout=30)
+        probes: Final = tuple(latencies.get_nowait() for _ in range(latencies.qsize()))
+        slowest: Final = max(probes, default=0.0)
+        record_property("slowest_health_seconds", round(slowest, 3))
+        record_property("health_probes", len(probes))
+        assert large <= _TIMING_GROWTH_LIMIT * small, (shape, small, large)
+        assert slowest <= _HEALTH_LATENCY_SECONDS, (shape, slowest, len(probes))
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+def test_anthropic_pass_through_stream_relays_the_tool_stream_verbatim_and_logs_spend(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker, marker_hex = _marker("wrapped")
+    overrides: Final = {"ANTHROPIC_API_BASE": "", "ANTHROPIC_API_KEY": _ANTHROPIC_KEY}
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        key: Final = scenario.key()
+        with owned_proxy_process(gateway, tmp_path, {**overrides, "ANTHROPIC_API_BASE": wire.url}) as owned:
+            response: Final = _post(
+                owned.gateway.client,
+                key,
+                "/anthropic/v1/messages",
+                _messages_body(_UNMAPPED_MODEL, marker, stream=True, tools=[_ANTHROPIC_JSON_TOOL]),
+            )
+            assert response.status_code == 200, response.text
+            assert response.headers["content-type"].startswith(_SSE), response.headers
+            expected: Final = _tool_reply(f"msg_{marker_hex}", "wrapped", marker_hex, False, "sse").chunks
+            assert expected is not None
+            assert response.content == b"".join(expected), response.text
+            sent: Final = _one_delivery(wire, marker_hex)
+            assert sent.target == "/v1/messages", sent.target
+            assert _json_tool_schema(sent) == _SCHEMA, sent.body
+            (row,) = _pass_through_spend_rows(key)
+            assert row["model"] == _UNMAPPED_MODEL, row
+
+
+def test_bedrock_pass_through_invoke_stream_relays_the_event_stream_verbatim(gateway: Gateway) -> None:
+    marker, marker_hex = _marker("wrapped")
+    with wire_server(_peer) as wire, gateway.scenario() as scenario:
+        deployment: Final = scenario.model(
+            model=f"bedrock/{_BEDROCK_INVOKE_MODEL}",
+            api_base=wire.url,
+            aws_access_key_id="AKIASCRIPTEDPROVIDER",
+            aws_secret_access_key="scripted-secret",
+            aws_region_name="us-east-1",
+        )
+        response: Final = gateway.request(
+            "POST",
+            f"/bedrock/model/{deployment}/invoke-with-response-stream",
+            {
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": marker}],
+                "tools": [_ANTHROPIC_JSON_TOOL],
+            },
+        )
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"] == _EVENT_STREAM, response.headers
+        expected: Final = _tool_reply(f"msg_{marker_hex}", "wrapped", marker_hex, False, "aws").chunks
+        assert expected is not None
+        assert response.content == b"".join(expected), response.content[:200]
+        sent: Final = _one_delivery(wire, marker_hex)
+        assert sent.target == f"/model/{_BEDROCK_INVOKE_MODEL}/invoke-with-response-stream", sent.target
+
+
+@pytest.mark.timeout(_OWNED_PROXY_CELL_SECONDS)
+@pytest.mark.parametrize("route", _PASS_THROUGH_ROUTES)
+def test_pass_through_stream_relays_the_scripted_frames_verbatim(
+    pass_through_proxy: tuple[OwnedProxy, Wire], session_gateway: Gateway, route: str
+) -> None:
+    owned, wire = pass_through_proxy
+    marker_hex: Final = uuid.uuid4().hex
+    call: Final = _pass_through_call(route, f"relay {marker_hex}", session_gateway.key)
+    response: Final = owned.gateway.client.post(call.path, json=call.body, headers=call.headers)
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"].startswith(_SSE), response.headers
+    assert response.content == b"".join(_RELAY_CHUNKS), response.text
+    (seen,) = tuple(request for request in wire.drain() if marker_hex in request.body.decode())
+    assert seen.target == call.upstream_target, seen.target

@@ -3,6 +3,7 @@ Calling + translation logic for anthropic's `/v1/messages` endpoint
 """
 
 import copy
+import io
 import json
 import re
 from collections.abc import Callable, Mapping
@@ -79,9 +80,22 @@ _FIRST_NAME_VALUE: Final = re.compile(r'^\s*\{\s*"(?:' + _ENVELOPE_NAME_KEY_PATT
 _NAME_VALUE_PREFIX: Final = re.compile(
     r'^\s*\{\s*"(?:' + _ENVELOPE_NAME_KEY_PATTERN + r')"\s*:\s*(?:"(?:[^"\\]|\\.)*\\?)?$'
 )
+_NEXT_OBJECT_KEY: Final = re.compile(r'^\s*,\s*"((?:[^"\\]|\\.)*)"\s*:')
+_NEXT_KEY_PREFIX: Final = re.compile(r'^\s*(?:,\s*(?:"(?:[^"\\]|\\.)*\\?(?:"\s*)?)?)?$')
+_OBJECT_END: Final = re.compile(r"^\s*\}")
+_UNDECIDED_PREFIX_LIMIT: Final = 4096
 
 
-def _envelope_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
+def _second_key_verdict(after_first_value: str, schema: ResponseFormatSchema) -> _EnvelopeVerdict:
+    second_key: Final = _NEXT_OBJECT_KEY.match(after_first_value)
+    if second_key is not None:
+        return "pass_through" if second_key.group(1) in schema.property_names else "hold"
+    if _OBJECT_END.match(after_first_value):
+        return "pass_through"
+    return "undecided" if _NEXT_KEY_PREFIX.match(after_first_value) else "pass_through"
+
+
+def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
     first_key: Final = _FIRST_OBJECT_KEY.match(buffered_json)
     if first_key is None:
         return "undecided" if _OBJECT_KEY_PREFIX.match(buffered_json) else "pass_through"
@@ -92,7 +106,16 @@ def _envelope_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_nam
     first_value: Final = _FIRST_NAME_VALUE.match(buffered_json)
     if first_value is None:
         return "undecided" if _NAME_VALUE_PREFIX.match(buffered_json) else "pass_through"
-    return "hold" if first_value.group(1) == tool_name else "pass_through"
+    if first_value.group(1) == tool_name:
+        return "hold"
+    return _second_key_verdict(buffered_json[first_value.end() :], schema)
+
+
+def _envelope_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
+    verdict: Final = _prefix_verdict(buffered_json, schema, tool_name)
+    if verdict == "undecided" and len(buffered_json) > _UNDECIDED_PREFIX_LIMIT:
+        return "hold"
+    return verdict
 
 
 async def make_call(
@@ -611,7 +634,7 @@ class ModelResponseIterator:
         # Track if we've converted any response_format tools (affects finish_reason)
         self.converted_response_format_tool: bool = False
         self.response_format_schema = response_format_schema
-        self._response_format_buffer: str = ""
+        self._response_format_buffer: io.StringIO = io.StringIO()
         self._response_format_verdict: _EnvelopeVerdict = "undecided"
 
         # For handling partial JSON chunks from fragmentation
@@ -1133,25 +1156,24 @@ class ModelResponseIterator:
         self, tool_use: ChatCompletionToolCallChunk, schema: ResponseFormatSchema
     ) -> str:
         if tool_use.get("id") is not None:
-            self._response_format_buffer = ""
+            self._response_format_buffer = io.StringIO()
             self._response_format_verdict = "undecided"
             return ""
         fragment: Final = tool_use.get("function", {}).get("arguments") or ""
         if self._response_format_verdict == "pass_through":
             return fragment
-        self._response_format_buffer = self._response_format_buffer + fragment
+        self._response_format_buffer.write(fragment)
         if self._response_format_verdict == "hold":
             return ""
-        self._response_format_verdict = _envelope_verdict(
-            self._response_format_buffer, schema, RESPONSE_FORMAT_TOOL_NAME
-        )
-        return self._response_format_buffer if self._response_format_verdict == "pass_through" else ""
+        buffered: Final = self._response_format_buffer.getvalue()
+        self._response_format_verdict = _envelope_verdict(buffered, schema, RESPONSE_FORMAT_TOOL_NAME)
+        return buffered if self._response_format_verdict == "pass_through" else ""
 
     def _flush_response_format_buffer(self) -> str:
         if self.response_format_schema is None or self._response_format_verdict == "pass_through":
             return ""
-        held: Final = self._response_format_buffer
-        self._response_format_buffer = ""
+        held: Final = self._response_format_buffer.getvalue()
+        self._response_format_buffer = io.StringIO()
         self._response_format_verdict = "undecided"
         if not held:
             return ""

@@ -7330,7 +7330,23 @@ _OPEN_SCORE_SCHEMA: Final = {
 _VALUES_SCHEMA: Final = {"type": "object", "properties": {"values": {"type": "array"}}, "required": ["values"]}
 _REMOTE_REF_SCHEMA: Final = {**_PERSON_SCHEMA, "$ref": "https://schemas.example.com/person.json"}
 _LOOSE_SCHEMA: Final = {"type": "object", "properties": {"name": {"type": "string"}, "email": {"type": "string"}}}
+_CLOSED_CONTACT_SCHEMA: Final = {**_LOOSE_SCHEMA, "additionalProperties": False}
 _CONTACT: Final = {"name": "Ada", "email": "ada@example.com"}
+_NAMED_BOOK_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "parameters": {
+            "type": "object",
+            "properties": {"title": {"type": "string"}, "author": {"type": "string"}},
+            "required": ["title", "author"],
+            "additionalProperties": False,
+        },
+    },
+    "required": ["name", "parameters"],
+    "additionalProperties": False,
+}
+_NAMED_BOOK: Final = {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"title": "Dune", "author": "Frank Herbert"}}
 
 
 def _schema(document: dict[str, object]) -> ResponseFormatSchema:
@@ -7389,11 +7405,18 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
             id="remote_ref_schema_falls_back_to_key_matching",
         ),
         pytest.param(
-            _LOOSE_SCHEMA,
+            _CLOSED_CONTACT_SCHEMA,
             {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CONTACT},
             _CONTACT,
             id="tool_name_envelope_when_the_schema_lists_no_required_keys",
         ),
+        pytest.param(
+            _LOOSE_SCHEMA,
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CONTACT},
+            {"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CONTACT},
+            id="open_schema_accepts_the_tool_name_envelope_itself",
+        ),
+        pytest.param(_NAMED_BOOK_SCHEMA, _NAMED_BOOK, _NAMED_BOOK, id="accepted_answer_whose_name_is_the_tool_name"),
         pytest.param(
             _LOOSE_SCHEMA,
             {"name": RESPONSE_FORMAT_TOOL_NAME, "email": "ada@example.com"},
@@ -7440,6 +7463,22 @@ def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_env
 
     assert message is not None
     assert json.loads(message.content) == expected_content
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        {"type": "object", "properties": ["tier", "summary"]},
+        {"type": "object", "properties": {"tier": {"type": "integer"}}, "required": "tier"},
+    ],
+    ids=["properties_list", "required_string"],
+)
+def test_response_format_schema_rejects_a_malformed_schema(document: dict[str, object]):
+    assert response_format_schema(document) is None
+
+
+def test_response_format_schema_without_constraints_accepts_any_object():
+    assert _schema({}).accepts({"tool_name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _CONTACT})
 
 
 def test_json_mode_with_user_tool_call_unwraps_the_envelope_into_content():

@@ -13,8 +13,8 @@ import litellm
 from litellm._uuid import uuid
 from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.factory import anthropic_messages_pt
-from litellm.llms.anthropic.chat.handler import ModelResponseIterator, make_call
-from litellm.llms.base_llm.base_utils import response_format_schema
+from litellm.llms.anthropic.chat.handler import ModelResponseIterator, _envelope_verdict, make_call
+from litellm.llms.base_llm.base_utils import response_format_schema, unwrap_response_format_envelope
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.llms.openai import (
     ChatCompletionToolCallChunk,
@@ -2746,11 +2746,31 @@ _STREAMED_RISK_SCHEMA: Final = {
     "required": ["tier", "summary"],
 }
 _STREAMED_RISK_OBJECT: Final = {"tier": 3, "summary": "Two-hour read-only window on the loyalty APIs"}
-_STREAMED_LOOSE_SCHEMA: Final = {
+_STREAMED_CONTACT_SCHEMA: Final = {
     "type": "object",
     "properties": {"name": {"type": "string"}, "email": {"type": "string"}},
+    "additionalProperties": False,
+}
+_STREAMED_BOOK_SCHEMA: Final = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "parameters": {
+            "type": "object",
+            "properties": {"title": {"type": "string"}, "author": {"type": "string"}},
+            "required": ["title", "author"],
+        },
+    },
+    "required": ["name", "parameters"],
+    "additionalProperties": False,
 }
 _STREAMED_CONTACT: Final = {"name": "Ada", "email": "ada@example.com"}
+_STREAMED_PERSON_SCHEMA: Final = {
+    "type": "object",
+    "properties": {"name": {"type": "string"}, "age": {"type": "integer"}},
+    "required": ["name", "age"],
+}
+_STREAMED_PERSON: Final = {"name": "Ada", "age": 36}
 
 
 def _json_tool_events(fragments: tuple[str, ...]) -> tuple[dict[str, object], ...]:
@@ -2832,21 +2852,61 @@ def test_streamed_json_mode_truncated_output_is_passed_through_untouched():
 def test_streamed_json_mode_tool_name_envelope_is_unwrapped_when_name_is_a_schema_property():
     envelope = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": _STREAMED_CONTACT})
 
-    contents = _streamed_json_mode_contents((envelope[:6], envelope[6:24], envelope[24:]), _STREAMED_LOOSE_SCHEMA)
+    contents = _streamed_json_mode_contents((envelope[:6], envelope[6:24], envelope[24:]), _STREAMED_CONTACT_SCHEMA)
 
     assert json.loads("".join(contents)) == _STREAMED_CONTACT
     assert contents[:-2] == ("",) * (len(contents) - 2)
 
 
-def test_streamed_json_mode_name_property_answer_streams_once_its_value_is_known():
+def test_streamed_json_mode_name_property_answer_streams_once_its_second_key_is_known():
     answer = json.dumps(_STREAMED_CONTACT)
 
-    contents = _streamed_json_mode_contents((answer[:6], answer[6:16], answer[16:]), _STREAMED_LOOSE_SCHEMA)
+    contents = _streamed_json_mode_contents((answer[:6], answer[6:24], answer[24:]), _STREAMED_CONTACT_SCHEMA)
 
     assert "".join(contents) == answer
     assert contents[2] == ""
-    assert contents[3] == answer[:16]
-    assert contents[4] == answer[16:]
+    assert contents[3] == answer[:24]
+    assert contents[4] == answer[24:]
+
+
+def test_streamed_json_mode_single_name_property_answer_streams_when_the_object_closes():
+    answer = json.dumps({"name": "Ada"})
+
+    contents = _streamed_json_mode_contents((answer[:-1], answer[-1:]), _STREAMED_CONTACT_SCHEMA)
+
+    assert "".join(contents) == answer
+    assert contents[2] == ""
+    assert contents[3] == answer
+
+
+def test_streamed_json_mode_accepted_answer_naming_the_tool_is_kept_whole():
+    answer = json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "parameters": {"title": "Dune", "author": "Frank Herbert"}})
+
+    contents = _streamed_json_mode_contents((answer[:9], answer[9:40], answer[40:]), _STREAMED_BOOK_SCHEMA)
+
+    assert json.loads("".join(contents)) == json.loads(answer)
+    assert contents[:-2] == ("",) * (len(contents) - 2)
+
+
+def test_envelope_verdict_holds_a_prefix_that_stays_undecided_past_the_limit():
+    schema = response_format_schema(_STREAMED_RISK_SCHEMA)
+    assert schema is not None
+    never_closing_key = '{"' + "k" * 5000
+
+    assert _envelope_verdict(never_closing_key[:100], schema, RESPONSE_FORMAT_TOOL_NAME) == "undecided"
+    assert _envelope_verdict(never_closing_key, schema, RESPONSE_FORMAT_TOOL_NAME) == "hold"
+
+
+def test_streamed_json_mode_foreign_name_envelope_is_unwrapped_like_the_non_streamed_answer():
+    envelope = json.dumps({"name": "Person", "parameters": _STREAMED_PERSON})
+    schema = response_format_schema(_STREAMED_PERSON_SCHEMA)
+    assert schema is not None
+
+    contents = _streamed_json_mode_contents((envelope[:16], envelope[16:34], envelope[34:]), _STREAMED_PERSON_SCHEMA)
+
+    assert json.loads("".join(contents)) == _STREAMED_PERSON
+    assert contents[:-2] == ("",) * (len(contents) - 2)
+    assert unwrap_response_format_envelope(json.loads(envelope), schema, RESPONSE_FORMAT_TOOL_NAME) == _STREAMED_PERSON
 
 
 @respx.mock

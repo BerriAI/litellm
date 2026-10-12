@@ -188,12 +188,16 @@ def as_json_object(value: object) -> Mapping[str, JsonValue] | None:
 
 
 def response_format_schema(value: object) -> ResponseFormatSchema | None:
+    from jsonschema.exceptions import SchemaError
+    from jsonschema.validators import validator_for
+
     document: Final = as_json_object(value)
     if document is None:
         return None
     try:
+        validator_for(document).check_schema(dict(document))
         required: Final = _REQUIRED_NAMES.validate_python(document.get("required", ()))
-    except ValidationError:
+    except (SchemaError, ValidationError):
         return None
     return ResponseFormatSchema(
         document=document,
@@ -225,10 +229,12 @@ def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchem
     payload_object: Final = as_json_object(payload)
     if payload_object is None:
         return payload
+    if schema.accepts(payload_object):
+        return payload
     tool_call_payload: Final = _tool_call_envelope_payload(payload_object, tool_name)
     if tool_call_payload is not None:
         return tool_call_payload
-    if schema.accepts(payload_object) or _is_schema_object(payload_object, schema):
+    if _is_schema_object(payload_object, schema):
         return payload
     nested_objects: Final = tuple(as_json_object(value) for value in payload_object.values())
     candidates: Final = tuple(
