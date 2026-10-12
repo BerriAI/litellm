@@ -328,7 +328,7 @@ SDK_KWARGS = {
 EXPECTED_BODY = {"input": ["hello", "good morning"], "model": "served-embedding-model"}
 
 
-class TestSagemakerOpenAIEmbeddingEndToEnd:
+class TestSagemakerOpenAIEmbeddingSdkCalls:
     def test_sdk_sync(self):
         session, client = fake_sagemaker_session(OPENAI_RESPONSE)
         with patch("boto3.Session", return_value=session):
