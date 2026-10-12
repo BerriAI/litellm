@@ -4,7 +4,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { renderWithProviders } from "../../../../../tests/test-utils";
 import AddProviderForm from "./add_provider_form";
-import { DiscountConfig } from "./types";
 
 const onAddProvider = vi.fn();
 const onParentFinish = vi.fn();
@@ -18,11 +17,12 @@ const ParentOwnedForm = () => (
     className="space-y-6"
   >
     <AddProviderForm
-      discountConfig={{} as DiscountConfig}
       selectedProvider="OpenAI"
       newDiscount="5"
+      modelPattern=""
       onProviderChange={vi.fn()}
       onDiscountChange={vi.fn()}
+      onModelPatternChange={vi.fn()}
       onAddProvider={onAddProvider}
     />
   </form>
