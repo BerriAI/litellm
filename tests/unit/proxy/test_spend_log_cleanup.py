@@ -61,6 +61,29 @@ def test_first_cleanup_run_kwargs_runs_soon_after_startup_when_opted_in():
     assert len(delays) > 1
 
 
+@pytest.mark.parametrize("interval, interval_seconds", [("30s", 30), ("2m", 120)])
+def test_first_cleanup_run_kwargs_never_runs_later_than_a_short_interval(interval: str, interval_seconds: int):
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    settings: Final = {
+        "maximum_spend_logs_cleanup_run_on_startup": True,
+        "maximum_spend_logs_retention_interval": interval,
+    }
+    delays: Final = {
+        (first_cleanup_run_kwargs(settings, now)["next_run_time"] - now).total_seconds() for _ in range(200)
+    }
+    assert max(delays) <= interval_seconds, delays
+    assert min(delays) >= min(SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS, interval_seconds), delays
+
+
+@pytest.mark.parametrize("interval", ["not-a-duration", 3600])
+def test_first_cleanup_run_kwargs_leaves_an_invalid_interval_to_the_caller(interval: object):
+    settings: Final = {
+        "maximum_spend_logs_cleanup_run_on_startup": True,
+        "maximum_spend_logs_retention_interval": interval,
+    }
+    assert dict(first_cleanup_run_kwargs(settings, datetime(2026, 1, 1, tzinfo=timezone.utc))) == {}
+
+
 def _far_deadline() -> float:
     """A run deadline far enough out that only the other bounds can stop a batch loop."""
     return time.monotonic() + 3600

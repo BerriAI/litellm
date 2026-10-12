@@ -4259,6 +4259,28 @@ async def test_ProxyConfig__reschedule_spend_log_cleanup_job_first_run_only_move
         real_scheduler.shutdown(wait=False)
 
 
+@pytest.mark.asyncio
+async def test_ProxyConfig__reschedule_spend_log_cleanup_job_opt_in_never_delays_a_short_interval(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    real_scheduler: Final = _paused_scheduler(monkeypatch)
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.general_settings",
+        {
+            "maximum_health_check_retention_period": "90d",
+            "maximum_spend_logs_retention_interval": "30s",
+            "maximum_spend_logs_cleanup_run_on_startup": True,
+        },
+    )
+    before: Final = datetime.now(timezone.utc)
+    try:
+        await ProxyConfig()._reschedule_spend_log_cleanup_job()
+        delay: Final = (real_scheduler.get_job("spend_log_cleanup_job").next_run_time - before).total_seconds()
+        assert delay <= 30 + 1, delay
+    finally:
+        real_scheduler.shutdown(wait=False)
+
+
 def _scheduler_whose_first_add_job_raises(monkeypatch):
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 

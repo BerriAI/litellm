@@ -108,16 +108,24 @@ def first_cleanup_run_kwargs(settings: Mapping[str, object], now: datetime) -> F
     """
     Extra ``add_job`` kwargs for the interval cleanup job. Empty unless
     ``maximum_spend_logs_cleanup_run_on_startup`` is true, so the first run otherwise stays one interval out.
+    The startup delay is capped at the configured interval so opting in never makes the first run later.
     """
     if (
         settings.get("maximum_spend_logs_cleanup_cron")
         or settings.get("maximum_spend_logs_cleanup_run_on_startup") is not True
     ):
         return {}
-    delay_seconds: Final = SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS + random.randint(
+    retention_interval: Final = settings.get("maximum_spend_logs_retention_interval", "1d")
+    if not isinstance(retention_interval, str):
+        return {}
+    try:
+        interval_seconds: Final = duration_in_seconds(retention_interval)
+    except (ValueError, OverflowError):
+        return {}
+    startup_delay_seconds: Final = SPEND_LOG_CLEANUP_STARTUP_DELAY_SECONDS + random.randint(
         0, SPEND_LOG_CLEANUP_STARTUP_JITTER_SECONDS
     )
-    return {"next_run_time": now + timedelta(seconds=delay_seconds)}
+    return {"next_run_time": now + timedelta(seconds=min(startup_delay_seconds, interval_seconds))}
 
 
 class SpendLogCleanup:
