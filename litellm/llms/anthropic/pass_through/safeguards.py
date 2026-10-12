@@ -4,7 +4,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from itertools import accumulate, chain
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Final, Literal, Protocol, TypeAlias, cast
 
 from pydantic import ConfigDict, TypeAdapter, ValidationError
 from typing_extensions import NotRequired, ReadOnly, TypedDict, Unpack, assert_never
@@ -128,6 +128,11 @@ PendingToolUse: TypeAlias = ToolUseUnderReview | TruncatedToolUse
 
 
 @dataclass(frozen=True, slots=True)
+class ClassifierNotServed:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
 class SafeguardsEvaluator:
     classifier_model: str
     classifier_context: str
@@ -145,16 +150,21 @@ class SafeguardsEvaluator:
                 "safeguards classifier %s is outside the caller's model access, budget, or rate limit",
                 self.classifier_model,
             )
-            unsupported: Final[SafeguardStatusUnsupported] = {"type": "unsupported"}
-            return ({"type": DANGEROUS_TOOL_USE, "status": unsupported},)
-        verdicts: Final[Mapping[str, SafeguardToolUseVerdict]] = await self._verdicts(complete) if complete else {}
+            return _unsupported_results()
+        verdicts: Final[Mapping[str, SafeguardToolUseVerdict] | ClassifierNotServed] = (
+            await self._verdicts(complete) if complete else {}
+        )
+        if isinstance(verdicts, ClassifierNotServed):
+            return _unsupported_results()
         status: Final[SafeguardStatusAvailable] = {
             "type": "available",
             "tool_uses": {use.id: _final_verdict(use, verdicts) for use in tool_uses},
         }
         return ({"type": DANGEROUS_TOOL_USE, "status": status},)
 
-    async def _verdicts(self, tool_uses: Sequence[ToolUseUnderReview]) -> Mapping[str, SafeguardToolUseVerdict]:
+    async def _verdicts(
+        self, tool_uses: Sequence[ToolUseUnderReview]
+    ) -> Mapping[str, SafeguardToolUseVerdict] | ClassifierNotServed:
         try:
             response: Final = await asyncio.wait_for(
                 self.acompletion(messages=self._classifier_messages(tool_uses), **self._call_kwargs()),
@@ -172,6 +182,11 @@ class SafeguardsEvaluator:
             verbose_logger.warning("safeguards classifier %s refused the conversation", self.classifier_model)
             return _every_tool_use_unavailable(tool_uses, "refused")
         except Exception as error:  # noqa: BLE001  # the classifier's failure is a verdict, never a 500 on the agent's turn
+            if _proxy_cannot_serve(error):
+                verbose_logger.warning(
+                    "safeguards classifier %s is not served by this proxy: %s", self.classifier_model, error
+                )
+                return ClassifierNotServed()
             verbose_logger.exception("safeguards classifier %s failed: %s", self.classifier_model, error)
             return _every_tool_use_unavailable(tool_uses, "error")
         parsed: Final = _parse_classifier_output(_response_text(response))
@@ -414,6 +429,21 @@ def _final_verdict(use: PendingToolUse, verdicts: Mapping[str, SafeguardToolUseV
 
 def _unavailable(reason: _UnavailableReason) -> SafeguardToolUseUnavailable:
     return SafeguardToolUseUnavailable(type="unavailable", reason=reason)
+
+
+def _unsupported_results() -> Sequence[SafeguardResult]:
+    unsupported: Final[SafeguardStatusUnsupported] = {"type": "unsupported"}
+    return ({"type": DANGEROUS_TOOL_USE, "status": unsupported},)
+
+
+class _ProviderError(Protocol):
+    llm_provider: str | None
+
+
+def _proxy_cannot_serve(error: Exception) -> bool:
+    if not isinstance(error, litellm.BadRequestError):
+        return False
+    return not cast(_ProviderError, error).llm_provider  # cast-ok: litellm exceptions leave llm_provider untyped
 
 
 def _every_tool_use_unavailable(
