@@ -668,6 +668,27 @@ def _parent_logging_with_params(litellm_params: dict) -> Logging:
 
 
 @pytest.mark.asyncio
+async def test_a_line_the_batch_could_not_price_reports_the_zero_the_aggregate_billed(recorder):
+    litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
+    with (
+        patch(
+            "litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=_file_content
+        ),  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        patch(
+            "litellm.cost_calculator.batch_cost_calculator", side_effect=ValueError("no batch price")
+        ),  # test-quality-ok: the pricing table boundary, same seam existing batch_utils tests patch
+    ):
+        await _log_completed_batch(_parent_logging(), _batch())
+
+    line_costs: Final = [
+        _payload(event)["response_cost"]
+        for event in recorder.success_events
+        if _hidden(event).get("batch_custom_id") is not None
+    ]
+    assert line_costs == [0.0]
+
+
+@pytest.mark.asyncio
 async def test_line_items_edge_shapes_and_edge_cases(recorder):
     litellm.store_batch_line_items_in_callbacks = True  # test-quality-ok: flag under test; fixture restores it
     batch = LiteLLMBatch(
@@ -1251,12 +1272,16 @@ class _FakeRedisCache(RedisCache):
     def __init__(self) -> None:
         self._store: dict[str, object] = {}  # mutable-ok: a dict-backed fake needs a mutable store
         self.fail_next_set = False
+        self.swallow_next_set = False
         self.swap_owner_on_get: str | None = None
 
     async def async_set_cache(self, key, value, nx=False, **_kwargs):
         if self.fail_next_set:
             self.fail_next_set = False
             raise ConnectionError("redis down")
+        if self.swallow_next_set:
+            self.swallow_next_set = False
+            return None
         if nx and key in self._store:
             return None
         self._store[key] = value
@@ -1339,6 +1364,19 @@ async def test_line_items_skip_when_redis_claim_backend_is_down(recorder):
     assert second == 2
     assert len(recorder.success_events) == 1
     assert len(recorder.failure_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_redis_set_failure_the_client_swallows_reads_as_unavailable():
+    """RedisCache.async_set_cache logs a failed SET and returns None, the same value
+    SET NX returns when another worker holds the claim."""
+    fake: Final = _FakeRedisCache()
+    claim_cache: Final = DualCache(redis_cache=fake)
+    fake.swallow_next_set = True
+    down: Final = await _claim_line_items(claim_cache, "batch_line_items_emitted:batch_down", "first")
+    claimed: Final = await _claim_line_items(claim_cache, "batch_line_items_emitted:batch_down", "second")
+    held: Final = await _claim_line_items(claim_cache, "batch_line_items_emitted:batch_down", "third")
+    assert (down, claimed, held) == ("unavailable", "claimed", "already_claimed")
 
 
 @pytest.mark.asyncio

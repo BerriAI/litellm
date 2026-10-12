@@ -104,11 +104,12 @@ async def _claim_line_items(claim_cache: DualCache, claim_key: str, token: str) 
         return "already_claimed"
     try:
         ok: Final = await redis_cache.async_set_cache(claim_key, token, ttl=_LINE_ITEM_CLAIM_TTL_SECONDS, nx=True)  # pyright: ignore[reportUnknownMemberType]  # RedisCache.set is untyped upstream
+        holder: Final = None if ok else await redis_cache.async_get_cache(claim_key)  # pyright: ignore[reportUnknownMemberType]  # RedisCache.get is untyped upstream
     except Exception:  # noqa: BLE001  # a redis outage must not emit duplicates; the next retrieve retries
         return "unavailable"
     if ok:
         return "claimed"
-    return "already_claimed"
+    return "already_claimed" if holder is not None else "unavailable"
 
 
 @with_service_target("batch_line_items")
@@ -426,7 +427,7 @@ async def _emit_line_event(
         batch,
         custom_id,
         status_code,
-        response_cost=stats.prompt_cost + stats.completion_cost if stats is not None else None,
+        response_cost=stats.prompt_cost + stats.completion_cost if stats is not None else 0.0,
     )
     if stats is not None and not response_body.get("usage") and isinstance(result, (ModelResponse, EmbeddingResponse)):
         setattr(  # noqa: B010  # ModelResponse.usage is set dynamically by its ctor, so setattr keeps parity for both response types

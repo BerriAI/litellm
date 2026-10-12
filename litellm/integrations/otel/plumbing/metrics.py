@@ -249,8 +249,6 @@ class GenAIMetricRecorder:
         start_time: datetime,
         end_time: datetime,
     ) -> None:
-        if is_batch_line_item_event(kwargs):
-            return
         """Record the one metric a failed request can honestly report: the
         operation's duration, tagged with ``error.type``.
 
@@ -271,6 +269,8 @@ class GenAIMetricRecorder:
         ``gen_ai.token.type``, so an operator's include/exclude list cannot strip
         the discriminator and silently merge failures back into the success series.
         """
+        if is_batch_line_item_event(kwargs):
+            return
         attributes: Final = {
             **self._filter_attributes(self._bounded_attributes(kwargs)),
             Error.TYPE: resolve_error_type(kwargs),
