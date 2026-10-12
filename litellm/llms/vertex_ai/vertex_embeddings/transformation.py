@@ -1,5 +1,6 @@
 import types
-from typing import Any, Final, Literal
+from collections.abc import Mapping
+from typing import Final, Literal, cast  # noqa: TID251  # payload is raw Vertex JSON
 
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -215,7 +216,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         return text_embedding_input
 
     def transform_vertex_response_to_openai(
-        self, response: dict[str, Any], model: str, model_response: EmbeddingResponse
+        self, response: dict, model: str, model_response: EmbeddingResponse
     ) -> EmbeddingResponse:
         """
         Transforms a vertex embedding response to an openai response.
@@ -244,7 +245,13 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
             )
             input_tokens += embedding["statistics"]["token_count"]
 
-        billable_character_count: Final = (response.get("metadata") or {}).get("billableCharacterCount")
+        vertex_response: Final = cast(Mapping[str, object], response)  # cast-ok: raw Vertex JSON, read-only boundary
+        metadata: Final = vertex_response.get("metadata")
+        billable_character_count: Final = (
+            cast(Mapping[str, object], metadata).get("billableCharacterCount")  # cast-ok: isinstance erases types
+            if isinstance(metadata, Mapping)
+            else None
+        )
 
         model_response.object = "list"
         model_response.data = embedding_response
