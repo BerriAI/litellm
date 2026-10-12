@@ -1,14 +1,16 @@
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
 import litellm
-from litellm.proxy.auth.user_api_key_auth import (
-    _run_post_custom_auth_checks,
-    update_valid_token_with_end_user_params,
-)
 from litellm.proxy._types import (
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
     UserAPIKeyAuth,
+)
+from litellm.proxy.auth.user_api_key_auth import (
+    _run_post_custom_auth_checks,
+    update_valid_token_with_end_user_params,
 )
 
 
@@ -21,9 +23,7 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
     valid_token = UserAPIKeyAuth(token="test_token")
 
     # Default: common_checks should NOT be called inside the helper
-    with patch(
-        "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
-    ) as mock_common:
+    with patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock) as mock_common:
         mock_common.return_value = True
         result = await _run_post_custom_auth_checks(
             valid_token=valid_token,
@@ -39,9 +39,7 @@ async def test_custom_auth_run_post_custom_auth_checks_without_end_user_id():
     # With opt-in flag: still not from the helper — the centralized gate
     # in the wrapper handles it.
     with (
-        patch(
-            "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
-        ) as mock_common,
+        patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock) as mock_common,
         patch(
             "litellm.proxy.proxy_server.general_settings",
             {"custom_auth_run_common_checks": True},
@@ -64,15 +62,11 @@ async def test_custom_auth_run_post_custom_auth_checks_with_end_user_budget_exce
     valid_token = UserAPIKeyAuth(
         token="test_token",
         end_user_id="test_user",
-        end_user_model_max_budget={
-            "gpt-4": {"budget_limit": 10.0, "time_period": "1d"}
-        },
+        end_user_model_max_budget={"gpt-4": {"budget_limit": 10.0, "time_period": "1d"}},
     )
     request_data = {"model": "gpt-4"}
 
-    with patch(
-        "litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock
-    ):
+    with patch("litellm.proxy.auth.user_api_key_auth.common_checks", new_callable=AsyncMock):
         with patch(
             "litellm.proxy.proxy_server.model_max_budget_limiter.is_end_user_within_model_budget",
             new_callable=AsyncMock,
@@ -106,9 +100,7 @@ async def test_custom_auth_enforces_end_user_budget_when_common_checks_skipped()
         litellm_budget_table=LiteLLM_BudgetTable(max_budget=1.0),
     )
 
-    async def mock_get_current_spend(
-        counter_key, fallback_spend, max_budget=None, **kwargs
-    ):
+    async def mock_get_current_spend(counter_key, fallback_spend, max_budget=None, **kwargs):
         if counter_key == "spend:end_user:customer-1":
             return 5.0
         return fallback_spend
@@ -403,6 +395,7 @@ def test_end_user_budget_tpd_limit_reaches_the_token():
 
     assert result.end_user_rpm_limit == 5
     assert result.end_user_tpd_limit == 750000
+
 
 def test_end_user_max_budget_reaches_the_token():
     from litellm.proxy.auth.user_api_key_auth import _apply_budget_limits_to_end_user_params
