@@ -410,9 +410,7 @@ def test_response_api_handler_sends_no_stream_options_when_web_search_forces_a_n
 ):
     sent: Final = _SentRequestRecorder()
     recorder: Final = _AgenticLoopKwargsRecorder()
-    monkeypatch.setattr(
-        litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"]), recorder]
-    )
+    monkeypatch.setattr(litellm, "callbacks", [WebSearchInterceptionLogger(enabled_providers=["azure"]), recorder])
     logging_obj: Final = Mock()
     logging_obj.dynamic_success_callbacks = []
 
@@ -2233,7 +2231,9 @@ async def test_async_anthropic_messages_handler_passes_deployment_api_base_to_ag
             super().__init__()
             self.hook_kwargs: dict | None = None
 
-        async def async_should_run_agentic_loop(self, response, model, messages, tools, stream, custom_llm_provider, kwargs):
+        async def async_should_run_agentic_loop(
+            self, response, model, messages, tools, stream, custom_llm_provider, kwargs
+        ):
             self.hook_kwargs = dict(kwargs)
             return False, {}
 
@@ -2593,9 +2593,7 @@ def _transform_subtitle_response(payload):
 
 
 def test_subtitle_synthesis_fallback_without_timings_drops_words():
-    response = _transform_subtitle_response(
-        {"text": "hello world", "words": [{"word": "hello"}, {"word": "world"}]}
-    )
+    response = _transform_subtitle_response({"text": "hello world", "words": [{"word": "hello"}, {"word": "world"}]})
 
     assert response.text == "hello world"
     assert "words" not in response
@@ -3531,7 +3529,13 @@ def _capture_video_create_request(captured):
         captured["body"] = request.content
         return httpx.Response(
             200,
-            json={"id": "video_123", "object": "video", "status": "queued", "created_at": 1712697600, "model": "sora-2"},
+            json={
+                "id": "video_123",
+                "object": "video",
+                "status": "queued",
+                "created_at": 1712697600,
+                "model": "sora-2",
+            },
         )
 
     return respond
@@ -3554,7 +3558,9 @@ def test_video_generation_without_file_sends_multipart_form_data():
     captured = {}
     client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
 
-    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(OpenAIVideoConfig()))
+    result = BaseLLMHTTPHandler().video_generation_handler(
+        client=client, **_video_create_call_kwargs(OpenAIVideoConfig())
+    )
 
     assert captured["content_type"].startswith("multipart/form-data")
     assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
@@ -3594,7 +3600,9 @@ def test_azure_video_generation_without_file_sends_multipart_form_data():
     captured = {}
     client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
 
-    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(AzureVideoConfig()))
+    result = BaseLLMHTTPHandler().video_generation_handler(
+        client=client, **_video_create_call_kwargs(AzureVideoConfig())
+    )
 
     assert captured["content_type"].startswith("multipart/form-data")
     assert _multipart_text_fields(captured["content_type"], captured["body"]) == {
@@ -3609,7 +3617,9 @@ def test_video_generation_json_provider_keeps_json_body():
     captured = {}
     client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_capture_video_create_request(captured))))
 
-    result = BaseLLMHTTPHandler().video_generation_handler(client=client, **_video_create_call_kwargs(_JSONBodyVideoConfig()))
+    result = BaseLLMHTTPHandler().video_generation_handler(
+        client=client, **_video_create_call_kwargs(_JSONBodyVideoConfig())
+    )
 
     assert captured["content_type"] == "application/json"
     assert json.loads(captured["body"]) == {"model": "sora-2", "prompt": "a cat surfing", "seconds": "4"}
@@ -3639,6 +3649,7 @@ def test_video_generation_with_input_reference_keeps_file_multipart():
 AZURE_AI_BASE = "https://myfoundry.services.ai.azure.com"
 AZURE_AI_CHAT_COMPLETIONS_URL = f"{AZURE_AI_BASE}/models/chat/completions"
 
+
 def _a_tool_with_an_unsupported_field() -> dict:
     return {
         "type": "function",
@@ -3646,14 +3657,13 @@ def _a_tool_with_an_unsupported_field() -> dict:
         "strict": True,
     }
 
+
 A_COMPLETION = {
     "id": "chatcmpl-1",
     "object": "chat.completion",
     "created": 1,
     "model": "grok-3",
-    "choices": [
-        {"index": 0, "message": {"role": "assistant", "content": "sent"}, "finish_reason": "stop"}
-    ],
+    "choices": [{"index": 0, "message": {"role": "assistant", "content": "sent"}, "finish_reason": "stop"}],
     "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
 }
 
@@ -3697,9 +3707,7 @@ def _call_azure_ai(recorder: _RecordedAzureAI, **overrides):
 
 
 def test_a_tool_field_the_provider_rejects_is_dropped_and_the_call_retried():
-    recorder = _RecordedAzureAI(
-        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
-    )
+    recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)])
 
     response = _call_azure_ai(recorder)
 
@@ -3710,9 +3718,7 @@ def test_a_tool_field_the_provider_rejects_is_dropped_and_the_call_retried():
 
 
 def test_the_retry_changes_only_the_field_the_provider_named():
-    recorder = _RecordedAzureAI(
-        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
-    )
+    recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)])
 
     _call_azure_ai(recorder)
 
@@ -3751,9 +3757,7 @@ def test_an_extra_input_outside_a_tool_is_not_retried_unless_dropping_params_was
 
 
 def test_an_extra_input_outside_a_tool_is_retried_when_dropping_params_was_asked_for():
-    recorder = _RecordedAzureAI(
-        [_rejection(UNRELATED_REJECTION), httpx.Response(200, json=A_COMPLETION)]
-    )
+    recorder = _RecordedAzureAI([_rejection(UNRELATED_REJECTION), httpx.Response(200, json=A_COMPLETION)])
 
     response = _call_azure_ai(recorder, drop_params=True)
 
@@ -3767,9 +3771,7 @@ async def test_a_tool_field_the_provider_rejects_is_dropped_and_retried_on_the_a
 ):
     import respx
 
-    recorder = _RecordedAzureAI(
-        [_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)]
-    )
+    recorder = _RecordedAzureAI([_rejection(TOOL_LEVEL_REJECTION), httpx.Response(200, json=A_COMPLETION)])
 
     with respx.mock(assert_all_called=True) as router:
         router.post(AZURE_AI_CHAT_COMPLETIONS_URL).mock(side_effect=recorder)
@@ -3910,7 +3912,11 @@ async def test_create_batch_says_which_setting_is_missing_when_the_provider_reso
 
     with pytest.raises(ValueError, match="api_base is required for create_batch"):
         await BaseLLMHTTPHandler().create_batch(
-            create_batch_data={"input_file_id": "file_1", "endpoint": "/v1/chat/completions", "completion_window": "24h"},
+            create_batch_data={
+                "input_file_id": "file_1",
+                "endpoint": "/v1/chat/completions",
+                "completion_window": "24h",
+            },
             litellm_params={},
             provider_config=provider_config,
             headers={},
@@ -4091,7 +4097,9 @@ def _start_async_completion(config, logging_obj=None):
         custom_llm_provider="openai",
         model_response=ModelResponse(),
         encoding=None,
-        logging_obj=logging_obj if logging_obj is not None else Mock(dynamic_success_callbacks=None, model_call_details={}),
+        logging_obj=logging_obj
+        if logging_obj is not None
+        else Mock(dynamic_success_callbacks=None, model_call_details={}),
         optional_params={},
         timeout=10.0,
         litellm_params={},
@@ -4431,7 +4439,9 @@ async def test_async_realtime_bridges_a_transcription_session_through_the_provid
     logging_obj.dispatch_failure_handlers = AsyncMock()
     handler = BaseLLMHTTPHandler()
 
-    with patch.object(handler, "_open_realtime_backend_ws", AsyncMock(side_effect=AssertionError("dialed a websocket"))) as dial:
+    with patch.object(
+        handler, "_open_realtime_backend_ws", AsyncMock(side_effect=AssertionError("dialed a websocket"))
+    ) as dial:
         await handler.async_realtime(
             model="chirp_3",
             websocket=client_ws,
@@ -5144,3 +5154,105 @@ async def test_retrieve_file_rejects_unverified_bedrock_range_error(
                 )
         finally:
             sync_client.close()
+
+
+class _DroppingByteStream(httpx.AsyncByteStream):
+    """A response body that fails on its first read, the way a dropped connection does."""
+
+    async def __aiter__(self):
+        raise httpx.ReadError("Connection closed.")
+        yield b""  # pragma: no cover - unreachable, makes this an async generator
+
+
+def _google_genai_streaming_logging_obj():
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj = Logging(
+        model="gemini-3.8-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="agenerate_content_stream",
+        start_time=time.time(),
+        litellm_call_id="google-genai-stream-priming",
+        function_id="f",
+    )
+    logging_obj.update_environment_variables(
+        model="gemini-3.8-flash",
+        user="",
+        optional_params={},
+        litellm_params={},
+        custom_llm_provider="gemini",
+    )
+    return logging_obj
+
+
+async def _call_google_genai_stream(upstream: httpx.Response):
+    """Drive async_generate_content_handler against `upstream` faked at the HTTP boundary.
+
+    The provider config and the HTTP client are the real ones; only the upstream
+    response is a double, so the error mapping under test is the provider's own.
+    """
+    from litellm.llms.gemini.google_genai.transformation import GoogleGenAIConfig
+
+    transport: Final = httpx.MockTransport(lambda request: upstream)
+    async with httpx.AsyncClient(transport=transport) as async_client:
+        client: Final = AsyncHTTPHandler()
+        await client.close()
+        client.client = async_client
+        return await BaseLLMHTTPHandler().async_generate_content_handler(
+            model="gemini-3.8-flash",
+            contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+            generate_content_provider_config=GoogleGenAIConfig(),
+            generate_content_config_dict={},
+            tools=None,
+            custom_llm_provider="gemini",
+            litellm_params=GenericLiteLLMParams(
+                api_key="test-key",
+                api_base="https://generativelanguage.googleapis.com",
+            ),
+            logging_obj=_google_genai_streaming_logging_obj(),
+            client=client,
+            stream=True,
+        )
+
+
+@pytest.mark.asyncio
+async def test_google_genai_async_stream_priming_fails_retriably_when_the_stream_drops_before_its_first_event():
+    """
+    A stream that drops before its first event must fail inside the caller's own retry window.
+
+    The handler returns as soon as the response headers arrive, so without priming the first
+    body read happens in the proxy's data generator, long after the router recorded the call
+    as a success and spent its retry budget.
+    """
+    upstream: Final = httpx.Response(
+        status_code=200,
+        headers={"content-type": "text/event-stream"},
+        stream=_DroppingByteStream(),
+    )
+
+    with pytest.raises(BaseLLMException) as exc_info:
+        await _call_google_genai_stream(upstream)
+
+    # The router retries on this status, so the drop now lands inside its retry loop.
+    assert litellm.should_retry(exc_info.value.status_code)
+
+
+@pytest.mark.asyncio
+async def test_google_genai_async_stream_priming_returns_an_iterator_that_still_yields_the_whole_stream():
+    """Priming must not consume the first event: the consumer sees the entire stream."""
+    from litellm.google_genai.streaming_iterator import (
+        AsyncGoogleGenAIGenerateContentStreamingIterator,
+    )
+
+    upstream: Final = httpx.Response(
+        status_code=200,
+        headers={"content-type": "text/event-stream"},
+        content=b'data: {"first": 1}\n\ndata: {"second": 2}\n\n',
+    )
+
+    iterator = await _call_google_genai_stream(upstream)
+
+    assert isinstance(iterator, AsyncGoogleGenAIGenerateContentStreamingIterator)
+    assert await iterator.__anext__() == b'data: {"first": 1}\n\n'
+    assert await iterator.__anext__() == b'data: {"second": 2}\n\n'
