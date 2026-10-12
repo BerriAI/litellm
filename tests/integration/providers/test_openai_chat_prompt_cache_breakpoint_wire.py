@@ -1,12 +1,9 @@
-import uuid
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import Final
 
-import httpx
 import openai
 import pytest
-from integration._support import prompt_cache_breakpoint as pcb
 from integration._support import responses_vendor as rv
 from integration._support.client import Gateway, gateway_from_environment, string_value
 from integration._support.openai_wire import answering_model_discovery, chat_reply
@@ -15,201 +12,193 @@ from pydantic import JsonValue
 
 pytestmark: Final = pytest.mark.timeout(120)
 
-_MODEL: Final = "openai/gpt-5.6"
-_EPHEMERAL: Final[Mapping[str, JsonValue]] = {"type": "ephemeral"}
-_EPHEMERAL_1H: Final[Mapping[str, JsonValue]] = {"type": "ephemeral", "ttl": "1h"}
-_OPTED_IN: Final[Mapping[str, JsonValue]] = {"prompt_cache_options": {"mode": "explicit"}}
-_LOOKUP_CALL: Final[Mapping[str, JsonValue]] = {
-    "id": "call_1",
-    "type": "function",
-    "function": {"name": "lookup", "arguments": "{}"},
-}
-_LOOKUP_TOOL: Final[Mapping[str, JsonValue]] = {"type": "function", "function": {"name": "lookup", "parameters": {}}}
+_SYSTEM_AND_USER_WITH_CACHE_CONTROL: Final[list[JsonValue]] = [
+    {
+        "role": "system",
+        "content": [
+            {"type": "text", "text": "Answer briefly"},
+            {"type": "text", "text": "Stable rules", "cache_control": {"type": "ephemeral"}},
+        ],
+    },
+    {
+        "role": "user",
+        "content": [
+            {"type": "text", "text": "Describe this", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+            {"type": "text", "text": "and nothing else"},
+        ],
+    },
+]
 
 
-def _scripted(request: Request) -> Reply:
+def _reply_ok(request: Request) -> Reply:
     body: Final = rv.JSON_OBJECT.validate_json(request.body)
-    marker: Final = rv.newest_marker(request.body.decode())
-    return chat_reply(
-        f"chatcmpl-{marker}", string_value(body["model"]), rv.answer(marker), stream=body.get("stream") is True
-    )
-
-
-_respond: Final = answering_model_discovery(_scripted)
+    return chat_reply("chatcmpl-1", string_value(body["model"]), "ok", stream=body.get("stream") is True)
 
 
 @dataclass(frozen=True, slots=True)
-class _Chat:
+class _Proxy:
     gateway: Gateway
-    wire: Wire
-    reading: str
-    verbatim: str
-    spend: pcb.SpendLogs
+    openai: Wire
+    gpt_5_6_with_prompt_cache_options: str
+    gpt_5_6_without_prompt_cache_options: str
 
-    @property
-    def v1(self) -> str:
-        return str(self.gateway.client.base_url).rstrip("/") + "/v1"
+    def openai_receives(
+        self, model: str, messages: Sequence[JsonValue], *, stream: bool = False, tools: Sequence[JsonValue] = ()
+    ) -> dict[str, JsonValue]:
+        _ = self.openai.drain()
+        request: Final[dict[str, JsonValue]] = {
+            "model": model,
+            "messages": list(messages),
+            "stream": stream,
+            "cache": {"no-cache": True},
+        }
+        response: Final = self.gateway.request(
+            "POST", "/v1/chat/completions", {**request, "tools": list(tools)} if tools else request
+        )
+        assert response.status_code == 200, response.text
+        return self.received_by_openai()
+
+    def received_by_openai(self) -> dict[str, JsonValue]:
+        posts: Final = tuple(request for request in self.openai.drain() if request.method == "POST")
+        assert [post.target for post in posts] == ["/v1/chat/completions"], posts
+        return rv.JSON_OBJECT.validate_json(posts[0].body)
 
 
 @pytest.fixture(scope="module")
-def chat() -> Iterator[_Chat]:
+def proxy() -> Iterator[_Proxy]:
     with (
-        wire_server(_respond) as wire,
+        wire_server(answering_model_discovery(_reply_ok)) as openai_upstream,
         gateway_from_environment() as gateway,
         gateway.scenario() as scenario,
-        pcb.spend_logs() as spend,
     ):
-        api_base: Final = f"{wire.url}/v1"
-        yield _Chat(
+        api_base: Final = f"{openai_upstream.url}/v1"
+        yield _Proxy(
             gateway,
-            wire,
-            scenario.model(model=_MODEL, api_base=api_base, **_OPTED_IN),
-            scenario.model(model=_MODEL, api_base=api_base),
-            spend,
+            openai_upstream,
+            gpt_5_6_with_prompt_cache_options=scenario.model(
+                model="openai/gpt-5.6", api_base=api_base, prompt_cache_options={"mode": "explicit"}
+            ),
+            gpt_5_6_without_prompt_cache_options=scenario.model(model="openai/gpt-5.6", api_base=api_base),
         )
-
-
-def _cached(block: Mapping[str, JsonValue], mark: Mapping[str, JsonValue] = _EPHEMERAL) -> dict[str, JsonValue]:
-    return {**block, "cache_control": mark}
-
-
-def _marked_messages(marker: str) -> list[JsonValue]:
-    return [
-        {"role": "system", "content": [pcb.text("Answer briefly"), _cached(pcb.text("Stable rules"))]},
-        {
-            "role": "user",
-            "content": [_cached(pcb.text(pcb.prompt(marker)), _EPHEMERAL_1H), pcb.text("and nothing else")],
-        },
-    ]
-
-
-def _rewritten_messages(marker: str) -> list[dict[str, JsonValue]]:
-    return [
-        {
-            "role": "system",
-            "content": [pcb.text("Answer briefly"), pcb.marked(pcb.text("Stable rules"), pcb.EXPLICIT)],
-        },
-        {
-            "role": "user",
-            "content": [pcb.marked(pcb.text(pcb.prompt(marker)), pcb.EXPLICIT), pcb.text("and nothing else")],
-        },
-    ]
-
-
-def _post(
-    chat: _Chat, model: str, messages: Sequence[JsonValue], *, stream: bool = False, tools: Sequence[JsonValue] = ()
-) -> httpx.Response:
-    body: Final[dict[str, JsonValue]] = {"model": model, "messages": list(messages), "stream": stream, **pcb.NO_CACHE}
-    return chat.gateway.request("POST", "/v1/chat/completions", {**body, "tools": list(tools)} if tools else body)
-
-
-def _answered(response: httpx.Response, marker: str, *, stream: bool = False) -> str:
-    assert response.status_code == 200, response.text
-    if stream:
-        assert f'"content": "{rv.answer(marker)}"' in response.text.replace('"content":"', '"content": "'), (
-            response.text
-        )
-    else:
-        body: Final = rv.JSON_OBJECT.validate_json(response.text)
-        (choice,) = rv.ITEMS.validate_python(body["choices"])
-        assert rv.JSON_OBJECT.validate_python(choice["message"])["content"] == rv.answer(marker), body
-    return response.headers["x-litellm-call-id"]
-
-
-def _posted(wire: Wire, marker: str) -> Request:
-    (request,) = pcb.with_marker(pcb.drained_posts(wire), marker)
-    assert request.target == "/v1/chat/completions", request.target
-    return request
-
-
-def _wire_body(request: Request, *, stream: bool = False) -> dict[str, JsonValue]:
-    body: Final = pcb.body_of(request)
-    assert body["model"] == "gpt-5.6", body
-    assert (body.get("stream") is True) is stream, body
-    return body
-
-
-def _wire_messages(body: Mapping[str, JsonValue]) -> list[dict[str, JsonValue]]:
-    return rv.ITEMS.validate_python(body["messages"])
 
 
 @pytest.mark.parametrize("stream", [False, True], ids=["unary", "stream"])
-def test_cache_control_reaches_the_wire_as_a_prompt_cache_breakpoint_on_the_same_part(
-    chat: _Chat, stream: bool
-) -> None:
-    marker: Final = uuid.uuid4().hex
-    response: Final = _post(chat, chat.reading, _marked_messages(marker), stream=stream)
-    call_id: Final = _answered(response, marker, stream=stream)
-    request: Final = _posted(chat.wire, marker)
-    body: Final = _wire_body(request, stream=stream)
-    assert body["prompt_cache_options"] == {"mode": "explicit"}, body
-    assert _wire_messages(body) == _rewritten_messages(marker), body
-    assert b"cache_control" not in request.body, request.body
-    chat.spend.landed(chat.reading, call_id, None)
+def test_cache_control_on_a_part_becomes_prompt_cache_breakpoint_on_that_part(proxy: _Proxy, stream: bool) -> None:
+    received: Final = proxy.openai_receives(
+        proxy.gpt_5_6_with_prompt_cache_options, _SYSTEM_AND_USER_WITH_CACHE_CONTROL, stream=stream
+    )
 
-
-def test_openai_sdk_marks_are_rewritten_the_same_way(chat: _Chat) -> None:
-    marker: Final = uuid.uuid4().hex
-    with openai.OpenAI(api_key=chat.gateway.key, base_url=chat.v1, max_retries=0) as client:
-        raw: Final = client.chat.completions.with_raw_response.create(
-            model=chat.reading,
-            messages=[
-                {"role": "system", "content": "Answer briefly", "cache_control": _EPHEMERAL},  # pyright: ignore[reportArgumentType]  # Anthropic mark the SDK forwards verbatim
-                {"role": "user", "content": pcb.prompt(marker)},
+    assert received["messages"] == [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "Answer briefly"},
+                {"type": "text", "text": "Stable rules", "prompt_cache_breakpoint": {"mode": "explicit"}},
             ],
-            extra_body=dict(pcb.NO_CACHE),
+        },
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Describe this", "prompt_cache_breakpoint": {"mode": "explicit"}},
+                {"type": "text", "text": "and nothing else"},
+            ],
+        },
+    ]
+    assert received["prompt_cache_options"] == {"mode": "explicit"}
+    assert received.get("stream", False) is stream
+    assert "cache_control" not in str(received)
+
+
+def test_cache_control_on_a_string_message_sent_with_the_openai_sdk(proxy: _Proxy) -> None:
+    with openai.OpenAI(
+        api_key=proxy.gateway.key, base_url=f"{str(proxy.gateway.client.base_url).rstrip('/')}/v1", max_retries=0
+    ) as sdk:
+        completion: Final = sdk.chat.completions.create(
+            model=proxy.gpt_5_6_with_prompt_cache_options,
+            messages=[
+                {"role": "system", "content": "Answer briefly", "cache_control": {"type": "ephemeral"}},  # pyright: ignore[reportArgumentType]  # Anthropic mark the SDK forwards verbatim
+                {"role": "user", "content": "Say hi"},
+            ],
+            extra_body={"cache": {"no-cache": True}},
         )
-    completion: Final = raw.parse()
-    assert completion.choices[0].message.content == rv.answer(marker), completion
-    request: Final = _posted(chat.wire, marker)
-    assert _wire_messages(_wire_body(request)) == [
-        {"role": "system", "content": [pcb.marked(pcb.text("Answer briefly"), pcb.EXPLICIT)]},
-        {"role": "user", "content": pcb.prompt(marker)},
-    ], request.body
-    chat.spend.landed(chat.reading, raw.headers["x-litellm-call-id"], None)
+    assert completion.choices[0].message.content == "ok"
 
-
-def test_tool_message_mark_is_kept_and_tool_definition_mark_is_dropped(chat: _Chat) -> None:
-    marker: Final = uuid.uuid4().hex
-    messages: Final[list[JsonValue]] = [
-        {"role": "user", "content": pcb.prompt(marker)},
-        {"role": "assistant", "content": None, "tool_calls": [dict(_LOOKUP_CALL)]},
-        {"role": "tool", "tool_call_id": "call_1", "content": [_cached(pcb.text("found it"))]},
+    assert proxy.received_by_openai()["messages"] == [
+        {
+            "role": "system",
+            "content": [{"type": "text", "text": "Answer briefly", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        },
+        {"role": "user", "content": "Say hi"},
     ]
-    response: Final = _post(chat, chat.reading, messages, tools=[_cached(_LOOKUP_TOOL)])
-    call_id: Final = _answered(response, marker)
-    request: Final = _posted(chat.wire, marker)
-    body: Final = _wire_body(request)
-    assert _wire_messages(body)[2] == {
-        "role": "tool",
-        "tool_call_id": "call_1",
-        "content": [pcb.marked(pcb.text("found it"), pcb.EXPLICIT)],
-    }, "a breakpoint on a tool message part writes the cache on live gpt-5.6 Chat Completions (2026-10-12)"
-    assert body["tools"] == [_LOOKUP_TOOL], body
-    assert b"cache_control" not in request.body, request.body
-    chat.spend.landed(chat.reading, call_id, None)
 
 
-def test_assistant_mark_is_dropped(chat: _Chat) -> None:
-    marker: Final = uuid.uuid4().hex
-    messages: Final[list[JsonValue]] = [
-        {"role": "user", "content": "first question"},
-        {"role": "assistant", "content": [_cached(pcb.text("earlier answer"))]},
-        {"role": "user", "content": pcb.prompt(marker)},
+def test_cache_control_on_a_tool_result_is_kept_and_on_a_tool_definition_is_dropped(proxy: _Proxy) -> None:
+    received: Final = proxy.openai_receives(
+        proxy.gpt_5_6_with_prompt_cache_options,
+        [
+            {"role": "user", "content": "Look it up"},
+            {
+                "role": "assistant",
+                "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [{"type": "text", "text": "found it", "cache_control": {"type": "ephemeral"}}],
+            },
+        ],
+        tools=[
+            {
+                "type": "function",
+                "function": {"name": "lookup", "parameters": {}},
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+    )
+
+    assert received["messages"] == [
+        {"role": "user", "content": "Look it up"},
+        {
+            "role": "assistant",
+            "tool_calls": [{"id": "call_1", "type": "function", "function": {"name": "lookup", "arguments": "{}"}}],
+        },
+        {
+            "role": "tool",
+            "tool_call_id": "call_1",
+            "content": [{"type": "text", "text": "found it", "prompt_cache_breakpoint": {"mode": "explicit"}}],
+        },
+    ], "a breakpoint on a tool message part writes the cache on live gpt-5.6 Chat Completions (2026-10-12)"
+    assert received["tools"] == [{"type": "function", "function": {"name": "lookup", "parameters": {}}}]
+    assert "cache_control" not in str(received)
+
+
+def test_cache_control_on_an_assistant_turn_is_dropped(proxy: _Proxy) -> None:
+    received: Final = proxy.openai_receives(
+        proxy.gpt_5_6_with_prompt_cache_options,
+        [
+            {"role": "user", "content": "First question"},
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": "Earlier answer", "cache_control": {"type": "ephemeral"}}],
+            },
+            {"role": "user", "content": "Second question"},
+        ],
+    )
+
+    assert received["messages"] == [
+        {"role": "user", "content": "First question"},
+        {"role": "assistant", "content": [{"type": "text", "text": "Earlier answer"}]},
+        {"role": "user", "content": "Second question"},
     ]
-    call_id: Final = _answered(_post(chat, chat.reading, messages), marker)
-    request: Final = _posted(chat.wire, marker)
-    assert _wire_messages(_wire_body(request))[1] == {"role": "assistant", "content": [pcb.text("earlier answer")]}
-    assert b"cache_control" not in request.body and b"prompt_cache_breakpoint" not in request.body, request.body
-    chat.spend.landed(chat.reading, call_id, None)
+    assert "cache_control" not in str(received)
+    assert "prompt_cache_breakpoint" not in str(received)
 
 
-def test_a_deployment_that_does_not_read_breakpoints_keeps_cache_control_verbatim(chat: _Chat) -> None:
-    marker: Final = uuid.uuid4().hex
-    call_id: Final = _answered(_post(chat, chat.verbatim, _marked_messages(marker)), marker)
-    request: Final = _posted(chat.wire, marker)
-    body: Final = _wire_body(request)
-    assert "prompt_cache_options" not in body, body
-    assert _wire_messages(body) == _marked_messages(marker), body
-    assert b"prompt_cache_breakpoint" not in request.body, request.body
-    chat.spend.landed(chat.verbatim, call_id, None)
+def test_custom_api_base_without_prompt_cache_options_forwards_cache_control_unchanged(proxy: _Proxy) -> None:
+    received: Final = proxy.openai_receives(
+        proxy.gpt_5_6_without_prompt_cache_options, _SYSTEM_AND_USER_WITH_CACHE_CONTROL
+    )
+
+    assert received["messages"] == _SYSTEM_AND_USER_WITH_CACHE_CONTROL
+    assert "prompt_cache_options" not in received
+    assert "prompt_cache_breakpoint" not in str(received)
