@@ -10775,7 +10775,14 @@ class Router:
         """
         if not isinstance(model_info, Mapping):
             return False
-        return model_info.get("max_input_tokens") is not None and model_info.get("max_output_tokens") is not None
+        # ``Mapping`` is unparameterised here, so pin the key/value types before
+        # reading the keys: bare ``Mapping`` makes both ``.get`` member accesses
+        # only partially known, which trips the basedpyright delta gate.
+        typed_model_info: Final = cast(Mapping[str, object], model_info)  # cast-ok: isinstance check above
+        return (
+            typed_model_info.get("max_input_tokens") is not None
+            and typed_model_info.get("max_output_tokens") is not None
+        )
 
     async def arefresh_model_info(self, *, client: AsyncHTTPHandler | None = None) -> None:
         """Refresh token limits advertised by configured OpenAI-compatible deployments."""
