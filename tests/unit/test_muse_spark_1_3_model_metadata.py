@@ -42,7 +42,7 @@ def test_muse_spark_1_3_backup_matches_main(model: str):
     assert backup_cost.get(model) == main_cost.get(model), f"{model} differs between main and backup model cost maps"
 
 
-def test_muse_wonder_advertises_max_and_xhigh_reasoning_efforts():
+def test_muse_wonder_reasoning_efforts_include_max_and_exclude_none():
     entry = dict(_load_cost_map()[MUSE_WONDER])
     entry["key"] = MUSE_WONDER
 
@@ -51,7 +51,7 @@ def test_muse_wonder_advertises_max_and_xhigh_reasoning_efforts():
     assert resolved is not None
     assert "max" in resolved
     assert "xhigh" in resolved
-    assert "none" in resolved
+    assert "none" not in resolved
 
 
 def test_muse_spark_contributor_tier_is_cheaper_than_standard():
