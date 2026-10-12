@@ -37,8 +37,8 @@ vi.mock("@/contexts/AuthContext", () => ({
   }),
 }));
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({ useKeys: mockUseKeys }));
-vi.mock("@/app/(dashboard)/api-keys/ApiKeysDashboard", () => ({
-  default: () => <div data-testid="api-keys-dashboard" />,
+vi.mock("@/app/(dashboard)/home/_components/HomePage", () => ({
+  default: () => <div data-testid="home-page" />,
 }));
 vi.mock("@/components/common_components/LoadingScreen", () => ({
   default: () => <div data-testid="loading-screen" />,
@@ -86,7 +86,7 @@ describe("dashboard landing", () => {
     (role) => {
       state.userRole = role;
       render(<CreateKeyPage />);
-      expect(screen.getByTestId("api-keys-dashboard")).toBeInTheDocument();
+      expect(screen.getByTestId("home-page")).toBeInTheDocument();
       expect(screen.queryByTestId("loading-screen")).not.toBeInTheDocument();
       expect(mockReplace).not.toHaveBeenCalled();
       expect(mockUiHref).not.toHaveBeenCalledWith("connect");
@@ -96,7 +96,7 @@ describe("dashboard landing", () => {
   it("lands a user who already owns a key on the keys dashboard", () => {
     state.keys = [{ token: "sk-abc" }];
     render(<CreateKeyPage />);
-    expect(screen.getByTestId("api-keys-dashboard")).toBeInTheDocument();
+    expect(screen.getByTestId("home-page")).toBeInTheDocument();
     expect(mockReplace).not.toHaveBeenCalled();
   });
 
@@ -110,7 +110,7 @@ describe("dashboard landing", () => {
     render(<CreateKeyPage />);
     expect(mockReplace).toHaveBeenCalledWith("/mocked-ui/logs");
     expect(screen.getByTestId("loading-screen")).toBeInTheDocument();
-    expect(screen.queryByTestId("api-keys-dashboard")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("home-page")).not.toBeInTheDocument();
   });
 
   it("carries the MCP env-var deep link's other params through the legacy redirect", () => {
