@@ -974,6 +974,12 @@ def _ocr_document_summary(document: object) -> str:
 
 
 # Runs once per call to check if the user wants to send their data anywhere - PostHog/Sentry/Slack/etc.
+
+_DECISION_CALL_TYPES: Final[frozenset[str]] = frozenset(
+    (CallTypes.decisions.value, CallTypes.adecisions.value, CallTypes.systemone.value, CallTypes.asystemone.value)
+)
+
+
 def function_setup(
     original_function: str,
     rules_obj: Rules,
@@ -1220,7 +1226,7 @@ def function_setup(
                 if isinstance(search_query, list)
                 else search_query
             )
-        elif call_type in (CallTypes.decisions.value, CallTypes.adecisions.value):
+        elif call_type in _DECISION_CALL_TYPES:
             decisions_state: Final = args[1] if len(args) > 1 else kwargs.get("state") or kwargs.get("input") or ""
             messages = decisions_state if isinstance(decisions_state, str) else json.dumps(decisions_state, default=str)
         elif call_type in (CallTypes.image_edit.value, CallTypes.aimage_edit.value):
@@ -1740,6 +1746,9 @@ def client(original_function):
 
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
+            from litellm.llms.github_copilot.per_user_auth import attach_github_copilot_user_session
+
+            attach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
             kwargs["litellm_logging_obj"] = logging_obj
             LLMCachingHandler: Final = _get_cached_llm_caching_handler()
             _llm_caching_handler: Final[LLMCachingHandler] = LLMCachingHandler(
@@ -2028,6 +2037,9 @@ def client(original_function):
             kwargs["litellm_logging_obj"] = logging_obj
             ## LOAD CREDENTIALS
             load_credentials_from_list(kwargs)
+            from litellm.llms.github_copilot.per_user_auth import aattach_github_copilot_user_session
+
+            await aattach_github_copilot_user_session(kwargs)  # pyright: ignore[reportUnknownArgumentType]  # kwargs is the untyped request dict
             logging_obj.llm_caching_handler = _llm_caching_handler
             # [OPTIONAL] CHECK BUDGET
             if litellm.max_budget:
@@ -8301,13 +8313,18 @@ def convert_to_dict(message: BaseModel | dict) -> dict:
         raise TypeError(f"Invalid message type: {type(message)}. Expected dict or Pydantic model.")
 
 
-def convert_list_message_to_dict(messages: Sequence):
-    new_messages: Final = []
-    for message in messages:
-        convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
-        cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
-        new_messages.append(cleaned_message)
-    return new_messages
+def convert_list_message_to_dict(
+    messages: Sequence[BaseModel | Mapping[str, object]],
+) -> list[dict[str, object]]:  # mutable-ok: callers mutate the returned message dicts
+    def _as_message_value(message: BaseModel | Mapping[str, object]) -> AllMessageValues:
+        return cast(  # cast-ok: message dicts satisfy the TypedDict shape
+            AllMessageValues,
+            convert_to_dict(
+                cast("BaseModel | dict[str, object]", message)  # cast-ok: messages are dicts or pydantic models at runt
+            ),
+        )
+
+    return [dict(cleanup_none_field_in_message(message=_as_message_value(message))) for message in messages]
 
 
 def validate_and_fix_openai_messages(messages: list):
@@ -8323,7 +8340,12 @@ def validate_and_fix_openai_messages(messages: list):
         if message.get("tool_calls"):
             message["tool_calls"] = jsonify_tools(tools=message["tool_calls"])
 
-        convert_msg_to_dict = cast(AllMessageValues, convert_to_dict(message))
+        convert_msg_to_dict = cast(  # cast-ok: message dicts satisfy the TypedDict shape
+            AllMessageValues,
+            convert_to_dict(
+                cast("BaseModel | dict[str, object]", message)  # cast-ok: dicts or pydantic models at runtime
+            ),
+        )
         cleaned_message = cleanup_none_field_in_message(message=convert_msg_to_dict)
         new_messages.append(cleaned_message)
     return validate_chat_completion_user_messages(messages=new_messages)
@@ -8639,6 +8661,7 @@ class ProviderConfigManager:
                 False,
             ),
             LlmProviders.FEATHERLESS_AI: (lambda: litellm.FeatherlessAIConfig(), False),
+            LlmProviders.SCALEDOWN: (lambda: litellm.ScaleDownChatConfig(), False),
             LlmProviders.NOVITA: (lambda: litellm.NovitaConfig(), False),
             LlmProviders.NEBIUS: (lambda: litellm.NebiusConfig(), False),
             LlmProviders.WANDB: (lambda: litellm.WandbConfig(), False),
@@ -8669,6 +8692,10 @@ class ProviderConfigManager:
             LlmProviders.AMAZON_NOVA: (lambda: litellm.AmazonNovaChatConfig(), False),
             LlmProviders.LANGGRAPH: (
                 lambda: ProviderConfigManager._get_langgraph_config(),
+                False,
+            ),
+            LlmProviders.MICROSOFT_365_COPILOT: (
+                lambda: ProviderConfigManager._get_microsoft_365_copilot_config(),
                 False,
             ),
             LlmProviders.SAIL: (ProviderConfigManager._get_sail_chat_config, False),
@@ -8764,6 +8791,12 @@ class ProviderConfigManager:
         from litellm.llms.langgraph.chat.transformation import LangGraphConfig
 
         return LangGraphConfig()
+
+    @staticmethod
+    def _get_microsoft_365_copilot_config() -> BaseConfig:
+        from litellm.llms.microsoft_365_copilot.chat.transformation import Microsoft365CopilotChatConfig
+
+        return Microsoft365CopilotChatConfig()
 
     @staticmethod
     def _get_langflow_config() -> BaseConfig:
@@ -8985,16 +9018,24 @@ class ProviderConfigManager:
             return litellm.TypeSafeDecisionsConfig()
         if provider == LlmProviders.OPENROUTER:
             return litellm.OpenRouterDecisionsConfig()
+        if provider == LlmProviders.FIREWORKS_AI:
+            return litellm.FireworksAIDecisionsConfig()
         if provider == LlmProviders.CLOUDFLARE:
             return litellm.CloudflareDecisionsConfig()
         if provider == LlmProviders.STRANDS_DECIDER:
             return litellm.StrandsDeciderDecisionsConfig()
+        if provider == LlmProviders.DATABRICKS:
+            return litellm.DatabricksDecisionsConfig()
+        if provider == LlmProviders.HOSTED_VLLM:
+            return litellm.HostedVLLMDecisionsConfig()
         if provider == LlmProviders.LAYA:
             return litellm.LayaDecisionsConfig()
         if provider == LlmProviders.BESPOKE:
             return litellm.BespokeDecisionsConfig()
         if provider == LlmProviders.OPENAI:
             return litellm.OpenAIDecisionsConfig()
+        if provider == LlmProviders.AZURE_AI:
+            return litellm.AzureAIDecisionsConfig()
         return None
 
     @staticmethod

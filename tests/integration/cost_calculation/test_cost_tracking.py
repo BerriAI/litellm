@@ -12,7 +12,6 @@ import zlib
 from collections.abc import Mapping
 from hashlib import sha256
 from itertools import islice
-from types import MappingProxyType
 from typing import Final, cast
 
 import httpx
@@ -29,24 +28,23 @@ from integration.cost_calculation.conftest import (
     read_rows_now,
     register_scenario_deployment,
 )
+from integration.cost_calculation.catalog import STANDALONE_CASES, data_errors
 from integration.cost_calculation.cost_tracking_case import (
-    CASES,
     BinaryResponse,
     CostTrackingTestCase,
     ExactExpected,
     FailureExpected,
     RecountExpected,
-    data_errors,
 )
 from pydantic import JsonValue
-
-DECISIONS_UPSTREAM_PATHS: Final = MappingProxyType({"perplexity": "/v1/decisions", "typesafe": "/v1/systemone"})
 
 if _data_errors := data_errors():
     raise ValueError("\n".join(_data_errors))
 
 
-_CASES: Final = tuple(pytest.param(case, marks=pytest.mark.covers(case.covers), id=case.name) for case in CASES)
+_CASES: Final = tuple(
+    pytest.param(case, marks=pytest.mark.covers(case.covers), id=case.name) for case in STANDALONE_CASES
+)
 
 
 def _wav_bytes(seconds: float) -> bytes:
@@ -254,35 +252,19 @@ def test_case_bills_expected_cost(gateway: Gateway, case: CostTrackingTestCase) 
             assert row.spend == 0, f"{case.name}: failure spend was {row.spend}"
             return
         assert response.is_success, f"{case.name}: proxy returned {response.status_code}: {response.text[:400]}"
-        if case.endpoint == "/v1/systemone":
+        if case.upstream_body is not None:
             observed: Final = JSON_OBJECT.validate_json(
                 httpx.get(f"{gateway.upstream_url}/__observations", timeout=5, trust_env=False).content
             )
-            decisions_provider: Final = case.rates.litellm_provider
-            upstream_model: Final = case.litellm_model.removeprefix(f"{decisions_provider}/")
-            upstream_path: Final = f"/{scenario_id}{DECISIONS_UPSTREAM_PATHS[decisions_provider]}"
-            decision_observations: Final = tuple(
-                value
+            upstream_bodies: Final = tuple(
+                value.get("body")
                 for value in observed["requests"]
-                if isinstance(value, dict) and value.get("path") == upstream_path
+                if isinstance(value, dict)
+                and value.get("method") == "POST"
+                and str(value.get("path", "")).startswith(f"/{scenario_id}/")
             )
-            assert decision_observations == (
-                {
-                    "path": upstream_path,
-                    "authorization": "Bearer sk-scripted-provider",
-                    "method": "POST",
-                    "api_key": "",
-                    "body": {
-                        "model": upstream_model,
-                        "state": {"source": "cost-tracking"},
-                        "questions": {
-                            "is_defect": {
-                                "type": "noul",
-                                "instructions": "Is this a defect?",
-                            }
-                        },
-                    },
-                },
+            assert upstream_bodies == (case.upstream_body,), (
+                f"{case.name}: upstream received {upstream_bodies}, expected exactly {case.upstream_body}"
             )
         if case.response.content_type == "text/event-stream":
             _assert_stream_has_no_error(response.text)

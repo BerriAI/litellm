@@ -4,8 +4,8 @@ import LensPage from "./page";
 
 const { auth, workspace } = vi.hoisted(() => ({ auth: vi.fn(), workspace: vi.fn() }));
 vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({ default: auth }));
-vi.mock("@/components/lens/LensWorkspace", () => ({
-  LensWorkspace: (props: { accessToken: string; userRole: string; readOnly: boolean }) => {
+vi.mock("@/components/lens/EmbeddedLens", () => ({
+  EmbeddedLens: (props: { accessToken: string; userRole: string; readOnly: boolean }) => {
     workspace(props);
     return <div>Lens workspace</div>;
   },

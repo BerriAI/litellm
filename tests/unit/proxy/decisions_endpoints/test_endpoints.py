@@ -12,17 +12,19 @@ import respx
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 from starlette.routing import Match
 
 import litellm
 from litellm.proxy._lazy_features import LAZY_FEATURES, LazyFeature, attach_lazy_features
-from litellm.proxy.decisions_endpoints.endpoints import decisions, systemone
+from litellm.proxy.decisions_endpoints.endpoints import decisions, router, systemone
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import SafeRouteAdder
 from litellm.proxy.proxy_server import (
     app,
     cleanup_router_config_variables,
     initialize,
 )
+from litellm.types.decisions import DecisionsRequestBody, OpenAIDecisionRequestBody
 
 _INPUT_TOKENS: Final[int] = 367
 _OUTPUT_TOKENS: Final[int] = 3
@@ -309,6 +311,98 @@ def test_proxy_decisions_dispatches_oss_classifier_deployment(
     assert "authorization" not in upstream.calls[0].request.headers
 
 
+def test_proxy_systemone_dispatches_databricks_serving_endpoint(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("DATABRICKS_API_BASE", raising=False)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "databricks-decider",
+                "litellm_params": {
+                    "model": "databricks/databricks-openjev-qwen35-4b",
+                    "api_base": "https://workspace.example/serving-endpoints",
+                    "api_key": "dapi-deployment",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    upstream: Final = respx_mock.post(
+        "https://workspace.example/serving-endpoints/databricks-openjev-qwen35-4b/invocations"
+    ).respond(json={**_RESPONSE, "model": "/mosaicml/local_model"})
+
+    response: Final = client.post(
+        "/v1/systemone",
+        json={
+            "model": "databricks-decider",
+            "state": {"source": "proxy-test"},
+            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == _RESPONSE["answers"]
+    assert upstream.called
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "databricks-openjev-qwen35-4b",
+        "state": {"source": "proxy-test"},
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer dapi-deployment"
+
+
+def test_proxy_systemone_dispatches_databricks_ai_decide(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+) -> None:
+    monkeypatch.delenv("DATABRICKS_API_BASE", raising=False)
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    monkeypatch.delenv("DATABRICKS_TOKEN", raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "databricks-decider",
+                "litellm_params": {
+                    "model": "databricks/ai_decide",
+                    "api_base": "https://workspace.example/serving-endpoints",
+                    "api_key": "dapi-deployment",
+                },
+            }
+        ]
+    )
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", router)
+    upstream: Final = respx_mock.post("https://workspace.example/api/2.0/ai-functions/ai-decide").respond(
+        json={
+            "response": {"answers": {"is_defect": {"type": "noul", "probability": 0.9}}},
+            "metadata": {"version": "1.0"},
+        }
+    )
+
+    response: Final = client.post(
+        "/v1/systemone",
+        json={
+            "model": "databricks-decider",
+            "state": {"source": "proxy-test"},
+            "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["answers"] == _RESPONSE["answers"]
+    assert upstream.called
+    assert json.loads(upstream.calls[0].request.content) == {
+        "state": {"source": "proxy-test"},
+        "questions": {"is_defect": {"type": "noul", "instructions": "Is this a defect?"}},
+    }
+    assert upstream.calls[0].request.headers["authorization"] == "Bearer dapi-deployment"
+
+
 def test_proxy_decisions_without_model_uses_the_proxy_default_model(
     client: TestClient,
     monkeypatch: pytest.MonkeyPatch,
@@ -582,6 +676,68 @@ def test_openai_format_decisions_reach_an_openai_deployment_unchanged_including_
     assert float(response.headers["x-litellm-response-cost"]) == pytest.approx(expected_cost)
 
 
+@pytest.mark.parametrize("safety_identifier", (7, ["end-user-1"]), ids=("numeric", "list"))
+@pytest.mark.parametrize("deployment_drops_params", (False, True), ids=("strict", "drop_params"))
+def test_a_non_string_safety_identifier_is_refused_unless_the_deployment_drops_params(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    respx_mock: respx.MockRouter,
+    safety_identifier: object,
+    deployment_drops_params: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "api_base", None)
+    monkeypatch.delenv("OPENAI_BASE_URL", raising=False)
+    monkeypatch.delenv("OPENAI_API_BASE", raising=False)
+    monkeypatch.setattr(
+        litellm.proxy.proxy_server,
+        "llm_router",
+        litellm.Router(
+            model_list=[
+                {
+                    "model_name": "decider",
+                    "litellm_params": {
+                        "model": "openai/gpt-6-luna",
+                        "api_key": "k",
+                        "drop_params": deployment_drops_params,
+                    },
+                }
+            ]
+        ),
+    )
+    upstream: Final = respx_mock.post("https://api.openai.com/v1/decisions").respond(
+        json={
+            "model": "gpt-6-luna",
+            "answers": _OPENAI_FORMAT_ANSWERS[:1],
+            "usage": {
+                "input_tokens": _INPUT_TOKENS,
+                "output_tokens": _OUTPUT_TOKENS,
+                "total_tokens": _INPUT_TOKENS + _OUTPUT_TOKENS,
+            },
+        }
+    )
+    request_body: Final = {
+        "model": "decider",
+        "input": "The package arrived with a broken screen.",
+        "questions": _OPENAI_FORMAT_REQUEST["questions"][:1],
+        "safety_identifier": safety_identifier,
+    }
+
+    response: Final = client.post("/v1/decisions", json=request_body)
+
+    if not deployment_drops_params:
+        assert response.status_code == 400, response.text
+        assert "safety_identifier" in response.json()["error"]["message"]
+        assert not upstream.called
+        return
+    assert response.status_code == 200, response.text
+    assert json.loads(upstream.calls[0].request.content) == {
+        "model": "gpt-6-luna",
+        "input": "The package arrived with a broken screen.",
+        "questions": _OPENAI_FORMAT_REQUEST["questions"][:1],
+    }
+
+
 def _decisions_feature() -> LazyFeature:
     return next(feature for feature in LAZY_FEATURES if feature.name == "decisions")
 
@@ -633,3 +789,63 @@ def test_with_lazy_routes_disabled_a_config_pass_through_at_v1_decisions_still_w
         assert client.post("/v1/decisions", json={"model": "gpt-6-luna"}).json() == {"served_by": "pass-through"}
     assert _serving_endpoint(bare, "/v1/decisions") is pass_through
     assert _serving_endpoint(bare, "/decisions") is decisions
+
+
+@pytest.fixture(scope="module")
+def decisions_openapi() -> dict[str, object]:
+    app = FastAPI()
+    app.include_router(router)
+    return app.openapi()
+
+
+@pytest.mark.parametrize(
+    ("path", "body_adapter", "response_schema", "required"),
+    (
+        ("/v1/systemone", TypeAdapter(DecisionsRequestBody), "DecisionsResponse", {"model", "state", "questions"}),
+        ("/systemone", TypeAdapter(DecisionsRequestBody), "DecisionsResponse", {"model", "state", "questions"}),
+        (
+            "/v1/decisions",
+            TypeAdapter(OpenAIDecisionRequestBody),
+            "OpenAIDecisionResponse",
+            {"model", "input", "questions"},
+        ),
+        (
+            "/decisions",
+            TypeAdapter(OpenAIDecisionRequestBody),
+            "OpenAIDecisionResponse",
+            {"model", "input", "questions"},
+        ),
+    ),
+)
+def test_swagger_documents_the_request_format_and_response_of_each_decisions_route(
+    decisions_openapi: dict[str, object],
+    path: str,
+    body_adapter: TypeAdapter[DecisionsRequestBody] | TypeAdapter[OpenAIDecisionRequestBody],
+    response_schema: str,
+    required: set[str],
+) -> None:
+    operation = decisions_openapi["paths"][path]["post"]
+    media = operation["requestBody"]["content"]["application/json"]
+
+    assert "Decisions" in operation["summary"] or "System One" in operation["summary"]
+    assert "docs.litellm.ai/docs/decisions" in operation["description"]
+    assert required <= set(media["schema"]["required"])
+    assert required <= set(media["schema"]["properties"])
+    assert "$ref" not in json.dumps(media["schema"])
+    assert media["schema"]["properties"]["model"]["description"]
+
+    example = {key: value for key, value in media["example"].items() if key != "model"}
+    assert len(body_adapter.validate_python(example).questions) == 3
+
+    response_ref = operation["responses"]["200"]["content"]["application/json"]["schema"]["$ref"]
+    assert response_ref == f"#/components/schemas/{response_schema}"
+    assert "answers" in decisions_openapi["components"]["schemas"][response_schema]["properties"]
+
+
+def test_the_two_decisions_routes_document_different_request_formats(decisions_openapi: dict[str, object]) -> None:
+    def properties(path: str) -> set[str]:
+        operation = decisions_openapi["paths"][path]["post"]
+        return set(operation["requestBody"]["content"]["application/json"]["schema"]["properties"])
+
+    assert "state" in properties("/v1/systemone") and "state" not in properties("/v1/decisions")
+    assert "input" in properties("/v1/decisions") and "input" not in properties("/v1/systemone")
