@@ -284,9 +284,10 @@ class BedrockConverseLLM(BaseAWSLLM):
     ):
         ## SETUP ##
         stream: Final = optional_params.pop("stream", None)
-        stream_chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size if stream is True else None
+        control_options: Final = stored_control_options(litellm_params)
+        stream_chunk_size: Final = control_options.stream_chunk_size if stream is True else None
         unencoded_model_id: Final = optional_params.pop("model_id", None)
-        fake_stream = optional_params.pop("fake_stream", False)
+        fake_stream = optional_params.pop("fake_stream", False) or control_options.fake_stream is True
         json_mode: Final = optional_params.get("json_mode", False)
         if unencoded_model_id is not None:
             modelId = self.encode_model_id(model_id=unencoded_model_id)

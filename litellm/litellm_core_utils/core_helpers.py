@@ -12,6 +12,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.llm_response_utils.get_headers import get_provider_request_id
+from litellm.types.litellm_params import MCP_HANDLER_KWARG_NAMES
 from litellm.types.llms.openai import AllMessageValues, OpenAIChatCompletionFinishReason
 
 if TYPE_CHECKING:
@@ -695,36 +696,9 @@ def filter_exceptions_from_params(data: object, max_depth: int = 20) -> Any:
         return data
 
 
-def filter_internal_params(data: dict, additional_internal_params: set | None = None) -> dict:
-    """
-    Filter out LiteLLM internal parameters that shouldn't be sent to provider APIs.
-
-    This removes internal/MCP-related parameters that are used by LiteLLM internally
-    but should not be included in API requests to providers.
-
-    Args:
-        data: Dictionary of parameters to filter
-        additional_internal_params: Optional set of additional internal parameter names to filter
-
-    Returns:
-        Filtered dictionary with internal parameters removed
-    """
-    if not isinstance(data, dict):
-        return data
-
-    # Known internal parameters that should never be sent to provider APIs
-    internal_params: Final = {
-        "skip_mcp_handler",
-        "mcp_handler_context",
-        "_skip_mcp_handler",
-    }
-
-    # Add any additional internal params if provided
-    if additional_internal_params:
-        internal_params.update(additional_internal_params)
-
-    # Filter out internal parameters
-    return {k: v for k, v in data.items() if k not in internal_params}
+def filter_internal_params(data: dict) -> dict:
+    """Drop the MCP handler keys only, since fallback callers send the rest of the kwargs back into acompletion."""
+    return {k: v for k, v in data.items() if k not in MCP_HANDLER_KWARG_NAMES}
 
 
 def redact_nested_match_and_regex_keys(

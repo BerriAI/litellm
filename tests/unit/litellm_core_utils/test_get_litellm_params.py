@@ -167,6 +167,9 @@ class TestGetLitellmParamsKwargsExtraction:
         ({"stream_chunk_size": "64"}, ControlOptions(stream_chunk_size=64)),
         ({"stream_chunk_size": None}, ControlOptions()),
         ({"temperature": 0.2}, ControlOptions()),
+        ({"fake_stream": True}, ControlOptions(fake_stream=True)),
+        ({"fake_stream": "true", "stream_chunk_size": 64}, ControlOptions(stream_chunk_size=64, fake_stream=True)),
+        ({"fake_stream": False}, ControlOptions(fake_stream=False)),
     ],
 )
 def test_control_options_are_read_from_the_request_kwargs(kwargs: dict[str, object], expected: ControlOptions) -> None:
@@ -200,6 +203,12 @@ def test_control_options_reject_a_stream_chunk_size_that_is_not_a_positive_int(r
     assert parse_control_options({"stream_chunk_size": raw}) == InvalidControlOption(
         param="stream_chunk_size",
         message=f"Invalid stream_chunk_size={shown}: expected a positive integer of at most 18 digits",
+    )
+
+
+def test_control_options_reject_a_fake_stream_that_is_not_a_boolean() -> None:
+    assert parse_control_options({"fake_stream": "maybe"}) == InvalidControlOption(
+        param="fake_stream", message="Invalid fake_stream='maybe': expected true or false"
     )
 
 
