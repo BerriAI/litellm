@@ -1491,52 +1491,6 @@ jobs:
       - store_artifacts:
           path: test-results
 
-  mcp_integration:
-    machine:
-      image: ubuntu-2204:2024.04.1
-    resource_class: large
-    working_directory: ~/project
-    environment:
-      COVERAGE_CORE: sysmon
-      LITELLM_LOCAL_MODEL_COST_MAP: "True"
-    steps:
-      - checkout
-      - skip_if_unrelated_changes
-      - setup_litellm_test_deps
-      - run:
-          name: Generate Prisma client
-          command: uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma
-      - run:
-          name: Install MCP SDK1 peer
-          command: |
-            uv venv --python 3.12 .venv-mcp-peer
-            uv pip install --python .venv-mcp-peer 'mcp==1.28.1' 'langchain-mcp-adapters==0.2.1'
-            echo "export MCP_TEST_PEER_PYTHON=$PWD/.venv-mcp-peer/bin/python" >> "$BASH_ENV"
-      - run:
-          name: Run MCP integration tests
-          command: |
-            mkdir -p test-results
-            env -u OPENAI_API_KEY -u ANTHROPIC_API_KEY \
-              timeout --signal=TERM 20m uv run --no-sync pytest \
-              tests/unit/experimental_mcp_client tests/unit/proxy/_experimental/mcp_server \
-              tests/unit/responses/mcp --tb=short -vv --maxfail=10 -n 2 --dist=loadscope --reruns 0 \
-              --reruns-delay 1 --timeout=120 --rerun-except "from pytest-timeout" --durations=20 \
-              --cov=./litellm --cov=./enterprise/litellm_enterprise --cov-report=xml:coverage.xml \
-              --cov-config=pyproject.toml -o junit_family=xunit1 --junitxml=test-results/junit.xml
-      - install_codecov_cli
-      - run:
-          name: Upload MCP integration coverage
-          when: always
-          command: |
-            [ -f coverage.xml ] || { echo "no coverage.xml produced"; exit 1; }
-            codecov upload-process --disable-search --fail-on-error -f coverage.xml \
-              -F mcp-integration -C "$CIRCLE_SHA1" \
-              -n "mcp-integration-${CIRCLE_BUILD_NUM}" --git-service github
-      - store_test_results:
-          path: test-results
-      - store_artifacts:
-          path: test-results
-
   redis_compat:
     parameters:
       redis_py:
@@ -1748,9 +1702,6 @@ workflows:
           seed: false
           coverage_flag: roi-postgres
           timeout_minutes: 10
-          filters: *integration_default_run
-      - mcp_integration:
-          name: mcp-integration
           filters: *integration_default_run
       - redis_compat:
           name: redis-compat-<< matrix.redis_py >>

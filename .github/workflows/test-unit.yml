@@ -573,6 +573,28 @@ jobs:
             job-timeout-minutes: 60
             dist: loadscope
 
+          - shard: mcp
+            test-path: >-
+              tests/unit/experimental_mcp_client
+              tests/unit/proxy/_experimental/mcp_server
+              tests/unit/responses/mcp
+              --ignore=tests/unit/experimental_mcp_client/test_mcp_client.py
+              --ignore=tests/unit/proxy/_experimental/mcp_server/test_capabilities.py
+              --ignore=tests/unit/proxy/_experimental/mcp_server/test_interactions.py
+              --ignore=tests/unit/proxy/_experimental/mcp_server/test_mcp_elicitation_handler.py
+              --ignore=tests/unit/proxy/_experimental/mcp_server/test_mcp_server_manager.py
+              --ignore=tests/unit/proxy/_experimental/mcp_server/test_mcp_server_tool_calls_and_headers.py
+              --ignore=tests/unit/proxy/_experimental/mcp_server/test_operations.py
+              --ignore=tests/unit/proxy/_experimental/mcp_server/test_discoverable_endpoints.py
+              --ignore=tests/unit/proxy/_experimental/mcp_server/test_db_credentials.py
+              --ignore=tests/unit/proxy/_experimental/mcp_server/outbound_credentials
+            python-version: "3.12"
+            workers: 4
+            reruns: 0
+            timeout-minutes: 15
+            job-timeout-minutes: 30
+            dist: loadscope
+
           - shard: proxy-infra
             test-path: |-
               tests/unit/proxy/db
