@@ -1,5 +1,5 @@
 import types
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 from litellm.llms.vertex_ai.common_utils import pop_vertex_request_labels
 from litellm.types.llms.base import LiteLLMBaseModel
@@ -215,7 +215,7 @@ class VertexAITextEmbeddingConfig(LiteLLMBaseModel):
         return text_embedding_input
 
     def transform_vertex_response_to_openai(
-        self, response: dict, model: str, model_response: EmbeddingResponse
+        self, response: dict[str, Any], model: str, model_response: EmbeddingResponse
     ) -> EmbeddingResponse:
         """
         Transforms a vertex embedding response to an openai response.
