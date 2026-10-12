@@ -5,8 +5,9 @@ Handles transforming from Responses API -> LiteLLM completion  (Chat Completion 
 import json
 import re
 import uuid
-from collections.abc import Iterable, Iterator, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import accumulate
 from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
@@ -15,6 +16,7 @@ from typing import (
     Literal,
     Protocol,
     TypeAlias,
+    TypeVar,
     cast,
     runtime_checkable,
 )
@@ -36,6 +38,7 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.constants import REDACTED_BY_LITELLM, REDACTED_TOOL_CALL_ARGUMENTS_PLACEHOLDER
+from litellm.integrations.anthropic_cache_control_hook import MAX_CACHE_CONTROL_BLOCKS
 from litellm.litellm_core_utils.get_supported_openai_params import (
     get_supported_openai_params,
 )
@@ -238,6 +241,53 @@ def _input_item_cache_control(input_item: Mapping[str, object]) -> ChatCompletio
     return cast(  # cast-ok: Responses input uses the shared cache-control shape
         ChatCompletionCachedContent, cache_control
     )
+
+
+def _with_cache_control_on_last_block(blocks: Sequence[object], cache_control: object) -> Sequence[object]:
+    if not blocks or not isinstance(blocks[-1], dict):
+        return blocks
+    last_block: Final = _STR_KEY_DICT_ADAPTER.validate_python(blocks[-1])
+    if "cache_control" in last_block:
+        return blocks
+    return [*blocks[:-1], {**last_block, "cache_control": cache_control}]
+
+
+def _cache_control_count(value: object) -> int:
+    if isinstance(value, list):
+        return sum(_cache_control_count(item) for item in _OBJECT_LIST_ADAPTER.validate_python(value))
+    if not isinstance(value, dict):
+        return 0
+    fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(value)
+    return int("cache_control" in fields) + sum(_cache_control_count(item) for item in fields.values())
+
+
+def _without_cache_control(value: object) -> object:
+    if isinstance(value, list):
+        return [_without_cache_control(item) for item in _OBJECT_LIST_ADAPTER.validate_python(value)]
+    if not isinstance(value, dict):
+        return value
+    fields: Final = _STR_KEY_DICT_ADAPTER.validate_python(value)
+    return {key: _without_cache_control(item) for key, item in fields.items() if key != "cache_control"}
+
+
+_ReplayedMessageT = TypeVar("_ReplayedMessageT")
+
+
+def _replayed_messages_within_cache_control_limit(
+    replayed_messages: Sequence[_ReplayedMessageT], current_messages: Sequence[object]
+) -> Sequence[_ReplayedMessageT]:
+    budget: Final = MAX_CACHE_CONTROL_BLOCKS - _cache_control_count(list(current_messages))
+    newest_first: Final = tuple(reversed(replayed_messages))
+    markers_up_to_each: Final = tuple(accumulate(_cache_control_count(message) for message in newest_first))
+    kept_newest_first: Final = tuple(
+        message
+        if markers_so_far <= budget
+        else cast(  # cast-ok: the same message shape minus its cache markers
+            _ReplayedMessageT, _without_cache_control(message)
+        )
+        for message, markers_so_far in zip(newest_first, markers_up_to_each)
+    )
+    return tuple(reversed(kept_newest_first))
 
 
 class ChatCompletionSession(TypedDict, total=False):
@@ -593,19 +643,23 @@ class LiteLLMCompletionResponsesConfig:
         previous_response_id: str,
         litellm_completion_request: dict,
         instructions: str | None,
+        session_lookup: Callable[[str], Awaitable[ChatCompletionSession]] | None = None,
     ) -> dict:
         """
         Async hook to get the chain of previous input and output pairs and return a list of Chat Completion messages
         """
-        chat_completion_session = ChatCompletionSession(messages=[], litellm_session_id=None)
-        if previous_response_id:
-            chat_completion_session = (
-                await ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id(
-                    previous_response_id=previous_response_id,
-                )
-            )
+        lookup: Final = (
+            session_lookup or ResponsesSessionHandler.get_chat_completion_message_history_for_previous_response_id
+        )
+        chat_completion_session: Final = (
+            await lookup(previous_response_id)
+            if previous_response_id
+            else ChatCompletionSession(messages=[], litellm_session_id=None)
+        )
         _messages: Final = litellm_completion_request.get("messages") or []
-        session_messages: Final = chat_completion_session.get("messages") or []
+        session_messages: Final = _replayed_messages_within_cache_control_limit(
+            chat_completion_session.get("messages") or (), _OBJECT_LIST_ADAPTER.validate_python(_messages)
+        )
         instructions_end: Final = 1 if instructions else 0
         carried_instructions: Final = None if instructions else chat_completion_session.get("instructions")
         leading_system_messages: Final = (
@@ -619,7 +673,7 @@ class LiteLLMCompletionResponsesConfig:
         # Store original _messages before combining for safety check
         original_new_messages: Final = _messages.copy() if _messages else []
 
-        combined_messages = leading_system_messages + session_messages + _messages[instructions_end:]
+        combined_messages = [*leading_system_messages, *session_messages, *_messages[instructions_end:]]
 
         # Fix: Ensure tool_results have corresponding tool_calls in previous assistant message
         # Pass tools parameter to help reconstruct tool_calls if not in cache
@@ -641,7 +695,7 @@ class LiteLLMCompletionResponsesConfig:
             elif session_messages:
                 # If we had session messages but they got filtered out,
                 # restore them
-                combined_messages = session_messages
+                combined_messages = list(session_messages)
             else:
                 # Both are empty - this likely means function_call_output had empty/invalid call_id
                 # Provide a helpful error message
@@ -978,9 +1032,15 @@ class LiteLLMCompletionResponsesConfig:
                 )
             ]
         )
+        new_cache_control: Final = new_message.get("cache_control")
         merged: Final = {
             **last_message,
-            "content": content,
+            "content": (
+                _with_cache_control_on_last_block(_OBJECT_LIST_ADAPTER.validate_python(content), new_cache_control)
+                if new_cache_control is not None and isinstance(content, list)
+                else content
+            ),
+            **({} if new_cache_control is None else {"cache_control": new_cache_control}),
         }
         return cast(  # cast-ok: preserves the assistant fields and content blocks
             ChatCompletionAssistantMessage, merged
@@ -1777,27 +1837,26 @@ class LiteLLMCompletionResponsesConfig:
         raw_name: Final = function_call.get("name") or ""
         namespace: Final = function_call.get("namespace") or ""
         qualify: Final = bool(namespace) and function_call.get("type") != "custom_tool_call"
-        tool_call: Final = ChatCompletionToolCallChunk(
-            id=function_call.get("call_id") or function_call.get("id") or "",
-            type="function",
-            function=ChatCompletionToolCallFunctionChunk(
-                name=f"{namespace}__{raw_name}" if qualify else raw_name,
-                arguments=serialize_tool_call_arguments(raw_arguments),
-            ),
-            index=0,
+        tool_call_id: Final = function_call.get("call_id") or function_call.get("id") or ""
+        tool_call_function: Final = ChatCompletionToolCallFunctionChunk(
+            name=f"{namespace}__{raw_name}" if qualify else raw_name,
+            arguments=serialize_tool_call_arguments(raw_arguments),
         )
-
-        # Create an assistant message with the tool call
         function_call_cache_control: Final = _input_item_cache_control(function_call)
-        chat_completion_response_message: Final = (
-            ChatCompletionResponseMessage(tool_calls=[tool_call], role="assistant", content=None)
+        tool_call: Final = (
+            ChatCompletionToolCallChunk(id=tool_call_id, type="function", function=tool_call_function, index=0)
             if function_call_cache_control is None
-            else ChatCompletionResponseMessage(
-                tool_calls=[tool_call], role="assistant", content=None, cache_control=function_call_cache_control
+            else ChatCompletionToolCallChunk(
+                id=tool_call_id,
+                type="function",
+                function=tool_call_function,
+                index=0,
+                cache_control=function_call_cache_control,
             )
         )
 
-        return [chat_completion_response_message]
+        # Create an assistant message with the tool call
+        return [ChatCompletionResponseMessage(tool_calls=[tool_call], role="assistant", content=None)]
 
     @staticmethod
     def _resolve_file_id(item: Mapping[str, object]) -> object:

@@ -13,6 +13,8 @@ from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm.integrations.anthropic_cache_control_hook import (
+    CARRY_UNMATCHED_MESSAGE_POINTS,
+    EXTERNAL_BREAKPOINTS_STAMP,
     AnthropicCacheControlHook,
     configured_injection_points,
     supports_openai_prompt_cache_breakpoint,
@@ -4052,10 +4054,10 @@ class TestBedrockMantleGptShipsTheOpenAIDialect:
         assert out["prompt_cache_options"] == {"mode": "implicit"}
 
     def test_the_responses_stamp_carries_the_resolved_provider_for_a_bare_deployment_name(self):
-        from litellm.responses.main import _stamp_injection_points_with_dialect
+        from litellm.responses.main import _stamp_injection_points_for_the_hook
 
         kwargs: dict = {"cache_control_injection_points": copy.deepcopy(self.POINTS)}
-        _stamp_injection_points_with_dialect(kwargs, self.BARE_MODEL, "bedrock_mantle")
+        _stamp_injection_points_for_the_hook(kwargs, self.BARE_MODEL, "bedrock_mantle", None)
         _, messages, out = AnthropicCacheControlHook().get_chat_completion_prompt(
             model=self.BARE_MODEL,
             messages=copy.deepcopy(self.MESSAGES),
@@ -4066,6 +4068,103 @@ class TestBedrockMantleGptShipsTheOpenAIDialect:
         )
         assert messages[0]["content"] == self.MARKED_SYSTEM
         assert out["prompt_cache_options"] == {"mode": "implicit"}
+
+
+class TestResponsesLayerReservesMarksOutsideTheProvisionalMessages:
+    """The Responses layer's hook pass sees only the role-bearing input items, while the bridge
+    forwards a function_call or function_call_output mark onto the tool call or tool message it
+    builds, so the pass reserves those marks before placing an ordinal point and the bridge's
+    pass, which sees them in its own messages, replaces the reservation with its own count."""
+
+    MODEL = "claude-sonnet-4-6"
+    MARK = {"type": "ephemeral"}
+
+    @classmethod
+    def _items(cls, marked_calls: int) -> list[dict]:
+        calls = [
+            {
+                "type": "function_call",
+                "call_id": f"call_{index}",
+                "name": "weather",
+                "arguments": "{}",
+                "cache_control": cls.MARK,
+            }
+            for index in range(marked_calls)
+        ]
+        outputs = [
+            {"type": "function_call_output", "call_id": f"call_{index}", "output": "sunny"}
+            for index in range(marked_calls)
+        ]
+        return [
+            {"role": "user", "content": "ask", "cache_control": cls.MARK},
+            *calls,
+            *outputs,
+            {"role": "user", "content": "next"},
+        ]
+
+    def _marks_on_the_last_message_after_the_responses_pass(self, marked_calls: int) -> int:
+        from litellm.responses.main import _stamp_injection_points_for_the_hook
+        from litellm.responses.utils import ResponsesAPIRequestUtils
+
+        items = self._items(marked_calls)
+        kwargs: dict = {
+            "cache_control_injection_points": [{"location": "message", "index": -1}],
+            CARRY_UNMATCHED_MESSAGE_POINTS: True,
+        }
+        _stamp_injection_points_for_the_hook(kwargs, self.MODEL, "anthropic", items)
+        _, messages, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=self.MODEL,
+            messages=ResponsesAPIRequestUtils.responses_input_to_chat_messages(items),
+            non_default_params=kwargs,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        return AnthropicCacheControlHook._count_cache_control_blocks(messages[-1])
+
+    def test_function_call_marks_filling_the_cap_leave_the_ordinal_point_unplaced(self):
+        assert self._marks_on_the_last_message_after_the_responses_pass(marked_calls=3) == 0
+
+    def test_function_call_marks_under_the_cap_leave_the_ordinal_point_its_slot(self):
+        assert self._marks_on_the_last_message_after_the_responses_pass(marked_calls=2) == 1
+
+    def test_the_chat_pass_replaces_the_count_the_responses_layer_stamped(self):
+        messages = [
+            {"role": "system", "content": "sys"},
+            {"role": "user", "content": "ask", "cache_control": self.MARK},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_0",
+                        "type": "function",
+                        "function": {"name": "weather", "arguments": "{}"},
+                        "cache_control": self.MARK,
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_0", "content": "sunny"},
+            {"role": "user", "content": "next"},
+        ]
+        params: dict = {
+            "cache_control_injection_points": [{"location": "message", "role": "system", EXTERNAL_BREAKPOINTS_STAMP: 3}]
+        }
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=copy.deepcopy(messages),
+            model=self.MODEL,
+            custom_llm_provider="anthropic",
+        )
+        _, out, _ = AnthropicCacheControlHook().get_chat_completion_prompt(
+            model=self.MODEL,
+            messages=copy.deepcopy(messages),
+            non_default_params=params,
+            prompt_id=None,
+            prompt_variables=None,
+            dynamic_callback_params={},
+        )
+        assert AnthropicCacheControlHook._count_cache_control_blocks(out[0]) == 1
 
 
 class TestRecordGatewayInjection:
@@ -4274,8 +4373,8 @@ class TestMalformedInjectionPointsAreIgnored:
 
     @pytest.mark.parametrize("value", SHAPES)
     def test_responses_dialect_stamp_leaves_the_request_untouched(self, value):
-        from litellm.responses.main import _stamp_injection_points_with_dialect
+        from litellm.responses.main import _stamp_injection_points_for_the_hook
 
         kwargs: dict = {"cache_control_injection_points": copy.deepcopy(value)}
-        _stamp_injection_points_with_dialect(kwargs, "gpt-5.6", "openai")
+        _stamp_injection_points_for_the_hook(kwargs, "gpt-5.6", "openai", None)
         assert kwargs == {"cache_control_injection_points": value}

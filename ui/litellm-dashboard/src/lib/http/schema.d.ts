@@ -28575,6 +28575,7 @@ export interface components {
         };
         /** ChatCompletionToolCallChunk */
         ChatCompletionToolCallChunk: {
+            cache_control?: components["schemas"]["ChatCompletionCachedContent"];
             function: components["schemas"]["ChatCompletionToolCallFunctionChunk"];
             /** Id */
             id: string | null;

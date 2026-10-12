@@ -764,12 +764,16 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
         The hook sees neither the tools nor the request kwargs, so the target dialect
         and the client's breakpoint count outside the message list ride on the points.
-        Builds copies because config-owned point dicts are shared across requests.
+        A zero count replaces an earlier layer's stamp (the chat bridge runs behind the
+        Responses layer, whose outside marks sit in the bridge's own message list) and is
+        otherwise left off. Builds copies because config-owned point dicts are shared
+        across requests.
         """
         with_dialect: Final = AnthropicCacheControlHook._stamped_with_dialect(
             points, model, custom_llm_provider, api_base, prompt_cache_options
         )
-        if external_breakpoints == 0:
+        stamped_earlier: Final = any(EXTERNAL_BREAKPOINTS_STAMP in point for point in with_dialect)
+        if external_breakpoints == 0 and not stamped_earlier:
             return with_dialect
         return AnthropicCacheControlHook._stamped(with_dialect, EXTERNAL_BREAKPOINTS_STAMP, external_breakpoints)
 

@@ -568,12 +568,25 @@ def _will_bridge_to_chat_completions(
     )
 
 
-def _stamp_injection_points_with_dialect(
+def _cache_control_marks_outside_the_provisional_messages(input: str | ResponseInputParam | None) -> int:
+    """Client marks on the input items the provisional message list leaves out.
+
+    A ``function_call`` or ``function_call_output`` item has no role, so the hook's pass here
+    never sees its mark, while the bridge forwards it onto the tool call or tool message it
+    builds, where the provider counts it against the cap.
+    """
+    if input is None or isinstance(input, str):
+        return 0
+    return sum(1 for item in input if "role" not in item and item.get("cache_control"))
+
+
+def _stamp_injection_points_for_the_hook(
     kwargs: dict[str, object],  # mutable-ok: the points are rewritten in the caller's own kwargs for the hook to read
     model: str,
     custom_llm_provider: str | None,
+    input: str | ResponseInputParam | None,
 ) -> None:
-    """Carry the provider this layer resolved onto the points.
+    """Carry onto the points the provider this layer resolved and the marks its pass cannot see.
 
     The hook reads ``custom_llm_provider`` from the request kwargs, which never hold the one
     resolved here, and resolving the model name alone reads a Foundry deployment of an OpenAI
@@ -582,8 +595,9 @@ def _stamp_injection_points_with_dialect(
     points: Final = configured_injection_points(kwargs.get("cache_control_injection_points"))
     if not points:
         return
-    kwargs["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_with_dialect(
+    kwargs["cache_control_injection_points"] = AnthropicCacheControlHook._stamped_for_prompt_hook(
         points,
+        _cache_control_marks_outside_the_provisional_messages(input),
         model,
         custom_llm_provider,
         kwargs.get("api_base") or kwargs.get("base_url"),
@@ -704,7 +718,7 @@ async def aresponses(
                     _api_base_kwarg(kwargs),
                 ),
             ):
-                _stamp_injection_points_with_dialect(kwargs, model, custom_llm_provider)
+                _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input)
                 (
                     model,
                     merged_input,
@@ -875,7 +889,7 @@ def _apply_prompt_management_to_responses_call(
                 _api_base_kwarg(kwargs),
             ),
         ):
-            _stamp_injection_points_with_dialect(kwargs, model, custom_llm_provider)
+            _stamp_injection_points_for_the_hook(kwargs, model, custom_llm_provider, input)
             (
                 model,
                 merged_input,

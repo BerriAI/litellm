@@ -505,14 +505,14 @@ def test_messages_endpoint_points_skip_injection_when_tool_use_marks_fill_the_ca
         assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
 
 
-def test_responses_bridge_keeps_system_and_user_marks_within_the_cap(gateway: Gateway) -> None:
+def test_responses_bridge_points_skip_injection_when_function_call_marks_fill_the_cap(gateway: Gateway) -> None:
     marker: Final = new_marker()
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
         model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
         response: Final = gateway.request("POST", "/v1/responses", responses_body(model, marker))
         assert response.status_code == 200, response.text
         assert _JSON_OBJECT.validate_json(response.content)["status"] == "completed", response.text
-        assert anthropic_labels(_only_request(wire)) == [SYSTEM_LABEL, ASK_LABEL]
+        assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
 
 
 @pytest.mark.timeout(240)
@@ -567,14 +567,16 @@ def test_assistant_without_tool_calls_keeps_configured_points(gateway: Gateway, 
     assert labels == [SYSTEM_LABEL, ASK_LABEL, final_label(marker)]
 
 
-def test_responses_stream_bridge_keeps_system_and_user_marks_within_the_cap(gateway: Gateway) -> None:
+def test_responses_stream_bridge_points_skip_injection_when_function_call_marks_fill_the_cap(
+    gateway: Gateway,
+) -> None:
     marker: Final = new_marker()
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
         model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
         status, text = _stream(gateway, "/v1/responses", {**responses_body(model, marker), "stream": True})
         assert status == 200, text
         assert '"type":"response.completed"' in text, text
-        assert anthropic_labels(_only_request(wire)) == [SYSTEM_LABEL, ASK_LABEL]
+        assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
 
 
 def _openai_client(gateway: Gateway) -> openai.OpenAI:
@@ -698,7 +700,9 @@ async def test_anthropic_sdk_async_messages_stream_keeps_the_capped_request_with
     assert gateway_injected(f"msg_{marker}") is False
 
 
-async def test_openai_sdk_async_responses_keeps_system_and_user_marks_within_the_cap(gateway: Gateway) -> None:
+async def test_openai_sdk_async_responses_points_skip_injection_when_function_call_marks_fill_the_cap(
+    gateway: Gateway,
+) -> None:
     marker: Final = new_marker()
     with wire_server(anthropic_peer) as wire, gateway.scenario() as scenario:
         model: Final = _anthropic_deployment(scenario, wire, cache_control_injection_points=POINTS)
@@ -712,7 +716,7 @@ async def test_openai_sdk_async_responses_keeps_system_and_user_marks_within_the
                 input=cast(ResponseInputParam, body["input"]),
             )
         assert response.status == "completed", response.model_dump()
-        assert anthropic_labels(_only_request(wire)) == [SYSTEM_LABEL, ASK_LABEL]
+        assert anthropic_labels(_only_request(wire)) == _CLIENT_MARKED
 
 
 def test_request_level_points_skip_injection_when_client_marks_fill_the_cap(gateway: Gateway) -> None:
@@ -891,8 +895,7 @@ def test_response_cache_twins_on_messages_and_responses_stay_within_the_cap(
         responses: Final = tuple(uncapped_gateway.request("POST", path, body) for _ in range(2))
         received: Final = wire.drain()
     assert [response.status_code for response in responses] == [200, 200], [response.text for response in responses]
-    expected: Final = _CLIENT_MARKED if path == "/v1/messages" else [SYSTEM_LABEL, ASK_LABEL]
-    assert [anthropic_labels(request) for request in received] == [expected] * len(received)
+    assert [anthropic_labels(request) for request in received] == [_CLIENT_MARKED] * len(received)
     assert len(received) == 1, [request.target for request in received]
 
 

@@ -658,6 +658,7 @@ class ChatCompletionToolCallChunk(TypedDict):  # result of /chat/completions cal
     type: Literal["function"]
     function: ChatCompletionToolCallFunctionChunk
     index: int
+    cache_control: NotRequired[ReadOnly["ChatCompletionCachedContent"]]
 
 
 class ChatCompletionDeltaToolCallChunk(TypedDict, total=False):
@@ -1139,7 +1140,6 @@ class ChatCompletionResponseMessage(TypedDict, total=False):
     provider_specific_fields: dict | None
     reasoning_content: str | None
     thinking_blocks: list[ChatCompletionThinkingBlock | ChatCompletionRedactedThinkingBlock] | None
-    cache_control: ReadOnly[ChatCompletionCachedContent]
 
 
 class ChatCompletionUsageBlock(TypedDict, total=False):
