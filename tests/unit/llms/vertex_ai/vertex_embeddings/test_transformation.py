@@ -6,10 +6,17 @@ from litellm.llms.vertex_ai.vertex_embeddings.transformation import (
 from litellm.types.utils import EmbeddingResponse
 
 
-def _vertex_response(token_counts: list[int], billable_character_count: int | None = None) -> dict:
+def _vertex_response(
+    token_counts: list[int], billable_character_count: int | None = None
+) -> dict:
     response: dict = {
         "predictions": [
-            {"embeddings": {"statistics": {"truncated": False, "token_count": n}, "values": [0.1]}}
+            {
+                "embeddings": {
+                    "statistics": {"truncated": False, "token_count": n},
+                    "values": [0.1],
+                }
+            }
             for n in token_counts
         ]
     }
