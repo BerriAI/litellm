@@ -1066,7 +1066,7 @@ class DBSpendUpdateWriter:
                 team_id=team_id,
                 user_id=user_id,
                 prisma_client=prisma_client,
-                tokens=payload["total_tokens"],
+                tokens=payload["total_tokens"] if "total_tokens" in payload else 0,
             )
         except Exception:
             verbose_proxy_logger.debug(
