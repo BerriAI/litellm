@@ -30,7 +30,7 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 from cryptography.x509.oid import NameOID
 from pydantic import TypeAdapter
 
-from tests.integration._support.budget import case_timeout_seconds, import_seconds, readiness_for, readiness_seconds
+from tests.integration._support.budget import import_seconds, readiness_for, readiness_seconds
 from tests.integration._support.client import GATEWAY_LIMITS, Gateway
 
 DB_PUSH: Final = ("--use_prisma_db_push",)
@@ -98,7 +98,7 @@ def healthcheck_seconds(healthcheck: WorkerHealthcheck) -> int:
         case WorkerHealthcheck.STRICT:
             return STRICT_HEALTHCHECK_SECONDS
         case WorkerHealthcheck.LENIENT:
-            return int(case_timeout_seconds())
+            return int(graceful_stop_seconds())
 
 
 def _is_serving_worker(process: psutil.Process) -> bool:
@@ -122,9 +122,33 @@ def _wait_until_gone(process: psutil.Process, seconds: float) -> None:
         time.sleep(0.05)
 
 
+def _is_stopped(process: psutil.Process) -> bool:
+    try:
+        return process.status() == psutil.STATUS_STOPPED
+    except psutil.NoSuchProcess:
+        return False
+
+
+def _is_reaped(process: psutil.Process) -> bool:
+    try:
+        process.status()
+    except psutil.NoSuchProcess:
+        return True
+    return False
+
+
+def _wait_until_reaped(process: psutil.Process, supervisor: psutil.Process, seconds: float) -> None:
+    deadline: Final = time.monotonic() + seconds
+    while not _is_reaped(process) and not _is_stopped(supervisor):
+        assert time.monotonic() < deadline, f"The supervisor did not reap worker {process.pid} within {seconds:.0f}s"
+        time.sleep(0.05)
+
+
 @dataclass(frozen=True, slots=True)
 class WorkerKill:
     victim: psutil.Process
+    supervisor: psutil.Process
+    reap_seconds: float
     fired: threading.Event
 
     def freeze(self) -> psutil.Process:
@@ -136,6 +160,7 @@ class WorkerKill:
         with suppress(psutil.NoSuchProcess):
             self.victim.kill()
         _wait_until_gone(self.victim, STRICT_HEALTHCHECK_SECONDS)
+        _wait_until_reaped(self.victim, self.supervisor, self.reap_seconds)
         self.fired.set()
 
 
@@ -185,17 +210,21 @@ class OwnedProxy:
         assert pid in before, f"{pid} is not a serving worker of this proxy: {sorted(before)}"
         return psutil.Process(pid), before
 
+    def _worker_kill(self, victim: psutil.Process) -> WorkerKill:
+        reap_seconds: Final = healthcheck_seconds(self.healthcheck) + STRICT_HEALTHCHECK_SECONDS
+        return WorkerKill(victim, psutil.Process(self.process.pid), reap_seconds, threading.Event())
+
     @contextmanager
     def replacing_worker(self, pid: int) -> Iterator[WorkerKill]:
         victim, before = self._victim(pid)
-        kill: Final = WorkerKill(victim, threading.Event())
+        kill: Final = self._worker_kill(victim)
         yield kill
         assert kill.fired.is_set(), f"replacing_worker({pid}) exited without killing the worker"
         self._await_replacement(before)
 
     def kill_worker(self, pid: int) -> int:
         victim, before = self._victim(pid)
-        WorkerKill(victim, threading.Event())()
+        self._worker_kill(victim)()
         return self._await_replacement(before)
 
     @contextmanager

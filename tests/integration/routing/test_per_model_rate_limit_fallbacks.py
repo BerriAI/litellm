@@ -73,6 +73,10 @@ class Rig:
     groups: Groups
     wires: Mapping[str, Wire]
 
+    @property
+    def log(self) -> Path:
+        return self.owned.log
+
     def traffic(self) -> dict[str, tuple[str, ...]]:
         return {group: markers_on(wire) for group, wire in self.wires.items()}
 

@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
+import httpx
 import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.process import OwnedProxy, owned_proxy_process
@@ -18,6 +19,7 @@ from pydantic import BaseModel
 
 PERSON: Final = "John Smith"
 MASK: Final = "<PERSON>"
+CUT_BY_WORKER_DEATH: Final = 0
 GEMINI_MODEL: Final = "gemini-2.5-flash"
 
 
@@ -167,6 +169,12 @@ class Rig:
             "POST", path, json=body, headers={"Authorization": f"Bearer {key or self.gateway.key}"}
         ) as response:
             return Received(response.status_code, tuple(response.iter_raw()))
+
+    def stream_on_a_worker_that_may_die(self, path: str, body: dict[str, object]) -> Received:
+        try:
+            return self.stream(path, body)
+        except httpx.TransportError:
+            return Received(CUT_BY_WORKER_DEATH, ())
 
     def gemini_path(self) -> str:
         return f"/v1beta/models/{self.gemini}:streamGenerateContent?alt=sse"
@@ -567,7 +575,10 @@ def test_native_gemini_keeps_streaming_after_one_worker_is_killed(gateway: Gatew
     with presidio_rig(gateway, tmp_path, provider) as rig:
         workers: Final = eventually(rig.proxy.worker_pids, lambda members: len(members) >= 2, seconds=30)
         with rig.proxy.replacing_worker(min(workers)) as kill, ThreadPoolExecutor(max_workers=8) as pool:
-            futures: Final = tuple(pool.submit(rig.stream, rig.gemini_path(), rig.gemini_body()) for _ in range(8))
+            futures: Final = tuple(
+                pool.submit(rig.stream_on_a_worker_that_may_die, rig.gemini_path(), rig.gemini_body())
+                for _ in range(8)
+            )
             kill()
             first_wave: Final = tuple(future.result() for future in futures)
         survivors: Final = tuple(received for received in first_wave if received.status == 200)

@@ -11,7 +11,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import redis
-from integration._support.process import stop_child
+from tests.integration._support.process import stop_child
 
 from litellm._redis import _get_redis_env_kwarg_mapping, get_redis_client
 from litellm._redis_credential_provider import _token_cache
