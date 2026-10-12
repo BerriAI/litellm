@@ -22,6 +22,7 @@ from litellm.proxy.common_request_processing import (
 )
 from litellm.proxy.common_utils.http_parsing_utils import (
     coerce_numeric_form_fields,
+    decode_json_list_form_fields,
     numeric_form_fields,
     resolve_inference_model,
 )
@@ -39,6 +40,8 @@ router: Final = APIRouter()
 
 IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(ImageEditRequestParams))
 IMAGE_EDIT_OPTIONAL_FIELD_DEFAULTS: Final = MappingProxyType({"prompt": None, "image": None})
+# Router fallback lists arrive as JSON text in a multipart body and must be decoded back into lists.
+IMAGE_EDIT_LIST_FORM_FIELDS: Final = frozenset({"fallbacks", "context_window_fallbacks", "content_policy_fallbacks"})
 
 IMAGE_ARRAY_FIELD: Final = "image[]"
 MASK_ARRAY_FIELD: Final = "mask[]"
@@ -297,9 +300,12 @@ async def image_edit_api(
     #########################################################
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
-    form_fields: Final = coerce_numeric_form_fields(
-        parsed_body=await read_request_body(request=request),
-        numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
+    form_fields: Final = decode_json_list_form_fields(
+        parsed_body=coerce_numeric_form_fields(
+            parsed_body=await read_request_body(request=request),
+            numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
+        ),
+        list_fields=IMAGE_EDIT_LIST_FORM_FIELDS,
     )
     data: Final = {
         key: value

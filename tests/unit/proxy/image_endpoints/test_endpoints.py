@@ -222,6 +222,53 @@ def test_image_edit_multipart_n_that_is_not_a_number_is_left_alone(monkeypatch):
     assert captured["n"] == "two"
 
 
+def test_image_edit_multipart_fallbacks_reach_the_router_as_a_list(monkeypatch):
+    """A multipart `fallbacks` is JSON text and must not be walked one character at a time."""
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={"image": ("tree.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+        data={"model": "primary", "prompt": "add a hat", "fallbacks": '["backup"]'},
+    )
+
+    assert response.status_code == 200
+    assert captured["fallbacks"] == ["backup"]
+
+
+def test_image_edit_multipart_context_window_and_content_policy_fallbacks_are_decoded(monkeypatch):
+    """The other router fallback lists share the same multipart shape."""
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={"image": ("tree.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+        data={
+            "model": "primary",
+            "prompt": "add a hat",
+            "context_window_fallbacks": '[{"primary": ["big"]}]',
+            "content_policy_fallbacks": '["safe"]',
+        },
+    )
+
+    assert response.status_code == 200
+    assert captured["context_window_fallbacks"] == [{"primary": ["big"]}]
+    assert captured["content_policy_fallbacks"] == ["safe"]
+
+
+def test_image_edit_multipart_fallbacks_given_as_a_bare_model_name_is_a_single_entry(monkeypatch):
+    captured: Dict[str, Any] = {}
+
+    response = _image_edit_client(monkeypatch, captured).post(
+        "/v1/images/edits",
+        files={"image": ("tree.png", b"\x89PNG\r\n\x1a\n", "image/png")},
+        data={"model": "primary", "prompt": "add a hat", "fallbacks": "backup"},
+    )
+
+    assert response.status_code == 200
+    assert captured["fallbacks"] == ["backup"]
+
+
 @pytest.mark.parametrize(
     "files, form, missing",
     [

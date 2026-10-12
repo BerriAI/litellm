@@ -159,6 +159,34 @@ def coerce_numeric_form_fields(
     }
 
 
+def _list_form_value(value: object) -> object:
+    if not isinstance(value, str) or not value.strip():
+        return value
+    try:
+        decoded: Final = json.loads(value)
+    except ValueError:
+        return [value]
+    if isinstance(decoded, list):
+        return decoded
+    if isinstance(decoded, str):
+        return [decoded]
+    return [value]
+
+
+def decode_json_list_form_fields(
+    parsed_body: Mapping[str, object],
+    list_fields: Collection[str],
+) -> Mapping[str, object]:
+    """
+    Parse the list-valued fields of a form-encoded body back into lists.
+
+    ``request.form()`` yields every field as a string, so a JSON array such as
+    ``["backup"]`` arrives as text that a consumer iterating it would walk one
+    character at a time. A string that is not a JSON array is a single entry.
+    """
+    return {name: _list_form_value(value) if name in list_fields else value for name, value in parsed_body.items()}
+
+
 def _parse_binary_body(body: bytes) -> dict:
     """JSON sent under a binary content type still parses; real binary (protobuf) carries no params -> {}."""
     try:

@@ -23,6 +23,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     safe_get_request_query_params,
     safe_set_request_parsed_body,
     coerce_numeric_form_fields,
+    decode_json_list_form_fields,
     get_form_data,
     get_request_body,
     get_tags_from_request_body,
@@ -1274,6 +1275,57 @@ class TestCoerceNumericFormFields:
             numeric_fields=self.numeric_fields,
         )
         assert result == {"n": 3, "temperature": None, "image": buffer}
+
+
+class TestDecodeJsonListFormFields:
+    list_fields = frozenset({"fallbacks", "context_window_fallbacks"})
+
+    def test_json_array_string_is_decoded_to_a_list(self):
+        assert decode_json_list_form_fields(
+            parsed_body={"fallbacks": '["backup", "other"]'},
+            list_fields=self.list_fields,
+        ) == {"fallbacks": ["backup", "other"]}
+
+    def test_array_of_mappings_keeps_its_shape(self):
+        assert decode_json_list_form_fields(
+            parsed_body={"fallbacks": '[{"primary": ["backup"]}]'},
+            list_fields=self.list_fields,
+        ) == {"fallbacks": [{"primary": ["backup"]}]}
+
+    def test_plain_string_is_a_single_entry(self):
+        assert decode_json_list_form_fields(
+            parsed_body={"fallbacks": "backup"},
+            list_fields=self.list_fields,
+        ) == {"fallbacks": ["backup"]}
+
+    def test_json_string_literal_is_a_single_entry(self):
+        assert decode_json_list_form_fields(
+            parsed_body={"fallbacks": '"backup"'},
+            list_fields=self.list_fields,
+        ) == {"fallbacks": ["backup"]}
+
+    def test_malformed_json_is_never_walked_one_character_at_a_time(self):
+        result = decode_json_list_form_fields(
+            parsed_body={"fallbacks": '["backup"'},
+            list_fields=self.list_fields,
+        )
+        assert result == {"fallbacks": ['["backup"']}
+
+    def test_empty_string_is_left_alone(self):
+        assert decode_json_list_form_fields(
+            parsed_body={"fallbacks": ""},
+            list_fields=self.list_fields,
+        ) == {"fallbacks": ""}
+
+    def test_other_fields_and_non_string_values_pass_through(self):
+        buffer = io.BytesIO(b"png")
+        parsed_body = {
+            "prompt": '["not", "a", "fallback"]',
+            "image": buffer,
+            "fallbacks": ["already", "a", "list"],
+            "context_window_fallbacks": None,
+        }
+        assert decode_json_list_form_fields(parsed_body=parsed_body, list_fields=self.list_fields) == parsed_body
 
 
 @pytest.mark.parametrize(
