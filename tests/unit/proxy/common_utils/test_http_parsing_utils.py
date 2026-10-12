@@ -276,6 +276,51 @@ async def test_form_data_with_json_metadata():
     mock_request.form.assert_called_once()
 
 
+def _multipart_request(fields: Mapping[str, str]) -> MagicMock:
+    mock_request = MagicMock()
+    mock_request.form = AsyncMock(return_value=FormData(fields))
+    mock_request.headers = {"content-type": "multipart/form-data"}
+    mock_request.scope = {}
+    mock_request.state._cached_headers = None
+    return mock_request
+
+
+@pytest.mark.asyncio
+async def test_form_fallback_fields_are_decoded_into_lists():
+    result = await read_request_body(
+        _multipart_request(
+            {
+                "model": "primary",
+                "fallbacks": '["backup"]',
+                "context_window_fallbacks": '[{"primary": ["big"]}]',
+                "content_policy_fallbacks": "safe",
+            }
+        )
+    )
+
+    assert result["fallbacks"] == ["backup"]
+    assert result["context_window_fallbacks"] == [{"primary": ["big"]}]
+    assert result["content_policy_fallbacks"] == ["safe"]
+
+
+@pytest.mark.asyncio
+async def test_form_fallback_with_client_endpoint_is_visible_to_the_request_body_safety_check():
+    from litellm.proxy.auth.auth_utils import is_request_body_safe, request_fallback_model_names
+
+    attacker_fallbacks = '[{"primary": [{"model": "primary", "api_base": "https://attacker.example/v1"}]}]'
+    body = await read_request_body(_multipart_request({"model": "primary", "fallbacks": attacker_fallbacks}))
+
+    assert request_fallback_model_names(body) == ("primary",)
+    with pytest.raises(ValueError, match="api_base"):
+        is_request_body_safe(
+            request_body=body,
+            general_settings={},
+            llm_router=None,
+            model="primary",
+            route="/v1/images/edits",
+        )
+
+
 @pytest.mark.asyncio
 async def test_form_data_with_invalid_json_metadata():
     """

@@ -29,6 +29,10 @@ _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-
 # hit the JSON surrogate-repair path and fail auth with a 400. JSON under these types still parses.
 _BINARY_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-protobuf", "application/protobuf"})
 
+_FORM_FALLBACK_FIELDS: Final[frozenset[str]] = frozenset(
+    {"fallbacks", "context_window_fallbacks", "content_policy_fallbacks"}
+)
+
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
 
 
@@ -270,7 +274,7 @@ async def read_request_body(request: Request | None) -> dict:
                     param="request_body",
                     code=status.HTTP_400_BAD_REQUEST,
                 )
-            parsed_body = dict(form_data)
+            parsed_body = dict(decode_json_list_form_fields(form_data, _FORM_FALLBACK_FIELDS))
             if "metadata" in parsed_body and isinstance(parsed_body["metadata"], str):
                 parsed_body["metadata"] = json.loads(parsed_body["metadata"])
         else:
