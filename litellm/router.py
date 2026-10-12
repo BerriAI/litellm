@@ -546,12 +546,6 @@ def _as_retry_skipped_deployment_ids(value: object) -> tuple[str, ...]:
     return tuple(item for item in value if isinstance(item, str)) if isinstance(value, tuple) else ()
 
 
-def _has_untried_deployment(deployments: Sequence[Mapping[str, object]], tried_deployment_ids: tuple[str, ...]) -> bool:
-    return bool(tried_deployment_ids) and any(
-        _configured_model_info(deployment).get("id") not in tried_deployment_ids for deployment in deployments
-    )
-
-
 def _silent_experiment_targets(silent_model: object) -> tuple[str, ...]:
     if silent_model is None:
         return ()
@@ -8309,9 +8303,11 @@ class Router:
         status_code: Final = getattr(error, "status_code", None)
         # 401/403 are special cases - allow retry if multiple deployments exist (handled below)
         if status_code is not None and not litellm.should_retry(status_code) and status_code not in (401, 403):
-            if not _has_untried_deployment(
-                _DEPLOYMENTS_ADAPTER.validate_python(healthy_deployments or ()), tried_deployment_ids
-            ):
+            deployments: Final = _DEPLOYMENTS_ADAPTER.validate_python(healthy_deployments or ())
+            has_untried_deployment: Final = bool(tried_deployment_ids) and any(
+                _configured_model_info(deployment).get("id") not in tried_deployment_ids for deployment in deployments
+            )
+            if not has_untried_deployment:
                 raise error
             return True
         # Error we should only retry if there are other deployments
