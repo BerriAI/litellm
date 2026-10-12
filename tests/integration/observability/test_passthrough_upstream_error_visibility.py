@@ -126,7 +126,7 @@ async def test_gemini_passthrough_async_client_404_body_reaches_proxy_log_and_sp
     path: Final = tmp_path / "gemini-async.yaml"
     with wire_server(respond) as wire:
         _gemini_config(path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             async with httpx.AsyncClient(
                 base_url=str(candidate.client.base_url), timeout=15, trust_env=False
@@ -156,7 +156,7 @@ def test_gemini_passthrough_streaming_500_relays_full_body_and_logs_bounded_prev
     path: Final = tmp_path / "gemini-stream-500.yaml"
     with wire_server(respond) as wire:
         _gemini_config(path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             with candidate.client.stream(
                 "POST",
@@ -188,7 +188,7 @@ def test_gemini_passthrough_success_logs_nothing_and_spend_row_is_success(gatewa
     path: Final = tmp_path / "gemini-200.yaml"
     with wire_server(respond) as wire:
         _gemini_config(path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             response: Final = candidate.request(
                 "POST", _GEMINI_MODEL_PATH, _GENERATE_CONTENT, headers={"x-goog-api-key": candidate.key}
@@ -208,7 +208,7 @@ def test_gemini_passthrough_streaming_200_relays_every_chunk(gateway: Gateway, t
     path: Final = tmp_path / "gemini-stream-200.yaml"
     with wire_server(respond) as wire:
         _gemini_config(path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             with candidate.client.stream(
                 "POST",
@@ -239,7 +239,7 @@ def test_gemini_streaming_passthrough_request_tags_reach_spend_log(gateway: Gate
     config_path: Final = tmp_path / "gemini-stream-tags.yaml"
     with wire_server(respond) as wire:
         _gemini_config(config_path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=config_path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=config_path) as owned:
             candidate: Final = owned.gateway
             with candidate.client.stream(
                 "POST",
@@ -293,7 +293,7 @@ def test_config_pass_through_route_logs_body_and_strips_query(gateway: Gateway, 
             }
         ]
         path.write_text(yaml.safe_dump(config))
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             response: Final = candidate.request("POST", "/audit-pt", _GENERATE_CONTENT)
             assert response.status_code == 403, response.text
@@ -324,7 +324,7 @@ def test_openai_passthrough_sdk_error_body_reaches_proxy_log_and_spend_row(gatew
     path: Final = tmp_path / "openai-404.yaml"
     with wire_server(respond) as wire:
         _openai_config(path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             with OpenAI(
                 api_key=candidate.key,
@@ -350,7 +350,7 @@ async def test_openai_passthrough_async_sdk_error_body_reaches_proxy_log_and_spe
     path: Final = tmp_path / "openai-async-404.yaml"
     with wire_server(respond) as wire:
         _openai_config(path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             async with AsyncOpenAI(
                 api_key=candidate.key,
@@ -377,7 +377,7 @@ def test_gemini_passthrough_control_characters_cannot_forge_log_lines(gateway: G
     path: Final = tmp_path / "gemini-forged.yaml"
     with wire_server(respond) as wire:
         _gemini_config(path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             response: Final = candidate.request(
                 "POST", _GEMINI_MODEL_PATH, _GENERATE_CONTENT, headers={"x-goog-api-key": candidate.key}
@@ -401,7 +401,7 @@ def test_gemini_passthrough_empty_error_body_still_logged_and_proxy_serves(gatew
     path: Final = tmp_path / "gemini-empty.yaml"
     with wire_server(respond) as wire:
         _gemini_config(path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             response: Final = candidate.request(
                 "POST", _GEMINI_MODEL_PATH, _GENERATE_CONTENT, headers={"x-goog-api-key": candidate.key}
@@ -434,7 +434,7 @@ def test_gemini_passthrough_gzip_error_body_decoded_for_log_and_client(gateway: 
     path: Final = tmp_path / "gemini-gzip.yaml"
     with wire_server(respond) as wire:
         _gemini_config(path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             response: Final = candidate.request(
                 "POST", _GEMINI_MODEL_PATH, _GENERATE_CONTENT, headers={"x-goog-api-key": candidate.key}
@@ -462,7 +462,7 @@ def test_gemini_passthrough_streaming_gzip_error_body_decoded_for_log_and_client
     path: Final = tmp_path / "gemini-stream-gzip.yaml"
     with wire_server(respond) as wire:
         _gemini_config(path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             with candidate.client.stream(
                 "POST",
@@ -490,7 +490,7 @@ def test_gemini_passthrough_error_body_redacted_when_message_logging_off(gateway
         config["environment_variables"] = {"GEMINI_API_BASE": wire.url, "GEMINI_API_KEY": "scripted"}
         config["litellm_settings"]["turn_off_message_logging"] = True
         path.write_text(yaml.safe_dump(config))
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             response: Final = candidate.request(
                 "POST", _GEMINI_MODEL_PATH, _GENERATE_CONTENT, headers={"x-goog-api-key": candidate.key}
@@ -516,7 +516,7 @@ def test_gemini_passthrough_exact_4096_byte_body_logged_without_marker(gateway: 
     path: Final = tmp_path / "gemini-exact.yaml"
     with wire_server(respond) as wire:
         _gemini_config(path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             response: Final = candidate.request(
                 "POST", _GEMINI_MODEL_PATH, _GENERATE_CONTENT, headers={"x-goog-api-key": candidate.key}
@@ -537,7 +537,7 @@ def test_gemini_passthrough_4097_byte_body_truncated_with_marker(gateway: Gatewa
     path: Final = tmp_path / "gemini-over.yaml"
     with wire_server(respond) as wire:
         _gemini_config(path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             response: Final = candidate.request(
                 "POST", _GEMINI_MODEL_PATH, _GENERATE_CONTENT, headers={"x-goog-api-key": candidate.key}
@@ -557,7 +557,7 @@ def test_gemini_passthrough_one_byte_stream_chunks_reassembled_and_logged(gatewa
     path: Final = tmp_path / "gemini-one-byte.yaml"
     with wire_server(respond) as wire:
         _gemini_config(path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             with candidate.client.stream(
                 "POST",
@@ -580,7 +580,7 @@ def test_gemini_passthrough_repeated_errors_each_get_row_and_log_line(gateway: G
     path: Final = tmp_path / "gemini-twice.yaml"
     with wire_server(respond) as wire:
         _gemini_config(path, wire.url)
-        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
             candidate: Final = owned.gateway
             responses: Final = tuple(
                 candidate.request(
@@ -604,7 +604,7 @@ def test_gemini_passthrough_repeated_errors_each_get_row_and_log_line(gateway: G
 def test_budget_rejected_call_keeps_budget_normalized_error(gateway: Gateway, tmp_path: Path) -> None:
     path: Final = tmp_path / "budget.yaml"
     path.write_text(Path("tests/integration/proxy_config.yaml").read_text())
-    with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
+    with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
         candidate: Final = owned.gateway
         with candidate.scenario() as scenario:
             model: Final = scenario.model()
