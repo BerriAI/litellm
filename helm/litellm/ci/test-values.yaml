@@ -1,0 +1,34 @@
+# Values for the CircleCI helm_chart_testing job: a monolith install on a
+# kind cluster from the image built by the pipeline (image.repository / tag /
+# pullPolicy are passed with --set), backed by the throwaway PostgreSQL in
+# ci/postgres.yaml so the migrations Job and the proxy have a database.
+monolith:
+  enabled: true
+
+masterKey:
+  secretName: ""
+  generate: true
+
+gateway:
+  replicaCount: 1
+  hpa:
+    enabled: false
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  config:
+    create: true
+    proxy_config:
+      general_settings: {}
+
+database:
+  writer:
+    host: litellm-ci-postgres
+    dbname: litellm
+    passwordSecret:
+      name: litellm-ci-postgres
+      usernameKey: username
+      passwordKey: password
