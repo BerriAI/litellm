@@ -1,6 +1,7 @@
-use std::convert::Infallible;
-
-use crate::routes::inference::InferenceHost;
+use crate::{
+    cache::{CacheCall, Cached, Selection},
+    routes::inference::InferenceHost,
+};
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
 use litellm_inference_responses::{Error, route::Responses, types::ResponsesCall};
 use pyo3::{
@@ -51,15 +52,19 @@ pub(super) fn project(
 }
 
 impl PythonBinding for ResponsesPythonHost {
-    type Protocol = Responses;
+    type Protocol = Cached<Responses>;
     type Failure = PyErr;
 
     fn decode_request(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<ResponsesCall, InvokeError<Error>> {
+    ) -> Result<(ResponsesCall, Selection), InvokeError<Error>> {
         let call = project(&mut self.0, py, arguments).map_err(InvokeError::Python)?;
+        let selection = self
+            .0
+            .select_cache(py, arguments)
+            .map_err(InvokeError::Python)?;
         if call
             .optional_params
             .get("stream")
@@ -69,13 +74,13 @@ impl PythonBinding for ResponsesPythonHost {
                 "native Python responses streaming",
             )));
         }
-        Ok(call)
+        Ok((call, selection))
     }
 
     fn encode_response(
         &mut self,
         py: Python<'_>,
-        response: <Responses as litellm_host::protocol::Protocol>::Response,
+        response: <Cached<Responses> as litellm_host::protocol::Protocol>::Response,
     ) -> PyResult<Py<PyAny>> {
         self.0.response(py, &response)
     }
@@ -83,7 +88,7 @@ impl PythonBinding for ResponsesPythonHost {
     fn encode_stream_head(
         &mut self,
         _py: Python<'_>,
-        head: <Responses as litellm_host::protocol::Protocol>::StreamHead,
+        head: <Cached<Responses> as litellm_host::protocol::Protocol>::StreamHead,
     ) -> PyResult<Py<PyAny>> {
         let _ = head;
         Err(pyo3::exceptions::PyRuntimeError::new_err(
@@ -94,7 +99,7 @@ impl PythonBinding for ResponsesPythonHost {
     fn encode_chunk(
         &mut self,
         _py: Python<'_>,
-        chunk: <Responses as litellm_host::protocol::Protocol>::Chunk,
+        chunk: <Cached<Responses> as litellm_host::protocol::Protocol>::Chunk,
     ) -> PyResult<Py<PyAny>> {
         let _ = chunk;
         Err(pyo3::exceptions::PyRuntimeError::new_err(
@@ -110,13 +115,29 @@ impl PythonBinding for ResponsesPythonHost {
     }
 }
 
-impl PythonHostCalls<Responses> for ResponsesPythonHost {
+impl PythonHostCalls<Cached<Responses>> for ResponsesPythonHost {
     fn handle_host_call(
         &mut self,
-        _: Python<'_>,
-        op: Infallible,
+        py: Python<'_>,
+        op: CacheCall,
     ) -> Result<(), InvokeError<Error>> {
-        match op {}
+        self.0.begin_cache_call(py, op).map(|_| ())
+    }
+
+    fn begin_host_call(
+        &mut self,
+        py: Python<'_>,
+        op: CacheCall,
+    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+        self.0.begin_cache_call(py, op)
+    }
+
+    fn resume_host_call(
+        &mut self,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+        self.0.resume_cache_call(py, result)
     }
 }
 

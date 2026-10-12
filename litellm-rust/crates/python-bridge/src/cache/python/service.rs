@@ -13,7 +13,7 @@ use serde_json::Value;
 
 const STREAM_EVENTS_KEY: &str = "litellm_cached_anthropic_sse_events";
 
-fn from_python(value: Value) -> Result<Value, Error> {
+fn from_python(surface: &str, value: Value) -> Result<Value, Error> {
     let output = match value.get(STREAM_EVENTS_KEY) {
         Some(events) => {
             let events: Vec<String> =
@@ -22,13 +22,13 @@ fn from_python(value: Value) -> Result<Value, Error> {
         }
         None => CachedOutput::Response(value),
     };
-    serde_json::to_value(ResponseEnvelope::new("messages", output)).map_err(|_| Error::InvalidEntry)
+    serde_json::to_value(ResponseEnvelope::new(surface, output)).map_err(|_| Error::InvalidEntry)
 }
 
-fn to_python(value: Value) -> Result<Value, Error> {
+fn to_python(surface: &str, value: Value) -> Result<Value, Error> {
     let envelope: ResponseEnvelope<CachedOutput<Value>> =
         serde_json::from_value(value).map_err(|_| Error::InvalidEntry)?;
-    match envelope.decode("messages").ok_or(Error::InvalidEntry)? {
+    match envelope.decode(surface).ok_or(Error::InvalidEntry)? {
         CachedOutput::Response(response) => Ok(response),
         CachedOutput::Stream(text) => Ok(serde_json::json!({
             STREAM_EVENTS_KEY: text.split_inclusive("\n\n").collect::<Vec<_>>()
@@ -49,11 +49,13 @@ pub(crate) enum CacheCall {
 struct PythonCacheService<P: Protocol> {
     services: HostServices<P>,
     config: ResponseCacheConfig,
+    surface: &'static str,
 }
 
 pub(in crate::cache) fn service<P: Protocol<HostCall = CacheCall>>(
     services: HostServices<P>,
     namespace: String,
+    surface: &'static str,
 ) -> std::sync::Arc<dyn ResponseCacheService>
 where
     P::Error: From<MachineFault>,
@@ -64,6 +66,7 @@ where
             namespace,
             ..Default::default()
         },
+        surface,
     })
 }
 
@@ -85,7 +88,7 @@ where
                 .call(|reply| CacheCall::Lookup { reply })
                 .await
                 .map_err(|_| Error::Unavailable)??
-                .map(from_python)
+                .map(|value| from_python(self.surface, value))
                 .transpose()
         })
     }
@@ -97,7 +100,7 @@ where
         _: Duration,
     ) -> Pin<Box<dyn Future<Output = Result<(), Error>> + Send + 'a>> {
         Box::pin(async move {
-            let value = to_python(value)?;
+            let value = to_python(self.surface, value)?;
             self.services
                 .call(|reply| CacheCall::Store { value, reply })
                 .await

@@ -1,11 +1,15 @@
 use std::sync::Arc;
 
 use litellm_auth::AuthServices;
-use litellm_cache_response::{CachePolicy, CacheScope, ScopedCache};
+use litellm_cache_response::ScopedCache;
 use litellm_callbacks_legacy_python::LoggingOperation;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
-use litellm_host::{call::HostedMachine, protocol::Protocol};
-use litellm_host_python::{PythonBinding, PythonHostCalls, from_py};
+use litellm_host::{
+    call::{OutputOf, hosted_call},
+    machine::ChannelInterceptors,
+    protocol::Protocol,
+};
+use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, from_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_inference::RouteError;
 use litellm_secrets::source::SecretSource;
@@ -20,6 +24,7 @@ use serde_json::{Map, Value};
 
 use super::{NativeCall, RequestView};
 use crate::{
+    cache::{CacheCall, Cached, PythonCache, Selection},
     errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{
         RouteOptions, optional_timeout, project_optional_fields, public_response,
@@ -30,6 +35,9 @@ use crate::{
 pub(super) struct InferenceHost {
     view: RequestView,
     module: &'static str,
+    route: &'static str,
+    call_type: &'static str,
+    cache: PythonCache,
 }
 
 pub(super) struct ProjectedCall {
@@ -39,8 +47,20 @@ pub(super) struct ProjectedCall {
 }
 
 impl InferenceHost {
-    pub fn new(view: RequestView, module: &'static str) -> Self {
-        Self { view, module }
+    pub fn new(
+        view: RequestView,
+        module: &'static str,
+        route: &'static str,
+        call_type: &'static str,
+        asynchronous: bool,
+    ) -> Self {
+        Self {
+            view,
+            module,
+            route,
+            call_type,
+            cache: PythonCache::new(asynchronous),
+        }
     }
 
     pub fn project(
@@ -102,12 +122,38 @@ impl InferenceHost {
         self.view.argument(py, arguments, name)
     }
 
+    pub fn select_cache(
+        &mut self,
+        py: Python<'_>,
+        arguments: &Bound<'_, PyDict>,
+    ) -> PyResult<Selection> {
+        crate::cache::configure(&mut self.cache, py, arguments, self.call_type)
+    }
+
+    pub fn begin_cache_call(
+        &mut self,
+        py: Python<'_>,
+        op: CacheCall,
+    ) -> Result<Option<Py<PyAny>>, InvokeError<RouteError>> {
+        self.cache.begin(py, op).map_err(InvokeError::Python)
+    }
+
+    pub fn resume_cache_call(
+        &mut self,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> Result<Option<Py<PyAny>>, InvokeError<RouteError>> {
+        self.cache.resume(py, result).map_err(InvokeError::Python)
+    }
+
     pub fn close(&mut self) {
         self.view.close();
+        self.cache.close();
     }
 
     pub fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        self.view.traverse(visit)
+        self.view.traverse(visit)?;
+        self.cache.traverse(visit)
     }
 
     pub fn parameters(
@@ -115,7 +161,7 @@ impl InferenceHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> PyResult<Map<String, Value>> {
-        let names: Vec<String> = py.import(self.module)?.getattr("PARAMETERS")?.extract()?;
+        let names = super::provider_parameters(py, self.route)?;
         project_optional_fields(names.iter().map(String::as_str), |name| {
             self.argument(py, arguments, name)
         })
@@ -149,11 +195,9 @@ impl InferenceHost {
     }
 }
 
-pub(super) trait InferenceRoute: Sized + 'static {
-    type Protocol: Protocol<Error = RouteError>;
+pub(super) trait InferenceRoute: Sized + Send + 'static {
+    type Protocol: litellm_inference::caching::Cachable;
     const OPERATION: LoggingOperation;
-    const SYNC_CALL_TYPE: &'static str;
-    const ASYNC_CALL_TYPE: &'static str;
 
     fn new(
         http: litellm_http::Client,
@@ -161,11 +205,12 @@ pub(super) trait InferenceRoute: Sized + 'static {
         secrets: Arc<dyn SecretSource>,
     ) -> Self;
     fn with_cache(self, cache: ScopedCache) -> Self;
-    fn machine(
+    fn execute(
         self,
         call: <Self::Protocol as Protocol>::Request,
-        policy: CachePolicy,
-    ) -> HostedMachine<Self::Protocol>;
+        interceptors: ChannelInterceptors<Cached<Self::Protocol>>,
+        options: litellm_inference::CallOptions,
+    ) -> impl Future<Output = Result<OutputOf<Self::Protocol>, RouteError>> + Send;
 }
 
 pub(super) fn run_inference<R, H>(
@@ -176,14 +221,10 @@ pub(super) fn run_inference<R, H>(
 ) -> PyResult<Py<PyAny>>
 where
     R: InferenceRoute,
-    H: PythonBinding<Protocol = R::Protocol> + PythonHostCalls<R::Protocol> + 'static,
+    H: PythonBinding<Protocol = Cached<R::Protocol>>
+        + PythonHostCalls<Cached<R::Protocol>>
+        + 'static,
 {
-    let call_type = if asynchronous {
-        R::ASYNC_CALL_TYPE
-    } else {
-        R::SYNC_CALL_TYPE
-    };
-    crate::cache::require_native_cache(py, &call.kwargs, call_type)?;
     let (arguments, hooks) = super::call_hooks(py, R::OPERATION, &call, asynchronous)?;
     super::run_public_call(
         py,
@@ -195,12 +236,27 @@ where
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );
-            let (cache, cache_options) = crate::cache::configured_native(py, arguments, call_type)?;
-            let route = match cache {
-                Some(cache) => route.with_cache(ScopedCache::new(cache, CacheScope::Shared)),
-                None => route,
-            };
-            Ok(route.machine(request, cache_options.policy))
+            Ok(hosted_call(
+                request,
+                None,
+                move |(call, selection): (_, Selection), services, interceptors, observers| async move {
+                    let (cache, options) = selection.attach(services);
+                    let route = match cache {
+                        Some(cache) => route.with_cache(cache),
+                        None => route,
+                    };
+                    route
+                        .execute(
+                            call,
+                            interceptors,
+                            litellm_inference::CallOptions {
+                                cache: Some(options.policy),
+                                observers,
+                            },
+                        )
+                        .await
+                },
+            ))
         },
         host,
         hooks,

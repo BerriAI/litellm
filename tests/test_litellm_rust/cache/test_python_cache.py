@@ -247,10 +247,12 @@ async def test_v2_messages_replays_a_completed_stream(recording_server: Recordin
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("chat", "messages", "responses"))
 @pytest.mark.parametrize("backend", ("memory", "redis"))
-async def test_rust_messages_uses_a_legacy_cache_without_python_inference(
+async def test_rust_inference_uses_a_legacy_cache_without_python_inference(
     recording_server: RecordingServer,
     monkeypatch: pytest.MonkeyPatch,
+    route: Literal["chat", "messages", "responses"],
     backend: Literal["memory", "redis"],
     redis_url: str,
 ) -> None:
@@ -260,16 +262,8 @@ async def test_rust_messages_uses_a_legacy_cache_without_python_inference(
     litellm.cache = Cache() if backend == "memory" else Cache(type="redis", url=redis_url, namespace="rust-host")
     logger: Final = RecordingLogger()
     litellm.callbacks = [logger]
-    recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
-    parameters: Final = {
-        "model": MESSAGES_MODEL,
-        "messages": list(MESSAGES),
-        "max_tokens": 32,
-        "api_key": "test-key",
-        "api_base": recording_server.base_url,
-    }
-    first: Final = await invoke("messages", recording_server, parameters)
-    second: Final = await invoke("messages", recording_server, parameters)
+    first: Final = await invoke(route, recording_server, {})
+    second: Final = await invoke(route, recording_server, {})
     assert cache_key(second)
     assert cache_key(first) is None
     assert payload(first) == payload(second)

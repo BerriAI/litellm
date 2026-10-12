@@ -6,6 +6,7 @@ use litellm_host::{
     machine::{HostServices, MachineFault},
     protocol::Protocol,
 };
+use litellm_inference::caching::Cachable;
 use pyo3::{prelude::*, types::PyDict};
 use std::sync::Arc;
 
@@ -34,9 +35,9 @@ pub(crate) struct Selection {
 }
 
 impl Selection {
-    pub(crate) fn attach<P: Protocol<HostCall = python::CacheCall>>(
+    pub(crate) fn attach<P: Cachable>(
         self,
-        services: HostServices<P>,
+        services: HostServices<Cached<P>>,
     ) -> (Option<ScopedCache>, CacheOptions)
     where
         P::Error: From<MachineFault>,
@@ -44,7 +45,7 @@ impl Selection {
         let service = match self.backend {
             Backend::Disabled => None,
             Backend::Native(service) => Some(service),
-            Backend::Python { namespace } => Some(python::service(services, namespace)),
+            Backend::Python { namespace } => Some(python::service(services, namespace, P::SURFACE)),
         };
         (
             service.map(|service| ScopedCache::new(service, CacheScope::Shared)),
@@ -74,38 +75,6 @@ fn selected_cache<'py>(
         return Ok(None);
     }
     Ok(Some(configured))
-}
-
-pub(crate) fn require_native_cache(
-    py: Python<'_>,
-    kwargs: &Bound<'_, PyDict>,
-    call_type: &str,
-) -> PyResult<()> {
-    if let Some(configured) = selected_cache(py, kwargs, call_type)?
-        && native::v2::native_handle(&configured)?.is_none()
-    {
-        return Err(pyo3::exceptions::PyNotImplementedError::new_err(
-            "native inference does not implement the configured Python cache on this route",
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn configured_native(
-    py: Python<'_>,
-    kwargs: &Bound<'_, PyDict>,
-    call_type: &str,
-) -> PyResult<(
-    Option<Arc<dyn ResponseCacheService>>,
-    litellm_cache_response::CacheOptions,
-)> {
-    let Some(configured) = selected_cache(py, kwargs, call_type)? else {
-        return Ok((
-            None,
-            litellm_cache_response::CacheOptions::new(litellm_cache_response::CacheScope::Shared),
-        ));
-    };
-    native_configuration(&configured, kwargs)
 }
 
 fn native_configuration(

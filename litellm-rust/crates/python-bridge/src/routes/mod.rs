@@ -21,6 +21,15 @@ use pyo3::{
     types::{PyDict, PyMapping, PyTuple},
 };
 
+const PARAMETERS_MODULE: &str = "litellm.rust_bridge.host.parameters";
+
+fn provider_parameters(py: Python<'_>, route: &str) -> PyResult<Vec<String>> {
+    py.import(PARAMETERS_MODULE)?
+        .getattr("provider_parameters")?
+        .call1((route,))?
+        .extract()
+}
+
 /// The public call as Python bound it: `base` holds the positional arguments by name plus
 /// the signature defaults, `kwargs` the caller's keyword dict.
 #[derive(FromPyObject)]

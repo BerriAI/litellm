@@ -29,31 +29,6 @@ use crate::{
 const ROUTE_HOST_MODULE: &str = "litellm.rust_bridge.messages.route_host";
 const REQUEST_ERROR_MARKER: &str = "messages_request_error";
 
-const BODY_FIELDS: [&str; 22] = [
-    "max_tokens",
-    "metadata",
-    "stop_sequences",
-    "stream",
-    "system",
-    "temperature",
-    "thinking",
-    "tool_choice",
-    "tools",
-    "top_k",
-    "inference_geo",
-    "top_p",
-    "mcp_servers",
-    "context_management",
-    "compaction",
-    "container",
-    "output_format",
-    "speed",
-    "output_config",
-    "cache_control",
-    "reasoning_effort",
-    "safeguards",
-];
-
 fn merge_headers(
     forwarded: Option<Map<String, Value>>,
     extra_headers: Option<Map<String, Value>>,
@@ -143,7 +118,8 @@ impl MessagesPythonHost {
         let model = string("model")?.ok_or_else(|| PyValueError::new_err("model is required"))?;
         let messages =
             argument("messages")?.ok_or_else(|| PyValueError::new_err("messages is required"))?;
-        let fields = project_optional_fields(BODY_FIELDS, argument)?;
+        let names = crate::routes::provider_parameters(py, "messages")?;
+        let fields = project_optional_fields(names.iter().map(String::as_str), argument)?;
         let body = [
             ("model".to_string(), Value::String(model.clone())),
             ("messages".to_string(), from_py(&messages)?),

@@ -1,6 +1,7 @@
-use std::convert::Infallible;
-
-use crate::routes::inference::InferenceHost;
+use crate::{
+    cache::{CacheCall, Cached, Selection},
+    routes::inference::InferenceHost,
+};
 use litellm_host_python::{InvokeError, PythonBinding, PythonHostCalls, PythonOwned};
 use litellm_inference_chat::{Error, route::ChatCompletions, types::ChatCompletionsCall};
 use pyo3::{
@@ -30,15 +31,19 @@ pub(super) fn project(
 }
 
 impl PythonBinding for ChatCompletionsPythonHost {
-    type Protocol = ChatCompletions;
+    type Protocol = Cached<ChatCompletions>;
     type Failure = PyErr;
 
     fn decode_request(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-    ) -> Result<ChatCompletionsCall, InvokeError<Error>> {
+    ) -> Result<(ChatCompletionsCall, Selection), InvokeError<Error>> {
         let call = project(&mut self.0, py, arguments).map_err(InvokeError::Python)?;
+        let selection = self
+            .0
+            .select_cache(py, arguments)
+            .map_err(InvokeError::Python)?;
         if call
             .optional_params
             .get("stream")
@@ -48,13 +53,13 @@ impl PythonBinding for ChatCompletionsPythonHost {
                 "native Python chat_completions streaming",
             )));
         }
-        Ok(call)
+        Ok((call, selection))
     }
 
     fn encode_response(
         &mut self,
         py: Python<'_>,
-        response: <ChatCompletions as litellm_host::protocol::Protocol>::Response,
+        response: <Cached<ChatCompletions> as litellm_host::protocol::Protocol>::Response,
     ) -> PyResult<Py<PyAny>> {
         self.0.response(py, &response)
     }
@@ -62,7 +67,7 @@ impl PythonBinding for ChatCompletionsPythonHost {
     fn encode_stream_head(
         &mut self,
         _py: Python<'_>,
-        head: <ChatCompletions as litellm_host::protocol::Protocol>::StreamHead,
+        head: <Cached<ChatCompletions> as litellm_host::protocol::Protocol>::StreamHead,
     ) -> PyResult<Py<PyAny>> {
         match head {}
     }
@@ -70,7 +75,7 @@ impl PythonBinding for ChatCompletionsPythonHost {
     fn encode_chunk(
         &mut self,
         _py: Python<'_>,
-        chunk: <ChatCompletions as litellm_host::protocol::Protocol>::Chunk,
+        chunk: <Cached<ChatCompletions> as litellm_host::protocol::Protocol>::Chunk,
     ) -> PyResult<Py<PyAny>> {
         match chunk {}
     }
@@ -83,13 +88,29 @@ impl PythonBinding for ChatCompletionsPythonHost {
     }
 }
 
-impl PythonHostCalls<ChatCompletions> for ChatCompletionsPythonHost {
+impl PythonHostCalls<Cached<ChatCompletions>> for ChatCompletionsPythonHost {
     fn handle_host_call(
         &mut self,
-        _: Python<'_>,
-        op: Infallible,
+        py: Python<'_>,
+        op: CacheCall,
     ) -> Result<(), InvokeError<Error>> {
-        match op {}
+        self.0.begin_cache_call(py, op).map(|_| ())
+    }
+
+    fn begin_host_call(
+        &mut self,
+        py: Python<'_>,
+        op: CacheCall,
+    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+        self.0.begin_cache_call(py, op)
+    }
+
+    fn resume_host_call(
+        &mut self,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+        self.0.resume_cache_call(py, result)
     }
 }
 

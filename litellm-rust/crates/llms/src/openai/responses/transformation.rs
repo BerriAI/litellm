@@ -176,13 +176,22 @@ impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
         {
             return Err(Error::InvalidRequest("stream must be a boolean".into()));
         }
+        let extra_body = match params.get("extra_body") {
+            None | Some(Value::Null) => Map::new(),
+            Some(Value::Object(extra_body)) => extra_body.clone(),
+            Some(_) => {
+                return Err(Error::InvalidRequest("extra_body must be an object".into()));
+            }
+        };
         Ok(Value::Object(
             params
                 .into_iter()
+                .filter(|(name, _)| name != "extra_body")
                 .chain([
                     ("model".into(), Value::String(model.into())),
                     ("input".into(), input),
                 ])
+                .chain(extra_body)
                 .collect(),
         ))
     }
@@ -195,7 +204,47 @@ impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
     use super::*;
+
+    #[rstest::rstest]
+    #[case::adds_fields(
+        json!({"temperature": 0.2, "extra_body": {"vendor_flag": true}}),
+        json!({"temperature": 0.2, "vendor_flag": true, "model": "gpt-5", "input": "hi"})
+    )]
+    #[case::overrides_params_and_model(
+        json!({"temperature": 0.2, "extra_body": {"temperature": 0.9, "model": "pinned"}}),
+        json!({"temperature": 0.9, "model": "pinned", "input": "hi"})
+    )]
+    #[case::null_is_absent(
+        json!({"extra_body": null}),
+        json!({"model": "gpt-5", "input": "hi"})
+    )]
+    fn extra_body_merges_over_the_request(#[case] params: Value, #[case] expected: Value) {
+        let Value::Object(params) = params else {
+            unreachable!("case params are objects")
+        };
+        assert_eq!(
+            OPENAI_RESPONSES_WS_CONFIG
+                .transform_responses_api_request("gpt-5", json!("hi"), params)
+                .expect("valid request"),
+            expected
+        );
+    }
+
+    #[rstest::rstest]
+    fn non_object_extra_body_is_a_request_error() {
+        let params = Map::from_iter([("extra_body".to_string(), json!(["not", "an", "object"]))]);
+        assert!(matches!(
+            OPENAI_RESPONSES_WS_CONFIG.transform_responses_api_request(
+                "gpt-5",
+                json!("hi"),
+                params
+            ),
+            Err(Error::InvalidRequest(_))
+        ));
+    }
 
     #[rstest::rstest]
     #[case::default(None)]

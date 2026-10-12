@@ -266,24 +266,38 @@ async def test_unstarted_native_inference_has_no_provider_or_callback_effects(
 @pytest.mark.parametrize(
     "options",
     (
-        {"stream": True},
-        {"extra_body": {"provider_option": True}},
-        {"mock_response": "mock"},
+        {"vendor_flag": True},
         {"num_retries": 1},
-        {"use_chat_completions_api": True},
         {"model_list": []},
+        {"user_api_key_alias": "proxy-key", "proxy_server_request": {"url": "/v1/responses"}},
     ),
 )
-async def test_native_responses_rejects_unsupported_requests_before_callbacks(
+async def test_native_inference_drops_kwargs_outside_the_route_parameters(
+    route: Route,
     recording_server: RecordingServer,
     options: Mapping[str, object],
 ) -> None:
-    recorder: Final = RecordingLogger()
+    await execute(route, True, recording_server, options)
+    assert len(recording_server.requests) == 1
+    body: Final = _OBJECT.validate_python(recording_server.requests[0].body)
+    assert not body.keys() & options.keys()
+
+
+@pytest.mark.asyncio
+async def test_native_responses_merges_extra_body_into_the_provider_body(recording_server: RecordingServer) -> None:
+    await execute("responses", True, recording_server, {"extra_body": {"provider_option": True, "temperature": 0.5}})
+    body: Final = _OBJECT.validate_python(recording_server.requests[0].body)
+    assert body["provider_option"] is True
+    assert body["temperature"] == 0.5
+    assert "extra_body" not in body
+
+
+@pytest.mark.asyncio
+async def test_native_responses_stream_fails_before_the_provider(recording_server: RecordingServer) -> None:
     recording_server.expected_requests = 0
-    with pytest.raises(NotImplementedError):
-        native_call("responses", True, recording_server, {**options, "callbacks": [recorder]})
+    with pytest.raises(litellm.APIConnectionError, match="native Python responses streaming"):
+        await execute("responses", True, recording_server, {"stream": True})
     assert not recording_server.requests
-    assert not recorder.events
 
 
 @pytest.mark.asyncio

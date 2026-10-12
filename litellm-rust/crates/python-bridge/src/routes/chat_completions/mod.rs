@@ -4,10 +4,18 @@ use std::sync::Arc;
 
 use host::ChatCompletionsPythonHost;
 use litellm_auth::AuthServices;
-use litellm_cache_response::{CachePolicy, ScopedCache};
+use litellm_cache_response::ScopedCache;
 use litellm_callbacks_legacy_python::LoggingOperation;
-use litellm_host::{call::HostedMachine, protocol::Protocol};
-use litellm_inference_chat::{ChatCompletionsRoute, route::ChatCompletions};
+use litellm_host::{
+    call::{CallOutput, OutputOf},
+    machine::ChannelInterceptors,
+    protocol::Protocol,
+};
+use litellm_inference_chat::{
+    ChatCompletionsRoute,
+    route::ChatCompletions,
+    types::{ChatCompletionsCall, ChatCompletionsRequest},
+};
 use litellm_secrets::source::SecretSource;
 use pyo3::prelude::*;
 
@@ -15,6 +23,7 @@ use super::{
     NativeCall,
     inference::{InferenceHost, InferenceRoute, run_inference},
 };
+use crate::cache::Cached;
 
 fn run_chat_completions(
     py: Python<'_>,
@@ -24,6 +33,13 @@ fn run_chat_completions(
     let host = InferenceHost::new(
         call.view()?,
         "litellm.rust_bridge.chat_completions.route_host",
+        "chat_completions",
+        if asynchronous {
+            "acompletion"
+        } else {
+            "completion"
+        },
+        asynchronous,
     );
     run_inference::<ChatCompletionsRoute, _>(
         py,
@@ -46,8 +62,6 @@ pub(crate) fn acompletion(py: Python<'_>, call: NativeCall<'_>) -> PyResult<Py<P
 impl InferenceRoute for ChatCompletionsRoute {
     type Protocol = ChatCompletions;
     const OPERATION: LoggingOperation = LoggingOperation::Completion;
-    const SYNC_CALL_TYPE: &'static str = "completion";
-    const ASYNC_CALL_TYPE: &'static str = "acompletion";
 
     fn new(
         http: litellm_http::Client,
@@ -61,11 +75,34 @@ impl InferenceRoute for ChatCompletionsRoute {
         self.with_cache(cache)
     }
 
-    fn machine(
+    async fn execute(
         self,
         call: <ChatCompletions as Protocol>::Request,
-        policy: CachePolicy,
-    ) -> HostedMachine<ChatCompletions> {
-        self.machine(call, policy)
+        interceptors: ChannelInterceptors<Cached<ChatCompletions>>,
+        options: litellm_inference::CallOptions,
+    ) -> Result<OutputOf<ChatCompletions>, litellm_inference::RouteError> {
+        let ChatCompletionsCall {
+            model,
+            messages,
+            optional_params,
+            api_key,
+            api_base,
+            custom_llm_provider,
+            extra_headers,
+            timeout,
+        } = call;
+        let request = ChatCompletionsRequest {
+            model: &model,
+            messages,
+            optional_params,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
+            timeout,
+        };
+        ChatCompletionsRoute::execute(&self, request, &interceptors, options)
+            .await
+            .map(CallOutput::Complete)
     }
 }
