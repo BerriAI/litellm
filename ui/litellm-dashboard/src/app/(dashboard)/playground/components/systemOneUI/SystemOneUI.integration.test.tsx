@@ -261,7 +261,9 @@ describe("SystemOneUI integration", () => {
 
     await selectEndpoint("/v1/systemone");
     expect(screen.getByRole("textbox", { name: "Input" })).toHaveValue("An outage");
-    expect(screen.queryByRole("region", { name: "Decisions results" })).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Decisions results" })).getByText("Send a request to see answers here"),
+    ).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Send" }));
     expect(await screen.findByText("Selected choice")).toBeInTheDocument();
     expect(screen.getByRole("meter", { name: "technical probability" })).toHaveAttribute("aria-valuenow", "90");
@@ -580,17 +582,21 @@ describe("SystemOneUI integration", () => {
     const editor = screen.getByRole("region", { name: "Decisions request editor" });
     const form = within(editor).getByRole("textbox", { name: "Input" });
     expect(form.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.queryByRole("region", { name: "Decisions results" })).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Decisions results" })).getByText("Send a request to see answers here"),
+    ).toBeInTheDocument();
     expect(screen.queryByRole("note")).not.toBeInTheDocument();
 
     await user.click(send);
 
     const results = await screen.findByRole("region", { name: "Decisions results" });
-    expect(within(results).getByText("Calibrated probabilities")).toBeInTheDocument();
+    expect(within(results).getByText("Response")).toBeInTheDocument();
     expect(editor.compareDocumentPosition(results) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
 
     fireEvent.change(within(editor).getByRole("textbox", { name: "Input" }), { target: { value: "Edited state" } });
-    expect(screen.queryByRole("region", { name: "Decisions results" })).not.toBeInTheDocument();
+    expect(
+      within(screen.getByRole("region", { name: "Decisions results" })).getByText("Send a request to see answers here"),
+    ).toBeInTheDocument();
   });
 
   it("ties each setup label to its control, numbers question cards and keeps the actions in the editor footer", () => {
@@ -607,11 +613,12 @@ describe("SystemOneUI integration", () => {
 
     const editor = screen.getByRole("region", { name: "Decisions request editor" });
     const card = within(editor).getByRole("group", { name: "Request editor" });
-    const status = within(card).getByText("Ready to send");
     const actions = within(card).getByRole("toolbar", { name: "Request actions" });
+    const status = within(actions).getByRole("status");
     const clear = within(actions).getByRole("button", { name: "Clear" });
     const send = within(actions).getByRole("button", { name: "Send" });
-    expect(status.compareDocumentPosition(actions) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(status).toHaveTextContent("Ready to send");
+    expect(status.compareDocumentPosition(clear) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(clear.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 

@@ -18,6 +18,7 @@ import { DECISION_PRESETS, emptyPayload, matchPreset, presetPayload, type Decisi
 import { payloadModel, withPayloadModel } from "./lib/payloadModel";
 import CurlPreview from "./CurlPreview";
 import ResponseView from "./ResponseView";
+import { ValidationSummary } from "./ValidationFeedback";
 import SystemOneForm from "./SystemOneForm";
 import OpenAIDecisionsForm from "./OpenAIDecisionsForm";
 import { validateSystemOnePayload, validateOpenAIDecisionsPayload, errorCount } from "./lib/validatePayload";
@@ -111,7 +112,6 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
       makePlaygroundDecisionRequest(request, apiKey, getCustomProxyBaseUrl(), { signal }),
   });
   const isLoading = systemOne.isPending;
-  const hasResult = isLoading || systemOne.data !== undefined || systemOne.error !== null;
   const { reset: resetSystemOne } = systemOne;
 
   useEffect(() => () => activeController.current?.abort(), []);
@@ -171,12 +171,7 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-auto p-4 xl:overflow-hidden">
-      <div
-        className={cn(
-          "mx-auto grid w-full gap-4 xl:min-h-0 xl:flex-1",
-          hasResult ? "max-w-7xl xl:grid-cols-2" : "max-w-3xl",
-        )}
-      >
+      <div className="mx-auto grid w-full max-w-[1400px] gap-4 xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,11fr)_minmax(0,9fr)]">
         <section className="flex min-h-96 flex-col gap-4 xl:min-h-0" aria-label="Decisions request editor">
           <div className="grid gap-3 rounded-lg border bg-card p-3 sm:grid-cols-3">
             <SetupField label="Endpoint" htmlFor="decision-endpoint">
@@ -307,28 +302,25 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
             <div
               role="toolbar"
               aria-label="Request actions"
-              className="flex flex-wrap items-center gap-2 border-t bg-muted/30 px-3 py-2"
+              className="flex flex-wrap items-center justify-between gap-3 border-t bg-muted/50 px-4 py-3"
             >
-              <Button
-                variant="ghost"
-                onClick={() => handlePayloadChange(clearedPayload)}
-                disabled={rawPayload === clearedPayload}
-              >
-                <Eraser />
-                Clear
-              </Button>
-              <div className="ml-auto flex items-center gap-2">
+              <ValidationSummary validation={validation} />
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => handlePayloadChange(clearedPayload)}
+                  disabled={rawPayload === clearedPayload}
+                >
+                  <Eraser />
+                  Clear
+                </Button>
                 {isLoading && (
                   <Button variant="outline" onClick={clearRequestState}>
                     Cancel request
                   </Button>
                 )}
-                <Button
-                  size="lg"
-                  className="min-w-32"
-                  onClick={handleSend}
-                  disabled={!validation.isValid || isLoading || !effectiveApiKey}
-                >
+                <Button size="sm" onClick={handleSend} disabled={!validation.isValid || isLoading || !effectiveApiKey}>
                   {isLoading ? <LoaderCircle className="animate-spin" /> : <Send />}
                   Send
                 </Button>
@@ -337,18 +329,16 @@ export default function SystemOneUI({ accessToken, disabledPersonalKeyCreation =
           </Tabs>
         </section>
 
-        {hasResult && (
-          <section className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto" aria-label="Decisions results">
-            <ResponseView
-              response={systemOne.data?.response}
-              view={view}
-              fallbackModel={validation.payload?.model}
-              latencyMs={systemOne.data?.latencyMs}
-              error={systemOne.error?.message}
-              isLoading={isLoading}
-            />
-          </section>
-        )}
+        <section className="grid content-start gap-4 xl:min-h-0 xl:overflow-auto" aria-label="Decisions results">
+          <ResponseView
+            response={systemOne.data?.response}
+            view={view}
+            fallbackModel={validation.payload?.model}
+            latencyMs={systemOne.data?.latencyMs}
+            error={systemOne.error?.message}
+            isLoading={isLoading}
+          />
+        </section>
       </div>
     </div>
   );
