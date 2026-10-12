@@ -14,6 +14,7 @@ import httpx
 import psutil
 import psycopg
 import pytest
+import yaml
 from integration._support.client import (
     JSON_OBJECT,
     Gateway,
@@ -24,7 +25,7 @@ from integration._support.client import (
     string_value,
 )
 from integration._support.database import read_rows, write_rows
-from integration._support.process import group_members, owned_proxy, owned_proxy_process
+from integration._support.process import CONFIGURATION, OwnedProxy, group_members, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 from pydantic import JsonValue
 
@@ -32,7 +33,24 @@ from litellm.models.user import LiteLLM_UserTable
 from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
 
 _OWNED_PROXY_SALT_KEY: Final = "sk-integration-salt"
+_OWNERSHIP_POOL_LIMIT: Final = 4
+_CONNECTION_BUDGET: Final = re.compile(
+    r"Postgres connection budget per pod = \d+ worker\(s\) x \(?writer connection_limit (\d+)"
+)
 _OWNERSHIP_MARKER: Final = re.compile(rb"ownership-[0-9a-f]{32}")
+
+
+def _ownership_config(directory: Path) -> Path:
+    source: Final = Path(__file__).resolve().parents[1] / "proxy_config.yaml"
+    settings: Final = CONFIGURATION.validate_python(yaml.safe_load(source.read_text()))
+    general: Final = CONFIGURATION.validate_python(settings["general_settings"])
+    configured: Final = {
+        **settings,
+        "general_settings": {**general, "database_connection_pool_limit": _OWNERSHIP_POOL_LIMIT},
+    }
+    destination: Final = directory / "ownership-proxy-config.yaml"
+    destination.write_text(yaml.safe_dump(configured, sort_keys=False))
+    return destination
 
 
 def _project_rows(project_id: str) -> list[dict[str, JsonValue]]:
@@ -806,7 +824,12 @@ def test_ownership_rejections_during_concurrent_traffic_burst(ownership_gateway:
             assert _project_state_rows(project_a) == project_before
 
 
-def test_ownership_checks_wait_for_row_locks_without_failing_readiness(ownership_gateway: Gateway) -> None:
+def test_ownership_checks_wait_for_row_locks_without_failing_readiness(
+    ownership_gateway: Gateway, ownership_proxy: OwnedProxy
+) -> None:
+    budget: Final = _CONNECTION_BUDGET.search(ownership_proxy.log.read_text())
+    assert budget is not None, ownership_proxy.log.read_text()
+    assert int(budget.group(1)) == _OWNERSHIP_POOL_LIMIT
     with ownership_gateway.scenario() as scenario:
         model: Final = scenario.model()
         team: Final = scenario.team(models=[model])
@@ -986,15 +1009,22 @@ def test_ownership_enforced_after_worker_kill(ownership_gateway: Gateway, tmp_pa
 
 
 @pytest.fixture(scope="module")
-def ownership_gateway(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Gateway]:
+def ownership_proxy(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OwnedProxy]:
+    directory: Final = tmp_path_factory.mktemp("project-team-ownership")
     with gateway_from_environment() as gateway:
-        with owned_proxy(
+        with owned_proxy_process(
             gateway,
-            tmp_path_factory.mktemp("project-team-ownership"),
+            directory,
             {"LITELLM_SALT_KEY": _OWNED_PROXY_SALT_KEY},
+            config=_ownership_config(directory),
             workers=2,
-        ) as candidate:
-            yield candidate
+        ) as owned:
+            yield owned
+
+
+@pytest.fixture(scope="module")
+def ownership_gateway(ownership_proxy: OwnedProxy) -> Gateway:
+    return ownership_proxy.gateway
 
 
 @pytest.mark.covers("mgmt.project.new.real_route_persists")
