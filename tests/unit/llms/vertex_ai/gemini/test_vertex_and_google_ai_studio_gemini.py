@@ -812,6 +812,102 @@ def test_vertex_ai_url_context_tool_use_tokens_billed_as_input_tokens():
     assert usage.total_tokens - usage.prompt_tokens - usage.completion_tokens == 0
 
 
+def test_url_context_tool_use_tokens_are_priced_as_input():
+    """
+    URL context tool-use tokens are billed at the input token rate, so the input cost must
+    cover every token counted in usage.prompt_tokens, not just the reported text modality.
+    See https://github.com/BerriAI/litellm/issues/45991
+    """
+    v = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [
+            {
+                "urlContextMetadata": {"urlMetadata": []},
+                "groundingMetadata": {
+                    "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]
+                },
+            }
+        ],
+        "usageMetadata": UsageMetadata(
+            promptTokenCount=23,
+            candidatesTokenCount=10,
+            toolUsePromptTokenCount=14115,
+            totalTokenCount=14148,
+            promptTokensDetails=[{"modality": "TEXT", "tokenCount": 23}],
+            toolUsePromptTokensDetails=[{"modality": "TEXT", "tokenCount": 14115}],
+        ),
+    }
+
+    usage = v.calculate_usage(completion_response=completion_response)
+
+    assert usage.prompt_tokens == 23 + 14115
+    assert usage.prompt_tokens_details.text_tokens == usage.prompt_tokens
+    input_rate: Final = litellm.get_model_info("gemini-2.5-flash")["input_cost_per_token"]
+    prompt_cost, _ = litellm.cost_per_token(model="gemini/gemini-2.5-flash", usage_object=usage)
+    assert prompt_cost == usage.prompt_tokens * input_rate
+
+
+def test_search_grounding_tool_use_tokens_stay_unpriced():
+    """
+    Grounding with Google Search tokens are not billed at the input token rate (a separate
+    per-query search fee applies), so neither prompt_tokens nor the input cost may grow with
+    toolUsePromptTokenCount.
+    """
+    v = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [{"groundingMetadata": {"webSearchQueries": ["latest nobel physics"]}}],
+        "usageMetadata": UsageMetadata(
+            promptTokenCount=23,
+            candidatesTokenCount=10,
+            toolUsePromptTokenCount=14115,
+            totalTokenCount=14148,
+            promptTokensDetails=[{"modality": "TEXT", "tokenCount": 23}],
+            toolUsePromptTokensDetails=[{"modality": "TEXT", "tokenCount": 14115}],
+        ),
+    }
+
+    usage = v.calculate_usage(completion_response=completion_response)
+
+    assert usage.prompt_tokens == 23
+    assert usage.prompt_tokens_details.text_tokens == 23
+    input_rate: Final = litellm.get_model_info("gemini-2.5-flash")["input_cost_per_token"]
+    prompt_cost, _ = litellm.cost_per_token(model="gemini/gemini-2.5-flash", usage_object=usage)
+    assert prompt_cost == 23 * input_rate
+
+
+def test_missing_prompt_tokens_details_still_prices_the_full_prompt():
+    """
+    Gemini omits promptTokensDetails on some tool-use responses, leaving text_tokens unset.
+    That None must be preserved so input billing falls back to the full prompt_tokens, and
+    must not be turned into a concrete count that prices only part of the prompt.
+    """
+    v = VertexGeminiConfig()
+    completion_response = {
+        "candidates": [
+            {
+                "urlContextMetadata": {"urlMetadata": []},
+                "groundingMetadata": {
+                    "groundingChunks": [{"web": {"uri": "https://example.com", "title": "Example"}}]
+                },
+            }
+        ],
+        "usageMetadata": UsageMetadata(
+            promptTokenCount=23,
+            candidatesTokenCount=10,
+            toolUsePromptTokenCount=14115,
+            totalTokenCount=14148,
+        ),
+    }
+
+    usage = v.calculate_usage(completion_response=completion_response)
+
+    assert usage.prompt_tokens == 23 + 14115
+    assert usage.prompt_tokens_details.text_tokens is None
+    input_rate: Final = litellm.get_model_info("gemini-2.5-flash")["input_cost_per_token"]
+    prompt_cost, _ = litellm.cost_per_token(model="gemini/gemini-2.5-flash", usage_object=usage)
+    assert prompt_cost == usage.prompt_tokens * input_rate
+
+
 def test_streaming_chunk_includes_reasoning_tokens():
     from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
         ModelResponseIterator,
