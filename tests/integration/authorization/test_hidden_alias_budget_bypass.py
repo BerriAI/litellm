@@ -1,7 +1,6 @@
 import base64
 import json
 import math
-import signal
 import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
@@ -1384,7 +1383,7 @@ def test_killing_one_worker_keeps_the_shadowing_alias_refused(rig: AliasRig, tmp
             settle_candidate(candidate, target, exhausted, BUDGET_EXCEEDED, seconds=120)
             settle_candidate(candidate, shadow, exhausted, BUDGET_EXCEEDED, seconds=120)
             victim: Final = before[0]
-            victim.send_signal(signal.SIGKILL)
+            owned.kill_worker(victim.pid)
             eventually(lambda: _workers(root), _replaced(victim), seconds=120)
             settle_candidate(candidate, shadow, exhausted, BUDGET_EXCEEDED, seconds=120)
             assert chat_statuses(candidate, shadow, exhausted, GATEWAY_BURST) == {BUDGET_EXCEEDED}
