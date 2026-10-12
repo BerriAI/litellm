@@ -4,16 +4,20 @@ Re rank api
 LiteLLM supports the re rank API format, no paramter transformation occurs
 """
 
-from typing import Any, Final
+from typing import Final
+
+from pydantic import ConfigDict, TypeAdapter
 
 import litellm
 from litellm.llms.base import BaseLLM
 from litellm.llms.custom_httpx.http_handler import (
-    _get_httpx_client,
     get_async_httpx_client,
+    get_httpx_client,
 )
 from litellm.llms.together_ai.rerank.transformation import TogetherAIRerankConfig
 from litellm.types.rerank import RerankRequest, RerankResponse
+
+_JSON_DICT: Final = TypeAdapter(dict[str, object], config=ConfigDict(hide_input_in_errors=True))
 
 
 def _rerank_url(api_base: str) -> str:
@@ -27,14 +31,14 @@ class TogetherAIRerank(BaseLLM):
         api_key: str,
         api_base: str,
         query: str,
-        documents: list[str | dict[str, Any]],
+        documents: list[str | dict[str, object]],
         top_n: int | None = None,
         rank_fields: list[str] | None = None,
         return_documents: bool | None = True,
         max_chunks_per_doc: int | None = None,
         _is_async: bool | None = False,
     ) -> RerankResponse:
-        client: Final = _get_httpx_client()
+        client: Final = get_httpx_client()
 
         request_data: Final = RerankRequest(
             model=model,
@@ -66,13 +70,13 @@ class TogetherAIRerank(BaseLLM):
         if response.status_code != 200:
             raise Exception(response.text)
 
-        _json_response: Final = response.json()
+        _json_response: Final = _JSON_DICT.validate_python(response.json())
 
-        return TogetherAIRerankConfig()._transform_response(_json_response)
+        return TogetherAIRerankConfig().transform_response(_json_response)
 
     async def async_rerank(  # New async method
         self,
-        request_data_dict: dict[str, Any],
+        request_data_dict: dict[str, object],
         api_key: str,
         api_base: str,
     ) -> RerankResponse:
@@ -91,6 +95,6 @@ class TogetherAIRerank(BaseLLM):
         if response.status_code != 200:
             raise Exception(response.text)
 
-        _json_response: Final = response.json()
+        _json_response: Final = _JSON_DICT.validate_python(response.json())
 
-        return TogetherAIRerankConfig()._transform_response(_json_response)
+        return TogetherAIRerankConfig().transform_response(_json_response)

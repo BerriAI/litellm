@@ -62,6 +62,16 @@ pub async fn execute_read(
     sql: &str,
     parameters: &BTreeMap<String, Parameter>,
 ) -> Result<String, Error> {
+    execute_read_with_limits(client, connection, sql, parameters, READ_LIMITS).await
+}
+
+async fn execute_read_with_limits(
+    client: &Client,
+    connection: &Connection,
+    sql: &str,
+    parameters: &BTreeMap<String, Parameter>,
+    limits: ReadLimits,
+) -> Result<String, Error> {
     if sql.trim().is_empty() {
         return Err(Error::EmptySql);
     }
@@ -89,12 +99,9 @@ pub async fn execute_read(
         .clear()
         .extend_pairs(existing_pairs)
         .append_pair("readonly", "1")
-        .append_pair("max_result_rows", &READ_LIMITS.result_rows.to_string())
+        .append_pair("max_result_rows", &limits.result_rows.to_string())
         .append_pair("result_overflow_mode", "throw")
-        .append_pair(
-            "max_execution_time",
-            &READ_LIMITS.execution_seconds.to_string(),
-        )
+        .append_pair("max_execution_time", &limits.execution_seconds.to_string())
         .append_pair("wait_end_of_query", "1")
         .append_pair("default_format", "JSON");
 
@@ -110,12 +117,19 @@ pub async fn execute_read(
         .body(sql.to_owned());
     let mut response = request.send().await.map_err(|_| Error::Transport)?;
     if !response.status().is_success() {
+        if response
+            .headers()
+            .get("x-clickhouse-exception-code")
+            .is_some_and(|code| code == "396")
+        {
+            return Err(Error::ResponseTooLarge);
+        }
         return Err(Error::QueryFailed(response.status().as_u16()));
     }
 
     let mut body = Vec::new();
     while let Some(chunk) = response.chunk().await.map_err(|_| Error::Transport)? {
-        if body.len() + chunk.len() > READ_LIMITS.response_bytes {
+        if body.len() + chunk.len() > limits.response_bytes {
             return Err(Error::ResponseTooLarge);
         }
         body.extend_from_slice(&chunk);
@@ -134,6 +148,7 @@ pub trait Query {
     type Params: Serialize;
     type Row: DeserializeOwned;
 
+    const READ_LIMITS: ReadLimits = crate::read::READ_LIMITS;
     const SQL: &'static str;
 }
 
@@ -152,7 +167,14 @@ pub async fn fetch<Q: Query>(
     connection: &Connection,
     params: &Q::Params,
 ) -> Result<Vec<Q::Row>, Error> {
-    let body = execute_read(client, connection, Q::SQL, &parameters(params)?).await?;
+    let body = execute_read_with_limits(
+        client,
+        connection,
+        Q::SQL,
+        &parameters(params)?,
+        Q::READ_LIMITS,
+    )
+    .await?;
     decode_rows::<Q::Row>(&body)
 }
 
@@ -161,7 +183,14 @@ pub async fn fetch_json<Q: Query>(
     connection: &Connection,
     params: &Q::Params,
 ) -> Result<String, Error> {
-    let body = execute_read(client, connection, Q::SQL, &parameters(params)?).await?;
+    let body = execute_read_with_limits(
+        client,
+        connection,
+        Q::SQL,
+        &parameters(params)?,
+        Q::READ_LIMITS,
+    )
+    .await?;
     decode_rows::<Q::Row>(&body)?;
     Ok(body)
 }

@@ -10,11 +10,12 @@ from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Final
 
 import httpx
-from pydantic import BaseModel, ConfigDict, TypeAdapter
+from pydantic import ConfigDict, TypeAdapter
 
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.secret_managers.main import get_secret_str
+from litellm.types.llms.base import LiteLLMBaseModel
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Message, ModelResponse, Usage
 
@@ -30,14 +31,14 @@ REASONING_DISABLED_EFFORTS: Final[frozenset[str]] = frozenset(("none", "minimal"
 REASONING_ENABLED_EFFORTS: Final[frozenset[str]] = frozenset(("low", "medium", "high"))
 
 
-class _FalUsage(BaseModel):
+class _FalUsage(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     input_tokens: int
     output_tokens: int
 
 
-class _FalChatResponse(BaseModel):
+class _FalChatResponse(LiteLLMBaseModel):
     model_config = ConfigDict(frozen=True, extra="ignore")
 
     output: str
