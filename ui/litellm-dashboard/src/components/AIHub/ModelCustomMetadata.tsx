@@ -7,6 +7,18 @@ interface ModelCustomMetadataProps {
   customMetadata?: Record<string, ModelCustomMetadataValue> | null;
 }
 
+export function ModelCustomTags({ tags, className = "" }: { tags: string[]; className?: string }) {
+  return (
+    <div className={`flex flex-wrap gap-1 ${className}`}>
+      {tags.map((tag) => (
+        <Badge key={tag} variant="outline">
+          {tag}
+        </Badge>
+      ))}
+    </div>
+  );
+}
+
 export function ModelCustomMetadata({ customTags, customMetadata }: ModelCustomMetadataProps) {
   const tags = customTags ?? [];
   const entries = Object.entries(customMetadata ?? {});
@@ -15,13 +27,7 @@ export function ModelCustomMetadata({ customTags, customMetadata }: ModelCustomM
       {tags.length > 0 && (
         <div className="col-span-2">
           <p className="font-medium">Tags:</p>
-          <div className="flex flex-wrap gap-1 mt-1">
-            {tags.map((tag) => (
-              <Badge key={tag} variant="outline">
-                {tag}
-              </Badge>
-            ))}
-          </div>
+          <ModelCustomTags tags={tags} className="mt-1" />
         </div>
       )}
       {entries.length > 0 && (

@@ -17,7 +17,7 @@ import { cn } from "@/lib/cva.config";
 import { displayMode } from "@/lib/decisionModels";
 import { copyToClipboard } from "@/utils/dataUtils";
 
-import type { ModelCustomMetadataValue } from "./ModelCustomMetadata";
+import { ModelCustomTags, type ModelCustomMetadataValue } from "./ModelCustomMetadata";
 
 export interface ModelHubData {
   model_group: string;
@@ -225,15 +225,7 @@ export const getModelHubTableColumns = ({ onModelClick }: ModelHubTableColumnsDe
       if (tags.length === 0) {
         return <span className="text-xs text-muted-foreground">-</span>;
       }
-      return (
-        <div className="flex flex-wrap gap-1">
-          {tags.map((tag) => (
-            <Badge key={tag} variant="outline">
-              {tag}
-            </Badge>
-          ))}
-        </div>
-      );
+      return <ModelCustomTags tags={tags} />;
     },
   },
   {
