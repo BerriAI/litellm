@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import signal
 import threading
 import uuid
 from collections.abc import Callable, Mapping
@@ -564,11 +563,12 @@ def test_worker_sigkill_mid_burst_leaves_the_replacement_forwarding_inline_tools
         shares: Final = {pid: _accepted_client_ports(pid, proxy_url.port or 0) & frozenset(ports) for pid in workers}
         assert sum(map(len, shares.values())) == len(clients), shares
         victim: Final = min((pid for pid in workers if shares[pid]), key=lambda pid: len(shares[pid]))
-        psutil.Process(victim).send_signal(signal.SIGKILL)
-        release.set()
-        results: Final = tuple(future.result(timeout=60) for future in futures)
-        for port, result in zip(ports, results, strict=True):
-            assert result == (None if port in shares[victim] else 200), (port, result, shares)
+        with owned.replacing_worker(victim) as kill:
+            kill()
+            release.set()
+            results: Final = tuple(future.result(timeout=60) for future in futures)
+            for port, result in zip(ports, results, strict=True):
+                assert result == (None if port in shares[victim] else 200), (port, result, shares)
         eventually(lambda: len(_STARTED_WORKER.findall(owned.log.read_text())), lambda started: started >= 3, 120)
         second_wave: Final = tuple(_marker("after kill") for _ in range(6))
         for marker in second_wave:

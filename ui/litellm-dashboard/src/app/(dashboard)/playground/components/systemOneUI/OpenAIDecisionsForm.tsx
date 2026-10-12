@@ -177,10 +177,10 @@ interface OpenAIDecisionsFormProps {
   value: string;
   onChange: (value: string) => void;
   validation: PayloadValidation<OpenAIDecisionsRequest>;
-  onOpenJson: () => void;
+  onReset: () => void;
 }
 
-export default function OpenAIDecisionsForm({ value, onChange, validation, onOpenJson }: OpenAIDecisionsFormProps) {
+export default function OpenAIDecisionsForm({ value, onChange, validation, onReset }: OpenAIDecisionsFormProps) {
   const inputId = useId();
   const safetyId = useId();
   const form = useMemo(() => readDecisionsForm(value), [value]);
@@ -188,11 +188,9 @@ export default function OpenAIDecisionsForm({ value, onChange, validation, onOpe
   if (form === undefined) {
     return (
       <FormFrame validation={validation}>
-        <p className="text-sm text-muted-foreground">
-          This request has JSON the form can&apos;t show. Edit it in JSON to fix its shape.
-        </p>
-        <Button variant="outline" className="w-fit" onClick={onOpenJson}>
-          Edit in JSON
+        <p className="text-sm text-muted-foreground">This request has a shape the form can&apos;t show.</p>
+        <Button variant="outline" className="w-fit" onClick={onReset}>
+          Reset to example
         </Button>
       </FormFrame>
     );
@@ -207,12 +205,7 @@ export default function OpenAIDecisionsForm({ value, onChange, validation, onOpe
       <div className="grid gap-1.5">
         {Array.isArray(form.input) ? (
           <>
-            <p className="text-sm text-muted-foreground">
-              Input contains messages. Edit messages and image parts in JSON; form edits keep them unchanged.
-            </p>
-            <Button variant="outline" className="w-fit" onClick={onOpenJson}>
-              Edit input in JSON
-            </Button>
+            <p className="text-sm text-muted-foreground">Input contains messages. Form edits keep them unchanged.</p>
           </>
         ) : (
           <>

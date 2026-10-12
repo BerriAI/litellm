@@ -19,7 +19,12 @@ use crate::{Deployment, Error, Gateway, JsonObject, RequestId, request};
 
 /// Client headers Python forwards to Anthropic-speaking providers on every call.
 const ANTHROPIC_API_HEADERS: [&str; 2] = ["anthropic-version", "anthropic-beta"];
-const ANTHROPIC_API_HEADER_PROVIDERS: &str = "anthropic,bedrock,bedrock_mantle,vertex_ai";
+const OPENROUTER_API_HEADERS: [&str; 2] = [
+    "x-openrouter-metadata",
+    "x-openrouter-experimental-metadata",
+];
+const ANTHROPIC_API_HEADER_PROVIDERS: &str =
+    "anthropic,bedrock,bedrock_mantle,vertex_ai,openrouter";
 
 pub async fn create(
     State(gateway): State<Arc<Gateway>>,
@@ -88,17 +93,28 @@ fn project(
 }
 
 fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders> {
-    let extra_headers: Map<String, Value> = ANTHROPIC_API_HEADERS
+    let scopes = [
+        (
+            ANTHROPIC_API_HEADER_PROVIDERS,
+            ANTHROPIC_API_HEADERS.as_slice(),
+        ),
+        ("openrouter", OPENROUTER_API_HEADERS.as_slice()),
+    ];
+    let forwarded: Vec<ProviderSpecificHeader> = scopes
         .into_iter()
-        .filter_map(|name| {
-            let value = headers.get(name)?.to_str().ok()?;
-            Some((name.to_owned(), Value::from(value)))
+        .filter_map(|(provider, names)| {
+            let extra_headers: Map<String, Value> = names
+                .iter()
+                .filter_map(|name| {
+                    let value = headers.get(*name)?.to_str().ok()?;
+                    Some(((*name).to_owned(), Value::from(value)))
+                })
+                .collect();
+            (!extra_headers.is_empty()).then(|| ProviderSpecificHeader {
+                custom_llm_provider: provider.into(),
+                extra_headers,
+            })
         })
         .collect();
-    (!extra_headers.is_empty()).then(|| {
-        ProviderSpecificHeaders::One(ProviderSpecificHeader {
-            custom_llm_provider: ANTHROPIC_API_HEADER_PROVIDERS.into(),
-            extra_headers,
-        })
-    })
+    (!forwarded.is_empty()).then_some(ProviderSpecificHeaders::Many(forwarded))
 }
