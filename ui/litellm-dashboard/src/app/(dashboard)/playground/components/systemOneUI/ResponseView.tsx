@@ -249,7 +249,10 @@ export default function ResponseView({
             </Badge>
           )}
           {model && (
-            <Badge variant="outline" className="font-mono text-[11px] font-normal">
+            <Badge
+              variant="outline"
+              className="h-auto max-w-full min-w-0 shrink font-mono text-[11px] font-normal wrap-anywhere whitespace-normal"
+            >
               {model}
             </Badge>
           )}
