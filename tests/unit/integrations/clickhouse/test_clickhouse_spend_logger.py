@@ -518,7 +518,7 @@ async def test_batch_line_item_success_event_does_not_write_spend(monkeypatch: p
     monkeypatch.setattr(litellm, "store_batch_line_items_in_callbacks", True, raising=False)
     storage = MagicMock()
     logger = ClickHouseSpendLogger(storage=storage)
-    now = datetime.now(timezone.utc)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
 
     await logger.async_log_success_event(
         {

@@ -185,8 +185,8 @@ async def test_async_log_failure_event_skips_batch_line_item_events():
             "model": "gpt-3.5-turbo",
         },
         response_obj=None,
-        start_time=datetime.now(),
-        end_time=datetime.now(),
+        start_time=datetime(2026, 1, 1),
+        end_time=datetime(2026, 1, 1),
     )
 
     assert local_cache.cache_dict == {}

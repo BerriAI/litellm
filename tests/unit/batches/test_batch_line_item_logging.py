@@ -13,9 +13,7 @@ cost, or error propagation fails here.
 
 import asyncio
 import json
-import subprocess
-import sys
-import textwrap
+import threading
 import uuid
 from datetime import datetime
 from types import MappingProxyType, SimpleNamespace
@@ -32,6 +30,7 @@ from litellm.batches.batch_line_item_logging import (
     drain_batch_line_items,
     log_batch_line_items,
     pending_batch_line_item_tasks,
+    spawn_batch_line_items,
 )
 from litellm.batches.batch_utils import BatchResultFiles
 from litellm.caching.caching import DualCache
@@ -165,7 +164,7 @@ def _parent_logging(custom_llm_provider: str = "openai") -> Logging:
         messages=[{"role": "user", "content": "<retrieve_batch>"}],
         stream=False,
         call_type="aretrieve_batch",
-        start_time=datetime.now(),
+        start_time=datetime(2026, 1, 1),
         litellm_call_id=str(uuid.uuid4()),
         function_id=str(uuid.uuid4()),
     )
@@ -1635,52 +1634,35 @@ async def test_a_retrieve_after_the_shutdown_drain_leaves_every_line_to_the_next
     assert next_retrieve == 2
 
 
-_EXIT_FLUSH_SPAWN_SCRIPT: Final = textwrap.dedent(
-    """
-    import asyncio
-    import atexit
-    from types import SimpleNamespace
-
-    from litellm.batches.batch_line_item_logging import spawn_batch_line_items
-    from litellm.types.utils import LiteLLMBatch
-
-
-    async def spawn():
-        return spawn_batch_line_items(
+@pytest.mark.asyncio
+async def test_a_retrieve_flushed_at_interpreter_exit_starts_no_line_fan_out(monkeypatch):
+    """The logging worker's exit flush runs a queued retrieve handler on a loop it
+    closes as soon as the handler returns, so a fan-out started there would be
+    destroyed partway with the batch claim held."""
+    exited_main_thread: Final = threading.Thread(target=lambda: None)
+    exited_main_thread.start()
+    exited_main_thread.join()
+    with monkeypatch.context() as interpreter_exit:
+        interpreter_exit.setattr(threading, "main_thread", lambda: exited_main_thread)
+        spawned: Final = spawn_batch_line_items(
             batch=LiteLLMBatch(
-                id="batch_exit", object="batch", endpoint="/v1/chat/completions", input_file_id="in",
-                status="completed", completion_window="24h", created_at=1,
+                id="batch_exit",
+                object="batch",
+                endpoint="/v1/chat/completions",
+                input_file_id="in",
+                status="completed",
+                completion_window="24h",
+                created_at=1,
             ),
             custom_llm_provider="openai",
-            parent=SimpleNamespace(litellm_params={}),
+            parent=_parent_logging(),
             model_name="gpt-4o",
             litellm_params=None,
             model_info=None,
             result_files=None,
         )
 
-
-    def flush_at_exit():
-        loop = asyncio.new_event_loop()
-        print("spawned:", loop.run_until_complete(spawn()), flush=True)
-        loop.close()
-
-
-    atexit.register(flush_at_exit)
-    """
-)
-
-
-def test_a_retrieve_flushed_at_interpreter_exit_starts_no_line_fan_out():
-    """The logging worker's exit flush runs a queued retrieve handler on a loop it
-    closes as soon as the handler returns, so a fan-out started there would be
-    destroyed partway with the batch claim held."""
-    result: Final = subprocess.run(
-        [sys.executable, "-P", "-c", _EXIT_FLUSH_SPAWN_SCRIPT], capture_output=True, text=True, timeout=120
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert "spawned: None" in result.stdout, result.stdout + result.stderr
+    assert (spawned, pending_batch_line_item_tasks()) == (None, ())
 
 
 @pytest.mark.asyncio

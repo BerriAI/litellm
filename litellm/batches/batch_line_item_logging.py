@@ -90,7 +90,6 @@ _LINE_ITEM_TASKS: Final[set["asyncio.Task[int]"]] = set()  # mutable-ok: strong 
 # loops whose shutdown drain has started, where a new fan-out would be cancelled with its claim held
 _DRAINED_LOOPS: Final[weakref.WeakSet[asyncio.AbstractEventLoop]] = weakref.WeakSet()
 
-# Body keys carrying the system prompt: Anthropic and Bedrock `system`, Responses `instructions`
 _SYSTEM_PROMPT_KEYS: Final = ("system", "instructions")
 
 # Anthropic keeps no input file, so its retrieved batch reports input_file_id as the string "None"

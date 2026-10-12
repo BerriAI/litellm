@@ -171,7 +171,6 @@ class DatadogMetricsLogger(CustomBatchLogger):
         self.log_queue.append(series_count)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        # A batch line item is counted by the aggregate aretrieve_batch event
         if is_batch_line_item_event(kwargs):
             return
         try:

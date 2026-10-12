@@ -1324,7 +1324,7 @@ async def test_deployment_callbacks_skip_batch_line_items(monkeypatch: pytest.Mo
             }
         ]
     )
-    now = datetime.now()
+    now = datetime(2026, 1, 1)
     line_item_kwargs = {
         "call_type": "acompletion",
         "standard_logging_object": {"total_tokens": _BATCH_TOKENS_PER_ROW},

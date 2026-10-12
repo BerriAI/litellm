@@ -73,8 +73,6 @@ class DatadogCostManagementLogger(CustomBatchLogger):
         super().__init__(**kwargs)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        # A batch line item is billed by the aggregate aretrieve_batch event; a
-        # per-line FOCUS BilledCost row would double-count cloud spend.
         if is_batch_line_item_event(kwargs):
             return
         try:

@@ -949,8 +949,6 @@ class ShadowEvalLogger(CustomLogger):
         *,
         guardrail_snapshot: GuardrailRequestSnapshot | None = None,
     ) -> None:
-        # A batch line item was served by the batch API, so replaying it against a
-        # shadow model would buy realtime calls for traffic that never went realtime
         if is_batch_line_item_event(kwargs):
             return
         try:

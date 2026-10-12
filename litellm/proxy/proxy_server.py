@@ -7067,7 +7067,6 @@ class ProxyConfig:
             health_check_interval = general_settings.get("health_check_interval", DEFAULT_HEALTH_CHECK_INTERVAL)
             health_check_concurrency = general_settings.get("health_check_concurrency", None)
             health_check_details = general_settings.get("health_check_details", True)
-            ### BATCH LINE ITEM CALLBACKS ###
             _store_batch_line_items: Final = coerce_bool(general_settings.get("store_batch_line_items_in_callbacks"))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # general_settings is untyped upstream
             if _store_batch_line_items is not None:
                 litellm.store_batch_line_items_in_callbacks = bool(_store_batch_line_items)

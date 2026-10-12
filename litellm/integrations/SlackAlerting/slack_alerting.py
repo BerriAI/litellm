@@ -1689,8 +1689,6 @@ Model Info:
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
         """Log deployment latency"""
-        # A batch line item ran inside the provider's batch job, not on the deployment,
-        # and its timing spans the whole batch, so it says nothing about deployment health
         if is_batch_line_item_event(kwargs):
             return
         try:

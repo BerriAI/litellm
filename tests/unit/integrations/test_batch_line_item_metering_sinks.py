@@ -18,7 +18,6 @@ import asyncio
 import io
 import json
 import os
-import time
 import uuid
 from contextlib import redirect_stdout
 from datetime import datetime
@@ -110,7 +109,7 @@ def _parent_logging() -> Logging:
         messages=[{"role": "user", "content": "<retrieve_batch>"}],
         stream=False,
         call_type="aretrieve_batch",
-        start_time=datetime.now(),
+        start_time=datetime(2026, 1, 1),
         litellm_call_id=str(uuid.uuid4()),
         function_id=str(uuid.uuid4()),
     )
@@ -258,7 +257,7 @@ async def test_newrelic_metrics_meters_only_the_aggregate_batch_event(monkeypatc
         f"New Relic metered per-line costs on top of the aggregate: {costs}; "
         "line items must be metered only by the aggregate aretrieve_batch event"
     )
-    now = time.time()
+    now = 1_767_225_600.0
     envelopes = build_metric_payload(records=records, window_start=now - 1, now=now)
     cost_sum = 0.0
     for envelope in envelopes:

@@ -222,10 +222,6 @@ class GenAIMetricRecorder:
         start_time: datetime,
         end_time: datetime,
     ) -> None:
-        # A batch line item is metered by the aggregate aretrieve_batch event, and
-        # its child interval (parent retrieve start -> line emission) measures
-        # retrieval and callback processing rather than the line's model call, so
-        # skip every metric for it; spans for line items are still emitted.
         if is_batch_line_item_event(kwargs):
             return
         common_attrs: Final = self._filter_attributes(self._bounded_attributes(kwargs))
@@ -253,8 +249,6 @@ class GenAIMetricRecorder:
         start_time: datetime,
         end_time: datetime,
     ) -> None:
-        # A batch line item's interval measures retrieval and emission, not the
-        # line's model call, so its duration would be synthetic here too.
         if is_batch_line_item_event(kwargs):
             return
         """Record the one metric a failed request can honestly report: the

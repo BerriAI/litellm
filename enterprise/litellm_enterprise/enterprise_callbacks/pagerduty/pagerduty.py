@@ -87,7 +87,6 @@ class PagerDutyAlerting(SlackAlerting):
         Record a failure event. Only send an alert to PagerDuty if the
         configured *failure* threshold is exceeded in the specified window.
         """
-        # A failed batch line item is reported by its batch, not by live traffic
         if is_batch_line_item_event(kwargs):
             return
         now = datetime.now(timezone.utc)

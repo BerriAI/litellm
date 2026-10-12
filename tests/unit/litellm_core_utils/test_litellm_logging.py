@@ -338,8 +338,8 @@ async def test_mcp_native_structured_replacement_must_match_returned_content(
     returned = await logging_obj.async_post_mcp_tool_call_hook(
         kwargs={"original_response": result},
         response_obj=result,
-        start_time=datetime.datetime.now(),
-        end_time=datetime.datetime.now(),
+        start_time=datetime.datetime(2026, 1, 1),
+        end_time=datetime.datetime(2026, 1, 1),
     )
     assert returned is result
     assert result.content == [TextContent(type="text", text="native-safe" if same_content else "final-safe")]
@@ -367,8 +367,8 @@ async def test_mcp_direct_content_edit_invalidates_stale_structured_data(logging
     returned = await logging_obj.async_post_mcp_tool_call_hook(
         kwargs={"original_response": result},
         response_obj=result,
-        start_time=datetime.datetime.now(),
-        end_time=datetime.datetime.now(),
+        start_time=datetime.datetime(2026, 1, 1),
+        end_time=datetime.datetime(2026, 1, 1),
     )
     assert returned is result
     assert result.content == [TextContent(type="text", text="[REDACTED]")]
@@ -2951,7 +2951,7 @@ async def test_shadow_snapshot_stays_private_and_is_invalidated_before_logging_g
         messages=[],
         stream=stream,
         call_type="anthropic_messages",
-        start_time=datetime.datetime.now(),
+        start_time=datetime.datetime(2026, 1, 1),
         litellm_call_id="private-snapshot",
         function_id="private-snapshot",
         dynamic_async_success_callbacks=[shadow, RecordingLogger(), guardrail],
@@ -9724,7 +9724,7 @@ class TestRetrieveBatchReusesFetchedResultFiles:
             messages=[{"role": "user", "content": "Hey"}],
             stream=False,
             call_type="aretrieve_batch",
-            start_time=time.time(),
+            start_time=1_767_225_600.0,
             litellm_call_id="batch-call-reuse",
             function_id="f",
         )

@@ -1670,9 +1670,6 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
         return True
 
     def _record_metrics(self, kwargs, response_obj, start_time, end_time):
-        # A batch line item's tokens and cost are metered by the aggregate
-        # aretrieve_batch event; per-line samples here would double-count them.
-        # Spans for line items are still emitted by _handle_success.
         if is_batch_line_item_event(kwargs):
             return
         duration_s: Final = (end_time - start_time).total_seconds()

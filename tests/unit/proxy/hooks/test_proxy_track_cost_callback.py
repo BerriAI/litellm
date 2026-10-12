@@ -2840,8 +2840,8 @@ async def test_batch_line_item_event_never_updates_spend():  # test-quality-ok: 
         await logger.async_log_success_event(
             kwargs=kwargs,
             response_obj=ModelResponse(),
-            start_time=datetime.now(),
-            end_time=datetime.now(),
+            start_time=datetime(2026, 1, 1),
+            end_time=datetime(2026, 1, 1),
         )
     mock_track.assert_not_awaited()
 

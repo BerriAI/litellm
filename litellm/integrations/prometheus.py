@@ -1507,8 +1507,6 @@ class PrometheusLogger(CustomLogger):
         self._track_end_user_metric_series(counter, metric_name, _labels)
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
-        # A batch line item is metered by the aggregate aretrieve_batch event; a
-        # per-line sample here would double-count spend and requests.
         if is_batch_line_item_event(kwargs):
             return
         # Define prometheus client

@@ -302,7 +302,6 @@ class NewRelicMetricsLogger(CustomBatchLogger):
         await self._final_drain()
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        # A batch line item is metered by the aggregate aretrieve_batch event.
         if is_batch_line_item_event(kwargs):
             return
         try:

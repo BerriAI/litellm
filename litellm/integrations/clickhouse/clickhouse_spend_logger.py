@@ -206,15 +206,11 @@ class ClickHouseSpendLogger(ClickHouseBatchLogger):
     table = SPEND_LOGS_TABLE
 
     async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        # Batch line items are billed by the aggregate aretrieve_batch row; a per-line
-        # spend row here would bill the batch twice.
         if is_batch_line_item_event(kwargs):
             return
         self._log(kwargs)
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time) -> None:
-        # Failed batch lines are part of the same aggregate row's request counts;
-        # per-line rows here would inflate spend-log request counts.
         if is_batch_line_item_event(kwargs):
             return
         self._log(kwargs)
