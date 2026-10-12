@@ -4334,3 +4334,62 @@ async def test_async_create_file(
         "s3://litellm-proxy-941277531214/litellm-bedrock-files-"
     )
     assert file_obj.filename.endswith(".jsonl")
+
+
+_VALID_BATCH_LINE: Final = json.dumps(
+    {
+        "custom_id": "req-1",
+        "method": "POST",
+        "url": "/v1/chat/completions",
+        "body": {
+            "model": "bedrock/amazon.nova-pro-v1:0",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 10,
+        },
+    }
+)
+_MALFORMED_BATCH_JSONL: Final = f"{_VALID_BATCH_LINE}\n{{not json\n".encode()
+
+
+class TestMalformedBatchJsonl:
+    """A malformed line in a batch input file is the client's mistake, so it must come back as a 400 that names the
+    line, not escape as a JSONDecodeError the proxy reports as a 500 (#45060)."""
+
+    def test_create_file_request_rejects_a_malformed_line_with_a_400(self):
+        from litellm.llms.bedrock.common_utils import BedrockError
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        with pytest.raises(BedrockError) as exc_info:
+            BedrockFilesConfig().transform_create_file_request(
+                model="amazon.nova-pro-v1:0",
+                create_file_data={
+                    "file": ("batch.jsonl", _MALFORMED_BATCH_JSONL, "application/jsonl"),
+                    "purpose": "batch",
+                },
+                optional_params={
+                    "aws_access_key_id": "test-key-id",
+                    "aws_secret_access_key": "test-secret",
+                    "aws_region_name": "us-west-2",
+                },
+                litellm_params={"s3_bucket_name": "litellm-batch-bucket"},
+            )
+        assert exc_info.value.status_code == 400
+        assert "line 2" in exc_info.value.message
+
+    def test_file_content_conversion_rejects_a_malformed_line_with_a_400(self):
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        with pytest.raises(BedrockError) as exc_info:
+            BedrockJsonlFilesTransformation().transform_openai_file_content_to_bedrock_file_content(
+                _MALFORMED_BATCH_JSONL
+            )
+        assert exc_info.value.status_code == 400
+        assert "line 2" in exc_info.value.message
+
+    def test_object_name_inference_still_falls_back_for_a_non_json_file(self):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        object_name = BedrockFilesConfig().get_object_name(
+            {"content": b"just some text, not jsonl", "filename": "notes.txt"}, purpose="batch"
+        )
+        assert object_name.endswith("notes.txt")
