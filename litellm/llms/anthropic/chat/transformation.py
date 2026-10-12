@@ -20,7 +20,6 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MINIMAL_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
-    RESPONSE_FORMAT_TOOL_DESCRIPTION,
     RESPONSE_FORMAT_TOOL_NAME,
 )
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
@@ -1755,7 +1754,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         _tool: Final = AnthropicMessagesTool(
             name=RESPONSE_FORMAT_TOOL_NAME,
-            description=RESPONSE_FORMAT_TOOL_DESCRIPTION,
             input_schema=_input_schema,
         )
         return _tool

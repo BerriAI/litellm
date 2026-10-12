@@ -16,7 +16,6 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
-    RESPONSE_FORMAT_TOOL_DESCRIPTION,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.databricks.chat.transformation import (
@@ -2144,7 +2143,6 @@ def test_databricks_claude_json_schema_preserves_refs_in_tool_parameters() -> No
             "function": {
                 "name": "json_tool_call",
                 "parameters": JSON_SCHEMA_RESPONSE_FORMAT["json_schema"]["schema"],
-                "description": RESPONSE_FORMAT_TOOL_DESCRIPTION,
             },
         }
     ]

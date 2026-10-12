@@ -7498,7 +7498,6 @@ def test_vertex_claude_tool_emulated_response_format_returns_the_object_the_mode
     )
     json_tool = next(tool for tool in request["tools"] if tool["name"] == RESPONSE_FORMAT_TOOL_NAME)
     assert json_tool["input_schema"]["required"] == ["tier", "summary"]
-    assert json_tool["description"]
     assert "output_format" not in request
     assert "output_config" not in request
     completion_response = {
