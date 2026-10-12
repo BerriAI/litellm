@@ -306,9 +306,10 @@ async def test_route_a2a_bridge_agent_with_an_empty_oauth_block_fails_before_cal
     data = {"model": "a2a/dbx-app", "messages": [{"role": "user", "content": "ping"}]}
 
     with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", _registry_with(agent)):
-        with pytest.raises(ValueError, match="missing required field"):
+        with pytest.raises(litellm.BadRequestError, match="missing required field") as info:
             await route_a2a_agent_request(data=data, route_type="acompletion")
 
+    assert info.value.status_code == 400
     assert not app.called
 
 

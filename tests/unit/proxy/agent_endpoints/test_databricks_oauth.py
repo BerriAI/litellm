@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, create_autospec, patch
 import httpx
 import pytest
 
+import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy.agent_endpoints.databricks_oauth import (
     DatabricksAppOAuthConfig,
@@ -121,13 +122,15 @@ def test_parse_raises_on_missing_field(missing_field):
         "workspace_url": "https://dbc-abc.cloud.databricks.com",
     }
     block.pop(missing_field)
-    with pytest.raises(ValueError, match=missing_field):
+    with pytest.raises(litellm.BadRequestError, match=missing_field) as info:
         parse_databricks_oauth_config({"databricks_oauth": block})
+    assert info.value.status_code == 400
 
 
 def test_parse_raises_on_non_mapping_block():
-    with pytest.raises(ValueError, match="mapping"):
+    with pytest.raises(litellm.BadRequestError, match="mapping") as info:
         parse_databricks_oauth_config({"databricks_oauth": "not-a-dict"})
+    assert info.value.status_code == 400
 
 
 @pytest.mark.parametrize(
@@ -137,7 +140,7 @@ def test_parse_raises_on_non_mapping_block():
 def test_parse_raises_on_an_empty_nested_block(block, error):
     params = {"custom_llm_provider": "databricks_agent", "databricks_oauth": block}
     assert has_databricks_oauth(params)
-    with pytest.raises(ValueError, match=error):
+    with pytest.raises(litellm.BadRequestError, match=error):
         parse_databricks_oauth_config(params)
 
 
@@ -559,20 +562,43 @@ def test_parse_flat_fields_prefer_an_explicit_workspace_url_for_an_app():
     assert config.scope == "custom-scope"
 
 
-def test_parse_flat_fields_of_an_app_without_a_workspace_url_raise_instead_of_using_the_app_host():
-    with pytest.raises(ValueError, match="workspace_url"):
+@pytest.mark.parametrize(
+    "app_base",
+    ["https://my-app-1.azure.databricksapps.com/responses", "https://my-app-1.azure.databricksapps.com"],
+)
+def test_parse_flat_fields_of_an_app_without_a_workspace_url_raise_instead_of_using_the_app_host(app_base):
+    with pytest.raises(litellm.BadRequestError, match="workspace_url") as info:
+        parse_databricks_oauth_config(
+            {
+                "custom_llm_provider": "databricks_agent",
+                "api_base": app_base,
+                "client_id": "sp-id",
+                "client_secret": "sp-secret",
+            }
+        )
+    assert info.value.status_code == 400
+
+
+@pytest.mark.parametrize(
+    "workspace_url",
+    ["https://my-app-1.azure.databricksapps.com", "https://my-app-1.azure.databricksapps.com/responses"],
+)
+def test_parse_rejects_an_app_url_typed_as_the_workspace_url(workspace_url):
+    with pytest.raises(litellm.BadRequestError, match="not a Databricks App URL") as info:
         parse_databricks_oauth_config(
             {
                 "custom_llm_provider": "databricks_agent",
                 "api_base": "https://my-app-1.azure.databricksapps.com/responses",
                 "client_id": "sp-id",
                 "client_secret": "sp-secret",
+                "workspace_url": workspace_url,
             }
         )
+    assert info.value.status_code == 400
 
 
 def test_parse_flat_fields_with_only_a_client_id_raise_on_the_missing_secret():
-    with pytest.raises(ValueError, match="client_secret"):
+    with pytest.raises(litellm.BadRequestError, match="client_secret"):
         parse_databricks_oauth_config(
             {
                 "custom_llm_provider": "databricks_agent",

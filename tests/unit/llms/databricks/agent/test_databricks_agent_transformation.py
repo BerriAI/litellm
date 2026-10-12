@@ -4,6 +4,7 @@ from unittest.mock import MagicMock
 
 import httpx
 import pytest
+import responses
 import respx
 
 import litellm
@@ -14,21 +15,37 @@ from litellm.llms.databricks.agent.responses_output import (
 )
 from litellm.llms.databricks.agent.transformation import (
     DatabricksAgentConfig,
+    is_databricks_app_url,
     resolve_endpoint_url,
+    workspace_url_from_api_base,
 )
 from litellm.llms.databricks.common_utils import DatabricksException
 from litellm.types.utils import ModelResponse
 
 WORKSPACE: Final = "https://adb-1.azuredatabricks.net"
+TOKEN_URL: Final = f"{WORKSPACE}/oidc/v1/token"
 INVOCATIONS_URL: Final = f"{WORKSPACE}/serving-endpoints/my-agent/invocations"
 UNIFIED_URL: Final = f"{WORKSPACE}/serving-endpoints/responses"
-APP_URL: Final = "https://my-app-1.azure.databricksapps.com/responses"
+APP_HOST: Final = "https://my-app-1.azure.databricksapps.com"
+APP_URL: Final = f"{APP_HOST}/responses"
 MESSAGE_ITEM: Final = {
     "type": "message",
     "id": "msg_1",
     "role": "assistant",
     "content": [{"type": "output_text", "text": "pong", "annotations": []}],
 }
+_TOOL_CALL: Final = {
+    "id": "call_1",
+    "type": "function",
+    "function": {"name": "get_weather", "arguments": "{}"},
+}
+
+
+@pytest.fixture
+def env_oauth_m2m(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DATABRICKS_HOST", raising=False)
+    monkeypatch.setenv("DATABRICKS_CLIENT_ID", "sp-id")
+    monkeypatch.setenv("DATABRICKS_CLIENT_SECRET", "sp-secret")
 
 
 @pytest.fixture
@@ -47,13 +64,29 @@ def _sse(events: list[dict[str, object]]) -> str:
         (f"{WORKSPACE}/", "databricks_agent/my-agent", INVOCATIONS_URL),
         (f"{WORKSPACE}/serving-endpoints", "my-agent", INVOCATIONS_URL),
         (INVOCATIONS_URL, "anything", INVOCATIONS_URL),
+        (f"{WORKSPACE}/serving-endpoints/my-agent", "", INVOCATIONS_URL),
         (f"{APP_URL}/", "agent", APP_URL),
+        (APP_HOST, "", APP_URL),
+        (f"{APP_HOST}/", "agent", APP_URL),
+        (f"{APP_HOST}/api/agent", "", f"{APP_HOST}/api/agent"),
         (f"{UNIFIED_URL}/", "databricks_agent/my-agent", UNIFIED_URL),
         (WORKSPACE, "team/agent v2", f"{WORKSPACE}/serving-endpoints/team%2Fagent%20v2/invocations"),
     ],
 )
 def test_resolve_endpoint_url(api_base: str, model: str, expected: str) -> None:
     assert resolve_endpoint_url(api_base, model) == expected
+
+
+@pytest.mark.parametrize("app_base", [APP_HOST, f"{APP_HOST}/", APP_URL, "https://other.example/responses"])
+def test_an_app_url_is_never_a_workspace(app_base: str) -> None:
+    assert is_databricks_app_url(app_base)
+    assert workspace_url_from_api_base(app_base) is None
+
+
+@pytest.mark.parametrize("api_base", [WORKSPACE, f"{WORKSPACE}/serving-endpoints", INVOCATIONS_URL, UNIFIED_URL])
+def test_model_serving_urls_resolve_to_the_workspace(api_base: str) -> None:
+    assert not is_databricks_app_url(api_base)
+    assert workspace_url_from_api_base(api_base) == WORKSPACE
 
 
 def test_resolve_endpoint_url_needs_an_endpoint_name_for_a_workspace_url() -> None:
@@ -105,7 +138,8 @@ def test_transform_request_sets_stream_only_when_streaming() -> None:
     assert config.transform_request("m", messages, {"stream": True}, {}, {})["stream"] is True
 
 
-def test_transform_request_rejects_roles_a_responses_agent_cannot_take() -> None:
+def test_transform_request_rejects_roles_a_responses_agent_cannot_take(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
     with pytest.raises(DatabricksException, match="role 'tool' is not supported") as info:
         DatabricksAgentConfig().transform_request(
             model="my-agent",
@@ -115,6 +149,49 @@ def test_transform_request_rejects_roles_a_responses_agent_cannot_take() -> None
             headers={},
         )
     assert info.value.status_code == 400
+
+
+def test_transform_request_rejects_assistant_tool_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    with pytest.raises(DatabricksException, match="remove tool_calls from the message") as info:
+        DatabricksAgentConfig().transform_request(
+            model="my-agent",
+            messages=[
+                {"role": "user", "content": "weather?"},
+                {"role": "assistant", "content": None, "tool_calls": [_TOOL_CALL]},
+            ],
+            optional_params={},
+            litellm_params={},
+            headers={},
+        )
+    assert info.value.status_code == 400
+
+
+def test_transform_request_drops_tool_turns_and_empty_messages_under_drop_params(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "drop_params", False)
+    body = DatabricksAgentConfig().transform_request(
+        model="my-agent",
+        messages=[
+            {"role": "user", "content": "weather?"},
+            {"role": "assistant", "content": None, "tool_calls": [_TOOL_CALL]},
+            {"role": "tool", "content": "sunny", "tool_call_id": "call_1"},
+            {"role": "assistant", "content": "Checking the weather", "tool_calls": [_TOOL_CALL]},
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://example.com/cat.png"}}]},
+            {"role": "user", "content": "and tomorrow?"},
+        ],
+        optional_params={},
+        litellm_params={"drop_params": True},
+        headers={},
+    )
+    assert body == {
+        "input": [
+            {"role": "user", "content": "weather?"},
+            {"role": "assistant", "content": "Checking the weather"},
+            {"role": "user", "content": "and tomorrow?"},
+        ]
+    }
 
 
 @pytest.mark.parametrize(
@@ -207,12 +284,61 @@ def test_validate_environment_uses_the_pat_as_bearer() -> None:
     assert headers == {"Content-Type": "application/json", "Authorization": "Bearer pat-1"}
 
 
-def test_validate_environment_without_any_credential_is_a_400() -> None:
+def test_validate_environment_without_any_credential_is_a_400(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("DATABRICKS_CLIENT_ID", raising=False)
+    monkeypatch.delenv("DATABRICKS_CLIENT_SECRET", raising=False)
     with pytest.raises(DatabricksException, match="Missing Databricks credentials") as info:
         DatabricksAgentConfig().validate_environment(
             headers={}, model="my-agent", messages=[], optional_params={}, litellm_params={}, api_key=None
         )
     assert info.value.status_code == 400
+
+
+def _validate_environment(api_key: str | None, api_base: str | None) -> dict[str, object]:
+    return DatabricksAgentConfig().validate_environment(
+        headers={"authorization": "Bearer client-token"},
+        model="my-agent",
+        messages=[],
+        optional_params={},
+        litellm_params={},
+        api_key=api_key,
+        api_base=api_base,
+    )
+
+
+@responses.activate
+@pytest.mark.parametrize("api_base", [WORKSPACE, f"{WORKSPACE}/serving-endpoints", INVOCATIONS_URL])
+def test_validate_environment_mints_an_oauth_m2m_token_from_the_env_service_principal(
+    env_oauth_m2m: None, api_base: str
+) -> None:
+    token = responses.post(TOKEN_URL, json={"access_token": "m2m-token", "expires_in": 3600})
+    headers = _validate_environment(api_key=None, api_base=api_base)
+    assert headers == {"Content-Type": "application/json", "Authorization": "Bearer m2m-token"}
+    assert token.calls[0].request.headers["Authorization"].startswith("Basic ")
+    assert "grant_type=client_credentials" in str(token.calls[0].request.body)
+
+
+@responses.activate
+def test_validate_environment_mints_the_env_token_from_databricks_host_for_an_app(
+    env_oauth_m2m: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("DATABRICKS_HOST", f"{WORKSPACE}/")
+    responses.post(TOKEN_URL, json={"access_token": "m2m-token"})
+    assert _validate_environment(api_key=None, api_base=APP_HOST)["Authorization"] == "Bearer m2m-token"
+
+
+@responses.activate
+def test_validate_environment_never_posts_the_env_secret_to_an_app_host(env_oauth_m2m: None) -> None:
+    with pytest.raises(DatabricksException, match="set DATABRICKS_HOST") as info:
+        _validate_environment(api_key=None, api_base=APP_URL)
+    assert info.value.status_code == 400
+    assert not responses.calls
+
+
+@responses.activate
+def test_validate_environment_prefers_the_api_key_over_the_env_service_principal(env_oauth_m2m: None) -> None:
+    assert _validate_environment(api_key="pat-1", api_base=WORKSPACE)["Authorization"] == "Bearer pat-1"
+    assert not responses.calls
 
 
 def test_output_text_joins_message_items_and_skips_tool_trace_items() -> None:
@@ -389,6 +515,23 @@ async def test_acompletion_streams_output_text_deltas(httpx_transport: None) -> 
     deltas = [chunk.choices[0].delta.content async for chunk in stream if chunk.choices[0].delta.content]
     assert json.loads(route.calls.last.request.content)["stream"] is True
     assert "".join(deltas) == "pong"
+
+
+@responses.activate
+@respx.mock
+async def test_acompletion_authenticates_with_the_env_service_principal(
+    httpx_transport: None, env_oauth_m2m: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("DATABRICKS_API_KEY", raising=False)
+    responses.post(TOKEN_URL, json={"access_token": "m2m-token"})
+    route = respx.post(INVOCATIONS_URL).mock(return_value=httpx.Response(200, json={"output": [MESSAGE_ITEM]}))
+    response = await litellm.acompletion(
+        model="databricks_agent/my-agent",
+        messages=[{"role": "user", "content": "ping"}],
+        api_base=WORKSPACE,
+    )
+    assert route.calls.last.request.headers["Authorization"] == "Bearer m2m-token"
+    assert response.choices[0].message.content == "pong"
 
 
 async def test_unsupported_openai_params_follow_drop_params(httpx_transport: None) -> None:

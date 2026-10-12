@@ -7,7 +7,7 @@ Databricks Apps: POST {app}/responses
 
 from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Final
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 import httpx
 from pydantic import BaseModel, ConfigDict, ValidationError
@@ -22,7 +22,7 @@ from litellm.llms.databricks.agent.responses_output import (
     DatabricksAgentResponsesIterator,
     output_text,
 )
-from litellm.llms.databricks.common_utils import DatabricksException
+from litellm.llms.databricks.common_utils import DatabricksBase, DatabricksException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices, Message, ModelResponse, Usage
@@ -33,8 +33,12 @@ if TYPE_CHECKING:
 
 PROVIDER_NAME: Final = "databricks_agent"
 _MODEL_PREFIX: Final = f"{PROVIDER_NAME}/"
-_ENDPOINT_URL_SUFFIXES: Final = ("/invocations", "/responses")
+_INVOCATIONS_SUFFIX: Final = "/invocations"
+_APP_RESPONSES_SUFFIX: Final = "/responses"
+_ENDPOINT_URL_SUFFIXES: Final = (_INVOCATIONS_SUFFIX, _APP_RESPONSES_SUFFIX)
+_SERVING_ENDPOINTS_SEGMENT: Final = "/serving-endpoints/"
 _UNIFIED_RESPONSES_SUFFIX: Final = "/serving-endpoints/responses"
+_APP_HOST_SUFFIX: Final = ".databricksapps.com"
 _INPUT_ROLES: Final = frozenset({"system", "developer", "user", "assistant"})
 _PASSTHROUGH_PARAMS: Final = ("custom_inputs", "context", "databricks_options")
 
@@ -51,8 +55,23 @@ def _is_unified_responses_url(api_base: str) -> bool:
     return _normalized_base(api_base).endswith(_UNIFIED_RESPONSES_SUFFIX)
 
 
+def _is_databricks_app_host(api_base: str) -> bool:
+    return (urlsplit(_normalized_base(api_base)).hostname or "").endswith(_APP_HOST_SUFFIX)
+
+
 def is_databricks_app_url(api_base: str) -> bool:
-    return _normalized_base(api_base).endswith("/responses") and not _is_unified_responses_url(api_base)
+    if _is_unified_responses_url(api_base):
+        return False
+    return _is_databricks_app_host(api_base) or _normalized_base(api_base).endswith(_APP_RESPONSES_SUFFIX)
+
+
+def workspace_url_from_api_base(api_base: str | None) -> str | None:
+    if not api_base or not api_base.strip() or is_databricks_app_url(api_base):
+        return None
+    parts: Final = urlsplit(_normalized_base(api_base))
+    if not parts.scheme or not parts.netloc:
+        return None
+    return f"{parts.scheme}://{parts.netloc}"
 
 
 def _required_endpoint_name(model: str) -> str:
@@ -68,6 +87,10 @@ def _required_endpoint_name(model: str) -> str:
     return endpoint
 
 
+def _app_endpoint_url(app_base: str) -> str:
+    return f"{app_base}{_APP_RESPONSES_SUFFIX}" if urlsplit(app_base).path in ("", "/") else app_base
+
+
 def resolve_endpoint_url(api_base: str, model: str) -> str:
     base: Final = _normalized_base(api_base)
     if _is_unified_responses_url(base):
@@ -75,6 +98,10 @@ def resolve_endpoint_url(api_base: str, model: str) -> str:
         return base
     if base.endswith(_ENDPOINT_URL_SUFFIXES):
         return base
+    if _is_databricks_app_host(base):
+        return _app_endpoint_url(base)
+    if _SERVING_ENDPOINTS_SEGMENT in base:
+        return f"{base}{_INVOCATIONS_SUFFIX}"
     workspace: Final = base.removesuffix("/serving-endpoints")
     return f"{workspace}/serving-endpoints/{quote(_required_endpoint_name(model), safe='')}/invocations"
 
@@ -95,39 +122,51 @@ class _InputMessage(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     content: str | tuple[_InputContentPart, ...] | None = None
+    tool_calls: tuple[object, ...] | None = None
 
 
 def _drop_params_enabled(litellm_params: Mapping[str, object]) -> bool:
     return litellm.drop_params is True or litellm_params.get("drop_params") is True
 
 
-def _input_item(message: AllMessageValues, drop_unsupported_content: bool) -> Mapping[str, str]:
+def _input_item(message: AllMessageValues, drop_unsupported: bool) -> Mapping[str, str] | None:
     role: Final = message["role"]
     if role not in _INPUT_ROLES:
+        if drop_unsupported:
+            return None
         raise DatabricksException(
             status_code=400,
             message=(
                 f"message role '{role}' is not supported by a Databricks ResponsesAgent; "
-                "send system, developer, user, or assistant messages"
+                "send system, developer, user, or assistant messages, or set drop_params: true to drop it"
             ),
         )
-    unsupported: Final = _non_text_content_types(message)
-    if unsupported and not drop_unsupported_content:
+    unsupported: Final = _unsupported_message_parts(message)
+    if unsupported and not drop_unsupported:
         raise DatabricksException(
             status_code=400,
             message=(
-                f"databricks_agent sends text content only; remove the {', '.join(unsupported)} content "
-                "part(s) from the request, or set drop_params: true to drop them"
+                f"databricks_agent sends text content only; remove {', '.join(unsupported)} from the "
+                "message, or set drop_params: true to drop them"
             ),
         )
-    return {"role": role, "content": convert_content_list_to_str(message)}
+    content: Final = convert_content_list_to_str(message)
+    if unsupported and not content:
+        return None
+    return {"role": role, "content": content}
 
 
-def _non_text_content_types(message: AllMessageValues) -> tuple[str, ...]:
-    content: Final = _InputMessage.model_validate(message).content
-    if not isinstance(content, tuple):
-        return ()
-    return tuple(sorted({part.type for part in content} - {"text"}))
+def _input_items(messages: Sequence[AllMessageValues], drop_unsupported: bool) -> Sequence[Mapping[str, str]]:
+    items: Final = (_input_item(message, drop_unsupported) for message in messages)
+    return [item for item in items if item is not None]
+
+
+def _unsupported_message_parts(message: AllMessageValues) -> tuple[str, ...]:
+    parsed: Final = _InputMessage.model_validate(message)
+    content_parts: Final = parsed.content if isinstance(parsed.content, tuple) else ()
+    content_types: Final[frozenset[str]] = frozenset(part.type for part in content_parts) - {"text"}
+    tool_calls: Final[frozenset[str]] = frozenset({"tool_calls"}) if parsed.tool_calls else frozenset()
+    return tuple(sorted(content_types | tool_calls))
 
 
 def _has_authorization(headers: Mapping[str, object]) -> bool:
@@ -136,6 +175,23 @@ def _has_authorization(headers: Mapping[str, object]) -> bool:
 
 def _without_authorization(headers: Mapping[str, object]) -> Mapping[str, object]:
     return {name: value for name, value in headers.items() if name.lower() != "authorization"}
+
+
+def _env_oauth_m2m_token(api_base: str | None) -> str | None:
+    client_id: Final = get_secret_str("DATABRICKS_CLIENT_ID")
+    client_secret: Final = get_secret_str("DATABRICKS_CLIENT_SECRET")
+    if not (client_id and client_secret):
+        return None
+    workspace: Final = get_secret_str("DATABRICKS_HOST") or workspace_url_from_api_base(api_base)
+    if workspace is None:
+        raise DatabricksException(
+            status_code=400,
+            message=(
+                "DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET are set but the OAuth token endpoint is unknown: "
+                "set DATABRICKS_HOST to the workspace URL (a Databricks App URL is not a workspace)"
+            ),
+        )
+    return DatabricksBase().get_oauth_m2m_token(workspace, client_id, client_secret)
 
 
 class DatabricksAgentConfig(BaseConfig):
@@ -168,11 +224,12 @@ class DatabricksAgentConfig(BaseConfig):
         api_key: str | None = None,
         api_base: str | None = None,
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
-        if api_key:
+        bearer: Final = api_key or _env_oauth_m2m_token(api_base)
+        if bearer:
             return {
                 **_without_authorization(headers),
                 "Content-Type": "application/json",
-                "Authorization": f"Bearer {api_key}",
+                "Authorization": f"Bearer {bearer}",
             }
         if _has_authorization(headers):
             return {**headers, "Content-Type": "application/json"}
@@ -180,7 +237,8 @@ class DatabricksAgentConfig(BaseConfig):
             status_code=400,
             message=(
                 "Missing Databricks credentials: set api_key to a personal access token, set the "
-                "DATABRICKS_API_KEY environment variable, or register the agent with OAuth client credentials"
+                "DATABRICKS_API_KEY environment variable, set DATABRICKS_CLIENT_ID and DATABRICKS_CLIENT_SECRET "
+                "for OAuth M2M, or register the agent with OAuth client credentials"
             ),
         )
 
@@ -213,10 +271,9 @@ class DatabricksAgentConfig(BaseConfig):
     ) -> dict[str, object]:  # mutable-ok: mirrors override contract
         passthrough: Final = {key: optional_params[key] for key in _PASSTHROUGH_PARAMS if key in optional_params}
         stream: Final = {"stream": True} if optional_params.get("stream") is True else {}
-        drop_unsupported_content: Final = _drop_params_enabled(litellm_params)
         return {
             **_body_model_field(litellm_params.get("api_base"), model),
-            "input": [_input_item(message, drop_unsupported_content) for message in messages],
+            "input": _input_items(messages, _drop_params_enabled(litellm_params)),
             **stream,
             **passthrough,
         }

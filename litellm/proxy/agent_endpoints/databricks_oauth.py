@@ -28,15 +28,15 @@ import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Final
-from urllib.parse import urlsplit
 
 import httpx
 from pydantic import TypeAdapter, ValidationError
 
+import litellm
 from litellm._logging import verbose_logger
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-from litellm.llms.databricks.agent.transformation import is_databricks_app_url
+from litellm.llms.databricks.agent.transformation import is_databricks_app_url, workspace_url_from_api_base
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 
@@ -82,12 +82,11 @@ class DatabricksAppOAuthConfig:
 
 
 def _workspace_origin(url: object) -> str | None:
-    if not isinstance(url, str) or not url.strip() or is_databricks_app_url(url):
-        return None
-    parts: Final = urlsplit(url.strip())
-    if not parts.scheme or not parts.netloc:
-        return None
-    return f"{parts.scheme}://{parts.netloc}"
+    return workspace_url_from_api_base(url) if isinstance(url, str) else None
+
+
+def _config_error(message: str) -> litellm.BadRequestError:
+    return litellm.BadRequestError(message=message, model="a2a", llm_provider=DATABRICKS_AGENT_PROVIDER)
 
 
 def _is_databricks_agent(litellm_params: Mapping[str, object]) -> bool:
@@ -138,8 +137,8 @@ def parse_databricks_oauth_config(
 ) -> DatabricksAppOAuthConfig | None:
     """Build a Databricks App OAuth config from an agent's ``litellm_params``.
 
-    Returns ``None`` when the agent has no ``databricks_oauth`` block. Raises
-    ``ValueError`` when the block is present but incomplete, so misconfiguration
+    Returns ``None`` when the agent has no ``databricks_oauth`` block. Raises a 400
+    ``litellm.BadRequestError`` when the block is present but incomplete, so misconfiguration
     surfaces loudly instead of silently sending an unauthenticated request.
     """
     if not litellm_params:
@@ -151,7 +150,7 @@ def parse_databricks_oauth_config(
     try:
         block: Final = _OAUTH_BLOCK.validate_python(raw)
     except ValidationError as e:
-        raise ValueError(
+        raise _config_error(
             f"'{DATABRICKS_OAUTH_PARAM}' must be a mapping of OAuth settings, got {type(raw).__name__}"
         ) from e
 
@@ -169,7 +168,9 @@ def parse_databricks_oauth_config(
             )
             if not value
         )
-        raise ValueError(f"Databricks App OAuth config is missing required field(s): {', '.join(missing)}")
+        raise _config_error(f"Databricks App OAuth config is missing required field(s): {', '.join(missing)}")
+    if is_databricks_app_url(workspace_url):
+        raise _config_error("workspace_url must be the Databricks workspace URL, not a Databricks App URL")
 
     scope: Final = _resolve_secret(block.get("scope")) or _DEFAULT_SCOPE
 

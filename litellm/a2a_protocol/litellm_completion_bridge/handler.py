@@ -25,6 +25,7 @@ from litellm.a2a_protocol.providers.config_manager import A2AProviderConfigManag
 from litellm.constants import A2A_CHAT_COMPLETION_BRIDGE_PROVIDERS
 from litellm.interactions.agents.utils import merge_agent_headers
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.secret_managers.main import get_secret_str
 from litellm.types.utils import ModelResponse
 
 # litellm_params key carrying the authenticated principal (hashed virtual key) so
@@ -60,11 +61,18 @@ def bridge_model_name(litellm_params: Mapping[str, object]) -> str:
     return f"{custom_llm_provider}/{model}"
 
 
+def _resolved_secret(value: object) -> object:
+    if isinstance(value, str) and value.startswith("os.environ/"):
+        return get_secret_str(value)
+    return value
+
+
 def agent_completion_kwargs(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-    """The agent's litellm_params that are valid litellm.acompletion kwargs (api_key, api_base, ...)."""
+    """The agent's litellm_params that are valid litellm.acompletion kwargs (api_key, api_base, ...), with
+    ``os.environ/`` references resolved the way config-file agents resolve them at load."""
     return MappingProxyType(
         {
-            key: value
+            key: _resolved_secret(value)
             for key, value in litellm_params.items()
             if key not in ("model", "custom_llm_provider") and key not in _AGENT_ONLY_PARAMS
         }
