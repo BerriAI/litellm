@@ -10,7 +10,6 @@ from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError,
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy.litellm_pre_call_utils import sanitize_for_log
 
 EMPTY_MAP: Final[Mapping[str, object]] = MappingProxyType({})
 _OBJECT_MAP_ADAPTER: Final = TypeAdapter(dict[str, object])
@@ -57,6 +56,26 @@ def _normalize_group_by(v: object) -> tuple[SpendReportGroupBy, ...]:
     return filtered if filtered else ("team",)
 
 
+def _clean_email_item(item: object) -> str | None:
+    if isinstance(item, str):
+        cleaned: Final = item.replace("\r", "").replace("\n", "").strip()
+        return cleaned if cleaned else None
+    return None
+
+
+def _normalize_email_list(v: object) -> tuple[str, ...]:
+    if isinstance(v, str):
+        single_clean: Final = _clean_email_item(v)
+        return (single_clean,) if single_clean else ()
+    if isinstance(v, (list, tuple)):
+        try:
+            items: Final = _STR_SEQUENCE_ADAPTER.validate_python(v)
+            return tuple(cleaned for item in items if (cleaned := _clean_email_item(item)) is not None)
+        except ValidationError:
+            return ()
+    return ()
+
+
 class SpendReportEmailAlert(BaseModel):
     model_config = ConfigDict(extra="ignore", frozen=True)
 
@@ -92,6 +111,11 @@ class SpendReportEmailAlert(BaseModel):
         default=None,
         description="Optional team filter to report only on a specific team",
     )
+
+    @field_validator("recipient_emails", mode="before")
+    @classmethod
+    def validate_recipient_emails(cls, v: object) -> tuple[str, ...]:
+        return _normalize_email_list(v)
 
     @field_validator("group_by", mode="before")
     @classmethod
@@ -135,6 +159,13 @@ class SpendReportEmailSendRequest(BaseModel):
         default=None,
         description="Optional team filter to report only on a specific team",
     )
+
+    @field_validator("recipient_emails", mode="before")
+    @classmethod
+    def validate_recipient_emails(cls, v: object) -> tuple[str, ...] | None:
+        if v is None:
+            return None
+        return _normalize_email_list(v)
 
 
 class SpendReportEmailStatusResponse(BaseModel):
@@ -839,9 +870,9 @@ async def send_spend_report_email(
 
     team_subject_suffix: Final = f" - Team: {team_id}" if team_id else ""
     subject: Final = f"LiteLLM {frequency.capitalize()} Spend Report{team_subject_suffix} ({resolved_start_date} to {resolved_end_date})"
-    for email_addr in resolved_recipients:
+    for raw_email in resolved_recipients:
         await actual_sender(
-            receiver_email=email_addr,
+            receiver_email=str(raw_email).replace("\r", "").replace("\n", "").strip(),
             subject=subject,
             html=html_content,
         )
@@ -870,12 +901,8 @@ def _safe_remove_job(remove_fn: Callable[[str], object] | None, job_id: str) -> 
         return
     try:
         remove_fn(job_id)
-    except Exception as exc:  # noqa: BLE001  # scheduler job removal is best-effort cleanup
-        verbose_proxy_logger.debug(
-            "Spend report job %s could not be removed: %s",
-            sanitize_for_log(job_id),
-            sanitize_for_log(exc),
-        )
+    except Exception:  # noqa: BLE001  # scheduler job removal is best-effort cleanup
+        verbose_proxy_logger.debug("Spend report job could not be removed")
 
 
 async def _resolve_current_alert(alert_id: str) -> tuple[bool, SpendReportEmailAlert | None]:
@@ -892,11 +919,8 @@ async def _resolve_current_alert(alert_id: str) -> tuple[bool, SpendReportEmailA
             if from_cfg is not None:
                 matching: Final = next((a for a in from_cfg.alerts if a.id == alert_id), None)
                 return (True, matching)
-        except Exception as exc:  # noqa: BLE001  # fallback to memory if config query fails
-            verbose_proxy_logger.debug(
-                "Failed to query current config for alert resolution: %s",
-                sanitize_for_log(exc),
-            )
+        except Exception:  # noqa: BLE001  # fallback to memory if config query fails
+            verbose_proxy_logger.debug("Failed to query current config for alert resolution")
 
     from_mem: Final = _settings_from_memory()
     if from_mem is not None:
@@ -923,10 +947,7 @@ async def run_scheduled_email_spend_alert(
     settings_found: Final = resolution_result[0]
     current_alert: Final = resolution_result[1]
     if settings_found and (current_alert is None or not current_alert.enabled or not current_alert.recipient_emails):
-        verbose_proxy_logger.info(
-            "Skipping scheduled spend report alert %s: deleted, disabled, or has no recipients",
-            sanitize_for_log(alert.id),
-        )
+        verbose_proxy_logger.info("Skipping scheduled spend report alert: deleted, disabled, or has no recipients")
         return
 
     target_alert: Final = _select_target_alert(alert, settings_found, current_alert)
@@ -941,10 +962,7 @@ async def run_scheduled_email_spend_alert(
         if acquire_lock_fn is not None:
             has_lock: Final = await acquire_lock_fn(cronjob_id=job_id, ttl=3600, allow_reentrant=False)
             if has_lock is False:
-                verbose_proxy_logger.info(
-                    "Email spend report lock already acquired by another pod: %s",
-                    sanitize_for_log(job_id),
-                )
+                verbose_proxy_logger.info("Email spend report lock already acquired by another pod")
                 return
 
     try:
@@ -954,12 +972,8 @@ async def run_scheduled_email_spend_alert(
             group_by=target_alert.group_by,
             team_id=target_alert.team_id,
         )
-    except Exception as e:  # noqa: BLE001  # scheduled job runner must catch top-level exceptions to prevent crash
-        verbose_proxy_logger.error(
-            "Failed to run scheduled email spend alert (%s): %s",
-            sanitize_for_log(target_alert.name),
-            sanitize_for_log(e),
-        )
+    except Exception:  # noqa: BLE001  # scheduled job runner must catch top-level exceptions to prevent crash
+        verbose_proxy_logger.error("Failed to run scheduled email spend alert")
 
 
 _registered_spend_report_job_ids: Final[set[str]] = set()  # mutable-ok: active background job registry
@@ -1010,11 +1024,8 @@ def _setup_alert_jobs(
 def _fetch_current_jobs(get_jobs_fn: Callable[[], Sequence[object]]) -> Sequence[object]:
     try:
         return get_jobs_fn()
-    except Exception as exc:  # noqa: BLE001  # scheduler job inspection is best-effort
-        verbose_proxy_logger.debug(
-            "Could not inspect current scheduler jobs: %s",
-            sanitize_for_log(exc),
-        )
+    except Exception:  # noqa: BLE001  # scheduler job inspection is best-effort
+        verbose_proxy_logger.debug("Could not inspect current scheduler jobs")
         return ()
 
 

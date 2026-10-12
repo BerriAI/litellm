@@ -7362,7 +7362,8 @@ async def send_email(
     email_message["From"] = sender_email
     email_message["To"] = receiver_email
     email_message["Subject"] = subject
-    verbose_proxy_logger.debug("sending email from %s to %s", sender_email, receiver_email)
+    clean_receiver_email: Final = str(receiver_email).replace("\r", "").replace("\n", "")
+    verbose_proxy_logger.debug("sending email from %s to %s", sender_email, clean_receiver_email)
 
     if smtp_host is None:
         raise ValueError("Trying to use SMTP, but SMTP_HOST is not set")
@@ -7385,7 +7386,8 @@ async def send_email(
         )
 
     except Exception as e:
-        verbose_proxy_logger.exception("An error occurred while sending the email:" + str(e))
+        clean_err: Final = str(e).replace("\r", "").replace("\n", "")
+        verbose_proxy_logger.exception("An error occurred while sending the email: %s", clean_err)
 
 
 def hash_token(token: str):
