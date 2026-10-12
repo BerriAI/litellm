@@ -155,6 +155,12 @@ def _beta_header(config: AnthropicMessagesConfig, client_beta: str) -> dict:
     )
 
 
+def _derived_beta_header(config: AnthropicMessagesConfig) -> dict:
+    return config._update_headers_with_anthropic_beta(
+        headers={}, optional_params={"safeguards": list(AUTO_MODE_SAFEGUARDS)}, messages=[]
+    )
+
+
 @pytest.mark.parametrize("config", _classifier_configs(), ids=type)
 def test_routes_whose_platform_runs_the_classifier_keep_safeguards_and_the_beta(
     config: AnthropicMessagesConfig, local_beta_headers_config: None
@@ -164,6 +170,7 @@ def test_routes_whose_platform_runs_the_classifier_keep_safeguards_and_the_beta(
     honour the pair (probed live 2026-10-12), so both halves must reach them unchanged."""
     assert _safeguards_request(config)["safeguards"] == AUTO_MODE_SAFEGUARDS
     assert _beta_header(config, DANGEROUS_TOOL_USE_BETA)["anthropic-beta"] == DANGEROUS_TOOL_USE_BETA
+    assert _derived_beta_header(config)["anthropic-beta"] == DANGEROUS_TOOL_USE_BETA
 
 
 @pytest.mark.parametrize("config", _no_classifier_configs(), ids=type)
@@ -175,6 +182,7 @@ def test_routes_without_the_classifier_drop_safeguards_together_with_the_beta(
     stays a 200 without a verdict, which Claude Code's gateway contract treats as "feature off"."""
     assert "safeguards" not in _safeguards_request(config)
     assert "anthropic-beta" not in _beta_header(config, DANGEROUS_TOOL_USE_BETA)
+    assert "anthropic-beta" not in _derived_beta_header(config)
     assert _beta_header(config, f"context-1m-2025-08-07,{DANGEROUS_TOOL_USE_BETA}") == {
         "anthropic-beta": "context-1m-2025-08-07"
     }

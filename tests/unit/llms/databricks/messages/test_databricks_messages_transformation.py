@@ -141,7 +141,6 @@ async def test_safeguards_reach_the_workspace_and_safeguard_results_come_back(
             api_base=DATABRICKS_API_BASE,
             tools=[BASH_TOOL],
             safeguards=AUTO_MODE_SAFEGUARDS,
-            extra_headers={"anthropic-beta": DANGEROUS_TOOL_USE_BETA},
             client=upstream,
         )
     finally:
@@ -151,7 +150,7 @@ async def test_safeguards_reach_the_workspace_and_safeguard_results_come_back(
     sent: Final = received[0]
     sent_body: Final = json.loads(sent.content)
     assert sent.headers["authorization"] == f"Bearer {DATABRICKS_API_KEY}"
-    assert DANGEROUS_TOOL_USE_BETA in sent.headers["anthropic-beta"].split(",")
+    assert sent.headers["anthropic-beta"] == DANGEROUS_TOOL_USE_BETA
     assert sent_body["safeguards"] == AUTO_MODE_SAFEGUARDS
     assert sent_body["model"] == CLAUDE_MODEL
     assert response["safeguard_results"] == SAFEGUARD_RESULTS
@@ -224,7 +223,6 @@ async def test_streaming_message_delta_keeps_safeguard_results(local_beta_header
             api_base=DATABRICKS_API_BASE,
             tools=[BASH_TOOL],
             safeguards=AUTO_MODE_SAFEGUARDS,
-            extra_headers={"anthropic-beta": DANGEROUS_TOOL_USE_BETA},
             stream=True,
             client=upstream,
         )
@@ -233,6 +231,7 @@ async def test_streaming_message_delta_keeps_safeguard_results(local_beta_header
         await upstream.close()
 
     assert [str(request.url) for request in received] == [MESSAGES_URL]
+    assert received[0].headers["anthropic-beta"] == DANGEROUS_TOOL_USE_BETA
     sent_body: Final = json.loads(received[0].content)
     assert sent_body["safeguards"] == AUTO_MODE_SAFEGUARDS
     assert sent_body["stream"] is True

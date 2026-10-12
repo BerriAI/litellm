@@ -738,7 +738,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             custom_llm_provider: Provider name for looking up correct tool search header
             messages: Request messages, scanned for per-message output_config
         """
-        beta_values: Final[set] = set()
+        beta_values: Final[set[str]] = set()
 
         existing_beta: Final = tuple(
             piece.strip()
@@ -787,6 +787,9 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         # Check for fast mode
         if optional_params.get("speed") == "fast":
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.FAST_MODE_2026_02_01.value)
+
+        if optional_params.get("safeguards") is not None:
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
 
         if messages_carry_output_config(messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.PER_TURN_CONTROL_2026_07_01.value)
