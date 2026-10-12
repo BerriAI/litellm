@@ -2,7 +2,7 @@
 
 import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
 import { getSpendBudgetMeterTone } from "@/components/shared/table_cells/spend_budget_cell";
-import { formatBudgetReset } from "@/utils/budgetUtils";
+import { formatBudgetResetUtc } from "@/utils/budgetUtils";
 import { formatNumberWithCommas, getSpendString } from "@/utils/dataUtils";
 
 interface CallerMembership {
@@ -29,7 +29,7 @@ function BudgetLine({ label, spend, maxBudget, resetAt }: BudgetLineProps) {
   const budget = typeof maxBudget === "number" && Number.isFinite(maxBudget) ? maxBudget : null;
   const spendText = spendValue === 0 ? "$0.00" : getSpendString(spendValue, 2);
   const budgetText = budget === null ? "Unlimited" : `$${formatNumberWithCommas(budget, 2)}`;
-  const resetText = label === "Member" ? formatBudgetReset(resetAt) : null;
+  const resetText = label === "Member" ? formatBudgetResetUtc(resetAt) : null;
 
   return (
     <div className="flex flex-col gap-1">
@@ -47,7 +47,7 @@ function BudgetLine({ label, spend, maxBudget, resetAt }: BudgetLineProps) {
           </MeterTrack>
         </Meter>
       )}
-      {resetText && <div className="text-[10px] text-muted-foreground">Resets {resetText}</div>}
+      {resetText && <div className="text-[10px] text-muted-foreground">Resets {resetText} UTC</div>}
     </div>
   );
 }
