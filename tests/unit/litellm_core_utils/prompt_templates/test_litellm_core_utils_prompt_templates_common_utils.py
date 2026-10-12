@@ -23,6 +23,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
     parse_tool_call_arguments,
+    prompt_cache_breakpoint_for_wire,
     responses_reasoning_items_from_thinking_blocks,
     salvage_concatenated_tool_arguments,
     split_concatenated_json_objects,
@@ -2263,3 +2264,49 @@ def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_w
     messages: list[dict[str, object]],
 ) -> None:
     assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
+
+
+_MALFORMED_PROMPT_CACHE_BREAKPOINTS: Final = (
+    "yes",
+    1,
+    ["explicit"],
+    "",
+    {},
+    {"mode": "bogus"},
+    {"mode": "explicit", "ttl": "1h"},
+)
+_MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS: Final = (
+    "string",
+    "int",
+    "list",
+    "empty-string",
+    "empty-object",
+    "bogus-mode",
+    "bad-ttl",
+)
+_VALID_PROMPT_CACHE_BREAKPOINTS: Final = ({"mode": "explicit"}, {"mode": "explicit", "ttl": "30m"})
+
+
+@pytest.mark.parametrize("drop_params", (True, False), ids=("drop", "keep"))
+def test_prompt_cache_breakpoint_for_wire_passes_a_missing_marker_through(drop_params: bool) -> None:
+    assert prompt_cache_breakpoint_for_wire(None, drop_params) is None
+
+
+@pytest.mark.parametrize("marker", _MALFORMED_PROMPT_CACHE_BREAKPOINTS, ids=_MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS)
+def test_prompt_cache_breakpoint_for_wire_drops_a_malformed_marker_under_drop_params(marker: object) -> None:
+    assert prompt_cache_breakpoint_for_wire(marker, True) is None
+
+
+@pytest.mark.parametrize("marker", _MALFORMED_PROMPT_CACHE_BREAKPOINTS, ids=_MALFORMED_PROMPT_CACHE_BREAKPOINT_IDS)
+def test_prompt_cache_breakpoint_for_wire_forwards_a_malformed_marker_without_drop_params(marker: object) -> None:
+    assert prompt_cache_breakpoint_for_wire(marker, False) is marker
+
+
+@pytest.mark.parametrize("drop_params", (True, False), ids=("drop", "keep"))
+@pytest.mark.parametrize("marker", _VALID_PROMPT_CACHE_BREAKPOINTS, ids=("explicit", "explicit-30m"))
+def test_prompt_cache_breakpoint_for_wire_keeps_a_valid_marker(marker: dict[str, str], drop_params: bool) -> None:
+    assert prompt_cache_breakpoint_for_wire(marker, drop_params) == marker
+
+
+def test_prompt_cache_breakpoint_for_wire_strips_an_unknown_key_under_drop_params() -> None:
+    assert prompt_cache_breakpoint_for_wire({"mode": "explicit", "note": "kept"}, True) == {"mode": "explicit"}
