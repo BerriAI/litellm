@@ -10,7 +10,7 @@ from functools import partial
 from itertools import product
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final, TypeVar
+from typing import Final, Protocol, TypeVar, cast
 from urllib.parse import parse_qs
 
 import anthropic
@@ -49,6 +49,11 @@ from tests.integration._support.process import OwnedProxy, graceful_stop_seconds
 from tests.integration._support.wire import Reply, Request, Wire, wire_server
 
 T = TypeVar("T")
+
+
+class _ClientNetworkStream(Protocol):
+    def get_extra_info(self, info: str) -> object | None: ...
+
 
 SOURCES: Final = ("token_file", "secret_reference", "internal_issuer", "keycloak", "environment")
 CLIENTS: Final = ("chat", "messages", "messages_stream")
@@ -771,6 +776,62 @@ def _workers(owned: OwnedProxy) -> tuple[psutil.Process, ...]:
     return tuple(child for child in psutil.Process(owned.process.pid).children() if _is_worker(child))
 
 
+def _worker_pids(owned: OwnedProxy) -> frozenset[int]:
+    return frozenset(child.pid for child in _workers(owned))
+
+
+def _client_address(response: httpx.Response) -> object | None:
+    stream: Final = cast(_ClientNetworkStream | None, response.extensions.get("network_stream"))
+    return stream.get_extra_info("client_addr") if stream is not None else None
+
+
+def _credential_read_on_worker(owned: OwnedProxy, name: str, _: int) -> int | None:
+    try:
+        with httpx.Client(
+            base_url=owned.gateway.client.base_url,
+            timeout=15,
+            trust_env=False,
+            limits=httpx.Limits(max_connections=1),
+        ) as client:
+            before: Final = client.get("/health/integration-readiness")
+            credential: Final = client.get(
+                f"/credentials/by_name/{name}",
+                headers={"Authorization": f"Bearer {owned.gateway.key}"},
+            )
+            after: Final = client.get("/health/integration-readiness")
+            addresses: Final = tuple(_client_address(response) for response in (before, credential, after))
+    except httpx.TransportError:
+        return None
+    before_pid: Final = cast(str | None, before.headers.get("x-integration-worker-pid")) or ""
+    after_pid: Final = cast(str | None, after.headers.get("x-integration-worker-pid")) or ""
+    if (
+        before.status_code != 200
+        or credential.status_code != 200
+        or after.status_code != 200
+        or not before_pid.isdecimal()
+        or not after_pid.isdecimal()
+        or before_pid != after_pid
+        or (
+            any(address is not None for address in addresses)
+            and not all(address == addresses[0] for address in addresses)
+        )
+    ):
+        return None
+    return int(before_pid)
+
+
+def _every_worker_holds(owned: OwnedProxy, name: str) -> bool:
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        samples: Final = tuple(pool.map(partial(_credential_read_on_worker, owned, name), range(16)))
+    holders: Final = frozenset(pid for pid in samples if pid is not None)
+    workers: Final = _worker_pids(owned)
+    return bool(workers) and workers <= holders
+
+
+def _loaded_on_every_worker(owned: OwnedProxy, name: str) -> None:
+    assert eventually(lambda: _every_worker_holds(owned, name), lambda held: held, seconds=70)
+
+
 @pytest.mark.timeout(240)
 def test_worker_kill_mid_credential_burst(gateway: Gateway, tmp_path: Path) -> None:
     directory: Final = tmp_path.resolve()
@@ -1043,6 +1104,7 @@ def test_connection_probe_names_the_missing_id(federation: FederationRig) -> Non
     with federation.owned.gateway.scenario() as scenario:
         misconfigured: Final = _misconfigured(federation, scenario, _MISCONFIGURED["inline_token_without_org"])
         _deployments_visible(federation.owned.gateway, (misconfigured.model,))
+        _loaded_on_every_worker(federation.owned, misconfigured.credential)
         response: Final = federation.owned.gateway.request(
             "POST",
             "/health/test_connection",
