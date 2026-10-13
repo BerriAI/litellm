@@ -4,9 +4,10 @@ Azure AI Anthropic CountTokens API handler.
 Uses httpx for HTTP requests with Azure authentication.
 """
 
-from typing import Any, Final
+from typing import Final
 
 import httpx
+from pydantic import JsonValue
 
 import litellm
 from litellm._logging import verbose_logger
@@ -28,14 +29,14 @@ class AzureAIAnthropicCountTokensHandler(AzureAIAnthropicCountTokensConfig):
     async def handle_count_tokens_request(
         self,
         model: str,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, JsonValue]],
         api_key: str,
         api_base: str,
         litellm_params: dict[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
-        tools: list[dict[str, Any]] | None = None,
+        tools: list[dict[str, JsonValue]] | None = None,
         system: object = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         """
         Handle a CountTokens request using httpx with Azure authentication.
 
