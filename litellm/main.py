@@ -96,6 +96,7 @@ from litellm.litellm_core_utils.health_check_utils import (
 )
 from litellm.litellm_core_utils.hidden_params import HIDDEN_PARAMS_ATTR, get_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.mcp_availability import mcp_gateway_importable
 from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
     mock_image_generation,
@@ -5243,7 +5244,7 @@ def completion(
 
     control_options: Final = _resolve_control_options(kwargs, model)
     skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
-    if not skip_mcp_handler and tools:
+    if not skip_mcp_handler and tools and mcp_gateway_importable():
         from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
         from litellm.responses.mcp.litellm_proxy_mcp_handler import (
             LiteLLM_Proxy_MCP_Handler,
