@@ -3450,6 +3450,51 @@ class TestBatchLineItemsFromThePoller:
         assert row.batch_processed is True
 
     @pytest.mark.asyncio
+    async def test_a_batch_retired_with_nothing_billable_reads_its_input_file_by_the_id_the_provider_reported(
+        self, monkeypatch
+    ):
+        import litellm
+
+        journal: list = []
+        _, instance = self._setup(journal, status="expired", output_file_id=None, error_file_id="file-err-1")
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+
+        async def _persist_managed_ids(*, response, **_):
+            response.input_file_id = "managed-id-of-the-copy-on-another-deployment"
+
+        with (
+            self._provider(journal),
+            patch(
+                "litellm.proxy.openai_files_endpoints.common_utils.ensure_batch_response_managed_file_ids",
+                new=AsyncMock(side_effect=_persist_managed_ids),
+            ),
+        ):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == ["finalize", "read file-err-1", "read file-input-1", "lines"]
+        ((line,),) = [payload["lines"] for payload in logger.payloads]
+        assert line["request"] == json.loads(self._INPUT)
+
+    @pytest.mark.asyncio
+    async def test_a_batch_whose_files_hold_no_readable_line_sends_no_lines(self, monkeypatch):
+        import litellm
+
+        journal: list = []
+        _, instance = self._setup(journal, status="expired", output_file_id=None, error_file_id="file-err-1")
+        logger = self._recording_logger(journal)
+        monkeypatch.setattr(litellm, "batch_line_item_callbacks", (logger,))
+        monkeypatch.setattr(type(self), "_ERROR", b"not json\n")
+
+        with self._provider(journal):
+            await instance.check_batch_cost()
+            await self._stored(instance)
+
+        assert journal == ["finalize", "read file-err-1", "read file-input-1"]
+        assert logger.payloads == []
+
+    @pytest.mark.asyncio
     async def test_a_batch_that_could_not_be_retired_sends_no_lines_until_it_is(self, monkeypatch):
         import litellm
 

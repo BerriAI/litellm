@@ -252,6 +252,37 @@ def test_a_vertex_input_row_without_a_custom_id_pairs_with_nothing():
     assert (line["custom_id"], line["request"]) == (None, None)
 
 
+@pytest.mark.parametrize(
+    "vertex_input",
+    [
+        pytest.param(
+            b"\n".join(
+                _OpenAIToVertexBatchUploadStream(
+                    _jsonl(_request("unknown", "first"), {**_request("vx-1", "second"), "custom_id": None}),
+                    VertexAIFilesConfig()._map_openai_to_vertex_params,
+                ).iter_bytes()
+            ),
+            id="custom-id-unknown-next-to-a-null-one",
+        ),
+        pytest.param(
+            _jsonl(
+                {"request": {"contents": [{"role": "user", "parts": [{"text": "first"}]}], "labels": {"team": "a"}}},
+                {"request": {"contents": [{"role": "user", "parts": [{"text": "second"}]}]}},
+            ),
+            id="native-rows-with-other-labels-next-to-unlabeled-ones",
+        ),
+    ],
+)
+def test_a_vertex_line_read_as_unknown_pairs_with_no_input_row(vertex_input):
+    payload = build_batch_line_items(
+        _source(model="gemini-2.5-flash", custom_llm_provider="vertex_ai", cost_provider="vertex_ai"),
+        vertex_input,
+        (_jsonl(_success("unknown", 3, 1), _success("unknown", 4, 2)),),
+    )
+
+    assert [(line["custom_id"], line["request"]) for line in payload["lines"]] == [("unknown", None)] * 2
+
+
 @pytest.mark.asyncio
 async def test_redaction_drops_only_the_request_and_response():
     payload = _payload()

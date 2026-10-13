@@ -29,7 +29,7 @@ from integration._support.database import read_rows, scratch_database
 from integration._support.forward_proxy import tunnelling_forward_proxy
 from integration._support.process import owned_proxy
 from integration._support.tls import server_context, write_self_signed_cert
-from integration._support.upstream import ScenarioHandle, delete_scenario, register_scenario
+from integration._support.upstream import CONTROL_URL, ScenarioHandle, delete_scenario, register_scenario
 from integration._support.vertex import service_account_json
 from integration._support.wire import Reply, Request, wire_server
 from integration.cost_calculation.cost_tracking_case import JsonResponse, RoutedResponse, TextResponse
@@ -47,6 +47,9 @@ PROMPT_TOKENS: Final = 100
 COMPLETION_TOKENS: Final = 50
 POLLER_SECONDS: Final = 150
 JWT_KEY_ID: Final = "batch-line-items-signing-key"
+TWO_ACCOUNT_MODEL: Final = "line-items-two-accounts"
+FIRST_ACCOUNT: Final = f"batch-line-items-first-account-{uuid.uuid4().hex[:12]}"
+SECOND_ACCOUNT: Final = f"batch-line-items-second-account-{uuid.uuid4().hex[:12]}"
 
 
 @dataclass(slots=True)
@@ -153,6 +156,23 @@ def _config(directory: Path, s3_url: str, line_item_callbacks: JsonValue) -> Pat
     shipped: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     configuration: Final = {
         **shipped,
+        "model_list": [
+            *shipped["model_list"],
+            *(
+                {
+                    "model_name": TWO_ACCOUNT_MODEL,
+                    "litellm_params": {
+                        "model": "openai/gpt-4o-mini",
+                        "api_key": "sk-scripted-provider",
+                        "api_base": f"{CONTROL_URL}/{account}",
+                        "input_cost_per_token": 0.001,
+                        "output_cost_per_token": 0.002,
+                        "weight": weight,
+                    },
+                }
+                for account, weight in ((FIRST_ACCOUNT, 0), (SECOND_ACCOUNT, 1))
+            ),
+        ],
         "general_settings": {
             **shipped["general_settings"],
             "enable_jwt_auth": True,
@@ -371,7 +391,11 @@ def _submit(
     rig: Rig, lines: Lines, key_fields: Mapping[str, JsonValue], *, finished: bool = True, token: str | None = None
 ) -> SubmittedBatch:
     handle: Final = register_scenario(f"batch-line-items-{uuid.uuid4().hex}", _routes(lines, finished=finished))
-    model: Final = string_value(
+    return _create_batch(rig, lines, key_fields, _add_model(rig, handle), handle, token)
+
+
+def _add_model(rig: Rig, handle: ScenarioHandle) -> str:
+    return string_value(
         rig.gateway.post(
             "/model/new",
             {
@@ -386,6 +410,11 @@ def _submit(
             },
         )["model_name"]
     )
+
+
+def _create_batch(
+    rig: Rig, lines: Lines, key_fields: Mapping[str, JsonValue], model: str, handle: ScenarioHandle, token: str | None
+) -> SubmittedBatch:
     key: Final = (
         token
         if token is not None
@@ -613,6 +642,32 @@ def test_a_batch_where_every_line_failed_still_writes_its_error_lines(rig: Rig) 
     assert records["bad-a"]["request"] == lines.inputs[0]
     assert records["bad-b"]["response"] == lines.errors[1]
     assert all(record["response_cost"] == 0 for record in records.values())
+
+
+def test_a_failed_batch_on_the_second_deployment_of_its_model_group_keeps_each_lines_request(rig: Rig) -> None:
+    lines: Final = Lines(
+        inputs=(_input_line("second-a", "first"), _input_line("second-b", "second")),
+        outputs=(),
+        errors=(_error_line("second-a"), _error_line("second-b")),
+    )
+    first: Final = register_scenario(FIRST_ACCOUNT, _routes(lines))
+    second: Final = register_scenario(SECOND_ACCOUNT, _routes(lines))
+    try:
+        batch: Final = _create_batch(rig, lines, {}, TWO_ACCOUNT_MODEL, second, None)
+        records: Final = _by_custom_id(_written(rig.s3, _object_name(f"{S3_PREFIX}/", batch.batch_id)))
+    finally:
+        delete_scenario(first)
+        delete_scenario(second)
+
+    assert read_rows(
+        'SELECT model_object_id FROM "LiteLLM_ManagedObjectTable" WHERE unified_object_id = %s',
+        (batch.batch_id,),
+        database_url=rig.database_url,
+    ) == [{"model_object_id": f"batch-{SECOND_ACCOUNT}"}]
+    assert {custom_id: record["request"] for custom_id, record in records.items()} == {
+        "second-a": lines.inputs[0],
+        "second-b": lines.inputs[1],
+    }
 
 
 def test_a_failing_bucket_still_bills_the_batch_and_the_other_sink_keeps_its_lines(rig: Rig) -> None:

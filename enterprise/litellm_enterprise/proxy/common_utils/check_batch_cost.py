@@ -971,6 +971,16 @@ class CheckBatchCost:
 
         return model_name, str(llm_provider) if llm_provider else None, content_bytes
 
+    async def _retire_unbilled_terminal_job(
+        self, job: "_ManagedObjectRow", response: "LiteLLMBatch", model_id: str, batch_id: str
+    ) -> None:
+        """Persist a terminal batch that has nothing billable, then store its lines, reading its input file by the id
+        the provider reported rather than the managed id that was persisted."""
+        provider_input_file_id: Final = response.input_file_id
+        if await self._finalize_unbilled_terminal_job(job, response):
+            response.input_file_id = provider_input_file_id
+            self._store_batch_line_items_in_background(job, response, model_id, batch_id, b"")
+
     def _store_batch_line_items_in_background(
         self,
         job: "_ManagedObjectRow",
@@ -1071,6 +1081,8 @@ class CheckBatchCost:
             payload: Final = await asyncio.to_thread(
                 build_batch_line_items, source, input_content, (output_content, error_content)
             )
+            if not payload["lines"]:
+                return
             await dispatch_batch_line_items(payload, redact_bodies=redact_bodies)
             verbose_proxy_logger.info(
                 f"CheckBatchCost: handed the {len(payload['lines'])} line items of batch {batch_id} "
@@ -1258,8 +1270,7 @@ class CheckBatchCost:
                             f"CheckBatchCost: output file {response.output_file_id} of batch {batch_id} "
                             f"does not exist at the provider; retiring job {job.id} unbilled"
                         )
-                        if await self._finalize_unbilled_terminal_job(job, response):
-                            self._store_batch_line_items_in_background(job, response, model_id, batch_id, b"")
+                        await self._retire_unbilled_terminal_job(job, response, model_id, batch_id)
                         continue
                     verbose_proxy_logger.error(
                         f"CheckBatchCost: failed to track cost for batch {batch_id} "
@@ -1309,8 +1320,7 @@ class CheckBatchCost:
                         f"has not appeared yet; leaving job {job.id} for the next poll cycle"
                     )
                     continue
-                if await self._finalize_unbilled_terminal_job(job, response):
-                    self._store_batch_line_items_in_background(job, response, model_id, batch_id, b"")
+                await self._retire_unbilled_terminal_job(job, response, model_id, batch_id)
 
         # Record polling run metrics (always, even if nothing was processed)
         if prom_logger:

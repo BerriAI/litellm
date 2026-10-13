@@ -23,6 +23,8 @@ from litellm.types.utils import (
 
 BatchFileProvider: TypeAlias = Literal["openai", "azure", "vertex_ai", "hosted_vllm", "anthropic", "mistral"]
 
+_VERTEX_AI_UNKNOWN_CUSTOM_ID: Final = "unknown"  # what a Vertex AI batch row that carries no custom_id is read as
+
 
 @dataclass(frozen=True, slots=True)
 class BatchLineItemSource:
@@ -92,7 +94,7 @@ def _line_item(
         batch_id=source.batch_id,
         custom_id=custom_id,
         status="success" if succeeded else "failure",
-        request=requests.get(custom_id) if custom_id is not None else None,
+        request=_request_for(source, requests, custom_id),
         response=entry,
         usage=StandardBatchLineItemUsage(
             prompt_tokens=priced.usage.prompt_tokens,
@@ -106,6 +108,15 @@ def _line_item(
         custom_llm_provider=source.custom_llm_provider,
         metadata=source.metadata,
     )
+
+
+def _request_for(
+    source: BatchLineItemSource, requests: Mapping[str | None, Mapping[str, object]], custom_id: str | None
+) -> Mapping[str, object] | None:
+    """The input line that shares a result line's custom_id. A Vertex AI line read as "unknown" pairs with none."""
+    if custom_id is None or (source.cost_provider == "vertex_ai" and custom_id == _VERTEX_AI_UNKNOWN_CUSTOM_ID):
+        return None
+    return requests.get(custom_id)
 
 
 def without_request_and_response(payload: StandardBatchLineItemsPayload) -> StandardBatchLineItemsPayload:
