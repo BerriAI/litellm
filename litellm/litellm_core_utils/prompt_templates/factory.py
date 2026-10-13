@@ -3897,6 +3897,11 @@ def _parse_bedrock_tool_result_content_list(
             _append_bedrock_tool_result_image_url_block(tool_result_content_blocks, content)
         elif content["type"] == "file":
             _append_bedrock_tool_result_file_block(tool_result_content_blocks, content)
+        elif content["type"] == "tool_reference":
+            content_map = cast(dict[str, object], content)  # cast-ok: untyped anthropic json
+            tool_name = content_map.get("tool_name")
+            if isinstance(tool_name, str):
+                tool_result_content_blocks.append(BedrockToolResultContentBlock(text=tool_name))
     return tool_result_content_blocks
 
 
@@ -5088,7 +5093,7 @@ def make_valid_bedrock_tool_name(input_tool_name: str) -> str:
 def add_cache_point_tool_block(tool: dict, model: str | None = None) -> BedrockToolBlock | None:
     from litellm.llms.bedrock.common_utils import (
         bedrock_model_accepts_cache_points,
-        is_claude_4_5_on_bedrock,
+        supports_bedrock_prompt_cache_ttl,
     )
 
     cache_control: Final = tool.get("cache_control", None)
@@ -5098,7 +5103,7 @@ def add_cache_point_tool_block(tool: dict, model: str | None = None) -> BedrockT
             cache_point_block: Final[CachePointBlock] = {"type": "default"}
             if isinstance(cache_control, dict) and "ttl" in cache_control:
                 ttl: Final = cache_control["ttl"]
-                if ttl in ["5m", "1h"] and model is not None and is_claude_4_5_on_bedrock(model):
+                if ttl in ["5m", "1h"] and model is not None and supports_bedrock_prompt_cache_ttl(model):
                     cache_point_block["ttl"] = ttl
             return {"cachePoint": cache_point_block}
     return None

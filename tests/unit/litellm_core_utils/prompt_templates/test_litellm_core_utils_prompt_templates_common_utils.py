@@ -12,6 +12,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_BOUNDARY,
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     add_system_prompt_to_messages,
+    cache_control_as_prompt_cache_breakpoint,
     encrypted_content_from_signature,
     encrypted_reasoning_signature,
     get_file_ids_from_messages,
@@ -2263,3 +2264,19 @@ def test_get_semantic_cache_prompt_from_messages_matches_get_str_from_messages_w
     messages: list[dict[str, object]],
 ) -> None:
     assert get_semantic_cache_prompt_from_messages(messages) == get_str_from_messages(messages)
+
+
+def test_cache_control_is_replaced_by_an_explicit_prompt_cache_breakpoint_on_the_same_block() -> None:
+    marked: Final = {"type": "text", "text": "rules", "cache_control": {"type": "ephemeral", "ttl": "1h"}}
+
+    assert cache_control_as_prompt_cache_breakpoint(marked) == {
+        "type": "text",
+        "text": "rules",
+        "prompt_cache_breakpoint": {"mode": "explicit"},
+    }
+
+
+def test_a_block_without_cache_control_is_returned_untouched() -> None:
+    unmarked: Final = {"type": "text", "text": "rules"}
+
+    assert cache_control_as_prompt_cache_breakpoint(unmarked) is unmarked

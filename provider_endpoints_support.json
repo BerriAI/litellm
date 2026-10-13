@@ -672,6 +672,24 @@
         "interactions": true
       }
     },
+    "coralbricks": {
+      "display_name": "CoralBricks (`coralbricks`)",
+      "url": "https://docs.litellm.ai/docs/providers/coralbricks",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": true,
+        "responses": true,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "cortecs": {
       "display_name": "Cortecs (`cortecs`)",
       "url": "https://docs.litellm.ai/docs/providers/cortecs",
@@ -1096,7 +1114,8 @@
         "batches": false,
         "rerank": true,
         "a2a": true,
-        "interactions": true
+        "interactions": true,
+        "systemone": true
       }
     },
     "firecrawl": {
@@ -1388,7 +1407,8 @@
         "rerank": true,
         "a2a": true,
         "interactions": true,
-        "video_generations": true
+        "video_generations": true,
+        "systemone": true
       }
     },
     "huggingface": {
@@ -2366,6 +2386,24 @@
         "search": true
       }
     },
+    "scaledown": {
+      "display_name": "ScaleDown (`scaledown`)",
+      "url": "https://docs.litellm.ai/docs/providers/scaledown",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
+      }
+    },
     "sambanova": {
       "display_name": "Sambanova (`sambanova`)",
       "url": "https://docs.litellm.ai/docs/providers/sambanova",
@@ -2729,7 +2767,7 @@
       }
     },
     "voyage": {
-      "display_name": "Voyage AI (`voyage`)",
+      "display_name": "VoyageAI by MongoDB (`voyage`)",
       "url": "https://docs.litellm.ai/docs/providers/voyage",
       "endpoints": {
         "chat_completions": false,
@@ -2886,6 +2924,24 @@
         "rerank": false,
         "a2a": true,
         "interactions": true
+      }
+    },
+    "microsoft_365_copilot": {
+      "display_name": "Microsoft 365 Copilot (`microsoft_365_copilot`)",
+      "url": "https://docs.litellm.ai/docs/providers/microsoft_365_copilot",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false,
+        "interactions": false
       }
     },
     "langflow": {

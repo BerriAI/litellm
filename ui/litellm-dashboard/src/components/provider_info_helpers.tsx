@@ -33,6 +33,7 @@ import jinaLogo from "../../public/assets/logos/jina.png";
 import lambdaLogo from "../../public/assets/logos/lambda.svg";
 import lmstudioLogo from "../../public/assets/logos/lmstudio.svg";
 import metaLlamaLogo from "../../public/assets/logos/meta_llama.svg";
+import microsoft365CopilotLogo from "../../public/assets/logos/microsoft_365_copilot.svg";
 import microsoftAzureLogo from "../../public/assets/logos/microsoft_azure.svg";
 import minimaxLogo from "../../public/assets/logos/minimax.svg";
 import mistralLogo from "../../public/assets/logos/mistral.svg";
@@ -99,6 +100,7 @@ export enum Providers {
   COHERE_CHAT = "Cohere Chat",
   COMETAPI = "Cometapi",
   COMPACTIFAI = "Compactifai",
+  CORALBRICKS = "CoralBricks",
   CORTI = "Corti",
   Cursor = "Cursor",
   Dashscope = "Dashscope",
@@ -134,6 +136,7 @@ export enum Providers {
   LM_STUDIO = "Lm Studio",
   LLAMA = "Meta Llama",
   MARITALK = "Maritalk",
+  MICROSOFT_365_COPILOT = "Microsoft 365 Copilot",
   MiniMax = "MiniMax",
   MistralAI = "Mistral AI",
   MOONSHOT = "Moonshot",
@@ -184,7 +187,7 @@ export enum Providers {
   VERTEX_AI_BETA = "Vertex Ai Beta",
   VLLM = "Local vLLM",
   VolcEngine = "VolcEngine",
-  Voyage = "Voyage AI",
+  Voyage = "VoyageAI by MongoDB",
   WANDB = "Wandb",
   WATSONX = "Watsonx",
   WATSONX_TEXT = "Watsonx Text",
@@ -221,6 +224,7 @@ export const provider_map: Record<string, string> = {
   COHERE_CHAT: "cohere_chat",
   COMETAPI: "cometapi",
   COMPACTIFAI: "compactifai",
+  CORALBRICKS: "coralbricks",
   CORTI: "corti",
   Cursor: "cursor",
   Dashscope: "dashscope",
@@ -255,6 +259,7 @@ export const provider_map: Record<string, string> = {
   LLAMAFILE: "llamafile",
   LLAMA: "meta_llama",
   LM_STUDIO: "lm_studio",
+  MICROSOFT_365_COPILOT: "microsoft_365_copilot",
   MARITALK: "maritalk",
   MiniMax: "minimax",
   MistralAI: "mistral",
@@ -318,6 +323,9 @@ export const provider_map: Record<string, string> = {
 
 const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
 
+export const resolveLitellmProviderSlug = (provider: string): string =>
+  provider_map[provider] ?? provider.toLowerCase();
+
 export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.A2A_Agent]: a2aAgentLogo.src,
   [Providers.AI21]: ai21Logo.src,
@@ -368,6 +376,7 @@ export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.LM_STUDIO]: lmstudioLogo.src,
   [Providers.LLAMA]: metaLlamaLogo.src,
   [Providers.MiniMax]: minimaxLogo.src,
+  [Providers.MICROSOFT_365_COPILOT]: microsoft365CopilotLogo.src,
   [Providers.MistralAI]: mistralLogo.src,
   [Providers.MOONSHOT]: moonshotLogo.src,
   [Providers.MORPH]: morphLogo.src,
@@ -456,6 +465,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.Bedrock]: "claude-3-opus",
   [Providers.CHATGPT]: "chatgpt/gpt-5.4",
   [Providers.Cognition]: "cognition/swe-1.7",
+  [Providers.CORALBRICKS]: "coralbricks/glm-5.3-fast",
   [Providers.CORTI]: "corti/corti-s1",
   [Providers.Cursor]: "cursor/claude-4-sonnet",
   [Providers.DeepInfra]: "deepinfra/<any-model-on-deepinfra>",
@@ -463,6 +473,7 @@ const providerPlaceholderMap: Partial<Record<Providers, string>> = {
   [Providers.FalAI]: "fal_ai/fal-ai/flux-pro/v1.1-ultra",
   [Providers.Google_AI_Studio]: "gemini-pro",
   [Providers.JinaAI]: "jina_ai/",
+  [Providers.MICROSOFT_365_COPILOT]: "microsoft_365_copilot/chat",
   [Providers.NVIDIA_RIVA]: "nvidia_riva/nvidia/parakeet-ctc-1_1b-asr",
   [Providers.Oracle]: "oci/xai.grok-4",
   [Providers.RunwayML]: "runwayml/gen4_turbo",
@@ -487,7 +498,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
 
 export const getProviderModels = (provider: string, modelMap: any): Array<string> => {
   let providerKey = provider;
-  let custom_llm_provider = provider_map[providerKey];
+  let custom_llm_provider = providerKey ? resolveLitellmProviderSlug(providerKey) : undefined;
 
   let providerModels: Array<string> = [];
 

@@ -98,7 +98,25 @@ def configured_injection_points(value: object) -> Sequence[CacheControlInjection
     return tuple(cast(CacheControlInjectionPoint, entry) for entry in value if isinstance(entry, dict))
 
 
-def supports_openai_prompt_cache_breakpoint(model: str) -> bool:
+def _served_provider_for_model(model: str) -> str | None:
+    from litellm.exceptions import BadRequestError
+    from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+    try:
+        _, provider, _, _ = get_llm_provider(model=model)
+    except BadRequestError:
+        return None
+    return provider
+
+
+def supports_openai_prompt_cache_breakpoint(model: str, custom_llm_provider: str | None = None) -> bool:
+    hosted_flag: Final = (
+        None
+        if custom_llm_provider is None
+        else _hosted_openai_dialect_flag(model, custom_llm_provider, _served_provider_for_model)
+    )
+    if hosted_flag is not None:
+        return hosted_flag
     model_map_flag: Final = _model_map_prompt_cache_breakpoint_flag(model)
     if model_map_flag is not None:
         return model_map_flag
@@ -308,7 +326,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         openai_dialect: Final = (
             stamped_dialect
             if isinstance(stamped_dialect, bool)
-            else AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+            else AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
                 model,
                 non_default_params.get("custom_llm_provider"),
                 non_default_params.get("api_base") or non_default_params.get("base_url"),
@@ -366,7 +384,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return model, processed_messages, non_default_params
 
     @staticmethod
-    def _targets_openai_prompt_cache_breakpoint(
+    def targets_openai_prompt_cache_breakpoint(
         model: str | None,
         custom_llm_provider: str | None,
         api_base: object = None,
@@ -387,14 +405,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def _resolve_provider(model: str) -> str | None:
-        from litellm.exceptions import BadRequestError
-        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
-
-        try:
-            _, provider, _, _ = get_llm_provider(model=model)
-        except BadRequestError:
-            return None
-        return provider
+        return _served_provider_for_model(model)
 
     @staticmethod
     def count_request_cache_breakpoints(messages: Iterable[object], system: object = None) -> int:
@@ -775,7 +786,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return AnthropicCacheControlHook._stamped(
             points,
             "_litellm_openai_dialect",
-            AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+            AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
                 model, custom_llm_provider, api_base, prompt_cache_options
             ),
         )
@@ -1092,7 +1103,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         if not injection_points:
             return messages, system
 
-        openai_dialect: Final = AnthropicCacheControlHook._targets_openai_prompt_cache_breakpoint(
+        openai_dialect: Final = AnthropicCacheControlHook.targets_openai_prompt_cache_breakpoint(
             model, custom_llm_provider, api_base, kwargs.get("prompt_cache_options")
         )
         breakpoints_before: Final = AnthropicCacheControlHook.count_request_cache_breakpoints(messages, system)
