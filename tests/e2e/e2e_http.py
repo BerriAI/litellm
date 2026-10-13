@@ -496,6 +496,28 @@ def get_external[R: BaseModel](
     return classify(resp, response_type)
 
 
+def post_external[R: BaseModel](
+    url: str,
+    *,
+    json: BaseModel,
+    response_type: type[R],
+    headers: BaseModel | None = None,
+    timeout: float = 30.0,
+) -> Result[R]:
+    """POST JSON to an absolute URL outside the proxy (e.g. a mock server's control
+    route), classified the same way as every other call."""
+    try:
+        resp = requests.post(
+            url,
+            headers={"Accept": "application/json", **(_headers(headers) if headers is not None else {})},
+            json=wire_body(json),
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        return NetworkError(message=str(exc))
+    return classify(resp, response_type)
+
+
 def post_form_external[R: BaseModel](
     url: str,
     *,

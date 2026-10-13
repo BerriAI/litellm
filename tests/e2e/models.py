@@ -1591,6 +1591,9 @@ class TeamNewBody(BaseModel):
     organization_id: str | None = None
     metadata: TeamMetadata | None = None
     model_aliases: dict[str, str] | None = None
+    max_budget: float | None = None
+    rpm_limit: int | None = None
+    tpm_limit: int | None = None
 
 
 class TeamNewResponse(BaseModel):

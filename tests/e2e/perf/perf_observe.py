@@ -1,0 +1,249 @@
+"""Turns what a run left behind (the client records, what each mock received, the guardrail's
+calls, the workers' memory) into the case's metrics, and the case's limits into a verdict."""
+
+from __future__ import annotations
+
+import statistics
+from collections import Counter
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from typing import Final
+
+from e2e_http import NoBody, get_external, post_external, unwrap
+from memory_readings import RssCapture, RssReading, WorkerKey
+from perf_case import Limit, Metric, PerformanceTestCase
+from perf_wire import WireRecord
+from pydantic import BaseModel
+
+
+class MockRequestSeen(BaseModel):
+    marker: str | None
+    model: str
+    route: str
+    stream: bool
+    attempt: int
+    failed: bool
+    status: int
+    delay_s: float
+    prompt_text: str
+    received_at: float
+
+
+class MockRequestsSeen(BaseModel):
+    requests: list[MockRequestSeen]
+
+
+class GuardrailCallSeen(BaseModel):
+    marker: str | None
+    input_type: str
+    action: str
+    model: str | None
+    team_id: str | None
+    key_alias: str | None
+    user_id: str | None
+    litellm_call_id: str | None
+    received_at: float
+
+
+class GuardrailCallsSeen(BaseModel):
+    calls: list[GuardrailCallSeen]
+
+
+class Cleared(BaseModel):
+    cleared: int
+
+
+def read_mock_requests(url: str) -> list[MockRequestSeen]:
+    return unwrap(get_external(f"{url}/mock/requests", response_type=MockRequestsSeen, timeout=60.0)).requests
+
+
+def read_guardrail_calls(url: str) -> list[GuardrailCallSeen]:
+    return unwrap(get_external(f"{url}/mock/calls", response_type=GuardrailCallsSeen, timeout=60.0)).calls
+
+
+def reset_mock(url: str) -> int:
+    return unwrap(post_external(f"{url}/mock/reset", json=NoBody(), response_type=Cleared)).cleared
+
+
+def percentile(values: Iterable[float], p: int) -> float | None:
+    ordered: Final = sorted(values)
+    if not ordered:
+        return None
+    index: Final = min(len(ordered) - 1, max(0, round(p / 100 * (len(ordered) - 1))))
+    return ordered[index]
+
+
+def worst_worker_growth_mb(before: RssCapture, after: RssCapture) -> float | None:
+    """Worst RSS growth across workers. A worker missing from `before` (a pod replaced during the
+    run) is measured against the median of the old workers."""
+    old: Final[dict[WorkerKey, RssReading]] = {reading.worker: reading for reading in before.readings}
+    if not old or not after.readings:
+        return None
+    median_before: Final = statistics.median(reading.ram_usage_mb for reading in old.values())
+    growth: list[float] = []
+    for reading in after.readings:
+        baseline = old[reading.worker].ram_usage_mb if reading.worker in old else median_before
+        growth.append(reading.ram_usage_mb - baseline)
+    return max(growth)
+
+
+@dataclass(frozen=True, slots=True)
+class Observation:
+    records: tuple[WireRecord, ...]
+    mock_requests: tuple[MockRequestSeen, ...]
+    guardrail_calls: tuple[GuardrailCallSeen, ...]
+    rss_before: RssCapture
+    rss_after: RssCapture
+    wall_seconds: float
+    extra: Mapping[Metric, float] = field(default_factory=lambda: dict[Metric, float]())
+
+    @property
+    def retried_markers(self) -> frozenset[str]:
+        counts: Final = Counter(seen.marker for seen in self.mock_requests if seen.marker is not None)
+        return frozenset(marker for marker, count in counts.items() if count > 1)
+
+    @property
+    def served(self) -> tuple[WireRecord, ...]:
+        return tuple(record for record in self.records if record.ok and not record.blocked)
+
+    @property
+    def _delay_by_marker(self) -> dict[str, float]:
+        return {seen.marker: seen.delay_s for seen in self.mock_requests if seen.marker is not None and not seen.failed}
+
+    def _clean(self, *, stream: bool) -> list[tuple[WireRecord, float]]:
+        """Served requests of one kind that were answered on the first attempt, with the mock's delay."""
+        delays: Final = self._delay_by_marker
+        pairs: list[tuple[WireRecord, float]] = []
+        for record in self.served:
+            delay = record.mock_delay_s if record.mock_delay_s is not None else delays.get(record.marker)
+            if record.stream == stream and delay is not None and record.marker not in self.retried_markers:
+                pairs.append((record, delay))
+        return pairs
+
+    def added_latencies(self) -> list[float]:
+        return [record.total_s - delay for record, delay in self._clean(stream=False)]
+
+    def header_added(self) -> list[float]:
+        return [record.header_s - delay for record, delay in self._clean(stream=False)]
+
+    def ttft_added(self) -> list[float]:
+        return [
+            record.first_token_s - delay
+            for record, delay in self._clean(stream=True)
+            if record.first_token_s is not None
+        ]
+
+    def guardrail_missed(self) -> int:
+        """Served requests that did not get exactly one pre-call and one post-call guardrail call."""
+        pre: Final = Counter(call.marker for call in self.guardrail_calls if call.input_type == "request")
+        post: Final = Counter(call.marker for call in self.guardrail_calls if call.input_type == "response")
+        return sum(1 for record in self.served if pre[record.marker] != 1 or post[record.marker] != 1)
+
+
+def observe(metric: Metric, percentile_rank: int | None, observation: Observation) -> float | None:
+    """The observed value of one metric, at a percentile when the metric is per request."""
+    per_request: dict[str, list[float]] = {
+        "added_latency_s": observation.added_latencies(),
+        "header_added_s": observation.header_added(),
+        "ttft_added_s": observation.ttft_added(),
+    }
+    if metric in per_request:
+        return percentile(per_request[metric], 50 if percentile_rank is None else percentile_rank)
+    records: Final = observation.records
+    if metric == "client_5xx":
+        return float(sum(1 for record in records if record.status >= 500 or record.status == 0))
+    if metric == "incorrect_responses":
+        return float(sum(1 for record in records if not record.ok))
+    if metric == "guardrail_calls_per_request":
+        return len(observation.guardrail_calls) / len(records) if records else None
+    if metric == "guardrail_missed":
+        return float(observation.guardrail_missed()) if observation.guardrail_calls else None
+    if metric == "retried_share":
+        return len(observation.retried_markers) / len(records) if records else None
+    if metric == "rss_growth_mb":
+        return worst_worker_growth_mb(observation.rss_before, observation.rss_after)
+    if metric == "wall_seconds":
+        return observation.wall_seconds
+    return observation.extra.get(metric)
+
+
+@dataclass(frozen=True, slots=True)
+class Row:
+    label: str
+    observed: float | None
+    limit: float | None
+
+    @property
+    def over(self) -> bool:
+        return self.limit is not None and self.observed is not None and self.observed > self.limit
+
+    @property
+    def missing(self) -> bool:
+        return self.limit is not None and self.observed is None
+
+
+REPORTED: Final[tuple[tuple[Metric, int | None], ...]] = (
+    ("added_latency_s", 50),
+    ("added_latency_s", 95),
+    ("added_latency_s", 99),
+    ("header_added_s", 95),
+    ("ttft_added_s", 50),
+    ("ttft_added_s", 95),
+    ("client_5xx", None),
+    ("incorrect_responses", None),
+    ("guardrail_calls_per_request", None),
+    ("guardrail_missed", None),
+    ("retried_share", None),
+    ("rss_growth_mb", None),
+    ("wall_seconds", None),
+    ("spend_logged_share", None),
+)
+
+
+def evaluate(case: PerformanceTestCase, observation: Observation) -> tuple[list[Row], list[str]]:
+    """Every reported metric with its observed value and the case's limit if it has one, plus the
+    problems: a limit exceeded, or a limited metric the run could not observe."""
+    limits: Final[dict[tuple[Metric, int | None], Limit]] = {
+        (limit.metric, limit.percentile): limit for limit in case.limits
+    }
+    keys: list[tuple[Metric, int | None]] = list(REPORTED)
+    keys.extend(key for key in limits if key not in keys)
+    rows: list[Row] = []
+    for metric, rank in keys:
+        limit = limits.get((metric, rank))
+        label = f"{metric} p{rank}" if rank is not None else metric
+        rows.append(Row(label=label, observed=observe(metric, rank, observation), limit=limit.max if limit else None))
+    problems: Final = [
+        f"{row.label}: observed {row.observed:.4f} > limit {row.limit:.4f}"
+        if row.over and row.observed is not None and row.limit is not None
+        else f"{row.label}: limit set but nothing observed"
+        for row in rows
+        if row.over or row.missing
+    ]
+    return rows, problems
+
+
+def render(case: PerformanceTestCase, observation: Observation, rows: list[Row]) -> str:
+    by_endpoint: Final = Counter((record.endpoint, record.stream) for record in observation.records)
+    failures: Final = [record for record in observation.records if not record.ok][:10]
+    lines: list[str] = [
+        f"perf case {case.name}: {len(observation.records)} requests, {len(observation.served)} served, "
+        f"{sum(1 for r in observation.records if r.blocked and r.ok)} blocked as planned, "
+        f"{sum(1 for r in observation.records if not r.ok)} wrong, wall {observation.wall_seconds:.1f}s",
+        "  "
+        + ", ".join(
+            f"{endpoint}{' stream' if stream else ''}={count}"
+            for (endpoint, stream), count in sorted(by_endpoint.items())
+        ),
+        f"  {'metric':32} {'observed':>12} {'limit':>12}",
+    ]
+    for row in rows:
+        observed = "n/a" if row.observed is None else f"{row.observed:.4f}"
+        limit = "" if row.limit is None else f"{row.limit:.4f}"
+        flag = "  OVER" if row.over else "  MISSING" if row.missing else ""
+        lines.append(f"  {row.label:32} {observed:>12} {limit:>12}{flag}")
+    for record in failures:
+        lines.append(
+            f"  wrong: seq {record.seq} {record.caller} {record.endpoint}{' stream' if record.stream else ''} status {record.status}: {record.error}"
+        )
+    return "\n".join(lines)
