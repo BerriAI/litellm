@@ -55,6 +55,7 @@ from litellm.types.videos.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 class VolcEngineVideoError(BaseLLMException):
@@ -350,7 +351,7 @@ def _image_url(image: object) -> str:
     return f"data:{content_type};base64,{encoded}"
 
 
-def _content_items(prompt: str, params: Mapping[str, object]) -> tuple[dict[str, object], ...]:
+def _content_items(prompt: str, params: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     """
     Build Ark's typed ``content`` array.
 
@@ -488,7 +489,7 @@ def _video_object_from_task(task: _Task) -> VideoObject:
     status: Final = _STATUS_MAP.get(task.status.strip().lower(), "failed")
     usage: Final = _video_usage(task)
     seconds: Final = usage.get("duration_seconds")
-    error: Final[dict[str, object] | None] = (
+    error: Final[dict[str, object] | None] = (  # mutable-ok: VideoObject.error is a dict field
         {key: value for key, value in (("code", task.error.code), ("message", task.error.message)) if value is not None}
         if task.error is not None
         else None
@@ -499,11 +500,11 @@ def _video_object_from_task(task: _Task) -> VideoObject:
         status=status,
         created_at=_coerce_timestamp(task.created_at),
         completed_at=_coerce_timestamp(task.updated_at) if status in _TERMINAL_STATUSES else None,
-        error=error,  # mutable-ok: VideoObject.error is a dict field
+        error=error,
         seconds=str(seconds) if seconds is not None else None,
         size=_size_from_task(task),
         model=task.model,
-        usage=dict(usage) if usage else None,  # mutable-ok: VideoObject.usage is a dict field
+        usage=dict(usage) if usage else None,
     )
 
 
@@ -564,7 +565,7 @@ def _requested_usage(request_data: Mapping[str, object] | None, model: str | Non
     )
 
 
-def _encoded_task_dump(task: _Task, custom_llm_provider: str | None) -> dict[str, object]:
+def _encoded_task_dump(task: _Task, custom_llm_provider: str | None) -> Mapping[str, object]:
     video_obj: Final = _video_object_from_task(task)
     if custom_llm_provider and video_obj.id:
         video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, video_obj.model)
@@ -663,7 +664,7 @@ def _source_video_url(video_id: str, extra_body: Mapping[str, object] | None) ->
     )
 
 
-def _source_video_content_item(video_url: str) -> dict[str, object]:
+def _source_video_content_item(video_url: str) -> Mapping[str, object]:
     return {"type": "video_url", "video_url": {"url": video_url}, "role": "reference_video"}
 
 
@@ -678,7 +679,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
     """
 
     def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseVideoConfig contract returns list
-        return [  # mutable-ok: BaseVideoConfig contract returns list
+        return [
             "model",
             "prompt",
             "input_reference",
@@ -823,7 +824,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         video_obj: Final = VideoObject(id=task.id, object="video", status="queued", model=model)
         requested_usage: Final = _requested_usage(request_data, model)
         if requested_usage:
-            video_obj.usage = dict(requested_usage)  # mutable-ok: VideoObject.usage is a dict field
+            video_obj.usage = dict(requested_usage)
             requested_seconds: Final = requested_usage.get("duration_seconds")
             video_obj.seconds = str(requested_seconds) if requested_seconds is not None else None
         size: Final = _size_from_geometry(
@@ -856,6 +857,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         raw_response: httpx.Response,
         logging_obj: "Logging",
         custom_llm_provider: str | None = None,
+        client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         task: Final = _parse_task(raw_response)
         video_obj: Final = _video_object_from_task(task)
@@ -933,7 +935,7 @@ class VolcEngineVideoConfig(BaseVideoConfig):
         video_file: object | None = None,
         extra_body: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
         prefetched_source_data: dict[str, object] | None = None,  # mutable-ok: BaseVideoConfig contract
-    ) -> tuple[str, Mapping[str, object], RequestFiles | None]:  # mutable-ok: BaseVideoConfig contract
+    ) -> tuple[str, Mapping[str, object], RequestFiles | None]:
         """
         Build Ark's video editing task.
 
