@@ -308,12 +308,14 @@ class ProxyInitializationHelpers:
 
         import litellm
         from litellm._logging import _get_uvicorn_json_log_config, resolve_log_level
+        from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
 
         uvicorn_args: Final = {
             "app": "litellm.proxy.proxy_server:app",
             "host": host,
             "port": port,
             "server_header": False,
+            "timeout_graceful_shutdown": GracefulShutdownManager.get_timeout(),
         }
         if log_config is not None:
             print(f"Using log_config: {log_config}")
@@ -551,6 +553,12 @@ class ProxyInitializationHelpers:
         """
         Run litellm with `gunicorn`
         """
+        import math
+
+        from litellm.constants import GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS
+        from litellm.proxy.shutdown.graceful_shutdown_manager import GracefulShutdownManager
+        from litellm.proxy.shutdown.graceful_uvicorn_worker import build_graceful_shutdown_uvicorn_worker
+
         if os.name == "nt":
             pass
         else:
@@ -607,10 +615,12 @@ class ProxyInitializationHelpers:
                 return self.application
 
         print(f"\033[1;32mLiteLLM Proxy: Starting server on {host}:{port} with {num_workers} workers\033[0m\n")
+        graceful_shutdown_timeout: Final = GracefulShutdownManager.get_timeout()
         gunicorn_options: Final = {
             "bind": f"{host}:{port}",
             "workers": num_workers,  # default is 1
-            "worker_class": "uvicorn.workers.UvicornWorker",
+            "worker_class": build_graceful_shutdown_uvicorn_worker(graceful_shutdown_timeout),
+            "graceful_timeout": math.ceil(graceful_shutdown_timeout) + GRACEFUL_SHUTDOWN_TEARDOWN_HEADROOM_SECONDS,
             "preload": True,  # Add the preload flag,
             "accesslog": "-",  # Log to stdout
             "timeout": 600,  # default to very high number, bedrock/anthropic.claude-v2:1 can take 30+ seconds for the 1st chunk to come in
