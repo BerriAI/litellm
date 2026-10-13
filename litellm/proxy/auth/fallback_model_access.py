@@ -4,8 +4,8 @@ Authorize router fallback targets against the caller's key, team and project mod
 `_enforce_key_and_fallback_model_access` only sees fallbacks the client sends in the request body.
 Fallbacks configured on the router (`router_settings.fallbacks` and friends) are chosen after auth,
 inside the router, so this predicate is injected into the router to re-run the same model access
-checks for each fallback target before it is attempted. Opt-in via
-`general_settings.enforce_fallback_model_access: true`. Fallbacks of a search request always run the
+checks for each fallback target before it is attempted. Enabled by default. Opt out via
+`general_settings.enforce_fallback_model_access: false`. Fallbacks of a search request always run the
 key, team and user search tool grants instead, the same check /search runs on the requested tool.
 """
 
@@ -28,7 +28,7 @@ class _RequestMetadata(LiteLLMBaseModel):
 
 
 class _FallbackAccessSettings(LiteLLMBaseModel):
-    enforce_fallback_model_access: bool = False
+    enforce_fallback_model_access: bool = True
 
 
 async def is_model_authorized_for_token(*, model: str, valid_token: UserAPIKeyAuth, llm_router: Router) -> bool:
