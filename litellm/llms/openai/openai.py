@@ -370,9 +370,7 @@ def _first_non_ascii_header(extra_headers: Mapping[str, str] | None) -> str | No
     return next((k for k, v in extra_headers.items() if not v.isascii()), None)
 
 
-def _non_ascii_header_error(
-    extra_headers: Mapping[str, str] | None, original_error: UnicodeEncodeError
-) -> OpenAIError:
+def _non_ascii_header_error(extra_headers: Mapping[str, str] | None, original_error: UnicodeEncodeError) -> OpenAIError:
     """Re-raise a bare httpx ``UnicodeEncodeError`` (``'ascii' codec can't encode
     character ...``) naming the offending header when it is one litellm set.
 
