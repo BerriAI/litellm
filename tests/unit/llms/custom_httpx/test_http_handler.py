@@ -1498,7 +1498,7 @@ async def test_connection_error_retry_forwards_content(method: str):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method", ["post", "put", "patch", "delete"])
+@pytest.mark.parametrize("method", ["post", "patch"])
 async def test_disconnect_after_send_is_not_replayed(method: str) -> None:
     retried_requests: Final[list[httpx.Request]] = []  # mutable-ok: async closure capture buffer
 
@@ -1518,6 +1518,31 @@ async def test_disconnect_after_send_is_not_replayed(method: str) -> None:
             await getattr(handler, method)("https://api.example.com/runs/batch", content=b'{"a":1}')
 
         assert retried_requests == []
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["put", "delete"])
+async def test_idempotent_disconnect_is_replayed(method: str) -> None:
+    captured: Final[list[tuple[str, bytes]]] = []  # mutable-ok: async closure capture buffer
+
+    async def raise_disconnect(request: httpx.Request) -> httpx.Response:
+        raise httpx.RemoteProtocolError("connection dropped after send", request=request)
+
+    async def capture_retry(request: httpx.Request) -> httpx.Response:
+        captured.append((request.method, request.content))
+        return httpx.Response(200, request=request)
+
+    first: Final = httpx.AsyncClient(transport=httpx.MockTransport(raise_disconnect))
+    retry: Final = httpx.AsyncClient(transport=httpx.MockTransport(capture_retry))
+    async with first, retry:
+        handler: Final = _RetryClientHandler(first=first, retry=retry)
+
+        body: Final = b'{"a":1}'
+        response: Final = await getattr(handler, method)("https://api.example.com/runs/batch", content=body)
+
+        assert response.status_code == 200
+        assert captured == [(method.upper(), body)]
         await handler.close()
 
 

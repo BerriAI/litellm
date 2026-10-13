@@ -918,7 +918,7 @@ class AsyncHTTPHandler:
             response: Final = await self.client.send(req, follow_redirects=_follow_redirects)
             response.raise_for_status()
             return response
-        except httpx.ConnectError:
+        except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
@@ -1058,7 +1058,7 @@ class AsyncHTTPHandler:
                 _anchor_handler_to(response, self)
             response.raise_for_status()
             return response
-        except httpx.ConnectError:
+        except (httpx.RemoteProtocolError, httpx.ConnectError):
             # Retry the request with a new session if there is a connection error
             new_client: Final = self.create_client(timeout=timeout, event_hooks=self.event_hooks)
             try:
