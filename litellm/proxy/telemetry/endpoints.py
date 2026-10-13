@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter

@@ -8,6 +8,11 @@ import { proxyAdminTierRoles } from "@/utils/roles";
 
 export type TelemetrySettings = components["schemas"]["TelemetrySettingsResponse"];
 export type TelemetryGroup = components["schemas"]["TelemetryGroup"];
+export type TelemetryDestination = components["schemas"]["TelemetryDestination"];
+export type TelemetrySettingsUpdate = {
+  groups: readonly TelemetryGroup[];
+  destination: TelemetryDestination | null;
+};
 
 export const telemetrySettingsKeys = createQueryKeys("telemetrySettings");
 
@@ -27,9 +32,10 @@ export const useTelemetrySettings = () => {
 
 export const useUpdateTelemetrySettings = () => {
   const queryClient = useQueryClient();
-  return useMutation<TelemetrySettings, Error, readonly TelemetryGroup[]>({
-    mutationFn: async (groups) =>
-      (await fetchClient.PUT("/telemetry/settings", { body: { groups: [...groups] } })).data as TelemetrySettings,
+  return useMutation<TelemetrySettings, Error, TelemetrySettingsUpdate>({
+    mutationFn: async ({ groups, destination }) =>
+      (await fetchClient.PUT("/telemetry/settings", { body: { groups: [...groups], destination } }))
+        .data as TelemetrySettings,
     onSuccess: (settings) => queryClient.setQueryData(telemetrySettingsKeys.detail("current"), settings),
   });
 };

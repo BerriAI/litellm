@@ -1,11 +1,14 @@
 "use client";
 
 import { Switch } from "@/components/ui/switch";
+import { FieldLabel } from "@/components/ui/field";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Activity } from "lucide-react";
 import { Page, PageTabs, PageTabsContent, PageTabsList, PageTabsTrigger } from "@/components/shared/Page";
 import { PageHeader, PageHeaderControls, PageHeaderDescription, PageHeaderTitle } from "@/components/shared/PageHeader";
 import { useUrlTab } from "@/hooks/useUrlTab";
 import {
+  type TelemetryDestination,
   type TelemetryGroup,
   type TelemetrySettings,
   useTelemetrySettings,
@@ -18,16 +21,61 @@ const TABS = ["proxy", "ui"] as const;
 const destinationText = (settings: TelemetrySettings): string => {
   const every = `every ${settings.flush_interval_seconds} s`;
   switch (settings.destination) {
-    case "https":
-      return `One JSON report per worker ${every} and on shutdown, by HTTPS POST to LITELLM_TELEMETRY_ENDPOINT. A failed send is retried next window`;
+    case "http":
+      return `One JSON report per worker ${every} and on shutdown, by HTTP POST to LITELLM_TELEMETRY_ENDPOINT. A failed send is retried next window`;
     case "local_table":
       return `One report per worker ${every} and on shutdown, stored in this proxy's LiteLLM_TelemetryReport table for ${settings.retention_days} days. Nothing leaves the proxy. Admins can export from GET /telemetry/reports`;
-    case "none":
-      return "No database and no LITELLM_TELEMETRY_ENDPOINT, so nothing is collected";
+    case null:
+      return "No destination is chosen, so nothing is recorded";
   }
 };
 
+const DESTINATION_LABELS: Record<TelemetryDestination, string> = {
+  local_table: "Local table (LiteLLM_TelemetryReport in this proxy's database)",
+  http: "HTTP (POST to LITELLM_TELEMETRY_ENDPOINT)",
+};
+
 type SettingsUpdate = ReturnType<typeof useUpdateTelemetrySettings>;
+
+const enabledGroups = (settings: TelemetrySettings): Set<TelemetryGroup> =>
+  new Set(settings.groups.filter((info) => info.enabled).map((info) => info.group));
+
+const savedDestination = (settings: TelemetrySettings): TelemetryDestination | null =>
+  settings.destination_set_by_environment ? null : settings.stored_destination ?? null;
+
+function DestinationPicker({ settings, update }: { settings: TelemetrySettings; update: SettingsUpdate }) {
+  const locked = !settings.editable || settings.destination_set_by_environment || update.isPending;
+  const missing = settings.destination === null && enabledGroups(settings).size > 0;
+  return (
+    <section className="space-y-2">
+      <h3 className="font-medium">Destination</h3>
+      {missing && (
+        <p className="text-xs text-destructive">Telemetry is on but no destination is chosen, so nothing is recorded</p>
+      )}
+      <RadioGroup
+        value={settings.destination ?? ""}
+        disabled={locked}
+        onValueChange={(value: unknown) =>
+          update.mutate({ groups: [...enabledGroups(settings)], destination: value as TelemetryDestination })
+        }
+      >
+        {(Object.keys(DESTINATION_LABELS) as TelemetryDestination[]).map((destination) => (
+          <FieldLabel key={destination} className="text-xs font-normal">
+            <RadioGroupItem
+              value={destination}
+              disabled={!settings.available_destinations.includes(destination)}
+              aria-label={DESTINATION_LABELS[destination]}
+            />
+            {DESTINATION_LABELS[destination]}
+          </FieldLabel>
+        ))}
+      </RadioGroup>
+      {settings.destination_set_by_environment && (
+        <p className="text-xs text-muted-foreground">Set by LITELLM_TELEMETRY_DESTINATION</p>
+      )}
+    </section>
+  );
+}
 
 function GroupList({
   groups,
@@ -39,10 +87,10 @@ function GroupList({
   update: SettingsUpdate;
 }) {
   const requires: Requires = new Map(settings.groups.map((info) => [info.group, info.requires ?? null]));
-  const enabled = new Set(settings.groups.filter((info) => info.enabled).map((info) => info.group));
+  const enabled = enabledGroups(settings);
   const depths = relativeDepths(groups, requires);
   const onToggle = (group: TelemetryGroup, on: boolean) => {
-    update.mutate([...toggleGroup(group, on, enabled, requires)]);
+    update.mutate({ groups: [...toggleGroup(group, on, enabled, requires)], destination: savedDestination(settings) });
   };
   return (
     <ul className="divide-y rounded-md border">
@@ -134,6 +182,7 @@ export default function TelemetrySettingsPage() {
           </p>
         </PageTabsContent>
       </PageTabs>
+      <DestinationPicker settings={settings} update={update} />
       <section className="space-y-1">
         <h3 className="font-medium">How and when it is sent</h3>
         <p className="text-xs text-muted-foreground">{destinationText(settings)}. Changes apply from the next window</p>
