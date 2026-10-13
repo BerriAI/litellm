@@ -2,6 +2,7 @@ import copy
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
+from itertools import dropwhile
 from typing import TYPE_CHECKING, Any, Final, Optional, Protocol, TypeAlias
 
 from pydantic import InstanceOf, TypeAdapter
@@ -27,9 +28,12 @@ from litellm.llms.bedrock.chat.converse_to_openai import (
 )
 from litellm.llms.bedrock.passthrough.guardrail_translation.structured_edits import (
     Edit,
+    RemovedTools,
     ToolResultText,
     structured_edits,
+    tool_edits,
 )
+from litellm.proxy.guardrails.auto_router_compression import is_compression_guardrail
 from litellm.types.utils import GenericGuardrailAPIInputs
 
 if TYPE_CHECKING:
@@ -226,10 +230,26 @@ def _tool_result_write(body: Mapping[str, object], edit: ToolResultText) -> _Wri
     ]
 
 
+def _is_cache_point(entry: object) -> bool:
+    fields: Final = as_json_object(entry)
+    return fields is not None and "cachePoint" in fields
+
+
+def _tools_write(body: Mapping[str, object], edit: RemovedTools) -> _Write | None:
+    tool_config: Final = _child(body, "toolConfig")
+    tools: Final = as_json_array(_child(tool_config, "tools"))
+    if tools is None:
+        return None
+    kept: Final = (tool for index, tool in enumerate(tools) if index not in edit.indices)
+    return (tool_config, "tools"), list(dropwhile(_is_cache_point, kept))
+
+
 def _resolved(body: Mapping[str, object], edit: Edit) -> _Write | None:
     match edit:
         case ToolResultText():
             return _tool_result_write(body, edit)
+        case RemovedTools():
+            return _tools_write(body, edit)
         case (path, text):
             holder: Final = _holder(body, path)
             return None if holder is None else (holder, text)
@@ -558,7 +578,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
         texts, holders = _extract_converse_texts(
             request_body, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results
         )
-        request: Final = parse_converse_request(request_body)
+        request: Final = None if is_compression_guardrail(guardrail_to_apply) else parse_converse_request(request_body)
         rows: Final = converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
         scoped_indices: Final = scoped_structured_message_indices(
             tuple(row.message for row in rows),
@@ -576,7 +596,7 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             inputs["structured_messages"] = copy.deepcopy(sent_messages)
         tools: Final = converse_tools(request) if request and not scope.scan_only_tool_results else ()
         if tools:
-            inputs["tools"] = list(tools)
+            inputs["tools"] = copy.deepcopy([tool.param for tool in tools])
         model: Final = data.get("model")
         if model:
             inputs["model"] = model
@@ -605,10 +625,14 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
                 rows, scoped_indices, rewritten_rows, partial(_texts_applied_rows, request_body, applied_texts, scope)
             )
         )
+        returned_tools: Final = guardrailed_inputs.get("tools")
+        tool_changes: Final = () if returned_tools is None else tool_edits(tools, returned_tools)
         holder_edits: Final = (
             None
-            if row_edits is None
-            else _holder_edits(request_body, row_edits, _changed_leaves(holders, texts, applied_texts))
+            if row_edits is None or tool_changes is None
+            else _holder_edits(
+                request_body, (*row_edits, *tool_changes), _changed_leaves(holders, texts, applied_texts)
+            )
         )
         if holder_edits is None:
             raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)

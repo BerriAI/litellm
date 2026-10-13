@@ -10,6 +10,7 @@ Validates that:
 """
 
 import copy
+import json
 from datetime import datetime
 from collections.abc import Callable, Mapping
 from typing import Literal
@@ -22,6 +23,7 @@ from litellm.caching.caching import DualCache
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.headroom.headroom import HeadroomGuardrail
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -2535,3 +2537,163 @@ class TestConverseRewriteRegressions:
         result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
         assert result == original
         assert guard.received == ()
+
+
+def _tool_config_data() -> dict:
+    return {
+        "endpoint": "model/test/converse",
+        "data": {
+            "messages": [{"role": "user", "content": [{"text": "Card 4111 please"}]}],
+            "toolConfig": {
+                "tools": [
+                    {
+                        "toolSpec": {
+                            "name": "lookup",
+                            "description": "Card 4111 on file",
+                            "inputSchema": {
+                                "json": {
+                                    "type": "object",
+                                    "properties": {"card": {"type": "string", "description": "use 4111"}},
+                                    "required": ["card"],
+                                }
+                            },
+                        }
+                    },
+                    {"cachePoint": {"type": "default"}},
+                    {"toolSpec": {"name": "refund", "inputSchema": {"json": {"type": "object"}}}},
+                ],
+                "toolChoice": {"auto": {}},
+            },
+        },
+    }
+
+
+def _masked_tools(inputs: GenericGuardrailAPIInputs) -> list:
+    return json.loads(json.dumps(inputs["tools"]).replace("4111", "[CARD]"))
+
+
+def _masked_texts(inputs: GenericGuardrailAPIInputs) -> list[str]:
+    return [text.replace("4111", "[CARD]") for text in inputs["texts"]]
+
+
+def _added_tool(tools: list) -> list:
+    return [*tools, {"type": "function", "function": {"name": "retrieve", "parameters": {"type": "object"}}}]
+
+
+def _renamed_tool(tools: list) -> list:
+    return [{**tools[0], "function": {**tools[0]["function"], "name": "lookup_v2"}}, *tools[1:]]
+
+
+def _retyped_schema(tools: list) -> list:
+    function = tools[0]["function"]
+    return [
+        {**tools[0], "function": {**function, "parameters": {**function["parameters"], "required": []}}},
+        *tools[1:],
+    ]
+
+
+class _RecordingHeadroom(HeadroomGuardrail):
+    def __init__(self) -> None:
+        super().__init__(api_base="http://127.0.0.1:9", guardrail_name="headroom")
+        self.received: tuple[GenericGuardrailAPIInputs, ...] = ()
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.received = (*self.received, copy.deepcopy(inputs))
+        return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+
+class TestConverseToolDefinitionRewrites:
+    @pytest.mark.asyncio
+    async def test_masked_tool_description_and_schema_reach_the_tool_spec(self):
+        data = _tool_config_data()
+        expected = copy.deepcopy(data["data"])
+        expected["messages"][0]["content"] = [{"text": "Card [CARD] please"}]
+        lookup = expected["toolConfig"]["tools"][0]["toolSpec"]
+        lookup["description"] = "Card [CARD] on file"
+        lookup["inputSchema"]["json"]["properties"]["card"]["description"] = "use [CARD]"
+        guard = _ScriptedGuardrail(lambda inputs: {"texts": _masked_texts(inputs), "tools": _masked_tools(inputs)})
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert result["data"] == expected
+
+    @pytest.mark.asyncio
+    async def test_tool_the_guardrail_removed_is_dropped_and_the_rest_keep_their_edits(self):
+        data = _tool_config_data()
+        expected_lookup = copy.deepcopy(data["data"]["toolConfig"]["tools"][0])
+        expected_lookup["toolSpec"]["description"] = "Card [CARD] on file"
+        expected_lookup["toolSpec"]["inputSchema"]["json"]["properties"]["card"]["description"] = "use [CARD]"
+        guard = _ScriptedGuardrail(lambda inputs: {"texts": inputs["texts"], "tools": _masked_tools(inputs)[:1]})
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert result["data"]["toolConfig"] == {
+            "tools": [expected_lookup, {"cachePoint": {"type": "default"}}],
+            "toolChoice": {"auto": {}},
+        }
+
+    @pytest.mark.asyncio
+    async def test_cache_point_left_without_a_tool_before_it_is_dropped(self):
+        data = _tool_config_data()
+        guard = _ScriptedGuardrail(lambda inputs: {"texts": inputs["texts"], "tools": inputs["tools"][1:]})
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert result["data"]["toolConfig"] == {
+            "tools": [{"toolSpec": {"name": "refund", "inputSchema": {"json": {"type": "object"}}}}],
+            "toolChoice": {"auto": {}},
+        }
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "rewrite",
+        [_added_tool, _renamed_tool, _retyped_schema, lambda tools: tools[::-1], lambda tools: {"tools": tools}],
+        ids=["added", "renamed", "retyped", "reordered", "not-a-list"],
+    )
+    async def test_tool_change_this_route_cannot_carry_fails_closed_without_mutation(self, rewrite):
+        data = _tool_config_data()
+        original = copy.deepcopy(data["data"])
+        guard = _ScriptedGuardrail(
+            lambda inputs: {"texts": _masked_texts(inputs), "tools": rewrite(_masked_tools(inputs))}
+        )
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(data, guard)
+
+        assert data["data"] == original
+
+    @pytest.mark.asyncio
+    async def test_refused_tool_change_made_in_place_leaves_the_request_unchanged(self):
+        data = _tool_config_data()
+        original = copy.deepcopy(data["data"])
+
+        def mask_in_place_and_add(inputs: GenericGuardrailAPIInputs) -> Mapping[str, object]:
+            inputs["tools"][0]["function"]["parameters"]["properties"]["card"]["description"] = "use [CARD]"
+            return {**inputs, "tools": _added_tool(inputs["tools"])}
+
+        with pytest.raises(UnappliableRequestRewrite):
+            await BedrockPassthroughGuardrailHandler().process_input_messages(
+                data, _ScriptedGuardrail(mask_in_place_and_add)
+            )
+
+        assert data["data"] == original
+
+    @pytest.mark.asyncio
+    async def test_compression_guardrail_gets_only_texts_and_leaves_the_request_unchanged(self):
+        data = _agent_loop_converse_data()
+        data["data"]["toolConfig"] = copy.deepcopy(_tool_config_data()["data"]["toolConfig"])
+        original = copy.deepcopy(data["data"])
+        headroom = _RecordingHeadroom()
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(data, headroom)
+
+        assert result["data"] == original
+        assert headroom.received[-1]["texts"] == ["list files", "Listing them.", "ls", "a.txt", "now delete them"]
+        assert "structured_messages" not in headroom.received[-1]
+        assert "tools" not in headroom.received[-1]

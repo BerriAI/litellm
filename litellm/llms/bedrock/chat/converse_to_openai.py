@@ -296,17 +296,26 @@ def converse_rows(request: ConverseRequest, include_tool_calls: bool) -> tuple[C
     )
 
 
-def converse_tools(request: ConverseRequest) -> tuple[ChatCompletionToolParam, ...]:
+@dataclass(frozen=True, slots=True)
+class ConverseTool:
+    index: int
+    param: ChatCompletionToolParam
+
+
+def converse_tools(request: ConverseRequest) -> tuple[ConverseTool, ...]:
     tools: Final = request.tool_config.tools if request.tool_config else ()
     return tuple(
-        ChatCompletionToolParam(
-            type="function",
-            function=ChatCompletionToolParamFunctionChunk(
-                name=spec.name,
-                description=spec.description,
-                parameters=dict(spec.input_schema.json_schema),
+        ConverseTool(
+            index,
+            ChatCompletionToolParam(
+                type="function",
+                function=ChatCompletionToolParamFunctionChunk(
+                    name=spec.name,
+                    description=spec.description,
+                    parameters=dict(spec.input_schema.json_schema),
+                ),
             ),
         )
-        for tool in tools
+        for index, tool in enumerate(tools)
         if (spec := tool.tool_spec) and spec.name and spec.input_schema and spec.input_schema.json_schema is not None
     )

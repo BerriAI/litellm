@@ -7,6 +7,7 @@ from pydantic import TypeAdapter, ValidationError
 
 from litellm.llms.bedrock.chat.converse_to_openai import (
     ConverseRow,
+    ConverseTool,
     JsonPath,
     JsonSlot,
     Slot,
@@ -25,7 +26,13 @@ class ToolResultText:
     text: str
 
 
-Edit: TypeAlias = tuple[JsonPath, str] | ToolResultText
+@dataclass(frozen=True, slots=True)
+class RemovedTools:
+    indices: frozenset[int]
+
+
+TextEdit: TypeAlias = tuple[JsonPath, str]
+Edit: TypeAlias = TextEdit | ToolResultText | RemovedTools
 _JsonPair: TypeAlias = tuple[JsonPath, object, object]
 _TEXT_PARTS: Final = TypeAdapter(tuple[ChatCompletionTextObject, ...])
 _PARSED_JSON: Final = TypeAdapter(object)
@@ -80,7 +87,7 @@ def _pair_children(pair: _JsonPair | None) -> tuple[_JsonPair | None, ...]:
     return (None,) if children is None else children
 
 
-def _leaf_edit(pair: _JsonPair | None) -> Edit | None:
+def _leaf_edit(pair: _JsonPair | None) -> TextEdit | None:
     match pair:
         case (path, str() as original, str() as returned) if original != returned:
             return path, returned
@@ -88,7 +95,7 @@ def _leaf_edit(pair: _JsonPair | None) -> Edit | None:
             return None
 
 
-def _json_edits(path: JsonPath, original: object, returned: object) -> tuple[Edit, ...] | None:
+def _json_edits(path: JsonPath, original: object, returned: object) -> tuple[TextEdit, ...] | None:
     pairs: Final = tuple(breadth_first((path, original, returned), _pair_children))
     if any(pair is None for pair in pairs):
         return None
@@ -235,3 +242,47 @@ def structured_edits(
         return None
     fallbacks: Final = tuple(_unmapped_edits(rows[index], view[index], row) for index, row in unmapped)
     return _merged((*(edits for edits in proposed if edits is not None), *fallbacks))
+
+
+def _spec_edit(index: int, edit: TextEdit) -> TextEdit | None:
+    path, text = edit
+    match path:
+        case ("function", "description"):
+            return ("toolConfig", "tools", index, "toolSpec", "description"), text
+        case ("function", "parameters", *schema_path):
+            return ("toolConfig", "tools", index, "toolSpec", "inputSchema", "json", *schema_path), text
+        case _:
+            return None
+
+
+def _tool_edits(tool: ConverseTool | None, returned: object) -> tuple[Edit, ...] | None:
+    edits: Final = None if tool is None else _json_edits((), tool.param, returned)
+    if tool is None or edits is None:
+        return None
+    spec_edits: Final = tuple(_spec_edit(tool.index, edit) for edit in edits)
+    return None if None in spec_edits else tuple(edit for edit in spec_edits if edit is not None)
+
+
+def _tool_name(tool: object) -> object:
+    function: Final = _call_function(tool)
+    return None if function is None else function.get("name")
+
+
+def _paired_tools(tools: Sequence[ConverseTool], returned: Sequence[object]) -> tuple[ConverseTool | None, ...]:
+    remaining: Final = iter(tools)
+    return tuple(
+        next((tool for tool in remaining if tool.param["function"]["name"] == _tool_name(item)), None)
+        for item in returned
+    )
+
+
+def tool_edits(tools: Sequence[ConverseTool], returned: object) -> tuple[Edit, ...] | None:
+    returned_tools: Final = as_json_array(returned)
+    if returned_tools is None:
+        return None
+    paired: Final = _paired_tools(tools, returned_tools)
+    edits: Final = _merged(tuple(_tool_edits(tool, item) for tool, item in zip(paired, returned_tools)))
+    removed: Final = frozenset(tool.index for tool in tools if tool not in paired)
+    if edits is None or not removed:
+        return edits
+    return (*edits, RemovedTools(removed))
