@@ -19,7 +19,7 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, Protocol, cast
 
 import aiohttp
-from pydantic import ConfigDict, JsonValue, TypeAdapter, with_config
+from pydantic import ConfigDict, JsonValue, TypeAdapter, ValidationError, with_config
 from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
@@ -83,6 +83,7 @@ class _PresidioAnonymizeResponse(TypedDict):
 _PRESIDIO_ANONYMIZE_ADAPTER: Final[TypeAdapter[_PresidioAnonymizeResponse | None]] = TypeAdapter(
     _PresidioAnonymizeResponse | None
 )
+_SSE_EVENT_ADAPTER: Final[TypeAdapter[dict[str, JsonValue]]] = TypeAdapter(dict[str, JsonValue])
 
 
 class _JsonResponse(Protocol):
@@ -1563,7 +1564,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         more stream data can arrive for it, so the truncated-token fallback in
         ``_unmask_pii_text`` is safe to apply.
         """
-        flushed: Final = OPTIONAL_PresidioPIIMasking._unmask_pii_text(pending, pii_tokens)
+        flushed: Final = OPTIONAL_PresidioPIIMasking._unmask_pii_text(pending, dict(pii_tokens))
         event: Final = {
             "type": "content_block_delta",
             "index": index,
@@ -1591,30 +1592,33 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if line.startswith("data: ") and line != "data: [DONE]":
                 raw_json = line[6:]
                 try:
-                    event = json.loads(raw_json)
-                    delta = event.get("delta") if isinstance(event, dict) else None
+                    event = _SSE_EVENT_ADAPTER.validate_python(json.loads(raw_json))
+                    delta = event.get("delta")
+                    delta_dict = delta if isinstance(delta, dict) else None
+                    delta_text = delta_dict.get("text") if delta_dict is not None else None
                     if (
-                        isinstance(delta, dict)
+                        delta_dict is not None
                         and event.get("type") == "content_block_delta"
-                        and delta.get("type") == "text_delta"
-                        and isinstance(delta.get("text"), str)
+                        and delta_dict.get("type") == "text_delta"
+                        and isinstance(delta_text, str)
                     ):
                         combined = OPTIONAL_PresidioPIIMasking._replace_complete_tokens(
-                            pending + delta["text"], pii_tokens
+                            pending + delta_text, pii_tokens
                         )
                         carry = OPTIONAL_PresidioPIIMasking._longest_token_prefix_suffix(combined, pii_tokens)
                         emit_text = combined[: len(combined) - len(carry)] if carry else combined
                         pending = carry
-                        if emit_text != delta["text"]:
-                            event["delta"]["text"] = emit_text
+                        if emit_text != delta_text:
+                            delta_dict["text"] = emit_text
                             line = "data: " + json.dumps(event, ensure_ascii=False)
-                    elif pending and isinstance(event, dict) and event.get("type") != "ping":
-                        index = event.get("index", 0) if isinstance(event, dict) else 0
+                    elif pending and event.get("type") != "ping":
+                        index_value = event.get("index", 0)
+                        index = index_value if isinstance(index_value, int) else 0
                         result_lines.append(
                             OPTIONAL_PresidioPIIMasking._flush_pending_as_sse_text_delta(pending, pii_tokens, index)
                         )
                         pending = ""
-                except (json.JSONDecodeError, KeyError, TypeError):
+                except (json.JSONDecodeError, ValidationError, KeyError, TypeError):
                     pass
             result_lines.append(line)
 
@@ -1646,7 +1650,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
     async def _finalize_non_sse_stream(
         self,
         remaining_chunks: Sequence[ModelResponseStream],
-        request_data: dict,  # mutable-ok: forwarded verbatim to _process_response_for_pii, which requires dict
+        request_data: dict[str, Any],  # mutable-ok: forwarded to _process_response_for_pii, which needs dict
     ) -> AsyncGenerator[object, None]:
         """
         Reassemble buffered ``ModelResponseStream`` chunks (the ``/chat/completions``
@@ -1661,16 +1665,17 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         if not remaining_chunks:
             return
 
+        chunks_list: Final = list(remaining_chunks)
         assembled_model_response: Final = stream_chunk_builder(
-            chunks=list(remaining_chunks), messages=request_data.get("messages")
+            chunks=chunks_list, messages=request_data.get("messages")
         )
 
         if not isinstance(assembled_model_response, ModelResponse):
-            for chunk in remaining_chunks:
+            for chunk in chunks_list:
                 yield chunk
             return
 
-        self._preserve_usage_from_last_chunk(assembled_model_response, remaining_chunks)
+        self._preserve_usage_from_last_chunk(assembled_model_response, chunks_list)
 
         await self._process_response_for_pii(
             response=assembled_model_response,
@@ -1721,11 +1726,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                     yield chunk
 
             if pending_sse_text:
-                line: Final = self._flush_pending_as_sse_text_delta(pending_sse_text, pii_tokens, 0)
+                line: Final = self._flush_pending_as_sse_text_delta(
+                    pending_sse_text,
+                    pii_tokens,  # pyright: ignore[reportUnknownArgumentType]  # request_data is an untyped dict
+                    0,
+                )
                 yield (line + "\n\n").encode("utf-8")
 
             if not saw_non_chat_chunk:
-                async for chunk in self._finalize_non_sse_stream(remaining_chunks, request_data):
+                async for chunk in self._finalize_non_sse_stream(
+                    remaining_chunks,
+                    request_data,  # pyright: ignore[reportUnknownArgumentType]  # request_data is an untyped dict
+                ):
                     yield chunk
 
         except Exception as e:
