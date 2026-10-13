@@ -5,6 +5,7 @@ import copy
 import datetime
 import functools
 import json
+import math
 import os
 import re
 import subprocess
@@ -732,6 +733,7 @@ class Logging(LiteLLMLoggingBaseClass):
         # Initialize cost breakdown field
         self.cost_breakdown: CostBreakdown | None = None
         self.billed_token_rates: BilledTokenRates | None = None
+        self._provider_reported_cost: float | None = None
 
         # Init Caching related details
         self.caching_details: CachingDetails | None = None
@@ -1948,7 +1950,16 @@ class Logging(LiteLLMLoggingBaseClass):
             return None
 
         try:
-            response_cost: Final = litellm.response_cost_calculator(**response_cost_calculator_kwargs)
+            reported_cost: Final = self._provider_reported_cost
+            response_cost: Final = (
+                reported_cost
+                if isinstance(reported_cost, float)
+                and math.isfinite(reported_cost)
+                and reported_cost >= 0
+                and not custom_pricing
+                and base_model is None
+                else litellm.response_cost_calculator(**response_cost_calculator_kwargs)
+            )
 
             verbose_logger.debug("response_cost: %s", response_cost)
             additional_response_cost: Final[object] = self.model_call_details.get("additional_response_cost")
@@ -2507,7 +2518,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.callback_duration_ms += (time.time() - _start) * 1000
         return payload
 
-    def _transform_usage_objects(self, result):
+    def _transform_usage_objects(self, result: object) -> object:
         if isinstance(result, ResponsesAPIResponse):
             result = result.model_copy()
             transformed_usage = ResponseAPILoggingUtils.transform_response_api_usage_to_chat_usage(result.usage)
@@ -2545,13 +2556,13 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def _success_handler_helper_fn(
         self,
-        result=None,
-        start_time=None,
-        end_time=None,
-        cache_hit=None,
+        result: object = None,
+        start_time: datetime.datetime | None = None,
+        end_time: datetime.datetime | None = None,
+        cache_hit: bool | None = None,
         standard_logging_object: StandardLoggingPayload | None = None,
         build_logging_payload: bool = True,
-    ):
+    ) -> tuple[datetime.datetime, datetime.datetime, object]:
         try:
             if start_time is None:
                 start_time = self.start_time

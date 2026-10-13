@@ -1,7 +1,6 @@
 import asyncio
 import json
 import re
-import signal
 import socket
 import threading
 import uuid
@@ -472,9 +471,7 @@ async def test_worker_sigkill_mid_burst_leaves_the_sibling_returning_the_search_
             held_by: Final = MappingProxyType({pid: _open_upstream_connections(pid, wire.url) for pid in workers})
             assert sum(held_by.values()) == 20, held_by
             victim_pid, survivor_pid = sorted(workers, key=held_by.__getitem__)
-            victim: Final = psutil.Process(victim_pid)
-            victim.suspend()
-            victim.send_signal(signal.SIGKILL)
+            await asyncio.to_thread(owned.kill_worker, victim_pid)
             release.set()
             served: Final = await burst
             assert held_by[survivor_pid] >= 10, held_by

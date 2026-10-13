@@ -138,7 +138,9 @@ pub fn has_bearer_auth(headers: &[(String, String)]) -> bool {
         }
         let value = value.trim();
         value.len() > 7
-            && value[..7].eq_ignore_ascii_case("bearer ")
+            && value
+                .get(..7)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("bearer "))
             && !value[7..].trim().is_empty()
     })
 }
@@ -279,31 +281,19 @@ mod tests {
         assert!(!has_header(&headers, "authorization"));
     }
 
-    #[test]
-    fn bearer_detection_requires_a_non_empty_token() {
-        assert!(has_bearer_auth(&[(
-            "Authorization".to_string(),
-            "Bearer abc".to_string()
-        )]));
-        assert!(has_bearer_auth(&[(
-            "authorization".to_string(),
-            "bearer abc".to_string()
-        )]));
-        assert!(!has_bearer_auth(&[(
-            "Authorization".to_string(),
-            "Bearer    ".to_string()
-        )]));
-        assert!(!has_bearer_auth(&[(
-            "authorization".to_string(),
-            String::new()
-        )]));
-        assert!(!has_bearer_auth(&[(
-            "Authorization".to_string(),
-            "Basic abc".to_string()
-        )]));
-        assert!(!has_bearer_auth(&[(
-            "x-api-key".to_string(),
-            "abc".to_string()
-        )]));
+    #[rstest::rstest]
+    #[case::bearer("Authorization", "Bearer abc", true)]
+    #[case::lowercase("authorization", "bearer abc", true)]
+    #[case::blank_token("Authorization", "Bearer    ", false)]
+    #[case::empty("authorization", "", false)]
+    #[case::basic("Authorization", "Basic abc", false)]
+    #[case::different_header("x-api-key", "abc", false)]
+    #[case::non_ascii("authorization", "invali\u{00e9}auth", false)]
+    fn bearer_detection_requires_a_non_empty_token(
+        #[case] name: &str,
+        #[case] value: &str,
+        #[case] expected: bool,
+    ) {
+        assert_eq!(has_bearer_auth(&[(name.into(), value.into())]), expected);
     }
 }

@@ -2483,7 +2483,7 @@ class LiteLLMCompletionResponsesConfig:
             ),
             "function": function_dict,
             "type": "function",
-            "index": 0,
+            "index": index,
         }
 
         if provider_specific_fields:
