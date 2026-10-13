@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+import threading
 import uuid
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
@@ -32,7 +33,7 @@ from integration._support.redis_edge import (
     redis_relay,
 )
 from integration._support.redis_process import OwnedRedis, owned_redis
-from integration._support.responses_vendor import response_identities
+from integration._support.responses_vendor import response_identities, same_response
 from integration._support.wire import Reply, Request, Wire, wire_server
 from openai.types.chat import ChatCompletionMessageParam, ChatCompletionToolParam
 from openai.types.responses import ResponseInputParam
@@ -48,8 +49,22 @@ PIN_TTL_SECONDS: Final = 600
 SESSION_HEADER: Final = "x-litellm-session-id"
 STEP_TOKEN: Final = re.compile(r"step-[0-9a-f]{12}")
 NO_KEEPALIVE: Final = httpx.Limits(max_keepalive_connections=0)
+NO_EXTRA: Final[Mapping[str, JsonValue]] = MappingProxyType({})
+USE_CACHE: Final[Mapping[str, JsonValue]] = MappingProxyType({"cache": {"use-cache": True}})
+PLAIN_SETTINGS: Final[Mapping[str, JsonValue]] = MappingProxyType({"drop_params": True})
+OPT_IN_RESPONSE_CACHE: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {
+        "drop_params": True,
+        "cache": True,
+        "cache_params": {"type": "local", "mode": "default_off", "max_messages": None},
+    }
+)
+DEFAULT_MODEL_FALLBACK: Final[Mapping[str, JsonValue]] = MappingProxyType(
+    {"classifier_fallback": "default_model", "default_model": SIMPLE_MODEL}
+)
 Endpoint = Literal["chat", "responses", "messages"]
 Turn = Literal["simple", "complex", "continue"]
+Script = tuple[tuple[Turn, str], ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -98,6 +113,17 @@ def _judge(request: Request) -> Reply:
     return chat_reply("chatcmpl-judge-" + uuid.uuid4().hex[:8], SIMPLE_MODEL, json.dumps({"tier": tier}), stream=False)
 
 
+def _failing_judge(failing: threading.Event) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        if request.method == "POST" and failing.is_set():
+            return Reply(
+                status=500, body=json.dumps({"error": {"message": "judge down", "type": "server_error"}}).encode()
+            )
+        return _judge(request)
+
+    return respond
+
+
 def _tier(model: str) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         if request.method == "GET":
@@ -112,7 +138,14 @@ def _tier(model: str) -> Callable[[Request], Reply]:
     return respond
 
 
-def _config(directory: Path, wires: tuple[str, str, str], router: str, redis: tuple[str, int] | None) -> Path:
+def _config(
+    directory: Path,
+    wires: tuple[str, str, str],
+    router: str,
+    redis: tuple[str, int] | None,
+    settings: Mapping[str, JsonValue] = PLAIN_SETTINGS,
+    router_extras: Mapping[str, JsonValue] = NO_EXTRA,
+) -> Path:
     shared: Final = JSON_OBJECT.validate_python(yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text()))
     judge, simple, complex_tier = wires
     config: Final = {
@@ -139,6 +172,7 @@ def _config(directory: Path, wires: tuple[str, str, str], router: str, redis: tu
                         "classification_mode": "user_turn",
                         "return_raw_model_name": True,
                         "session_affinity_ttl_seconds": PIN_TTL_SECONDS,
+                        **router_extras,
                         "tiers": {
                             "SIMPLE": SIMPLE_MODEL,
                             "MEDIUM": SIMPLE_MODEL,
@@ -149,7 +183,7 @@ def _config(directory: Path, wires: tuple[str, str, str], router: str, redis: tu
                 },
             }
         ],
-        "litellm_settings": {"drop_params": True},
+        "litellm_settings": dict(settings),
         "router_settings": {
             "num_retries": 0,
             **({"redis_host": redis[0], "redis_port": redis[1]} if redis is not None else {}),
@@ -225,8 +259,14 @@ def _headers(gateway: Gateway, session: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {gateway.key}", SESSION_HEADER: session}
 
 
-def _chat_httpx(gateway: Gateway, router: str, session: str, turns: tuple[JsonValue, ...]) -> Outcome:
-    body: Final = {"model": router, "messages": list(turns), "tools": _tools("chat")}
+def _chat_httpx(
+    gateway: Gateway,
+    router: str,
+    session: str,
+    turns: tuple[JsonValue, ...],
+    extra: Mapping[str, JsonValue] = NO_EXTRA,
+) -> Outcome:
+    body: Final = {"model": router, "messages": list(turns), "tools": _tools("chat"), **extra}
     with httpx.Client(timeout=30, trust_env=False, limits=NO_KEEPALIVE) as client:
         response: Final = client.post(
             f"{_origin(gateway)}/v1/chat/completions", json=body, headers=_headers(gateway, session)
@@ -236,7 +276,13 @@ def _chat_httpx(gateway: Gateway, router: str, session: str, turns: tuple[JsonVa
     return Outcome(string_value(payload["id"]), string_value(payload["model"]))
 
 
-def _chat_openai_sync(gateway: Gateway, router: str, session: str, turns: tuple[JsonValue, ...]) -> Outcome:
+def _chat_openai_sync(
+    gateway: Gateway,
+    router: str,
+    session: str,
+    turns: tuple[JsonValue, ...],
+    extra: Mapping[str, JsonValue] = NO_EXTRA,
+) -> Outcome:
     with (
         httpx.Client(timeout=30, trust_env=False, limits=NO_KEEPALIVE) as transport,
         openai.OpenAI(
@@ -251,11 +297,18 @@ def _chat_openai_sync(gateway: Gateway, router: str, session: str, turns: tuple[
             model=router,
             messages=cast(list[ChatCompletionMessageParam], list(turns)),
             tools=cast(list[ChatCompletionToolParam], _tools("chat")),
+            extra_body=dict(extra),
         )
         return Outcome(completion.id, completion.model)
 
 
-def _chat_openai_async_stream(gateway: Gateway, router: str, session: str, turns: tuple[JsonValue, ...]) -> Outcome:
+def _chat_openai_async_stream(
+    gateway: Gateway,
+    router: str,
+    session: str,
+    turns: tuple[JsonValue, ...],
+    extra: Mapping[str, JsonValue] = NO_EXTRA,
+) -> Outcome:
     async def run() -> Outcome:
         async with (
             httpx.AsyncClient(timeout=30, trust_env=False, limits=NO_KEEPALIVE) as transport,
@@ -272,6 +325,7 @@ def _chat_openai_async_stream(gateway: Gateway, router: str, session: str, turns
                 messages=cast(list[ChatCompletionMessageParam], list(turns)),
                 tools=cast(list[ChatCompletionToolParam], _tools("chat")),
                 stream=True,
+                extra_body=dict(extra),
             )
             chunks: Final = [chunk async for chunk in stream]
             assert chunks and len({chunk.id for chunk in chunks}) == 1, chunks
@@ -280,8 +334,20 @@ def _chat_openai_async_stream(gateway: Gateway, router: str, session: str, turns
     return asyncio.run(run())
 
 
-def _responses_httpx(gateway: Gateway, router: str, session: str, turns: tuple[JsonValue, ...]) -> Outcome:
-    body: Final = {"model": router, "input": list(turns), "tools": _tools("responses"), "max_output_tokens": 32}
+def _responses_httpx(
+    gateway: Gateway,
+    router: str,
+    session: str,
+    turns: tuple[JsonValue, ...],
+    extra: Mapping[str, JsonValue] = NO_EXTRA,
+) -> Outcome:
+    body: Final = {
+        "model": router,
+        "input": list(turns),
+        "tools": _tools("responses"),
+        "max_output_tokens": 32,
+        **extra,
+    }
     with httpx.Client(timeout=30, trust_env=False, limits=NO_KEEPALIVE) as client:
         response: Final = client.post(f"{_origin(gateway)}/v1/responses", json=body, headers=_headers(gateway, session))
     assert response.status_code == 200, response.text
@@ -290,7 +356,11 @@ def _responses_httpx(gateway: Gateway, router: str, session: str, turns: tuple[J
 
 
 def _responses_openai_async_stream(
-    gateway: Gateway, router: str, session: str, turns: tuple[JsonValue, ...]
+    gateway: Gateway,
+    router: str,
+    session: str,
+    turns: tuple[JsonValue, ...],
+    extra: Mapping[str, JsonValue] = NO_EXTRA,
 ) -> Outcome:
     async def run() -> Outcome:
         async with (
@@ -309,6 +379,7 @@ def _responses_openai_async_stream(
                 tools=cast(list[ResponsesToolParam], _tools("responses")),
                 max_output_tokens=32,
                 stream=True,
+                extra_body=dict(extra),
             )
             events: Final = [event async for event in stream]
             completed: Final = [event for event in events if event.type == "response.completed"]
@@ -318,7 +389,13 @@ def _responses_openai_async_stream(
     return asyncio.run(run())
 
 
-def _messages_anthropic_sync(gateway: Gateway, router: str, session: str, turns: tuple[JsonValue, ...]) -> Outcome:
+def _messages_anthropic_sync(
+    gateway: Gateway,
+    router: str,
+    session: str,
+    turns: tuple[JsonValue, ...],
+    extra: Mapping[str, JsonValue] = NO_EXTRA,
+) -> Outcome:
     with (
         httpx.Client(timeout=30, trust_env=False, limits=NO_KEEPALIVE) as transport,
         anthropic.Anthropic(
@@ -334,12 +411,17 @@ def _messages_anthropic_sync(gateway: Gateway, router: str, session: str, turns:
             max_tokens=32,
             messages=cast(list[MessageParam], list(turns)),
             tools=cast(list[AnthropicToolParam], _tools("messages")),
+            extra_body=dict(extra),
         )
         return Outcome(message.id, str(message.model))
 
 
 def _messages_anthropic_async_stream(
-    gateway: Gateway, router: str, session: str, turns: tuple[JsonValue, ...]
+    gateway: Gateway,
+    router: str,
+    session: str,
+    turns: tuple[JsonValue, ...],
+    extra: Mapping[str, JsonValue] = NO_EXTRA,
 ) -> Outcome:
     async def run() -> Outcome:
         async with (
@@ -358,6 +440,7 @@ def _messages_anthropic_async_stream(
                 messages=cast(list[MessageParam], list(turns)),
                 tools=cast(list[AnthropicToolParam], _tools("messages")),
                 stream=True,
+                extra_body=dict(extra),
             )
             events: Final = [event async for event in stream]
             starts: Final = [event for event in events if isinstance(event, RawMessageStartEvent)]
@@ -374,7 +457,7 @@ def _record(record_property: Recorder, *observed: Observed) -> None:
     record_property("response_ids", " ".join(item.outcome.identity for item in observed))
 
 
-Caller = Callable[[Gateway, str, str, tuple[JsonValue, ...]], Outcome]
+Caller = Callable[[Gateway, str, str, tuple[JsonValue, ...], Mapping[str, JsonValue]], Outcome]
 CLIENTS: Final[MappingProxyType[str, tuple[Endpoint, Caller]]] = MappingProxyType(
     {
         "chat-openai-sync": ("chat", _chat_openai_sync),
@@ -427,17 +510,23 @@ def _tier_that_received(token: str, simple: Wire, complex_tier: Wire) -> str:
         for name, wire in (("simple", simple), ("complex", complex_tier))
         if any(token.encode() in request.body for request in _posts(wire))
     )
-    assert len(hits) == 1, hits
-    return hits[0]
+    assert len(hits) <= 1, hits
+    return hits[0] if hits else "cache"
 
 
 def _step(
-    rig: Rig, endpoint: Endpoint, call: Caller, session: str, script: Sequence[tuple[Turn, str]], worker: int | None
+    rig: Rig,
+    endpoint: Endpoint,
+    call: Caller,
+    session: str,
+    script: Sequence[tuple[Turn, str]],
+    worker: int | None,
+    extra: Mapping[str, JsonValue] = NO_EXTRA,
 ) -> Observed:
     _drain_all((rig.judge, rig.simple, rig.complex_tier))
     turns: Final = _turns(endpoint, script)
     with _only(rig.owned, worker) if worker is not None else ExitStack():
-        outcome: Final = call(rig.owned.gateway, rig.router, session, turns)
+        outcome: Final = call(rig.owned.gateway, rig.router, session, turns, extra)
     return Observed(outcome, len(_posts(rig.judge)), _tier_that_received(script[-1][1], rig.simple, rig.complex_tier))
 
 
@@ -504,7 +593,13 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
         wire_server(_tier(COMPLEX_MODEL)) as complex_tier,
     ):
         router: Final = "pinned-" + uuid.uuid4().hex[:8]
-        config: Final = _config(directory, (judge.url, simple.url, complex_tier.url), router, ("127.0.0.1", relay.port))
+        config: Final = _config(
+            directory,
+            (judge.url, simple.url, complex_tier.url),
+            router,
+            ("127.0.0.1", relay.port),
+            OPT_IN_RESPONSE_CACHE,
+        )
         with owned_proxy_process(
             lane, directory, {}, config=config, workers=2, healthcheck=WorkerHealthcheck.LENIENT
         ) as owned:
@@ -521,7 +616,12 @@ def test_continuation_on_the_other_worker_follows_the_tier_the_session_moved_to(
     endpoint, call = CLIENTS[client]
     session: Final = _session()
     first, second = _workers(rig.owned)
-    script: Final = (("simple", _token()), ("continue", _token()), ("complex", _token()), ("continue", _token()))
+    script: Final[Script] = (
+        ("simple", _token()),
+        ("continue", _token()),
+        ("complex", _token()),
+        ("continue", _token()),
+    )
     step1: Final = _step(rig, endpoint, call, session, script[:1], first)
     step2: Final = _step(rig, endpoint, call, session, script[:2], second)
     step3: Final = _step(rig, endpoint, call, session, script[:3], second)
@@ -541,7 +641,12 @@ def test_a_continuation_refreshes_the_pin_ttl_in_redis_instead_of_rewriting_it(
 ) -> None:
     session: Final = _session()
     first, second = _workers(rig.owned)
-    script: Final = (("simple", _token()), ("continue", _token()), ("complex", _token()), ("continue", _token()))
+    script: Final[Script] = (
+        ("simple", _token()),
+        ("continue", _token()),
+        ("complex", _token()),
+        ("continue", _token()),
+    )
     _step(rig, "chat", _chat_httpx, session, script[:1], first)
     with monitored_commands(rig.cache.host, rig.cache.port) as commands:
         step2: Final = _step(rig, "chat", _chat_httpx, session, script[:2], second)
@@ -561,7 +666,7 @@ def test_a_continuation_refreshes_the_pin_ttl_in_redis_instead_of_rewriting_it(
 def test_a_pin_deleted_in_redis_is_not_resurrected_from_a_worker_copy(rig: Rig, record_property: Recorder) -> None:
     session: Final = _session()
     first, _ = _workers(rig.owned)
-    script: Final = (("complex", _token()), ("continue", _token()))
+    script: Final[Script] = (("complex", _token()), ("continue", _token()))
     step1: Final = _step(rig, "chat", _chat_httpx, session, script[:1], first)
     assert (step1.tier, step1.judge_posts) == ("complex", 1), step1
     _delete_pin(rig.cache, rig.pin_prefix + session)
@@ -575,7 +680,7 @@ def test_a_newer_pin_written_between_the_read_and_the_refresh_wins(rig: Rig, rec
     session: Final = _session()
     key: Final = rig.pin_prefix + session
     first, second = _workers(rig.owned)
-    script: Final = (("complex", _token()), ("continue", _token()), ("continue", _token()))
+    script: Final[Script] = (("complex", _token()), ("continue", _token()), ("continue", _token()))
     _step(rig, "chat", _chat_httpx, session, script[:1], first)
     newer: Final = json.dumps(_pinned(SIMPLE_MODEL, "SIMPLE"))
     rig.relay.intercept(
@@ -600,7 +705,7 @@ def test_a_pin_deleted_after_the_read_is_restored_only_while_no_newer_pin_exists
     session: Final = _session()
     key: Final = rig.pin_prefix + session
     first, _ = _workers(rig.owned)
-    script: Final = (("complex", _token()), ("continue", _token()))
+    script: Final[Script] = (("complex", _token()), ("continue", _token()))
     _step(rig, "chat", _chat_httpx, session, script[:1], first)
     newer: Final = json.dumps(_pinned(SIMPLE_MODEL, "SIMPLE"))
     rig.relay.intercept(
@@ -626,7 +731,7 @@ def test_a_model_only_pin_is_upgraded_in_place(rig: Rig, record_property: Record
     key: Final = rig.pin_prefix + session
     first, _ = _workers(rig.owned)
     _write_raw_pin(rig.cache, key, json.dumps(COMPLEX_MODEL))
-    script: Final = (("simple", _token()), ("continue", _token()))
+    script: Final[Script] = (("simple", _token()), ("continue", _token()))
     step: Final = _step(rig, "chat", _chat_httpx, session, script, first)
     assert (step.tier, step.judge_posts) == ("complex", 0), step
     upgraded: Final = _pin(rig.cache, key)
@@ -654,7 +759,7 @@ def test_an_unusable_pin_in_redis_is_classified_past_and_replaced(
     key: Final = rig.pin_prefix + session
     first, _ = _workers(rig.owned)
     _write_raw_pin(rig.cache, key, raw)
-    script: Final = (("complex", _token()), ("continue", _token()), ("continue", _token()))
+    script: Final[Script] = (("complex", _token()), ("continue", _token()), ("continue", _token()))
     step: Final = _step(rig, "chat", _chat_httpx, session, script[:2], first)
     assert (step.tier, step.judge_posts) == ("complex", 1), step
     assert _pin(rig.cache, key) == _pinned(COMPLEX_MODEL, "COMPLEX")
@@ -669,21 +774,18 @@ def test_a_burst_of_continuations_across_both_workers_replays_the_pin_once_each(
     session: Final = _session()
     key: Final = rig.pin_prefix + session
     first, second = _workers(rig.owned)
-    opening: Final = (("complex", _token()), ("continue", _token()))
+    opening: Final[Script] = (("complex", _token()), ("continue", _token()))
     _step(rig, "chat", _chat_httpx, session, opening[:1], first)
     _step(rig, "chat", _chat_httpx, session, opening, second)
     pinned: Final = _pin(rig.cache, key)
     _drain_all((rig.judge, rig.simple, rig.complex_tier))
     tokens: Final = tuple(_token() for _ in range(12))
+
+    def continuation(token: str) -> Outcome:
+        return _chat_httpx(rig.owned.gateway, rig.router, session, _turns("chat", (*opening, ("continue", token))))
+
     with ThreadPoolExecutor(max_workers=12) as pool:
-        outcomes: Final = tuple(
-            pool.map(
-                lambda token: _chat_httpx(
-                    rig.owned.gateway, rig.router, session, _turns("chat", (*opening, ("continue", token)))
-                ),
-                tokens,
-            )
-        )
+        outcomes: Final = tuple(pool.map(continuation, tokens))
     assert {outcome.model for outcome in outcomes} == {COMPLEX_MODEL}, outcomes
     assert len({outcome.identity for outcome in outcomes}) == 12, outcomes
     assert _posts(rig.judge) == () and _posts(rig.simple) == ()
@@ -694,6 +796,85 @@ def test_a_burst_of_continuations_across_both_workers_replays_the_pin_once_each(
         _spend_agrees(Observed(outcome, 0, "complex"), token)
 
 
+@pytest.mark.parametrize("client", tuple(CLIENTS), ids=tuple(CLIENTS))
+def test_a_response_cache_hit_still_reads_the_pin_from_redis_and_refreshes_it(
+    rig: Rig, client: str, record_property: Recorder
+) -> None:
+    endpoint, call = CLIENTS[client]
+    session: Final = _session()
+    first, second = _workers(rig.owned)
+    script: Final[Script] = (
+        ("simple", _token()),
+        ("continue", _token()),
+        ("complex", _token()),
+        ("continue", _token()),
+    )
+    step1: Final = _step(rig, endpoint, call, session, script[:1], first, USE_CACHE)
+    step2: Final = _step(rig, endpoint, call, session, script[:2], second, USE_CACHE)
+    step3: Final = _step(rig, endpoint, call, session, script[:3], second, USE_CACHE)
+    step4: Final = _step(rig, endpoint, call, session, script[:4], first, USE_CACHE)
+    with monitored_commands(rig.cache.host, rig.cache.port) as commands:
+        hit: Final = _step(rig, endpoint, call, session, script[:4], first, USE_CACHE)
+        on_hit: Final = commands_mentioning(commands, rig.pin_prefix + session)
+    _record(record_property, step1, step2, step3, step4, hit)
+    assert (step1.tier, step1.judge_posts) == ("simple", 1), step1
+    assert (step2.tier, step2.judge_posts) == ("simple", 0), step2
+    assert (step3.tier, step3.judge_posts) == ("complex", 1), step3
+    assert (step4.tier, step4.judge_posts, step4.outcome.model) == ("complex", 0, step3.outcome.model), step4
+    assert (hit.tier, hit.judge_posts, hit.outcome.model) == ("cache", 0, step4.outcome.model), hit
+    assert same_response(hit.outcome.identity, step4.outcome.identity), (hit, step4)
+    assert tuple(command[0] for command in on_hit) == ("GET", "EXPIRE"), on_hit
+    assert _pin(rig.cache, rig.pin_prefix + session) == _pinned(step3.outcome.model, "COMPLEX")
+
+
+def test_a_response_cache_hit_does_not_resurrect_a_pin_deleted_in_redis(rig: Rig, record_property: Recorder) -> None:
+    session: Final = _session()
+    first, _ = _workers(rig.owned)
+    script: Final[Script] = (("complex", _token()), ("continue", _token()))
+    step1: Final = _step(rig, "chat", _chat_httpx, session, script[:1], first, USE_CACHE)
+    step2: Final = _step(rig, "chat", _chat_httpx, session, script[:2], first, USE_CACHE)
+    _delete_pin(rig.cache, rig.pin_prefix + session)
+    hit: Final = _step(rig, "chat", _chat_httpx, session, script[:2], first, USE_CACHE)
+    _record(record_property, step1, step2, hit)
+    assert (step1.tier, step1.judge_posts) == ("complex", 1), step1
+    assert (step2.tier, step2.judge_posts) == ("complex", 0), step2
+    assert (hit.tier, hit.judge_posts, hit.outcome) == ("cache", 1, step2.outcome), hit
+    assert _pin(rig.cache, rig.pin_prefix + session) == _pinned(COMPLEX_MODEL, "COMPLEX")
+
+
+def _cached_chat(gateway: Gateway, token: str, ttl: str) -> Outcome:
+    body: Final = {
+        "model": SIMPLE_MODEL,
+        "messages": [{"role": "user", "content": f"hello {token}"}],
+        "cache": {"use-cache": True, "ttl": ttl},
+    }
+    with httpx.Client(timeout=30, trust_env=False, limits=NO_KEEPALIVE) as client:
+        response: Final = client.post(
+            f"{_origin(gateway)}/v1/chat/completions", json=body, headers={"Authorization": f"Bearer {gateway.key}"}
+        )
+    assert response.status_code == 200, response.text
+    payload: Final = JSON_OBJECT.validate_json(response.content)
+    return Outcome(string_value(payload["id"]), string_value(payload["model"]))
+
+
+@pytest.mark.parametrize("ttl", ("nan", "not-a-number", "inf", "600"), ids=("nan", "unparseable", "infinite", "finite"))
+def test_a_request_ttl_that_is_not_a_finite_number_still_serves_the_repeat_from_the_cache(
+    rig: Rig, ttl: str, record_property: Recorder
+) -> None:
+    first, _ = _workers(rig.owned)
+    token: Final = _token()
+    later: Final = _token()
+    _drain_all((rig.judge, rig.simple, rig.complex_tier))
+    with _only(rig.owned, first):
+        repeated: Final = tuple(_cached_chat(rig.owned.gateway, token, ttl) for _ in range(2))
+        afterwards: Final = tuple(_cached_chat(rig.owned.gateway, later, str(PIN_TTL_SECONDS)) for _ in range(2))
+    posts: Final = _posts(rig.simple)
+    record_property("response_ids", " ".join(outcome.identity for outcome in (*repeated, *afterwards)))
+    assert sum(token.encode() in request.body for request in posts) == 1, (ttl, len(posts))
+    assert sum(later.encode() in request.body for request in posts) == 1, (ttl, len(posts))
+    assert {outcome.model for outcome in (*repeated, *afterwards)} == {SIMPLE_MODEL}, (repeated, afterwards)
+
+
 @contextmanager
 def _own_rig(
     directory: Path,
@@ -701,15 +882,19 @@ def _own_rig(
     workers: int,
     healthcheck: WorkerHealthcheck,
     overrides: dict[str, str],
+    judging: Callable[[Request], Reply] = _judge,
+    router_extras: Mapping[str, JsonValue] = NO_EXTRA,
 ) -> Iterator[tuple[OwnedProxy, Wire, Wire, Wire, str]]:
     with (
         gateway_from_environment() as lane,
-        wire_server(_judge) as judge,
+        wire_server(judging) as judge,
         wire_server(_tier(SIMPLE_MODEL)) as simple,
         wire_server(_tier(COMPLEX_MODEL)) as complex_tier,
     ):
         router: Final = "own-" + uuid.uuid4().hex[:8]
-        config: Final = _config(directory, (judge.url, simple.url, complex_tier.url), router, redis)
+        config: Final = _config(
+            directory, (judge.url, simple.url, complex_tier.url), router, redis, PLAIN_SETTINGS, router_extras
+        )
         with owned_proxy_process(
             lane, directory, overrides, config=config, workers=workers, healthcheck=healthcheck
         ) as owned:
@@ -731,6 +916,7 @@ def _own_step(
     return Observed(outcome, len(_posts(judge)), _tier_that_received(script[-1][1], simple, complex_tier))
 
 
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 def test_a_redis_outage_serves_continuations_from_worker_copies_and_recovery_reads_redis_again(
     tmp_path: Path, record_property: Recorder
 ) -> None:
@@ -745,7 +931,7 @@ def test_a_redis_outage_serves_continuations_from_worker_copies_and_recovery_rea
             wires: Final = (judge, simple, complex_tier)
             session: Final = _session()
             first, second = _workers(owned)
-            script: Final = (("complex", _token()), ("continue", _token()), ("continue", _token()))
+            script: Final[Script] = (("complex", _token()), ("continue", _token()), ("continue", _token()))
             step1: Final = _own_step(owned, wires, router, session, script[:1], first)
             assert (step1.tier, step1.judge_posts) == ("complex", 1), step1
             key: Final = _pin_key_for(cache, session)
@@ -766,11 +952,17 @@ def test_a_redis_outage_serves_continuations_from_worker_copies_and_recovery_rea
             _record(record_property, step1, held, cold, recovered)
 
 
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
 def test_without_redis_the_pin_lives_in_worker_memory(tmp_path: Path, record_property: Recorder) -> None:
     with _own_rig(tmp_path, None, 1, WorkerHealthcheck.STRICT, {}) as (owned, judge, simple, complex_tier, router):
         wires: Final = (judge, simple, complex_tier)
         session: Final = _session()
-        script: Final = (("simple", _token()), ("continue", _token()), ("complex", _token()), ("continue", _token()))
+        script: Final[Script] = (
+            ("simple", _token()),
+            ("continue", _token()),
+            ("complex", _token()),
+            ("continue", _token()),
+        )
         steps: Final = tuple(_own_step(owned, wires, router, session, script[: index + 1], None) for index in range(4))
         assert tuple((step.tier, step.judge_posts) for step in steps) == (
             ("simple", 1),
@@ -780,6 +972,39 @@ def test_without_redis_the_pin_lives_in_worker_memory(tmp_path: Path, record_pro
         ), steps
         assert steps[3].outcome.model == steps[2].outcome.model != steps[0].outcome.model, steps
         _record(record_property, *steps)
+
+
+@pytest.mark.timeout(2 * graceful_stop_seconds() + 120)
+def test_a_pin_redis_no_longer_holds_is_not_served_from_a_worker_copy_once_redis_goes_down(
+    tmp_path: Path, record_property: Recorder
+) -> None:
+    failing: Final = threading.Event()
+    with owned_redis(tmp_path) as cache:
+        with _own_rig(
+            tmp_path,
+            (cache.host, cache.port),
+            2,
+            WorkerHealthcheck.LENIENT,
+            {},
+            _failing_judge(failing),
+            DEFAULT_MODEL_FALLBACK,
+        ) as (owned, judge, simple, complex_tier, router):
+            wires: Final = (judge, simple, complex_tier)
+            session: Final = _session()
+            first, _ = _workers(owned)
+            script: Final[Script] = (("complex", _token()), ("continue", _token()), ("continue", _token()))
+            step1: Final = _own_step(owned, wires, router, session, script[:1], first)
+            assert (step1.tier, step1.judge_posts) == ("complex", 1), step1
+            key: Final = _pin_key_for(cache, session)
+            _delete_pin(cache, key)
+            failing.set()
+            dropped: Final = _own_step(owned, wires, router, session, script[:2], first)
+            assert (dropped.tier, dropped.outcome.model) == ("simple", SIMPLE_MODEL), dropped
+            assert _pin(cache, key) is None
+            cache.stop()
+            outage: Final = _own_step(owned, wires, router, session, script[:3], first)
+            _record(record_property, step1, dropped, outage)
+            assert (outage.tier, outage.outcome.model) == ("simple", SIMPLE_MODEL), outage
 
 
 def _burst_continuation(
@@ -817,7 +1042,7 @@ def test_a_worker_killed_mid_burst_is_replaced_by_one_that_reads_the_pin_from_re
         ):
             wires: Final = (judge, simple, complex_tier)
             session: Final = _session()
-            opening: Final = (("complex", _token()), ("continue", _token()))
+            opening: Final[Script] = (("complex", _token()), ("continue", _token()))
             step1: Final = _own_step(owned, wires, router, session, opening[:1], None)
             assert (step1.tier, step1.judge_posts) == ("complex", 1), step1
             workers: Final = _workers(owned)

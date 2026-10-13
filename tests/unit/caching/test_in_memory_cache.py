@@ -344,19 +344,38 @@ def test_in_memory_cache_refresh_ttl_moves_the_eviction_deadline_without_adding_
 
 
 @pytest.mark.timeout(10)
-def test_in_memory_cache_nan_ttl_stores_nothing_and_leaves_the_next_write_working() -> None:
+@pytest.mark.parametrize("ttl", ("nan", float("nan"), "not-a-number", [60]), ids=("nan_text", "nan", "unparseable", "list"))
+def test_in_memory_cache_a_ttl_that_is_not_a_number_falls_back_to_the_default_ttl(ttl: str | float | list[int]) -> None:
     clock: Final = MagicMock(return_value=0.0)
-    cache: Final = InMemoryCache(max_size_in_memory=2, clock=clock)
-    cache.set_cache("live", "v", ttl=60)
-    cache.set_cache("nan", "v", ttl="nan")
+    cache: Final = InMemoryCache(max_size_in_memory=10, default_ttl=60, clock=clock)
+    cache.set_cache("live", "v", ttl=600)
+    cache.set_cache("malformed", "v", ttl=ttl)
     assert cache.refresh_ttl("live", float("nan")) is False
-    cache.set_cache("next", "v", ttl=60)
-    cache.set_cache("live", "v2", ttl=60)
-    assert cache.get_cache("nan") is None
-    assert cache.get_cache("next") == "v"
-    assert cache.get_cache("live") == "v2"
+    clock.return_value = 59.0
+    cache.set_cache("next", "v", ttl=600)
+    assert cache.get_cache("malformed") == "v"
     clock.return_value = 60.001
-    assert cache.get_cache("live") is None
+    cache.set_cache("after", "v", ttl=600)
+    assert cache.get_cache("malformed") is None
+    assert cache.get_cache("live") == "v"
+    assert cache.get_cache("next") == "v"
+
+
+
+def test_in_memory_cache_readding_a_deleted_key_keeps_one_heap_record_once_refreshes_pass_its_old_deadlines() -> None:
+    clock: Final = MagicMock(return_value=0.0)
+    cache: Final = InMemoryCache(max_size_in_memory=100, clock=clock)
+    cache.set_cache("anchor", "v", ttl=5)
+    cache.set_cache("pin", "v", ttl=10)
+    for readd_at in range(1, 5):
+        clock.return_value = float(readd_at)
+        cache.delete_cache("pin")
+        cache.set_cache("pin", "v", ttl=10)
+    for refresh_at in range(5, 40):
+        clock.return_value = float(refresh_at)
+        assert cache.refresh_ttl("pin", 10) is True
+    assert [key for _, key in cache.expiration_heap] == ["pin"]
+    assert cache.get_cache("pin") == "v"
 
 
 def test_in_memory_cache_refresh_ttl_never_evicts_a_neighbour_from_a_full_cache() -> None:

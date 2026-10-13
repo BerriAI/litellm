@@ -14,7 +14,7 @@ import math
 import sys
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
@@ -51,6 +51,7 @@ class InMemoryCache(BaseCache):
         self.cache_dict: dict = {}
         self.ttl_dict: dict[str, float] = {}
         self.expiration_heap: list[tuple[float, str]] = []
+        self._filed_expiry: dict[str, float] = {}
         self._increment_lock = threading.Lock()
         self._clock = clock if clock is not None else lambda: time.time()
 
@@ -105,22 +106,26 @@ class InMemoryCache(BaseCache):
         self.ttl_dict.pop(key, None)
 
     def _prune_heap_roots(self, current_time: float) -> None:
-        # Step 1: Remove expired or outdated items
         while self.expiration_heap:
             expiration_time, key = self.expiration_heap[0]
-
-            # Case 1: Heap entry is outdated
-            if expiration_time != (live_expiry := self.ttl_dict.get(key)):
-                heapq.heappop(self.expiration_heap)
-                if live_expiry is not None:
-                    heapq.heappush(self.expiration_heap, (live_expiry, key))
-            # Case 2: Entry is valid but expired
-            elif expiration_time <= current_time:
-                heapq.heappop(self.expiration_heap)
-                self._remove_key(key)
-            else:
-                # Case 3: Entry is valid and not expired
+            if expiration_time == self.ttl_dict.get(key) and expiration_time > current_time:
                 break
+            heapq.heappop(self.expiration_heap)
+            self._settle_popped_record(expiration_time, key)
+
+    def _settle_popped_record(self, expiration_time: float, key: str) -> None:
+        live_expiry: Final = self.ttl_dict.get(key)
+        if live_expiry == expiration_time:
+            self._remove_key(key)
+            self._filed_expiry.pop(key, None)
+            return
+        if self._filed_expiry.get(key) != expiration_time:
+            return
+        if live_expiry is None:
+            self._filed_expiry.pop(key, None)
+            return
+        self._filed_expiry[key] = live_expiry
+        heapq.heappush(self.expiration_heap, (live_expiry, key))
 
     def evict_cache(self):
         """
@@ -141,11 +146,7 @@ class InMemoryCache(BaseCache):
         # Step 2: Evict if cache is still full
         while len(self.cache_dict) >= self.max_size_in_memory:
             expiration_time, key = heapq.heappop(self.expiration_heap)
-            # Skip if key was removed or updated
-            if (live_expiry := self.ttl_dict.get(key)) == expiration_time:
-                self._remove_key(key)
-            elif live_expiry is not None:
-                heapq.heappush(self.expiration_heap, (live_expiry, key))
+            self._settle_popped_record(expiration_time, key)
 
         # de-reference the removed item
         # https://www.geeksforgeeks.org/diagnosing-and-fixing-memory-leaks-in-python/
@@ -178,13 +179,21 @@ class InMemoryCache(BaseCache):
             return
 
         if self.allow_ttl_override(key):
-            ttl: Final = float(kwargs["ttl"]) if "ttl" in kwargs and kwargs["ttl"] is not None else self.default_ttl
+            ttl: Final = self._ttl_seconds(kwargs["ttl"]) if "ttl" in kwargs else self.default_ttl
             expiry: Final = self._clock() + ttl
-            if math.isnan(expiry):
-                return
             self.ttl_dict[key] = expiry
+            self._filed_expiry[key] = expiry
             heapq.heappush(self.expiration_heap, (expiry, key))
         self.cache_dict[key] = value
+
+    def _ttl_seconds(self, requested: str | float | None) -> float:
+        if requested is None:
+            return self.default_ttl
+        try:
+            seconds: Final = float(requested)
+        except (TypeError, ValueError):
+            return self.default_ttl
+        return self.default_ttl if math.isnan(seconds) else seconds
 
     async def async_set_cache(self, key, value, **kwargs):
         self.set_cache(key=key, value=value, **kwargs)
@@ -268,7 +277,7 @@ class InMemoryCache(BaseCache):
         return self.increment_cache(key=key, value=value, **kwargs)
 
     async def async_increment_pipeline(
-        self, increment_list: list["RedisPipelineIncrementOperation"], **kwargs
+        self, increment_list: Sequence["RedisPipelineIncrementOperation"], **kwargs
     ) -> list[float] | None:
         results: Final = []
         for increment in increment_list:
@@ -280,6 +289,7 @@ class InMemoryCache(BaseCache):
         self.cache_dict.clear()
         self.ttl_dict.clear()
         self.expiration_heap.clear()
+        self._filed_expiry.clear()
 
     async def disconnect(self):
         pass

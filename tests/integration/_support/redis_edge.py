@@ -12,7 +12,6 @@ from typing import Final
 
 from pydantic import TypeAdapter
 from redis import Redis
-from redis.exceptions import TimeoutError as RedisTimeoutError
 
 from tests.integration._support.async_server import LoopbackServer, close_writer
 from tests.integration._support.redis_process import free_loopback_port
@@ -178,15 +177,12 @@ def monitored_commands(host: str, port: int) -> Iterator[SimpleQueue[str]]:
     stop_marker: Final = f"monitor-stop-{uuid.uuid4().hex}"
 
     def capture() -> None:
-        with Redis(host=host, port=port, socket_timeout=1, decode_responses=True) as client:
+        with Redis(host=host, port=port, decode_responses=True) as client:
             with client.monitor() as monitor:
                 started.set()
                 stream: Final = iter(monitor.listen())
                 while not stopped.is_set():
-                    try:
-                        record: Final = MONITOR_RECORD.validate_python(next(stream))
-                    except RedisTimeoutError:
-                        continue
+                    record: Final = MONITOR_RECORD.validate_python(next(stream))
                     command: Final = record.get("command")
                     if not isinstance(command, str):
                         continue

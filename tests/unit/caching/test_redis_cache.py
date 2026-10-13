@@ -1690,6 +1690,19 @@ async def test_async_get_cache_or_raise_reports_an_undecodable_value_as_a_failed
     assert service_logger.mock_testing_async_success_hook == 0
 
 
+
+@pytest.mark.asyncio
+async def test_async_get_cache_lets_a_client_build_failure_reach_the_caller(
+    get_cache_with_service_logger: tuple[RedisCache, ServiceLogging],
+):
+    cache, _ = get_cache_with_service_logger
+    with (
+        patch.object(cache, "init_async_client", side_effect=OSError("cannot build client")),
+        pytest.raises(OSError, match="cannot build client"),
+    ):
+        await cache.async_get_cache("lit9316")
+
+
 class _FormatCountingStr(str):
     format_calls = 0
 

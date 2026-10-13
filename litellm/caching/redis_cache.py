@@ -1715,8 +1715,10 @@ class RedisCache(BaseCache):
 
     @_redis_circuit_breaker_guard
     async def async_get_cache(self, key, parent_otel_span: Span | None = None, **kwargs):
+        commands: Final = self._async_commands()
+        namespaced_key: Final = self.check_and_fix_namespace(key=key)
         try:
-            return await self._async_get_reporting_to_service_hooks(key, parent_otel_span)
+            return await self._async_get_reporting_to_service_hooks(commands, namespaced_key, parent_otel_span)
         except Exception as e:
             print_verbose(f"litellm.caching.caching: async get() - Got exception from REDIS: {e}")
             _record_swallowed_redis_failure(self._circuit_breaker, e)
@@ -1724,11 +1726,13 @@ class RedisCache(BaseCache):
     @_redis_circuit_breaker_guard
     async def async_get_cache_or_raise(self, key: str, parent_otel_span: Span | None = None) -> object:
         """GET that raises on a Redis failure, so a caller can tell a failed read from a miss."""
-        return await self._async_get_reporting_to_service_hooks(key, parent_otel_span)
+        return await self._async_get_reporting_to_service_hooks(
+            self._async_commands(), self.check_and_fix_namespace(key=key), parent_otel_span
+        )
 
-    async def _async_get_reporting_to_service_hooks(self, key: str, parent_otel_span: Span | None):  # noqa: ANN202  # a named return retypes async_get_cache for every caller
-        commands: Final = self._async_commands()
-        namespaced_key: Final = self.check_and_fix_namespace(key=key)
+    async def _async_get_reporting_to_service_hooks(  # noqa: ANN202  # a named return retypes async_get_cache for every caller
+        self, commands: _AsyncRedisCommands, namespaced_key: str, parent_otel_span: Span | None
+    ):
         start_time: Final = time.time()
         try:
             print_verbose(f"Get Async Redis Cache: key: {namespaced_key}")
