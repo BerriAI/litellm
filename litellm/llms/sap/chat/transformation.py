@@ -2,11 +2,12 @@
 Translate from OpenAI's `/v1/chat/completions` to SAP Generative AI Hub's Orchestration Service`v2/completion`
 """
 
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from functools import cached_property
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.types.llms.openai import AllMessageValues
@@ -54,14 +55,14 @@ _SAP_MODEL_PARAMS_EXCLUDED_KEYS: Final[frozenset[str]] = frozenset(
 
 
 def validate_dict(
-    data: dict, model: type
+    data: Mapping[str, object], model: type
 ) -> dict:  # mutable-ok: pydantic validation boundary; both input and output are untyped wire dicts
     return model(**data).model_dump(by_alias=True, exclude_unset=True)
 
 
 def _fold_message_cache_control(
-    message: dict[str, object],
-) -> dict[str, object]:
+    message: Mapping[str, object],
+) -> Mapping[str, object]:
     """Move a message-level cache_control marker onto the content block.
 
     litellm's cache_control_injection_points hook attaches cache_control to the
@@ -90,6 +91,51 @@ def _fold_message_cache_control(
     return base
 
 
+class _IncomingTextPart(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    text: str
+    cache_control: object = None
+
+
+_CONTENT_PARTS: Final = TypeAdapter(tuple[object, ...])
+
+
+def _text_part(part: object) -> Mapping[str, object] | None:
+    if isinstance(part, str):
+        return {"type": "text", "text": part} if part else None
+    try:
+        parsed: Final = _IncomingTextPart.model_validate(part)
+    except ValidationError:
+        return None
+    if not parsed.text:
+        return None
+    if parsed.cache_control is None:
+        return {"type": "text", "text": parsed.text}
+    return {"type": "text", "text": parsed.text, "cache_control": parsed.cache_control}
+
+
+def _content_parts(content: object) -> tuple[object, ...] | None:
+    try:
+        return _CONTENT_PARTS.validate_python(content)
+    except ValidationError:
+        return None
+
+
+def _text_only_content(content: object) -> object:
+    parts: Final = _content_parts(content)
+    if parts is None:
+        return content
+    text_parts: Final = [part for part in map(_text_part, parts) if part is not None]
+    return text_parts or ""
+
+
+def _drop_non_text_content(message: Mapping[str, object]) -> Mapping[str, object]:
+    if message.get("role") == "user" or "content" not in message:
+        return message
+    return {**message, "content": _text_only_content(message["content"])}
+
+
 def _message_role_mapping(role: str) -> type[ChatMessage]:
     return {
         "user": SAPUserMessage,
@@ -101,7 +147,7 @@ def _message_role_mapping(role: str) -> type[ChatMessage]:
 def _messages_to_sap_template(messages: list[AllMessageValues]) -> list:
     template: Final = []
     for message in messages:
-        folded_message = _fold_message_cache_control(message)
+        folded_message = _fold_message_cache_control(_drop_non_text_content(message))
         message_role_class = _message_role_mapping(str(folded_message["role"]))
         validated_message = validate_dict(folded_message, message_role_class)
         template.append(validated_message)

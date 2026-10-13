@@ -923,3 +923,104 @@ class TestCacheControl:
         content = self._template(body)[0]["content"]
         assert "cache_control" not in content[0]
         assert content[1].get("cache_control") == {"type": "ephemeral"}
+
+
+def _sap_template(messages: list) -> list:
+    from litellm.llms.sap.chat.transformation import GenAIHubOrchestrationConfig
+
+    body = GenAIHubOrchestrationConfig().transform_request(
+        model="anthropic--claude-3-5-sonnet",
+        messages=messages,
+        optional_params={},
+        litellm_params={},
+        headers={},
+    )
+    return body["config"]["modules"]["prompt_templating"]["prompt"]["template"]
+
+
+_IMAGE_PART = {"type": "image_url", "image_url": {"url": "data:image/png;base64,abc="}}
+
+
+@pytest.mark.parametrize(
+    ("message", "expected_content"),
+    [
+        (
+            {"role": "tool", "tool_call_id": "tu1", "content": [{"type": "text", "text": "here"}, _IMAGE_PART]},
+            [{"type": "text", "text": "here"}],
+        ),
+        (
+            {"role": "tool", "tool_call_id": "tu1", "content": [_IMAGE_PART]},
+            "",
+        ),
+        (
+            {
+                "role": "assistant",
+                "content": [
+                    {"type": "thinking", "thinking": "hmm", "signature": "sig"},
+                    {"type": "text", "text": "answer"},
+                ],
+            },
+            [{"type": "text", "text": "answer"}],
+        ),
+        (
+            {"role": "assistant", "content": [{"type": "refusal", "refusal": "no"}]},
+            "",
+        ),
+        (
+            {"role": "tool", "tool_call_id": "tu1", "content": [{"type": "text", "text": ""}, "", "ok"]},
+            [{"type": "text", "text": "ok"}],
+        ),
+        (
+            {"role": "system", "content": ["be brief", "be kind"]},
+            [{"type": "text", "text": "be brief"}, {"type": "text", "text": "be kind"}],
+        ),
+        (
+            {
+                "role": "system",
+                "content": [
+                    {"type": "text", "text": "rules", "cache_control": {"type": "ephemeral"}},
+                    _IMAGE_PART,
+                ],
+            },
+            [{"type": "text", "text": "rules", "cache_control": {"type": "ephemeral"}}],
+        ),
+    ],
+)
+def test_non_text_parts_are_dropped_from_text_only_roles(message: dict, expected_content: object):
+    template = _sap_template([{"role": "user", "content": "hi"}, message])
+
+    assert template[1]["content"] == expected_content, template
+
+
+def test_message_level_cache_control_lands_on_last_text_part_when_tool_result_ends_with_image():
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "tu1",
+        "content": [{"type": "text", "text": "screenshot taken"}, _IMAGE_PART],
+        "cache_control": {"type": "ephemeral"},
+    }
+
+    template = _sap_template([{"role": "user", "content": "hi"}, tool_message])
+
+    assert template[1]["content"] == [
+        {"type": "text", "text": "screenshot taken", "cache_control": {"type": "ephemeral"}}
+    ], template
+
+
+def test_user_message_keeps_its_image_part():
+    user_message = {"role": "user", "content": [{"type": "text", "text": "describe"}, _IMAGE_PART]}
+
+    template = _sap_template([user_message])
+
+    assert template[0]["content"] == [{"type": "text", "text": "describe"}, _IMAGE_PART], template
+
+
+def test_text_part_with_invalid_cache_control_is_rejected_instead_of_dropped():
+    tool_message = {
+        "role": "tool",
+        "tool_call_id": "tu1",
+        "content": [{"type": "text", "text": "keep me", "cache_control": "ephemeral"}, _IMAGE_PART],
+    }
+
+    with pytest.raises(ValidationError):
+        _sap_template([{"role": "user", "content": "hi"}, tool_message])
