@@ -12,8 +12,7 @@ from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_di
 from litellm.rust_bridge import bindings, configuration, runtime
 from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
-from litellm.rust_bridge.lifecycle import Complete, StreamChunk
-from litellm.rust_bridge.public_execution import AsyncStream, SyncStream
+from litellm.rust_bridge.execution import AsyncStream, Complete, StreamChunk, SyncStream
 
 
 class RustBridgeDeclined(Exception):

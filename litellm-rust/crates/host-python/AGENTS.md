@@ -37,7 +37,7 @@ Terminal notifications share the selected response or exception. An ordinary not
   - Keep diagnostic counters in the consumer. Wrapper invocations do not measure every interpreter release
   - Release exclusive class borrows/locks before Python calls or decrements that can invoke finalizers. Expose retained Python edges to GC without calling Python during traversal
 - Keep coroutine driving in the shared Python driver and the native handle
-  - Shared driver implementation: `litellm/rust_bridge/lifecycle.py`, handle: `src/handle.rs`, call driver: `src/driver.rs`, native-backed behavior tests: `tests/lifecycle.py`. The consumer supplies the lifecycle binding
+  - Shared driver implementation: `litellm/rust_bridge/execution.py`, handle: `src/handle.rs`, call driver: `src/driver.rs`, native-backed behavior tests: `tests/lifecycle.py`. The consumer supplies the lifecycle binding
   - Every lifecycle suspension is awaited inline in the caller's task. `into_future` creates a separate task and cannot satisfy this contract
 - References: [ownership](https://pyo3.rs/v0.29.2/types.html), [conversions](https://pyo3.rs/v0.29.2/conversions/traits.html), [pythonize errors](https://docs.rs/pythonize/0.29.0/src/pythonize/error.rs.html)
   - [GC](https://pyo3.rs/v0.29.2/class/protocols.html#garbage-collector-integration), [re-entry](https://pyo3.rs/v0.29.2/class/call.html), [parallelism](https://pyo3.rs/v0.29.2/parallelism.html), [async delivery source](https://docs.rs/pyo3-async-runtimes/0.29.0/src/pyo3_async_runtimes/generic.rs.html)

@@ -70,14 +70,14 @@ pub fn call_options(asynchronous: bool) -> CallOptions {
 
 pub fn install_lifecycle_module(py: Python<'_>) -> Bound<'_, PyModule> {
     let source = std::ffi::CString::new(concat!(
-        include_str!("../../../../../litellm/rust_bridge/lifecycle.py"),
+        include_str!("../../../../../litellm/rust_bridge/execution.py"),
         "\n_drive = drive\n\n\nasync def drive(execution):\n    return await _drive(execution, AsyncStream)\n",
     ))
     .unwrap();
     PyModule::from_code(
         py,
         &source,
-        pyo3::ffi::c_str!("lifecycle.py"),
+        pyo3::ffi::c_str!("execution.py"),
         pyo3::ffi::c_str!("host_test_lifecycle"),
     )
     .unwrap()

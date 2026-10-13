@@ -1,9 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass
-from typing import Final, Protocol
+from typing import Final, Protocol, TypeVar, cast  # noqa: TID251  # trusts the native stub at the binding boundary
+
+from pydantic import TypeAdapter
+
+_Call = TypeVar("_Call")
 
 
 @dataclass(frozen=True, slots=True)
@@ -40,6 +44,11 @@ class Execution(Protocol):
 
 
 _REOPENED: Final = "execution opened a stream twice"
+_HEADERS: Final = TypeAdapter(Mapping[str, object])
+
+
+def _headers(head: object) -> Mapping[str, object]:
+    return _HEADERS.validate_python(head)
 
 
 class StreamClosed(Exception):
@@ -91,13 +100,25 @@ def run(execution: Execution, open_stream: Callable[[Execution, object], object]
         return _hand_off(execution, _settled(execution.send(None)), open_stream, cleanup)
 
 
+def synchronous(native: Callable[[_Call], object]) -> Callable[[_Call], object]:
+    return lambda call: run(_execution(native(call)), SyncStream)
+
+
+def asynchronous(native: Callable[[_Call], object]) -> Callable[[_Call], Awaitable[object]]:
+    return lambda call: drive(_execution(native(call)), AsyncStream)
+
+
+def _execution(value: object) -> Execution:
+    return cast("Execution", value)  # cast-ok: native entrypoints return Execution per _native.pyi
+
+
 class AsyncStream(AsyncIterator[object]):
     """A streamed native call: each read resumes the execution until its next chunk."""
 
-    def __init__(self, execution: Execution, head: object = None) -> None:
+    def __init__(self, execution: Execution, head: object) -> None:
         self._execution: Final = execution
         self._done = False
-        self.head: Final = head
+        self._hidden_params: dict[str, object] = dict(_headers(head))  # mutable-ok: header writers mutate it
 
     def __aiter__(self) -> AsyncStream:
         return self
@@ -136,10 +157,10 @@ class AsyncStream(AsyncIterator[object]):
 class SyncStream(Iterator[object]):
     """The sync form of `AsyncStream`; its execution never suspends on an awaitable."""
 
-    def __init__(self, execution: Execution, head: object = None) -> None:
+    def __init__(self, execution: Execution, head: object) -> None:
         self._execution: Final = execution
         self._done = False
-        self.head: Final = head
+        self._hidden_params: dict[str, object] = dict(_headers(head))  # mutable-ok: header writers mutate it
 
     def __iter__(self) -> SyncStream:
         return self

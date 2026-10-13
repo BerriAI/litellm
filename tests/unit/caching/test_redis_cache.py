@@ -1599,18 +1599,18 @@ def drive():
     return _settle()
 
 
-def test_call_stack_info_skips_native_lifecycle_frames():
-    """The Rust execution awaits the response-cache coroutine from ``lifecycle._settle`` inside
+def test_call_stack_info_skips_native_execution_frames():
+    """The Rust execution awaits the response-cache coroutine from ``execution._settle`` inside
     ``drive``; those frames forward every native suspension, so the chain names the code that
     started the native call instead of ``_settle <- drive``."""
-    lifecycle_globals = {"__name__": "litellm.rust_bridge.lifecycle", "_native_probe": _native_probe}
-    native_settle = types.FunctionType(_settle.__code__, lifecycle_globals, "_settle")
-    native_drive = types.FunctionType(drive.__code__, {**lifecycle_globals, "_settle": native_settle}, "drive")
+    execution_globals = {"__name__": "litellm.rust_bridge.execution", "_native_probe": _native_probe}
+    native_settle = types.FunctionType(_settle.__code__, execution_globals, "_settle")
+    native_drive = types.FunctionType(drive.__code__, {**execution_globals, "_settle": native_settle}, "drive")
 
     def anthropic_messages():
         return native_drive()
 
-    assert anthropic_messages() == "anthropic_messages <- test_call_stack_info_skips_native_lifecycle_frames"
+    assert anthropic_messages() == "anthropic_messages <- test_call_stack_info_skips_native_execution_frames"
 
 
 class _FormatCountingStr(str):

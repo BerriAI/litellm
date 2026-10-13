@@ -6,7 +6,7 @@ from typing import Final
 
 import pytest
 
-from litellm.rust_bridge.lifecycle import (
+from litellm.rust_bridge.execution import (
     AsyncStream,
     Await,
     Complete,
@@ -95,11 +95,11 @@ def test_stream_read_rejects_a_second_open_and_closes_the_execution(asynchronous
     execution: Final = ScriptedExecution([StreamChunk("first"), StreamOpen("head")])
 
     async def read() -> tuple[object, ...]:
-        stream: Final = AsyncStream(execution)
+        stream: Final = AsyncStream(execution, {})
         return (await anext(stream), await anext(stream))
 
     def read_sync() -> tuple[object, ...]:
-        stream: Final = SyncStream(execution)
+        stream: Final = SyncStream(execution, {})
         return (next(stream), next(stream))
 
     with pytest.raises(RuntimeError, match="opened a stream twice"):

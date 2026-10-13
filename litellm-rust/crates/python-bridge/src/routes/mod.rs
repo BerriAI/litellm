@@ -130,7 +130,7 @@ fn call_hooks(
 }
 
 fn execution_steps(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
-    py.import("litellm.rust_bridge.lifecycle")
+    py.import("litellm.rust_bridge.execution")
 }
 
 fn run_public_call<H, M>(
