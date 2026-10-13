@@ -3924,6 +3924,7 @@ dependencies = [
  "futures-util",
  "litellm-coroutine",
  "litellm-host",
+ "parking_lot",
  "pyo3",
  "pyo3-async-runtimes",
  "pythonize",

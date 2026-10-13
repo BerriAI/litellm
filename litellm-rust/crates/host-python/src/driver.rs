@@ -1,8 +1,9 @@
 use std::ops::ControlFlow;
 use std::pin::pin;
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 use std::task::{Context, Poll, Waker};
 
+use parking_lot::{Mutex, MutexGuard};
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
@@ -104,10 +105,6 @@ struct Parts<H, L> {
 
 type SharedParts<H, L> = Arc<Mutex<Parts<H, L>>>;
 
-fn lock_parts<H, L>(parts: &SharedParts<H, L>) -> MutexGuard<'_, Parts<H, L>> {
-    parts.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
 enum Setup<E> {
     Host(PyErr),
     Decode(InvokeError<E>),
@@ -147,7 +144,7 @@ where
     M::Complete: Into<HostedCompletion<ResponseOf<H>>>,
 {
     fn parts(&self) -> MutexGuard<'_, Parts<H, L>> {
-        lock_parts(&self.parts)
+        self.parts.lock()
     }
 
     async fn run(mut self) -> PyResult<Py<PyAny>> {
@@ -505,7 +502,7 @@ where
     /// A failure the body raised past its terminal hooks, or a cancellation, is the last
     /// thing the observers hear about the call.
     fn observe_host_failure(&self, error: &PyErr) {
-        let mut parts = lock_parts(&self.parts);
+        let mut parts = self.parts.lock();
         if !parts.observation.observing {
             return;
         }
@@ -539,7 +536,7 @@ where
             (Some(_), None) | (None, Some(_)) => return Err(missing_state()),
         }
         let step = {
-            let body = self.body.get_mut().unwrap_or_else(PoisonError::into_inner);
+            let body = self.body.get_mut();
             let mut resume = pin!(body.resume());
             match resume
                 .as_mut()
@@ -564,7 +561,7 @@ where
     }
 
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        let Ok(parts) = self.parts.try_lock() else {
+        let Some(parts) = self.parts.try_lock() else {
             return Ok(());
         };
         parts.binding.traverse(visit)?;
@@ -581,12 +578,9 @@ where
     L: PythonCallHooks,
 {
     fn drop(&mut self) {
-        self.body
-            .get_mut()
-            .unwrap_or_else(PoisonError::into_inner)
-            .cancel();
+        self.body.get_mut().cancel();
         self.reply = None;
-        let mut parts = lock_parts(&self.parts);
+        let mut parts = self.parts.lock();
         Python::attach(|py| {
             if parts.observation.observing {
                 let timing = parts.observation.timing();
