@@ -6549,7 +6549,7 @@ class ProxyConfig:
                     ## to pass a complete url, or set ssl=True, etc. just set it as `os.environ[REDIS_URL] = <your-redis-url>`, _redis.py checks for REDIS specific environment variables
                     _set_redis_usage_cache(
                         self.init_cache(
-                            cache_params=cache_params,
+                            cache_params={"type": cache_type, **cache_params},
                             enable_redis_auth_cache=litellm_settings.get("enable_redis_auth_cache", False) is True,
                         )
                     )
