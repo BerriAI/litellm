@@ -1,6 +1,6 @@
 mod support;
 
-use litellm_host::hooks::CallHooks;
+use litellm_host::{hooks::CallHooks, lifecycle::Timing};
 use litellm_host_python::{
     Execution, ExecutionBody, ExecutionStep, HookStep, PythonCallEvent, PythonOwned, PythonRuntime,
     Suspension, run_call,
@@ -9,7 +9,7 @@ use pyo3::{
     exceptions::PyBaseException,
     gc::{PyTraverseError, PyVisit},
     prelude::*,
-    types::PyDict,
+    types::{PyCFunction, PyDict},
 };
 use rstest::rstest;
 use support::{
@@ -104,14 +104,48 @@ fn error_execution(error: Bound<'_, PyBaseException>) -> Execution {
     Execution::new(ErrorBody(Some(error.unbind())), lifecycle_binding)
 }
 
+/// Where a paused call keeps the test's object: in its hooks, or selected as the call's
+/// response or exception, with the call paused in the hook that is told about it.
+#[derive(Clone, Copy, Debug)]
+enum Holder {
+    Hooks,
+    Response,
+    Exception,
+}
+
 struct PausingHooks {
     retained: Option<Py<PyAny>>,
     pause: Option<Py<PyAny>>,
+    holder: Holder,
 }
 
 impl CallHooks<PythonRuntime> for PausingHooks {
-    fn on_event(&mut self, _: Python<'_>, _: PythonCallEvent<'_>) -> PyResult<HookStep<Self, ()>> {
-        Ok(match self.pause.take() {
+    fn transform_response(
+        &mut self,
+        py: Python<'_>,
+        response: Py<PyAny>,
+        _: Timing,
+    ) -> PyResult<HookStep<Self, Py<PyAny>>> {
+        match self.holder {
+            Holder::Hooks => Ok(HookStep::Ready(response)),
+            Holder::Response => Ok(HookStep::Ready(self.retained.take().unwrap())),
+            Holder::Exception => Err(PyErr::from_value(
+                self.retained.take().unwrap().into_bound(py),
+            )),
+        }
+    }
+
+    fn on_event(
+        &mut self,
+        _: Python<'_>,
+        event: PythonCallEvent<'_>,
+    ) -> PyResult<HookStep<Self, ()>> {
+        let pauses_here = match self.holder {
+            Holder::Hooks => true,
+            Holder::Response => matches!(event, PythonCallEvent::Succeeded { .. }),
+            Holder::Exception => matches!(event, PythonCallEvent::Failed { .. }),
+        };
+        Ok(match self.pause.take_if(|_| pauses_here) {
             Some(pause) => {
                 HookStep::Await(pause, |_, _, answer| answer.map(|_| HookStep::Ready(())))
             }
@@ -132,8 +166,12 @@ impl PythonOwned for PausingHooks {
     }
 }
 
-#[pyfunction]
-fn paused_call(py: Python<'_>, retained: Py<PyAny>, pause: Py<PyAny>) -> PyResult<Py<PyAny>> {
+fn paused_call(
+    py: Python<'_>,
+    retained: Py<PyAny>,
+    pause: Py<PyAny>,
+    holder: Holder,
+) -> PyResult<Py<PyAny>> {
     let machine = success_machine();
     run_call(
         py,
@@ -142,6 +180,7 @@ fn paused_call(py: Python<'_>, retained: Py<PyAny>, pause: Py<PyAny>) -> PyResul
         PausingHooks {
             retained: Some(retained),
             pause: Some(pause),
+            holder,
         },
         PyDict::new(py).unbind(),
         call_options(true),
@@ -252,21 +291,28 @@ assert retained_ref() is None
 }
 
 #[rstest]
+#[case::held_by_the_hooks(Holder::Hooks)]
+#[case::selected_as_the_response(Holder::Response)]
+#[case::selected_as_the_exception(Holder::Exception)]
 fn cycles_through_a_call_suspended_in_a_hook_are_collectable(
     #[from(interpreter)] _python: Interpreter,
+    #[case] holder: Holder,
 ) {
     Python::attach(|py| {
         let locals = PyDict::new(py);
-        locals
-            .set_item("paused_call", wrap_pyfunction!(paused_call, py).unwrap())
-            .unwrap();
+        let call = PyCFunction::new_closure(py, None, None, move |args, _| {
+            let (retained, pause) = args.extract::<(Py<PyAny>, Py<PyAny>)>()?;
+            paused_call(args.py(), retained, pause, holder)
+        })
+        .unwrap();
+        locals.set_item("paused_call", call).unwrap();
         py.run(
             pyo3::ffi::c_str!(
                 r#"
 import gc
 import weakref
 
-class Retained:
+class Retained(Exception):
     pass
 
 class Pause:

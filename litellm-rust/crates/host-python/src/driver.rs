@@ -431,6 +431,8 @@ where
         self.failure(error, FailureOrigin::Call).await
     }
 
+    /// The terminal hooks may suspend. Until they finish, the selected response is held
+    /// only in the traversed parts, so a cycle through it stays collectable.
     async fn succeeded(&mut self, response: Py<PyAny>) -> PyResult<Py<PyAny>> {
         let step = {
             let mut parts = self.parts();
@@ -440,19 +442,18 @@ where
                 response: &response,
             };
             parts.observation.retain_terminal(&event);
-            Python::attach(|py| {
-                let step = parts.hooks.on_event(py, event)?;
-                parts.selected = Some(response.clone_ref(py));
-                Ok::<_, PyErr>(step)
-            })?
+            let step = Python::attach(|py| parts.hooks.on_event(py, event))?;
+            parts.selected = Some(response);
+            step
         };
         self.settle(step).await?;
         let mut parts = self.parts();
-        parts.selected = None;
         parts.observation.finish();
-        Ok(response)
+        parts.selected.take().ok_or_else(missing_state)
     }
 
+    /// As [`Self::succeeded`], with the selected exception held as its value and raised
+    /// again once the hooks finish.
     async fn failure(&mut self, error: PyErr, origin: FailureOrigin) -> PyResult<Py<PyAny>> {
         let step = {
             let mut parts = self.parts();
@@ -460,7 +461,7 @@ where
             let timing = parts.observation.timing();
             Python::attach(|py| {
                 if is_cancellation(py, &error) {
-                    return Ok::<_, PyErr>(None);
+                    return Err(error);
                 }
                 let event = PythonCallEvent::Failed {
                     timing,
@@ -469,18 +470,17 @@ where
                 };
                 parts.observation.retain_terminal(&event);
                 let step = parts.hooks.on_event(py, event)?;
-                parts.selected = Some(error.value(py).clone().into_any().unbind());
-                Ok(Some(step))
+                parts.selected = Some(error.into_value(py).into_any());
+                Ok(step)
             })?
-        };
-        let Some(step) = step else {
-            return Err(error);
         };
         self.settle(step).await?;
         let mut parts = self.parts();
-        parts.selected = None;
         parts.observation.finish();
-        Err(error)
+        let selected = parts.selected.take().ok_or_else(missing_state)?;
+        Err(Python::attach(|py| {
+            PyErr::from_value(selected.into_bound(py))
+        }))
     }
 }
 
