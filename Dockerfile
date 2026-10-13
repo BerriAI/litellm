@@ -53,17 +53,21 @@ USER root
 COPY --from=uvbin /uv /usr/local/bin/uv
 COPY --from=uvbin /uvx /usr/local/bin/uvx
 
-RUN apk add --no-cache \
-    bash \
-    gcc \
-    python-3.13 \
-    python-3.13-dev \
-    rust \
-    openssl \
-    openssl-dev \
-    nodejs \
-    npm \
-    libsndfile
+RUN for attempt in 1 2 3 4 5; do \
+      apk add --no-cache \
+        bash \
+        gcc \
+        python-3.13 \
+        python-3.13-dev \
+        rust \
+        openssl \
+        openssl-dev \
+        nodejs \
+        npm \
+        libsndfile && break; \
+      [ "$attempt" -eq 5 ] && exit 1; \
+      sleep 3; \
+    done
 
 ENV UV_PROJECT_ENVIRONMENT=/app/.venv \
     UV_LINK_MODE=copy \
@@ -140,7 +144,11 @@ USER root
 RUN echo "https://packages.wolfi.dev/os" >> /etc/apk/repositories
 
 # node (without npm) is required by the prisma CLI at runtime
-RUN apk add --no-cache bash openssl tzdata nodejs python-3.13 libsndfile libevent
+RUN for attempt in 1 2 3 4 5; do \
+      apk add --no-cache bash openssl tzdata nodejs python-3.13 libsndfile libevent && break; \
+      [ "$attempt" -eq 5 ] && exit 1; \
+      sleep 3; \
+    done
 COPY --from=pgbouncer-builder /usr/local/bin/pgbouncer /usr/local/bin/pgbouncer
 
 WORKDIR /app
