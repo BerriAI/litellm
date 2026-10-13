@@ -2,9 +2,12 @@
 Test for response_api_endpoints/endpoints.py
 """
 
+import asyncio
+import dataclasses
+import json
 import unittest
 from collections.abc import Mapping
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -256,10 +259,12 @@ async def test_responses_api_background_polling_accepts_input_from_prompt_templa
 
 
 @pytest.mark.asyncio
-async def test_responses_api_background_create_persists_the_creating_keys_attribution():
+@pytest.mark.parametrize("status", ["queued", "completed"])
+async def test_responses_api_background_create_persists_the_creating_keys_attribution(status: str):
     """The cost poll bills a background job off its managed object row, so the create must persist
     the key hash and tags the poll bills against, the way the batch create does, plus the client's
-    User-Agent tags that a spend-by-client view groups the charge under."""
+    User-Agent tags that a spend-by-client view groups the charge under. A create the provider
+    already finished is stored too, so a later read finds it billed instead of billing it again."""
     from fastapi import Response as FastAPIResponse
     from starlette.requests import Request
 
@@ -267,7 +272,7 @@ async def test_responses_api_background_create_persists_the_creating_keys_attrib
     from litellm.proxy.response_api_endpoints.endpoints import responses_api
 
     queued = ResponsesAPIResponse(
-        id="resp_background", object="response", status="queued", created_at=1, output=[], usage=None
+        id="resp_background", object="response", status=status, created_at=1, output=[], usage=None
     )
     queued._hidden_params = {"model_id": "deployment-1"}
     processor = MagicMock()
@@ -325,6 +330,7 @@ async def test_responses_api_background_create_persists_the_creating_keys_attrib
 
     assert result is queued
     store_kwargs = managed_files.store_unified_object_id.await_args.kwargs
+    assert store_kwargs["file_object"].status == status
     assert store_kwargs["file_purpose"] == "response"
     assert store_kwargs["persist_attribution"] is True
     assert store_kwargs["request_tags"] == (
@@ -404,6 +410,194 @@ async def test_reading_a_finished_background_response_bills_it(
 
     assert len(spend_events.payloads) == expected_billed_events
     assert all(payload["metadata"]["user_api_key_end_user_id"] == "customer-42" for payload in spend_events.payloads)
+
+
+@dataclasses.dataclass(frozen=True)
+class _ManagedObjectRow:
+    id: str
+    unified_object_id: str
+    model_object_id: str
+    status: str
+    file_object: Mapping[str, object]
+    file_purpose: str = "response"
+    created_by: str | None = None
+    api_key: str | None = None
+    team_id: str | None = None
+    org_id: str | None = None
+    request_tags: object = None
+
+
+class _UniqueManagedObjectTable:
+    """Rejects a second row for a response id and applies status claims atomically, the way the
+    Postgres table does, and yields on every query so concurrent reads interleave like two pods."""
+
+    def __init__(self, rows: tuple[_ManagedObjectRow, ...] = ()) -> None:
+        self.rows = rows
+
+    def _matches(self, row: _ManagedObjectRow, where: Mapping[str, object]) -> bool:
+        def holds(field: str, condition: object) -> bool:
+            if isinstance(condition, list):
+                return any(self._matches(row, alternative) for alternative in condition)
+            if isinstance(condition, dict):
+                return getattr(row, field) in condition["in"]
+            return getattr(row, field) == condition
+
+        return all(holds(field, condition) for field, condition in where.items())
+
+    async def find_first(self, where: Mapping[str, object]) -> _ManagedObjectRow | None:
+        await asyncio.sleep(0)
+        return next((row for row in self.rows if self._matches(row, where)), None)
+
+    async def create(self, data: Mapping[str, object]) -> _ManagedObjectRow:
+        from prisma.errors import UniqueViolationError
+
+        await asyncio.sleep(0)
+        if any(
+            row.unified_object_id == data["unified_object_id"] or row.model_object_id == data["model_object_id"]
+            for row in self.rows
+        ):
+            raise UniqueViolationError({"user_facing_error": {"error_code": "P2002"}})
+        row = _ManagedObjectRow(
+            id=f"job-{len(self.rows)}",
+            unified_object_id=str(data["unified_object_id"]),
+            model_object_id=str(data["model_object_id"]),
+            status=str(data["status"]),
+            file_object=json.loads(str(data["file_object"])),
+            created_by=cast("str | None", data.get("created_by")),
+            api_key=cast("str | None", data.get("api_key")),
+            team_id=cast("str | None", data.get("team_id")),
+            org_id=cast("str | None", data.get("org_id")),
+        )
+        self.rows = (*self.rows, row)
+        return row
+
+    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int:
+        await asyncio.sleep(0)
+        matched = frozenset(row.id for row in self.rows if self._matches(row, where))
+        self.rows = tuple(
+            dataclasses.replace(row, status=str(data["status"])) if row.id in matched else row for row in self.rows
+        )
+        return len(matched)
+
+
+async def _read_twice_on_two_pods(
+    monkeypatch: pytest.MonkeyPatch, table: _UniqueManagedObjectTable, response_id: str, reader: object
+) -> tuple[Mapping[str, object], ...]:
+    from litellm_enterprise.proxy.hooks.managed_files import _PROXY_LiteLLMManagedFiles
+
+    from litellm.caching.caching import DualCache
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.response_api_endpoints.endpoints import _bill_finished_background_response
+
+    class _CapturingLogger(_SpendEvents, CustomLogger):
+        pass
+
+    spend_events: Final = _CapturingLogger()
+    monkeypatch.setattr(litellm, "_async_success_callback", [spend_events])
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_managedobjecttable = table
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_verificationtoken.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    proxy_logging: Final = MagicMock()
+    proxy_logging.get_proxy_hook = MagicMock(
+        return_value=_PROXY_LiteLLMManagedFiles(internal_usage_cache=DualCache(), prisma_client=prisma_client)
+    )
+    finished: Final = ResponsesAPIResponse(
+        id=response_id,
+        object="response",
+        status="completed",
+        created_at=1,
+        model="gpt-5.6",
+        output=[],
+        usage=None,
+        background=True,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", prisma_client),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.proxy.proxy_server.llm_router", MagicMock()),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),  # test-quality-ok: the endpoint reads the proxy singletons at call time
+        patch("litellm.aget_responses", side_effect=AssertionError("billing must not read the provider again")),
+    ):
+        await asyncio.gather(
+            *(
+                _bill_finished_background_response(
+                    response=finished, response_id=response_id, user_api_key_dict=reader
+                )
+                for _ in range(2)
+            )
+        )
+    return spend_events.payloads
+
+
+@pytest.mark.asyncio
+async def test_a_finished_response_the_create_could_not_store_is_billed_once_under_the_reader(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A create that could not write its managed row (a database outage) leaves the reads marked free
+    and the poll blind to the job, so the first read that sees it finished stores the row under the
+    reading key and bills it, once even when two pods read it at the same moment."""
+    from litellm.proxy._types import UserAPIKeyAuth, hash_token
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    response_id: Final = ResponsesAPIRequestUtils._build_responses_api_response_id(
+        custom_llm_provider="openai", model_id="deployment-untracked", response_id="resp_untracked"
+    )
+    table: Final = _UniqueManagedObjectTable()
+
+    payloads: Final = await _read_twice_on_two_pods(
+        monkeypatch,
+        table,
+        response_id,
+        UserAPIKeyAuth(api_key="sk-reader", user_id="bob", team_id="team-beta", org_id="org-gamma", end_user_id="customer-42"),
+    )
+
+    (billed,) = payloads
+    assert billed["metadata"]["user_api_key_hash"] == hash_token("sk-reader")
+    assert billed["metadata"]["user_api_key_team_id"] == "team-beta"
+    assert billed["metadata"]["user_api_key_org_id"] == "org-gamma"
+    assert billed["metadata"]["user_api_key_end_user_id"] == "customer-42"
+    (row,) = table.rows
+    assert (row.unified_object_id, row.status) == (response_id, "completed")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("proxy_issued, stored_status", [(True, "completed"), (False, None)])
+async def test_a_finished_read_never_bills_a_response_already_billed_or_billed_by_the_read_itself(
+    monkeypatch: pytest.MonkeyPatch, proxy_issued: bool, stored_status: str | None
+):
+    """A row the create stored as finished means the create billed it, and an id the proxy did not
+    issue is priced by the read itself, so neither read stores a row or bills the response again."""
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.responses.utils import ResponsesAPIRequestUtils
+
+    response_id: Final = (
+        ResponsesAPIRequestUtils._build_responses_api_response_id(
+            custom_llm_provider="openai", model_id="deployment-billed", response_id="resp_billed"
+        )
+        if proxy_issued
+        else "resp_not_issued_by_the_proxy"
+    )
+    stored: Final = (
+        (
+            _ManagedObjectRow(
+                id="job-billed",
+                unified_object_id=response_id,
+                model_object_id="resp_billed",
+                status=stored_status,
+                file_object={"model": "gpt-5.6"},
+            ),
+        )
+        if stored_status is not None
+        else ()
+    )
+    table: Final = _UniqueManagedObjectTable(stored)
+
+    payloads: Final = await _read_twice_on_two_pods(monkeypatch, table, response_id, UserAPIKeyAuth(api_key="sk-reader"))
+
+    assert payloads == ()
+    assert table.rows == stored
 
 
 @pytest.mark.asyncio
@@ -653,9 +847,6 @@ class TestResponsesAPIEndpoints(unittest.TestCase):
         assert "x-litellm-response-cost" in response.headers
         response_cost_value = float(response.headers["x-litellm-response-cost"])
         assert response_cost_value == pytest.approx(0.0005, abs=1e-10)
-
-
-import json
 
 
 class TestManagedResponsesWSFirstMessage:

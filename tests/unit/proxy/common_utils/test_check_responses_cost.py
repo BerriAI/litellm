@@ -1415,11 +1415,10 @@ def _spend_capture_logger():
     return _CapturingLogger()
 
 
-@pytest.mark.asyncio
-async def test_the_billing_event_prices_the_fetched_usage_at_the_deployment_rates(monkeypatch: pytest.MonkeyPatch):
-    """Billing logs the body the read already fetched instead of reading it again, so the event must
-    carry the deployment's own pricing (100 input tokens at 0.001 plus 50 output tokens at 0.002 is
-    0.2), and neither take the read's zero price nor change the response the reader gets back."""
+_PRICED_COST: Final = 100 * 0.001 + 50 * 0.002
+
+
+async def _bill_through_a_priced_deployment(read: ResponsesAPIResponse) -> _InMemoryManagedObjectTable:
     import litellm
     from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
 
@@ -1450,19 +1449,85 @@ async def test_the_billing_event_prices_the_fetched_usage_at_the_deployment_rate
             }
         ]
     )
+    await CheckResponsesCost(
+        proxy_logging_obj=MagicMock(), prisma_client=prisma_client, llm_router=router
+    ).bill_if_finished(response_id=response_id, response=read)
+    return table
+
+
+@pytest.mark.asyncio
+async def test_the_billing_event_prices_the_fetched_usage_at_the_deployment_rates(monkeypatch: pytest.MonkeyPatch):
+    """Billing logs the body the read already fetched instead of reading it again, so the event must
+    carry the deployment's own pricing (100 input tokens at 0.001 plus 50 output tokens at 0.002 is
+    0.2), and neither take the read's zero price nor change the response the reader gets back."""
+    import litellm
+
     capture: Final = _spend_capture_logger()
     monkeypatch.setattr(litellm, "_async_success_callback", [capture])
     read: Final = _terminal_response()
     read.hidden_params = {"response_cost": 0.0}
 
-    await CheckResponsesCost(
-        proxy_logging_obj=MagicMock(), prisma_client=prisma_client, llm_router=router
-    ).bill_if_finished(response_id=response_id, response=read)
+    table: Final = await _bill_through_a_priced_deployment(read)
 
     (payload,) = capture.payloads
-    assert payload["response_cost"] == pytest.approx(100 * 0.001 + 50 * 0.002)
+    assert payload["response_cost"] == pytest.approx(_PRICED_COST)
     assert payload["model_id"] == "deployment-custom"
     assert payload["model_group"] == "priced-gpt"
     assert payload["metadata"]["user_api_key_hash"] == "hash-alice"
     assert read.hidden_params == {"response_cost": 0.0}
     assert table.statuses == {"job-priced": "completed"}
+
+
+@pytest.mark.asyncio
+async def test_the_billing_event_reaches_sync_only_success_callbacks(monkeypatch: pytest.MonkeyPatch):
+    """Sync-only success callbacks (legacy string integrations, plain functions) get every async
+    call's event from a worker thread, so they must get the billed background response too."""
+    import queue
+
+    import litellm
+
+    priced_costs: Final[queue.Queue[object]] = queue.Queue()
+
+    def record_cost(kwargs: Mapping[str, object], *_: object) -> None:
+        priced_costs.put(kwargs.get("response_cost"))
+
+    monkeypatch.setattr(litellm, "success_callback", [record_cost])
+    monkeypatch.setattr(litellm, "_async_success_callback", [])
+
+    await _bill_through_a_priced_deployment(_terminal_response())
+
+    assert priced_costs.get(timeout=10) == pytest.approx(_PRICED_COST)
+
+
+@pytest.mark.asyncio
+async def test_the_billing_event_keys_its_spend_row_apart_from_the_read_it_bills(monkeypatch: pytest.MonkeyPatch):
+    """The billing event logs the body the read returned, under the same response id, and spend logs
+    keep one row per request id. Its row must take its own request id, or the read's free row takes
+    the slot and the charge reaches the key with no spend row for an admin to see."""
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+    class _RequestIdCapture(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.request_ids: tuple[str, ...] = ()
+
+        async def async_log_success_event(
+            self, kwargs: dict[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            self.request_ids = (
+                *self.request_ids,
+                get_logging_payload(kwargs, response_obj, start_time, end_time)["request_id"],
+            )
+
+    capture: Final = _RequestIdCapture()
+    monkeypatch.setattr(litellm, "_async_success_callback", [capture])
+    read: Final = _terminal_response()
+
+    await _bill_through_a_priced_deployment(read)
+
+    (billed_request_id,) = capture.request_ids
+    assert billed_request_id != read.id
+    assert billed_request_id.startswith(read.id)
+

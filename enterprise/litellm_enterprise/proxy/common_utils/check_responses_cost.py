@@ -6,6 +6,8 @@ one spend event stamped with BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN and the c
 attribution, priced against the deployment that served it. The poll's status checks are stamped
 with BACKGROUND_RESPONSE_STATUS_POLL_CALL_ORIGIN and client reads are marked managed by the
 managed files hook, so both stay free, and billing never fetches the response a second time.
+A read that finds no row, because the create could not store one, stores it under the reading key
+and bills it the same way, so a response the create left untracked is still billed once.
 """
 
 import uuid
@@ -68,6 +70,7 @@ class BilledBackgroundResponse:
 
 
 BilledResponseLogger = Callable[[BilledBackgroundResponse], Awaitable[None]]
+UntrackedResponseTracker = Callable[[], Awaitable[bool]]
 
 
 def _without_read_price(response: ResponsesAPIResponse) -> ResponsesAPIResponse:
@@ -93,7 +96,11 @@ async def log_billed_background_response(billed: BilledBackgroundResponse) -> No
         optional_params={},
         custom_llm_provider=billed.custom_llm_provider,
     )
-    await logging_obj.async_success_handler(result=_without_read_price(billed.response))
+    unpriced: Final = _without_read_price(billed.response)
+    await logging_obj.async_success_handler(result=unpriced)
+    logging_obj.handle_sync_success_callbacks_for_async_calls(
+        result=unpriced, start_time=logging_obj.start_time, end_time=datetime.now()
+    )
 
 
 def _deployment_litellm_params(deployment: Deployment) -> Mapping[str, object]:
@@ -279,19 +286,32 @@ class CheckResponsesCost:
             raise
         verbose_proxy_logger.info(f"Response {job.unified_object_id} reached a terminal status and was billed")
 
-    async def bill_if_finished(
-        self, response_id: str, response: ResponsesAPIResponse, end_user_id: str | None = None
-    ) -> None:
-        if response.status not in TERMINAL_RESPONSE_STATUSES:
-            return
-        job: Final = await _managed_object_table(self.prisma_client).find_first(
+    async def _tracked_job(self, response_id: str) -> ManagedObjectRow | None:
+        return await _managed_object_table(self.prisma_client).find_first(
             where={
                 "OR": [{"unified_object_id": response_id}, {"model_object_id": decrypted_response_id(response_id)}],
                 "file_purpose": "response",
-                "status": {"in": list(PENDING_RESPONSE_STATUSES)},
             },
         )
-        if job is None:
+
+    async def _start_tracking(
+        self, response_id: str, track_untracked: UntrackedResponseTracker | None
+    ) -> ManagedObjectRow | None:
+        if track_untracked is None or not await track_untracked():
+            return None
+        return await self._tracked_job(response_id)
+
+    async def bill_if_finished(
+        self,
+        response_id: str,
+        response: ResponsesAPIResponse,
+        end_user_id: str | None = None,
+        track_untracked: UntrackedResponseTracker | None = None,
+    ) -> None:
+        if response.status not in TERMINAL_RESPONSE_STATUSES:
+            return
+        job: Final = await self._tracked_job(response_id) or await self._start_tracking(response_id, track_untracked)
+        if job is None or job.status not in PENDING_RESPONSE_STATUSES:
             return
         await self._bill_once(job, self._poll_target(job), response, end_user_id)
 

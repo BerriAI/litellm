@@ -53,6 +53,9 @@ from litellm.types.responses.main import DeleteResponseResult
 from litellm.types.utils import TokenCountResponse
 
 if TYPE_CHECKING:
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+
+    from litellm.proxy.utils import ProxyLogging
     from litellm.router import Router
 
 router: Final = APIRouter()
@@ -397,49 +400,37 @@ async def responses_api(
         )
 
         if isinstance(response, ResponsesAPIResponse) and (data.get("background") or is_background_response(response)):
-            if response.status in ["queued", "in_progress"]:
-                from litellm_enterprise.proxy.hooks.managed_files import (
-                    PROXY_LiteLLMManagedFiles,
-                )
+            managed_files_obj: Final = _managed_files_hook(proxy_logging_obj)
 
-                managed_files_obj: Final = cast(
-                    PROXY_LiteLLMManagedFiles | None,
-                    proxy_logging_obj.get_proxy_hook("managed_files"),
-                )
+            if managed_files_obj and llm_router:
+                try:
+                    hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
+                    model_id: Final = hidden_params.get("model_id", None)
 
-                if managed_files_obj and llm_router:
-                    try:
-                        # Get the actual deployment model_id from hidden params
-                        hidden_params: Final = getattr(response, "_hidden_params", {}) or {}
-                        model_id: Final = hidden_params.get("model_id", None)
-
-                        if not model_id:
-                            verbose_proxy_logger.warning(
-                                "No model_id found in response hidden params for response %s, skipping managed object storage",
-                                response.id,
-                            )
-                            raise Exception("No model_id found in response hidden params")
-                        # Store in managed objects table
-                        await managed_files_obj.store_unified_object_id(
-                            unified_object_id=response.id,
-                            file_object=response,
-                            litellm_parent_otel_span=None,
-                            model_object_id=decrypted_response_id(response.id),
-                            file_purpose="response",
-                            user_api_key_dict=user_api_key_dict,
-                            request_tags=_background_response_spend_tags(processor.data),
-                            persist_attribution=True,
-                        )
-
-                        verbose_proxy_logger.info(
-                            "Stored background response %s in managed objects table with unified_id=%s",
-                            response.id,
+                    if not model_id:
+                        verbose_proxy_logger.warning(
+                            "No model_id found in response hidden params for response %s, skipping managed object storage",
                             response.id,
                         )
-                    except Exception as e:
-                        verbose_proxy_logger.error(
-                            "Failed to store background response in managed objects table: %s", e
-                        )
+                        raise Exception("No model_id found in response hidden params")
+                    await managed_files_obj.store_unified_object_id(
+                        unified_object_id=response.id,
+                        file_object=response,
+                        litellm_parent_otel_span=None,
+                        model_object_id=decrypted_response_id(response.id),
+                        file_purpose="response",
+                        user_api_key_dict=user_api_key_dict,
+                        request_tags=_background_response_spend_tags(processor.data),
+                        persist_attribution=True,
+                    )
+
+                    verbose_proxy_logger.info(
+                        "Stored background response %s in managed objects table with unified_id=%s",
+                        response.id,
+                        response.id,
+                    )
+                except Exception as e:
+                    verbose_proxy_logger.error("Failed to store background response in managed objects table: %s", e)
 
         return response
     except ModifyResponseException as e:
@@ -819,6 +810,12 @@ def _background_response_spend_tags(data: Mapping[str, object]) -> tuple[str, ..
     return tags or None
 
 
+def _managed_files_hook(proxy_logging_obj: "ProxyLogging") -> "PROXY_LiteLLMManagedFiles | None":
+    from litellm_enterprise.proxy.hooks.managed_files import PROXY_LiteLLMManagedFiles
+
+    return cast(PROXY_LiteLLMManagedFiles | None, proxy_logging_obj.get_proxy_hook("managed_files"))
+
+
 async def _bill_finished_background_response(
     response: object, response_id: str, user_api_key_dict: UserAPIKeyAuth
 ) -> None:
@@ -831,11 +828,23 @@ async def _bill_finished_background_response(
     try:
         from litellm_enterprise.proxy.common_utils.check_responses_cost import CheckResponsesCost
 
+        managed_files_hook: Final = _managed_files_hook(proxy_logging_obj)
         await CheckResponsesCost(
             proxy_logging_obj=proxy_logging_obj,
             prisma_client=prisma_client,
             llm_router=llm_router,
-        ).bill_if_finished(response_id=response_id, response=response, end_user_id=user_api_key_dict.end_user_id)
+        ).bill_if_finished(
+            response_id=response_id,
+            response=response,
+            end_user_id=user_api_key_dict.end_user_id,
+            track_untracked=(
+                partial(
+                    managed_files_hook.track_untracked_background_response, response_id, response, user_api_key_dict
+                )
+                if managed_files_hook is not None
+                else None
+            ),
+        )
     except Exception as e:
         verbose_proxy_logger.warning("Billing a finished background response on read failed: %s", e)
 

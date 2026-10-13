@@ -27,6 +27,8 @@ from fastapi import HTTPException
 from pydantic import BaseModel, JsonValue, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, Unpack
 
+from litellm_enterprise.proxy.common_utils.check_responses_cost import PENDING_RESPONSE_STATUSES
+
 import litellm
 from litellm import Router, verbose_logger
 from litellm._internal_context import with_service_target
@@ -304,6 +306,8 @@ class _ManagedObjectTableActions(Protocol):
     ) -> "PrismaManagedObjectRow": ...
 
     async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
+
+    async def create(self, data: Mapping[str, object]) -> "PrismaManagedObjectRow": ...
 
 
 class _ManagedResourceDatabase(Protocol):
@@ -583,13 +587,14 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             "status": file_object.status,
             "updated_by": user_api_key_dict.user_id,
         }
+        managed_object_table: Final = _managed_object_table(self.prisma_client)
         if not create_if_missing:
-            await _managed_object_table(self.prisma_client).update_many(
+            await managed_object_table.update_many(
                 where={"unified_object_id": unified_object_id},
                 data=update_columns,
             )
             return
-        await _managed_object_table(self.prisma_client).upsert(
+        await managed_object_table.upsert(
             where={"unified_object_id": unified_object_id},
             data={
                 "create": {
@@ -608,6 +613,33 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
                 "update": update_columns,
             },
         )
+
+    async def track_untracked_background_response(
+        self, response_id: str, response: ResponsesAPIResponse, user_api_key_dict: UserAPIKeyAuth
+    ) -> bool:
+        if not _addresses_a_proxy_issued_response({"response_id": response_id}):
+            return False
+        from prisma.errors import UniqueViolationError
+
+        api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict) or None
+        try:
+            await _managed_object_table(self.prisma_client).create(
+                data={
+                    "unified_object_id": response_id,
+                    "model_object_id": decrypted_response_id(response_id),
+                    "file_purpose": "response",
+                    "file_object": _postgres_storable_json(response),
+                    "status": PENDING_RESPONSE_STATUSES[0],
+                    "created_by": resolve_resource_owner_id(user_api_key_dict),
+                    "team_id": user_api_key_dict.team_id,
+                    "org_id": await self._resolve_creator_org_id(user_api_key_dict),
+                    "updated_by": user_api_key_dict.user_id,
+                    **({"api_key": api_key} if api_key is not None else {}),
+                }
+            )
+        except UniqueViolationError:
+            return False
+        return True
 
     @with_service_target(_MANAGED_FILES_TARGET)
     async def get_unified_file_id(
