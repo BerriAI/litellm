@@ -1,5 +1,6 @@
 mod output;
 mod response;
+pub mod streaming;
 pub mod streaming_websocket;
 
 pub use output::*;

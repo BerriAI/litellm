@@ -32,6 +32,13 @@
   - Provider-wide docs (auth, errors, regions): `src/<provider>/`
   - One host's endpoint docs: `src/<provider>/<format>/`
 
+## Streaming
+
+- Each format's `src/base_llm/<format>/streaming.rs` exposes the same three names: `event_stream` (bytes to typed events), `decode` (a whole stream to typed events) and `encode` (one typed event to the SSE frame LiteLLM's proxy sends clients). Callers use the module path, never a vendor prefix
+- SSE framing, `[DONE]` and the generic helpers live in `src/base_llm/sse.rs`. Messages frames are `event:` plus `data:`; Chat Completions and Responses frames are bare `data:`, as Python's proxy writes them
+- Decoding is strict: a malformed event, or `[DONE]` on a Messages stream, is `InvalidResponse` and ends the stream. Python never fails a stream this way; the divergence is deliberate and `src/base_llm/sse.rs` lists what Python does per format. A stream cut inside an event drops that event, as the SSE spec requires
+- What ends or fails a stream belongs on the format's event type (`is_terminal`, `is_failure`). The cache's success check in `inference/src/caching.rs` still matches type strings; move it onto the typed events rather than adding new string matches
+
 ## Python pairs
 
 - Python paths identify counterparts but do not dictate Rust module names or class hierarchy. Preserve behavior and concepts, not structure
