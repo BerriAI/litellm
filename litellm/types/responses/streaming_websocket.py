@@ -14,6 +14,8 @@ class ResponsesClientWebSocket(Protocol):
 
     async def receive_text(self) -> str: ...
 
+    async def close(self, code: int = 1000, reason: str | None = None) -> None: ...
+
 
 class ResponsesBackendWebSocket(Protocol):
     """Upstream provider websocket surface used when proxying a native Responses API socket."""
