@@ -138,6 +138,7 @@ def _extract_converse_texts(
     skip_system: bool,
     skip_tool: bool,
     scan_only_tool_results: bool = False,
+    request_fields_first: bool = False,
 ) -> tuple[list[str], list[_StringHolder]]:
     """
     Walk a Bedrock Converse request body and collect text content.
@@ -164,15 +165,21 @@ def _extract_converse_texts(
     gives ``toolConfig.tools`` a fixed schema whose contents are tool metadata by
     contract, while ``additionalModelRequestFields`` is free-form and defined by
     the target model, so what it carries cannot be classified without knowing
-    that model. Scanning it stays the fail-closed default.
+    that model. Scanning it stays the fail-closed default. Its strings come
+    last, or right after the system prompt with ``request_fields_first``,
+    where their row sits for guardrails that also get rows.
     """
-    holders: Final[list[_StringHolder]] = []
-
+    system_holders: Final = list[_StringHolder]()
     if not skip_system and not scan_only_tool_results:
         for block in body.get("system") or []:
             if isinstance(block, dict):
-                _collect_block_text(block, holders)
+                _collect_block_text(block, system_holders)
 
+    request_field_holders: Final = list[_StringHolder]()
+    if not scan_only_tool_results:
+        _collect_strings(body.get("additionalModelRequestFields"), request_field_holders)
+
+    message_holders: Final = list[_StringHolder]()
     for message in body.get("messages") or []:
         if not isinstance(message, dict):
             continue
@@ -183,20 +190,22 @@ def _extract_converse_texts(
                 continue
             if scan_only_tool_results and "toolResult" not in block:
                 continue
-            _collect_block_text(block, holders)
+            _collect_block_text(block, message_holders)
             tool_use = block.get("toolUse")
             if isinstance(tool_use, dict):
-                _collect_strings(tool_use.get("input"), holders)
+                _collect_strings(tool_use.get("input"), message_holders)
             tool_result = block.get("toolResult")
             if isinstance(tool_result, dict):
                 for inner in tool_result.get("content") or []:
                     if isinstance(inner, dict):
-                        _collect_block_text(inner, holders)
-                        _collect_strings(inner.get("json"), holders)
+                        _collect_block_text(inner, message_holders)
+                        _collect_strings(inner.get("json"), message_holders)
 
-    if not scan_only_tool_results:
-        _collect_strings(body.get("additionalModelRequestFields"), holders)
-
+    holders: Final = (
+        [*system_holders, *request_field_holders, *message_holders]
+        if request_fields_first
+        else [*system_holders, *message_holders, *request_field_holders]
+    )
     texts: Final = [container[key] for container, key in holders]
     return texts, holders
 
@@ -206,11 +215,14 @@ class _Scope:
     skip_system: bool
     skip_tool: bool
     scan_only_tool_results: bool
+    request_fields_first: bool
 
 
 def _texts_applied_rows(body: Mapping[str, object], texts: Sequence[str], scope: _Scope) -> tuple[ConverseRow, ...]:
     rewritten: Final = copy.deepcopy(dict(body))
-    _, holders = _extract_converse_texts(rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results)
+    _, holders = _extract_converse_texts(
+        rewritten, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results, scope.request_fields_first
+    )
     _write_back_texts(texts, holders)
     request: Final = parse_converse_request(rewritten)
     return converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
@@ -617,15 +629,17 @@ class BedrockPassthroughGuardrailHandler(BaseTranslation):
             return data
         request_body: Final = _BODY_BY_REFERENCE.validate_python(body)
 
+        reads_rows: Final = not _reads_flat_texts_only(guardrail_to_apply)
         scope: Final = _Scope(
             skip_system=effective_skip_system_message_for_guardrail(guardrail_to_apply),
             skip_tool=effective_skip_tool_message_for_guardrail(guardrail_to_apply),
             scan_only_tool_results=effective_scan_only_tool_results_for_guardrail(guardrail_to_apply),
+            request_fields_first=reads_rows,
         )
         texts, holders = _extract_converse_texts(
-            request_body, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results
+            request_body, scope.skip_system, scope.skip_tool, scope.scan_only_tool_results, scope.request_fields_first
         )
-        request: Final = None if _reads_flat_texts_only(guardrail_to_apply) else parse_converse_request(request_body)
+        request: Final = parse_converse_request(request_body) if reads_rows else None
         rows: Final = converse_rows(request, include_tool_calls=not scope.skip_tool) if request else ()
         scoped_indices: Final = scoped_structured_message_indices(
             tuple(row.message for row in rows),

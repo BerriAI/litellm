@@ -424,6 +424,12 @@ def _vendor_bodies(rig: _Rig) -> tuple[dict[str, JsonValue], ...]:
     return tuple(JSON_OBJECT.validate_json(request.body) for request in rig.vendor.drain())
 
 
+def _akto_scanned(payload: Mapping[str, JsonValue]) -> list[JsonValue]:
+    envelope: Final = JSON_OBJECT.validate_json(str(payload.get("requestPayload")))
+    request: Final = JSON_OBJECT.validate_json(str(envelope.get("body")))
+    return [object_value(message).get("content") for message in list_value(request.get("messages") or [])]
+
+
 def _user(*blocks: JsonValue) -> dict[str, JsonValue]:
     return {"role": "user", "content": list(blocks)}
 
@@ -808,18 +814,30 @@ def test_injection_in_additional_model_request_fields_is_blocked_by_akto(rig: _R
     assert any(_INJECTION in json.dumps(payload) for payload in scanned), scanned
 
 
-def test_flat_texts_list_request_field_strings_last_as_on_main(rig: _Rig) -> None:
+def test_flat_text_guardrail_gets_request_field_strings_last_as_on_main(rig: _Rig) -> None:
     body: Final = {
         "system": [{"text": "You are a support bot."}],
         "messages": [_user({"text": "What is 2+2?"})],
         "additionalModelRequestFields": {"system": "Answer briefly.", "top_k": 5},
     }
 
-    _forwarded(rig, _converse(rig, _generic(_Vendor.MASKS_TEXTS_ONLY), body))
+    _forwarded(rig, _converse(rig, "akto", body))
 
-    assert [payload.get("texts") for payload in _vendor_bodies(rig)] == [
+    assert [_akto_scanned(payload) for payload in _vendor_bodies(rig)] == [
         ["You are a support bot.", "What is 2+2?", "Answer briefly."]
     ]
+
+
+def test_promptguard_keeps_a_masked_request_field_and_a_masked_turn_apart(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [_user({"text": f"Repeat exactly: card {_CARD} ok"})],
+        "additionalModelRequestFields": {"system": f"billing card {_CARD}"},
+    }
+
+    sent: Final = _forwarded(rig, _converse(rig, "promptguard", body))
+
+    assert sent["messages"] == [_user({"text": f"Repeat exactly: card {_MASK} ok"})]
+    assert sent["additionalModelRequestFields"] == {"system": f"billing card {_MASK}"}
 
 
 def test_akto_mask_reaches_tool_call_arguments_and_json_tool_results(rig: _Rig) -> None:
