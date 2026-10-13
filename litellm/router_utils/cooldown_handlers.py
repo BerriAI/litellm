@@ -697,14 +697,17 @@ def _is_allowed_fails_set_on_router(
     litellm_router_instance: LitellmRouter,
 ) -> bool:
     """
-    Check if Router.allowed_fails is set or is Non-default Value
+    Check if Router.allowed_fails was passed to the Router or is a Non-default Value
 
     Returns:
-    - True if Router.allowed_fails is set or is Non-default Value
-    - False if Router.allowed_fails is None or is Default Value
+    - True if allowed_fails was passed to the Router, even when it equals the default
+    - True if Router.allowed_fails is a Non-default Value
+    - False if Router.allowed_fails is None, or is the Default Value and was not passed
     """
     if litellm_router_instance.allowed_fails is None:
         return False
+    if litellm_router_instance.explicit_allowed_fails is not None:
+        return True
     if litellm_router_instance.allowed_fails != litellm.allowed_fails:
         return True
     return False

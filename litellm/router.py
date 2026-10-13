@@ -1196,6 +1196,7 @@ class Router:
             self.allowed_fails = allowed_fails
         else:
             self.allowed_fails = litellm.allowed_fails
+        self.explicit_allowed_fails = allowed_fails  # None when user did not pass allowed_fails
         self.cooldown_time = cooldown_time or DEFAULT_COOLDOWN_TIME_SECONDS
         self.cooldown_cache = CooldownCache(cache=self.cache, default_cooldown_time=self.cooldown_time)
         self.disable_cooldowns = disable_cooldowns

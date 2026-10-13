@@ -679,6 +679,58 @@ class TestDeploymentLevelAllowedFails:
 
 
 @pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
+class TestRouterLevelAllowedFailsEqualToDefault:
+    def test_allowed_fails_equal_to_the_default_cools_down_after_that_many_fails(self):
+        """
+        Passing allowed_fails equal to litellm.allowed_fails must switch on the
+        count-based cooldown like any other value, not count as "not set".
+        """
+        router = _make_router(
+            model_list=[
+                {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "primary"}}
+            ],
+            allowed_fails=litellm.allowed_fails,
+        )
+        _exception = litellm.ServiceUnavailableError("down", "openai", "gpt-4")
+
+        decisions = [
+            _should_cooldown_deployment(
+                litellm_router_instance=router,
+                deployment="primary",
+                exception_status=503,
+                original_exception=_exception,
+            )
+            for _ in range(litellm.allowed_fails + 1)
+        ]
+
+        assert decisions == [False] * litellm.allowed_fails + [True]
+
+    def test_unset_allowed_fails_keeps_the_rate_based_default(self):
+        """
+        Without allowed_fails the router keeps its rate-based logic, which does not
+        cool a single-deployment group down on a handful of failures.
+        """
+        router = _make_router(
+            model_list=[
+                {"model_name": "gpt-4", "litellm_params": {"model": "openai/gpt-4"}, "model_info": {"id": "primary"}}
+            ],
+        )
+        _exception = litellm.ServiceUnavailableError("down", "openai", "gpt-4")
+
+        decisions = [
+            _should_cooldown_deployment(
+                litellm_router_instance=router,
+                deployment="primary",
+                exception_status=503,
+                original_exception=_exception,
+            )
+            for _ in range(litellm.allowed_fails + 1)
+        ]
+
+        assert decisions == [False] * (litellm.allowed_fails + 1)
+
+
+@pytest.mark.usefixtures("_vcr_outcome_gate", "setup_and_teardown")
 class TestDeploymentLevelAllowedFailsPolicyByExceptionType:
     def test_rate_limit_error_triggers_cooldown_with_zero_threshold(self):
         """
