@@ -658,7 +658,7 @@ class Cache:
         )
         namespace: Final[str | None] = (
             ":".join(
-                value
+                cast(str, value)
                 for value in namespace_parts
                 if isinstance(value, str) and value
             )
