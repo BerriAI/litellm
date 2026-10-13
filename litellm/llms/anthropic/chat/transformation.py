@@ -2858,7 +2858,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             return None
         try:
             payload: Final[object] = json.loads(json_mode_content_str)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, RecursionError):
             # json decode error does occur, return the original tool response str
             return litellm.Message(content=json_mode_content_str)
         if response_format_schema is not None:

@@ -162,9 +162,11 @@ _convert_tool_response_to_message = convert_tool_response_to_message
 @dataclass(frozen=True, slots=True)
 class ResponseFormatSchema:
     property_names: frozenset[str]
+    required_names: frozenset[str] = frozenset()
 
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, JsonValue])
+_NAMES: Final = TypeAdapter(frozenset[str])
 
 
 def as_json_object(value: object) -> Mapping[str, JsonValue] | None:
@@ -174,10 +176,23 @@ def as_json_object(value: object) -> Mapping[str, JsonValue] | None:
         return None
 
 
+def _names(value: object) -> frozenset[str]:
+    try:
+        return _NAMES.validate_python(value)
+    except ValidationError:
+        return frozenset()
+
+
 def response_format_schema(value: object) -> ResponseFormatSchema | None:
     document: Final = as_json_object(value)
-    properties: Final = None if document is None else as_json_object(document.get("properties", {}))
-    return None if properties is None else ResponseFormatSchema(property_names=frozenset(properties))
+    if document is None:
+        return None
+    properties: Final = as_json_object(document.get("properties", {}))
+    if properties is None:
+        return None
+    return ResponseFormatSchema(
+        property_names=frozenset(properties), required_names=_names(document.get("required", ()))
+    )
 
 
 RESPONSE_FORMAT_ENVELOPE_NAME_KEYS: Final = frozenset({"name", "tool_name"})
@@ -194,8 +209,15 @@ def _json_object_or_encoded_object(value: JsonValue) -> Mapping[str, JsonValue] 
         return as_json_object(value)
     try:
         return as_json_object(json.loads(value))
-    except json.JSONDecodeError:
+    except (json.JSONDecodeError, RecursionError):
         return None
+
+
+def _label_keys(payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema) -> frozenset[str]:
+    if not schema.required_names:
+        return frozenset()
+    declared: Final = schema.property_names | schema.required_names
+    return frozenset(key for key, value in payload_object.items() if isinstance(value, str) and key not in declared)
 
 
 def _envelope_layer(
@@ -204,7 +226,8 @@ def _envelope_layer(
     name_keys: Final = frozenset(
         key for key in RESPONSE_FORMAT_ENVELOPE_NAME_KEYS if payload_object.get(key) == tool_name
     )
-    wrapper_keys: Final = tuple(key for key in payload_object if key not in name_keys)
+    label_keys: Final = name_keys or _label_keys(payload_object, schema)
+    wrapper_keys: Final = tuple(key for key in payload_object if key not in label_keys)
     if len(wrapper_keys) != 1 or wrapper_keys[0] in schema.property_names:
         return None
     wrapped: Final = payload_object[wrapper_keys[0]]

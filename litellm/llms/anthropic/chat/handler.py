@@ -80,14 +80,26 @@ _FIRST_NAME_VALUE: Final = re.compile(r'^\s*\{\s*"(?:' + _ENVELOPE_NAME_KEY_PATT
 _NAME_VALUE_PREFIX: Final = re.compile(
     r'^\s*\{\s*"(?:' + _ENVELOPE_NAME_KEY_PATTERN + r')"\s*:\s*(?:"(?:[^"\\]|\\.)*\\?)?$'
 )
+_STRING_VALUE_THEN_KEY: Final = re.compile(r'^"(?:[^"\\]|\\.)*"\s*,\s*"((?:[^"\\]|\\.)*)"\s*:')
 _UNDECIDED_PREFIX_LIMIT: Final = 4096
 
 
-def _first_value_verdict(after_first_key: str) -> _EnvelopeVerdict:
+def _key_after_a_string_verdict(string_value_start: str, schema: ResponseFormatSchema) -> _EnvelopeVerdict:
+    next_key: Final = _STRING_VALUE_THEN_KEY.match(string_value_start)
+    if next_key is None:
+        return "undecided"
+    return "pass_through" if next_key.group(1) in schema.property_names else "hold"
+
+
+def _first_value_verdict(after_first_key: str, schema: ResponseFormatSchema) -> _EnvelopeVerdict:
     value_start: Final = after_first_key.lstrip()
     if not value_start:
         return "undecided"
-    return "hold" if value_start.startswith("{") else "pass_through"
+    if value_start.startswith("{"):
+        return "hold"
+    if value_start.startswith('"') and schema.required_names:
+        return _key_after_a_string_verdict(value_start, schema)
+    return "pass_through"
 
 
 def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:
@@ -102,7 +114,7 @@ def _prefix_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name:
             return "undecided"
     if first_key.group(1) in schema.property_names or not schema.property_names:
         return "pass_through"
-    return _first_value_verdict(buffered_json[first_key.end() :])
+    return _first_value_verdict(buffered_json[first_key.end() :], schema)
 
 
 def _envelope_verdict(buffered_json: str, schema: ResponseFormatSchema, tool_name: str) -> _EnvelopeVerdict:

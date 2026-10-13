@@ -7410,6 +7410,30 @@ def _json_tool_call(arguments: object) -> list[ChatCompletionToolCallChunk]:
         ),
         pytest.param(
             _RISK_SCHEMA,
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="string_label_beside_the_wrapper",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"$FUNCTION_NAME": RESPONSE_FORMAT_TOOL_NAME, "PARAMETER_VALUE": _RISK_OBJECT},
+            _RISK_OBJECT,
+            id="foreign_tool_name_key_beside_the_wrapper",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
+            {"note": "read-only window", **_RISK_OBJECT},
+            {"note": "read-only window", **_RISK_OBJECT},
+            id="string_label_beside_schema_keys",
+        ),
+        pytest.param(
+            {**_RISK_SCHEMA, "required": "tier"},
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            {"parameter_name": "RiskAssessment", "parameter_value": _RISK_OBJECT},
+            id="string_label_when_required_is_malformed",
+        ),
+        pytest.param(
+            _RISK_SCHEMA,
             {"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": json.dumps(_RISK_OBJECT)},
             _RISK_OBJECT,
             id="tool_name_envelope_holding_encoded_json",
@@ -7515,6 +7539,31 @@ def test_convert_tool_response_to_message_unwraps_only_an_unambiguous_schema_env
 
     assert message is not None
     assert json.loads(message.content) == expected_content
+
+
+_TOO_DEEP_TO_DECODE: Final = "[" * 100_000 + "]" * 100_000
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [json.dumps({"name": RESPONSE_FORMAT_TOOL_NAME, "arguments": _TOO_DEEP_TO_DECODE}), _TOO_DEEP_TO_DECODE],
+    ids=["encoded_inner_object", "whole_arguments"],
+)
+def test_convert_tool_response_to_message_keeps_arguments_too_deep_to_decode(arguments: str):
+    message = AnthropicConfig.convert_tool_response_to_message(
+        tool_calls=[
+            ChatCompletionToolCallChunk(
+                id="toolu_1",
+                type="function",
+                function=ChatCompletionToolCallFunctionChunk(name=RESPONSE_FORMAT_TOOL_NAME, arguments=arguments),
+                index=0,
+            )
+        ],
+        response_format_schema=_schema(_RISK_SCHEMA),
+    )
+
+    assert message is not None
+    assert message.content == arguments
 
 
 @pytest.mark.parametrize(
