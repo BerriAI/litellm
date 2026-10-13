@@ -1,5 +1,5 @@
 use crate::cache::{CacheCall, Cached, PythonCache, Selection};
-use litellm_host_python::{PythonHostCalls, PythonOwned};
+use litellm_host_python::{Awaiter, PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
 use litellm_host_python::{InvokeError, PythonBinding, from_py, to_py};
@@ -261,16 +261,15 @@ impl PythonBinding for MessagesPythonHost {
     type Failure = PyErr;
 
     fn decode_request(
-        &mut self,
+        &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<(MessagesCall, Selection), InvokeError<Error>> {
         self.view
             .resolve(py, arguments)
             .map_err(InvokeError::Python)?;
-        let selection =
-            crate::cache::configure(&mut self.cache, py, arguments, "anthropic_messages")
-                .map_err(InvokeError::Python)?;
+        let selection = crate::cache::configure(&self.cache, py, arguments, "anthropic_messages")
+            .map_err(InvokeError::Python)?;
         self.projection(py, arguments)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
             .map_err(InvokeError::Native)
@@ -278,25 +277,21 @@ impl PythonBinding for MessagesPythonHost {
     }
 
     fn encode_response(
-        &mut self,
+        &self,
         py: Python<'_>,
         response: Box<litellm_llms_types::formats::messages::MessagesResponse>,
     ) -> PyResult<Py<PyAny>> {
         public_response(py, ROUTE_HOST_MODULE, response.as_ref())
     }
 
-    fn encode_stream_head(
-        &mut self,
-        py: Python<'_>,
-        head: MessagesStreamHead,
-    ) -> PyResult<Py<PyAny>> {
+    fn encode_stream_head(&self, py: Python<'_>, head: MessagesStreamHead) -> PyResult<Py<PyAny>> {
         py.import(ROUTE_HOST_MODULE)?
             .getattr("stream_hidden_params")?
             .call1((to_py(py, &head.headers)?,))
             .map(Bound::unbind)
     }
 
-    fn encode_chunk(&mut self, py: Python<'_>, chunk: Bytes) -> PyResult<Py<PyAny>> {
+    fn encode_chunk(&self, py: Python<'_>, chunk: Bytes) -> PyResult<Py<PyAny>> {
         Ok(PyBytes::new(py, &chunk).into_any().unbind())
     }
 
@@ -315,31 +310,12 @@ impl PythonBinding for MessagesPythonHost {
 }
 
 impl PythonHostCalls<Cached<Messages>> for MessagesPythonHost {
-    fn handle_host_call(
-        &mut self,
-        py: Python<'_>,
+    async fn handle_host_call(
+        &self,
+        task: &dyn Awaiter,
         op: CacheCall,
     ) -> Result<(), InvokeError<Error>> {
-        self.cache
-            .begin(py, op)
-            .map(|_| ())
-            .map_err(InvokeError::Python)
-    }
-
-    fn begin_host_call(
-        &mut self,
-        py: Python<'_>,
-        op: CacheCall,
-    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
-        self.cache.begin(py, op).map_err(InvokeError::Python)
-    }
-
-    fn resume_host_call(
-        &mut self,
-        py: Python<'_>,
-        result: PyResult<Py<PyAny>>,
-    ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
-        self.cache.resume(py, result).map_err(InvokeError::Python)
+        self.cache.call(task, op).await.map_err(InvokeError::Python)
     }
 }
 

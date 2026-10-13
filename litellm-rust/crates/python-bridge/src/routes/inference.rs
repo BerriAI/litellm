@@ -44,7 +44,7 @@ impl InferenceHost {
     }
 
     pub fn project(
-        &mut self,
+        &self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
         input: &str,

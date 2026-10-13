@@ -15,6 +15,7 @@ use litellm_host_python::{Error as HostError, present};
 use litellm_host_python::{
     CallOptions, HookChain, PythonBinding, PythonCallHooks, PythonHostCalls, effective_py_args,
 };
+use parking_lot::Mutex;
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -48,7 +49,7 @@ impl<'py> NativeCall<'py> {
 /// The keyword view a route host reads: the signature base under the caller's keywords,
 /// laid again once the hooks have rewritten them so a keyword a hook deleted stays deleted
 /// instead of falling back to the caller's value.
-pub(crate) struct RequestView(Option<RequestDicts>);
+pub(crate) struct RequestView(Mutex<Option<RequestDicts>>);
 
 struct RequestDicts {
     base: Py<PyDict>,
@@ -57,30 +58,25 @@ struct RequestDicts {
 
 impl RequestView {
     pub(crate) fn new(base: &Bound<'_, PyDict>, kwargs: &Bound<'_, PyDict>) -> PyResult<Self> {
-        Ok(Self(Some(RequestDicts {
+        Ok(Self(Mutex::new(Some(RequestDicts {
             base: base.clone().unbind(),
             request: effective_py_args(base, kwargs)?.unbind(),
-        })))
+        }))))
     }
 
-    fn dicts(&self) -> PyResult<&RequestDicts> {
-        self.0
-            .as_ref()
-            .ok_or_else(|| HostError::MissingState.into())
-    }
-
-    pub(crate) fn resolve(
-        &mut self,
-        py: Python<'_>,
-        arguments: &Bound<'_, PyDict>,
-    ) -> PyResult<()> {
-        let dicts = self.0.as_mut().ok_or(HostError::MissingState)?;
+    pub(crate) fn resolve(&self, py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<()> {
+        let mut dicts = self.0.lock();
+        let dicts = dicts.as_mut().ok_or(HostError::MissingState)?;
         dicts.request = effective_py_args(dicts.base.bind(py), arguments)?.unbind();
         Ok(())
     }
 
-    pub(crate) fn request<'py>(&self, py: Python<'py>) -> PyResult<&Bound<'py, PyDict>> {
-        Ok(self.dicts()?.request.bind(py))
+    pub(crate) fn request<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyDict>> {
+        self.0
+            .lock()
+            .as_ref()
+            .map(|dicts| dicts.request.bind(py).clone())
+            .ok_or_else(|| HostError::MissingState.into())
     }
 
     pub(crate) fn argument<'py>(
@@ -89,15 +85,18 @@ impl RequestView {
         arguments: &Bound<'py, PyDict>,
         name: &str,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
-        present(arguments, self.request(py)?, name)
+        present(arguments, &self.request(py)?, name)
     }
 
     pub(crate) fn close(&mut self) {
-        self.0 = None;
+        *self.0.get_mut() = None;
     }
 
     pub(crate) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        let Some(dicts) = &self.0 else {
+        let Some(dicts) = self.0.try_lock() else {
+            return Ok(());
+        };
+        let Some(dicts) = dicts.as_ref() else {
             return Ok(());
         };
         visit.call(&dicts.base)?;
@@ -226,7 +225,7 @@ mod tests {
     ) {
         Python::initialize();
         Python::attach(|py| {
-            let mut view = super::RequestView::new(&dict(py, base), &dict(py, kwargs)).unwrap();
+            let view = super::RequestView::new(&dict(py, base), &dict(py, kwargs)).unwrap();
             let prepared = dict(py, prepared);
             view.resolve(py, &prepared).unwrap();
             let value = view

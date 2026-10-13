@@ -1,7 +1,9 @@
 use litellm_cache::Error;
 use litellm_host::protocol::Reply;
-use litellm_host_python::{from_py, to_py};
+use litellm_host_python::{Awaiter, from_py, to_py};
+use parking_lot::Mutex;
 use pyo3::{
+    exceptions::{PyException, PyRuntimeError},
     gc::{PyTraverseError, PyVisit},
     prelude::*,
     types::PyDict,
@@ -15,127 +17,116 @@ enum Pending {
     Store(Reply<Result<(), Error>>),
 }
 
+struct Configured {
+    cache: Py<PyAny>,
+    arguments: Py<PyDict>,
+}
+
 pub(crate) struct PythonCache {
-    cache: Option<Py<PyAny>>,
-    arguments: Option<Py<PyDict>>,
-    pending: Option<Pending>,
+    configured: Mutex<Option<Configured>>,
     asynchronous: bool,
 }
 
 impl PythonCache {
     pub fn new(asynchronous: bool) -> Self {
         Self {
-            cache: None,
-            arguments: None,
-            pending: None,
+            configured: Mutex::new(None),
             asynchronous,
         }
     }
 
-    pub(in crate::cache) fn bind(
-        &mut self,
-        cache: Bound<'_, PyAny>,
-        arguments: &Bound<'_, PyDict>,
-    ) {
-        self.cache = Some(cache.unbind());
-        self.arguments = Some(arguments.clone().unbind());
+    pub(in crate::cache) fn bind(&self, cache: Bound<'_, PyAny>, arguments: &Bound<'_, PyDict>) {
+        *self.configured.lock() = Some(Configured {
+            cache: cache.unbind(),
+            arguments: arguments.clone().unbind(),
+        });
     }
 
-    pub fn begin(&mut self, py: Python<'_>, call: CacheCall) -> PyResult<Option<Py<PyAny>>> {
-        let Some(cache) = self.cache.as_ref() else {
-            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+    /// Runs one cache operation against the configured Python cache, awaiting it on the
+    /// caller's task for an async call. A cache failure is an answer to the route, a
+    /// cancellation ends the call.
+    pub async fn call(&self, task: &dyn Awaiter, call: CacheCall) -> PyResult<()> {
+        let (pending, invoked) = Python::attach(|py| self.invoke(py, call))?;
+        let result = match invoked {
+            Ok(awaitable) if self.asynchronous => task.awaited(awaitable).await,
+            invoked => invoked,
+        };
+        Python::attach(|py| answer(py, pending, result))
+    }
+
+    fn invoke(&self, py: Python<'_>, call: CacheCall) -> PyResult<(Pending, PyResult<Py<PyAny>>)> {
+        let configured = self.configured.lock();
+        let Some(configured) = configured.as_ref() else {
+            return Err(PyRuntimeError::new_err(
                 "cache operation without configured cache",
             ));
         };
-        let arguments = self
-            .arguments
-            .as_ref()
-            .ok_or_else(|| {
-                pyo3::exceptions::PyRuntimeError::new_err("cache arguments unavailable")
-            })?
-            .bind(py)
-            .copy()?;
-        let (method, result) = match call {
-            CacheCall::Lookup { reply } => {
-                self.pending = Some(Pending::Lookup(reply));
-                (
-                    if self.asynchronous {
+        let arguments = configured.arguments.bind(py).copy()?;
+        let cache = configured.cache.bind(py);
+        let (pending, invoked) = match (call, self.asynchronous) {
+            (CacheCall::Lookup { reply }, asynchronous) => (
+                Pending::Lookup(reply),
+                cache.call_method(
+                    if asynchronous {
                         "async_get_cache"
                     } else {
                         "get_cache"
                     },
-                    None,
-                )
-            }
-            CacheCall::Store { value, reply } => {
-                self.pending = Some(Pending::Store(reply));
-                (
-                    if self.asynchronous {
+                    (),
+                    Some(&arguments),
+                ),
+            ),
+            (CacheCall::Store { value, reply }, asynchronous) => (
+                Pending::Store(reply),
+                cache.call_method(
+                    if asynchronous {
                         "async_add_cache"
                     } else {
                         "add_cache"
                     },
-                    Some(to_py(py, &value)?),
-                )
-            }
+                    (to_py(py, &value)?,),
+                    Some(&arguments),
+                ),
+            ),
         };
-        let result = match result {
-            Some(value) => cache
-                .bind(py)
-                .call_method(method, (value,), Some(&arguments)),
-            None => cache.bind(py).call_method(method, (), Some(&arguments)),
-        }
-        .map(Bound::unbind);
-        if self.asynchronous && result.is_ok() {
-            return result.map(Some);
-        }
-        self.resume(py, result)
-    }
-
-    pub fn resume(
-        &mut self,
-        py: Python<'_>,
-        result: PyResult<Py<PyAny>>,
-    ) -> PyResult<Option<Py<PyAny>>> {
-        if let Err(error) = &result
-            && !error.is_instance_of::<pyo3::exceptions::PyException>(py)
-        {
-            self.pending = None;
-            return Err(result.err().unwrap());
-        }
-        match self.pending.take() {
-            Some(Pending::Lookup(reply)) => {
-                let value = result.map_err(|_| Error::Unavailable).and_then(|value| {
-                    if value.bind(py).is_none() {
-                        Ok(None)
-                    } else {
-                        from_py(value.bind(py))
-                            .map(Some)
-                            .map_err(|_| Error::InvalidEntry)
-                    }
-                });
-                reply.send(value);
-            }
-            Some(Pending::Store(reply)) => {
-                reply.send(result.map(|_| ()).map_err(|_| Error::Unavailable));
-            }
-            None => {
-                return Err(pyo3::exceptions::PyRuntimeError::new_err(
-                    "cache reply without pending operation",
-                ));
-            }
-        }
-        Ok(None)
+        Ok((pending, invoked.map(Bound::unbind)))
     }
 
     pub fn close(&mut self) {
-        self.pending = None;
-        self.cache = None;
-        self.arguments = None;
+        *self.configured.get_mut() = None;
     }
 
     pub fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        visit.call(&self.cache)?;
-        visit.call(&self.arguments)
+        let Some(configured) = self.configured.try_lock() else {
+            return Ok(());
+        };
+        let Some(configured) = configured.as_ref() else {
+            return Ok(());
+        };
+        visit.call(&configured.cache)?;
+        visit.call(&configured.arguments)
     }
+}
+
+fn answer(py: Python<'_>, pending: Pending, result: PyResult<Py<PyAny>>) -> PyResult<()> {
+    if let Err(error) = &result
+        && !error.is_instance_of::<PyException>(py)
+    {
+        return result.map(drop);
+    }
+    match pending {
+        Pending::Lookup(reply) => {
+            reply.send(result.map_err(|_| Error::Unavailable).and_then(|value| {
+                if value.bind(py).is_none() {
+                    Ok(None)
+                } else {
+                    from_py(value.bind(py))
+                        .map(Some)
+                        .map_err(|_| Error::InvalidEntry)
+                }
+            }))
+        }
+        Pending::Store(reply) => reply.send(result.map(drop).map_err(|_| Error::Unavailable)),
+    }
+    Ok(())
 }
