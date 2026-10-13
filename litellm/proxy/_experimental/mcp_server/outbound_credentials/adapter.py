@@ -257,9 +257,7 @@ def _id_jag_spec(server: MCPServer, resource: str) -> ServerSpec | None:
     )
 
 
-def _id_jag_resource_client(
-    server: MCPServer, client_id: str, client_auth: ClientAuth
-) -> IdJagResourceClient | None:
+def _id_jag_resource_client(server: MCPServer, client_id: str, client_auth: ClientAuth) -> IdJagResourceClient | None:
     match server.id_jag_resource_token_endpoint_auth_method:
         case None:
             if server.id_jag_resource_client_id is not None or server.id_jag_resource_client_secret is not None:

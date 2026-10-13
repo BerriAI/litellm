@@ -3370,9 +3370,7 @@ class MCPServerManager:
                 credentials_dict.get("id_jag_resource_token_endpoint") if credentials_dict else None
             ),
             id_jag_resource=(credentials_dict.get("id_jag_resource") if credentials_dict else None),
-            id_jag_resource_client_id=(
-                credentials_dict.get("id_jag_resource_client_id") if credentials_dict else None
-            ),
+            id_jag_resource_client_id=(credentials_dict.get("id_jag_resource_client_id") if credentials_dict else None),
             id_jag_resource_client_secret=self._decrypt_credential_field(
                 credentials_dict.get("id_jag_resource_client_secret") if credentials_dict else None,
                 "id_jag_resource_client_secret",
