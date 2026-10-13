@@ -354,15 +354,6 @@ _SDK_OPTION_KEYS: Final = frozenset(("extra_headers", "extra_query", "extra_body
 _STR_DICT_ADAPTER: Final = TypeAdapter(dict[str, str])
 
 
-def _extra_headers_or_none(data: Mapping) -> Mapping[str, str] | None:
-    """This request's `extra_headers`, validated to a str-to-str mapping, or None
-    if absent or malshaped."""
-    try:
-        return _STR_DICT_ADAPTER.validate_python(data["extra_headers"])
-    except (KeyError, ValidationError):
-        return None
-
-
 def _first_non_ascii_header(extra_headers: Mapping[str, str] | None) -> str | None:
     """Name the first non-ASCII entry in `extra_headers`, or None if there isn't one."""
     if extra_headers is None:
@@ -578,7 +569,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 raise
             return build_output_token_limit_response(e=e, data=data, is_async=True)
         except UnicodeEncodeError as e:
-            raise _non_ascii_header_error(_extra_headers_or_none(data), original_error=e) from e
+            try:
+                extra_headers: Final = _STR_DICT_ADAPTER.validate_python(data["extra_headers"])
+            except (KeyError, ValidationError):
+                raise _non_ascii_header_error(None, original_error=e) from e
+            raise _non_ascii_header_error(extra_headers, original_error=e) from e
         except Exception as e:
             raise e
 
@@ -617,7 +612,11 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                 raise
             return build_output_token_limit_response(e=e, data=data, is_async=False)
         except UnicodeEncodeError as e:
-            raise _non_ascii_header_error(_extra_headers_or_none(data), original_error=e) from e
+            try:
+                extra_headers: Final = _STR_DICT_ADAPTER.validate_python(data["extra_headers"])
+            except (KeyError, ValidationError):
+                raise _non_ascii_header_error(None, original_error=e) from e
+            raise _non_ascii_header_error(extra_headers, original_error=e) from e
         except Exception as e:
             if raw_response is not None:
                 raise Exception(
