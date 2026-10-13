@@ -278,13 +278,8 @@ def _system_rows(blocks: Sequence[_ContentBlock]) -> tuple[ConverseRow, ...]:
     )
 
 
-def request_field_slots(value: object) -> tuple[TextSlot, ...]:
-    """The ``additionalModelRequestFields`` strings in the order their row lists them."""
-    return _string_leaves(("additionalModelRequestFields",), value)
-
-
 def _request_field_rows(value: object) -> tuple[ConverseRow, ...]:
-    slots: Final = request_field_slots(value)
+    slots: Final = _string_leaves(("additionalModelRequestFields",), value)
     return (
         (ConverseRow(ChatCompletionUserMessage(role="user", content=list(_text_parts(slots))), slots),) if slots else ()
     )

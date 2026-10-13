@@ -1,4 +1,5 @@
 import copy
+from collections import deque
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from functools import partial, reduce
@@ -25,7 +26,6 @@ from litellm.llms.bedrock.chat.converse_to_openai import (
     converse_rows,
     converse_tools,
     parse_converse_request,
-    request_field_slots,
 )
 from litellm.llms.bedrock.passthrough.guardrail_translation.structured_edits import (
     Edit,
@@ -101,31 +101,32 @@ _Write: TypeAlias = tuple[_StringHolder, object]
 _BODY_BY_REFERENCE: Final = TypeAdapter(InstanceOf[dict[str, object]])
 
 
-def _collect_strings(node: object, holders: list[_StringHolder]) -> None:
+def _collect_strings(node: object, holders: list[_StringHolder], breadth_first: bool = False) -> None:
     """
     Record a (container, key) holder for every non-empty string value nested
     under an arbitrary JSON node, so prompt content a caller hides in fields
     like ``toolUse.input`` or ``toolResult.content[].json`` is still scanned
     and can be written back in place. Iterative to avoid unbounded recursion
-    on deeply nested payloads.
+    on deeply nested payloads. With ``breadth_first`` the strings come level by
+    level, the order a structured row lists them.
     """
-    stack: Final[list[object]] = [node]
-    while stack:
-        current = stack.pop()
+    pending: Final = deque((node,))
+    while pending:
+        current = pending.popleft() if breadth_first else pending.pop()
         if isinstance(current, dict):
             for key, value in current.items():
                 if isinstance(value, str):
                     if value:
                         holders.append((current, key))
                 else:
-                    stack.append(value)
+                    pending.append(value)
         elif isinstance(current, list):
             for index, value in enumerate(current):
                 if isinstance(value, str):
                     if value:
                         holders.append((current, index))
                 else:
-                    stack.append(value)
+                    pending.append(value)
 
 
 def _collect_block_text(block: dict, holders: list[_StringHolder]) -> None:
@@ -135,13 +136,9 @@ def _collect_block_text(block: dict, holders: list[_StringHolder]) -> None:
 
 
 def _request_field_holders(body: Mapping[str, object], in_row_order: bool) -> tuple[_StringHolder, ...]:
-    fields: Final = body.get("additionalModelRequestFields")
-    if in_row_order:
-        holders: Final = (_holder(body, slot.path) for slot in request_field_slots(fields))
-        return tuple(holder for holder in holders if holder is not None)
-    collected: Final = list[_StringHolder]()
-    _collect_strings(fields, collected)
-    return tuple(collected)
+    holders: Final = list[_StringHolder]()
+    _collect_strings(body.get("additionalModelRequestFields"), holders, breadth_first=in_row_order)
+    return tuple(holders)
 
 
 def _extract_converse_texts(

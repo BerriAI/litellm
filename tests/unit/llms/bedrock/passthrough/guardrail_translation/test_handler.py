@@ -1033,6 +1033,28 @@ class TestBedrockPassthroughGuardrailHandlerStructuredInputs:
         assert result["data"]["messages"] == [{"role": "user", "content": [{"text": "Say hi."}]}]
 
     @pytest.mark.asyncio
+    async def test_flat_mask_on_a_turn_next_to_a_request_field_wins_over_the_row_mask(self):
+        data = {
+            "endpoint": "model/test/converse",
+            "data": {
+                "messages": [{"role": "user", "content": [{"text": "card 4111 1111 1111 1111 please"}]}],
+                "additionalModelRequestFields": {"system": "Answer briefly."},
+            },
+        }
+
+        def mask_rows_and_texts_differently(inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
+            rows = json.loads(json.dumps(inputs["structured_messages"]).replace("4111 1111 1111 1111", "****"))
+            texts = [text.replace("4111 1111 1111 1111", "[CARD]") for text in inputs["texts"]]
+            return {**inputs, "structured_messages": rows, "texts": texts}
+
+        result = await BedrockPassthroughGuardrailHandler().process_input_messages(
+            data=data, guardrail_to_apply=_ScriptedGuardrail(mask_rows_and_texts_differently)
+        )
+
+        assert result["data"]["messages"] == [{"role": "user", "content": [{"text": "card [CARD] please"}]}]
+        assert result["data"]["additionalModelRequestFields"] == {"system": "Answer briefly."}
+
+    @pytest.mark.asyncio
     async def test_flat_text_guardrail_gets_request_field_texts_last_as_on_main(self, monkeypatch):
         guardrail = OpenAIModerationGuardrail(guardrail_name="moderation", api_key="sk-test")
         received: list[GenericGuardrailAPIInputs] = []
