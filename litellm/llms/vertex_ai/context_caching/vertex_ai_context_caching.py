@@ -16,7 +16,6 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
 )
 from litellm.llms.openai.openai import AllMessageValues
-from litellm.types.llms.vertex_ai import VERTEX_AI_CACHE_CREATION_TOKENS_KEY
 from litellm.utils import is_prompt_caching_valid_prompt
 
 from ..common_utils import VertexAIError, get_vertex_base_url
@@ -65,7 +64,7 @@ class _CreatedCachedContentRoot(RootModel[_CreatedCachedContent]):
 
 def _record_cache_creation_tokens(logging_obj: Logging, created: _CreatedCachedContent) -> None:
     tokens: Final = (created.get("usageMetadata") or {}).get("totalTokenCount") or 0
-    logging_obj.model_call_details[VERTEX_AI_CACHE_CREATION_TOKENS_KEY] = tokens  # rebind-ok: shared kwargs bag
+    logging_obj.vertex_ai_cache_creation_input_tokens = max(tokens, 0)  # rebind-ok: set provider count
 
 
 class ContextCachingEndpoints(VertexBase):
