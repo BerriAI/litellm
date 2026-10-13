@@ -11,6 +11,7 @@ from litellm.exceptions import Timeout
 from litellm.types.llms.vertex_ai import (
     Candidates,
     GenerateContentResponseBody,
+    GroundingMetadata,
     HttpxPartType,
     RequestBody,
     UsageMetadata,
@@ -119,6 +120,18 @@ def _candidate_parts(candidate: Candidates) -> Sequence[HttpxPartType]:
     return content.get("parts", ()) if content is not None else ()
 
 
+def _candidate_grounding(candidate: Candidates) -> tuple[GroundingMetadata, ...]:
+    grounding: Final = candidate.get("groundingMetadata")
+    if grounding is None:
+        return ()
+    return grounding if isinstance(grounding, tuple) else (grounding,)
+
+
+def _with_hop_grounding(candidate: Candidates, hop_candidates: Sequence[Candidates]) -> Candidates:
+    grounding: Final = tuple(chain.from_iterable(map(_candidate_grounding, hop_candidates)))
+    return {**candidate, "groundingMetadata": grounding} if grounding else candidate
+
+
 def merge_hops(hops: LongDecodeHops) -> GenerateContentResponseBody:
     last: Final = hops[-1]
     if len(hops) == 1:
@@ -130,7 +143,7 @@ def merge_hops(hops: LongDecodeHops) -> GenerateContentResponseBody:
     }
     return {
         **last,
-        "candidates": [merged_first, *(last.get("candidates") or [])[1:]],
+        "candidates": [_with_hop_grounding(merged_first, hop_candidates), *(last.get("candidates") or [])[1:]],
         "usageMetadata": sum_usage_metadata(*(hop.get("usageMetadata", UsageMetadata()) for hop in hops)),
     }
 

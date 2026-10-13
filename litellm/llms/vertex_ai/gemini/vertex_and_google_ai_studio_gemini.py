@@ -2196,7 +2196,7 @@ class VertexGeminiConfig(VertexAIBaseConfig, BaseConfig):
         citation_metadata: Final[list] = []
 
         if "groundingMetadata" in candidate:
-            if isinstance(candidate["groundingMetadata"], list):
+            if isinstance(candidate["groundingMetadata"], (list, tuple)):
                 grounding_metadata.extend(candidate["groundingMetadata"])
             else:
                 grounding_metadata.append(candidate["groundingMetadata"])
@@ -3330,6 +3330,8 @@ class ModelResponseIterator:
         self._usage_offset: UsageMetadata = UsageMetadata()
         self._hop_usage: UsageMetadata = UsageMetadata()
         self._initial_prompt_tokens: int | None = None
+        self._grounding_offset: tuple[Mapping[str, object], ...] = ()
+        self._hop_grounding: tuple[Mapping[str, object], ...] = ()
 
     @property
     def accumulated_json(self) -> str:
@@ -3446,6 +3448,15 @@ class ModelResponseIterator:
             return usage
         return with_initial_prompt_tokens(usage, self._initial_prompt_tokens)
 
+    def _grounding_through_this_hop(
+        self, grounding_metadata: Sequence[Mapping[str, object]]
+    ) -> Sequence[Mapping[str, object]]:
+        if grounding_metadata:
+            self._hop_grounding = tuple(grounding_metadata)
+        if not self._grounding_offset:
+            return grounding_metadata
+        return (*self._grounding_offset, *self._hop_grounding)
+
     def _apply_stream_usage_metadata(
         self,
         processed_chunk: GenerateContentResponseBody,
@@ -3460,7 +3471,7 @@ class ModelResponseIterator:
             cache_creation_tokens=_cache_creation_tokens(self.logging_obj),
         )
 
-        VertexGeminiConfig.set_grounding_usage_counters(usage, grounding_metadata)
+        VertexGeminiConfig.set_grounding_usage_counters(usage, self._grounding_through_this_hop(grounding_metadata))
 
         traffic_type: Final = processed_chunk.get("usageMetadata", {}).get("trafficType")
         if traffic_type:
@@ -3562,6 +3573,8 @@ class ModelResponseIterator:
     def _start_hop(self, response: httpx.Response) -> None:
         self._usage_offset = sum_usage_metadata(self._usage_offset, self._hop_usage)
         self._hop_usage = UsageMetadata()
+        self._grounding_offset = (*self._grounding_offset, *self._hop_grounding)
+        self._hop_grounding = ()
         self.response = response
 
     @staticmethod

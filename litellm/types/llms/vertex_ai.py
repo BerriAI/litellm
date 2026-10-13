@@ -468,7 +468,7 @@ class Candidates(TypedDict, total=False):
     finishReason: GeminiFinishReason
     safetyRatings: list[SafetyRatings]
     citationMetadata: CitationMetadata
-    groundingMetadata: GroundingMetadata
+    groundingMetadata: GroundingMetadata | tuple[GroundingMetadata, ...]
     finishMessage: str
     logprobsResult: LogprobsResult
     urlContextMetadata: UrlContextMetadata

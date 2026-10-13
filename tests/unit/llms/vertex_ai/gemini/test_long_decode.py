@@ -54,11 +54,27 @@ HOP_2_TRUNCATED: Final = {
 
 HOP_END_FINISH_REASONS: Final = ("MAX_TOKENS", "CONTINUATION")
 
+HOP_1_SEARCHES: Final = ("argon launch date", "argon output limit", "argon pricing")
+HOP_2_SEARCHES: Final = ("argon pricing", "argon context window")
+STREAM_HOP_1_END: Final = {
+    "candidates": [{**HOP_1["candidates"][0], "content": {"role": "model", "parts": [{"text": "lo"}]}}],
+    "usageMetadata": HOP_1["usageMetadata"],
+}
+
 
 def _ending_with(body: Mapping[str, object], finish_reason: str) -> dict[str, object]:
     candidates: Final = body["candidates"]
     assert isinstance(candidates, list)
     return {**body, "candidates": [{**candidates[0], "finishReason": finish_reason}, *candidates[1:]]}
+
+
+def _searching(body: Mapping[str, object], queries: Sequence[str]) -> Mapping[str, object]:
+    if not queries:
+        return body
+    candidates: Final = body["candidates"]
+    assert isinstance(candidates, list)
+    grounded: Final = {**candidates[0], "groundingMetadata": {"webSearchQueries": list(queries)}}
+    return {**body, "candidates": [grounded, *candidates[1:]]}
 
 
 def _replay(hops: Sequence[httpx.Response], sent: list[dict[str, object]]) -> Callable[[httpx.Request], httpx.Response]:
@@ -102,6 +118,33 @@ async def test_unary_long_decode_resends_the_original_request_with_the_token_and
     assert response.usage.completion_tokens == 50
     assert response.usage.prompt_tokens_details.cached_tokens == 9
     assert response.usage.prompt_tokens_details.initial_prompt_tokens == 10
+
+
+@pytest.mark.parametrize("hop_2_searches", [(), HOP_2_SEARCHES])
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_unary_long_decode_bills_the_searches_of_every_hop(is_async: bool, hop_2_searches: Sequence[str]):
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (
+        httpx.Response(200, json=_searching(HOP_1, HOP_1_SEARCHES)),
+        httpx.Response(200, json=_searching(HOP_2, hop_2_searches)),
+    )
+    kwargs: Final = {"model": MODEL, "messages": list(MESSAGES), "max_tokens": 100_000, "api_key": "fake-gemini-key"}
+
+    response: Final = (
+        await litellm.acompletion(**kwargs, client=AsyncHTTPHandler(transport=httpx.MockTransport(_replay(hops, sent))))
+        if is_async
+        else litellm.completion(
+            **kwargs, client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(_replay(hops, sent))))
+        )
+    )
+
+    assert len(sent) == 2
+    assert response.choices[0].message.content == "hello world"
+    assert response.usage.prompt_tokens_details.web_search_requests == len({*HOP_1_SEARCHES, *hop_2_searches})
+    assert [item["webSearchQueries"] for item in response.vertex_ai_grounding_metadata] == [
+        list(searches) for searches in (HOP_1_SEARCHES, hop_2_searches) if searches
+    ]
 
 
 @pytest.mark.parametrize("hop_end", HOP_END_FINISH_REASONS)
@@ -197,13 +240,7 @@ def _stream_hops(hop_end: str = "MAX_TOKENS") -> tuple[httpx.Response, httpx.Res
     return (
         _sse(
             {"candidates": [{"content": {"role": "model", "parts": [{"text": "hel"}]}}]},
-            _ending_with(
-                {
-                    "candidates": [{**HOP_1["candidates"][0], "content": {"role": "model", "parts": [{"text": "lo"}]}}],
-                    "usageMetadata": HOP_1["usageMetadata"],
-                },
-                hop_end,
-            ),
+            _ending_with(STREAM_HOP_1_END, hop_end),
         ),
         _sse(HOP_2),
     )
@@ -256,6 +293,22 @@ async def test_streaming_long_decode_chains_hops_into_one_stream_with_one_finish
     assert chunks[-1].usage.prompt_tokens == 20
     assert chunks[-1].usage.completion_tokens == 50
     assert chunks[-1].usage.prompt_tokens_details.initial_prompt_tokens == 10
+
+
+@pytest.mark.parametrize("hop_2_searches", [(), HOP_2_SEARCHES])
+@pytest.mark.parametrize("is_async", [True, False])
+@pytest.mark.asyncio
+async def test_streaming_long_decode_bills_the_searches_of_every_hop(is_async: bool, hop_2_searches: Sequence[str]):
+    sent: Final[list[dict[str, object]]] = []
+    hops: Final = (
+        _sse(_searching(STREAM_HOP_1_END, HOP_1_SEARCHES)),
+        _sse(_searching(HOP_2, hop_2_searches)),
+    )
+
+    chunks: Final = await _collect_stream(is_async, hops, sent)
+
+    assert len(sent) == 2
+    assert chunks[-1].usage.prompt_tokens_details.web_search_requests == len({*HOP_1_SEARCHES, *hop_2_searches})
 
 
 @pytest.mark.asyncio
