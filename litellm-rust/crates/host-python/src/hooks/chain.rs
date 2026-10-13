@@ -6,7 +6,7 @@ use futures_util::future::BoxFuture;
 use litellm_host::{
     hooks::{CallHooks, ChainRuntime, DynCallHooks, HookGroupAdapter},
     interceptors::{RequestContext, WireRequest},
-    lifecycle::{CallEvent, Timing},
+    lifecycle::Timing,
 };
 use parking_lot::Mutex;
 use pyo3::{
@@ -25,6 +25,14 @@ impl<H: DynCallHooks<PythonRuntime> + PythonOwned> PythonHookGroup for H {}
 
 impl ChainRuntime for PythonRuntime {
     type Group = dyn PythonHookGroup;
+
+    fn terminal_notification_failed(error: PyErr) -> PyResult<()> {
+        if is_cancellation(&error) {
+            return Err(error);
+        }
+        Python::attach(|py| error.write_unraisable(py, None));
+        Ok(())
+    }
 }
 
 impl<H: PythonCallHooks + 'static> HookGroupAdapter<H> for PythonRuntime {
@@ -91,25 +99,6 @@ impl Awaiter for Stage<'_> {
     }
 }
 
-fn is_terminal<Response, Error, Raw>(event: &CallEvent<Response, Error, Raw>) -> bool {
-    matches!(
-        event,
-        CallEvent::Succeeded { .. } | CallEvent::Failed { .. }
-    )
-}
-
-/// A terminal notification reaches every hook, so an ordinary error from one is reported
-/// and the next hook still runs.
-fn notification_result(terminal: bool, result: PyResult<()>) -> PyResult<()> {
-    match result {
-        Err(error) if terminal && !is_cancellation(&error) => {
-            Python::attach(|py| error.write_unraisable(py, None));
-            Ok(())
-        }
-        result => result,
-    }
-}
-
 impl<H: PythonCallHooks> CallHooks<PythonRuntime> for PythonHookAdapter<H> {
     async fn prepare_arguments<'a>(
         &'a self,
@@ -157,9 +146,7 @@ impl<H: PythonCallHooks> CallHooks<PythonRuntime> for PythonHookAdapter<H> {
         event: PythonCallEvent<'_>,
     ) -> PyResult<()> {
         let stage = Stage::new(task);
-        let terminal = is_terminal(&event);
-        let result = stage.guard(self.0.on_event(&stage, event)).await;
-        notification_result(terminal, result)
+        stage.guard(self.0.on_event(&stage, event)).await
     }
 
     fn on_stream_open(&self, head: &Py<PyAny>) -> PyResult<()> {

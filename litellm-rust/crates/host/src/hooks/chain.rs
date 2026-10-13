@@ -1,11 +1,14 @@
 use super::{CallHooks, DynCallHooks, HookRuntime, RuntimeCallEvent};
 use crate::{
     interceptors::{RequestContext, WireRequest},
-    lifecycle::Timing,
+    lifecycle::{CallEvent, Timing},
 };
 
 pub trait ChainRuntime: HookRuntime + Sized + 'static {
     type Group: DynCallHooks<Self> + ?Sized;
+
+    /// `Ok` lets the next group receive the terminal event, `Err` stops the chain.
+    fn terminal_notification_failed(error: Self::Error) -> Result<(), Self::Error>;
 }
 
 pub trait HookGroupAdapter<H>: ChainRuntime {
@@ -96,8 +99,15 @@ where
         runtime: R::Context<'a>,
         event: RuntimeCallEvent<'_, R>,
     ) -> Result<(), R::Error> {
+        let terminal = matches!(
+            event,
+            CallEvent::Succeeded { .. } | CallEvent::Failed { .. }
+        );
         for hooks in &self.hooks {
-            hooks.on_event(runtime, event.clone()).await?;
+            match hooks.on_event(runtime, event.clone()).await {
+                Err(error) if terminal => R::terminal_notification_failed(error)?,
+                result => result?,
+            }
         }
         Ok(())
     }
@@ -128,7 +138,7 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use super::*;
-    use crate::lifecycle::CallEvent;
+    use crate::lifecycle::FailureOrigin;
 
     struct TestRuntime;
 
@@ -143,6 +153,13 @@ mod tests {
 
     impl ChainRuntime for TestRuntime {
         type Group = dyn DynCallHooks<Self>;
+
+        fn terminal_notification_failed(error: &'static str) -> Result<(), &'static str> {
+            match error {
+                "cancelled" => Err(error),
+                _ => Ok(()),
+            }
+        }
     }
 
     impl<H: CallHooks<TestRuntime> + 'static> HookGroupAdapter<H> for TestRuntime {
@@ -154,7 +171,7 @@ mod tests {
     struct Group {
         name: &'static str,
         suspensions: u8,
-        reject: bool,
+        reject: Option<&'static str>,
     }
 
     impl Group {
@@ -168,10 +185,10 @@ mod tests {
             for _ in 0..self.suspensions {
                 tokio::task::yield_now().await;
             }
-            if self.reject {
-                return Err("rejected");
+            match self.reject {
+                Some(error) => Err(error),
+                None => Ok(format!("{value}{}", self.name)),
             }
-            Ok(format!("{value}{}", self.name))
         }
     }
 
@@ -209,10 +226,12 @@ mod tests {
             trace: &'a Mutex<Vec<String>>,
             event: RuntimeCallEvent<'_, TestRuntime>,
         ) -> Result<(), &'static str> {
-            let CallEvent::Succeeded { response, .. } = event else {
-                panic!("expected success")
+            let label = match event {
+                CallEvent::Succeeded { response, .. } => response.as_str(),
+                CallEvent::Failed { error, .. } => *error,
+                _ => "event",
             };
-            self.value(trace, response, String::new()).await.map(|_| ())
+            self.value(trace, label, String::new()).await.map(|_| ())
         }
     }
 
@@ -252,12 +271,12 @@ mod tests {
             .with(Group {
                 name: "a",
                 suspensions,
-                reject: false,
+                reject: None,
             })
             .with(Group {
                 name: "b",
                 suspensions,
-                reject: false,
+                reject: None,
             });
         let arguments = CallHooks::prepare_arguments(&hooks, &trace, "input".into(), 0.0)
             .await
@@ -301,48 +320,72 @@ mod tests {
         );
     }
 
+    fn rejecting_chain(suspensions: u8, error: &'static str) -> HookChain<TestRuntime> {
+        ["a", "b", "c"]
+            .into_iter()
+            .fold(HookChain::new(), |hooks, name| {
+                hooks.with(Group {
+                    name,
+                    suspensions,
+                    reject: (name == "b").then_some(error),
+                })
+            })
+    }
+
     #[rstest]
     #[tokio::test]
-    async fn failure_stops_later_groups(
+    async fn transformation_failure_stops_later_groups(
         trace: Mutex<Vec<String>>,
-        timing: Timing,
         #[values(0, 2)] suspensions: u8,
-        #[values(false, true)] terminal: bool,
     ) {
-        let hooks = HookChain::<TestRuntime>::new()
-            .with(Group {
-                name: "a",
-                suspensions,
-                reject: false,
-            })
-            .with(Group {
-                name: "b",
-                suspensions,
-                reject: true,
-            })
-            .with(Group {
-                name: "c",
-                suspensions,
-                reject: false,
-            });
-        if terminal {
-            let response = "selected".to_owned();
-            let result = CallHooks::on_event(
-                &hooks,
-                &trace,
-                CallEvent::Succeeded {
-                    timing,
-                    response: &response,
-                },
-            )
-            .await;
-            assert_eq!(result, Err("rejected"));
-            assert_eq!(*trace.lock().unwrap(), ["selected:a", "selected:b"]);
-            return;
-        }
+        let hooks = rejecting_chain(suspensions, "rejected");
         let result = CallHooks::prepare_arguments(&hooks, &trace, String::new(), 0.0).await;
         assert_eq!(result, Err("rejected"));
         assert_eq!(*trace.lock().unwrap(), ["prepare:a", "prepare:b"]);
+    }
+
+    #[rstest]
+    #[case::success_reaches_every_group(true, "rejected", Ok(()), &["selected:a", "selected:b", "selected:c"])]
+    #[case::failure_reaches_every_group(false, "rejected", Ok(()), &["failed:a", "failed:b", "failed:c"])]
+    #[case::cancellation_stops_success(true, "cancelled", Err("cancelled"), &["selected:a", "selected:b"])]
+    #[case::cancellation_stops_failure(false, "cancelled", Err("cancelled"), &["failed:a", "failed:b"])]
+    #[tokio::test]
+    async fn terminal_notification_errors_follow_the_runtime(
+        trace: Mutex<Vec<String>>,
+        timing: Timing,
+        #[values(0, 2)] suspensions: u8,
+        #[case] succeeded: bool,
+        #[case] error: &'static str,
+        #[case] expected: Result<(), &'static str>,
+        #[case] reached: &[&str],
+    ) {
+        let hooks = rejecting_chain(suspensions, error);
+        let response = "selected".to_owned();
+        let event = if succeeded {
+            CallEvent::Succeeded {
+                timing,
+                response: &response,
+            }
+        } else {
+            CallEvent::Failed {
+                timing,
+                origin: FailureOrigin::Host,
+                error: &"failed",
+            }
+        };
+        let result = CallHooks::on_event(&hooks, &trace, event).await;
+        assert_eq!(result, expected);
+        assert_eq!(*trace.lock().unwrap(), reached);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn non_terminal_notification_error_stops_later_groups(trace: Mutex<Vec<String>>) {
+        let hooks = rejecting_chain(0, "rejected");
+        let result =
+            CallHooks::on_event(&hooks, &trace, CallEvent::Started { start_time: 0.0 }).await;
+        assert_eq!(result, Err("rejected"));
+        assert_eq!(*trace.lock().unwrap(), ["event:a", "event:b"]);
     }
 
     #[rstest]
