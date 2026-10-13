@@ -201,6 +201,7 @@ describe("provider_info_helpers", () => {
         Providers.CLARIFAI,
         Providers.Cognition,
         Providers.COMPACTIFAI,
+        Providers.CORALBRICKS,
         Providers.DATAROBOT,
         Providers.DOCKER_MODEL_RUNNER,
         Providers.DOTPROMPT,
@@ -359,6 +360,10 @@ describe("provider_info_helpers", () => {
 
     it("should return a tencent/ placeholder for the Tencent provider", () => {
       expect(getPlaceholder(Providers.Tencent)).toBe("tencent/deepseek-v4-pro");
+    });
+
+    it("should return a coralbricks/ placeholder for the CoralBricks provider", () => {
+      expect(getPlaceholder(Providers.CORALBRICKS)).toBe("coralbricks/glm-5.3-fast");
     });
 
     it("should return decision model placeholders for the TypeSafe and StrandsDecider dropdown keys", () => {

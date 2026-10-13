@@ -3996,3 +3996,61 @@ def test_get_batch_cost_rates_claude_haiku_5_5_prompt_length_tiers(
     )
 
     assert (rates.input, rates.output, rates.cache_read, rates.cache_creation) == expected
+
+
+@pytest.mark.parametrize(("speed", "multiplier"), (("fast", 6.0), ("standard", 1.0), (None, 1.0)))
+def test_token_type_cost_breakdown_bills_cache_tokens_at_the_provider_speed_multiplier(
+    monkeypatch: pytest.MonkeyPatch, speed: str | None, multiplier: float
+) -> None:
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "fast-cache-model",
+        {
+            "input_cost_per_token": 1e-6,
+            "output_cost_per_token": 2e-6,
+            "cache_read_input_token_cost": 1e-7,
+            "cache_creation_input_token_cost": 1.25e-6,
+            "litellm_provider": "anthropic",
+            "mode": "chat",
+            "provider_specific_entry": {"fast": 6.0},
+        },
+    )
+    usage = Usage(
+        prompt_tokens=800,
+        completion_tokens=50,
+        total_tokens=850,
+        prompt_tokens_details=PromptTokensDetailsWrapper(cached_tokens=400, cache_creation_tokens=300),
+        speed=speed,
+    )
+
+    breakdown = get_token_type_cost_breakdown(model="fast-cache-model", custom_llm_provider="anthropic", usage=usage)
+
+    assert breakdown.cache_read_cost == pytest.approx(multiplier * 400 * 1e-7)
+    assert breakdown.cache_creation_cost == pytest.approx(multiplier * 300 * 1.25e-6)
+
+
+GEMINI_4_ARGON_TOKEN_PRICE_KEYS: Final = (
+    "input_cost_per_token",
+    "input_cost_per_token_batches",
+    "input_cost_per_token_flex",
+    "input_cost_per_token_priority",
+    "output_cost_per_token",
+    "output_cost_per_token_batches",
+    "output_cost_per_token_flex",
+    "output_cost_per_token_priority",
+    "output_cost_per_reasoning_token",
+    "cache_read_input_token_cost",
+    "cache_read_input_token_cost_batches",
+    "cache_read_input_token_cost_flex",
+    "cache_read_input_token_cost_priority",
+)
+
+
+@pytest.mark.parametrize("model", ["gemini-4-argon", "vertex_ai/gemini-4-argon"])
+def test_vertex_gemini_4_argon_matches_gemini_api_global_pricing(model: str, _local_model_cost_map: None) -> None:
+    vertex_row: Final = litellm.model_cost[model]
+    gemini_row: Final = litellm.model_cost["gemini/gemini-4-argon"]
+    assert {key: vertex_row[key] for key in GEMINI_4_ARGON_TOKEN_PRICE_KEYS} == {
+        key: gemini_row[key] for key in GEMINI_4_ARGON_TOKEN_PRICE_KEYS
+    }
+    assert vertex_row["litellm_provider"].startswith("vertex_ai")

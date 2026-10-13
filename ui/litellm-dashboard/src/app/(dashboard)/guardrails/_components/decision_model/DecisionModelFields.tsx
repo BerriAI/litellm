@@ -53,7 +53,7 @@ const NoDecisionModels: React.FC<{ providerFilter: string | null }> = ({ provide
       <AlertTitle>No decision models yet</AlertTitle>
       <AlertDescription>
         <p>
-          Add a decision model{source} to use this guardrail. A model shows up here once its mode is evaluation.{" "}
+          Add a decision model{source} to use this guardrail. A model shows up here once its mode is decisions.{" "}
           <a href={uiHref("models-and-endpoints")} target="_blank" rel="noopener noreferrer">
             Add a model
           </a>
