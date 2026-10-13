@@ -111,7 +111,7 @@ class TestIsRunning:
         assert is_running(os.getpid()) is True
 
     def test_checking_a_live_proxy_does_not_kill_it(self):
-        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+        child = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(120)"])
         try:
             assert is_running(child.pid) is True
             with pytest.raises(subprocess.TimeoutExpired):

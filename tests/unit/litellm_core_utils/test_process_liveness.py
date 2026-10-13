@@ -8,7 +8,7 @@ import pytest
 
 from litellm.litellm_core_utils.process_liveness import pid_exists
 
-_SLEEP_FOREVER: Final = [sys.executable, "-c", "import time; time.sleep(120)"]
+_SLEEP_FOREVER: Final = [sys.executable, "-I", "-c", "import time; time.sleep(120)"]
 
 
 @pytest.fixture
@@ -33,7 +33,7 @@ def test_checking_a_live_process_reports_it_alive_and_leaves_it_running(
 
 
 def test_exited_process_does_not_exist() -> None:
-    child: Final = subprocess.Popen([sys.executable, "-c", "pass"])
+    child: Final = subprocess.Popen([sys.executable, "-I", "-c", "pass"])
     child.wait(timeout=30)
     assert pid_exists(child.pid) is False
 

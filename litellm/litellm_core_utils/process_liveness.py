@@ -10,7 +10,7 @@ _WAIT_TIMEOUT: Final = 0x102
 
 
 def pid_exists(pid: int) -> bool:
-    if sys.platform == "win32":
+    if sys.platform == "win32":  # pragma: no cover  # Windows-only, CI runs on Linux
         return _pid_exists_windows(pid)
     try:
         os.kill(pid, 0)
@@ -21,7 +21,7 @@ def pid_exists(pid: int) -> bool:
     return True
 
 
-def _pid_exists_windows(pid: int) -> bool:
+def _pid_exists_windows(pid: int) -> bool:  # pragma: no cover  # Windows-only, CI runs on Linux
     # os.kill(pid, 0) on Windows calls TerminateProcess, so liveness must come from the Win32 process handle
     from ctypes import wintypes
 
