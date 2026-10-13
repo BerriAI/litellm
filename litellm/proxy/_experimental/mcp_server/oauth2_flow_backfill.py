@@ -42,7 +42,11 @@ from typing import Final, Literal, Protocol
 from pydantic import JsonValue
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._experimental.mcp_server.db import _decode_oauth_payload, decrypt_credentials
+from litellm.proxy._experimental.mcp_server.db import (  # noqa: F401  # legacy module exports
+    _decode_oauth_payload,  # pyright: ignore[reportPrivateUsage,reportUnusedImport]  # backwards-compatible package export
+    decode_oauth_payload,
+    decrypt_credentials,
+)
 from litellm.proxy.utils import PrismaClient
 from litellm.types.mcp import MCPCredentials
 
@@ -156,7 +160,7 @@ async def backfill_null_oauth2_flows(prisma_client: PrismaClient) -> dict[Backfi
         where={"server_id": {"in": server_ids}},
     )
     server_ids_with_oauth_tokens: Final[set[str]] = {
-        token_row.server_id for token_row in token_rows if _decode_oauth_payload(token_row.credential_b64) is not None
+        token_row.server_id for token_row in token_rows if decode_oauth_payload(token_row.credential_b64) is not None
     }
 
     classified: Final = tuple(

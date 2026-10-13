@@ -204,6 +204,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
+        streaming_buffer_until_moderated: bool | None = None,
         **kwargs,
     ):
         self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
@@ -250,6 +251,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
             "block_only" if streaming_transform_mode is None else streaming_transform_mode
         )
+        if streaming_buffer_until_moderated is not None:
+            self.streaming_buffer_until_moderated: bool = streaming_buffer_until_moderated
 
         # Set supported event hooks
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -364,7 +367,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             else None
         )
         if rows_to_write_back is not None:
-            return_inputs["structured_messages"] = list(rows_to_write_back)  # mutable-ok: guardrail inputs take a list
+            return_inputs["structured_messages"] = list(rows_to_write_back)
         if guardrail_response.stream_holdback_chars is not None:
             return_inputs["stream_holdback_chars"] = guardrail_response.stream_holdback_chars
         return return_inputs
@@ -477,6 +480,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                 url=self.api_base,
                 json=guardrail_request.model_dump(mode="json"),
                 headers=headers,
+                timeout=self.timeout,
             )
 
             response.raise_for_status()

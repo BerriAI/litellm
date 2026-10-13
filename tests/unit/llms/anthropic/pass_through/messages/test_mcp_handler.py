@@ -190,12 +190,12 @@ async def test_anthropic_messages_with_mcp_forwards_the_callers_mcp_credentials(
             else __import__(
                 "litellm.responses.mcp.litellm_proxy_mcp_handler", fromlist=["LiteLLM_Proxy_MCP_Handler"]
             ).LiteLLM_Proxy_MCP_Handler,
-            "_process_mcp_tools_without_openai_transform",
+            "process_mcp_tools_without_openai_transform",
             new=process,
         ),
         patch.object(
             import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
-            "_execute_tool_calls",
+            "execute_tool_calls",
             new=execute,
         ),
         patch("litellm.anthropic_messages", new=AsyncMock(side_effect=responses)),
@@ -227,6 +227,76 @@ async def test_anthropic_messages_with_mcp_forwards_the_callers_mcp_credentials(
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_with_mcp_hands_execution_the_requests_served_tools():
+    """
+    Regression test: /v1/messages auto-execution must carry this request's
+    resolved tool definitions into execution, matching the Responses and chat
+    completions bridges.
+
+    Given: A request whose MCP reference resolves to a definition carrying a
+           description and input schema
+    When:  The model asks for that tool and the gateway executes it
+    Then:  _execute_tool_calls receives the definition under served_tools, so
+           pre_mcp_call hooks can judge the call on what the model was shown
+
+    Dropping it does not fail loudly; the call still runs, but the hook sees
+    only the name and arguments, leaving /v1/messages permanently colder than
+    the other two bridges even though all three resolve the same definitions.
+    """
+    from mcp.types import Tool
+
+    from litellm.llms.anthropic.pass_through.messages import mcp_handler
+    from litellm.responses.mcp.request_context import MCPRequestContext
+
+    served = [
+        Tool(
+            name="read_wiki_structure",
+            description="Read the structure of a wiki",
+            inputSchema={"type": "object", "properties": {"repoName": {"type": "string"}}},
+        )
+    ]
+
+    process = AsyncMock(return_value=(served, {"read_wiki_structure": "deepwiki"}))
+    execute = AsyncMock(
+        return_value=[{"tool_call_id": "toolu_1", "result": "ok", "name": "read_wiki_structure"}]
+    )
+    responses = [
+        {
+            "stop_reason": "tool_use",
+            "content": [{"type": "tool_use", "id": "toolu_1", "name": "read_wiki_structure", "input": {}}],
+        },
+        {"stop_reason": "end_turn", "content": [{"type": "text", "text": "done"}]},
+    ]
+
+    with (
+        patch.object(MCPRequestContext, "resolve", return_value=MCPRequestContext(user_api_key_auth="auth")),
+        patch.object(
+            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
+            "process_mcp_tools_without_openai_transform",
+            new=process,
+        ),
+        patch.object(
+            import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
+            "execute_tool_calls",
+            new=execute,
+        ),
+        patch("litellm.anthropic_messages", new=AsyncMock(side_effect=responses)),
+    ):
+        await mcp_handler.anthropic_messages_with_mcp(
+            max_tokens=100,
+            messages=[{"role": "user", "content": "hi"}],
+            model="claude-sonnet-4-5",
+            tools=[MCP_REFERENCE],
+        )
+
+    execution = execute.call_args.kwargs
+    assert execution.get("served_tools") == served, (
+        "The request's resolved tool definitions must reach execution so pre_mcp_call "
+        "hooks see the listed description and input schema"
+    )
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_with_mcp_stops_when_every_tool_call_is_skipped():
     """
     Regression test (LIT-4517): a tool_use turn whose calls all get skipped must
@@ -253,12 +323,12 @@ async def test_anthropic_messages_with_mcp_stops_when_every_tool_call_is_skipped
         patch.object(MCPRequestContext, "resolve", return_value=MCPRequestContext(user_api_key_auth="auth")),
         patch.object(
             import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
-            "_process_mcp_tools_without_openai_transform",
+            "process_mcp_tools_without_openai_transform",
             new=AsyncMock(return_value=([], {})),
         ),
         patch.object(
             import_module("litellm.responses.mcp.litellm_proxy_mcp_handler").LiteLLM_Proxy_MCP_Handler,
-            "_execute_tool_calls",
+            "execute_tool_calls",
             new=AsyncMock(return_value=[]),
         ),
         patch("litellm.anthropic_messages", new=anthropic_messages_mock),

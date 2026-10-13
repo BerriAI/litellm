@@ -10,8 +10,6 @@ from __future__ import annotations
 import hashlib
 import itertools
 import json
-import os
-import signal
 import socket
 import threading
 import uuid
@@ -30,7 +28,7 @@ import pytest
 import yaml
 from integration._support.client import Gateway, eventually, gateway_from_environment, object_value
 from integration._support.database import read_rows
-from integration._support.process import OwnedProxy, owned_proxy, owned_proxy_process
+from integration._support.process import OwnedProxy, WorkerHealthcheck, owned_proxy, owned_proxy_process
 from integration._support.wire import Reply, Request, wire_server
 
 V3_KEY: Final = "sk_agt_synthetic_integration_key"
@@ -38,6 +36,7 @@ V1_KEY: Final = "synthetic-v1-collection-key"
 V3_PATH: Final = "/api/v3/detect"
 V1_PATH: Final = "/api/v1/detect/webhook"
 BLOCK_MARK: Final = "SYNTHETIC-INJECTION"
+STRAY_V3_BLOCK_MARK: Final = "SYNTHETIC-STRAY-VERSION-BLOCK"
 KILL_MARK: Final = "SYNTHETIC-KILLSWITCH"
 DENY_MARK: Final = "SYNTHETIC-DENY"
 SINK_500_MARK: Final = "SYNTHETIC-SINK-500"
@@ -144,7 +143,11 @@ def _verdict(seen: Seen, text: str) -> tuple[int, bytes]:
         return 200, json.dumps({"action": "NONE"}).encode()
     assert seen.target == V3_PATH, seen.target
     turn: Final = "turn-" + hashlib.sha256(text.encode()).hexdigest()[:12]
-    if BLOCK_MARK in text or (LOG_BLOCK_MARK in text and agent == LOG_AGENT):
+    if (
+        BLOCK_MARK in text
+        or (STRAY_V3_BLOCK_MARK in text and agent is None)
+        or (LOG_BLOCK_MARK in text and agent == LOG_AGENT)
+    ):
         return 200, json.dumps(
             {
                 "hookSpecificOutput": {"permissionDecision": "block"},
@@ -363,7 +366,9 @@ def _rig_config(sink_url: str, root: Path) -> Path:
             format_hint="anthropic.messages",
         ),
         _guardrail("straiker-v3-as-v1", V3_KEY, sink_url, "pre_call", False, api_version="v1"),
+        _guardrail("straiker-v3-stray-version", V3_KEY, sink_url, "pre_call", False, api_version="2024-09-01"),
         _guardrail("straiker-v1", V1_KEY, sink_url, "pre_call", False),
+        _guardrail("straiker-v1-empty-version", V1_KEY, sink_url, "pre_call", False, api_version=""),
         _guardrail("straiker-v1-post", V1_KEY, sink_url, "post_call", False),
     ]
     path: Final = root / "straiker.yaml"
@@ -429,7 +434,9 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     with gateway_from_environment() as gateway, wire_server(_provider) as provider:
         config: Final = _rig_config(sink.url, root)
         with (
-            owned_proxy_process(gateway, root, {}, config=config, workers=2) as owned,
+            owned_proxy_process(
+                gateway, root, {}, config=config, workers=2, healthcheck=WorkerHealthcheck.LENIENT
+            ) as owned,
             owned.gateway.scenario() as scenario,
         ):
             chat: Final = scenario.model(
@@ -776,14 +783,52 @@ def test_v1_post_call_sends_response_envelope(rig: Rig) -> None:
     assert "synthetic answer " + marker in json.dumps(calls[0].body.get("response"))
 
 
-# E: explicit api_version v1 with a v3-shaped key follows the configuration, not the key
-def test_explicit_api_version_v1_overrides_key_prefix(rig: Rig) -> None:
-    marker: Final = rig.marker()
-    response: Final = _chat(rig, "explicit " + marker, guardrails=["straiker-v3-as-v1"])
-    assert response.status_code == 200, response.text
-    calls: Final = _v1_calls(rig, marker, V3_KEY)
-    assert len(calls) == 1, rig.sink_calls(marker)
-    assert calls[0].headers["x-straiker-webhook-format"] == "litellm"
+# E: a saved api_version v1 with an sk_agt_ key routes to v3; the key prefix decides, not the saved version
+def test_saved_api_version_v1_with_v3_key_routes_to_v3_not_the_v1_webhook(rig: Rig) -> None:
+    allowed_marker: Final = rig.marker()
+    allowed: Final = _chat(rig, "saved v1 " + allowed_marker, guardrails=["straiker-v3-as-v1"])
+    assert allowed.status_code == 200, allowed.text
+    assert len(_v3_request_calls(rig, allowed_marker, agent=None)) == 1, rig.sink_calls(allowed_marker)
+    assert _v1_calls(rig, allowed_marker, V3_KEY) == ()
+    assert len(rig.provider_calls(allowed_marker, rig.provider_drain())) == 1
+
+    blocked_marker: Final = rig.marker()
+    blocked: Final = _chat(rig, f"{STRAY_V3_BLOCK_MARK} {blocked_marker}", guardrails=["straiker-v3-as-v1"])
+    assert blocked.status_code == 400, blocked.text
+    assert blocked.json()["error"]["message"] == BLOCK_MESSAGE, blocked.text
+    assert len(_v3_request_calls(rig, blocked_marker, agent=None)) == 1, rig.sink_calls(blocked_marker)
+    assert _v1_calls(rig, blocked_marker, V3_KEY) == ()
+    assert rig.provider_calls(blocked_marker, rig.provider_drain()) == ()
+
+
+def test_stray_api_version_with_v3_key_still_enforces_on_v3(rig: Rig) -> None:
+    allowed_marker: Final = rig.marker()
+    allowed: Final = _chat(rig, "stray version " + allowed_marker, guardrails=["straiker-v3-stray-version"])
+    assert allowed.status_code == 200, allowed.text
+    assert len(_v3_request_calls(rig, allowed_marker, agent=None)) == 1
+    assert len(rig.provider_calls(allowed_marker, rig.provider_drain())) == 1
+
+    blocked_marker: Final = rig.marker()
+    blocked: Final = _chat(rig, f"{STRAY_V3_BLOCK_MARK} {blocked_marker}", guardrails=["straiker-v3-stray-version"])
+    assert blocked.status_code == 400, blocked.text
+    assert blocked.json()["error"]["message"] == BLOCK_MESSAGE, blocked.text
+    assert len(_v3_request_calls(rig, blocked_marker, agent=None)) == 1
+    assert rig.provider_calls(blocked_marker, rig.provider_drain()) == ()
+
+
+def test_empty_api_version_with_v1_key_still_enforces_on_v1(rig: Rig) -> None:
+    allowed_marker: Final = rig.marker()
+    allowed: Final = _chat(rig, "empty version " + allowed_marker, guardrails=["straiker-v1-empty-version"])
+    assert allowed.status_code == 200, allowed.text
+    assert len(_v1_calls(rig, allowed_marker, V1_KEY)) == 1
+    assert len(rig.provider_calls(allowed_marker, rig.provider_drain())) == 1
+
+    blocked_marker: Final = rig.marker()
+    blocked: Final = _chat(rig, f"{V1_BLOCK_MARK} {blocked_marker}", guardrails=["straiker-v1-empty-version"])
+    assert blocked.status_code == 400, blocked.text
+    assert blocked.json()["error"]["message"] == BLOCK_MESSAGE, blocked.text
+    assert len(_v1_calls(rig, blocked_marker, V1_KEY)) == 1
+    assert rig.provider_calls(blocked_marker, rig.provider_drain()) == ()
 
 
 # E: configured client and format_hint ride as headers; request header for agent fills in when YAML has none
@@ -1025,16 +1070,30 @@ def test_burst_with_platform_outage_recovers_without_duplicate_spend(rig: Rig) -
 
 
 # C2: one proxy worker is killed during a burst; the other keeps serving and detect still runs for each call
-def _uvicorn_workers(parent: psutil.Process, *, exclude: int = 0) -> tuple[psutil.Process, ...]:
-    return tuple(
-        c for c in parent.children() if c.is_running() and c.pid != exclude and "spawn_main" in " ".join(c.cmdline())
-    )
+def test_an_unreaped_worker_does_not_hide_the_surviving_proxy_worker(rig: Rig) -> None:
+    workers: Final = tuple(sorted(eventually(rig.owned.worker_pids, lambda pids: len(pids) == 2)))
+    victim: Final = workers[0]
+    survivor: Final = workers[1]
+    marker: Final = rig.marker()
+    with rig.owned.replacing_worker(victim) as kill, rig.owned.suspended(rig.owned.process.pid):
+        kill()
+        assert eventually(psutil.Process(victim).status, lambda status: status == psutil.STATUS_ZOMBIE) == (
+            psutil.STATUS_ZOMBIE
+        )
+        assert rig.owned.worker_pids() == frozenset((survivor,))
+        with httpx.Client(base_url=rig._base(), timeout=15, trust_env=False) as client:
+            response: Final = client.post(
+                "/v1/chat/completions",
+                json={"model": rig.chat_model, "messages": _messages(marker)},
+                headers={"Authorization": f"Bearer {rig.proxy.key}"},
+            )
+        assert response.status_code == 200, response.text
+        assert len(_v3_request_calls(rig, marker)) == 1
+    assert len(rig.owned.worker_pids() - frozenset((victim,))) == 2
 
 
 def test_burst_survives_one_worker_kill(rig: Rig) -> None:
-    parent: Final = psutil.Process(rig.owned.process.pid)
-    workers: Final = eventually(lambda: _uvicorn_workers(parent), lambda c: len(c) >= 2)
-    victim: Final = workers[0].pid
+    workers: Final = tuple(sorted(eventually(rig.owned.worker_pids, lambda pids: len(pids) == 2)))
     markers: Final = tuple(rig.marker() for _ in range(24))
 
     def fresh_chat(text: str) -> tuple[int, str]:
@@ -1049,18 +1108,19 @@ def test_burst_survives_one_worker_kill(rig: Rig) -> None:
                 return 0, repr(error)
         return response.status_code, response.text
 
-    def call(index: int) -> tuple[int, str]:
-        if index == 6:
-            os.kill(victim, signal.SIGKILL)
-        return fresh_chat("kill " + markers[index])
+    with rig.owned.replacing_worker(workers[0]) as kill:
 
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        results: Final = tuple(pool.map(call, range(24)))
+        def call(index: int) -> tuple[int, str]:
+            if index == 6:
+                kill()
+            return fresh_chat("kill " + markers[index])
+
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            results: Final = tuple(pool.map(call, range(24)))
     ok: Final = tuple(i for i, (status, _) in enumerate(results) if status == 200)
     assert len(ok) >= 20, results
     for index in ok:
         assert len(_v3_request_calls(rig, markers[index])) >= 1, markers[index]
-    eventually(lambda: _uvicorn_workers(parent, exclude=victim), lambda c: len(c) >= 2)
     after: Final = fresh_chat("after-kill " + rig.marker())
     assert after[0] == 200, after
 

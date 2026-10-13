@@ -76,9 +76,7 @@ class VertexAILlama3Config(OpenAIGPTConfig):
             if is_vertex_self_deployed_openai_compatible_endpoint(model)
             else frozenset({"max_retries"})
         )
-        return [  # mutable-ok: get_optional_params extends the returned list with allowed_openai_params
-            param for param in super().get_supported_openai_params(model=model) if param not in unsupported_params
-        ]
+        return [param for param in super().get_supported_openai_params(model=model) if param not in unsupported_params]
 
     def map_openai_params(
         self,

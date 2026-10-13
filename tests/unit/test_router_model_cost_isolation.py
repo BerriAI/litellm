@@ -23,9 +23,16 @@ from litellm import Router
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import DEFAULT_MAX_LRU_CACHE_SIZE
 from litellm.litellm_core_utils.ptu_pricing import ptu_config_error
+from litellm.litellm_core_utils.llm_cost_calc.utils import SERVICE_TIER_COST_KEY_SUFFIXES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.openai_like.model_info import MODEL_INFO_REFRESH_SECONDS
-from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+from litellm.types.router import (
+    Deployment,
+    DeploymentTypedDict,
+    LiteLLM_Params,
+    LiteLLMParamsTypedDict,
+    ModelInfo,
+)
 from litellm.utils import (
     _invalidate_model_cost_lowercase_map,
     reapply_runtime_model_cost_registrations,
@@ -513,6 +520,34 @@ def test_should_not_pollute_shared_key_with_custom_nonzero_pricing():
     )
 
 
+def test_regex_lookaround_flag_stays_on_the_deployment_that_set_it() -> None:
+    """A deployment's ``supports_regex_lookaround`` override must not land on the shared
+    ``{provider}/{model}`` key, or every sibling deployment of that model would inherit it."""
+    backend_model = "bedrock/us.xai.grok-4.6"
+    deploy_id = "grok-deploy-keep-regex"
+
+    builtin_flag = litellm.get_model_info(model=backend_model).get("supports_regex_lookaround")
+    model_keys = {
+        deploy_id: litellm.model_cost.get(deploy_id),
+        backend_model: copy.deepcopy(litellm.model_cost.get(backend_model)),
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "grok-keep-regex",
+                    "litellm_params": {"model": backend_model},
+                    "model_info": {"id": deploy_id, "supports_regex_lookaround": not builtin_flag},
+                }
+            ],
+        )
+
+        assert litellm.model_cost[deploy_id]["supports_regex_lookaround"] is (not builtin_flag)
+        assert litellm.get_model_info(model=backend_model).get("supports_regex_lookaround") is builtin_flag
+    finally:
+        _restore_model_cost_entries(model_keys)
+
+
 def test_should_store_full_pricing_under_deployment_model_id():
     """
     Per-deployment pricing (including zero) should be stored and
@@ -860,6 +895,425 @@ def test_inherit_builtin_cache_pricing_noop_for_unknown_backend():
     )
 
     assert model_info == {"input_cost_per_token": 0.000003}
+
+
+_TIER_BACKEND_MODEL: Final = "tier-priced-backend"
+_TIER_BACKEND_KEY: Final = f"openai/{_TIER_BACKEND_MODEL}"
+_CUSTOM_STANDARD_INPUT_RATE: Final = 0.00011
+_CUSTOM_STANDARD_OUTPUT_RATE: Final = 0.00022
+_TIER_BACKEND_ENTRY: Final = {
+    "key": _TIER_BACKEND_KEY,
+    "litellm_provider": "openai",
+    "mode": "chat",
+    "max_tokens": 123456,
+    "input_cost_per_token": 0.00021,
+    "output_cost_per_token": 0.00032,
+    "input_cost_per_token_ultrafast": 0.00031,
+    "output_cost_per_token_ultrafast": 0.00042,
+    "input_cost_per_token_priority": 0.00051,
+    "output_cost_per_token_priority": 0.00062,
+    "input_cost_per_token_flex": 0.00071,
+    "output_cost_per_token_flex": 0.00082,
+    "input_cost_per_token_balanced": 0.00091,
+    "output_cost_per_token_balanced": 0.00102,
+    "cache_read_input_token_cost_ultrafast": 0.00013,
+    "input_cost_per_token_above_272k_tokens_ultrafast": 0.00014,
+    "output_cost_per_token_above_272k_tokens_ultrafast": 0.00015,
+    "input_cost_per_token_batches": 0.00016,
+    "input_cost_per_token_above_272k_tokens": 0.00017,
+}
+_AZURE_TIER_BACKEND_KEY: Final = "azure/tier-priced-backend"
+_AZURE_TIER_BACKEND_ENTRY: Final = {
+    **_TIER_BACKEND_ENTRY,
+    "key": _AZURE_TIER_BACKEND_KEY,
+    "litellm_provider": "azure",
+}
+
+
+def _register_tier_backend() -> None:
+    litellm.model_cost[_TIER_BACKEND_KEY] = copy.deepcopy(_TIER_BACKEND_ENTRY)
+    litellm.get_model_info.cache_clear()
+    _invalidate_model_cost_lowercase_map()
+
+
+def _register_azure_tier_backend() -> None:
+    litellm.model_cost[_AZURE_TIER_BACKEND_KEY] = copy.deepcopy(_AZURE_TIER_BACKEND_ENTRY)
+    litellm.get_model_info.cache_clear()
+    _invalidate_model_cost_lowercase_map()
+
+
+def test_inherit_builtin_service_tier_pricing_fills_only_missing_fields() -> None:
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL)
+    }
+    try:
+        _register_tier_backend()
+        model_info: Final = {
+            "id": "custom-priced-tier-deployment",
+            "input_cost_per_token": _CUSTOM_STANDARD_INPUT_RATE,
+            "output_cost_per_token": _CUSTOM_STANDARD_OUTPUT_RATE,
+            "output_cost_per_token_ultrafast": 0.00999,
+        }
+
+        Router._inherit_builtin_service_tier_pricing(
+            model_info=model_info,
+            backend_model=_TIER_BACKEND_MODEL,
+            custom_llm_provider="openai",
+        )
+
+        assert model_info == {
+            "id": "custom-priced-tier-deployment",
+            "input_cost_per_token": _CUSTOM_STANDARD_INPUT_RATE,
+            "output_cost_per_token": _CUSTOM_STANDARD_OUTPUT_RATE,
+            "input_cost_per_token_ultrafast": _TIER_BACKEND_ENTRY["input_cost_per_token_ultrafast"],
+            "output_cost_per_token_ultrafast": 0.00999,
+            "input_cost_per_token_priority": _TIER_BACKEND_ENTRY["input_cost_per_token_priority"],
+            "output_cost_per_token_priority": _TIER_BACKEND_ENTRY["output_cost_per_token_priority"],
+            "input_cost_per_token_flex": _TIER_BACKEND_ENTRY["input_cost_per_token_flex"],
+            "output_cost_per_token_flex": _TIER_BACKEND_ENTRY["output_cost_per_token_flex"],
+            "input_cost_per_token_balanced": _TIER_BACKEND_ENTRY["input_cost_per_token_balanced"],
+            "output_cost_per_token_balanced": _TIER_BACKEND_ENTRY["output_cost_per_token_balanced"],
+            "cache_read_input_token_cost_ultrafast": _TIER_BACKEND_ENTRY[
+                "cache_read_input_token_cost_ultrafast"
+            ],
+            "input_cost_per_token_above_272k_tokens_ultrafast": _TIER_BACKEND_ENTRY[
+                "input_cost_per_token_above_272k_tokens_ultrafast"
+            ],
+            "output_cost_per_token_above_272k_tokens_ultrafast": _TIER_BACKEND_ENTRY[
+                "output_cost_per_token_above_272k_tokens_ultrafast"
+            ],
+        }
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def test_inherit_builtin_service_tier_pricing_noop_without_base_rate_or_backend() -> None:
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL)
+    }
+    try:
+        _register_tier_backend()
+        model_info_without_base_rate: Final = {
+            "id": "custom-priced-no-base-rate",
+            "input_cost_per_token_ultrafast": 0.00031,
+        }
+        expected_without_base_rate: Final = copy.deepcopy(model_info_without_base_rate)
+        Router._inherit_builtin_service_tier_pricing(
+            model_info=model_info_without_base_rate,
+            backend_model=_TIER_BACKEND_MODEL,
+            custom_llm_provider="openai",
+        )
+
+        model_info_with_unknown_backend: Final = {
+            "id": "custom-priced-unknown-backend",
+            "input_cost_per_token": _CUSTOM_STANDARD_INPUT_RATE,
+            "output_cost_per_token": _CUSTOM_STANDARD_OUTPUT_RATE,
+        }
+        expected_with_unknown_backend: Final = copy.deepcopy(model_info_with_unknown_backend)
+        Router._inherit_builtin_service_tier_pricing(
+            model_info=model_info_with_unknown_backend,
+            backend_model="tier-priced-backend-unknown",
+            custom_llm_provider="openai",
+        )
+
+        assert model_info_without_base_rate == expected_without_base_rate
+        assert model_info_with_unknown_backend == expected_with_unknown_backend
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def test_router_completion_uses_custom_standard_and_backend_ultrafast_pricing() -> None:
+    model_id: Final = "tier-priced-deployment"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL, model_id)
+    }
+    try:
+        _register_tier_backend()
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "tier-priced-router",
+                    "litellm_params": {
+                        "model": _TIER_BACKEND_MODEL,
+                        "custom_llm_provider": "openai",
+                        "api_key": "sk-tier-pricing-not-used",
+                        "input_cost_per_token": _CUSTOM_STANDARD_INPUT_RATE,
+                        "output_cost_per_token": _CUSTOM_STANDARD_OUTPUT_RATE,
+                    },
+                    "model_info": {
+                        "id": model_id,
+                        "input_cost_per_token": _CUSTOM_STANDARD_INPUT_RATE,
+                        "output_cost_per_token": _CUSTOM_STANDARD_OUTPUT_RATE,
+                    },
+                }
+            ]
+        )
+
+        ultrafast_response: Final = router.completion(
+            model="tier-priced-router",
+            messages=[{"role": "user", "content": "tiered pricing"}],
+            service_tier="ultrafast",
+            mock_response=litellm.ModelResponse(
+                model=_TIER_BACKEND_MODEL,
+                service_tier="ultrafast",
+                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
+            ),
+        )
+        standard_response: Final = router.completion(
+            model="tier-priced-router",
+            messages=[{"role": "user", "content": "standard pricing"}],
+            mock_response=litellm.ModelResponse(
+                model=_TIER_BACKEND_MODEL,
+                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
+            ),
+        )
+
+        assert isinstance(ultrafast_response, litellm.ModelResponse)
+        assert ultrafast_response._hidden_params["response_cost"] == pytest.approx(
+            1000 * _TIER_BACKEND_ENTRY["input_cost_per_token_ultrafast"]
+            + 100 * _TIER_BACKEND_ENTRY["output_cost_per_token_ultrafast"]
+        )
+        assert isinstance(standard_response, litellm.ModelResponse)
+        assert standard_response._hidden_params["response_cost"] == pytest.approx(
+            1000 * _CUSTOM_STANDARD_INPUT_RATE + 100 * _CUSTOM_STANDARD_OUTPUT_RATE
+        )
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def test_router_completion_uses_backend_ultrafast_long_context_rates() -> None:
+    model_id: Final = "tier-priced-long-context-deployment"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL, model_id)
+    }
+    try:
+        _register_tier_backend()
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "tier-priced-long-context-router",
+                    "litellm_params": {
+                        "model": _TIER_BACKEND_MODEL,
+                        "custom_llm_provider": "openai",
+                        "api_key": "sk-tier-pricing-not-used",
+                        "input_cost_per_token": _CUSTOM_STANDARD_INPUT_RATE,
+                        "output_cost_per_token": _CUSTOM_STANDARD_OUTPUT_RATE,
+                    },
+                    "model_info": {
+                        "id": model_id,
+                        "input_cost_per_token": _CUSTOM_STANDARD_INPUT_RATE,
+                        "output_cost_per_token": _CUSTOM_STANDARD_OUTPUT_RATE,
+                    },
+                }
+            ]
+        )
+
+        response: Final = router.completion(
+            model="tier-priced-long-context-router",
+            messages=[{"role": "user", "content": "long context tiered pricing"}],
+            service_tier="ultrafast",
+            mock_response=litellm.ModelResponse(
+                model=_TIER_BACKEND_MODEL,
+                service_tier="ultrafast",
+                usage=litellm.Usage(prompt_tokens=300_000, completion_tokens=100, total_tokens=300_100),
+            ),
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            300_000 * _TIER_BACKEND_ENTRY["input_cost_per_token_above_272k_tokens_ultrafast"]
+            + 100 * _TIER_BACKEND_ENTRY["output_cost_per_token_above_272k_tokens_ultrafast"]
+        )
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.parametrize("ptu_enabled", (True, False))
+def test_ptu_service_tier_pricing_is_disabled_only_when_attribution_is_enabled(
+    monkeypatch: pytest.MonkeyPatch, ptu_enabled: bool
+) -> None:
+    model_id: Final = f"ptu-tier-deployment-{ptu_enabled}"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_TIER_BACKEND_KEY, model_id)
+    }
+    try:
+        _register_tier_backend()
+        monkeypatch.setenv("LITELLM_ENABLE_PTU_COST_ATTRIBUTION", "True" if ptu_enabled else "")
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": f"ptu-tier-model-{ptu_enabled}",
+                    "litellm_params": {
+                        "model": _TIER_BACKEND_MODEL,
+                        "custom_llm_provider": "openai",
+                        "api_key": "sk-tier-pricing-not-used",
+                        "input_cost_per_token": _CUSTOM_STANDARD_INPUT_RATE,
+                        "output_cost_per_token": _CUSTOM_STANDARD_OUTPUT_RATE,
+                    },
+                    "model_info": {**_PTU_MODEL_INFO, "id": model_id},
+                }
+            ]
+        )
+        registered: Final = litellm.model_cost[model_id]
+        tier_fields: Final = tuple(
+            field for field in _TIER_BACKEND_ENTRY if field.endswith(SERVICE_TIER_COST_KEY_SUFFIXES)
+        )
+        if ptu_enabled:
+            assert all(field not in registered for field in tier_fields)
+        else:
+            assert all(field in registered for field in tier_fields)
+
+        response: Final = router.completion(
+            model=f"ptu-tier-model-{ptu_enabled}",
+            messages=[{"role": "user", "content": "ptu service tier pricing"}],
+            service_tier="priority",
+            mock_response=litellm.ModelResponse(
+                model=_TIER_BACKEND_MODEL,
+                service_tier="priority",
+                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
+            ),
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        expected_cost: Final = (
+            0.0
+            if ptu_enabled
+            else 1000 * _TIER_BACKEND_ENTRY["input_cost_per_token_priority"]
+            + 100 * _TIER_BACKEND_ENTRY["output_cost_per_token_priority"]
+        )
+        assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def test_azure_base_model_inherits_service_tier_pricing_for_registration_and_payload() -> None:
+    model_id: Final = "azure-tier-priced-alias"
+    payload_id: Final = "azure-tier-priced-payload"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_AZURE_TIER_BACKEND_KEY, model_id, payload_id)
+    }
+    try:
+        _register_azure_tier_backend()
+        router: Final = Router(
+            model_list=[
+                {
+                    "model_name": "azure/tier-priced-alias",
+                    "litellm_params": {
+                        "model": "azure/tier-priced-alias",
+                        "custom_llm_provider": "azure",
+                        "api_key": "sk-tier-pricing-not-used",
+                        "api_base": "https://tier-priced.azure.invalid",
+                    },
+                    "model_info": {
+                        "id": model_id,
+                        "base_model": _AZURE_TIER_BACKEND_KEY,
+                        "input_cost_per_token": _CUSTOM_STANDARD_INPUT_RATE,
+                        "output_cost_per_token": _CUSTOM_STANDARD_OUTPUT_RATE,
+                    },
+                }
+            ]
+        )
+
+        response: Final = router.completion(
+            model="azure/tier-priced-alias",
+            messages=[{"role": "user", "content": "azure base model pricing"}],
+            service_tier="priority",
+            allowed_openai_params=["service_tier"],
+            mock_response=litellm.ModelResponse(
+                model=_AZURE_TIER_BACKEND_KEY,
+                service_tier="priority",
+                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=100, total_tokens=1100),
+            ),
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            1000 * _AZURE_TIER_BACKEND_ENTRY["input_cost_per_token_priority"]
+            + 100 * _AZURE_TIER_BACKEND_ENTRY["output_cost_per_token_priority"]
+        )
+
+        payload: Final = Router._deployment_model_cost_payload(
+            deployment=Deployment(
+                model_name="azure/tier-priced-alias-from-params",
+                litellm_params=LiteLLM_Params(
+                    model="azure/tier-priced-alias",
+                    custom_llm_provider="azure",
+                    base_model=_AZURE_TIER_BACKEND_KEY,
+                    input_cost_per_token=_CUSTOM_STANDARD_INPUT_RATE,
+                    output_cost_per_token=_CUSTOM_STANDARD_OUTPUT_RATE,
+                ),
+                model_info=ModelInfo(id=payload_id),
+            )
+        )
+
+        assert payload["input_cost_per_token_priority"] == _AZURE_TIER_BACKEND_ENTRY[
+            "input_cost_per_token_priority"
+        ]
+        assert payload["output_cost_per_token_priority"] == _AZURE_TIER_BACKEND_ENTRY[
+            "output_cost_per_token_priority"
+        ]
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.mark.parametrize(
+    ("model_info_base_model", "params_base_model", "model", "expected"),
+    (
+        pytest.param(
+            "azure/tier-priced-model-info-base",
+            "azure/tier-priced-params-base",
+            "azure/tier-priced-deployment-alias",
+            "azure/tier-priced-model-info-base",
+            id="model-info-base-model-wins",
+        ),
+        pytest.param(
+            None,
+            "azure/tier-priced-params-base",
+            "azure/tier-priced-deployment-alias",
+            "azure/tier-priced-params-base",
+            id="params-base-model-fallback",
+        ),
+        pytest.param(
+            None,
+            None,
+            "azure/tier-priced-deployment-alias",
+            "azure/tier-priced-deployment-alias",
+            id="model-fallback",
+        ),
+        pytest.param(
+            "",
+            "azure/tier-priced-params-base",
+            "azure/tier-priced-deployment-alias",
+            "azure/tier-priced-params-base",
+            id="empty-model-info-base-model-falls-through",
+        ),
+    ),
+)
+def test_cost_map_backend_model_uses_canonical_model_precedence(
+    model_info_base_model: str | None,
+    params_base_model: str | None,
+    model: str,
+    expected: str,
+) -> None:
+    deployment: Final = Deployment(
+        model_name="azure/tier-priced-cost-map-backend",
+        litellm_params=LiteLLM_Params(model=model, base_model=params_base_model),
+        model_info=ModelInfo(id="tier-priced-cost-map-backend", base_model=model_info_base_model),
+    )
+
+    assert Router._cost_map_backend_model(deployment) == expected
 
 
 def test_inherit_builtin_base_rates_for_off_peak_fills_missing_rates():
@@ -1772,7 +2226,7 @@ def test_replay_model_cost_registrations_survives_a_malformed_deployment():
 
         litellm.model_cost = {"gpt-4o": {"litellm_provider": "openai", "mode": "chat"}}
         _invalidate_model_cost_lowercase_map()
-        router._replay_model_cost_registrations()
+        router.replay_model_cost_registrations()
 
         assert litellm.model_cost["healthy-id"]["max_input_tokens"] == 777
     finally:
@@ -1803,6 +2257,41 @@ def test_deployment_model_cost_payload_folds_in_litellm_params_pricing():
     assert payload["cache_read_input_token_cost"] > 0
 
 
+def test_deployment_model_cost_payload_includes_builtin_service_tier_pricing() -> None:
+    model_id: Final = "tier-priced-payload"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (_TIER_BACKEND_KEY, _TIER_BACKEND_MODEL, model_id)
+    }
+    try:
+        _register_tier_backend()
+        payload: Final = Router._deployment_model_cost_payload(
+            deployment=Deployment(
+                model_name="tier-priced-payload",
+                litellm_params=LiteLLM_Params(
+                    model=_TIER_BACKEND_MODEL,
+                    custom_llm_provider="openai",
+                    input_cost_per_token=_CUSTOM_STANDARD_INPUT_RATE,
+                    output_cost_per_token=_CUSTOM_STANDARD_OUTPUT_RATE,
+                ),
+                model_info=ModelInfo(id=model_id),
+            )
+        )
+
+        assert (
+            payload["input_cost_per_token_ultrafast"] == _TIER_BACKEND_ENTRY["input_cost_per_token_ultrafast"]
+        )
+        assert (
+            payload["output_cost_per_token_ultrafast"] == _TIER_BACKEND_ENTRY["output_cost_per_token_ultrafast"]
+        )
+        assert payload["input_cost_per_token_balanced"] == _TIER_BACKEND_ENTRY["input_cost_per_token_balanced"]
+        assert payload["input_cost_per_token"] == _CUSTOM_STANDARD_INPUT_RATE
+        assert payload["output_cost_per_token"] == _CUSTOM_STANDARD_OUTPUT_RATE
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
 def test_register_deployment_in_model_cost_writes_both_key_families():
     """
     A deployment contributes its full model_info under its unique id and the
@@ -1827,6 +2316,34 @@ def test_register_deployment_in_model_cost_writes_both_key_families():
         assert "id" not in shared
     finally:
         _restore_model_cost_entries(model_keys)
+
+
+def test_router_registration_keeps_ultrafast_long_context_deployment_pricing() -> None:
+    model_id: Final = "ultrafast-long-context-pricing-id"
+    backend_key: Final = "openai/gpt-6-astra"
+    rates: Final = {
+        "input_cost_per_token_above_272k_tokens_ultrafast": 0.00012,
+        "output_cost_per_token_above_272k_tokens_ultrafast": 0.00045,
+        "cache_read_input_token_cost_above_272k_tokens_ultrafast": 1.2e-05,
+        "cache_creation_input_token_cost_above_272k_tokens_ultrafast": 0.00015,
+    }
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key)) for key in (model_id, backend_key, "gpt-6-astra")
+    }
+    try:
+        Router(
+            model_list=[
+                {
+                    "model_name": "ultrafast-long-context-pricing",
+                    "litellm_params": {"model": backend_key, **rates},
+                    "model_info": {"id": model_id},
+                }
+            ]
+        )
+
+        assert {key: litellm.model_cost[model_id][key] for key in rates} == rates
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
 
 
 def test_reload_keeps_custom_pricing_configured_on_litellm_params_for_a_db_model():
@@ -2716,3 +3233,89 @@ def test_price_data_reload_refreshes_the_cached_model_group_and_deployment_info(
 
     assert router.cached_model_group_info("grp").input_cost_per_token == new_price
     assert router.cached_deployment_model_info("dep-a", "openai/gpt-4o")["input_cost_per_token"] == new_price
+
+
+_COLLIDING_BUILTIN_KEY: Final = "baseten/zai-org/GLM-5.2"
+_COLLIDING_SHARED_OPENAI_KEY: Final = "openai/zai-org/GLM-5.2"
+_COLLIDING_MODEL_INFO: Final = {
+    "input_cost_per_token": 0.00000096,
+    "output_cost_per_token": 0.00000302,
+    "cache_read_input_token_cost": 0.00000010,
+    "mode": "chat",
+}
+
+
+def _colliding_id_deployment(model_id: str, custom_llm_provider: str) -> DeploymentTypedDict:
+    litellm_params: Final = LiteLLMParamsTypedDict(
+        model="zai-org/GLM-5.2",
+        api_base="https://inference.baseten.co/v1",
+        custom_llm_provider=custom_llm_provider,
+    )
+    model_info: Final[dict] = {"id": model_id, **_COLLIDING_MODEL_INFO}
+    return DeploymentTypedDict(
+        model_name="nvidia/zai-org/glm-5.2",
+        litellm_params=litellm_params,
+        model_info=model_info,
+    )
+
+
+@pytest.mark.parametrize("model_id", ("baseten/zai-org/glm-5.2",))
+def test_deployment_id_colliding_with_another_providers_catalog_key_keeps_its_own_pricing(model_id: str) -> None:
+    """A deployment id equal to another provider's catalog key must not merge
+    into that row: the merge leaves litellm_provider=baseten on the entry, which
+    _check_provider_match then rejects for the openai request, billing $0."""
+    builtin_row_before: Final = copy.deepcopy(litellm.model_cost[_COLLIDING_BUILTIN_KEY])
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (model_id, _COLLIDING_BUILTIN_KEY, _COLLIDING_SHARED_OPENAI_KEY)
+    }
+    try:
+        router: Final = Router(model_list=[_colliding_id_deployment(model_id, "openai")])
+
+        response: Final = router.completion(
+            model="nvidia/zai-org/glm-5.2",
+            messages=[{"role": "user", "content": "colliding id pricing"}],
+            mock_response=litellm.ModelResponse(
+                model="zai-org/GLM-5.2",
+                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+            ),
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            1000 * 0.00000096 + 500 * 0.00000302
+        )
+        assert litellm.model_cost[_COLLIDING_BUILTIN_KEY] == builtin_row_before
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
+
+
+def test_deployment_id_matching_its_own_providers_catalog_key_still_merges() -> None:
+    """Same-provider collision keeps today's merge behavior: the deployment's
+    custom prices land on the baseten row the openai-compatible baseten request
+    matches against."""
+    model_id: Final = "baseten/zai-org/glm-5.2"
+    model_cost_entries: Final = {
+        key: copy.deepcopy(litellm.model_cost.get(key))
+        for key in (model_id, _COLLIDING_BUILTIN_KEY)
+    }
+    try:
+        router: Final = Router(model_list=[_colliding_id_deployment(model_id, "baseten")])
+
+        response: Final = router.completion(
+            model="nvidia/zai-org/glm-5.2",
+            messages=[{"role": "user", "content": "same provider pricing"}],
+            mock_response=litellm.ModelResponse(
+                model="zai-org/GLM-5.2",
+                usage=litellm.Usage(prompt_tokens=1000, completion_tokens=500, total_tokens=1500),
+            ),
+        )
+
+        assert isinstance(response, litellm.ModelResponse)
+        assert response._hidden_params["response_cost"] == pytest.approx(
+            1000 * 0.00000096 + 500 * 0.00000302
+        )
+    finally:
+        _restore_model_cost_entries(model_cost_entries)
+        litellm.get_model_info.cache_clear()
