@@ -160,24 +160,10 @@ _convert_tool_response_to_message = convert_tool_response_to_message
 
 @dataclass(frozen=True, slots=True)
 class ResponseFormatSchema:
-    document: Mapping[str, JsonValue]
     property_names: frozenset[str]
-    required: tuple[str, ...]
-
-    def accepts(self, value: Mapping[str, JsonValue]) -> bool:
-        from jsonschema.validators import validator_for
-        from referencing import Registry
-        from referencing.exceptions import Unresolvable
-
-        validator: Final = validator_for(self.document)(dict(self.document), registry=Registry())
-        try:
-            return validator.is_valid(dict(value))
-        except Unresolvable:
-            return False
 
 
 _JSON_OBJECT: Final = TypeAdapter(Mapping[str, JsonValue])
-_REQUIRED_NAMES: Final = TypeAdapter(tuple[str, ...])
 
 
 def as_json_object(value: object) -> Mapping[str, JsonValue] | None:
@@ -188,76 +174,67 @@ def as_json_object(value: object) -> Mapping[str, JsonValue] | None:
 
 
 def response_format_schema(value: object) -> ResponseFormatSchema | None:
-    from jsonschema.exceptions import SchemaError
-    from jsonschema.validators import validator_for
-
     document: Final = as_json_object(value)
-    if document is None:
-        return None
-    try:
-        validator_for(document).check_schema(dict(document))
-        required: Final = _REQUIRED_NAMES.validate_python(document.get("required", ()))
-    except (SchemaError, ValidationError):
-        return None
-    return ResponseFormatSchema(
-        document=document,
-        property_names=frozenset(as_json_object(document.get("properties")) or ()),
-        required=required,
-    )
-
-
-def _is_schema_object(value: Mapping[str, JsonValue], schema: ResponseFormatSchema) -> bool:
-    return not schema.property_names.isdisjoint(value) and all(key in value for key in schema.required)
+    properties: Final = None if document is None else as_json_object(document.get("properties", {}))
+    return None if properties is None else ResponseFormatSchema(property_names=frozenset(properties))
 
 
 RESPONSE_FORMAT_ENVELOPE_NAME_KEYS: Final = frozenset({"name", "tool_name"})
 
 
-def _tool_call_envelope_payload(
-    payload_object: Mapping[str, JsonValue], tool_name: str
-) -> Mapping[str, JsonValue] | None:
+@dataclass(frozen=True, slots=True)
+class _EnvelopeLayer:
+    inner: Mapping[str, JsonValue]
+    names_the_tool: bool
+
+
+def _json_object_or_encoded_object(value: JsonValue) -> Mapping[str, JsonValue] | None:
+    if not isinstance(value, str):
+        return as_json_object(value)
+    try:
+        return as_json_object(json.loads(value))
+    except json.JSONDecodeError:
+        return None
+
+
+def _envelope_layer(
+    payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema, tool_name: str
+) -> _EnvelopeLayer | None:
     name_keys: Final = frozenset(
         key for key in RESPONSE_FORMAT_ENVELOPE_NAME_KEYS if payload_object.get(key) == tool_name
     )
-    other_values: Final = tuple(as_json_object(value) for key, value in payload_object.items() if key not in name_keys)
-    if not name_keys or len(other_values) != 1:
+    wrapper_keys: Final = tuple(key for key in payload_object if key not in name_keys)
+    if len(wrapper_keys) != 1 or wrapper_keys[0] in schema.property_names:
         return None
-    return other_values[0]
+    wrapped: Final = payload_object[wrapper_keys[0]]
+    inner: Final = _json_object_or_encoded_object(wrapped) if name_keys else as_json_object(wrapped)
+    return None if inner is None else _EnvelopeLayer(inner=inner, names_the_tool=bool(name_keys))
 
 
-_MAX_WRAPPER_DEPTH: Final = 3
-
-
-def _schema_object_under_single_key_wrappers(
-    value: Mapping[str, JsonValue], schema: ResponseFormatSchema, wrappers_left: int
+def _schema_object_inside_envelope(
+    payload_object: Mapping[str, JsonValue], schema: ResponseFormatSchema, tool_name: str
 ) -> Mapping[str, JsonValue] | None:
-    if not schema.property_names.isdisjoint(value):
-        return value if _is_schema_object(value, schema) else None
-    if wrappers_left == 0 or len(value) != 1:
+    layer: Final = _envelope_layer(payload_object, schema, tool_name)
+    if layer is None:
         return None
-    nested: Final = as_json_object(next(iter(value.values())))
-    return None if nested is None else _schema_object_under_single_key_wrappers(nested, schema, wrappers_left - 1)
+    if layer.names_the_tool:
+        return layer.inner
+    if not schema.property_names:
+        return None
+    if not schema.property_names.isdisjoint(layer.inner):
+        return layer.inner
+    return _schema_object_inside_envelope(layer.inner, schema, tool_name)
 
 
 def unwrap_response_format_envelope(payload: object, schema: ResponseFormatSchema, tool_name: str) -> object:
     payload_object: Final = as_json_object(payload)
     if payload_object is None:
         return payload
-    if schema.accepts(payload_object):
-        return payload
-    tool_call_payload: Final = _tool_call_envelope_payload(payload_object, tool_name)
-    if tool_call_payload is not None:
-        return tool_call_payload
-    if _is_schema_object(payload_object, schema):
-        return payload
-    nested_objects: Final = tuple(as_json_object(value) for value in payload_object.values())
-    candidates: Final = tuple(
-        nested for nested in nested_objects if nested is not None and _is_schema_object(nested, schema)
-    )
-    if len(candidates) == 1:
-        return candidates[0]
-    wrapped_object: Final = _schema_object_under_single_key_wrappers(payload_object, schema, _MAX_WRAPPER_DEPTH)
-    return payload if wrapped_object is None else wrapped_object
+    schema_object: Final = _schema_object_inside_envelope(payload_object, schema, tool_name)
+    if schema_object is not None:
+        return schema_object
+    values: Final = None if "values" in schema.property_names else payload_object.get("values")
+    return payload if values is None else values
 
 
 def _dict_to_response_format_helper(response_format: dict, ref_template: str | None = None) -> dict:
