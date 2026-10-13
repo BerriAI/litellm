@@ -61,7 +61,8 @@ async def test_opik_logging_http_request():
             temperature=0.2,
             mock_response="This is a mock response",
         )
-    await asyncio.sleep(1)
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
 
     assert opik_batch_calls() == [], "events below batch_size must stay queued"
     assert len(test_opik_logger.log_queue) == 10
@@ -74,7 +75,8 @@ async def test_opik_logging_http_request():
             temperature=0.2,
             mock_response="This is a mock response",
         )
-    await asyncio.sleep(1)
+    await asyncio.sleep(0)
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10)
 
     assert opik_batch_calls(), "crossing batch_size must flush the queue"
     events_left_over_after_the_size_triggered_flush = len(test_opik_logger.log_queue)

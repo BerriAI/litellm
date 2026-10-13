@@ -276,8 +276,9 @@ async def test_datadog_logging_http_request():
             )
             print(response)
 
-        # Wait for 5 seconds
-        await asyncio.sleep(6)
+        await asyncio.sleep(0)
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=5)
+        await dd_logger.flush_queue()
 
         # Assert that the mock was called
         assert mock_post.called, "HTTP request was not made"
