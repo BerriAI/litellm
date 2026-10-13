@@ -369,6 +369,26 @@ class ProxyInitializationHelpers:
     _apply_uvicorn_max_requests_jitter = apply_uvicorn_max_requests_jitter
 
     @staticmethod
+    def single_worker_max_requests_warning(
+        num_workers: int,
+        max_requests_before_restart: int | None,
+        run_gunicorn: bool,
+    ) -> str | None:
+        if max_requests_before_restart is None or num_workers > 1:
+            return None
+        outage: Final = (
+            "gunicorn accepts no connections until the replacement worker has booted"
+            if run_gunicorn
+            else "uvicorn exits the process, so the container restarts"
+        )
+        return (
+            f"LiteLLM Proxy: --max_requests_before_restart {max_requests_before_restart} with --num_workers "
+            f"{num_workers} does not recycle a worker. After {max_requests_before_restart} requests, health "
+            f"probes included, {outage}. Use --num_workers 2 or more with --max_requests_before_restart_jitter, "
+            "or rely on pod replacement instead."
+        )
+
+    @staticmethod
     def _get_reload_options(config_path: str | None) -> dict:
         """Build uvicorn reload kwargs so --reload also reacts to .env and YAML edits."""
         cwd: Final = os.path.abspath(os.getcwd())
@@ -968,7 +988,12 @@ class ProxyInitializationHelpers:
     "--max_requests_before_restart",
     default=None,
     type=int,
-    help="Restart worker after this many requests (uvicorn: limit_max_requests, gunicorn: max_requests)",
+    help=(
+        "Recycle each worker after it has served this many HTTP requests, health probes included "
+        "(uvicorn: limit_max_requests, gunicorn: max_requests). Only safe with --num_workers 2 or more. "
+        "With a single worker the whole proxy stops serving when the limit is hit, uvicorn exits the "
+        "process and gunicorn accepts no connections until the replacement worker has booted."
+    ),
     envvar="MAX_REQUESTS_BEFORE_RESTART",
 )
 @click.option(
@@ -1070,7 +1095,7 @@ def run_server(
     max_budget,
     test,
     local,
-    num_workers,
+    num_workers: int,
     granian_threads,
     test_async,
     iam_token_db_auth,
@@ -1092,7 +1117,7 @@ def run_server(
     validate_config: bool,
     keepalive_timeout,
     timeout_worker_healthcheck,
-    max_requests_before_restart,
+    max_requests_before_restart: int | None,
     max_requests_before_restart_jitter: int | None,
     limit_concurrency: int | None,
     enforce_prisma_migration_check: bool,
@@ -1571,6 +1596,14 @@ def run_server(
         # Optional: recycle uvicorn workers after N requests
         if max_requests_before_restart is not None:
             uvicorn_args["limit_max_requests"] = max_requests_before_restart
+        if run_hypercorn is False and run_granian is False:
+            single_worker_warning: Final = ProxyInitializationHelpers.single_worker_max_requests_warning(
+                num_workers=num_workers,
+                max_requests_before_restart=max_requests_before_restart,
+                run_gunicorn=run_gunicorn is True,
+            )
+            if single_worker_warning is not None:
+                print(f"\033[1;33m{single_worker_warning}\033[0m\n")
         if run_gunicorn is False and run_hypercorn is False and run_granian is False:
             if limit_concurrency is not None:
                 uvicorn_args["limit_concurrency"] = limit_concurrency
