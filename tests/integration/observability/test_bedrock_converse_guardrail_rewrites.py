@@ -901,6 +901,20 @@ def test_singulr_scans_request_field_strings_as_the_latest_user_turn_as_on_main(
     assert [_latest_user_text(payload) for payload in _vendor_bodies(rig)] == [_INJECTION]
 
 
+def test_singulr_scans_a_tool_result_injection_as_the_latest_user_turn_as_on_main(rig: _Rig) -> None:
+    body: Final = {
+        "messages": [
+            _user({"text": "Look up my card."}),
+            _assistant(_tool_use("on file")),
+            _user(_tool_result({"text": _INJECTION})),
+        ]
+    }
+
+    _refused(rig, _converse(rig, "singulr", body))
+
+    assert [_latest_user_text(payload) for payload in _vendor_bodies(rig)] == [_INJECTION]
+
+
 def test_flat_text_guardrail_gets_request_field_strings_last_as_on_main(rig: _Rig) -> None:
     body: Final = {
         "system": [{"text": "You are a support bot."}],

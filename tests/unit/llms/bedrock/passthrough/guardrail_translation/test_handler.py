@@ -37,6 +37,7 @@ from litellm.proxy.guardrails.guardrail_hooks.openai.moderations import OpenAIMo
 from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs.panw_prisma_airs import PanwPrismaAirsHandler
 from litellm.proxy.guardrails.guardrail_hooks.prompt_security.prompt_security import PromptSecurityGuardrail
 from litellm.proxy.guardrails.guardrail_hooks.promptguard.promptguard import PromptGuardGuardrail
+from litellm.proxy.guardrails.guardrail_hooks.singulr.singulr import SingulrGuardrail
 from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.utils import GenericGuardrailAPIInputs
@@ -2798,6 +2799,13 @@ _FLAT_TEXT_READERS: tuple[Callable[[], CustomGuardrail], ...] = (
     ),
     lambda: AktoGuardrail(akto_base_url="http://127.0.0.1:9", akto_api_key="akto-test", guardrail_name="akto"),
     lambda: PromptGuardGuardrail(guardrail_name="promptguard", api_key="pg-test", api_base="http://127.0.0.1:9"),
+    lambda: SingulrGuardrail(
+        guardrail_name="singulr",
+        singulr_api_key="singulr-test",
+        singulr_api_base="http://127.0.0.1:9",
+        singulr_application_id="app-test",
+        singulr_guardrail_id="gr-test",
+    ),
 )
 
 
@@ -2849,6 +2857,7 @@ class TestConverseGuardrailsThatReadFlatTextsOnly:
             "bedrock-latest-user",
             "akto",
             "promptguard",
+            "singulr",
         ],
     )
     async def test_guardrail_gets_every_flat_text_and_its_mask_reaches_every_turn(self, make_guardrail, monkeypatch):
