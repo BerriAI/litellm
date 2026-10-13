@@ -55,7 +55,26 @@ class JsonPathExtractor:
         if not expr or not data:
             return None
 
-        parts: Final = expr.replace("[*]", ".[*]").split(".")
+        # Normalize "key[*]" into "key" + "[*]" segments. Idempotent: the
+        # recursion below passes already-normalized paths (e.g.
+        # "content.[*].text") back through here, and re-running
+        # expr.replace("[*]", ".[*]") on those would inject empty segments
+        # ("content..[*].text") and silently drop every nested-wildcard
+        # expression, skipping the guardrail (#46302).
+        segments: list[str] = []
+        for segment in expr.split("."):
+            if segment == "[*]":
+                segments.append("[*]")
+                continue
+            # Peel trailing wildcards one at a time so adjacent wildcards
+            # ("a[*][*]") and already-normalized paths both split cleanly.
+            while segment.endswith("[*]"):
+                segments.append(segment[:-3])
+                segments.append("[*]")
+                segment = ""
+            if segment:
+                segments.append(segment)
+        parts: Final = segments
         current: Any = data
 
         for i, part in enumerate(parts):
