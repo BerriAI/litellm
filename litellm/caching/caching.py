@@ -650,15 +650,16 @@ class Cache:
         metadata_namespace: Final[str | None] = (
             metadata_namespace_value if isinstance(metadata_namespace_value, str) else None
         )
+        namespace_parts: Final[tuple[str | None, ...]] = (
+            self.namespace,
+            authenticated_namespace,
+            requested_namespace,
+            metadata_namespace,
+        )
         namespace: Final[str | None] = (
             ":".join(
                 value
-                for value in (
-                    self.namespace,
-                    authenticated_namespace,
-                    requested_namespace,
-                    metadata_namespace,
-                )
+                for value in namespace_parts
                 if isinstance(value, str) and value
             )
             if authenticated_namespace is not None
