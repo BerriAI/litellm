@@ -1071,7 +1071,9 @@ def mock_completion(
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     _resolve_openai_api_base as _resolve_openai_api_base,  # pyright: ignore[reportPrivateUsage]  # noqa: PLC0414  # re-export of moved helper
 )
-from litellm.responses.bridge_check import bridge_deployment_info  # noqa: E402
+from litellm.responses.bridge_check import (
+    bridge_deployment_info,
+)
 from litellm.responses.bridge_check import (  # noqa: E402  # re-export at the old definition site
     responses_api_bridge_check as responses_api_bridge_check,  # pyright: ignore[reportUnknownVariableType]  # noqa: PLC0414  # re-export of moved function
 )
@@ -5480,7 +5482,9 @@ def completion(
             custom_llm_provider=custom_llm_provider,
             web_search_options=web_search_options,
             api_base=api_base,
-            deployment_model_info=bridge_deployment_info(cast(object, model_info)),
+            deployment_model_info=bridge_deployment_info(
+                cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
+            ),
         )
 
         if not _is_claude_tool_target(custom_llm_provider=custom_llm_provider, model=model):
@@ -5778,7 +5782,9 @@ def completion(
                 reasoning_effort=reasoning_effort,
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
-                deployment_model_info=bridge_deployment_info(cast(object, model_info)),
+                deployment_model_info=bridge_deployment_info(
+                    cast(object, model_info)  # cast-ok: model_info is the untyped dict kwarg
+                ),
             )
 
         # Use base_model (the true underlying model) for Azure model-type

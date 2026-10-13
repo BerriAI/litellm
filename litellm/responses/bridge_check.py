@@ -55,7 +55,11 @@ def _resolve_openai_api_base(api_base: str | None) -> str:
 def bridge_deployment_info(model_info: object) -> Mapping[str, object] | None:
     """The router deployment's ``model_info`` when the call carries one, read without narrowing the
     caller's variable (``litellm.completion`` reuses it for pricing registration)."""
-    return cast(Mapping[str, object], model_info) if isinstance(model_info, Mapping) else None
+    if not isinstance(model_info, Mapping):
+        return None
+    return cast(  # cast-ok: isinstance only narrows to Mapping[Unknown, Unknown]; deployment model_info keys are str
+        Mapping[str, object], model_info
+    )
 
 
 def backend_serves_chat_completions(shared_model_info: Mapping[str, object]) -> bool:
