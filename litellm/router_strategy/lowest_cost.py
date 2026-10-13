@@ -1,7 +1,8 @@
 #### What this does ####
 #   picks based on response time (for streaming, this is time to first token)
+from collections.abc import Callable
 from datetime import datetime
-from typing import Final
+from typing import Final, cast  # noqa: TID251  # legacy deployment payloads have no shared typed boundary
 
 import litellm
 from litellm import ModelResponse, token_counter, verbose_logger
@@ -12,13 +13,46 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 
 
+def _deployment_cost(
+    model_id: str,
+    model_name: str,
+    input_price_override: float | None,
+    output_price_override: float | None,
+    price_lookup: Callable[[str, str], tuple[float | None, float | None]],
+) -> float:
+    lookup_input_price, lookup_output_price = price_lookup(model_id, model_name)
+    input_price: Final = (
+        input_price_override if input_price_override is not None else lookup_input_price
+    )
+    output_price: Final = (
+        output_price_override if output_price_override is not None else lookup_output_price
+    )
+    input_cost: Final = input_price if input_price is not None else 5.0
+    output_cost: Final = output_price if output_price is not None else 5.0
+    return input_cost + output_cost
+
+
+def _default_price_lookup(model_id: str, model_name: str) -> tuple[float | None, float | None]:
+    model_cost: Final = litellm.model_cost.get(model_id) or litellm.model_cost.get(model_name)
+    if model_cost is None:
+        return None, None
+    return model_cost.get("input_cost_per_token"), model_cost.get("output_cost_per_token")
+
+
 class LowestCostLoggingHandler(CustomLogger):
     test_flag: bool = False
     logged_success: int = 0
     logged_failure: int = 0
+    price_lookup: Callable[[str, str], tuple[float | None, float | None]]
 
-    def __init__(self, router_cache: DualCache, routing_args: dict = {}):
+    def __init__(
+        self,
+        router_cache: DualCache,
+        routing_args: dict = {},
+        price_lookup: Callable[[str, str], tuple[float | None, float | None]] = _default_price_lookup,
+    ):
         self.router_cache = router_cache
+        self.price_lookup = price_lookup
 
     @with_service_target("router_usage")
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
@@ -243,27 +277,23 @@ class LowestCostLoggingHandler(CustomLogger):
                 or _deployment.get("model_info", {}).get("rpm", None)
                 or float("inf")
             )
-            item_litellm_model_name = _deployment.get("litellm_params", {}).get("model")
-            item_litellm_model_cost_map = litellm.model_cost.get(item_litellm_model_name, {})
-
-            # check if user provided input_cost_per_token and output_cost_per_token in litellm_params
-            item_input_cost = None
-            item_output_cost = None
-            if _deployment.get("litellm_params", {}).get("input_cost_per_token", None):
-                item_input_cost = _deployment.get("litellm_params", {}).get("input_cost_per_token")
-
-            if _deployment.get("litellm_params", {}).get("output_cost_per_token", None):
-                item_output_cost = _deployment.get("litellm_params", {}).get("output_cost_per_token")
-
-            if item_input_cost is None:
-                item_input_cost = item_litellm_model_cost_map.get("input_cost_per_token", 5.0)
-
-            if item_output_cost is None:
-                item_output_cost = item_litellm_model_cost_map.get("output_cost_per_token", 5.0)
+            item_cost = _deployment_cost(
+                model_id=cast(str, item),  # cast-ok: router cache keys come from deployment ids
+                model_name=cast(  # cast-ok: router validates deployment model names
+                    str, _deployment.get("litellm_params", {}).get("model") or ""
+                ),
+                input_price_override=cast(  # cast-ok: router validates configured token prices
+                    float | None,
+                    _deployment.get("litellm_params", {}).get("input_cost_per_token"),
+                ),
+                output_price_override=cast(  # cast-ok: router validates configured token prices
+                    float | None,
+                    _deployment.get("litellm_params", {}).get("output_cost_per_token"),
+                ),
+                price_lookup=self.price_lookup,
+            )
 
             # if litellm["model"] is not in model_cost map -> use item_cost = $10
-
-            item_cost = item_input_cost + item_output_cost
 
             item_rpm = item_map.get(precise_minute, {}).get("rpm", 0)
             item_tpm = item_map.get(precise_minute, {}).get("tpm", 0)

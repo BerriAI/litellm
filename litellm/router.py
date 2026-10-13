@@ -1508,9 +1508,23 @@ class Router:
                     routing_args=routing_strategy_args,
                 )
             case RoutingStrategy.COST_BASED.value:
+                def price_lookup(
+                    model_id: str, model_name: str
+                ) -> tuple[float | None, float | None]:
+                    model_info: Final = self.get_deployment_model_info(
+                        model_id=model_id, model_name=model_name
+                    )
+                    if model_info is None:
+                        return None, None
+                    return (
+                        model_info.get("input_cost_per_token"),
+                        model_info.get("output_cost_per_token"),
+                    )
+
                 selector = LowestCostLoggingHandler(
                     router_cache=self.cache,
                     routing_args={},
+                    price_lookup=price_lookup,
                 )
             case _:
                 pass

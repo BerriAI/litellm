@@ -1,12 +1,16 @@
 import asyncio, copy, importlib, os, time
 from datetime import datetime
+from typing import Final, Literal
 
 import pytest
 
 import litellm
 from litellm.caching.caching import DualCache
+from litellm.router import Router
+from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.router_strategy.lowest_cost import LowestCostLoggingHandler
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
+from litellm.types.router import DeploymentTypedDict, LiteLLMParamsTypedDict
 from litellm.utils import _invalidate_model_cost_lowercase_map
 from tests._vcr_conftest_common import install_live_call_probe, record_vcr_outcome
 
@@ -357,3 +361,108 @@ async def test_get_available_endpoints_tpm_rpm_check_async(ans_rpm):
     assert (d_ans and d_ans["model_info"]["id"]) == ans
 
     print("selected deployment:", d_ans)
+
+
+def _cost_routing_deployment(
+    deployment_id: str,
+    model: str,
+    pricing_source: Literal["litellm_params", "model_info"] | None = None,
+    prices: tuple[float, float] | None = None,
+    base_model: str | None = None,
+) -> DeploymentTypedDict:
+    pricing: Final = (
+        {"input_cost_per_token": prices[0], "output_cost_per_token": prices[1]}
+        if prices is not None
+        else {}
+    )
+    litellm_params: Final[LiteLLMParamsTypedDict] = (
+        {
+            "model": model,
+            "mock_response": "ok",
+            "input_cost_per_token": prices[0],
+            "output_cost_per_token": prices[1],
+        }
+        if pricing_source == "litellm_params" and prices is not None
+        else {"model": model, "mock_response": "ok"}
+    )
+    return {
+        "model_name": "cost-pricing",
+        "litellm_params": litellm_params,
+        "model_info": {
+            "id": deployment_id,
+            **({"base_model": base_model} if base_model is not None else {}),
+            **(pricing if pricing_source == "model_info" else {}),
+        },
+    }
+
+
+def _cost_routing_deployments(
+    pricing_case: Literal["litellm_params", "model_info", "base_model", "zero_price"],
+) -> list[DeploymentTypedDict]:
+    match pricing_case:
+        case "litellm_params":
+            return [
+                _cost_routing_deployment(
+                    "litellm-params-expensive", "openai/gpt-4o-mini", "litellm_params", (3e-6, 3e-6)
+                ),
+                _cost_routing_deployment(
+                    "litellm-params-cheap", "openai/gpt-4o-mini", "litellm_params", (4e-7, 4e-7)
+                ),
+            ]
+        case "model_info":
+            return [
+                _cost_routing_deployment(
+                    "model-info-expensive", "openai/gpt-4o-mini", "model_info", (3e-6, 3e-6)
+                ),
+                _cost_routing_deployment(
+                    "model-info-cheap", "openai/gpt-4o-mini", "model_info", (4e-7, 4e-7)
+                ),
+            ]
+        case "base_model":
+            return [
+                _cost_routing_deployment(
+                    "base-model-expensive", "azure/my-4o", base_model="azure/gpt-4o"
+                ),
+                _cost_routing_deployment(
+                    "base-model-cheap", "azure/my-mini", base_model="azure/gpt-4o-mini"
+                ),
+            ]
+        case "zero_price":
+            return [
+                _cost_routing_deployment(
+                    "nonzero-price", "openai/gpt-4o-mini", "model_info", (1e-7, 1e-7)
+                ),
+                _cost_routing_deployment(
+                    "zero-price", "openai/gpt-4o-mini", "model_info", (0.0, 0.0)
+                ),
+            ]
+
+
+@pytest.mark.usefixtures("isolate_litellm_state", "setup_and_teardown")
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "pricing_case",
+    ("litellm_params", "model_info", "base_model", "zero_price"),
+)
+async def test_cost_based_router_uses_deployment_model_info_pricing(
+    pricing_case: Literal["litellm_params", "model_info", "base_model", "zero_price"],
+) -> None:
+    model_list: Final = _cost_routing_deployments(pricing_case)
+    cheap_deployment_id: Final = {
+        "litellm_params": "litellm-params-cheap",
+        "model_info": "model-info-cheap",
+        "base_model": "base-model-cheap",
+        "zero_price": "zero-price",
+    }[pricing_case]
+    router: Final = Router(
+        model_list=model_list,
+        routing_strategy="cost-based-routing",
+        num_retries=0,
+    )
+
+    response: Final = await router.acompletion(
+        model="cost-pricing",
+        messages=[{"role": "user", "content": "choose by deployment price"}],
+    )
+
+    assert get_hidden_params_dict(response)["model_id"] == cheap_deployment_id
