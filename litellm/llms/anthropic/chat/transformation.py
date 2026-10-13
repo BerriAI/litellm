@@ -138,6 +138,31 @@ else:
 _ANTHROPIC_TOOL_NAME_INVALID_CHARS: Final = re.compile(r"[^a-zA-Z0-9_-]")
 _ANTHROPIC_TOOL_NAME_MAX_LEN: Final = 128
 _DEFER_LOADING_ADAPTER: Final = TypeAdapter(bool)
+_TOOL_FIELDS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_TOOLS_ADAPTER: Final = TypeAdapter(list[object])
+_DEFERRAL_CARRYING_TOOL_KEYS: Final = frozenset({"function", "tools"})
+
+
+def _is_openai_tool_search_tool(tool: object) -> bool:
+    match tool:
+        case {"type": "tool_search"}:
+            return True
+        case _:
+            return False
+
+
+def _without_deferral(tool: object) -> object:
+    match tool:
+        case Mapping():
+            return {
+                key: _without_deferral(value) if key in _DEFERRAL_CARRYING_TOOL_KEYS else value
+                for key, value in _TOOL_FIELDS_ADAPTER.validate_python(tool).items()
+                if key != "defer_loading"
+            }
+        case list():
+            return [_without_deferral(member) for member in _TOOLS_ADAPTER.validate_python(tool)]
+        case _:
+            return tool
 
 
 def _validated_defer_loading(value: object) -> bool:
@@ -294,6 +319,11 @@ DROP_UNSUPPORTED_ADAPTIVE_THINKING_WARNING: Final = (
 
 DROP_UNSUPPORTED_SPEED_WARNING: Final = (
     "Dropping unsupported `speed` for model=%s (drop_params=True). Fast mode is only supported on select Opus models."
+)
+
+DROP_UNSUPPORTED_TOOL_SEARCH_WARNING: Final = (
+    "Dropping the OpenAI `tool_search` tool and the `defer_loading` of the other tools for model=%s on %s "
+    "(drop_params=True): this route cannot run tool search."
 )
 
 
@@ -1000,6 +1030,32 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             initial_tool["authorization_token"] = authorization_token
         return initial_tool
 
+    def _tools_with_openai_tool_search_mapped(
+        self, tools: Sequence[object], model: str, drop_params: bool
+    ) -> Sequence[object]:
+        from litellm.responses.litellm_completion_transformation.tool_search import (
+            anthropic_tool_search_chat_tool,
+            is_server_tool_search_tool,
+        )
+
+        search_tools: Final = tuple(tool for tool in tools if _is_openai_tool_search_tool(tool))
+        if not search_tools:
+            return tools
+        if all(is_server_tool_search_tool(tool) for tool in search_tools) and litellm.supports_tool_search(
+            model, self._resolved_provider
+        ):
+            return [anthropic_tool_search_chat_tool() if _is_openai_tool_search_tool(tool) else tool for tool in tools]
+        if not (litellm.drop_params or drop_params):
+            raise litellm.utils.UnsupportedParamsError(
+                message=(
+                    f"{model} on {self._resolved_provider} cannot run the OpenAI `tool_search` tool. To drop it "
+                    "and the `defer_loading` of the other tools, set `litellm.drop_params = True`."
+                ),
+                status_code=400,
+            )
+        litellm.verbose_logger.warning(DROP_UNSUPPORTED_TOOL_SEARCH_WARNING, model, self._resolved_provider)
+        return [_without_deferral(tool) for tool in tools if not _is_openai_tool_search_tool(tool)]
+
     def _map_tools(
         self,
         tools: list,
@@ -1568,7 +1624,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             if param == "max_tokens" or param == "max_completion_tokens":
                 optional_params["max_tokens"] = value if isinstance(value, int) else max(1, int(round(value)))
             elif param == "tools":
-                anthropic_tools, mcp_servers = self._map_tools(value)
+                anthropic_tools, mcp_servers = self._map_tools(
+                    list(self._tools_with_openai_tool_search_mapped(tools=value, model=model, drop_params=drop_params))
+                )
                 optional_params = self._add_tools_to_optional_params(
                     optional_params=optional_params, tools=anthropic_tools
                 )

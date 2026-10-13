@@ -8345,3 +8345,98 @@ def test_completion_surfaces_response_citations_in_provider_specific_fields(resp
     assert response.choices[0].message.provider_specific_fields["citations"] == [
         [{**citation, "supported_text": "the grass is green"}]
     ]
+
+
+def _openai_tool_search_with_deferred_functions(execution: str = "server") -> list[dict[str, object]]:
+    return [
+        {"type": "tool_search", "execution": execution},
+        {
+            "type": "function",
+            "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {}}},
+            "defer_loading": True,
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "get_stock_price",
+                "parameters": {"type": "object", "properties": {}},
+                "defer_loading": True,
+            },
+        },
+        {
+            "type": "namespace",
+            "name": "crm",
+            "tools": [
+                {
+                    "type": "function",
+                    "name": "lookup_customer",
+                    "parameters": {"type": "object", "properties": {}},
+                    "defer_loading": True,
+                }
+            ],
+        },
+    ]
+
+
+_DEFERRED_FUNCTION_NAMES: Final = ["get_weather", "get_stock_price", "lookup_customer"]
+
+
+@pytest.mark.parametrize(
+    ("config", "model", "provider"),
+    [
+        pytest.param(AnthropicConfig(), "claude-sonnet-5-5", "anthropic", id="anthropic"),
+        pytest.param(AmazonAnthropicClaudeConfig(), "us.anthropic.claude-sonnet-5-5", "bedrock", id="bedrock-invoke"),
+        pytest.param(VertexAIAnthropicConfig(), "claude-sonnet-5-5", "vertex_ai", id="vertex_ai"),
+    ],
+)
+def test_map_openai_params_translates_the_openai_tool_search_tool_on_a_route_that_runs_it(config, model, provider):
+    from litellm.responses.litellm_completion_transformation.tool_search import anthropic_tool_search_chat_tool
+
+    assert litellm.supports_tool_search(model, provider)
+    mapped: Final = config.map_openai_params(
+        non_default_params={"tools": _openai_tool_search_with_deferred_functions()},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    tools: Final = mapped["tools"]
+    assert {key: tools[0][key] for key in ("type", "name")} == anthropic_tool_search_chat_tool()
+    assert [tool["name"] for tool in tools[1:]] == _DEFERRED_FUNCTION_NAMES
+    assert all(tool["defer_loading"] is True for tool in tools[1:])
+
+
+@pytest.mark.parametrize(
+    ("config", "model", "provider", "execution"),
+    [
+        pytest.param(AzureAnthropicConfig(), "claude-sonnet-5-5", "azure_ai", "server", id="route-without-tool-search"),
+        pytest.param(AnthropicConfig(), "claude-3-haiku-20240307", "anthropic", "server", id="model-without-tool-search"),
+        pytest.param(AnthropicConfig(), "claude-sonnet-5-5", None, "client", id="client-executed-search"),
+    ],
+)
+def test_map_openai_params_answers_400_for_an_openai_tool_search_tool_it_cannot_run(
+    monkeypatch, config, model, provider, execution
+):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    assert provider is None or not litellm.supports_tool_search(model, provider)
+    with pytest.raises(litellm.utils.UnsupportedParamsError) as raised:
+        config.map_openai_params(
+            non_default_params={"tools": _openai_tool_search_with_deferred_functions(execution=execution)},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+    assert raised.value.status_code == 400
+    assert "tool_search" in str(raised.value)
+
+
+def test_map_openai_params_drops_the_openai_tool_search_tool_and_every_deferral_under_drop_params(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    assert not litellm.supports_tool_search("claude-sonnet-5-5", "azure_ai")
+    mapped: Final = AzureAnthropicConfig().map_openai_params(
+        non_default_params={"tools": _openai_tool_search_with_deferred_functions()},
+        optional_params={},
+        model="claude-sonnet-5-5",
+        drop_params=True,
+    )
+    assert [tool["name"] for tool in mapped["tools"]] == _DEFERRED_FUNCTION_NAMES
+    assert all("defer_loading" not in tool for tool in mapped["tools"])
