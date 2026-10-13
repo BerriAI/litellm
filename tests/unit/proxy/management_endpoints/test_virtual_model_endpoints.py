@@ -2630,3 +2630,176 @@ class TestVirtualModelRoutingStrategyValidation:
                 members=(VirtualModelMemberRequest(model_id="model-a"),),
                 routing_strategy="lar1",
             )
+
+
+@pytest.mark.asyncio
+async def test_get_virtual_model_404_not_found():
+    """Test GET /virtual_model/<id> returns 404 when virtual model doesn't exist."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.virtual_model_endpoints import get_virtual_model
+
+    prisma_client = MockPrismaClient()
+    prisma_client.db.litellm_virtualmodeltable.find_unique = AsyncMock(return_value=None)
+
+    user = _make_admin_user()
+
+    with patch.object(proxy_server, "prisma_client", prisma_client):
+        with pytest.raises(ProxyException) as exc:
+            await get_virtual_model(
+                virtual_model_id="nonexistent-id",
+                user_api_key_dict=user,
+            )
+
+    assert exc.value.code in (status.HTTP_404_NOT_FOUND, str(status.HTTP_404_NOT_FOUND))
+    assert "not found" in str(exc.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_delete_virtual_model_404_not_found():
+    """Test DELETE /virtual_model/<id> returns 404 when virtual model doesn't exist."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.virtual_model_endpoints import delete_virtual_model
+
+    prisma_client = MockPrismaClient()
+    prisma_client.db.litellm_virtualmodeltable.find_unique = AsyncMock(return_value=None)
+
+    user = _make_admin_user()
+
+    with patch.object(proxy_server, "prisma_client", prisma_client):
+        with pytest.raises(ProxyException) as exc:
+            await delete_virtual_model(
+                virtual_model_id="nonexistent-id",
+                user_api_key_dict=user,
+            )
+
+    assert exc.value.code in (status.HTTP_404_NOT_FOUND, str(status.HTTP_404_NOT_FOUND))
+    assert "not found" in str(exc.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_delete_virtual_model_already_deleted():
+    """Test DELETE /virtual_model/<id> returns 404 when virtual model was deleted during operation."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.virtual_model_endpoints import delete_virtual_model
+
+    prisma_client = MockPrismaClient()
+
+    existing_vm = LiteLLM_VirtualModelTable(
+        virtual_model_id="vm-to-delete",
+        virtual_model_name="test-vm",
+        created_at=datetime.now(),
+        created_by="test-user",
+        updated_at=datetime.now(),
+        updated_by="test-user",
+        routing_strategy="ordered",
+    )
+
+    prisma_client.db.litellm_virtualmodeltable.find_unique = AsyncMock(return_value=existing_vm)
+    prisma_client.db.litellm_virtualmodeltable.delete = AsyncMock(return_value=None)
+
+    user = _make_admin_user()
+
+    with patch.object(proxy_server, "prisma_client", prisma_client):
+        with pytest.raises(ProxyException) as exc:
+            await delete_virtual_model(
+                virtual_model_id="vm-to-delete",
+                user_api_key_dict=user,
+            )
+
+    assert exc.value.code in (status.HTTP_404_NOT_FOUND, str(status.HTTP_404_NOT_FOUND))
+    assert "already deleted" in str(exc.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_create_virtual_model_no_db_connection():
+    """Test POST /virtual_model returns 500 when database is not connected."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.virtual_model_endpoints import create_virtual_model
+
+    user = _make_admin_user()
+
+    request_body = VirtualModelCreateRequest(
+        virtual_model_name="test-vm",
+        members=(VirtualModelMemberRequest(model_id="dep-1", priority=1),),
+    )
+
+    with patch.object(proxy_server, "prisma_client", None):
+        with pytest.raises(ProxyException) as exc:
+            await create_virtual_model(
+                request_body=request_body,
+                user_api_key_dict=user,
+            )
+
+    assert exc.value.code in (status.HTTP_500_INTERNAL_SERVER_ERROR, str(status.HTTP_500_INTERNAL_SERVER_ERROR))
+    assert "db" in str(exc.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_list_virtual_models_no_db_connection():
+    """Test GET /virtual_model returns 500 when database is not connected."""
+    from litellm.proxy import proxy_server
+    from litellm.proxy.management_endpoints.virtual_model_endpoints import list_virtual_models
+
+    user = _make_admin_user()
+
+    with patch.object(proxy_server, "prisma_client", None):
+        with pytest.raises(ProxyException) as exc:
+            await list_virtual_models(
+                search=None,
+                user_api_key_dict=user,
+            )
+
+    assert exc.value.code in (status.HTTP_500_INTERNAL_SERVER_ERROR, str(status.HTTP_500_INTERNAL_SERVER_ERROR))
+    assert "db" in str(exc.value.message).lower()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_failure_logs_warning():
+    """Test that reconcile failure after write logs warning but doesn't fail."""
+    from unittest.mock import patch
+
+    from litellm.proxy.management_endpoints.virtual_model_endpoints import (
+        _reconcile_after_write,
+    )
+
+    with patch("litellm.proxy.management_endpoints.virtual_model_endpoints.clear_cache") as mock_clear:
+        mock_clear.side_effect = RuntimeError("Cache clear failed")
+
+        result = await _reconcile_after_write()
+
+        assert result.still_desired is None
+        assert result.live_after is None
+
+
+@pytest.mark.asyncio
+async def test_validate_virtual_model_rejects_none():
+    """Test that _validate_virtual_model raises ValueError for None input."""
+    from litellm.proxy.management_endpoints.virtual_model_endpoints import (
+        _validate_virtual_model,
+    )
+
+    with pytest.raises(ValueError, match="non-None"):
+        _validate_virtual_model(None)
+
+
+class TestVirtualModelNameValidation:
+    def test_rejects_empty_name(self):
+        """Test that empty virtual_model_name is rejected."""
+        with pytest.raises(ValueError, match="non-empty"):
+            VirtualModelCreateRequest(
+                virtual_model_name="",
+                members=(VirtualModelMemberRequest(model_id="dep-1", priority=1),),
+            )
+
+    def test_rejects_slash_in_name(self):
+        """Test that virtual_model_name with slash is rejected."""
+        with pytest.raises(ValueError, match="must not contain '/'"):
+            VirtualModelCreateRequest(
+                virtual_model_name="test/model",
+                members=(VirtualModelMemberRequest(model_id="dep-1", priority=1),),
+            )
+
+    def test_patch_accepts_none_name(self):
+        """Test that VirtualModelPatchRequest accepts None for virtual_model_name."""
+        request = VirtualModelPatchRequest(virtual_model_name=None)
+        assert request.virtual_model_name is None

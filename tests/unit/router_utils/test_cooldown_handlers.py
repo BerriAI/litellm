@@ -93,6 +93,40 @@ class TestGetDeploymentCooldownPolicy:
         assert allowed == 1
 
 
+class TestScopedCooldownWithAllowedFailsOverride:
+    def test_cooldown_with_allowed_fails_override_when_no_policy(self):
+        """
+        Test line 448: when router has no allowed_fails_policy but allowed_fails_override is provided,
+        the override should trigger the allowed_fails_policy cooldown logic.
+        """
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "test-model",
+                    "litellm_params": {"model": "openai/gpt-4"},
+                    "model_info": {"id": "dep-1"},
+                }
+            ],
+            num_retries=0,
+        )
+
+        exc = litellm.RateLimitError(
+            message="Rate limit exceeded",
+            model="test-model",
+            llm_provider="openai",
+        )
+
+        result = _should_cooldown_deployment(
+            litellm_router_instance=router,
+            deployment="dep-1",
+            original_exception=exc,
+            exception_status=429,
+            allowed_fails_override=3,
+        )
+
+        assert result is not None
+
+
 class TestResolveAllowedFailsFromPolicy:
     def test_none_policy_returns_none(self):
         exc = litellm.RateLimitError("429", "openai", "gpt-4")

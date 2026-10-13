@@ -58,6 +58,74 @@ def test_spike_order_is_selection_preference():
         )
 
 
+def test_sync_virtual_model_failover_walks_distinct_members():
+    """
+    SYNC-path: Verify that router.completion (not acompletion) through a virtual model
+    walks distinct members on failure, not retrying the same deployment.
+
+    Priority-1 fails with 500 (retryable), priority-2 healthy.
+    The sync selection path must serve priority-2 after excluding priority-1.
+    """
+    vm_name = f"{VIRTUAL_MODEL_PREFIX}test-sync-walk"
+    router = Router(
+        model_list=[
+            {
+                "model_name": "dep1-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "key1",
+                },
+                "model_info": {"id": "priority-1-dep"},
+            },
+            {
+                "model_name": "dep2-model",
+                "litellm_params": {
+                    "model": "gpt-4o",
+                    "api_key": "key2",
+                },
+                "model_info": {"id": "priority-2-dep"},
+            },
+        ],
+        num_retries=1,
+    )
+
+    router.set_virtual_models(
+        {
+            vm_name: VirtualModelRouterState(
+                members={"priority-1-dep": 1, "priority-2-dep": 2},
+                num_retries=1,
+            )
+        }
+    )
+
+    attempt_counts = {"priority-1-dep": 0, "priority-2-dep": 0}
+
+    def mock_completion(*args, **kwargs):
+        model_id = kwargs.get("api_key")
+        if model_id == "key1":
+            attempt_counts["priority-1-dep"] += 1
+            raise litellm.InternalServerError(message="Mock 500 error", model="gpt-4o", llm_provider="openai")
+        else:
+            attempt_counts["priority-2-dep"] += 1
+            return litellm.ModelResponse(id="test", choices=[{"message": {"content": "success from priority-2"}}])
+
+    with patch("litellm.completion", side_effect=mock_completion):
+        response = router.completion(
+            model=vm_name,
+            messages=[{"role": "user", "content": "test"}],
+        )
+
+    assert response._hidden_params["model_id"] == "priority-2-dep"
+    assert response.choices[0].message.content == "success from priority-2"
+
+    assert attempt_counts["priority-1-dep"] == 1, (
+        f"priority-1 should be attempted exactly once in sync path, got {attempt_counts['priority-1-dep']}"
+    )
+    assert attempt_counts["priority-2-dep"] == 1, (
+        f"priority-2 should be attempted exactly once in sync path, got {attempt_counts['priority-2-dep']}"
+    )
+
+
 @pytest.mark.asyncio
 async def test_spike_retry_vs_fallback_attempt_sequence():
     """
@@ -1034,7 +1102,9 @@ def test_is_recognized_model_recognizes_virtual_model_names():
         ],
     )
 
-    assert not router.is_recognized_model(vm_name), "virtual model name should not be recognized before set_virtual_models"
+    assert not router.is_recognized_model(vm_name), (
+        "virtual model name should not be recognized before set_virtual_models"
+    )
 
     router.set_virtual_models(
         {
@@ -1124,6 +1194,7 @@ async def test_aembedding_routes_through_virtual_model_member():
         model_id = kwargs.get("api_key")
         if model_id == "key1":
             from litellm import EmbeddingResponse
+
             return EmbeddingResponse(
                 data=[{"embedding": [0.1, 0.2, 0.3], "index": 0, "object": "embedding"}],
                 model="text-embedding-3-small",
@@ -1189,6 +1260,7 @@ async def test_aembedding_failover_across_virtual_model_members():
         else:
             attempt_counts["dep2"] += 1
             from litellm import EmbeddingResponse
+
             return EmbeddingResponse(
                 data=[{"embedding": [0.4, 0.5, 0.6], "index": 0, "object": "embedding"}],
                 model="text-embedding-3-small",
@@ -3191,6 +3263,45 @@ async def test_alias_to_virtual_model_applies_vm_strategy():
     strategy, selector = router._get_routing_context(model="public-alias")
 
     assert strategy == "least-busy", f"Expected 'least-busy' strategy from virtual model, got {strategy}"
+
+
+def test_extract_deployment_ids_fallback_without_model_info():
+    """
+    Test _deployment_ids_to_skip_on_retry's _extract_deployment_ids fallback path.
+
+    When a deployment row lacks a model_info dict but has a top-level model_id,
+    the extraction should still work. Test via a virtual model scenario where
+    the extraction logic is exercised.
+    """
+    from litellm.router import Router
+
+    vm_name = f"{VIRTUAL_MODEL_PREFIX}test-vm"
+    router = Router(model_list=[], num_retries=0)
+
+    deployments_without_model_info: Final = [
+        {"model_id": "dep-1", "model_name": "model-1"},
+        {"model_id": "dep-2", "model_name": "model-2"},
+        {"model_info": {"id": "dep-3"}, "model_name": "model-3"},
+    ]
+
+    exception = litellm.InternalServerError(
+        message="Mock error",
+        model="gpt-4o",
+        llm_provider="openai",
+    )
+    exception.status_code = 500
+    exception.failed_deployment_id = "dep-1"
+
+    skipped = router._deployment_ids_to_skip_on_retry(
+        exception=exception,
+        already_skipped=(),
+        model_group=vm_name,
+        healthy_deployments=deployments_without_model_info,
+        virtual_model_names=frozenset([vm_name]),
+        alias_resolver=None,
+    )
+
+    assert "dep-1" in skipped
 
 
 @pytest.mark.asyncio
