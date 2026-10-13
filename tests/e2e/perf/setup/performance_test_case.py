@@ -76,7 +76,7 @@ class Guardrail:
 @dataclass(frozen=True, slots=True)
 class RequestShape:
     """What one request looks like on the wire, in tokens: an optional system prompt, `history_turns`
-    earlier user and assistant turns of about `turn_tokens` each, the final user message of
+    earlier turns (user and assistant alternating) of about `turn_tokens` each, the final user message of
     `user_tokens`, tool definitions when `tools` is set, and the output cap the mock fills. The stock
     shapes follow what agent traffic looks like today: a short chat is a few tens of thousands of
     tokens, a tool-calling turn around 60k, a long context over 300k."""

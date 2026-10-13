@@ -152,7 +152,7 @@ def _turns(item: WireRequest) -> list[dict[str, object]]:
             "role": "user" if index % 2 == 0 else "assistant",
             "content": filler_text(f"{item.marker}:turn{index}", item.shape.turn_tokens),
         }
-        for index in range(2 * item.shape.history_turns)
+        for index in range(item.shape.history_turns)
     ]
     prompt: Final = f"{item.marker} {filler_text(f'{item.marker}:user', item.shape.user_tokens)}"
     return [*earlier, {"role": "user", "content": prompt}]
