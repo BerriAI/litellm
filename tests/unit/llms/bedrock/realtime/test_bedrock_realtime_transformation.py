@@ -628,7 +628,7 @@ class TestBedrockRealtimeResponseTransformation:
             "event": {
                 "toolUse": {
                     "completionId": "comp_1",
-                    "content": "{\"location\":\"New York\"}",
+                    "content": '{"location":"New York"}',
                     "contentId": "content_1",
                     "promptName": "prompt_1",
                     "role": "TOOL",
@@ -666,7 +666,7 @@ class TestBedrockRealtimeResponseTransformation:
         function_call = result["response"][2]
         assert function_call["call_id"] == "tool_call_123"
         assert function_call["name"] == "get_weather"
-        assert function_call["arguments"] == "{\"location\":\"New York\"}"
+        assert function_call["arguments"] == '{"location":"New York"}'
         assert function_call["response_id"] == result["current_response_id"]
         assert function_call["item_id"] != "item_message_1"
         assert function_call["item_id"] == result["response"][1]["item"]["id"]
@@ -676,7 +676,7 @@ class TestBedrockRealtimeResponseTransformation:
         assert done_item["type"] == "function_call"
         assert done_item["status"] == "completed"
         assert done_item["call_id"] == "tool_call_123"
-        assert done_item["arguments"] == "{\"location\":\"New York\"}"
+        assert done_item["arguments"] == '{"location":"New York"}'
 
     def test_tool_use_reuses_active_response(self):
         """A toolUse arriving while an assistant response is in flight must not emit a
@@ -688,7 +688,7 @@ class TestBedrockRealtimeResponseTransformation:
         tool_use_message = {
             "event": {
                 "toolUse": {
-                    "content": "{\"location\":\"New York\"}",
+                    "content": '{"location":"New York"}',
                     "toolName": "get_weather",
                     "toolUseId": "tool_call_123",
                 }
@@ -1364,7 +1364,7 @@ class TestBedrockRealtimeUserEventsAndUsage:
         """The real Nova 2 Sonic event sequence for one question: a USER transcript
         block, two role TOOL blocks each carrying a toolUse with a distinct toolUseId,
         then the post-tool-result ASSISTANT answer (LIT-9465)"""
-        args_json: Final = "{\"location\":\"New York\"}"
+        args_json: Final = '{"location":"New York"}'
 
         def tool_block(tool_use_id: str) -> list[dict[str, object]]:
             return [
@@ -1413,7 +1413,9 @@ class TestBedrockRealtimeUserEventsAndUsage:
 
         response_dones: Final = [e for e in events if e["type"] == "response.done"]
         assert len(response_dones) == 3
-        tool_call_dones: Final = [d for d in response_dones if d["response"]["output"]]
+        tool_call_dones: Final = [
+            d for d in response_dones if any(o["type"] == "function_call" for o in d["response"]["output"])
+        ]
         assert len(tool_call_dones) == 2
         assert tool_call_dones[0]["response"]["output"][0]["call_id"] == "tooluse_A"
         assert tool_call_dones[1]["response"]["output"][0]["call_id"] == "tooluse_B"
@@ -1422,10 +1424,100 @@ class TestBedrockRealtimeUserEventsAndUsage:
             assert done["response"]["output"][0]["type"] == "function_call"
             assert done["response"]["output"][0]["status"] == "completed"
             assert done["response"]["id"] == call["response_id"]
-        assert response_dones[2]["response"]["output"] == []
+        final_output: Final = response_dones[2]["response"]["output"]
+        assert [o["type"] for o in final_output] == ["message"]
+        assert final_output[0]["status"] == "completed"
 
         response_ids: Final = {d["response"]["id"] for d in response_dones}
         assert len(response_ids) == 3
+
+    @staticmethod
+    def _tool_block(tool_use_id: str) -> list[dict[str, object]]:
+        return [
+            {"event": {"contentStart": {"role": "TOOL", "type": "TOOL", "contentId": f"c_{tool_use_id}"}}},
+            {
+                "event": {
+                    "toolUse": {
+                        "content": '{"city":"Paris"}',
+                        "contentId": f"c_{tool_use_id}",
+                        "role": "TOOL",
+                        "toolName": "get_weather",
+                        "toolUseId": tool_use_id,
+                    }
+                }
+            },
+            {"event": {"contentEnd": {"stopReason": "TOOL_USE", "type": "TOOL", "contentId": f"c_{tool_use_id}"}}},
+        ]
+
+    @staticmethod
+    def _item_id_of(event) -> str | None:
+        if event["type"].startswith("response.output_item."):
+            return event["item"]["id"]
+        return event.get("item_id")
+
+    def test_tool_call_after_assistant_message_uses_output_index_one(self):
+        events: Final = self._run(
+            BedrockRealtimeConfig(),
+            self._assistant_text_block("SPECULATIVE", "Let me check.", "PARTIAL_TURN") + self._tool_block("tooluse_A"),
+        )
+        types: Final = [e["type"] for e in events]
+        assert types.count("response.created") == 1
+
+        added_items: Final = [e["item"]["id"] for e in events if e["type"] == "response.output_item.added"]
+        message_id, call_id = added_items
+
+        message_events: Final = [e for e in events if self._item_id_of(e) == message_id]
+        call_events: Final = [e for e in events if self._item_id_of(e) == call_id]
+        assert message_events and all(e["output_index"] == 0 for e in message_events)
+        assert call_events and all(e["output_index"] == 1 for e in call_events)
+
+        response_dones: Final = [e for e in events if e["type"] == "response.done"]
+        assert len(response_dones) == 1
+        assert [o["id"] for o in response_dones[0]["response"]["output"]] == [message_id, call_id]
+
+    def test_tool_call_inside_open_assistant_block_defers_response_done(self):
+        config: Final = BedrockRealtimeConfig()
+        events: Final = self._run(
+            config,
+            [
+                {
+                    "event": {
+                        "contentStart": {
+                            "role": "ASSISTANT",
+                            "type": "TEXT",
+                            "additionalModelFields": json.dumps({"generationStage": "SPECULATIVE"}),
+                        }
+                    }
+                },
+                {"event": {"textOutput": {"content": "Let me check."}}},
+            ]
+            + self._tool_block("tooluse_A")
+            + [
+                {"event": {"textOutput": {"content": " It is 72."}}},
+                {"event": {"contentEnd": {"stopReason": "PARTIAL_TURN"}}},
+            ],
+        )
+        types: Final = [e["type"] for e in events]
+        assert types.count("response.done") == 1
+        assert types[-1] == "response.done"
+        assert [e["text"] for e in events if e["type"] == "response.text.done"] == ["Let me check. It is 72."]
+
+        next_events: Final = self._run(config, self._assistant_text_block("SPECULATIVE", "Sunny.", "END_TURN"))
+        assert [e["text"] for e in next_events if e["type"] == "response.text.done"] == ["Sunny."]
+        assert all(e["output_index"] == 0 for e in next_events if "output_index" in e)
+        assert [e["response"]["id"] for e in next_events if e["type"] == "response.created"] != [
+            e["response"]["id"] for e in events if e["type"] == "response.created"
+        ]
+
+    def test_tool_call_without_assistant_message_stays_output_index_zero(self):
+        events: Final = self._run(BedrockRealtimeConfig(), self._tool_block("tooluse_A"))
+        call_events: Final = [
+            e
+            for e in events
+            if e["type"]
+            in ("response.output_item.added", "response.output_item.done", "response.function_call_arguments.done")
+        ]
+        assert call_events and all(e["output_index"] == 0 for e in call_events)
 
 
 if __name__ == "__main__":

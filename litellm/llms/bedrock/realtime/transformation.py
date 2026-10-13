@@ -136,7 +136,11 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         self._user_transcript_buffer = ""
         self._cumulative_usage = BedrockUsageEvent()
         self._reported_usage = BedrockUsageEvent()
-        self._response_function_call_items: tuple[OpenAIRealtimeStreamResponseOutputItem, ...] = ()
+        self._response_done_items: tuple[tuple[int, OpenAIRealtimeStreamResponseOutputItem], ...] = ()
+        self._response_item_count = 0
+        self._message_output_index = 0
+        self._assistant_block_open = False
+        self._response_done_pending = False
 
     def get_error_class(
         self,
@@ -729,6 +733,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         current_response_id: str | None,
         current_output_item_id: str | None,
         current_conversation_id: str | None,
+        current_delta_type: ALL_DELTA_TYPES | None,
     ) -> tuple[
         list[OpenAIRealtimeEvents],
         str | None,
@@ -762,7 +767,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 current_response_id,
                 current_output_item_id,
                 current_conversation_id,
-                None,
+                current_delta_type,
             )
 
         generation_stage: Final = self._parse_generation_stage(content_start.get("additionalModelFields"))
@@ -787,12 +792,14 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             current_response_id = f"resp_{uuid.uuid4()}"
         if not current_output_item_id:
             current_output_item_id = f"item_{uuid.uuid4()}"
+            self._message_output_index = self._response_item_count
+            self._response_item_count += 1
         if not current_conversation_id:
             current_conversation_id = f"conv_{uuid.uuid4()}"
 
         # Determine content type
         content_type: Final = content_start.get("type", "TEXT")
-        current_delta_type: Final[ALL_DELTA_TYPES] = "text" if content_type == "TEXT" else "audio"
+        next_delta_type: Final[ALL_DELTA_TYPES] = "text" if content_type == "TEXT" else "audio"
 
         returned_messages: Final[list[OpenAIRealtimeEvents]] = []
 
@@ -816,7 +823,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         output_item_added: Final = OpenAIRealtimeStreamResponseOutputItemAdded(
             type="response.output_item.added",
             response_id=current_response_id,
-            output_index=0,
+            output_index=self._message_output_index,
             item={
                 "id": current_output_item_id,
                 "object": "realtime.item",
@@ -826,18 +833,17 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 "content": [],
             },
         )
+        self._assistant_block_open = True
         returned_messages.append(output_item_added)
 
         # Send response.content_part.added
         content_part_added: Final = OpenAIRealtimeResponseContentPartAdded(
             type="response.content_part.added",
             content_index=0,
-            output_index=0,
+            output_index=self._message_output_index,
             event_id=f"event_{uuid.uuid4()}",
             item_id=current_output_item_id,
-            part=(
-                {"type": "text", "text": ""} if current_delta_type == "text" else {"type": "audio", "transcript": ""}
-            ),
+            part=({"type": "text", "text": ""} if next_delta_type == "text" else {"type": "audio", "transcript": ""}),
             response_id=current_response_id,
         )
         returned_messages.append(content_part_added)
@@ -847,7 +853,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             current_response_id,
             current_output_item_id,
             current_conversation_id,
-            current_delta_type,
+            next_delta_type,
         )
 
     @staticmethod
@@ -984,7 +990,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             content_index=0,
             event_id=f"event_{uuid.uuid4()}",
             item_id=current_output_item_id,
-            output_index=0,
+            output_index=self._message_output_index,
             response_id=current_response_id,
             delta=text_content,
         )
@@ -1024,7 +1030,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             content_index=0,
             event_id=f"event_{uuid.uuid4()}",
             item_id=current_output_item_id,
-            output_index=0,
+            output_index=self._message_output_index,
             response_id=current_response_id,
             delta=audio_content,
         )
@@ -1061,6 +1067,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         if not current_output_item_id or not current_response_id:
             return [], current_delta_chunks
 
+        self._assistant_block_open = False
         returned_messages: Final[list[OpenAIRealtimeEvents]] = []
 
         # Send appropriate done event based on type
@@ -1075,7 +1082,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 content_index=0,
                 event_id=f"event_{uuid.uuid4()}",
                 item_id=current_output_item_id,
-                output_index=0,
+                output_index=self._message_output_index,
                 response_id=current_response_id,
                 text=accumulated_text,
             )
@@ -1087,7 +1094,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 content_index=0,
                 event_id=f"event_{uuid.uuid4()}",
                 item_id=current_output_item_id,
-                output_index=0,
+                output_index=self._message_output_index,
                 part={"type": "text", "text": accumulated_text},
                 response_id=current_response_id,
             )
@@ -1099,7 +1106,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 content_index=0,
                 event_id=f"event_{uuid.uuid4()}",
                 item_id=current_output_item_id,
-                output_index=0,
+                output_index=self._message_output_index,
                 response_id=current_response_id,
             )
             returned_messages.append(audio_done)
@@ -1110,28 +1117,31 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 content_index=0,
                 event_id=f"event_{uuid.uuid4()}",
                 item_id=current_output_item_id,
-                output_index=0,
+                output_index=self._message_output_index,
                 part={"type": "audio", "transcript": ""},
                 response_id=current_response_id,
             )
             returned_messages.append(content_part_done)
 
-        # Send output_item.done
+        completed_message_item: Final[OpenAIRealtimeStreamResponseOutputItem] = {
+            "id": current_output_item_id,
+            "object": "realtime.item",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [],
+        }
         output_item_done: Final = OpenAIRealtimeOutputItemDone(
             type="response.output_item.done",
             event_id=f"event_{uuid.uuid4()}",
-            output_index=0,
+            output_index=self._message_output_index,
             response_id=current_response_id,
-            item={
-                "id": current_output_item_id,
-                "object": "realtime.item",
-                "type": "message",
-                "status": "completed",
-                "role": "assistant",
-                "content": [],
-            },
+            item=completed_message_item,
         )
         returned_messages.append(output_item_done)
+        self._response_done_items = tuple(
+            (index, item) for index, item in self._response_done_items if item.get("id") != current_output_item_id
+        ) + ((self._message_output_index, completed_message_item),)
 
         # Reset delta chunks
         return returned_messages, None
@@ -1176,8 +1186,12 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             return [], None, None, None
 
         usage: Final = self._take_usage_delta()
-        output_items: Final = self._response_function_call_items
-        self._response_function_call_items = ()
+        output_items: Final = tuple(item for _, item in sorted(self._response_done_items, key=lambda pair: pair[0]))
+        self._response_done_items = ()
+        self._response_item_count = 0
+        self._message_output_index = 0
+        self._assistant_block_open = False
+        self._response_done_pending = False
         response_done: Final = OpenAIRealtimeDoneEvent(
             type="response.done",
             event_id=f"event_{uuid.uuid4()}",
@@ -1218,6 +1232,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         response_id: Final = current_response_id or f"resp_{uuid.uuid4()}"
         conversation_id: Final = current_conversation_id or f"conv_{uuid.uuid4()}"
         item_id: Final = f"item_{uuid.uuid4()}"
+        output_index: Final = self._response_item_count
+        self._response_item_count += 1
 
         response_created_events: Final[tuple[OpenAIRealtimeEvents, ...]] = (
             (
@@ -1240,7 +1256,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         output_item_added: Final = OpenAIRealtimeStreamResponseOutputItemAdded(
             type="response.output_item.added",
             response_id=response_id,
-            output_index=0,
+            output_index=output_index,
             item={
                 "id": item_id,
                 "object": "realtime.item",
@@ -1257,7 +1273,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             "event_id": f"event_{uuid.uuid4()}",
             "response_id": response_id,
             "item_id": item_id,
-            "output_index": 0,
+            "output_index": output_index,
             "call_id": tool_use.toolUseId,
             "name": tool_use.toolName,
             "arguments": tool_use.content,
@@ -1275,12 +1291,12 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
         output_item_done: Final = OpenAIRealtimeOutputItemDone(
             type="response.output_item.done",
             event_id=f"event_{uuid.uuid4()}",
-            output_index=0,
+            output_index=output_index,
             response_id=response_id,
             item=completed_item,
         )
 
-        self._response_function_call_items = self._response_function_call_items + (completed_item,)
+        self._response_done_items = self._response_done_items + ((output_index, completed_item),)
 
         return (
             [
@@ -1292,6 +1308,29 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
             response_id,
             conversation_id,
         )
+
+    def _tool_content_end_events(
+        self,
+        current_output_item_id: str | None,
+        current_response_id: str | None,
+        current_conversation_id: str | None,
+        current_delta_type: ALL_DELTA_TYPES | None,
+    ) -> tuple[
+        tuple[OpenAIRealtimeEvents, ...],
+        str | None,
+        str | None,
+        ALL_DELTA_TYPES | None,
+    ]:
+        if self._assistant_block_open:
+            self._response_done_pending = True
+            return (), current_output_item_id, current_response_id, current_delta_type
+        done_events, output_item_id, response_id, delta_type = self._response_done_events(
+            current_response_id, current_conversation_id
+        )
+        return tuple(done_events), output_item_id, response_id, delta_type
+
+    def _should_close_response(self, stop_reason: str | None) -> bool:
+        return stop_reason == "END_TURN" or self._response_done_pending
 
     def transform_conversation_item_create_tool_result_event(self, json_message: dict) -> list[str]:
         """
@@ -1422,6 +1461,7 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 current_response_id,
                 current_output_item_id,
                 current_conversation_id,
+                current_delta_type,
             )
             returned_messages.extend(events)
 
@@ -1447,7 +1487,9 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 current_output_item_id,  # rebind-ok: same state-threading pattern as the adjacent event branches
                 current_response_id,  # rebind-ok: same state-threading pattern as the adjacent event branches
                 current_delta_type,  # rebind-ok: same state-threading pattern as the adjacent event branches
-            ) = self._response_done_events(current_response_id, current_conversation_id)
+            ) = self._tool_content_end_events(
+                current_output_item_id, current_response_id, current_conversation_id, current_delta_type
+            )
             returned_messages.extend(done_events)
 
         elif "contentEnd" in event and self._user_transcript_active:
@@ -1464,7 +1506,8 @@ class BedrockRealtimeConfig(BaseRealtimeConfig):
                 current_delta_chunks,
             )
             returned_messages.extend(events)
-            if BedrockContentEnd.model_validate(event["contentEnd"]).stopReason == "END_TURN":
+            content_end: Final = BedrockContentEnd.model_validate(event["contentEnd"])
+            if self._should_close_response(content_end.stopReason):
                 (
                     done_events,
                     current_output_item_id,

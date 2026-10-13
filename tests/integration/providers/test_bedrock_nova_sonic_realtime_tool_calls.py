@@ -286,7 +286,7 @@ def test_tool_result_round_trip(candidate: Gateway, cert: tuple[Path, Path]) -> 
         )
         assert "72" in text
         last_output: Final = object_value(dones[-1]["response"])["output"]
-        assert last_output == []
+        assert tuple(object_value(item).get("type") for item in last_output) == ("message",)
         results: Final = eventually(lambda: peer.tool_results(), lambda values: len(values) == 1, seconds=10)
         assert results == (("tooluse_A", TOOL_RESULT_OUTPUT),)
         rows: Final = eventually(
@@ -362,6 +362,20 @@ def test_tool_call_inside_active_assistant_response(candidate: Gateway, cert: tu
         assert string_value(call["call_id"]) == "tooluse_C"
         assert string_value(call["response_id"]) == response_id
         assert string_value(call["arguments"]) == '{"location":"New York"}'
+        assert call["output_index"] == 1, events
+        assert tuple(string_value(e["text"]) for e in events if e.get("type") == "response.text.done") == (
+            "It is 72 and sunny",
+        ), events
+        message_done_indexes: Final = tuple(
+            i
+            for i, event in enumerate(events)
+            if event.get("type") == "response.output_item.done" and object_value(event["item"]).get("type") == "message"
+        )
+        response_done_indexes: Final = tuple(
+            i for i, event in enumerate(events) if event.get("type") == "response.done"
+        )
+        assert len(response_done_indexes) == 1, events
+        assert len(message_done_indexes) == 1 and response_done_indexes[0] > message_done_indexes[0], events
 
 
 @pytest.mark.parametrize(
