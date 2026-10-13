@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from dataclasses import dataclass
+from typing import Literal
 
 from pydantic import JsonValue
 
@@ -20,6 +21,30 @@ class TranslationTestCase:
     mock_provider_response: Mapping[str, JsonValue]
     expected_litellm_status_code: int = 200
     expected_litellm_response: Mapping[str, JsonValue]
+
+    @property
+    def id(self) -> str:
+        return f"{self.litellm_request['model']}-{self.scenario}"
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class SSEFrame:
+    data: Mapping[str, JsonValue] | Literal["[DONE]"]
+    event: str | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class StreamingTranslationTestCase:
+    """The stream request, provider request, provider SSE frames, and the exact SSE frames LiteLLM returns."""
+
+    scenario: str
+    litellm_endpoint: str
+    litellm_request: Mapping[str, JsonValue]
+    expected_provider_endpoint: str
+    expected_provider_headers: Mapping[str, str]
+    expected_provider_request: Mapping[str, JsonValue]
+    mock_provider_frames: tuple[SSEFrame, ...]
+    expected_litellm_frames: tuple[SSEFrame, ...]
 
     @property
     def id(self) -> str:
