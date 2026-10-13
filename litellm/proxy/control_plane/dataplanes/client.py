@@ -17,6 +17,7 @@ from litellm.proxy.control_plane.dataplanes.credentials import Caller, Credentia
 from litellm.proxy.control_plane.dataplanes.registry import Dataplane
 
 Method: TypeAlias = Literal["GET", "POST", "PUT", "PATCH", "DELETE"]
+WRITE_METHODS: Final = frozenset({"POST", "PUT", "PATCH", "DELETE"})
 Sleeper: TypeAlias = Callable[[float], Awaitable[None]]
 RETRYABLE_STATUSES: Final = frozenset({502, 503, 504})
 _JSON: Final = TypeAdapter(object)
@@ -97,6 +98,18 @@ class DataplaneClient:
 
     async def post(self, dataplane: Dataplane, path: str, caller: Caller, json: Mapping[str, object]) -> CallResult:
         return await self._call("POST", dataplane, path, caller, params=None, json=json)
+
+    async def request(
+        self,
+        method: Method,
+        dataplane: Dataplane,
+        path: str,
+        caller: Caller,
+        params: Mapping[str, str] | None = None,
+        json: Mapping[str, object] | None = None,
+    ) -> CallResult:
+        """Any management verb. Only GET is retried, every write goes out exactly once."""
+        return await self._call(method, dataplane, path, caller, params=params, json=json)
 
     async def _call(
         self,
