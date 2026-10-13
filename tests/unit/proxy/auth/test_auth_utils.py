@@ -3119,6 +3119,48 @@ class TestIsRequestBodySafeBlocksClaudePlatformWorkspaceOverride:
             is True
         )
 
+    @pytest.mark.parametrize(
+        "request_body",
+        [
+            pytest.param({"metadata": {"workspace_id": "ws-1"}}, id="metadata"),
+            pytest.param({"litellm_metadata": {"workspace_id": "ws-1"}}, id="litellm_metadata"),
+            pytest.param({"litellm_metadata": '{"workspace_id": "ws-1"}'}, id="litellm_metadata-json"),
+            pytest.param({"metadata[workspace_id]": "ws-1"}, id="form-metadata"),
+            pytest.param({"litellm_params": {"metadata": {"workspace_id": "ws-1"}}}, id="litellm_params-metadata"),
+        ],
+    )
+    def test_workspace_id_metadata_tag_is_accepted(self, request_body):
+        assert (
+            is_request_body_safe(
+                request_body={"model": "gpt-4", **request_body},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+            is True
+        )
+
+    @pytest.mark.parametrize(
+        ("request_body", "rejected"),
+        [
+            pytest.param({"extra_body": {"workspace_id": "wrkspc_attacker"}}, "workspace_id", id="extra_body"),
+            pytest.param({"metadata": {"aws_workspace_id": "wrkspc_attacker"}}, "aws_workspace_id", id="alias"),
+            pytest.param(
+                {"metadata": {"workspace_id": "ws-1", "langfuse_host": "https://attacker.example"}},
+                "langfuse_host",
+                id="tag-beside-banned",
+            ),
+        ],
+    )
+    def test_metadata_tag_exemption_stays_narrow(self, request_body, rejected):
+        with pytest.raises(ValueError, match=rejected):
+            is_request_body_safe(
+                request_body={"model": "gpt-4", **request_body},
+                general_settings={},
+                llm_router=None,
+                model="gpt-4",
+            )
+
 
 class TestIsRequestBodySafeBlocksFireworksForwardUserId:
     @pytest.mark.parametrize("value", [True, False])

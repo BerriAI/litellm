@@ -313,6 +313,15 @@ _NESTED_CONFIG_KEYS: Final[tuple[str, ...]] = ("litellm_embedding_config", "extr
 # was an unintentional bypass.
 _NESTED_METADATA_KEYS: Final[tuple[str, ...]] = ("metadata", "litellm_metadata")
 
+# Bedrock Claude Platform reads its workspace pin only from top-level call params, never from
+# metadata, where `workspace_id` is a common caller tag (spend logs, traces).
+_METADATA_CALLER_TAGS: Final[frozenset[str]] = frozenset({"workspace_id"})
+
+
+def _without_metadata_caller_tags(metadata: Mapping[str, object]) -> Mapping[str, object]:
+    return MappingProxyType({key: value for key, value in metadata.items() if key not in _METADATA_CALLER_TAGS})
+
+
 # Banned request-body params. The same list applies to every entry in
 # ``_NESTED_CONFIG_KEYS`` (dicts spread as ``**kwargs`` into outbound
 # calls) and ``_NESTED_METADATA_KEYS`` (dicts read directly by integration
@@ -640,10 +649,18 @@ def is_request_body_safe(
     for metadata_key in _NESTED_METADATA_KEYS:
         metadata = _coerce_metadata_to_dict(request_body.get(metadata_key))
         if metadata is not None:
-            _check_banned_params(metadata, general_settings, llm_router, model, manages_deployments=manages_deployments)
+            _check_banned_params(
+                _without_metadata_caller_tags(metadata),
+                general_settings,
+                llm_router,
+                model,
+                manages_deployments=manages_deployments,
+            )
         if any(isinstance(key, str) and key.startswith(f"{metadata_key}[") for key in request_body):
             _check_banned_params(
-                extract_nested_form_metadata(form_data=request_body, prefix=f"{metadata_key}["),
+                _without_metadata_caller_tags(
+                    extract_nested_form_metadata(form_data=request_body, prefix=f"{metadata_key}[")
+                ),
                 general_settings,
                 llm_router,
                 model,
@@ -665,7 +682,7 @@ def is_request_body_safe(
         litellm_params_metadata: Final = _coerce_metadata_to_dict(litellm_params.get("metadata"))
         if litellm_params_metadata is not None:
             _check_banned_params(
-                litellm_params_metadata,
+                _without_metadata_caller_tags(litellm_params_metadata),
                 general_settings,
                 llm_router,
                 model,
