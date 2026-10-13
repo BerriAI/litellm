@@ -759,15 +759,16 @@ def get_logging_payload(
         if isinstance(usage_object, dict):
             prompt_tokens_details = usage_object.get("prompt_tokens_details")
     if isinstance(prompt_tokens_details, dict):
+        typed_prompt_tokens_details: Final = cast(dict[str, object], prompt_tokens_details)
         if "cache_read_input_tokens" not in additional_usage_values:
-            cached_tokens: Final = prompt_tokens_details.get("cached_tokens")
+            cached_tokens: Final = typed_prompt_tokens_details.get("cached_tokens")
             if isinstance(cached_tokens, int) and cached_tokens > 0:
                 additional_usage_values["cache_read_input_tokens"] = cached_tokens
         if "cache_creation_input_tokens" not in additional_usage_values:
             cache_write_tokens: Final = (
-                prompt_tokens_details.get("cache_write_tokens")
-                or prompt_tokens_details.get("cache_creation_tokens")
-                or prompt_tokens_details.get("created_cache_tokens")
+                typed_prompt_tokens_details.get("cache_write_tokens")
+                or typed_prompt_tokens_details.get("cache_creation_tokens")
+                or typed_prompt_tokens_details.get("created_cache_tokens")
             )
             if isinstance(cache_write_tokens, int) and cache_write_tokens > 0:
                 additional_usage_values["cache_creation_input_tokens"] = cache_write_tokens

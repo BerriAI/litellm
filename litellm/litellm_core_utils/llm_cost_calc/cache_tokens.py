@@ -1,5 +1,5 @@
 from collections.abc import Mapping
-from typing import Final
+from typing import Final, cast
 
 
 def extract_cache_read_tokens(usage_object: Mapping[str, object] | None) -> int:
@@ -19,7 +19,8 @@ def extract_cache_read_tokens(usage_object: Mapping[str, object] | None) -> int:
     details: Final = usage_object.get("prompt_tokens_details")
     if not isinstance(details, Mapping):
         return 0
-    cached: Final = details.get("cached_tokens")
+    typed_details: Final = cast(Mapping[str, object], details)
+    cached: Final = typed_details.get("cached_tokens")
     return int(cached) if isinstance(cached, (int, float)) else 0
 
 
@@ -39,13 +40,14 @@ def extract_cache_creation_tokens(usage_object: Mapping[str, object] | None) -> 
     details: Final = usage_object.get("prompt_tokens_details")
     if not isinstance(details, Mapping):
         return 0
+    typed_details: Final = cast(Mapping[str, object], details)
     written: Final = next(
         (
             value
             for value in (
-                details.get("cache_write_tokens"),
-                details.get("cache_creation_tokens"),
-                details.get("created_cache_tokens"),
+                typed_details.get("cache_write_tokens"),
+                typed_details.get("cache_creation_tokens"),
+                typed_details.get("created_cache_tokens"),
             )
             if isinstance(value, (int, float)) and value
         ),
