@@ -7,7 +7,13 @@ from unittest.mock import MagicMock
 
 from fastapi import HTTPException
 
-from litellm.proxy.route_llm_request import ProxyModelNotFoundError, route_request
+from litellm import Router
+from litellm.proxy.route_llm_request import (
+    ProxyModelNotFoundError,
+    ProxyUnsupportedEndpointError,
+    endpoint_unsupported_by_model,
+    route_request,
+)
 
 
 @pytest.mark.parametrize(
@@ -1760,3 +1766,153 @@ async def test_route_request_router_settings_override_skips_null_fields():
     assert "context_window_fallbacks" not in call_kwargs
     assert "num_retries" not in call_kwargs
     assert "model_group_retry_policy" not in call_kwargs
+
+
+CHAT_SHAPED_ROUTES: Final = (
+    ("acompletion", "/v1/chat/completions"),
+    ("anthropic_messages", "/v1/messages"),
+    ("aresponses", "/v1/responses"),
+)
+
+CHAT_SHAPED_ROUTE_TYPES: Final = tuple(route_type for route_type, _ in CHAT_SHAPED_ROUTES)
+
+EMBEDDING_ONLY: Final = {"mode": "embedding", "supported_endpoints": ["/v1/embeddings"]}
+
+
+def _embedding_deployment(model_name: str, model_info: dict[str, object]) -> dict[str, object]:
+    return {
+        "model_name": model_name,
+        "litellm_params": {"model": "sagemaker/openai/embed-endpoint", "aws_region_name": "us-east-1"},
+        "model_info": model_info,
+    }
+
+
+def _router_with(*deployments: dict[str, object], **router_kwargs: object) -> Router:
+    return Router(model_list=list(deployments), **router_kwargs)
+
+
+def _unsupported(route_type: str, model: object, router: Router | None) -> ProxyUnsupportedEndpointError | None:
+    return endpoint_unsupported_by_model(route_type=route_type, model=model, llm_router=router, team_id=None)
+
+
+@pytest.mark.parametrize("route_type, endpoint", CHAT_SHAPED_ROUTES)
+def test_endpoint_unsupported_rejects_chat_routes_on_embedding_only_model(route_type, endpoint):
+    error: Final = _unsupported(
+        route_type, "embed-only", _router_with(_embedding_deployment("embed-only", EMBEDDING_ONLY))
+    )
+
+    assert isinstance(error, ProxyUnsupportedEndpointError)
+    assert error.code == "400"
+    assert error.param == "model"
+    assert error.type == "invalid_request_error"
+    assert error.message == f"{endpoint} is not supported by model=embed-only. Supported endpoints: /v1/embeddings"
+
+
+@pytest.mark.parametrize("route_type", ["aembedding", "atext_completion", "aimage_generation"])
+def test_endpoint_unsupported_leaves_non_chat_routes_alone(route_type):
+    router: Final = _router_with(_embedding_deployment("embed-only", EMBEDDING_ONLY))
+
+    assert _unsupported(route_type, "embed-only", router) is None
+
+
+@pytest.mark.parametrize("route_type", CHAT_SHAPED_ROUTE_TYPES)
+@pytest.mark.parametrize(
+    "model_info",
+    [
+        {"mode": "embedding"},
+        {},
+        {"mode": "embedding", "supported_endpoints": None},
+        {"mode": "embedding", "supported_endpoints": "/v1/embeddings"},
+        {"mode": 1, "supported_endpoints": ["/v1/embeddings"]},
+    ],
+)
+def test_endpoint_unsupported_keeps_todays_behavior_without_a_valid_declaration(route_type, model_info):
+    router: Final = _router_with(_embedding_deployment("embed-model", model_info))
+
+    assert _unsupported(route_type, "embed-model", router) is None
+
+
+@pytest.mark.parametrize("route_type", CHAT_SHAPED_ROUTE_TYPES)
+@pytest.mark.parametrize(
+    "model_info",
+    [
+        {"supported_endpoints": ["/v1/embeddings"]},
+        {"mode": "chat", "supported_endpoints": ["/v1/batch"]},
+        {"mode": "completion", "supported_endpoints": ["/fine_tuning"]},
+        {"mode": "responses", "supported_endpoints": ["/v1/realtime"]},
+    ],
+)
+def test_endpoint_unsupported_needs_a_non_chat_mode_to_reject(route_type, model_info):
+    router: Final = _router_with(_embedding_deployment("advisory", model_info))
+
+    assert _unsupported(route_type, "advisory", router) is None
+
+
+@pytest.mark.parametrize("route_type", CHAT_SHAPED_ROUTE_TYPES)
+@pytest.mark.parametrize(
+    "declared",
+    [["/v1/messages"], ["/v1/responses"], ["/v1/chat/completions"], ["/chat/completions"], ["/responses"]],
+)
+def test_endpoint_unsupported_allows_every_chat_route_when_any_chat_endpoint_is_declared(route_type, declared):
+    router: Final = _router_with(
+        _embedding_deployment("chat-model", {"mode": "embedding", "supported_endpoints": declared})
+    )
+
+    assert _unsupported(route_type, "chat-model", router) is None
+
+
+def test_endpoint_unsupported_allows_a_group_with_one_deployment_that_declares_nothing():
+    router: Final = _router_with(
+        _embedding_deployment("mixed", EMBEDDING_ONLY),
+        _embedding_deployment("mixed", {"mode": "embedding"}),
+    )
+
+    assert _unsupported("acompletion", "mixed", router) is None
+
+
+def test_endpoint_unsupported_names_every_endpoint_the_group_declares():
+    router: Final = _router_with(
+        _embedding_deployment("embed-group", EMBEDDING_ONLY),
+        _embedding_deployment(
+            "embed-group", {"mode": "embedding", "supported_endpoints": ["/v1/rerank", "/v1/embeddings"]}
+        ),
+    )
+
+    error: Final = _unsupported("acompletion", "embed-group", router)
+
+    assert isinstance(error, ProxyUnsupportedEndpointError)
+    assert error.message == (
+        "/v1/chat/completions is not supported by model=embed-group. Supported endpoints: /v1/embeddings, /v1/rerank"
+    )
+
+
+def test_endpoint_unsupported_says_none_for_an_empty_declared_list():
+    router: Final = _router_with(_embedding_deployment("nothing", {"mode": "embedding", "supported_endpoints": []}))
+
+    error: Final = _unsupported("aresponses", "nothing", router)
+
+    assert isinstance(error, ProxyUnsupportedEndpointError)
+    assert error.message == "/v1/responses is not supported by model=nothing. Supported endpoints: none"
+
+
+def test_endpoint_unsupported_follows_a_model_group_alias():
+    router: Final = _router_with(
+        _embedding_deployment("embed-only", EMBEDDING_ONLY),
+        model_group_alias={"embed-alias": "embed-only"},
+    )
+
+    error: Final = _unsupported("anthropic_messages", "embed-alias", router)
+
+    assert isinstance(error, ProxyUnsupportedEndpointError)
+    assert error.message == "/v1/messages is not supported by model=embed-alias. Supported endpoints: /v1/embeddings"
+
+
+@pytest.mark.parametrize("model", ["unknown-model", "", None])
+def test_endpoint_unsupported_ignores_models_without_deployments(model):
+    router: Final = _router_with(_embedding_deployment("embed-only", EMBEDDING_ONLY))
+
+    assert _unsupported("acompletion", model, router) is None
+
+
+def test_endpoint_unsupported_skips_the_check_without_a_router():
+    assert _unsupported("acompletion", "embed-only", None) is None

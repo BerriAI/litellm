@@ -1413,7 +1413,7 @@ class LiteLLMParamsBody(BaseModel):
     order: int | None = None
 
 
-ModelMode = Literal["chat", "batch", "realtime", "image_generation"]
+ModelMode = Literal["chat", "embedding", "batch", "realtime", "image_generation"]
 
 
 class ModelInfoBody(BaseModel):

@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 import httpx
 from fastapi import HTTPException, status
-from pydantic import TypeAdapter, ValidationError
+from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 import litellm
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
@@ -329,6 +329,67 @@ def raise_if_required_body_param_missing(
     raise error_class(
         route=ROUTE_ENDPOINT_MAPPING.get(route_type, route_type),
         param=missing_param.name,
+    )
+
+
+CHAT_SHAPED_ENDPOINT_BY_ROUTE_TYPE: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "acompletion": "/v1/chat/completions",
+        "anthropic_messages": "/v1/messages",
+        "aresponses": "/v1/responses",
+    }
+)
+
+CHAT_SHAPED_ENDPOINTS: Final[frozenset[str]] = frozenset(
+    {"/v1/chat/completions", "/chat/completions", "/v1/messages", "/v1/responses", "/responses"}
+)
+
+CHAT_SHAPED_MODES: Final[frozenset[str]] = frozenset({"chat", "completion", "responses"})
+
+
+class _DeploymentEndpointDeclaration(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    mode: str | None = None
+    supported_endpoints: tuple[str, ...] | None = None
+
+
+class ProxyUnsupportedEndpointError(ProxyException):
+    pass
+
+
+def _declared_non_chat_endpoints(deployment: Mapping[str, object]) -> frozenset[str] | None:
+    try:
+        declared: Final = _DeploymentEndpointDeclaration.model_validate(deployment.get("model_info") or {})
+    except ValidationError:
+        return None
+    if declared.mode is None or declared.mode in CHAT_SHAPED_MODES or declared.supported_endpoints is None:
+        return None
+    endpoints: Final = frozenset(declared.supported_endpoints)
+    return endpoints if endpoints.isdisjoint(CHAT_SHAPED_ENDPOINTS) else None
+
+
+def endpoint_unsupported_by_model(
+    route_type: str,
+    model: object,
+    llm_router: LitellmRouter | None,
+    team_id: str | None,
+) -> ProxyUnsupportedEndpointError | None:
+    endpoint: Final = CHAT_SHAPED_ENDPOINT_BY_ROUTE_TYPE.get(route_type)
+    if endpoint is None or not isinstance(model, str) or not model or llm_router is None:
+        return None
+    deployments: Final = tuple(llm_router.get_model_list(model_name=model, team_id=team_id) or ())
+    non_chat: Final = tuple(
+        endpoints for deployment in deployments if (endpoints := _declared_non_chat_endpoints(deployment)) is not None
+    )
+    if not deployments or len(non_chat) < len(deployments):
+        return None
+    supported: Final = ", ".join(sorted(frozenset[str]().union(*non_chat))) or "none"
+    return ProxyUnsupportedEndpointError(
+        message=f"{endpoint} is not supported by model={model}. Supported endpoints: {supported}",
+        type="invalid_request_error",
+        param="model",
+        code=status.HTTP_400_BAD_REQUEST,
     )
 
 

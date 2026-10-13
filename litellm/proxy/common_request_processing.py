@@ -119,6 +119,7 @@ from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.proxy.guardrails.auto_router_compression import arm_pre_call as _arm_auto_router_compression
 from litellm.proxy.native_compaction import with_proxy_compaction_executor
 from litellm.proxy.route_llm_request import (
+    endpoint_unsupported_by_model,
     route_request,
 )
 from litellm.proxy.utils import (  # noqa: F401  # legacy module exports
@@ -2288,6 +2289,15 @@ class ProxyBaseLLMRequestProcessing:
         )
 
         self.data["litellm_logging_obj"] = logging_obj
+
+        unsupported_endpoint: Final = endpoint_unsupported_by_model(
+            route_type=route_type,
+            model=self.data.get("model"),
+            llm_router=llm_router,
+            team_id=user_api_key_dict.team_id,
+        )
+        if unsupported_endpoint is not None:
+            raise unsupported_endpoint
 
         # Merge model-level guardrails before pre_call_hook so DB/UI-configured
         # guardrails actually execute on pre_call. Without this, guardrails set
