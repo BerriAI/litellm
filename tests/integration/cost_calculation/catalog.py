@@ -51,7 +51,10 @@ PARITY_CASES: Final[tuple[StreamParityTestCase, ...]] = tuple(
 )
 BATCH_CASES: Final[tuple[BatchCostCase, ...]] = batch_realtime.BATCH_CASES
 REALTIME_CASES: Final[tuple[RealtimeCostCase, ...]] = batch_realtime.REALTIME_CASES
-BRIDGE_COST_PARITY_CASES: Final[tuple[BridgeCostParityTestCase, ...]] = openai.BRIDGE_COST_PARITY
+BRIDGE_COST_PARITY_CASES: Final[tuple[BridgeCostParityTestCase, ...]] = (
+    *openai.BRIDGE_COST_PARITY,
+    *bedrock_converse.BRIDGE_COST_PARITY,
+)
 _PARITY_LEGS: Final = frozenset(leg.name for pair in PARITY_CASES for leg in (pair.plain, pair.streamed)) | frozenset(
     leg.name for pair in BRIDGE_COST_PARITY_CASES for leg in (pair.native, pair.bridged)
 )
