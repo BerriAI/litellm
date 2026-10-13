@@ -1567,9 +1567,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             else:
                 # Tool calls now go out as ordinary prompt/response text, so a
                 # response-side scan reports the model's arguments under
-                # response_masked_data, which _CLIENT_HIDDEN_SCAN_FIELDS already
-                # withholds. prompt_masked_data is the caller's own input again and
-                # must keep reaching them -- it is one of the fields LIT-5638 asks for.
+                # response_masked_data, which _CLIENT_HIDDEN_SCAN_FIELDS withholds
+                # unless include_masked_response_on_block is on. prompt_masked_data is
+                # the caller's own input again and must keep reaching them -- it is one
+                # of the fields LIT-5638 asks for.
                 error_detail = self._build_error_detail(scan_result, is_response=is_response)
                 raise HTTPException(status_code=400, detail=error_detail)
 
