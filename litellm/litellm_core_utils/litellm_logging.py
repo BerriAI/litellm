@@ -737,6 +737,7 @@ class Logging(LiteLLMLoggingBaseClass):
 
         # Init Caching related details
         self.caching_details: CachingDetails | None = None
+        self.vertex_ai_cache_creation_input_tokens: int = 0
         # Timing for results that cannot carry ``_hidden_params`` (plain-dict /v1/messages
         # responses and the bridge stream wrappers); see ``update_response_metadata``.
         self.response_timing_metrics: Mapping[str, float] = {}

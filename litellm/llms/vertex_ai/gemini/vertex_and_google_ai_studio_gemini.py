@@ -54,7 +54,6 @@ from litellm.types.llms.openai import (
     OpenAIChatCompletionFinishReason,
 )
 from litellm.types.llms.vertex_ai import (
-    VERTEX_AI_CACHE_CREATION_TOKENS_KEY,
     VERTEX_AI_PROVIDER_METADATA_FIELDS,
     VERTEX_CREDENTIALS_TYPES,
     Candidates,
@@ -150,8 +149,8 @@ def _unsupported_reasoning_effort(reasoning_effort: str) -> UnsupportedParamsErr
 
 
 def _cache_creation_tokens(logging_obj: LoggingClass) -> int:
-    recorded: Final = logging_obj.model_call_details.get(VERTEX_AI_CACHE_CREATION_TOKENS_KEY)
-    return recorded if isinstance(recorded, int) else 0
+    recorded: Final[object] = getattr(logging_obj, "vertex_ai_cache_creation_input_tokens", 0)
+    return recorded if isinstance(recorded, int) and recorded > 0 else 0
 
 
 def _served_model_name(model_version: object) -> str | None:
