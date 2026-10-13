@@ -547,6 +547,9 @@ class GoogleGenAIAdapter:
                 # Handle assistant messages with potential function calls
                 combined_text = ""
                 tool_calls: list[ChatCompletionAssistantToolCall] = []
+                # Some clients (e.g. Google Antigravity CLI) send functionResponse
+                # parts in a "model" turn rather than a "user" turn.
+                model_tool_messages: list[ChatCompletionToolMessage] = []
 
                 for part in parts:
                     if isinstance(part, dict):
@@ -564,8 +567,22 @@ class GoogleGenAIAdapter:
                                 ),
                             )
                             tool_calls.append(tool_call)
+                        elif "functionResponse" in part:
+                            func_response = part["functionResponse"]
+                            model_tool_messages.append(
+                                ChatCompletionToolMessage(
+                                    role="tool",
+                                    tool_call_id=f"call_{func_response.get('name', 'unknown')}",
+                                    content=json.dumps(func_response.get("response", {})),
+                                )
+                            )
                     elif isinstance(part, str):
                         combined_text += part
+
+                # A model turn holding only function responses becomes tool messages
+                if model_tool_messages and not combined_text and not tool_calls:
+                    messages.extend(model_tool_messages)
+                    continue
 
                 # Create assistant message
                 if tool_calls:
@@ -581,6 +598,7 @@ class GoogleGenAIAdapter:
                     )
 
                 messages.append(assistant_message)
+                messages.extend(model_tool_messages)
 
         return messages
 

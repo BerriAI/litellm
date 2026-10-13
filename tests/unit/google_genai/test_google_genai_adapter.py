@@ -1641,3 +1641,75 @@ async def test_generate_content_sends_response_schema_and_tool_parameters_to_the
     }
     assert response["candidates"][0]["content"]["parts"] == [{"text": '{"park_name": "EPCOT"}'}]
     assert "text" not in response
+
+
+def test_function_response_in_model_turn_becomes_tool_message():
+    """Function responses sent in a "model" turn must not be dropped.
+
+    Google's Antigravity CLI sends tool results as
+    {"role": "model", "parts": [{"functionResponse": ...}]}. Dropping them left
+    the request ending on an assistant turn, which Gemini rejects with
+    "Requests ending with a model turn are not supported."
+    """
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+    contents = [
+        {"role": "user", "parts": [{"text": "Run the tests"}]},
+        {
+            "role": "model",
+            "parts": [
+                {
+                    "functionCall": {
+                        "name": "run_command",
+                        "args": {"command": "python3 test_calc.py"},
+                    }
+                }
+            ],
+        },
+        {
+            "role": "model",
+            "parts": [
+                {
+                    "functionResponse": {
+                        "name": "run_command",
+                        "response": {"output": "AssertionError"},
+                    }
+                }
+            ],
+        },
+    ]
+
+    completion_request = adapter.translate_generate_content_to_completion(
+        model="gemini-pro", contents=contents
+    )
+    messages = completion_request["messages"]
+
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool"]
+    assert messages[1]["tool_calls"][0]["id"] == "call_run_command"
+    assert messages[2]["tool_call_id"] == "call_run_command"
+    assert json.loads(messages[2]["content"]) == {"output": "AssertionError"}
+
+
+def test_model_turn_with_call_and_response_keeps_order():
+    """A model turn holding both a call and its response yields assistant then tool."""
+    from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+
+    adapter = GoogleGenAIAdapter()
+    contents = [
+        {"role": "user", "parts": [{"text": "Weather?"}]},
+        {
+            "role": "model",
+            "parts": [
+                {"functionCall": {"name": "get_weather", "args": {"city": "Oslo"}}},
+                {"functionResponse": {"name": "get_weather", "response": {"temp": "4C"}}},
+            ],
+        },
+    ]
+
+    messages = adapter.translate_generate_content_to_completion(
+        model="gemini-pro", contents=contents
+    )["messages"]
+
+    assert [m["role"] for m in messages] == ["user", "assistant", "tool"]
+    assert messages[2]["tool_call_id"] == messages[1]["tool_calls"][0]["id"]
