@@ -276,6 +276,43 @@ def test_mask_response_content_still_masks_when_flag_on(gateway: Gateway, tmp_pa
             assert content == _masked_data()["data"]
 
 
+def test_db_created_guardrail_string_false_withholds_response_masked_data_on_block(gateway: Gateway) -> None:
+    """The dashboard persists some litellm_params as strings; "false" must not turn the flag on."""
+    name: Final = f"panw-string-false-{uuid.uuid4().hex[:8]}"
+    with wire_server(_scanner) as policy, wire_server(_provider) as upstream:
+        gateway.post(
+            "/guardrails",
+            {
+                "guardrail": {
+                    "guardrail_name": name,
+                    "litellm_params": {
+                        "guardrail": "panw_prisma_airs",
+                        "mode": "post_call",
+                        "api_base": policy.url,
+                        "api_key": "synthetic-panw-key",
+                        "profile_name": "synthetic-profile",
+                        "include_masked_response_on_block": "false",
+                    },
+                }
+            },
+        )
+        with gateway.scenario() as scenario:
+            model: Final = scenario.model(
+                model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+            )
+            response: Final = gateway.request(
+                "POST",
+                "/v1/chat/completions",
+                {**_request_body(model, "/v1/chat/completions"), "guardrails": [name]},
+            )
+
+            assert response.status_code == 400, response.text
+            detail: Final = _block_detail(object_value(response.json()))
+            assert detail is not None, f"blocked detail missing from {response.text}"
+            assert "response_masked_data" not in detail
+            assert _response_scans(policy.drain()) != [], "the AIRS double never saw a response scan"
+
+
 def test_db_created_guardrail_includes_response_masked_data_on_block(gateway: Gateway, tmp_path: Path) -> None:
     name: Final = f"panw-block-details-{uuid.uuid4().hex[:8]}"
     with wire_server(_scanner) as policy, wire_server(_provider) as upstream:

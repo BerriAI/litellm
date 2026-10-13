@@ -133,6 +133,20 @@ if TYPE_CHECKING:
     from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 
 
+def _parse_bool_setting(name: str, value: object) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return False
+    if isinstance(value, str):
+        from litellm.secret_managers.main import str_to_bool
+
+        parsed: Final = str_to_bool(value)
+        if parsed is not None:
+            return parsed
+    raise ValueError(f"PANW Prisma AIRS: {name} must be true or false, got {value!r}")
+
+
 class PanwPrismaAirsHandler(CustomGuardrail):
     """
     LiteLLM Built-in Guardrail for Palo Alto Networks Prisma AI Runtime Security (AIRS).
@@ -172,7 +186,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         mask_on_block: bool = False,
         mask_request_content: bool = False,
         mask_response_content: bool = False,
-        include_masked_response_on_block: bool = False,
+        include_masked_response_on_block: bool | str | None = False,
         app_name: str | None = None,
         fallback_on_error: Literal["block", "allow"] = "block",
         timeout: float = 10.0,
@@ -227,7 +241,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         self.http_client = http_client
         self.fallback_on_error = fallback_on_error
-        self.include_masked_response_on_block = include_masked_response_on_block
+        # The dashboard persists some fields as strings and Pydantic extras pass
+        # them through unvalidated, so a bare "false" must not be treated as truthy.
+        self.include_masked_response_on_block: Final[bool] = _parse_bool_setting(
+            "include_masked_response_on_block", include_masked_response_on_block
+        )
         # Coerce defensively. The dashboard UI persists this field as a JSON
         # string, and Pydantic extras (the path that splats model_dump into
         # this handler) preserve whatever type the user supplied. A string

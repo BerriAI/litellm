@@ -6269,6 +6269,55 @@ class TestPanwAirsIncludeMaskedResponseOnBlock:
 
         assert result["texts"] == ["XXXXXXXXX response data"]
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("raw", ["false", "False", " false "])
+    async def test_string_false_withholds_response_masked_data(self, raw):
+        """A persisted "false" string must not be truthy on the withhold check."""
+        handler = make_handler(include_masked_response_on_block=raw)
+        inputs: GenericGuardrailAPIInputs = {"texts": ["Sensitive response data"]}
+        request_data = {"litellm_call_id": "test-call-id", "model": "gpt-4"}
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = copy.deepcopy(self._CUSTOMER_BLOCK_RESPONSE)
+
+            with pytest.raises(HTTPException) as exc_info:
+                await handler.apply_guardrail(
+                    inputs=inputs,
+                    request_data=request_data,
+                    input_type="response",
+                )
+
+        assert exc_info.value.status_code == 400
+        error = exc_info.value.detail["error"]
+        assert "response_masked_data" not in error
+        assert error["code"] == "panw_prisma_airs_response_blocked"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("raw", ["true", "TRUE"])
+    async def test_string_true_includes_response_masked_data(self, raw):
+        handler = make_handler(include_masked_response_on_block=raw)
+        inputs: GenericGuardrailAPIInputs = {"texts": ["Sensitive response data"]}
+        request_data = {"litellm_call_id": "test-call-id", "model": "gpt-4"}
+
+        with patch.object(handler, "_call_panw_api", new_callable=AsyncMock) as mock_api:
+            mock_api.return_value = copy.deepcopy(self._CUSTOMER_BLOCK_RESPONSE)
+
+            with pytest.raises(HTTPException) as exc_info:
+                await handler.apply_guardrail(
+                    inputs=inputs,
+                    request_data=request_data,
+                    input_type="response",
+                )
+
+        assert exc_info.value.status_code == 400
+        error = exc_info.value.detail["error"]
+        assert error["response_masked_data"] == self._CUSTOMER_BLOCK_RESPONSE["response_masked_data"]
+
+    @pytest.mark.parametrize("raw", ["yes", 1, ""])
+    def test_non_boolean_value_fails_closed(self, raw):
+        with pytest.raises(ValueError, match="include_masked_response_on_block"):
+            make_handler(include_masked_response_on_block=raw)
+
 
 class TestPanwAirsToolCallBlockMaskedDataRouting:
     """A tool-call block must withhold model output and keep caller input.
