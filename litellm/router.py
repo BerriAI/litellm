@@ -505,6 +505,29 @@ _FALLBACK_HOP_ADAPTER: Final = TypeAdapter(Mapping[str, object])
 _DEPLOYMENT_SELECTED_EVENT: Final = "litellm.request.deployment_selected"
 
 
+async def _hold_slot_until_closed(response: object, slot: contextlib.AsyncExitStack) -> None:
+    """Keep a deployment slot held until a streamed binary response is closed.
+
+    A buffered response already has its body in hand, so its slot is released right
+    away. A streamed one is still pulling audio from the provider, so the slot has to
+    survive until whoever consumes it closes the response.
+    """
+    raw: Final = getattr(response, "response", None)
+    if not isinstance(raw, httpx.Response) or raw.is_stream_consumed:
+        await slot.aclose()
+        return
+
+    close: Final = raw.aclose
+
+    async def _aclose_and_release() -> None:
+        try:
+            await close()
+        finally:
+            await slot.aclose()
+
+    raw.aclose = _aclose_and_release  # pyright: ignore[reportAttributeAccessIssue]  # wrapping the bound method keeps every caller's close path releasing the slot
+
+
 def _is_fallback_hop(request_kwargs: Mapping[str, object]) -> bool:
     fallback_depth: Final = request_kwargs.get("fallback_depth")
     return isinstance(fallback_depth, int) and fallback_depth > 0
@@ -5024,7 +5047,10 @@ class Router:
             )
 
             self.total_calls[model_name] += 1
-            async with self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span):
+            async with contextlib.AsyncExitStack() as deployment_slot:
+                await deployment_slot.enter_async_context(
+                    self._deployment_slot(deployment=deployment, kwargs=kwargs, parent_otel_span=parent_otel_span)
+                )
                 response = await litellm.aspeech(
                     **{
                         **data,
@@ -5034,6 +5060,10 @@ class Router:
                         **kwargs,
                     }
                 )
+                # A streamed response returns at the headers with its audio still arriving, so
+                # the slot has to outlive this block or the deployment's max_parallel_requests
+                # would only bound how many syntheses can *start*.
+                await _hold_slot_until_closed(response, deployment_slot.pop_all())
 
             self.success_calls[model_name] += 1
             verbose_router_logger.info("litellm.aspeech(model=%s)\x1b[32m 200 OK\x1b[0m", model_name)

@@ -765,6 +765,7 @@ except ImportError:
     build_billing_metrics_recorder = None
     shutdown_billing_metrics_recorder = None
 from fastapi.exception_handlers import http_exception_handler
+from starlette.background import BackgroundTask
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.websockets import WebSocketState
 
@@ -12838,6 +12839,15 @@ async def _audio_speech_chunk_generator(
         async for chunk in _generator:
             yield chunk
     finally:
+        # Reading the body to the end closes the upstream, but a client that walks away
+        # mid-clip never gets there. Starlette raises ClientDisconnect out of the response
+        # before its background task runs, so this is the path that covers a disconnect.
+        await _close_audio_speech_response(_response)
+
+
+async def _close_audio_speech_response(_response: HttpxBinaryResponseContent) -> None:
+    """Release the upstream connection holding this response's audio."""
+    with contextlib.suppress(Exception):
         await _response.aclose()
 
 
@@ -12943,10 +12953,14 @@ async def audio_speech(
             response_format=requested_format if isinstance(requested_format, str) else None,
         )
 
+        audio: Final = cast(  # cast-ok: the speech routes return this, and resolve_speech_media_type above already reads it as such
+            HttpxBinaryResponseContent, response
+        )
         return StreamingResponse(
-            _audio_speech_chunk_generator(response),
+            _audio_speech_chunk_generator(audio),
             media_type=media_type,
             headers=custom_headers,
+            background=BackgroundTask(_close_audio_speech_response, audio),
         )
 
     except Exception as e:

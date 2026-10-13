@@ -2,7 +2,7 @@ import asyncio
 import json
 import time
 from collections.abc import Callable, Coroutine
-from typing import Final, cast
+from typing import Final
 
 import httpx
 from openai import (
@@ -13,12 +13,15 @@ from openai import (
     BadRequestError,
     OpenAI,
 )
-from openai.types.audio.speech_create_params import SpeechCreateParams
 
 import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
+from litellm.litellm_core_utils.logging_utils import (
+    speech_create_params,
+    speech_request_body,
+    track_llm_api_timing,
+)
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
@@ -1423,9 +1426,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             },
         )
 
-        params: Final = cast(  # cast-ok: the provider-mapped body is this SDK call's own params shape
-            SpeechCreateParams, {"model": model, "voice": voice, "input": input, **optional_params}
-        )
+        params: Final = speech_create_params(model, voice, input, optional_params)
         raw_response: Final = (
             azure_client.audio.speech.with_streaming_response.create(**params).__enter__().http_response
             if stream
@@ -1470,9 +1471,7 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
             },
         )
 
-        params: Final = cast(  # cast-ok: the provider-mapped body is this SDK call's own params shape
-            SpeechCreateParams, {"model": model, "voice": voice, "input": input, **optional_params}
-        )
+        params: Final = speech_create_params(model, voice, input, optional_params)
         raw_response: Final = (
             (await azure_client.audio.speech.with_streaming_response.create(**params).__aenter__()).http_response
             if stream

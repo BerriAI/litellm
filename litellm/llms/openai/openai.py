@@ -17,7 +17,6 @@ from openai._constants import RAW_RESPONSE_HEADER
 from openai._legacy_response import LegacyAPIResponse
 from openai._types import RequestOptions
 from openai.types import CreateEmbeddingResponse
-from openai.types.audio.speech_create_params import SpeechCreateParams
 from openai.types.beta.assistant_deleted import AssistantDeleted
 from openai.types.file_deleted import FileDeleted
 from pydantic import BaseModel, TypeAdapter
@@ -30,7 +29,11 @@ from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
+from litellm.litellm_core_utils.logging_utils import (
+    speech_create_params,
+    speech_request_body,
+    track_llm_api_timing,
+)
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import MockResponseIterator
@@ -1659,9 +1662,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             },
         )
 
-        params: Final = cast(  # cast-ok: the provider-mapped body is this SDK call's own params shape
-            SpeechCreateParams, {"model": model, "voice": voice, "input": input, **optional_params}
-        )
+        params: Final = speech_create_params(model, voice, input, optional_params)
         raw_response: Final = (
             sync_client.audio.speech.with_streaming_response.create(**params).__enter__().http_response
             if stream
@@ -1710,9 +1711,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
             },
         )
 
-        params: Final = cast(  # cast-ok: the provider-mapped body is this SDK call's own params shape
-            SpeechCreateParams, {"model": model, "voice": voice, "input": input, **optional_params}
-        )
+        params: Final = speech_create_params(model, voice, input, optional_params)
         raw_response: Final = (
             (await openai_client.audio.speech.with_streaming_response.create(**params).__aenter__()).http_response
             if stream

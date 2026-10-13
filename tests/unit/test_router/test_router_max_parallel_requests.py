@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+
 from typing import Final
 
+import httpx
 import litellm
 import pytest
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
@@ -139,3 +142,61 @@ async def test_max_parallel_requests_tpm_rate_limiting_base_case() -> None:
 
     with pytest.raises(litellm.RateLimitError):
         await router.acompletion(**request)
+
+
+class _OneChunkAudioStream(httpx.AsyncByteStream):
+    async def __aiter__(self):
+        yield b"audio"
+
+    async def aclose(self) -> None:
+        return None
+
+
+def _speech_router() -> litellm.Router:
+    return litellm.Router(
+        model_list=[
+            {
+                "model_name": "tts",
+                "litellm_params": {
+                    "model": "elevenlabs/eleven_multilingual_v2",
+                    "api_key": "fake-key",
+                    "max_parallel_requests": 1,
+                },
+            }
+        ]
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [True, False], ids=["streamed", "buffered"])
+async def test_aspeech_holds_its_deployment_slot_until_the_audio_is_released(
+    monkeypatch: pytest.MonkeyPatch, stream: bool
+) -> None:
+    """A streamed synthesis occupies its deployment's only slot for as long as audio is
+    still arriving, so a second caller is turned away rather than doubling up on it."""
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _speech_router()
+
+    def _client() -> litellm.AsyncHTTPHandler:
+        return litellm.AsyncHTTPHandler(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(200, headers={"content-type": "audio/mpeg"}, stream=_OneChunkAudioStream())
+            )
+        )
+
+    response: Final = await router.aspeech(
+        model="tts", input="hello", voice="voice-id", client=_client(), stream=stream
+    )
+
+    async def _second_caller() -> str:
+        try:
+            await router.aspeech(model="tts", input="hello", voice="voice-id", client=_client(), stream=stream)
+        except litellm.RateLimitError:
+            return "refused"
+        return "admitted"
+
+    while_audio_open: Final = await _second_caller()
+    await response.aclose()
+    await asyncio.sleep(0)
+
+    assert (while_audio_open, await _second_caller()) == ("refused" if stream else "admitted", "admitted")

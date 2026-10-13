@@ -9,14 +9,26 @@ Pins (PR2):
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import gc
 import io
+from typing import Final
+
+import orjson
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
 
+from starlette.background import BackgroundTask
+from starlette.responses import StreamingResponse
+
 from litellm.constants import AUDIO_SPEECH_CHUNK_SIZE
+from fastapi import Request, Response
+
 from litellm.proxy import proxy_server
+from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import HttpxBinaryResponseContent
 
 
@@ -290,17 +302,123 @@ async def test_audio_speech_chunk_generator_forwards_an_unread_upstream_stream()
     assert stream.closed is True
 
 
-@pytest.mark.asyncio
-async def test_audio_speech_chunk_generator_closes_a_stream_abandoned_midway():
-    """An abandoned stream still releases its connection, a client disconnect cannot leak one."""
-    first = b"a" * AUDIO_SPEECH_CHUNK_SIZE
-    stream = _RecordingAudioStream([first, b"b" * AUDIO_SPEECH_CHUNK_SIZE], [])
-    response = HttpxBinaryResponseContent(
+def _speech_request(payload: dict) -> Request:
+    body: Final = orjson.dumps(payload)
+
+    async def _receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return Request(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/audio/speech",
+            "headers": [(b"content-type", b"application/json")],
+            "query_string": b"",
+        },
+        receive=_receive,
+    )
+
+
+def _audio_response(stream: _RecordingAudioStream) -> HttpxBinaryResponseContent:
+    return HttpxBinaryResponseContent(
         httpx.Response(status_code=200, headers={"content-type": "audio/mpeg"}, stream=stream)
     )
 
-    chunks = proxy_server._audio_speech_chunk_generator(response)
-    assert await anext(chunks) == first
-    await chunks.aclose()
+
+async def _serve_until_disconnect(response: StreamingResponse) -> None:
+    """Drive the response through one ASGI cycle where the client drops at the first chunk."""
+
+    async def _send(message):
+        if message["type"] == "http.response.body":
+            raise OSError("client gone")
+
+    async def _receive():
+        return {"type": "http.disconnect"}
+
+    with contextlib.suppress(Exception):
+        await response({"type": "http", "asgi": {"spec_version": "2.4"}}, _receive, _send)
+
+
+@pytest.fixture
+def patched_streaming_speech(monkeypatch):
+    """Route /v1/audio/speech to an upstream whose audio body is left unread."""
+    stream = _RecordingAudioStream([b"a" * AUDIO_SPEECH_CHUNK_SIZE], [])
+    monkeypatch.setattr(proxy_server, "llm_router", MagicMock())
+    monkeypatch.setattr(
+        proxy_server,
+        "proxy_logging_obj",
+        MagicMock(
+            pre_call_hook=AsyncMock(side_effect=lambda **kw: kw["data"]),
+            post_call_failure_hook=AsyncMock(),
+            post_call_response_headers_hook=AsyncMock(return_value={}),
+            update_request_status=AsyncMock(),
+        ),
+    )
+
+    async def _add_data(data, **kwargs):
+        return data
+
+    monkeypatch.setattr(proxy_server, "add_litellm_data_to_request", _add_data)
+
+    async def _llm_call():
+        return _audio_response(stream)
+
+    async def _fake_route_request(*args, **kwargs):
+        return _llm_call()
+
+    monkeypatch.setattr(proxy_server, "route_request", _fake_route_request)
+    yield stream
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_releases_its_upstream_when_the_client_walks_away():
+    """A client that drops mid-clip still has its upstream connection released. Starlette
+    raises ClientDisconnect out of the response before any background task runs, so the
+    body iterator's own cleanup is what has to cover this."""
+    stream = _RecordingAudioStream([b"a" * AUDIO_SPEECH_CHUNK_SIZE] * 3, [])
+    response = _audio_response(stream)
+
+    await _serve_until_disconnect(
+        StreamingResponse(
+            proxy_server._audio_speech_chunk_generator(response),
+            media_type="audio/mpeg",
+            background=BackgroundTask(proxy_server._close_audio_speech_response, response),
+        )
+    )
+    # The abandoned iterator is suspended mid-yield; it runs its cleanup once dropped.
+    gc.collect()
+    await asyncio.sleep(0.1)
+
+    assert stream.closed is True
+
+
+@pytest.mark.asyncio
+async def test_audio_speech_route_releases_an_upstream_whose_body_is_never_read(
+    monkeypatch, patched_streaming_speech
+):
+    """A response the server never iterates leaves the body iterator's cleanup unrun and
+    out of reach of GC, so the route itself has to arm the release."""
+    stream = patched_streaming_speech
+    captured: list[StreamingResponse] = []
+
+    original = proxy_server.StreamingResponse
+
+    def _capture(*args, **kwargs):
+        response = original(*args, **kwargs)
+        captured.append(response)
+        return response
+
+    monkeypatch.setattr(proxy_server, "StreamingResponse", _capture)
+
+    request = _speech_request({"model": "tts-1", "input": "Hi", "voice": "alloy", "stream": True})
+    await proxy_server.audio_speech(
+        request=request, fastapi_response=Response(), user_api_key_dict=UserAPIKeyAuth(api_key="sk-test")
+    )
+
+    assert len(captured) == 1
+    assert stream.closed is False
+
+    await captured[0].background()
 
     assert stream.closed is True
