@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import UserInfoView from "./user_info_view";
 import { extractMcpEntitlement } from "@/components/mcp_server_management/mcpEntitlement";
+import type { MCPServer } from "@/components/mcp_tools/types";
 
 const mockTeamMemberAddCall = vi.fn();
 const mockTeamMemberDeleteCall = vi.fn();
@@ -441,6 +442,12 @@ describe("UserInfoView", () => {
 });
 
 describe("extractMcpEntitlement", () => {
+  const auditFields = {
+    created_at: "2026-01-01",
+    created_by: "test-admin",
+    updated_at: "2026-01-01",
+    updated_by: "test-admin",
+  };
   const CATALOG = [
     { server_id: "srv-1", server_name: "deploy_tracker", alias: "deploy" },
     { server_id: "srv-2", server_name: "issue_tracker", alias: null },
@@ -492,6 +499,29 @@ describe("extractMcpEntitlement", () => {
   it("drops a name-keyed allowlist once its server is deselected", () => {
     const result = extractMcpEntitlement(form({ servers: ["srv-2"] }, { deploy_tracker: ["create_issue"] }), CATALOG);
     expect(result?.mcp_tool_permissions).toEqual({});
+  });
+
+  it.each(["server_name", "alias"])("revokes an ID-keyed grant despite another server's matching %s", (field) => {
+    const catalog: MCPServer[] = [
+      { ...auditFields, server_id: "srv-1", server_name: "First Server" },
+      { ...auditFields, server_id: "srv-2", server_name: "Second Server", [field]: "srv-1" },
+    ];
+    const result = extractMcpEntitlement(form({ servers: ["srv-2"] }, { "srv-1": ["read"] }), catalog);
+
+    expect(result?.mcp_tool_permissions).toEqual({});
+  });
+
+  it.each(["server_name", "alias"])("resolves a selected ID before another server's matching %s", (field) => {
+    const catalog: MCPServer[] = [
+      { ...auditFields, server_id: "srv-1", server_name: "First Server" },
+      { ...auditFields, server_id: "srv-2", server_name: "Second Server", [field]: "srv-1" },
+    ];
+    const result = extractMcpEntitlement(
+      form({ servers: ["srv-1"] }, { "srv-1": ["read"], "srv-2": ["write"] }),
+      catalog,
+    );
+
+    expect(result?.mcp_tool_permissions).toEqual({ "srv-1": ["read"] });
   });
 
   it("prunes nothing when the server catalog has not loaded", () => {

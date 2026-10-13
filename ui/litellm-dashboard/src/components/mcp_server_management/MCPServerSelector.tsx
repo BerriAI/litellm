@@ -6,6 +6,7 @@ import React from "react";
 import { ALL_PROXY_MCP_SERVERS_SENTINEL, NO_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
 
 interface MCPServerSelectorProps {
+  id?: string;
   onChange: (selected: { servers: string[]; accessGroups: string[]; toolsets: string[] }) => void;
   value?: {
     servers: string[];
@@ -24,6 +25,7 @@ interface MCPServerSelectorProps {
 const TOOLSET_PREFIX = "toolset:";
 
 const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
+  id,
   onChange,
   value,
   className,
@@ -107,6 +109,7 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   return (
     <div>
       <MultiSelect
+        id={id}
         options={selectOptions}
         value={selectedValues}
         onValueChange={handleChange}

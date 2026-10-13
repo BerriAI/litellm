@@ -10,12 +10,14 @@ from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from starlette.datastructures import Headers
 
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
     UnloadableEntitlementError,
     _agent_capped_servers,
     is_mcp_admitted_user_subject,
 )
+from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     ProxyException,
@@ -24,6 +26,8 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.agents import AgentCaller
+from litellm.types.mcp_server.mcp_server_manager import MCPServer
+from litellm.types.mcp_server.mcp_toolset import MCPToolset
 
 
 @pytest.mark.parametrize("headers,expected", [
@@ -10535,26 +10539,32 @@ class TestEntitlementFaultSemantics:
         assert set(allowed) == {"srv1"}
 
 
-async def _cache_with_end_user(end_user_id, *, mcp_tool_permissions=None, object_permission_id=None):
+async def _cache_with_end_user(
+    end_user_id: str,
+    *,
+    mcp_tool_permissions: dict[str, list[str]] | None = None,
+    object_permission_id: str | None = None,
+    object_permission_override: LiteLLM_ObjectPermissionTable | None = None,
+) -> DualCache:
     """A real DualCache already holding the end user row, so ``get_end_user_object`` answers from
     cache and no ``litellm.`` internal has to be patched. ``object_permission_id`` without a
     permission body models a row that NAMES an entitlement the DB then fails to serve."""
-    from litellm.caching.dual_cache import DualCache
     from litellm.models.end_user import LiteLLM_EndUserTable
     from litellm.proxy.common_utils.user_api_key_cache import end_user_cache_key
 
-    cache = DualCache()
+    permission: Final = object_permission_override or (
+        LiteLLM_ObjectPermissionTable(object_permission_id="op-eu", mcp_tool_permissions=mcp_tool_permissions)
+        if mcp_tool_permissions
+        else None
+    )
+    cache: Final = DualCache()
     await cache.async_set_cache(
         key=end_user_cache_key(end_user_id),
         value=LiteLLM_EndUserTable(
             user_id=end_user_id,
             blocked=False,
-            object_permission_id=object_permission_id or ("op-eu" if mcp_tool_permissions else None),
-            object_permission=LiteLLM_ObjectPermissionTable(
-                object_permission_id="op-eu", mcp_tool_permissions=mcp_tool_permissions
-            )
-            if mcp_tool_permissions
-            else None,
+            object_permission_id=object_permission_id or (permission.object_permission_id if permission else None),
+            object_permission=permission,
         ),
     )
     return cache
@@ -10564,6 +10574,207 @@ async def _cache_with_end_user(end_user_id, *, mcp_tool_permissions=None, object
 class TestEndUserToolCeiling:
     """The end user (customer) level narrows the TOOLS axis exactly as it narrows the servers axis,
     so `object_permission.mcp_tool_permissions` on `/customer/new` is enforced, not just stored."""
+
+    @pytest.mark.parametrize("require_defined", (False, True))
+    @pytest.mark.parametrize(
+        "key_servers,expected_servers", ((("server-a", "server-b"), ("server-a",)), (("server-b",), ()))
+    )
+    async def test_end_user_toolsets_cap_shared_key_servers(
+        self, require_defined: bool, key_servers: tuple[str, ...], expected_servers: tuple[str, ...]
+    ) -> None:
+        permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="op-eu", mcp_toolsets=["toolset-a"])
+        cache: Final = await _cache_with_end_user("eu-1", object_permission_override=permission)
+        await cache.async_set_cache(key="toolset_perms:toolset-a", value={"server-a": ["read"]})
+        auth: Final = UserAPIKeyAuth(
+            api_key="test-key",
+            end_user_id="eu-1",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-key", mcp_servers=list(key_servers)
+            ),
+        )
+        with (
+            _entitlement_fault_globals(user_api_key_cache=cache),
+            patch(
+                "litellm.proxy.proxy_server.general_settings", {"require_end_user_mcp_access_defined": require_defined}
+            ),
+        ):
+            allowed_servers: Final = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+            allowed_tools: Final = await MCPRequestHandler.get_allowed_tools_for_server("server-a", auth)
+            read_allowed: Final = await MCPRequestHandler.is_tool_allowed_for_server("read", "server-a", auth)
+            write_allowed: Final = await MCPRequestHandler.is_tool_allowed_for_server("write", "server-a", auth)
+        assert set(allowed_servers) == set(expected_servers)
+        assert allowed_tools == ["read"]
+        assert read_allowed is True
+        assert write_allowed is False
+
+    async def test_end_user_toolset_servers_union_with_existing_grants(self) -> None:
+        permission: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-eu",
+            mcp_servers=["direct"],
+            mcp_access_groups=["readers"],
+            mcp_tool_permissions={"inline": ["read"]},
+            mcp_toolsets=["toolset-a"],
+        )
+        cache: Final = await _cache_with_end_user("eu-1", object_permission_override=permission)
+        await cache.async_set_cache(key="toolset_perms:toolset-a", value={"toolset": ["read"]})
+        manager: Final = MCPServerManager()
+        manager.config_mcp_servers = {
+            "group": MCPServer(server_id="group", name="group", transport="http", access_groups=["readers"]),
+        }
+        auth: Final = UserAPIKeyAuth(
+            api_key="test-key",
+            end_user_id="eu-1",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-key",
+                mcp_servers=["direct", "group", "inline", "toolset", "other"],
+            ),
+        )
+        with (
+            _entitlement_fault_globals(user_api_key_cache=cache),
+            patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager", manager),
+        ):
+            allowed_servers: Final = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert set(allowed_servers) == {"direct", "group", "inline", "toolset"}
+
+    @pytest.mark.parametrize(
+        "toolset_rows",
+        ((), (MCPToolset(toolset_id="toolset-a", toolset_name="Empty", tools=[]),)),
+        ids=("missing-toolset", "empty-toolset"),
+    )
+    async def test_end_user_unresolvable_toolsets_deny_shared_key_servers(
+        self, toolset_rows: tuple[MCPToolset, ...]
+    ) -> None:
+        permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="op-eu", mcp_toolsets=["toolset-a"])
+        cache: Final = await _cache_with_end_user("eu-1", object_permission_override=permission)
+        prisma: Final = MagicMock()
+        prisma.configure_mock(**{"db.litellm_mcptoolsettable.find_many": AsyncMock(return_value=list(toolset_rows))})
+        auth: Final = UserAPIKeyAuth(
+            api_key="test-key",
+            end_user_id="eu-1",
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_servers=["server-a"]),
+        )
+        with _entitlement_fault_globals(prisma_client=prisma, user_api_key_cache=cache):
+            with pytest.raises(UnloadableEntitlementError):
+                await MCPRequestHandler._get_allowed_mcp_servers_for_end_user(auth)
+            allowed_servers: Final = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert allowed_servers == []
+
+    async def test_end_user_toolset_ceiling_reads_fresh_policy(self) -> None:
+        permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="op-eu", mcp_toolsets=["toolset-a"])
+        cache: Final = await _cache_with_end_user("eu-1", object_permission_override=permission)
+        await cache.async_set_cache(key="toolset_perms:toolset-a", value={"old-server": ["read"]})
+        prisma: Final = MagicMock()
+        prisma.configure_mock(
+            **{
+                "writer_db.litellm_mcptoolsettable.find_many": AsyncMock(
+                    return_value=[
+                        MCPToolset(
+                            toolset_id="toolset-a",
+                            toolset_name="Updated",
+                            tools=[
+                                {"server_id": "new-server", "tool_name": "read"},
+                            ],
+                        ),
+                    ]
+                ),
+            }
+        )
+        auth: Final = UserAPIKeyAuth(
+            api_key="test-key",
+            end_user_id="eu-1",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-key",
+                mcp_servers=["old-server", "new-server"],
+            ),
+        ).model_copy(update={"requires_fresh_policy": True})
+        with _entitlement_fault_globals(prisma_client=prisma, user_api_key_cache=cache):
+            allowed_servers: Final = await MCPRequestHandler._get_allowed_mcp_servers_for_end_user(auth)
+        assert allowed_servers == ["new-server"]
+
+    async def test_end_user_toolset_writer_fault_does_not_drop_ceiling(self) -> None:
+        permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="op-eu", mcp_toolsets=["toolset-a"])
+        cache: Final = await _cache_with_end_user("eu-1", object_permission_override=permission)
+        await cache.async_set_cache(key="toolset_perms:toolset-a", value={"old-server": ["read"]})
+        prisma: Final = MagicMock()
+        prisma.configure_mock(
+            **{
+                "writer_db.litellm_mcptoolsettable.find_many": AsyncMock(
+                    side_effect=RuntimeError("writer unavailable")
+                ),
+            }
+        )
+        auth: Final = UserAPIKeyAuth(
+            api_key="test-key",
+            end_user_id="eu-1",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-key", mcp_servers=["other-server"]
+            ),
+        ).model_copy(update={"requires_fresh_policy": True})
+        with _entitlement_fault_globals(prisma_client=prisma, user_api_key_cache=cache):
+            allowed_servers: Final = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert allowed_servers == []
+
+    async def test_end_user_access_group_writer_fault_does_not_drop_toolset_ceiling(self) -> None:
+        permission: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-eu", mcp_toolsets=["toolset-a"], mcp_access_groups=["group-x"]
+        )
+        cache: Final = await _cache_with_end_user("eu-1", object_permission_override=permission)
+        prisma: Final = MagicMock()
+        prisma.configure_mock(
+            **{
+                "writer_db.litellm_mcptoolsettable.find_many": AsyncMock(
+                    return_value=[
+                        MCPToolset(
+                            toolset_id="toolset-a",
+                            toolset_name="Read only",
+                            tools=[{"server_id": "server-a", "tool_name": "read"}],
+                        ),
+                    ]
+                ),
+                "writer_db.litellm_mcpservertable.find_many": AsyncMock(side_effect=RuntimeError("writer unavailable")),
+            }
+        )
+        auth: Final = UserAPIKeyAuth(
+            api_key="test-key",
+            end_user_id="eu-1",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id="op-key", mcp_servers=["server-a", "server-b"]
+            ),
+        ).model_copy(update={"requires_fresh_policy": True})
+        with _entitlement_fault_globals(prisma_client=prisma, user_api_key_cache=cache):
+            allowed_servers: Final = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert "server-b" not in allowed_servers
+
+    async def test_end_user_mcp_opt_out_overrides_toolset_servers(self) -> None:
+        permission: Final = LiteLLM_ObjectPermissionTable(
+            object_permission_id="op-eu",
+            mcp_servers=[SpecialMCPServerNames.no_mcp_servers.value],
+            mcp_toolsets=["toolset-a"],
+        )
+        cache: Final = await _cache_with_end_user("eu-1", object_permission_override=permission)
+        await cache.async_set_cache(key="toolset_perms:toolset-a", value={"server-a": ["read"]})
+        auth: Final = UserAPIKeyAuth(
+            api_key="test-key",
+            end_user_id="eu-1",
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_servers=["server-a"]),
+        )
+        with _entitlement_fault_globals(user_api_key_cache=cache):
+            allowed_servers: Final = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert allowed_servers == []
+
+    async def test_end_user_empty_permission_keeps_inherited_servers(self) -> None:
+        cache: Final = await _cache_with_end_user(
+            "eu-1",
+            object_permission_override=LiteLLM_ObjectPermissionTable(object_permission_id="op-eu"),
+        )
+        auth: Final = UserAPIKeyAuth(
+            api_key="test-key",
+            end_user_id="eu-1",
+            object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="op-key", mcp_servers=["server-a"]),
+        )
+        with _entitlement_fault_globals(user_api_key_cache=cache):
+            allowed_servers: Final = await MCPRequestHandler.get_allowed_mcp_servers(auth)
+        assert allowed_servers == ["server-a"]
 
     async def test_end_user_tool_permissions_intersect_key_tools(self):
         auth = _key_auth_reaching("srv1", tools=["tool_a", "tool_b"], end_user_id="eu-1")

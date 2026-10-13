@@ -464,6 +464,7 @@ describe("MCPServerPermissions", () => {
       />,
     );
     await waitFor(() => expect(screen.getByText("Blocked")).toHaveAttribute("data-variant", "destructive"));
+    expect(screen.getByText("No MCP servers. Access to all MCP servers is blocked")).toBeInTheDocument();
   });
 
   it("lists servers inherited from access groups, counts them, and names the group on hover", async () => {

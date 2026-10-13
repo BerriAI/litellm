@@ -53,7 +53,7 @@ export function ObjectPermissionsView({
         <p className="text-sm font-medium text-foreground">Search tools</p>
         {searchTools.length === 0 ? (
           <p className="mt-1 block text-xs text-muted-foreground">
-            No restriction — all configured search tools are allowed for this team.
+            No restriction. All configured search tools are allowed
           </p>
         ) : (
           <p className="mt-1 block text-xs break-words text-foreground">{searchTools.join(", ")}</p>

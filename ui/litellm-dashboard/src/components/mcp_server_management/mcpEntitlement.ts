@@ -1,5 +1,6 @@
 import { ALL_PROXY_MCP_SERVERS_SENTINEL } from "@/components/mcp_tools/constants";
 import { MCPServer, MCPToolset } from "@/components/mcp_tools/types";
+import { mcpServersForIdentifier } from "./effectiveMcpServers";
 
 export interface McpEntitlementUpdate {
   mcp_servers: string[];
@@ -18,9 +19,6 @@ const asToolPermissions = (value: unknown): Record<string, string[]> => {
   );
 };
 
-const mcpServerMatchesIdentifier = (server: MCPServer, identifier: string): boolean =>
-  server.server_id === identifier || server.server_name === identifier || server.alias === identifier;
-
 /**
  * The `object_permission` a save sends, derived from what the editor currently shows.
  *
@@ -35,8 +33,7 @@ const mcpServerMatchesIdentifier = (server: MCPServer, identifier: string): bool
  * which is the same membership the gateway resolves against. A selected toolset missing from the
  * catalog is unresolvable, so nothing is pruned in that save.
  *
- * A tool-permission key may be a server id, a name or an alias: the gateway normalizes all three
- * before looking up the allowlist, so an entry written by the API or by config can use any of them.
+ * A key matching a server id names only that server. Other keys fall back to names and aliases.
  * `allServers` is what resolves a key to its servers, plural: names and aliases are not unique, and
  * the gateway unions such a key into EVERY server answering to it, so the entry is kept while any
  * one of them is still granted. Resolving to the first match instead would make the outcome depend
@@ -66,14 +63,19 @@ export const extractMcpEntitlement = (
       .filter((toolset) => mcpToolsets.includes(toolset.toolset_id))
       .flatMap((toolset) => toolset.tools.map((tool) => tool.server_id)),
   );
+  const directServerIds = new Set(
+    mcpServers.flatMap((identifier) =>
+      mcpServersForIdentifier(allServers, identifier).map((server) => server.server_id),
+    ),
+  );
 
   const grants = (server: MCPServer): boolean =>
-    mcpServers.some((identifier) => mcpServerMatchesIdentifier(server, identifier)) ||
+    directServerIds.has(server.server_id) ||
     (server.mcp_access_groups ?? []).some((group) => mcpAccessGroups.includes(group)) ||
     toolsetServerIds.has(server.server_id);
 
   const grantsServerNamedBy = (permissionKey: string): boolean => {
-    const named = allServers.filter((candidate) => mcpServerMatchesIdentifier(candidate, permissionKey));
+    const named = mcpServersForIdentifier(allServers, permissionKey);
     if (named.length === 0) return true;
     return named.some(grants);
   };

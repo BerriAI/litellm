@@ -22,6 +22,66 @@ describe("MCPToolPermissions", () => {
     vi.mocked(networking.fetchMCPAccessGroups).mockResolvedValue([]);
   });
 
+  it("preserves an unrestricted stored grant until a tool permission is edited", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    const tools = [
+      { name: "list_records", description: "List records" },
+      { name: "delete_record", description: "Delete a record" },
+    ];
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([{ server_id: mockServerId, server_name: mockServerName }]);
+    vi.mocked(networking.listMCPTools).mockResolvedValue({ tools, error: false });
+    renderWithProviders(
+      <MCPToolPermissions
+        accessToken={mockAccessToken}
+        selectedServers={[mockServerId]}
+        toolPermissions={{}}
+        onChange={onChange}
+        initializeDefaultPermissions={false}
+      />,
+    );
+
+    expect(await screen.findByText("delete_record")).toBeInTheDocument();
+    await user.click(screen.getByRole("radio", { name: "Flat List" }));
+
+    expect(screen.getByRole("checkbox", { name: "delete_record" })).toBeChecked();
+    expect(onChange).not.toHaveBeenCalled();
+
+    await user.click(screen.getByRole("checkbox", { name: "delete_record" }));
+
+    expect(onChange).toHaveBeenCalledExactlyOnceWith({ [mockServerId]: ["list_records"] });
+  });
+
+  it("defaults a newly added edit server to non-delete tools without narrowing stored servers", async () => {
+    const onChange = vi.fn();
+    const newServerId = "new-server";
+    const tools = [
+      { name: "list_records", description: "List records" },
+      { name: "delete_record", description: "Delete a record" },
+    ];
+    vi.mocked(networking.fetchMCPServers).mockResolvedValue([
+      { server_id: mockServerId, server_name: mockServerName },
+      { server_id: newServerId, server_name: "New Server" },
+    ]);
+    vi.mocked(networking.listMCPTools).mockResolvedValue({ tools, error: false });
+    const props = {
+      accessToken: mockAccessToken,
+      toolPermissions: {},
+      onChange,
+      initializeDefaultPermissions: false,
+    };
+    const { rerender } = renderWithProviders(<MCPToolPermissions {...props} selectedServers={[mockServerId]} />);
+
+    expect(await screen.findByText("delete_record")).toBeInTheDocument();
+    expect(onChange).not.toHaveBeenCalled();
+
+    rerender(<MCPToolPermissions {...props} selectedServers={[mockServerId, newServerId]} />);
+
+    await waitFor(() => {
+      expect(onChange).toHaveBeenCalledExactlyOnceWith({ [newServerId]: ["list_records"] });
+    });
+  });
+
   it("should update tool permissions when user selects a tool", async () => {
     /**
      * Tests that clicking a tool checkbox calls onChange with updated permissions.
