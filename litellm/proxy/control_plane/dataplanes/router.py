@@ -6,7 +6,12 @@ from fastapi import APIRouter, Depends, Security
 from litellm.proxy.control_plane.auth.dependencies import require_scopes
 from litellm.proxy.control_plane.auth.rbac import Principal, Scope
 from litellm.proxy.control_plane.common.exceptions import ControlPlaneException, bad_gateway
-from litellm.proxy.control_plane.dataplanes.client import DataplaneClient, DataplaneReply, DataplaneUnreachable
+from litellm.proxy.control_plane.dataplanes.client import (
+    DataplaneClient,
+    DataplaneReply,
+    DataplaneResponseTooLarge,
+    DataplaneUnreachable,
+)
 from litellm.proxy.control_plane.dataplanes.credentials import Caller, CredentialUnavailable
 from litellm.proxy.control_plane.dataplanes.dependencies import (
     dataplane_access,
@@ -65,6 +70,10 @@ async def dataplane_health(
             return DataplaneHealthResponse(id=dataplane.id, status="degraded", http_status=status, detail=str(body))
         case DataplaneUnreachable(detail=detail):
             return DataplaneHealthResponse(id=dataplane.id, status="unreachable", http_status=None, detail=detail)
+        case DataplaneResponseTooLarge(limit_bytes=limit_bytes):
+            return DataplaneHealthResponse(
+                id=dataplane.id, status="degraded", http_status=None, detail=f"response exceeded {limit_bytes} bytes"
+            )
         case CredentialUnavailable(reason=reason):
             return DataplaneHealthResponse(id=dataplane.id, status="degraded", http_status=None, detail=reason)
 
@@ -100,5 +109,7 @@ async def dataplane_whoami(
             )
         case DataplaneUnreachable(detail=detail, attempts=attempts):
             raise ControlPlaneException(bad_gateway(f"Dataplane unreachable after {attempts} attempt(s): {detail}"))
+        case DataplaneResponseTooLarge(limit_bytes=limit_bytes):
+            raise ControlPlaneException(bad_gateway(f"Dataplane response exceeded the {limit_bytes}-byte limit."))
         case CredentialUnavailable(reason=reason):
             raise ControlPlaneException(bad_gateway(f"No usable credential for this dataplane: {reason}"))
